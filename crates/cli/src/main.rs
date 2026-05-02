@@ -4,15 +4,12 @@
 //! (`index`, `chat`, `render`, `skills`) land in later weeks per
 //! `PLAN.md` §15.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use awidat_proto::project::Project;
-use awidat_proto::validate::{validate_project, ValidationWarning};
+use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
 
 /// Top-level CLI. Subcommands match `PLAN.md` §15 Week 1.
@@ -182,6 +179,21 @@ fn print_index_warning(w: &ValidationWarning) {
             println!(
                 "  - index/{indexer}/ exists but is not in manifest.json — register it or remove it"
             );
+        }
+        ValidationWarning::InvalidIndexerName { indexer } => {
+            println!(
+                "  - indexer '{indexer}' is not a valid id — use lowercase letters, digits, and hyphens"
+            );
+        }
+        ValidationWarning::UnsafeAssetId { asset, location } => {
+            println!("  - asset id '{asset}' is unsafe: {location}");
+        }
+        ValidationWarning::SidecarPathMismatch {
+            path,
+            expected_path,
+            asset,
+        } => {
+            println!("  - {path}: asset '{asset}' should live at {expected_path}");
         }
     }
 }

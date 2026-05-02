@@ -9,3 +9,6 @@ description = "Awidat agent loop, session state, and turn handling. Stub in Week
 [dependencies]
 awidat-proto = { workspace = true }
 tokio = { workspace = true }
+
+[lints]
+workspace = true

@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 /// (or downgrade) this; we accept any string the server replies with —
 /// rejecting on protocol-version mismatch would brittle-couple us to the spec
 /// version of every server in the wild.
-pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+///
+/// Spec source: <https://modelcontextprotocol.io/specification/2025-11-25>.
+pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// JSON-RPC 2.0 request envelope used for outbound calls.
 #[derive(Debug, Serialize)]
@@ -34,9 +36,12 @@ pub(crate) struct JsonRpcNotification<'a> {
 }
 
 /// JSON-RPC 2.0 response envelope. We accept either `result` or `error`.
+///
+/// `jsonrpc` is exposed so the dispatcher can validate it equals `"2.0"`
+/// per spec; older code accepted any string for "compat" but a server that
+/// returns `"jsonrpc": "1.0"` is broken and we should say so.
 #[derive(Debug, Deserialize)]
 pub(crate) struct JsonRpcResponse {
-    #[allow(dead_code)] // we don't validate `jsonrpc` strictly; accepted for compat.
     #[serde(default)]
     pub jsonrpc: Option<String>,
     pub id: Option<serde_json::Value>,
@@ -50,6 +55,10 @@ pub(crate) struct JsonRpcResponse {
     #[serde(default)]
     pub method: Option<String>,
 }
+
+/// JSON-RPC 2.0 protocol-version literal. Both inbound and outbound messages
+/// must carry this exact string.
+pub(crate) const JSONRPC_VERSION: &str = "2.0";
 
 /// JSON-RPC error object.
 #[derive(Debug, Deserialize)]
@@ -70,9 +79,29 @@ pub struct JsonRpcError {
 pub(crate) struct InitializeParams<'a> {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: &'a str,
-    pub capabilities: serde_json::Value,
+    pub capabilities: ClientCapabilitiesWire,
     #[serde(rename = "clientInfo")]
     pub client_info: ClientInfoWire<'a>,
+}
+
+/// Capabilities the client advertises during `initialize`. v1 is a strict
+/// consumer (we call tools, we don't host them or serve resources), so we
+/// declare nothing — but we encode it as a typed struct rather than an
+/// untyped JSON object so that adding `roots` or `sampling` later is a
+/// field addition, not a re-plumb. Spec:
+/// <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
+#[derive(Debug, Default, Serialize)]
+pub(crate) struct ClientCapabilitiesWire {
+    /// `roots` (filesystem boundary advertisement). We don't expose roots
+    /// in v1; the engine is the boundary. Field present for forward compat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roots: Option<serde_json::Value>,
+    /// `sampling` (server-initiated LLM calls). Not supported in v1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<serde_json::Value>,
+    /// `elicitation` (server-initiated user input). Not supported in v1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<serde_json::Value>,
 }
 
 /// Lightweight client identity sent in `initialize.params.clientInfo`.
@@ -82,19 +111,49 @@ pub(crate) struct ClientInfoWire<'a> {
     pub version: &'a str,
 }
 
-/// Result of `initialize`. We only read what we use; everything else
-/// round-trips through serde's `serde(default)` machinery — but since we
-/// don't need the rest, we keep this small.
+/// Result of `initialize`. Fields not exposed publicly are still typed so
+/// we can route on them later without re-plumbing.
 #[derive(Debug, Deserialize)]
 pub(crate) struct InitializeResult {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: String,
     #[serde(rename = "serverInfo")]
     pub server_info: ServerInfoWire,
-    /// Server capabilities, kept opaque so we don't reject novel ones.
+    /// Server capabilities. We keep each known capability as an opaque
+    /// `Value` (the spec lets servers nest arbitrary configuration under
+    /// each) but the *names* are typed so unknown capabilities land in
+    /// [`ServerCapabilitiesWire::other`] and are inspectable.
     #[serde(default)]
-    #[allow(dead_code)]
-    pub capabilities: serde_json::Value,
+    pub capabilities: ServerCapabilitiesWire,
+    /// Optional human-readable instructions the server attaches.
+    #[serde(default)]
+    pub instructions: Option<String>,
+}
+
+/// Server-advertised capabilities. Forward-compat: unknown capability names
+/// fall into [`Self::other`] so a future MCP version that adds, say,
+/// `completions` is accepted by an unmodified client.
+///
+/// Spec: <https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle>.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub(crate) struct ServerCapabilitiesWire {
+    /// `tools` capability — server hosts tools the client can list/call.
+    /// All v1 indexers advertise this.
+    #[serde(default)]
+    pub tools: Option<serde_json::Value>,
+    /// `resources` capability — server exposes addressable resources.
+    #[serde(default)]
+    pub resources: Option<serde_json::Value>,
+    /// `prompts` capability — server hosts prompt templates.
+    #[serde(default)]
+    pub prompts: Option<serde_json::Value>,
+    /// `logging` capability — server emits `notifications/message` log
+    /// frames the client can subscribe to.
+    #[serde(default)]
+    pub logging: Option<serde_json::Value>,
+    /// `completions` and any other capability we don't know about yet.
+    #[serde(flatten)]
+    pub other: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// Server identity from `initialize.result.serverInfo`.

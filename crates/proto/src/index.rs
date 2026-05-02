@@ -19,9 +19,13 @@
 //! See `INDEX_SCHEMA.md` for the full contract and a worked example.
 
 use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use crate::ProtoError;
+use crate::error::JsonPath;
 
 /// A source asset's logical identifier. Convention: relative path from the
 /// project root, e.g. `"raw/ep-014-cam-a.mp4"`. Engine treats this as opaque.
@@ -38,6 +42,40 @@ impl AssetId {
     /// Return the inner string slice.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Validate that the asset id is a safe project-relative path.
+    pub fn validate(&self, file: &str, path: &JsonPath) -> Result<(), ProtoError> {
+        if is_safe_relative_asset_path(&self.0) {
+            Ok(())
+        } else {
+            Err(ProtoError::validation(
+                file,
+                path.clone(),
+                format!(
+                    "asset id must be a safe relative path with no '..', '.', absolute prefix, backslash, or empty component; got '{}'",
+                    self.0
+                ),
+            ))
+        }
+    }
+
+    /// Relative sidecar path for this asset, with `.json` appended to the
+    /// final filename.
+    pub fn sidecar_relative_path(&self) -> Option<PathBuf> {
+        if !is_safe_relative_asset_path(&self.0) {
+            return None;
+        }
+        let mut parts = self.0.split('/').peekable();
+        let mut out = PathBuf::new();
+        while let Some(part) = parts.next() {
+            if parts.peek().is_some() {
+                out.push(part);
+            } else {
+                out.push(format!("{part}.json"));
+            }
+        }
+        Some(out)
     }
 }
 
@@ -68,6 +106,44 @@ impl TimeSeconds {
     pub fn value(self) -> f64 {
         self.0
     }
+
+    /// Validate that this timestamp is finite and non-negative.
+    pub fn validate(&self, file: &str, path: &JsonPath) -> Result<(), ProtoError> {
+        if !self.0.is_finite() {
+            return Err(ProtoError::validation(
+                file,
+                path.clone(),
+                format!("timestamp must be finite, got {}", self.0),
+            ));
+        }
+        if self.0 < 0.0 {
+            return Err(ProtoError::validation(
+                file,
+                path.clone(),
+                format!("timestamp must be non-negative, got {}", self.0),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Returns true iff `name` is a valid canonical indexer id.
+pub fn is_valid_indexer_id(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+fn is_safe_relative_asset_path(s: &str) -> bool {
+    if s.is_empty() || s.contains('\\') || s.contains('\0') || s.contains("//") {
+        return false;
+    }
+    Path::new(s)
+        .components()
+        .all(|component| matches!(component, Component::Normal(part) if !part.is_empty()))
 }
 
 /// Self-describing header on every sidecar.
@@ -282,5 +358,71 @@ mod tests {
         };
         assert!(e.covers(&AssetId::new("a")));
         assert!(!e.covers(&AssetId::new("c")));
+    }
+
+    #[test]
+    fn asset_id_validates_safe_relative_paths() {
+        let path = JsonPath::root().field("asset_id");
+        AssetId::new("raw/ep.mp4")
+            .validate("index.json", &path)
+            .unwrap();
+        assert_eq!(
+            AssetId::new("raw/ep.mp4").sidecar_relative_path().unwrap(),
+            PathBuf::from("raw").join("ep.mp4.json")
+        );
+
+        for bad in [
+            "",
+            "/tmp/ep.mp4",
+            "../ep.mp4",
+            "raw/../ep.mp4",
+            "raw//ep.mp4",
+            "raw\\ep.mp4",
+        ] {
+            let err = AssetId::new(bad).validate("index.json", &path).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("asset id must be a safe relative path")
+            );
+            assert!(AssetId::new(bad).sidecar_relative_path().is_none());
+        }
+    }
+
+    #[test]
+    fn indexer_id_validation_is_strict_and_simple() {
+        for good in ["whisper", "whisperx", "audio-energy", "a1"] {
+            assert!(is_valid_indexer_id(good), "{good}");
+        }
+        for bad in [
+            "",
+            "-audio",
+            "audio-",
+            "Audio",
+            "audio_energy",
+            "audio/energy",
+            "audio energy",
+        ] {
+            assert!(!is_valid_indexer_id(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn time_seconds_validates_finite_non_negative() {
+        TimeSeconds::new(0.0)
+            .validate("index.json", &JsonPath::root().field("start_s"))
+            .unwrap();
+        TimeSeconds::new(12.5)
+            .validate("index.json", &JsonPath::root().field("start_s"))
+            .unwrap();
+
+        let err = TimeSeconds::new(-0.1)
+            .validate("index.json", &JsonPath::root().field("start_s"))
+            .unwrap_err();
+        assert!(err.to_string().contains("timestamp must be non-negative"));
+
+        let err = TimeSeconds::new(f64::NAN)
+            .validate("index.json", &JsonPath::root().field("start_s"))
+            .unwrap_err();
+        assert!(err.to_string().contains("timestamp must be finite"));
     }
 }

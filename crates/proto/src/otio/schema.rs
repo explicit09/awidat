@@ -4,8 +4,8 @@
 //! names with unknown majors as forward-compat (warning), reject unknown
 //! names hard.
 
-use crate::error::JsonPath;
 use crate::ProtoError;
+use crate::error::JsonPath;
 
 /// A canonical name we recognize and the major version we last shipped.
 ///
@@ -42,10 +42,14 @@ pub const SUPPORTED_SCHEMA_NAMES: &[OtioSchemaName] = &[
     },
     OtioSchemaName {
         name: "Clip",
-        expected_major: 1,
+        expected_major: 2,
     },
     OtioSchemaName {
         name: "Gap",
+        expected_major: 1,
+    },
+    OtioSchemaName {
+        name: "Transition",
         expected_major: 1,
     },
     OtioSchemaName {
@@ -62,7 +66,7 @@ pub const SUPPORTED_SCHEMA_NAMES: &[OtioSchemaName] = &[
     },
     OtioSchemaName {
         name: "Marker",
-        expected_major: 1,
+        expected_major: 2,
     },
 ];
 
@@ -171,11 +175,11 @@ mod tests {
 
     #[test]
     fn parses_exact() {
-        let out = parse_schema_string("p.json", &JsonPath::root(), "Clip.1").unwrap();
+        let out = parse_schema_string("p.json", &JsonPath::root(), "Clip.2").unwrap();
         match out {
             SchemaParseOutcome::Exact { name, major } => {
                 assert_eq!(name, "Clip");
-                assert_eq!(major, 1);
+                assert_eq!(major, 2);
             }
             SchemaParseOutcome::ForwardCompat { .. } => panic!("expected Exact"),
         }
@@ -183,7 +187,9 @@ mod tests {
 
     #[test]
     fn parses_forward_compat_for_known_name_unknown_major() {
-        let out = parse_schema_string("p.json", &JsonPath::root(), "Clip.2").unwrap();
+        // We ship Clip.2; a hypothetical Clip.7 must be accepted as
+        // forward-compat (read as our supported major, with a warning).
+        let out = parse_schema_string("p.json", &JsonPath::root(), "Clip.7").unwrap();
         match out {
             SchemaParseOutcome::ForwardCompat {
                 name,
@@ -191,8 +197,8 @@ mod tests {
                 expected_major,
             } => {
                 assert_eq!(name, "Clip");
-                assert_eq!(file_major, 2);
-                assert_eq!(expected_major, 1);
+                assert_eq!(file_major, 7);
+                assert_eq!(expected_major, 2);
             }
             SchemaParseOutcome::Exact { .. } => panic!("expected ForwardCompat"),
         }

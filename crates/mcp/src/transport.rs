@@ -35,12 +35,12 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use crate::error::McpError;
-use crate::protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+use crate::protocol::{JSONRPC_VERSION, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 
 /// Cap on the bytes of stderr we keep around for diagnostics on a crash.
 const STDERR_RING_CAP: usize = 4096;
@@ -48,10 +48,28 @@ const STDERR_RING_CAP: usize = 4096;
 /// Default request timeout. Indexers can run for minutes (whisper on a
 /// long episode is the worst case), so this is intentionally generous;
 /// shorter timeouts are layered above when a tool call is known to be quick.
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 30);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// One in-flight request awaiting a response.
 type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<serde_json::Value, McpError>>>>>;
+
+/// Map of progress-token → channel for `notifications/progress` events.
+/// Token is the request id we issued — same id space as [`PendingMap`] —
+/// so the reader can route by id without parsing into a different shape.
+type ProgressMap = Arc<Mutex<HashMap<u64, mpsc::Sender<ProgressEvent>>>>;
+
+/// One `notifications/progress` event from the server. Public via
+/// `Client::call_tool_with_progress`.
+#[derive(Debug, Clone)]
+pub struct ProgressEvent {
+    /// Monotonically-increasing progress value. Spec doesn't fix units —
+    /// could be percent (0–100), bytes processed, frames, etc.
+    pub progress: f64,
+    /// Optional total. When present, `progress / total` is a fraction.
+    pub total: Option<f64>,
+    /// Optional human-readable status message ("transcribing 0:30 / 1:00").
+    pub message: Option<String>,
+}
 
 /// Owned handle to a launched MCP server. Spawning logic lives in
 /// [`Transport::launch`]; the public `Client` wraps this with the high-level
@@ -61,6 +79,7 @@ pub(crate) struct Transport {
     next_id: u64,
     write_tx: mpsc::Sender<WriteMsg>,
     pending: PendingMap,
+    progress: ProgressMap,
     stderr_buf: Arc<Mutex<RingBuffer>>,
     /// Kept so dropping the transport tears the child down even if the
     /// caller forgot to `shutdown()`.
@@ -111,10 +130,7 @@ impl Transport {
     /// Spawn the configured server and start the I/O pump tasks. The first
     /// JSON-RPC call is now possible; the caller is responsible for the
     /// MCP `initialize` handshake.
-    pub(crate) async fn launch(
-        server_name: String,
-        cmd: Command,
-    ) -> Result<Self, McpError> {
+    pub(crate) fn launch(server_name: String, cmd: Command) -> Result<Self, McpError> {
         let mut command = cmd;
         command
             .stdin(Stdio::piped())
@@ -122,60 +138,53 @@ impl Transport {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let mut child = command
-            .spawn()
-            .map_err(|e| McpError::Spawn {
-                server: server_name.clone(),
-                source: e,
-            })?;
+        let mut child = command.spawn().map_err(|e| McpError::Spawn {
+            server: server_name.clone(),
+            source: e,
+        })?;
 
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| McpError::StdioAttach {
-                server: server_name.clone(),
-                message: "stdin pipe missing".into(),
-            })?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| McpError::StdioAttach {
-                server: server_name.clone(),
-                message: "stdout pipe missing".into(),
-            })?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| McpError::StdioAttach {
-                server: server_name.clone(),
-                message: "stderr pipe missing".into(),
-            })?;
+        let stdin = child.stdin.take().ok_or_else(|| McpError::StdioAttach {
+            server: server_name.clone(),
+            message: "stdin pipe missing".into(),
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| McpError::StdioAttach {
+            server: server_name.clone(),
+            message: "stdout pipe missing".into(),
+        })?;
+        let stderr = child.stderr.take().ok_or_else(|| McpError::StdioAttach {
+            server: server_name.clone(),
+            message: "stderr pipe missing".into(),
+        })?;
 
         let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
+        let progress: ProgressMap = Arc::new(Mutex::new(HashMap::new()));
         let stderr_buf = Arc::new(Mutex::new(RingBuffer::new(STDERR_RING_CAP)));
         let (write_tx, write_rx) = mpsc::channel::<WriteMsg>(64);
         let child_arc: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(Some(child)));
 
-        let mut tasks = Vec::new();
-        tasks.push(spawn_writer(server_name.clone(), stdin, write_rx));
-        tasks.push(spawn_reader(
-            server_name.clone(),
-            stdout,
-            pending.clone(),
-        ));
-        tasks.push(spawn_stderr(stderr, stderr_buf.clone()));
-        tasks.push(spawn_waiter(
-            server_name.clone(),
-            child_arc.clone(),
-            pending.clone(),
-            stderr_buf.clone(),
-        ));
+        let tasks = vec![
+            spawn_writer(server_name.clone(), stdin, write_rx),
+            spawn_reader(
+                server_name.clone(),
+                stdout,
+                pending.clone(),
+                progress.clone(),
+            ),
+            spawn_stderr(stderr, stderr_buf.clone()),
+            spawn_waiter(
+                server_name.clone(),
+                child_arc.clone(),
+                pending.clone(),
+                stderr_buf.clone(),
+            ),
+        ];
 
         Ok(Self {
             server_name,
             next_id: 1,
             write_tx,
             pending,
+            progress,
             stderr_buf,
             child: child_arc,
             tasks,
@@ -195,21 +204,69 @@ impl Transport {
         params: Option<P>,
         req_timeout: Option<Duration>,
     ) -> Result<serde_json::Value, McpError> {
+        self.request_full(method, params, req_timeout, None, None)
+            .await
+    }
+
+    /// Full-shape request: cancellation + progress notification subscription.
+    ///
+    /// Cancellation: if `cancel` fires before the response arrives, the
+    /// client sends `notifications/cancelled` to the server with the request
+    /// id (per MCP `2025-11-25` cancellation utility), drops the pending
+    /// oneshot, and returns [`McpError::Cancelled`]. The server may still
+    /// emit a late response after cancellation; the reader drops late
+    /// responses for ids no longer in the pending map.
+    ///
+    /// Progress: if `progress_tx` is set, the client adds
+    /// `_meta.progressToken: <request_id>` to the outbound params. The reader
+    /// forwards every `notifications/progress` frame matching that token to
+    /// `progress_tx` until the response arrives. The subscriber is removed
+    /// from the progress map automatically.
+    pub(crate) async fn request_full<P: Serialize>(
+        &mut self,
+        method: &str,
+        params: Option<P>,
+        req_timeout: Option<Duration>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+        progress_tx: Option<mpsc::Sender<ProgressEvent>>,
+    ) -> Result<serde_json::Value, McpError> {
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
 
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
 
-        let params_value = match params {
-            Some(p) => Some(serde_json::to_value(&p).map_err(|e| McpError::ProtocolViolation {
-                server: self.server_name.clone(),
-                message: format!("failed to serialize {method} params: {e}"),
-            })?),
+        // Register progress subscriber, if any. Inject `_meta.progressToken`
+        // into params so the server knows where to send progress frames.
+        if let Some(progress_tx) = progress_tx.clone() {
+            self.progress.lock().await.insert(id, progress_tx);
+        }
+
+        let mut params_value = match params {
+            Some(p) => Some(
+                serde_json::to_value(&p).map_err(|e| McpError::ProtocolViolation {
+                    server: self.server_name.clone(),
+                    message: format!("failed to serialize {method} params: {e}"),
+                })?,
+            ),
             None => None,
         };
+        if progress_tx.is_some() {
+            // Ensure params is an object, then inject _meta.progressToken.
+            // Spec: <https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/progress>.
+            let obj = params_value
+                .get_or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if let Some(map) = obj.as_object_mut() {
+                let meta = map
+                    .entry("_meta")
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if let Some(meta_map) = meta.as_object_mut() {
+                    meta_map.insert("progressToken".into(), serde_json::json!(id));
+                }
+            }
+        }
         let envelope = JsonRpcRequest {
-            jsonrpc: "2.0",
+            jsonrpc: JSONRPC_VERSION,
             id,
             method,
             params: params_value,
@@ -224,25 +281,59 @@ impl Transport {
         // tail and report a crash now rather than wait for a timeout.
         if self.write_tx.send(WriteMsg::Frame(bytes)).await.is_err() {
             self.pending.lock().await.remove(&id);
+            self.progress.lock().await.remove(&id);
             return Err(self.crash_error("send to writer failed").await);
         }
 
         let to = req_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT);
-        match timeout(to, rx).await {
-            Ok(Ok(res)) => res,
-            Ok(Err(_)) => {
-                // Sender dropped — typically because the reader / waiter
-                // declared the server crashed.
-                Err(self.crash_error("response channel closed").await)
+
+        // Three-way race: response, timeout, cancellation.
+        let cancelled_fut = async {
+            match cancel {
+                Some(c) => c.cancelled().await,
+                None => std::future::pending::<()>().await,
             }
-            Err(_elapsed) => {
+        };
+        tokio::pin!(cancelled_fut);
+        let response_fut = timeout(to, rx);
+        tokio::pin!(response_fut);
+        let result = tokio::select! {
+            biased;
+            () = &mut cancelled_fut => {
+                // Drop the pending entry and notify the server.
                 self.pending.lock().await.remove(&id);
-                Err(McpError::Timeout {
+                let payload = serde_json::json!({
+                    "requestId": id,
+                    "reason": "client cancelled",
+                });
+                // Best-effort notification — if the server is dead the
+                // notify will fail and we'll just return Cancelled anyway.
+                let _ = self.notify("notifications/cancelled", Some(payload)).await;
+                Err(McpError::Cancelled {
                     server: self.server_name.clone(),
-                    seconds: to.as_secs(),
                 })
             }
-        }
+            res = &mut response_fut => match res {
+                Ok(Ok(res)) => res,
+                Ok(Err(_)) => {
+                    // Sender dropped — typically because the reader / waiter
+                    // declared the server crashed.
+                    Err(self.crash_error("response channel closed").await)
+                }
+                Err(_elapsed) => {
+                    self.pending.lock().await.remove(&id);
+                    Err(McpError::Timeout {
+                        server: self.server_name.clone(),
+                        seconds: to.as_secs(),
+                    })
+                }
+            },
+        };
+        // Always drop the progress subscription on completion. The server
+        // may emit one final progress frame after the response; that frame
+        // gets routed-and-dropped harmlessly because the subscriber is gone.
+        self.progress.lock().await.remove(&id);
+        result
     }
 
     /// Send a JSON-RPC notification (no response expected).
@@ -252,14 +343,16 @@ impl Transport {
         params: Option<P>,
     ) -> Result<(), McpError> {
         let params_value = match params {
-            Some(p) => Some(serde_json::to_value(&p).map_err(|e| McpError::ProtocolViolation {
-                server: self.server_name.clone(),
-                message: format!("failed to serialize {method} params: {e}"),
-            })?),
+            Some(p) => Some(
+                serde_json::to_value(&p).map_err(|e| McpError::ProtocolViolation {
+                    server: self.server_name.clone(),
+                    message: format!("failed to serialize {method} params: {e}"),
+                })?,
+            ),
             None => None,
         };
         let envelope = JsonRpcNotification {
-            jsonrpc: "2.0",
+            jsonrpc: JSONRPC_VERSION,
             method,
             params: params_value,
         };
@@ -369,9 +462,7 @@ fn spawn_writer(
             match msg {
                 WriteMsg::Frame(bytes) => {
                     if let Err(e) = stdin.write_all(&bytes).await {
-                        eprintln!(
-                            "awidat-mcp: writer to '{server}' lost connection: {e}"
-                        );
+                        eprintln!("awidat-mcp: writer to '{server}' lost connection: {e}");
                         break;
                     }
                     let _ = stdin.flush().await;
@@ -388,6 +479,7 @@ fn spawn_reader(
     server: String,
     stdout: ChildStdout,
     pending: PendingMap,
+    progress: ProgressMap,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout);
@@ -409,24 +501,67 @@ fn spawn_reader(
             }
             match serde_json::from_str::<JsonRpcResponse>(trimmed) {
                 Ok(resp) => {
-                    if resp.method.is_some() && resp.id.is_none() {
-                        // Notification from server — Week 2 ignores all of
-                        // them. (Logging notifications are routine.)
+                    // Validate the JSON-RPC version field if present. Per
+                    // the spec it MUST be exactly "2.0"; anything else is a
+                    // broken server. Missing-but-otherwise-valid is tolerated
+                    // (some MCP servers in the wild forget it on
+                    // notifications) but a wrong value is reported.
+                    if let Some(v) = resp.jsonrpc.as_deref()
+                        && v != JSONRPC_VERSION
+                    {
+                        eprintln!(
+                            "awidat-mcp: reader from '{server}' got jsonrpc={v:?} (expected {JSONRPC_VERSION:?}); routing as protocol violation"
+                        );
+                        // If this was a response, surface a typed error to
+                        // its waiter; otherwise just log.
+                        if let Some(id_num) = resp.id.as_ref().and_then(serde_json::Value::as_u64)
+                            && let Some(tx) = pending.lock().await.remove(&id_num)
+                        {
+                            let _ = tx.send(Err(McpError::ProtocolViolation {
+                                server: server.clone(),
+                                message: format!(
+                                    "server sent jsonrpc={v:?} (expected {JSONRPC_VERSION:?})"
+                                ),
+                            }));
+                        }
                         continue;
                     }
-                    let id_num = match resp.id.as_ref().and_then(serde_json::Value::as_u64) {
-                        Some(n) => n,
-                        None => {
-                            // Response with non-numeric id — protocol weirdness;
-                            // skip rather than crash the pump.
-                            continue;
+
+                    if resp.method.is_some() && resp.id.is_none() {
+                        // Notification from server. We route
+                        // `notifications/progress` to its subscriber; other
+                        // notifications are intentionally dropped.
+                        if resp.method.as_deref() == Some("notifications/progress")
+                            && let Ok(parsed) =
+                                serde_json::from_str::<ProgressFrame>(trimmed)
+                            && let Some(tx) =
+                                progress.lock().await.get(&parsed.params.progress_token).cloned()
+                        {
+                            let event = ProgressEvent {
+                                progress: parsed.params.progress,
+                                total: parsed.params.total,
+                                message: parsed.params.message,
+                            };
+                            // Best-effort send: if the receiver dropped, the
+                            // subscriber is gone; ignore.
+                            let _ = tx.try_send(event);
                         }
+                        continue;
+                    }
+                    let Some(id_num) = resp.id.as_ref().and_then(serde_json::Value::as_u64) else {
+                        // Response with non-numeric id — protocol weirdness;
+                        // skip rather than crash the pump.
+                        continue;
                     };
                     if let Some(tx) = pending.lock().await.remove(&id_num) {
                         let res = if let Some(err) = resp.error {
+                            let data = err
+                                .data
+                                .map(|data| format!("; data: {data}"))
+                                .unwrap_or_default();
                             Err(McpError::ToolError {
                                 server: server.clone(),
-                                message: format!("[code {}] {}", err.code, err.message),
+                                message: format!("[code {}] {}{}", err.code, err.message, data),
                             })
                         } else {
                             Ok(resp.result.unwrap_or(serde_json::Value::Null))
@@ -446,6 +581,23 @@ fn spawn_reader(
     })
 }
 
+/// Wire shape for inbound `notifications/progress` frames.
+#[derive(serde::Deserialize)]
+struct ProgressFrame {
+    params: ProgressParams,
+}
+
+#[derive(serde::Deserialize)]
+struct ProgressParams {
+    #[serde(rename = "progressToken")]
+    progress_token: u64,
+    progress: f64,
+    #[serde(default)]
+    total: Option<f64>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
 fn spawn_stderr(stderr: ChildStderr, buf: Arc<Mutex<RingBuffer>>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut reader = BufReader::new(stderr);
@@ -453,12 +605,11 @@ fn spawn_stderr(stderr: ChildStderr, buf: Arc<Mutex<RingBuffer>>) -> JoinHandle<
         loop {
             line.clear();
             match reader.read_line(&mut line).await {
-                Ok(0) => break,
+                Ok(0) | Err(_) => break,
                 Ok(_) => {
                     let mut b = buf.lock().await;
                     b.push(line.as_bytes());
                 }
-                Err(_) => break,
             }
         }
     })
@@ -481,7 +632,9 @@ fn spawn_waiter(
             let exit_str;
             {
                 let mut guard = child.lock().await;
-                let Some(c) = guard.as_mut() else { return; };
+                let Some(c) = guard.as_mut() else {
+                    return;
+                };
                 match c.try_wait() {
                     Ok(Some(s)) => {
                         exited = true;

@@ -17,9 +17,17 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 /// Top-level awidat metadata on a `Timeline.metadata.awidat`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Forward-compat: `version` is the only required field. All others have
+/// `#[serde(default)]`, and unknown keys land in [`Self::extra`] (round-trip
+/// preserved). Adding a new field in v1.5 is a non-breaking change as long as
+/// the new field is optional or has a serde default — old engines reading
+/// new files keep the value in `extra`, new engines reading old files use
+/// the default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AwidatTimelineMetadata {
     /// Awidat project format version, e.g. `"0.1"`.
+    #[serde(default)]
     pub version: String,
     /// Source asset paths relative to the project root.
     #[serde(default)]
@@ -32,10 +40,18 @@ pub struct AwidatTimelineMetadata {
     /// Most recent `edit-plan.json` item id this timeline applied.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub edit_plan_id: Option<String>,
+    /// Forward-compat passthrough. Future versions of this metadata can add
+    /// fields here without breaking older readers. Engines that don't know
+    /// about a field still round-trip it intact.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Content anchor for a clip. Used by `apply_edl` to relocate a clip after
 /// upstream edits drift its absolute timeline position.
+///
+/// New anchor channels (e.g. v1.5's `face_embedding_sha`) slot in via
+/// [`Self::extra`] without breaking older engines.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Anchor {
     /// A snippet of transcript that uniquely identifies the clip.
@@ -51,6 +67,9 @@ pub struct Anchor {
     /// transcript is sparse.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub energy_curve_hash: Option<String>,
+    /// Forward-compat passthrough.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Per-clip awidat metadata on a `Clip.metadata.awidat`.
@@ -67,6 +86,9 @@ pub struct AwidatClipMetadata {
     /// location is allowed; tools should check both.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub anchor: Option<Anchor>,
+    /// Forward-compat passthrough.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Per-marker awidat metadata on a `Marker.metadata.awidat`.
@@ -78,6 +100,9 @@ pub struct AwidatMarkerMetadata {
     /// Free-form note attached to the marker.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub note: Option<String>,
+    /// Forward-compat passthrough.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 #[cfg(test)]
@@ -88,9 +113,7 @@ mod tests {
     fn anchor_partial_roundtrip() {
         let a = Anchor {
             transcript_snippet: Some("hello".into()),
-            scene_change_index: None,
-            audio_fingerprint_sha: None,
-            energy_curve_hash: None,
+            ..Anchor::default()
         };
         let s = serde_json::to_string(&a).unwrap();
         // Optional `None` fields should be omitted.
@@ -104,12 +127,30 @@ mod tests {
         let m = AwidatTimelineMetadata {
             version: "0.1".into(),
             source_assets: vec!["raw/foo.mp4".into()],
-            anchors: HashMap::new(),
-            edit_plan_id: None,
+            ..AwidatTimelineMetadata::default()
         };
         let s = serde_json::to_string(&m).unwrap();
         let back: AwidatTimelineMetadata = serde_json::from_str(&s).unwrap();
         assert_eq!(back.version, "0.1");
         assert_eq!(back.source_assets.len(), 1);
+    }
+
+    #[test]
+    fn unknown_fields_round_trip_through_extra() {
+        // A future engine adds a `taste_profile_id` field to the awidat
+        // namespace. An older reader (this code) deserializes it into
+        // `extra`, then serializes it back out unchanged.
+        let json = serde_json::json!({
+            "version": "0.1",
+            "source_assets": [],
+            "taste_profile_id": "tp-001",
+            "fancy_new_field": { "nested": true }
+        });
+        let m: AwidatTimelineMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(m.extra.get("taste_profile_id").and_then(|v| v.as_str()), Some("tp-001"));
+        // Round-trips intact.
+        let out = serde_json::to_value(&m).unwrap();
+        assert_eq!(out["taste_profile_id"], "tp-001");
+        assert_eq!(out["fancy_new_field"]["nested"], true);
     }
 }

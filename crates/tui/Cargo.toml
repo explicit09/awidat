@@ -7,3 +7,6 @@ license.workspace = true
 description = "Awidat Ratatui terminal UI. Stub in Week 1."
 
 [dependencies]
+
+[lints]
+workspace = true

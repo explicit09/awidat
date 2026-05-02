@@ -48,7 +48,7 @@
 //!     args: vec!["-m".into(), "awidat_audio_energy".into()],
 //!     env: HashMap::new(),
 //!     cwd: None,
-//! }).await?;
+//! })?;
 //!
 //! let server_info = client.initialize(ClientInfo {
 //!     name: "awidat".into(),
@@ -69,18 +69,14 @@
 //! # Ok(()) }
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
-#![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
-
 mod client;
 mod error;
 mod protocol;
 mod transport;
 
-pub use client::{Client, ClientInfo, ServerConfig, ServerInfo, ToolDescriptor, ToolResult};
+pub use client::{
+    Client, ClientInfo, ServerCapabilities, ServerConfig, ServerInfo, ToolDescriptor, ToolResult,
+};
 pub use error::McpError;
 pub use protocol::{ContentBlock, MCP_PROTOCOL_VERSION};
+pub use transport::ProgressEvent;

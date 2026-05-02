@@ -26,8 +26,9 @@ mod time;
 pub use nodes::{
     Clip, ClipMetadata, Effect, ExternalReference, Gap, Marker, MarkerMetadata, MediaReference,
     MissingReference, Stack, StackChild, Timeline, TimelineMetadata, Track, TrackChild, TrackKind,
+    Transition,
 };
 pub use schema::{
-    parse_schema_string, OtioSchemaName, SchemaParseOutcome, SchemaWarning, SUPPORTED_SCHEMA_NAMES,
+    OtioSchemaName, SUPPORTED_SCHEMA_NAMES, SchemaParseOutcome, SchemaWarning, parse_schema_string,
 };
 pub use time::{RationalTime, TimeRange};

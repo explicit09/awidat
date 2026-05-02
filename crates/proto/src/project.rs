@@ -20,12 +20,12 @@ use std::path::{Path, PathBuf};
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::ProtoError;
 use crate::error::JsonPath;
 use crate::index::Manifest;
 use crate::otio::{
-    parse_schema_string, SchemaParseOutcome, SchemaWarning, Timeline, SUPPORTED_SCHEMA_NAMES,
+    SUPPORTED_SCHEMA_NAMES, SchemaParseOutcome, SchemaWarning, Timeline, parse_schema_string,
 };
-use crate::ProtoError;
 
 /// File names inside a project, kept as constants so the CLI and validator
 /// agree.
@@ -45,6 +45,30 @@ pub mod files {
     /// Ephemeral state dir.
     pub const AWIDAT_DIR: &str = ".awidat";
 }
+
+/// Default `.gitignore` written by `awidat init`. Per `PLAN.md` §5.3:
+/// regenerable indexer outputs and ephemeral session state stay out of git
+/// by default; the manifest is carved back in because it's small and
+/// authoritative.
+const GITIGNORE_TEMPLATE: &str = "\
+# Awidat project — keep diffability sharp.
+# Regenerable outputs and ephemeral state stay out of git by default.
+
+# Sidecar JSON written by indexers (whisper, scenedetect, ...). Large and
+# rebuildable from `awidat index`.
+/index/*
+# Carve out the manifest: small, hand-curated source of truth.
+!/index/manifest.json
+
+# Final and proxy renders.
+/renders/
+
+# Ephemeral session state.
+/.awidat/
+
+# OS noise.
+.DS_Store
+";
 
 /// In-memory project. Built by [`Project::read`] and consumed by
 /// [`Project::write`].
@@ -149,10 +173,12 @@ impl Project {
             })?;
         }
 
-        // .gitkeep stubs so an empty directory is committable.
-        for d in [&index_dir, &renders_dir, &awidat_dir] {
-            write_file(&d.join(".gitkeep"), "")?;
-        }
+        // Project-root .gitignore: index/ and renders/ are regenerable
+        // outputs; .awidat/ is ephemeral session state. None should land in
+        // git by default. The manifest under index/ is the one exception —
+        // small, hand-curated, and the source of truth for which indexers
+        // ran. See PLAN.md §5.3.
+        write_file(&root.join(".gitignore"), GITIGNORE_TEMPLATE)?;
 
         // Default Timeline.
         let timeline = Timeline::empty(default_project_name(root));
@@ -420,13 +446,21 @@ mod tests {
         assert!(root.join(files::OTIO).exists());
         assert!(root.join(files::EDIT_PLAN).exists());
         assert!(root.join(files::EPISODE_NOTES).exists());
-        assert!(root
-            .join(files::INDEX_DIR)
-            .join(files::INDEX_MANIFEST)
-            .exists());
-        assert!(root.join(files::INDEX_DIR).join(".gitkeep").exists());
-        assert!(root.join(files::RENDERS_DIR).join(".gitkeep").exists());
-        assert!(root.join(files::AWIDAT_DIR).join(".gitkeep").exists());
+        assert!(
+            root.join(files::INDEX_DIR)
+                .join(files::INDEX_MANIFEST)
+                .exists()
+        );
+        // .gitignore is the source of truth; regenerable dirs are not
+        // .gitkeep'd because we don't want them tracked.
+        let gi = root.join(".gitignore");
+        assert!(gi.exists(), ".gitignore must be written by init");
+        let gi_text = fs::read_to_string(&gi).unwrap();
+        assert!(gi_text.contains("/index/*"));
+        assert!(gi_text.contains("!/index/manifest.json"));
+        assert!(gi_text.contains("/renders/"));
+        assert!(gi_text.contains("/.awidat/"));
+        assert!(!root.join(files::INDEX_DIR).join(".gitkeep").exists());
         assert_eq!(p.timeline.otio_schema, "Timeline.1");
         fs::remove_dir_all(&root).ok();
     }
@@ -457,10 +491,11 @@ mod tests {
     fn read_warns_on_known_name_unknown_major() {
         let root = tmp_dir();
         Project::init(&root).unwrap();
-        // Hand-edit OTIO to use Clip.2 — should be accepted with a warning.
+        // Hand-edit OTIO to use a future Clip major — should be accepted with
+        // a warning.
         let otio_path = root.join(files::OTIO);
         let text = fs::read_to_string(&otio_path).unwrap();
-        // Add a track with a clip carrying Clip.2.
+        // Add a track with a clip carrying Clip.99.
         let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
         v["tracks"]["children"] = serde_json::json!([
             {
@@ -469,7 +504,7 @@ mod tests {
                 "kind": "Video",
                 "children": [
                     {
-                        "OTIO_SCHEMA": "Clip.2",
+                        "OTIO_SCHEMA": "Clip.99",
                         "name": "c1",
                         "media_reference": {
                             "OTIO_SCHEMA": "ExternalReference.1",
@@ -482,7 +517,7 @@ mod tests {
         fs::write(&otio_path, serde_json::to_string_pretty(&v).unwrap()).unwrap();
         let p = Project::read(&root).unwrap();
         assert_eq!(p.warnings.len(), 1);
-        assert_eq!(p.warnings[0].schema, "Clip.2");
+        assert_eq!(p.warnings[0].schema, "Clip.99");
         fs::remove_dir_all(&root).ok();
     }
 
@@ -521,7 +556,7 @@ mod tests {
                 "kind": "Video",
                 "children": [
                     {
-                        "OTIO_SCHEMA": "Clip.1",
+                        "OTIO_SCHEMA": "Clip.2",
                         "name": "c1",
                         "source_range": {
                             "start_time": {"value": 0.0, "rate": 24.0},
@@ -558,7 +593,7 @@ mod tests {
                 "kind": "Video",
                 "children": [
                     {
-                        "OTIO_SCHEMA": "Clip.1",
+                        "OTIO_SCHEMA": "Clip.2",
                         "name": "c1",
                         "source_range": {
                             "start_time": {"value": 0.0, "rate": 0.0},

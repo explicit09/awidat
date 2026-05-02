@@ -28,10 +28,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ProtoError;
 use crate::awidat_meta::{AwidatClipMetadata, AwidatMarkerMetadata, AwidatTimelineMetadata};
 use crate::error::JsonPath;
 use crate::otio::time::{RationalTime, TimeRange};
-use crate::ProtoError;
 
 // --------- Timeline ---------------------------------------------------------
 
@@ -79,9 +79,7 @@ impl Timeline {
             metadata: TimelineMetadata {
                 awidat: Some(crate::awidat_meta::AwidatTimelineMetadata {
                     version: crate::AWIDAT_PROJECT_VERSION.to_string(),
-                    source_assets: Vec::new(),
-                    anchors: std::collections::HashMap::new(),
-                    edit_plan_id: None,
+                    ..crate::awidat_meta::AwidatTimelineMetadata::default()
                 }),
                 other: HashMap::new(),
             },
@@ -204,7 +202,7 @@ pub enum StackChild {
     #[serde(rename = "Stack.1")]
     Stack(Stack),
     /// Bare clip directly in the stack.
-    #[serde(rename = "Clip.1")]
+    #[serde(rename = "Clip.2")]
     Clip(Clip),
     /// Bare gap directly in the stack.
     #[serde(rename = "Gap.1")]
@@ -277,16 +275,25 @@ pub enum TrackKind {
     Audio,
 }
 
-/// What can sit inside a [`Track`]: a clip, a gap, or a nested stack.
+/// What can sit inside a [`Track`]: a clip, a gap, a transition, or a nested
+/// stack.
+///
+/// `Transition` is a peer of `Clip`/`Gap` per the OTIO spec — it sits between
+/// two clips on a track and describes the cut between them (cross-dissolve,
+/// fade, etc.). Modeling it now means Week-4's `apply_edl` can emit
+/// `Insert Transition` directives without a schema migration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "OTIO_SCHEMA")]
 pub enum TrackChild {
     /// A clip on the track.
-    #[serde(rename = "Clip.1")]
+    #[serde(rename = "Clip.2")]
     Clip(Clip),
     /// A gap on the track.
     #[serde(rename = "Gap.1")]
     Gap(Gap),
+    /// A transition between adjacent clips (dissolve, fade, etc.).
+    #[serde(rename = "Transition.1")]
+    Transition(Transition),
     /// A nested stack (multi-cam, picture-in-picture, etc.).
     #[serde(rename = "Stack.1")]
     Stack(Stack),
@@ -297,6 +304,7 @@ impl TrackChild {
         match self {
             Self::Clip(c) => c.validate(file, path),
             Self::Gap(g) => g.validate(file, path),
+            Self::Transition(t) => t.validate(file, path),
             Self::Stack(s) => s.validate(file, path),
         }
     }
@@ -304,9 +312,14 @@ impl TrackChild {
 
 // --------- Clip -------------------------------------------------------------
 
-/// OTIO `Clip.1`. A single piece of media on a track. Always lives inside a
+/// OTIO `Clip.2`. A single piece of media on a track. Always lives inside a
 /// [`TrackChild::Clip`] / [`StackChild::Clip`] envelope; no inline schema
 /// field.
+///
+/// `Clip.2` (mainline OTIO since 0.18) added the `active` field; clips that
+/// are marked inactive (`active: false`) are skipped by playback engines
+/// without being deleted, which is useful for the agent's "this cut is
+/// proposed, but not yet committed" workflow. Defaults to `true`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Clip {
     /// Clip name.
@@ -323,9 +336,17 @@ pub struct Clip {
     /// Markers attached to this clip.
     #[serde(default)]
     pub markers: Vec<Marker>,
+    /// Whether the clip is active. `false` means playback skips it without
+    /// deleting it. Defaults to `true`. Added in `Clip.2`.
+    #[serde(default = "default_true")]
+    pub active: bool,
     /// Clip-level metadata.
     #[serde(default)]
     pub metadata: ClipMetadata,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Clip {
@@ -340,6 +361,7 @@ impl Clip {
             media_reference: MediaReference::Missing(MissingReference::default()),
             effects: Vec::new(),
             markers: Vec::new(),
+            active: true,
             metadata: ClipMetadata::default(),
         }
     }
@@ -500,9 +522,9 @@ impl MissingReference {
 
 // --------- Effect -----------------------------------------------------------
 
-/// OTIO `Effect.1` base type. v1 holds `effect_name` plus a free
-/// `serde_json::Value` for parameters; specializations (color grade, time
-/// warp, etc.) land in v1.5+ per `PLAN.md` Concern B.
+/// OTIO `Effect.1` base type. v1 holds `effect_name` plus a free metadata
+/// object for parameters; specializations (color grade, time warp, etc.)
+/// land in v1.5+ per `PLAN.md` Concern B.
 ///
 /// Always serialized standalone (inside `Vec<Effect>` on a clip), so it
 /// owns its `otio_schema` field.
@@ -516,10 +538,10 @@ pub struct Effect {
     pub name: String,
     /// Effect type identifier. Convention: `"awidat.<kind>"` for our own.
     pub effect_name: String,
-    /// Effect parameters. Untyped to the engine; specialized inside whatever
-    /// applies the effect.
+    /// Effect parameters. Always an object per OTIO; untyped to the engine
+    /// and specialized inside whatever applies the effect.
     #[serde(default)]
-    pub metadata: serde_json::Value,
+    pub metadata: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Effect {
@@ -529,7 +551,7 @@ impl Effect {
             otio_schema: "Effect.1".to_string(),
             name: String::new(),
             effect_name: effect_name.into(),
-            metadata: serde_json::Value::Null,
+            metadata: serde_json::Map::new(),
         }
     }
 
@@ -545,14 +567,70 @@ impl Effect {
     }
 }
 
+// --------- Transition -------------------------------------------------------
+
+/// OTIO `Transition.1`. Sits between two adjacent clips on a track and
+/// describes the cut between them — typically a cross-dissolve, fade, or
+/// other gradual transform. Always serialized standalone inside a
+/// [`TrackChild::Transition`] envelope's tag, so it owns no inline schema
+/// field.
+///
+/// `in_offset` is the duration into the *previous* clip the transition
+/// reaches back; `out_offset` is the duration into the *next* clip it
+/// extends. The two offsets together define the transition's overlap range.
+/// Both are required by the OTIO spec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transition {
+    /// Display name.
+    #[serde(default)]
+    pub name: String,
+    /// Transition kind id. Convention: `"SMPTE_Dissolve"` (the OTIO standard
+    /// crossfade tag), `"awidat.fade_in"`, etc.
+    #[serde(default)]
+    pub transition_type: String,
+    /// Duration into the previous clip the transition reaches.
+    pub in_offset: RationalTime,
+    /// Duration into the next clip the transition extends.
+    pub out_offset: RationalTime,
+    /// Free metadata.
+    #[serde(default)]
+    pub metadata: HashMap<String, serde_json::Value>,
+}
+
+impl Transition {
+    /// Construct a symmetric transition of the given total duration centered
+    /// on the cut point. Half goes into the outgoing clip (`in_offset`) and
+    /// half into the incoming clip (`out_offset`).
+    pub fn symmetric(transition_type: impl Into<String>, duration_seconds: f64, rate: f64) -> Self {
+        let half = RationalTime::new((duration_seconds / 2.0) * rate, rate);
+        Self {
+            name: String::new(),
+            transition_type: transition_type.into(),
+            in_offset: half,
+            out_offset: half,
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn validate(&self, file: &str, path: &JsonPath) -> Result<(), ProtoError> {
+        self.in_offset.validate(file, &path.field("in_offset"))?;
+        self.out_offset.validate(file, &path.field("out_offset"))?;
+        Ok(())
+    }
+}
+
 // --------- Marker -----------------------------------------------------------
 
-/// OTIO `Marker.1`. Heavily used by Week 4 and the agent ("the laugh at
+/// OTIO `Marker.2`. Heavily used by Week 4 and the agent ("the laugh at
 /// 4:12", "speaker mentioned Stripe here"). Always serialized standalone
 /// (inside `Vec<Marker>` on a clip), so it owns its `otio_schema` field.
+///
+/// `Marker.2` (mainline OTIO since 0.18) added the `comment` field, which
+/// the agent uses for short editorial notes attached to a marker (separate
+/// from the marker's `name`, which is typically a short label).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Marker {
-    /// Discriminator: `"Marker.1"`.
+    /// Discriminator: `"Marker.2"`.
     #[serde(rename = "OTIO_SCHEMA")]
     pub otio_schema: String,
     /// Display name.
@@ -563,6 +641,10 @@ pub struct Marker {
     /// Optional color string, free-form (e.g. `"RED"`, `"#ff8800"`).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color: Option<String>,
+    /// Optional editorial comment. Added in `Marker.2`. Distinct from
+    /// [`Self::name`]: name is a label, comment is a sentence.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub comment: Option<String>,
     /// Strongly-typed awidat metadata + flatten passthrough.
     #[serde(default)]
     pub metadata: MarkerMetadata,
@@ -572,10 +654,11 @@ impl Marker {
     /// New marker.
     pub fn new(name: impl Into<String>, marked_range: TimeRange) -> Self {
         Self {
-            otio_schema: "Marker.1".to_string(),
+            otio_schema: "Marker.2".to_string(),
             name: name.into(),
             marked_range,
             color: None,
+            comment: None,
             metadata: MarkerMetadata::default(),
         }
     }
@@ -708,6 +791,7 @@ mod tests {
         m.metadata.awidat = Some(AwidatMarkerMetadata {
             category: Some("laugh".into()),
             note: Some("biggest laugh in episode".into()),
+            ..AwidatMarkerMetadata::default()
         });
         let json = serde_json::to_string(&m).unwrap();
         let back: Marker = serde_json::from_str(&json).unwrap();
@@ -753,8 +837,7 @@ mod tests {
             Anchor {
                 transcript_snippet: Some("hello world".into()),
                 scene_change_index: Some(3),
-                audio_fingerprint_sha: None,
-                energy_curve_hash: None,
+                ..Anchor::default()
             },
         );
         t.metadata.awidat = Some(AwidatTimelineMetadata {
@@ -762,6 +845,7 @@ mod tests {
             source_assets: vec!["raw/ep.mp4".into()],
             anchors,
             edit_plan_id: Some("plan-001".into()),
+            ..AwidatTimelineMetadata::default()
         });
         let json = serde_json::to_string(&t).unwrap();
         let back: Timeline = serde_json::from_str(&json).unwrap();
@@ -798,5 +882,88 @@ mod tests {
         };
         assert_eq!(rc.markers.len(), 1);
         assert_eq!(rc.effects.len(), 1);
+    }
+
+    #[test]
+    fn clip_active_defaults_true_and_roundtrips() {
+        // Fresh clip is active.
+        let clip = Clip::empty("c1");
+        assert!(clip.active, "fresh clip must be active by default");
+
+        // A Clip JSON without `active` deserializes to active=true.
+        let json = serde_json::json!({
+            "name": "c1",
+            "media_reference": {
+                "OTIO_SCHEMA": "MissingReference.1",
+                "name": ""
+            }
+        });
+        let back: Clip = serde_json::from_value(json).unwrap();
+        assert!(back.active, "missing `active` defaults to true per Clip.2");
+
+        // Inactive round-trips.
+        let mut clip = Clip::empty("c1");
+        clip.active = false;
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/foo.mp4"));
+        let s = serde_json::to_string(&clip).unwrap();
+        assert!(s.contains("\"active\":false"));
+        let back: Clip = serde_json::from_str(&s).unwrap();
+        assert!(!back.active);
+    }
+
+    #[test]
+    fn marker_comment_roundtrips() {
+        // Marker.2 added `comment`; verify it's emitted only when present.
+        let mut m = Marker::new("laugh", tr(0.0, 0.0, 24.0));
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(
+            !s.contains("comment"),
+            "absent comment must be omitted: {s}"
+        );
+
+        m.comment = Some("biggest laugh of the year".into());
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(s.contains("\"comment\":\"biggest laugh of the year\""));
+        let back: Marker = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.comment.as_deref(), Some("biggest laugh of the year"));
+    }
+
+    #[test]
+    fn marker_serializes_as_v2() {
+        let m = Marker::new("m", tr(0.0, 0.0, 24.0));
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(s.contains("\"OTIO_SCHEMA\":\"Marker.2\""));
+    }
+
+    #[test]
+    fn transition_round_trips_inside_track() {
+        let mut a = Clip::empty("a");
+        a.media_reference = MediaReference::External(ExternalReference::new("raw/a.mp4"));
+        a.source_range = Some(tr(0.0, 24.0, 24.0));
+        let mut b = Clip::empty("b");
+        b.media_reference = MediaReference::External(ExternalReference::new("raw/b.mp4"));
+        b.source_range = Some(tr(0.0, 24.0, 24.0));
+        let trans = Transition::symmetric("SMPTE_Dissolve", 0.5, 24.0);
+
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(a));
+        track.children.push(TrackChild::Transition(trans));
+        track.children.push(TrackChild::Clip(b));
+
+        let mut t = Timeline::empty("ep");
+        t.tracks.children.push(StackChild::Track(track));
+
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(
+            json.contains("\"OTIO_SCHEMA\":\"Transition.1\""),
+            "Transition tag must be Transition.1: {json}"
+        );
+        let back: Timeline = serde_json::from_str(&json).unwrap();
+        let StackChild::Track(rt) = &back.tracks.children[0] else {
+            panic!("expected Track")
+        };
+        assert_eq!(rt.children.len(), 3);
+        assert!(matches!(rt.children[1], TrackChild::Transition(_)));
+        back.validate("p.json", &JsonPath::root()).unwrap();
     }
 }

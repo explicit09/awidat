@@ -7,3 +7,6 @@ license.workspace = true
 description = "Awidat ffmpeg wrapper, proxy renders, preview job manager. Stub in Week 1."
 
 [dependencies]
+
+[lints]
+workspace = true

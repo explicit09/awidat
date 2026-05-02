@@ -109,9 +109,7 @@ pub enum ProtoError {
     /// `OTIO_SCHEMA` references a name we don't know about (not just an
     /// unknown major version of a known name). This is a hard fail per
     /// `PLAN.md` Concern B.
-    #[error(
-        "unknown OTIO_SCHEMA '{schema}' in '{file}' at '{path}'; supported names: {supported}"
-    )]
+    #[error("unknown OTIO_SCHEMA '{schema}' in '{file}' at '{path}'; supported names: {supported}")]
     UnknownOtioSchema {
         /// File the bad schema came from.
         file: String,

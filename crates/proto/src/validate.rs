@@ -17,9 +17,10 @@
 use std::fs;
 use std::path::Path;
 
-use crate::index::{IndexSidecar, IndexSidecarHeader, Manifest};
-use crate::project::{files, Project};
 use crate::ProtoError;
+use crate::error::JsonPath;
+use crate::index::{IndexSidecar, IndexSidecarHeader, Manifest, is_valid_indexer_id};
+use crate::project::{Project, files};
 
 /// Aggregate report from [`validate_project`].
 #[derive(Debug, Default, Clone)]
@@ -89,6 +90,27 @@ pub enum ValidationWarning {
         /// Indexer name (= directory name).
         indexer: String,
     },
+    /// Indexer id violates the canonical naming rules.
+    InvalidIndexerName {
+        /// Indexer name.
+        indexer: String,
+    },
+    /// Asset id is not a safe project-relative path.
+    UnsafeAssetId {
+        /// Asset id.
+        asset: String,
+        /// Where the unsafe id was found.
+        location: String,
+    },
+    /// Sidecar file path does not match its `asset_id`.
+    SidecarPathMismatch {
+        /// Sidecar file path.
+        path: String,
+        /// Expected sidecar file path.
+        expected_path: String,
+        /// Asset id.
+        asset: String,
+    },
 }
 
 /// Run all cross-cutting validation against a loaded [`Project`].
@@ -148,7 +170,7 @@ fn count_track(
     for child in &t.children {
         match child {
             crate::otio::TrackChild::Clip(c) => count_clip(c, clips, markers, effects),
-            crate::otio::TrackChild::Gap(_) => {}
+            crate::otio::TrackChild::Gap(_) | crate::otio::TrackChild::Transition(_) => {}
             crate::otio::TrackChild::Stack(s) => walk_counts(s, clips, markers, effects),
         }
     }
@@ -171,6 +193,8 @@ fn validate_index(
     // Manifest perspective: every listed indexer should have a directory.
     let listed: HashSet<&str> = manifest.indexers.iter().map(|e| e.name.as_str()).collect();
     for entry in &manifest.indexers {
+        validate_manifest_entry(entry, warnings);
+
         let dir = index_dir.join(&entry.name);
         if !dir.is_dir() {
             warnings.push(ValidationWarning::IndexerDirMissing {
@@ -179,55 +203,11 @@ fn validate_index(
             continue;
         }
         // Walk the indexer dir, validating each sidecar header.
-        for entry_res in fs::read_dir(&dir).map_err(|e| ProtoError::Io {
-            path: dir.display().to_string(),
-            source: e,
-        })? {
-            let dent = entry_res.map_err(|e| ProtoError::Io {
-                path: dir.display().to_string(),
-                source: e,
-            })?;
-            let path = dent.path();
-            if !path.is_file() || path.extension().and_then(|s| s.to_str()) != Some("json") {
-                continue;
-            }
+        let mut sidecar_paths = Vec::new();
+        collect_json_files(&dir, &mut sidecar_paths)?;
+        for path in sidecar_paths {
             summary.sidecar_count += 1;
-            let text = match fs::read_to_string(&path) {
-                Ok(t) => t,
-                Err(e) => {
-                    warnings.push(ValidationWarning::SidecarMalformed {
-                        path: path.display().to_string(),
-                        message: format!("io: {e}"),
-                    });
-                    continue;
-                }
-            };
-            // Parse just the header (data left as Value).
-            let parsed: Result<IndexSidecar<serde_json::Value>, _> = serde_json::from_str(&text);
-            let header: IndexSidecarHeader = match parsed {
-                Ok(s) => s.header,
-                Err(e) => {
-                    warnings.push(ValidationWarning::SidecarMalformed {
-                        path: path.display().to_string(),
-                        message: e.to_string(),
-                    });
-                    continue;
-                }
-            };
-            if header.indexer != entry.name {
-                warnings.push(ValidationWarning::SidecarHeaderMismatch {
-                    path: path.display().to_string(),
-                    found_indexer: header.indexer.clone(),
-                    expected_indexer: entry.name.clone(),
-                });
-            }
-            if !entry.assets.contains(&header.asset_id) {
-                warnings.push(ValidationWarning::SidecarAssetNotInManifest {
-                    indexer: entry.name.clone(),
-                    asset: header.asset_id.to_string(),
-                    path: path.display().to_string(),
-                });
-            }
+            validate_sidecar(entry, &dir, &path, warnings);
         }
     }
 
@@ -258,6 +238,133 @@ fn validate_index(
         }
     }
 
+    Ok(())
+}
+
+fn validate_manifest_entry(
+    entry: &crate::index::IndexerEntry,
+    warnings: &mut Vec<ValidationWarning>,
+) {
+    if !is_valid_indexer_id(&entry.name) {
+        warnings.push(ValidationWarning::InvalidIndexerName {
+            indexer: entry.name.clone(),
+        });
+    }
+    for asset in &entry.assets {
+        if let Err(err) = asset.validate(files::INDEX_MANIFEST, &JsonPath::root().field("assets")) {
+            warnings.push(ValidationWarning::UnsafeAssetId {
+                asset: asset.to_string(),
+                location: err.to_string(),
+            });
+        }
+    }
+}
+
+fn validate_sidecar(
+    entry: &crate::index::IndexerEntry,
+    indexer_dir: &Path,
+    path: &Path,
+    warnings: &mut Vec<ValidationWarning>,
+) {
+    let Some(header) = read_sidecar_header(path, warnings) else {
+        return;
+    };
+
+    validate_sidecar_asset_path(&header, indexer_dir, path, warnings);
+
+    if header.indexer != entry.name {
+        warnings.push(ValidationWarning::SidecarHeaderMismatch {
+            path: path.display().to_string(),
+            found_indexer: header.indexer.clone(),
+            expected_indexer: entry.name.clone(),
+        });
+    }
+    if !entry.assets.contains(&header.asset_id) {
+        warnings.push(ValidationWarning::SidecarAssetNotInManifest {
+            indexer: entry.name.clone(),
+            asset: header.asset_id.to_string(),
+            path: path.display().to_string(),
+        });
+    }
+}
+
+fn read_sidecar_header(
+    path: &Path,
+    warnings: &mut Vec<ValidationWarning>,
+) -> Option<IndexSidecarHeader> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            warnings.push(ValidationWarning::SidecarMalformed {
+                path: path.display().to_string(),
+                message: format!("io: {e}"),
+            });
+            return None;
+        }
+    };
+    let parsed: Result<IndexSidecar<serde_json::Value>, _> = serde_json::from_str(&text);
+    match parsed {
+        Ok(s) => Some(s.header),
+        Err(e) => {
+            warnings.push(ValidationWarning::SidecarMalformed {
+                path: path.display().to_string(),
+                message: e.to_string(),
+            });
+            None
+        }
+    }
+}
+
+fn validate_sidecar_asset_path(
+    header: &IndexSidecarHeader,
+    indexer_dir: &Path,
+    path: &Path,
+    warnings: &mut Vec<ValidationWarning>,
+) {
+    if let Err(err) = header.asset_id.validate(
+        &path.display().to_string(),
+        &JsonPath::root().field("asset_id"),
+    ) {
+        warnings.push(ValidationWarning::UnsafeAssetId {
+            asset: header.asset_id.to_string(),
+            location: err.to_string(),
+        });
+        return;
+    }
+
+    let Some(rel_path) = header.asset_id.sidecar_relative_path() else {
+        return;
+    };
+    let expected_path = indexer_dir.join(rel_path);
+    if path != expected_path {
+        warnings.push(ValidationWarning::SidecarPathMismatch {
+            path: path.display().to_string(),
+            expected_path: expected_path.display().to_string(),
+            asset: header.asset_id.to_string(),
+        });
+    }
+}
+
+fn collect_json_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), ProtoError> {
+    for entry_res in fs::read_dir(dir).map_err(|e| ProtoError::Io {
+        path: dir.display().to_string(),
+        source: e,
+    })? {
+        let dent = entry_res.map_err(|e| ProtoError::Io {
+            path: dir.display().to_string(),
+            source: e,
+        })?;
+        let file_type = dent.file_type().map_err(|e| ProtoError::Io {
+            path: dent.path().display().to_string(),
+            source: e,
+        })?;
+        let path = dent.path();
+        if file_type.is_dir() {
+            collect_json_files(&path, out)?;
+        } else if file_type.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
+            out.push(path);
+        }
+    }
     Ok(())
 }
 
@@ -368,14 +475,16 @@ mod tests {
             |w| matches!(w, ValidationWarning::OrphanIndexerDir { indexer } if indexer == "ghost")
         ));
         // No header-mismatch / no asset-not-in-manifest warning.
-        assert!(!r
-            .index_warnings
-            .iter()
-            .any(|w| matches!(w, ValidationWarning::SidecarHeaderMismatch { .. })));
-        assert!(!r
-            .index_warnings
-            .iter()
-            .any(|w| matches!(w, ValidationWarning::SidecarAssetNotInManifest { .. })));
+        assert!(
+            !r.index_warnings
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::SidecarHeaderMismatch { .. }))
+        );
+        assert!(
+            !r.index_warnings
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::SidecarAssetNotInManifest { .. }))
+        );
         fs::remove_dir_all(&root).ok();
     }
 
@@ -417,10 +526,145 @@ mod tests {
 
         let p = Project::read(&root).unwrap();
         let r = validate_project(&p).unwrap();
+        assert!(
+            r.index_warnings
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::SidecarHeaderMismatch { .. }))
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validates_nested_sidecars_that_preserve_asset_path() {
+        let root = tmp_dir();
+        Project::init(&root).unwrap();
+
+        let mp = root.join(files::INDEX_DIR).join(files::INDEX_MANIFEST);
+        let m = Manifest {
+            version: "0.1".into(),
+            indexers: vec![IndexerEntry {
+                name: "whisper".into(),
+                version: "1".into(),
+                schema_version: "1".into(),
+                assets: vec![AssetId::new("raw/foo.mp4")],
+                last_run: Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap(),
+            }],
+        };
+        fs::write(&mp, serde_json::to_string_pretty(&m).unwrap()).unwrap();
+
+        let nested_dir = root.join(files::INDEX_DIR).join("whisper").join("raw");
+        fs::create_dir_all(&nested_dir).unwrap();
+        fs::write(
+            nested_dir.join("foo.mp4.json"),
+            serde_json::to_string(&serde_json::json!({
+                "indexer": "whisper",
+                "indexer_version": "1",
+                "schema_version": "1",
+                "asset_id": "raw/foo.mp4",
+                "asset_sha256": "abc",
+                "produced_at": "2026-05-02T12:00:00Z",
+                "data": {"words": []}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let p = Project::read(&root).unwrap();
+        let r = validate_project(&p).unwrap();
+        assert_eq!(r.summary.sidecar_count, 1);
+        assert!(r.index_warnings.is_empty());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn warns_on_unsafe_index_paths() {
+        let root = tmp_dir();
+        Project::init(&root).unwrap();
+
+        let mp = root.join(files::INDEX_DIR).join(files::INDEX_MANIFEST);
+        let m = Manifest {
+            version: "0.1".into(),
+            indexers: vec![IndexerEntry {
+                name: "Bad_Name".into(),
+                version: "1".into(),
+                schema_version: "1".into(),
+                assets: vec![AssetId::new("../raw/foo.mp4")],
+                last_run: Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap(),
+            }],
+        };
+        fs::write(&mp, serde_json::to_string_pretty(&m).unwrap()).unwrap();
+
+        let bad_dir = root.join(files::INDEX_DIR).join("Bad_Name");
+        fs::create_dir_all(&bad_dir).unwrap();
+        fs::write(
+            bad_dir.join("foo.mp4.json"),
+            serde_json::to_string(&serde_json::json!({
+                "indexer": "Bad_Name",
+                "indexer_version": "1",
+                "schema_version": "1",
+                "asset_id": "../raw/foo.mp4",
+                "asset_sha256": "abc",
+                "produced_at": "2026-05-02T12:00:00Z",
+                "data": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let p = Project::read(&root).unwrap();
+        let r = validate_project(&p).unwrap();
         assert!(r
             .index_warnings
             .iter()
-            .any(|w| matches!(w, ValidationWarning::SidecarHeaderMismatch { .. })));
+            .any(|w| matches!(w, ValidationWarning::InvalidIndexerName { indexer } if indexer == "Bad_Name")));
+        assert!(r
+            .index_warnings
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::UnsafeAssetId { asset, .. } if asset == "../raw/foo.mp4")));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn warns_when_sidecar_path_does_not_match_asset_id() {
+        let root = tmp_dir();
+        Project::init(&root).unwrap();
+
+        let mp = root.join(files::INDEX_DIR).join(files::INDEX_MANIFEST);
+        let m = Manifest {
+            version: "0.1".into(),
+            indexers: vec![IndexerEntry {
+                name: "whisper".into(),
+                version: "1".into(),
+                schema_version: "1".into(),
+                assets: vec![AssetId::new("raw/foo.mp4")],
+                last_run: Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap(),
+            }],
+        };
+        fs::write(&mp, serde_json::to_string_pretty(&m).unwrap()).unwrap();
+
+        let misplaced_dir = root.join(files::INDEX_DIR).join("whisper").join("wrong");
+        fs::create_dir_all(&misplaced_dir).unwrap();
+        fs::write(
+            misplaced_dir.join("foo.mp4.json"),
+            serde_json::to_string(&serde_json::json!({
+                "indexer": "whisper",
+                "indexer_version": "1",
+                "schema_version": "1",
+                "asset_id": "raw/foo.mp4",
+                "asset_sha256": "abc",
+                "produced_at": "2026-05-02T12:00:00Z",
+                "data": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let p = Project::read(&root).unwrap();
+        let r = validate_project(&p).unwrap();
+        assert!(r
+            .index_warnings
+            .iter()
+            .any(|w| matches!(w, ValidationWarning::SidecarPathMismatch { asset, .. } if asset == "raw/foo.mp4")));
         fs::remove_dir_all(&root).ok();
     }
 }

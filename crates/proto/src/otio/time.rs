@@ -6,8 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::JsonPath;
 use crate::ProtoError;
+use crate::error::JsonPath;
 
 /// A time value at a given rate. Mirrors `opentime.RationalTime` from
 /// OpenTimelineIO 1.x.

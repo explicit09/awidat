@@ -28,17 +28,6 @@
 //! project.write(Path::new("/tmp/awidat-demo")).unwrap();
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
-#![warn(clippy::pedantic)]
-// Pedantic lints that aren't worth the noise on a schema crate:
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::large_enum_variant)] // OTIO types: tree-shaped, low fan-out per parent.
-#![allow(clippy::manual_let_else)] // stylistic preference
-
 pub mod awidat_meta;
 pub mod error;
 pub mod index;
