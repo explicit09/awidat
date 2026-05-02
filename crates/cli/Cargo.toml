@@ -12,11 +12,13 @@ path = "src/main.rs"
 [dependencies]
 awidat-proto = { workspace = true }
 awidat-config = { workspace = true }
+awidat-core = { workspace = true }
 awidat-index = { workspace = true }
 awidat-mcp = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "signal"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [lints]

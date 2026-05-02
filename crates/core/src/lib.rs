@@ -1,11 +1,24 @@
-//! Awidat agent loop and session state.
+//! Awidat agent loop and Anthropic API client.
 //!
-//! Week 1 stub. Implementations land in Week 3 per `PLAN.md` §15.
+//! Per `PLAN.md` §15 Week 3:
+//! - [`anthropic`] — typed messages, streaming SSE client, content-block
+//!   parser. Hand-rolled (no first-party Anthropic Rust SDK exists in 2026;
+//!   every harness in `harnesses/` hand-rolls this layer).
+//! - [`error::FunctionCallError`] — copied verbatim from
+//!   `harnesses/codex/codex-rs/core/src/function_tool.rs`.
+//! - Tools, `Session`, and the agent loop land in later phases of week 3.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
+pub mod anthropic;
+pub mod error;
+pub mod session;
+pub mod tool;
+pub mod tools;
 
-/// Returns the version of the agent core. Placeholder for Week 1.
+pub use error::FunctionCallError;
+pub use session::{Session, SessionError, SessionEvent};
+pub use tool::{ToolHandler, ToolInvocation, ToolOutput, ToolRegistry};
+
+/// Returns the version of the agent core.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }

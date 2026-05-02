@@ -96,6 +96,11 @@ anyhow = "1"
 thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
 tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+eventsource-stream = "0.2"
+async-stream = "0.3"
+async-trait = "0.1"
+bytes = "1"
 pretty_assertions = "1"
 tempfile = "3"
 awidat-test-support = { path = "crates/test-support" }

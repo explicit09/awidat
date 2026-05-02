@@ -11,6 +11,7 @@ use awidat_proto::project::Project;
 use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
 
+mod chat_cmd;
 mod index_cmd;
 
 /// Top-level CLI.
@@ -57,6 +58,17 @@ enum Command {
         #[arg(long, default_value_t = 4)]
         concurrency: usize,
     },
+    /// Open a text-only REPL with the agent. Type a prompt; the agent
+    /// streams a reply and may call tools (week 3 ships `bash`).
+    /// Ctrl-D / EOF / `:quit` to exit.
+    Chat {
+        /// Project directory. Used today only as the agent's `cwd` for
+        /// shell tools; week 5+ wires it into context injection.
+        path: PathBuf,
+        /// Override the default model id. Defaults to claude-sonnet-4-6.
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// Print the version of the awidat binary.
     Version,
 }
@@ -72,6 +84,7 @@ fn main() -> ExitCode {
             indexers,
             concurrency,
         } => index_cmd::run(&path, assets, indexers, concurrency),
+        Command::Chat { path, model } => chat_cmd::run(&path, model.as_deref()),
         Command::Version => {
             print_version();
             Ok(())
