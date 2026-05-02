@@ -104,9 +104,7 @@ impl ToolHandler for UpdatePlanTool {
             items: args.items,
             note: args.note,
         });
-        Ok(ToolOutput {
-            content: "Plan updated".into(),
-        })
+        Ok(ToolOutput::text("Plan updated"))
     }
 }
 

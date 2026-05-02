@@ -28,6 +28,7 @@ mod stream;
 pub use client::{Client, ClientConfig, ClientError};
 pub use messages::{
     ContentBlock, Message, MessagesRequest, Role, StopReason, Tool, ToolChoice, Usage,
+    tool_result,
 };
 pub use stream::{StreamEvent, StreamParseError};
 

@@ -10,4 +10,5 @@ pub mod list_assets;
 pub mod read_index;
 pub mod request_user_input;
 pub mod update_plan;
+pub mod view_frame;
 pub mod view_timeline;

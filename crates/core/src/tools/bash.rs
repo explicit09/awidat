@@ -166,7 +166,7 @@ impl ToolHandler for BashTool {
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
         let exit_code = output.status.code().unwrap_or(-1);
         let formatted = format_output(exit_code, &stdout, &stderr);
-        Ok(ToolOutput { content: formatted })
+        Ok(ToolOutput::text(formatted))
     }
 }
 

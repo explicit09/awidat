@@ -96,12 +96,37 @@ pub struct UserInputRequest {
     pub reply: oneshot::Sender<String>,
 }
 
-/// Tool result. Carries the call_id so the loop can build a matching
-/// `tool_result` ContentBlock without bookkeeping.
-#[derive(Debug, Clone)]
+/// Tool result. Most tools return text; multimodal tools (`view_frame`)
+/// return text + image content blocks via [`Self::with_images`].
+///
+/// The agent loop converts this to a [`crate::anthropic::ContentBlock::ToolResult`]
+/// before posting back to the model.
+#[derive(Debug, Clone, Default)]
 pub struct ToolOutput {
     /// Text payload to feed back to the model.
     pub content: String,
+    /// Optional image attachments. Each is `(media_type, base64_data)`.
+    /// When non-empty, the loop emits the result as a multi-block array
+    /// instead of a plain string.
+    pub images: Vec<(String, String)>,
+}
+
+impl ToolOutput {
+    /// Text-only result. The common case.
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            images: Vec::new(),
+        }
+    }
+
+    /// Attach one or more base64-encoded images. `media_type` is the
+    /// MIME (`"image/png"`, `"image/jpeg"`).
+    #[must_use]
+    pub fn with_images(mut self, images: Vec<(String, String)>) -> Self {
+        self.images = images;
+        self
+    }
 }
 
 /// One tool the agent can call. Object-safe via `BoxFuture` (`async_trait`).
@@ -214,9 +239,7 @@ mod tests {
             _i: ToolInvocation,
             _ctx: ToolContext,
         ) -> Result<ToolOutput, FunctionCallError> {
-            Ok(ToolOutput {
-                content: "ok".into(),
-            })
+            Ok(ToolOutput::text("ok"))
         }
     }
 

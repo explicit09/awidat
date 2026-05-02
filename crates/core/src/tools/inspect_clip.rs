@@ -113,7 +113,7 @@ impl ToolHandler for InspectClipTool {
 
         let body = serde_json::to_string(&serde_json::Value::Object(overview))
             .map_err(|e| FunctionCallError::Fatal(e.to_string()))?;
-        Ok(ToolOutput { content: body })
+        Ok(ToolOutput::text(body))
     }
 }
 

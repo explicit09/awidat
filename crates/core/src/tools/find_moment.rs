@@ -139,9 +139,7 @@ impl ToolHandler for FindMomentTool {
             "results": hits,
             "more_available": more_available,
         });
-        Ok(ToolOutput {
-            content: body.to_string(),
-        })
+        Ok(ToolOutput::text(body.to_string()))
     }
 }
 

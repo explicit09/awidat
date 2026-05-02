@@ -401,10 +401,10 @@ impl Session {
         if let Some(err) = call.args_err {
             return Ok(ContentBlock::ToolResult {
                 tool_use_id: call.id,
-                content: format!(
+                content: crate::anthropic::tool_result::text(format!(
                     "tool '{}' arguments failed to parse: {err}",
                     call.name
-                ),
+                )),
                 is_error: Some(true),
             });
         }
@@ -417,11 +417,11 @@ impl Session {
             });
             return Ok(ContentBlock::ToolResult {
                 tool_use_id: call.id,
-                content: format!(
+                content: crate::anthropic::tool_result::text(format!(
                     "tool '{}' is not registered. Available: {:?}",
                     call.name,
                     self.registry.names().collect::<Vec<_>>()
-                ),
+                )),
                 is_error: Some(true),
             });
         };
@@ -445,6 +445,17 @@ impl Session {
 
         match result {
             Ok(out) => {
+                // Build the wire content: plain string for text-only,
+                // multi-block array when the tool attached images.
+                let wire_content = if out.images.is_empty() {
+                    crate::anthropic::tool_result::text(&out.content)
+                } else {
+                    crate::anthropic::tool_result::text_and_images(
+                        &out.content, &out.images,
+                    )
+                };
+                // The event broadcast carries just the text part; the TUI
+                // renders images via the file-cache path (week 5+).
                 let _ = self.events_tx.send(SessionEvent::ToolResult {
                     id: call.id.clone(),
                     name: call.name.clone(),
@@ -452,7 +463,7 @@ impl Session {
                 });
                 Ok(ContentBlock::ToolResult {
                     tool_use_id: call.id,
-                    content: out.content,
+                    content: wire_content,
                     is_error: None,
                 })
             }
@@ -471,7 +482,7 @@ impl Session {
                 });
                 Ok(ContentBlock::ToolResult {
                     tool_use_id: call.id,
-                    content: msg,
+                    content: crate::anthropic::tool_result::text(msg),
                     is_error: Some(true),
                 })
             }

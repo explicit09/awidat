@@ -105,9 +105,7 @@ impl ToolHandler for ReadIndexTool {
         let body = serde_json::to_string(&projected).map_err(|e| {
             FunctionCallError::Fatal(format!("read_index serialization failed: {e}"))
         })?;
-        Ok(ToolOutput {
-            content: cap_size(&body),
-        })
+        Ok(ToolOutput::text(cap_size(&body)))
     }
 }
 
@@ -245,7 +243,7 @@ fn summary(project_root: &std::path::Path, asset_id: &str) -> Result<ToolOutput,
     }
     let body = serde_json::to_string(&serde_json::Value::Object(summary))
         .map_err(|e| FunctionCallError::Fatal(e.to_string()))?;
-    Ok(ToolOutput { content: cap_size(&body) })
+    Ok(ToolOutput::text(cap_size(&body)))
 }
 
 const DESCRIPTION: &str = "\

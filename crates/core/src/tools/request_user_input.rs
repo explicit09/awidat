@@ -117,7 +117,7 @@ impl ToolHandler for RequestUserInputTool {
         }
 
         match reply_rx.await {
-            Ok(response) => Ok(ToolOutput { content: response }),
+            Ok(response) => Ok(ToolOutput::text(response)),
             Err(_) => Err(FunctionCallError::RespondToModel(
                 "request_user_input was cancelled before receiving a response".into(),
             )),

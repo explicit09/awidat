@@ -140,7 +140,7 @@ impl ToolHandler for ListAssetsTool {
                 next = end + 1,
             ));
         }
-        Ok(ToolOutput { content: out })
+        Ok(ToolOutput::text(out))
     }
 }
 

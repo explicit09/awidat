@@ -15,7 +15,7 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use awidat_proto::otio::{Stack, StackChild, Timeline, TrackChild};
+use awidat_proto::otio::{StackChild, Timeline, TrackChild};
 use awidat_proto::project::Project;
 use serde::Deserialize;
 
@@ -106,9 +106,7 @@ impl ToolHandler for ViewTimelineTool {
             ))
         })?;
 
-        Ok(ToolOutput {
-            content: render(&project.timeline, start_s, end_s, line_cap),
-        })
+        Ok(ToolOutput::text(render(&project.timeline, start_s, end_s, line_cap)))
     }
 }
 

@@ -67,21 +67,65 @@ pub enum ContentBlock {
         /// Arguments. Object-shaped per Anthropic schema.
         input: serde_json::Value,
     },
+    /// Image input (model→model only in v1). Carried for round-trip.
+    Image {
+        /// `{ type: "base64", media_type: "image/png", data: "..." }`
+        /// or `{ type: "url", url: "https://..." }`.
+        source: serde_json::Value,
+    },
     /// Result we feed back for a previous tool call.
+    ///
+    /// `content` is intentionally typed as `serde_json::Value` because
+    /// Anthropic accepts either a plain string OR an array of inner
+    /// content blocks (text + image). We use the array form for tools
+    /// that return images (`view_frame`); everything else emits a string.
+    /// Construct via [`ToolResult::text`] / [`ToolResult::blocks`] for
+    /// readability.
     ToolResult {
         /// Id from the matching ToolUse.
         tool_use_id: String,
-        /// Output. Either a plain string or a multi-block array; we always
-        /// emit a string for simplicity.
-        content: String,
+        /// String OR array of inner blocks.
+        content: serde_json::Value,
         /// True iff the tool failed (per `FunctionCallError::RespondToModel`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
     },
-    /// Anything else (thinking, redacted_thinking, image, ...) — preserved
-    /// verbatim so we don't lose data on round-trip.
+    /// Anything else (thinking, redacted_thinking, server tool use, ...) —
+    /// preserved verbatim so we don't lose data on round-trip.
     #[serde(other)]
     Other,
+}
+
+/// Helpers for constructing ToolResult content. Keeps the JSON-shape
+/// implementation detail off the call site.
+pub mod tool_result {
+    use serde_json::{Value, json};
+
+    /// Plain-text result. The most common case.
+    pub fn text(s: impl Into<String>) -> Value {
+        Value::String(s.into())
+    }
+
+    /// Multi-block result: text + images. `images` are
+    /// `(media_type, base64_data)` tuples.
+    pub fn text_and_images(text: impl Into<String>, images: &[(String, String)]) -> Value {
+        let text = text.into();
+        let mut blocks = Vec::with_capacity(images.len() + usize::from(!text.is_empty()));
+        if !text.is_empty() {
+            blocks.push(json!({"type": "text", "text": text}));
+        }
+        for (media_type, data) in images {
+            blocks.push(json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": data,
+                }
+            }));
+        }
+        Value::Array(blocks)
+    }
 }
 
 /// One tool the model can call. We register every entry in our
@@ -237,7 +281,7 @@ mod tests {
     fn tool_result_includes_is_error_only_when_set() {
         let ok = ContentBlock::ToolResult {
             tool_use_id: "abc".into(),
-            content: "ok".into(),
+            content: tool_result::text("ok"),
             is_error: None,
         };
         let s = serde_json::to_string(&ok).unwrap();
@@ -245,11 +289,50 @@ mod tests {
 
         let err = ContentBlock::ToolResult {
             tool_use_id: "abc".into(),
-            content: "boom".into(),
+            content: tool_result::text("boom"),
             is_error: Some(true),
         };
         let s = serde_json::to_string(&err).unwrap();
         assert!(s.contains("\"is_error\":true"));
+    }
+
+    #[test]
+    fn tool_result_text_helper_emits_string() {
+        let v = tool_result::text("hi");
+        assert_eq!(v, serde_json::Value::String("hi".into()));
+    }
+
+    #[test]
+    fn tool_result_text_and_images_helper_builds_array() {
+        let v = tool_result::text_and_images(
+            "frame at 12.4s",
+            &[("image/png".into(), "BASE64".into())],
+        );
+        assert!(v.is_array());
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["type"], "text");
+        assert_eq!(arr[0]["text"], "frame at 12.4s");
+        assert_eq!(arr[1]["type"], "image");
+        assert_eq!(arr[1]["source"]["type"], "base64");
+        assert_eq!(arr[1]["source"]["media_type"], "image/png");
+        assert_eq!(arr[1]["source"]["data"], "BASE64");
+    }
+
+    #[test]
+    fn tool_result_text_only_no_images_omits_image_blocks() {
+        let v = tool_result::text_and_images("just text", &[]);
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["type"], "text");
+    }
+
+    #[test]
+    fn tool_result_image_only_omits_empty_text_block() {
+        let v = tool_result::text_and_images("", &[("image/png".into(), "X".into())]);
+        let arr = v.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["type"], "image");
     }
 
     #[test]
