@@ -246,7 +246,7 @@ mod tests {
     use super::*;
     use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
     use awidat_proto::otio::{
-        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, Stack, StackChild,
+        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
         TimeRange, Timeline, Track, TrackChild, TrackKind,
     };
 
