@@ -1,28 +1,9 @@
 //! OTIO node types: [`Timeline`], [`Stack`], [`Track`], [`Clip`], [`Gap`],
-//! [`Effect`], [`Marker`], [`ExternalReference`], [`MissingReference`].
+//! [`Transition`], [`Effect`], [`Marker`], [`ExternalReference`],
+//! [`MissingReference`].
 //!
-//! Schema-discriminator handling
-//! -----------------------------
-//!
-//! In OTIO JSON, every object carries an `OTIO_SCHEMA` field that names its
-//! type and major version. There are three places where that appears in our
-//! model:
-//!
-//! 1. **Standalone, never inside a tagged enum.** [`Timeline`], [`Effect`],
-//!    [`Marker`] always serialize as themselves and own an explicit
-//!    `otio_schema` field.
-//! 2. **Inside a `#[serde(tag = "OTIO_SCHEMA")]` enum.** [`Track`], [`Clip`],
-//!    [`Gap`], [`ExternalReference`], [`MissingReference`] only ever appear
-//!    inside [`StackChild`], [`TrackChild`], or [`MediaReference`], so the
-//!    enum's tag handles the schema string. They have no inline field.
-//! 3. **Both.** [`Stack`] appears in [`StackChild`] / [`TrackChild`] AND
-//!    standalone as [`Timeline::tracks`]. Its struct definition has no
-//!    inline schema field; when used standalone we go through the
-//!    [`stack_at_root`] (de)serialize helper.
-//!
-//! Schema-string forward-compat is handled at *load* time by
-//! [`crate::project`] which rewrites known-name-unknown-major schemas to
-//! the supported major before the typed deserialize runs.
+//! Schema-discriminator handling and forward-compat: see
+//! `crates/proto/OTIO_NOTES.md` (appendix).
 
 use std::collections::HashMap;
 

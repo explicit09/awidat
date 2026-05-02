@@ -18,6 +18,15 @@ use thiserror::Error;
 /// The path is a plain string internally; we append to it as we descend, and
 /// emit it as part of the final error message. This is a deliberately
 /// simple shape because the engine only consumes it as text.
+///
+/// **Discipline rule (do not delete):** this type exists *solely* to format
+/// human/agent-readable error strings. Do **not** add programmatic accessors
+/// like `to_json_pointer()`, `to_jq_path()`, segment iterators, or anything
+/// that invites callers to depend on its internal shape. If you find
+/// yourself wanting that, write a separate `JsonPointer` type with its own
+/// guarantees and migrate from the string. The audit (vs. codex-apply-patch)
+/// flagged this as the smallest-but-most-tempting source of future
+/// over-engineering.
 #[derive(Debug, Clone, Default)]
 pub struct JsonPath(String);
 

@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Awidat Ratatui terminal UI. Stub in Week 1."
+
+[lib]
+name = "awidat_tui"
+path = "src/lib.rs"
 
 [dependencies]
 

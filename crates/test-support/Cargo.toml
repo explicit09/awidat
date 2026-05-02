@@ -1,17 +1,21 @@
 [package]
-name = "awidat-core"
+name = "awidat-test-support"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish = false
 
 [lib]
-name = "awidat_core"
+name = "awidat_test_support"
 path = "src/lib.rs"
 
 [dependencies]
 awidat-proto = { workspace = true }
-tokio = { workspace = true }
+awidat-mcp = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }
 
 [lints]
 workspace = true

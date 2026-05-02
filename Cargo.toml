@@ -9,6 +9,7 @@ members = [
     "crates/tui",
     "crates/cli",
     "crates/render",
+    "crates/test-support",
 ]
 
 [workspace.package]
@@ -20,21 +21,53 @@ license = "Apache-2.0"
 repository = "https://github.com/awidat/awidat"
 
 # Centralized lints: every crate inherits via `[lints] workspace = true` in
-# its Cargo.toml. New crates added later get the same treatment by default,
-# avoiding the per-file `#![warn(clippy::pedantic)]` boilerplate that drifts
-# between crates.
+# its Cargo.toml. New crates added later get the same treatment by default.
+#
+# Philosophy lifted from `harnesses/codex/codex-rs/Cargo.toml`: we prefer
+# enabling specific lints that catch real bugs (`unwrap_used`,
+# `await_holding_lock`, `redundant_clone`) over enabling `clippy::pedantic`
+# wholesale, which mostly produces style noise. Add new lints when they earn
+# their keep on a real bug.
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
 
 [workspace.lints.clippy]
-pedantic = { level = "warn", priority = -1 }
-module_name_repetitions = "allow"
-missing_errors_doc = "allow"
-must_use_candidate = "allow"
-doc_markdown = "allow"
-large_enum_variant = "allow"
-manual_let_else = "allow"
+await_holding_invalid_type = "deny"
+await_holding_lock = "deny"
+expect_used = "deny"
+identity_op = "deny"
+manual_clamp = "deny"
+manual_filter = "deny"
+manual_find = "deny"
+manual_flatten = "deny"
+manual_map = "deny"
+manual_memcpy = "deny"
+manual_non_exhaustive = "deny"
+manual_ok_or = "deny"
+manual_range_contains = "deny"
+manual_retain = "deny"
+manual_strip = "deny"
+manual_try_fold = "deny"
+manual_unwrap_or = "deny"
+needless_borrow = "deny"
+needless_borrowed_reference = "deny"
+needless_collect = "deny"
+needless_late_init = "deny"
+needless_option_as_deref = "deny"
+needless_question_mark = "deny"
+needless_update = "deny"
+redundant_clone = "deny"
+redundant_closure = "deny"
+redundant_closure_for_method_calls = "deny"
+redundant_static_lifetimes = "deny"
+trivially_copy_pass_by_ref = "deny"
+uninlined_format_args = "deny"
+unnecessary_filter_map = "deny"
+unnecessary_lazy_evaluations = "deny"
+unnecessary_sort_by = "deny"
+unnecessary_to_owned = "deny"
+unwrap_used = "deny"
 
 [workspace.dependencies]
 # Crates we own.
@@ -52,9 +85,14 @@ serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
 tokio-util = { version = "0.7", default-features = false }
+rmcp = { version = "1", default-features = false, features = ["client", "transport-child-process", "macros"] }
 anyhow = "1"
 thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
+tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+pretty_assertions = "1"
+tempfile = "3"
+awidat-test-support = { path = "crates/test-support" }
 
 [profile.release]
 lto = "thin"

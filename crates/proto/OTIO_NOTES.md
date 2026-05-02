@@ -213,3 +213,26 @@ correct behavior for a new schema name.
 - [`PLAN.md` §3](../../PLAN.md) — design rationale for OTIO superset.
 - [`INDEX_SCHEMA.md`](INDEX_SCHEMA.md) — sister doc for the index sidecar
   contract.
+
+## Appendix: schema-discriminator handling in `src/otio/nodes.rs`
+
+In OTIO JSON every object carries an `OTIO_SCHEMA` field that names its
+type and major version. Three cases in our model:
+
+1. **Standalone, never inside a tagged enum.** `Timeline`, `Effect`,
+   `Marker` always serialize as themselves and own an explicit
+   `otio_schema` field.
+2. **Inside a `#[serde(tag = "OTIO_SCHEMA")]` enum.** `Track`, `Clip`,
+   `Gap`, `ExternalReference`, `MissingReference`, `Transition` only ever
+   appear inside `StackChild`, `TrackChild`, or `MediaReference`, so the
+   enum's tag handles the schema string. They have no inline field.
+3. **Both.** `Stack` appears in `StackChild` / `TrackChild` AND standalone
+   as `Timeline::tracks`. Its struct definition has no inline schema
+   field; when used standalone we go through the `stack_at_root`
+   (de)serialize helper.
+
+Schema-string forward-compat is handled at *load* time by
+[`src/project.rs`](src/project.rs)'s `read_otio_timeline`, which rewrites
+known-name-unknown-major schemas to the supported major before the typed
+deserialize runs. This is what lets us accept e.g. `Clip.7` as
+forward-compat without a custom `Deserialize` impl per type.

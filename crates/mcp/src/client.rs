@@ -1,21 +1,46 @@
-//! High-level MCP client. Wraps [`crate::transport::Transport`] in the
-//! `initialize` / `tools/list` / `tools/call` shapes the orchestrator and
-//! (later) the agent want to call directly.
+//! High-level MCP client. Thin wrapper over [`rmcp::service::RunningService`].
+//!
+//! `rmcp` owns: stdio framing, request id allocation, late-response handling,
+//! `notifications/cancelled`, `_meta.progressToken` injection, capability
+//! negotiation, the `2025-11-25` protocol version. We own: subprocess
+//! launch, our `ServerConfig` shape, the small surface our agent and CLI
+//! actually call, and per-request progress subscription routing via
+//! [`crate::handler::AwidatHandler`].
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use rmcp::ServiceExt;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ClientCapabilities, ClientRequest, Implementation,
+    InitializeRequestParams, NumberOrString, ProgressToken,
+};
+use rmcp::service::{PeerRequestOptions, RoleClient, RunningService};
+use rmcp::transport::TokioChildProcess;
 use serde::Serialize;
 use tokio::process::Command;
+use tokio::sync::mpsc;
 
 use crate::error::McpError;
-use crate::protocol::{
-    CallToolParams, CallToolResult, ClientCapabilitiesWire, ClientInfoWire, ContentBlock,
-    InitializeParams, InitializeResult, ListToolsResult, MCP_PROTOCOL_VERSION,
-    ServerCapabilitiesWire, ToolDescriptorWire,
-};
-use crate::transport::Transport;
+use crate::handler::{AwidatHandler, ProgressEvent};
+
+/// Default request timeout. Indexers can run for minutes (whisper on a long
+/// episode is the worst case), so this is intentionally generous; shorter
+/// timeouts are layered above when a tool call is known to be quick.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// MCP protocol version we negotiate against. The actual string sent on the
+/// wire is `rmcp::model::ProtocolVersion::LATEST.as_str()` — exposed here
+/// for downstream code that wants to log it.
+pub fn mcp_protocol_version() -> &'static str {
+    rmcp::model::ProtocolVersion::LATEST.as_str()
+}
+
+/// Backwards-compat constant for code that imports `MCP_PROTOCOL_VERSION`.
+/// Prefer [`mcp_protocol_version`] in new code.
+pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// How to spawn an MCP server.
 #[derive(Debug, Clone)]
@@ -51,52 +76,48 @@ pub struct ServerInfo {
     pub name: String,
     /// Server version.
     pub version: String,
-    /// Negotiated protocol version (echo from server). May differ from
-    /// what the client sent.
+    /// Negotiated protocol version (echo from server).
     pub protocol_version: String,
-    /// Capabilities the server advertised. Names are typed per the MCP
-    /// `2025-11-25` spec; unknown names land in
-    /// [`ServerCapabilities::other`].
+    /// Capabilities the server advertised.
     pub capabilities: ServerCapabilities,
     /// Optional server-attached human-readable instructions.
     pub instructions: Option<String>,
 }
 
-/// Server-advertised capabilities. Public counterpart of the wire type;
-/// each known capability is `Option<serde_json::Value>` because the spec
-/// lets servers nest config under each name.
+/// Server-advertised capabilities. Mirrors `rmcp::model::ServerCapabilities`
+/// but simplified to bools at the boundary so callers don't import rmcp
+/// types.
 #[derive(Debug, Default, Clone)]
 pub struct ServerCapabilities {
     /// `tools` — server hosts tools (every indexer).
-    pub tools: Option<serde_json::Value>,
+    pub tools: bool,
     /// `resources` — server exposes addressable resources.
-    pub resources: Option<serde_json::Value>,
+    pub resources: bool,
     /// `prompts` — server hosts prompt templates.
-    pub prompts: Option<serde_json::Value>,
+    pub prompts: bool,
     /// `logging` — server emits `notifications/message` log frames.
-    pub logging: Option<serde_json::Value>,
-    /// Forward-compat passthrough for any capability name we don't know
-    /// about yet (e.g. `completions`).
-    pub other: HashMap<String, serde_json::Value>,
-}
-
-impl From<ServerCapabilitiesWire> for ServerCapabilities {
-    fn from(w: ServerCapabilitiesWire) -> Self {
-        Self {
-            tools: w.tools,
-            resources: w.resources,
-            prompts: w.prompts,
-            logging: w.logging,
-            other: w.other,
-        }
-    }
+    pub logging: bool,
+    /// `completions` — server exposes argument-completion suggestions.
+    pub completions: bool,
 }
 
 impl ServerCapabilities {
     /// Returns true iff the server advertised the `tools` capability.
     /// Indexers always do; required before calling `tools/list`.
     pub fn supports_tools(&self) -> bool {
-        self.tools.is_some()
+        self.tools
+    }
+}
+
+impl From<rmcp::model::ServerCapabilities> for ServerCapabilities {
+    fn from(c: rmcp::model::ServerCapabilities) -> Self {
+        Self {
+            tools: c.tools.is_some(),
+            resources: c.resources.is_some(),
+            prompts: c.prompts.is_some(),
+            logging: c.logging.is_some(),
+            completions: c.completions.is_some(),
+        }
     }
 }
 
@@ -109,19 +130,36 @@ pub struct ToolDescriptor {
     pub title: Option<String>,
     /// Human description (optional).
     pub description: Option<String>,
-    /// JSON Schema for the tool's input arguments. Opaque on this end —
-    /// agents may use it to validate, the orchestrator only needs it to
-    /// surface during `awidat index --debug`.
+    /// JSON Schema for the tool's input arguments.
     pub input_schema: Option<serde_json::Value>,
 }
 
-impl From<ToolDescriptorWire> for ToolDescriptor {
-    fn from(w: ToolDescriptorWire) -> Self {
+impl From<rmcp::model::Tool> for ToolDescriptor {
+    fn from(t: rmcp::model::Tool) -> Self {
         Self {
-            name: w.name,
-            title: w.title,
-            description: w.description,
-            input_schema: w.input_schema,
+            name: t.name.into_owned(),
+            title: t.title,
+            description: t.description.map(|c| c.into_owned()),
+            input_schema: serde_json::to_value(&*t.input_schema).ok(),
+        }
+    }
+}
+
+/// One content block on a `tools/call` result.
+#[derive(Debug, Clone)]
+pub enum ContentBlock {
+    /// Plain UTF-8 text.
+    Text(String),
+    /// Any other block type (image, audio, …) — kept as opaque JSON for
+    /// forward compat.
+    Other(serde_json::Value),
+}
+
+impl From<rmcp::model::Content> for ContentBlock {
+    fn from(c: rmcp::model::Content) -> Self {
+        match c.raw {
+            rmcp::model::RawContent::Text(t) => Self::Text(t.text),
+            other => Self::Other(serde_json::to_value(&other).unwrap_or(serde_json::Value::Null)),
         }
     }
 }
@@ -129,15 +167,13 @@ impl From<ToolDescriptorWire> for ToolDescriptor {
 /// What `call_tool` returns.
 #[derive(Debug, Clone)]
 pub struct ToolResult {
-    /// Multi-format content blocks per MCP. Indexers typically include a
-    /// single `text` block carrying the JSON sidecar; some return only
+    /// Multi-format content blocks. Indexers typically include a single
+    /// `text` block carrying the JSON sidecar; some return only
     /// `structured_content`.
     pub content: Vec<ContentBlock>,
     /// True iff the server reported the tool failed.
     pub is_error: bool,
-    /// Structured / typed JSON output, if the server provided one. The
-    /// indexer orchestrator deserializes this directly into
-    /// `IndexSidecar<serde_json::Value>` when present.
+    /// Structured / typed JSON output, if the server provided one.
     pub structured_content: Option<serde_json::Value>,
 }
 
@@ -146,8 +182,8 @@ impl ToolResult {
     /// exists. Returns `None` for zero or many.
     pub fn single_text(&self) -> Option<&str> {
         let mut iter = self.content.iter().filter_map(|b| match b {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            ContentBlock::Other => None,
+            ContentBlock::Text(t) => Some(t.as_str()),
+            ContentBlock::Other(_) => None,
         });
         let first = iter.next()?;
         if iter.next().is_some() {
@@ -160,16 +196,22 @@ impl ToolResult {
 /// The MCP client itself. Owns one server subprocess.
 ///
 /// Lifecycle:
-/// 1. [`Client::launch`] spawns the server.
+/// 1. [`Client::launch`] spawns the server and starts the rmcp transport.
 /// 2. [`Client::initialize`] performs the MCP handshake; must be called
 ///    before any other method.
 /// 3. [`Client::list_tools`], [`Client::call_tool`] — the request methods.
-/// 4. [`Client::shutdown`] — graceful tear-down. `Drop` falls back to
-///    a forced kill (via `tokio::process::Command::kill_on_drop`).
+/// 4. [`Client::shutdown`] — graceful tear-down.
 pub struct Client {
-    transport: Transport,
-    initialized: bool,
+    server_name: String,
+    handler: AwidatHandler,
+    /// Pending pre-`initialize` state: the spawned child process transport,
+    /// kept here until `initialize()` consumes it.
+    pending_transport: Option<TokioChildProcess>,
+    /// `Option` so we can `take()` it to consume in `shutdown`. Always
+    /// `Some` between `initialize` and `shutdown`.
+    service: Option<Arc<RunningService<RoleClient, AwidatHandler>>>,
     capabilities: ServerCapabilities,
+    server_info: Option<ServerInfo>,
 }
 
 impl Client {
@@ -192,98 +234,107 @@ impl Client {
         if let Some(cwd) = &cwd {
             cmd.current_dir(cwd);
         }
-        let transport = Transport::launch(name, cmd)?;
+        let transport = TokioChildProcess::new(cmd).map_err(|e| McpError::Spawn {
+            server: name.clone(),
+            message: e.to_string(),
+        })?;
         Ok(Self {
-            transport,
-            initialized: false,
+            server_name: name,
+            handler: AwidatHandler::default(),
+            pending_transport: Some(transport),
+            service: None,
             capabilities: ServerCapabilities::default(),
+            server_info: None,
         })
     }
 
-    /// MCP `initialize` handshake. Sends our protocol version and identity,
-    /// reads back the server's identity / capabilities, then sends
-    /// `notifications/initialized` per the spec.
+    /// MCP `initialize` handshake.
     pub async fn initialize(&mut self, info: ClientInfo) -> Result<ServerInfo, McpError> {
         self.initialize_with_timeout(info, Duration::from_secs(20))
             .await
     }
 
-    /// Variant of [`Self::initialize`] with an explicit request timeout.
+    /// Variant of [`Self::initialize`] with an explicit handshake timeout.
     pub async fn initialize_with_timeout(
         &mut self,
         info: ClientInfo,
         req_timeout: Duration,
     ) -> Result<ServerInfo, McpError> {
-        let params = InitializeParams {
-            protocol_version: MCP_PROTOCOL_VERSION,
-            capabilities: ClientCapabilitiesWire::default(),
-            client_info: ClientInfoWire {
-                name: &info.name,
-                version: &info.version,
-            },
-        };
-        let raw = self
-            .transport
-            .request("initialize", Some(params), Some(req_timeout))
-            .await?;
-        let parsed: InitializeResult =
-            serde_json::from_value(raw).map_err(|e| McpError::ProtocolViolation {
-                server: self.transport.server_name().to_string(),
-                message: format!("malformed initialize result: {e}"),
+        let transport =
+            self.pending_transport
+                .take()
+                .ok_or_else(|| McpError::ProtocolViolation {
+                    server: self.server_name.clone(),
+                    message: "initialize called twice on the same client".into(),
+                })?;
+
+        // Pre-load our handler with the ClientInfo we want to advertise.
+        // The `ClientHandler::get_info` default returns ClientInfo::default();
+        // we override on AwidatHandler by stashing this and returning it.
+        let init_params = InitializeRequestParams::new(
+            ClientCapabilities::default(),
+            Implementation::new(info.name, info.version),
+        );
+        self.handler.set_client_info(init_params).await;
+
+        let handler = self.handler.clone();
+        let serve_fut = handler.serve(transport);
+        let service = tokio::time::timeout(req_timeout, serve_fut)
+            .await
+            .map_err(|_| McpError::Timeout {
+                server: self.server_name.clone(),
+                seconds: req_timeout.as_secs(),
+            })?
+            .map_err(|e| map_init_error(&self.server_name, e))?;
+
+        let peer_info = service
+            .peer_info()
+            .cloned()
+            .ok_or_else(|| McpError::ProtocolViolation {
+                server: self.server_name.clone(),
+                message: "server did not return peer_info after initialize".into(),
             })?;
-        // Per spec: client must send notifications/initialized before further
-        // requests. (We sent `initialize` first since the server expects it.)
-        self.transport
-            .notify::<serde_json::Value>("notifications/initialized", None)
-            .await?;
-        let capabilities: ServerCapabilities = parsed.capabilities.into();
-        self.capabilities = capabilities.clone();
-        self.initialized = true;
-        Ok(ServerInfo {
-            name: parsed.server_info.name,
-            version: parsed.server_info.version,
-            protocol_version: parsed.protocol_version,
-            capabilities,
-            instructions: parsed.instructions,
-        })
+
+        let capabilities: ServerCapabilities = peer_info.capabilities.into();
+        let server_info = ServerInfo {
+            name: peer_info.server_info.name,
+            version: peer_info.server_info.version,
+            protocol_version: peer_info.protocol_version.as_str().to_string(),
+            capabilities: capabilities.clone(),
+            instructions: peer_info.instructions,
+        };
+
+        self.capabilities = capabilities;
+        self.server_info = Some(server_info.clone());
+        self.service = Some(Arc::new(service));
+        Ok(server_info)
     }
 
     /// Capabilities the server advertised during `initialize`. Empty before
-    /// `initialize` returns. Survives across `tools/list` and `tools/call`
-    /// calls so callers don't have to stash the [`ServerInfo`].
+    /// `initialize` returns.
     pub fn capabilities(&self) -> &ServerCapabilities {
         &self.capabilities
     }
 
     /// `tools/list`. Returns every tool the server advertises.
     pub async fn list_tools(&mut self) -> Result<Vec<ToolDescriptor>, McpError> {
-        self.ensure_initialized()?;
-        let raw = self
-            .transport
-            .request::<serde_json::Value>("tools/list", None, Some(Duration::from_secs(20)))
-            .await?;
-        let parsed: ListToolsResult =
-            serde_json::from_value(raw).map_err(|e| McpError::ProtocolViolation {
-                server: self.transport.server_name().to_string(),
-                message: format!("malformed tools/list result: {e}"),
-            })?;
-        Ok(parsed.tools.into_iter().map(ToolDescriptor::from).collect())
+        let service = self.service()?;
+        let tools = service
+            .peer()
+            .list_all_tools()
+            .await
+            .map_err(|e| map_service_error(&self.server_name, e))?;
+        Ok(tools.into_iter().map(ToolDescriptor::from).collect())
     }
 
-    /// `tools/call`. Invokes the named tool with the given JSON arguments.
-    /// A `tools/call` result with `isError: true` is surfaced as the typed
-    /// [`ToolResult`] (the caller decides whether to treat it as fatal).
-    /// JSON-RPC errors are surfaced as [`McpError::ToolError`].
-    ///
-    /// Optional `req_timeout` overrides the per-request default. Pass
-    /// `Some(Duration::from_secs(60 * 30))` for indexer runs that may take
-    /// many minutes; `None` uses the transport default (also 30 minutes).
+    /// `tools/call`. Default per-request timeout; no cancellation; no progress
+    /// subscription.
     pub async fn call_tool(
         &mut self,
         name: &str,
         arguments: serde_json::Value,
     ) -> Result<ToolResult, McpError> {
-        self.call_tool_with_timeout(name, arguments, None).await
+        self.call_tool_full(name, arguments, None, None, None).await
     }
 
     /// Variant of [`Self::call_tool`] with explicit timeout.
@@ -298,8 +349,8 @@ impl Client {
     }
 
     /// Cancellable variant of [`Self::call_tool`]. If `cancel` fires while
-    /// the tool call is in flight, the client sends a `notifications/cancelled`
-    /// frame to the server (per MCP `2025-11-25`) and returns
+    /// the tool call is in flight, the client sends `notifications/cancelled`
+    /// to the server (per MCP `2025-11-25`) and returns
     /// [`McpError::Cancelled`]. Use this for long-running tools — render
     /// jobs, whisper transcriptions on a 1h episode — where the orchestrator
     /// may need to abort mid-flight.
@@ -314,70 +365,206 @@ impl Client {
     }
 
     /// Variant of [`Self::call_tool`] that subscribes to
-    /// `notifications/progress` events from the server. The client adds
-    /// `_meta.progressToken` to the outbound params (per MCP `2025-11-25`
-    /// progress utility) so the server knows where to send updates; events
-    /// are forwarded onto `progress_tx` until the call returns.
-    ///
-    /// `progress_tx` is consumed for the duration of the call. The
-    /// subscription is removed automatically once the response arrives,
-    /// times out, is cancelled, or the server crashes.
+    /// `notifications/progress` events. rmcp injects `_meta.progressToken`
+    /// into the request automatically; we register a subscriber against
+    /// that token and forward every matching `notifications/progress` frame
+    /// onto `progress_tx` until the call returns. Subscription is removed
+    /// when the response arrives or the call is cancelled.
     pub async fn call_tool_with_progress(
         &mut self,
         name: &str,
         arguments: serde_json::Value,
-        progress_tx: tokio::sync::mpsc::Sender<crate::transport::ProgressEvent>,
+        progress_tx: mpsc::Sender<ProgressEvent>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<ToolResult, McpError> {
         self.call_tool_full(name, arguments, None, cancel, Some(progress_tx))
             .await
     }
 
-    /// Internal: full-shape call_tool used by every public variant.
+    #[tracing::instrument(
+        name = "mcp.call_tool",
+        skip(self, arguments, cancel, progress_tx),
+        fields(server = %self.server_name, tool = name)
+    )]
     async fn call_tool_full(
         &mut self,
         name: &str,
         arguments: serde_json::Value,
         req_timeout: Option<Duration>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
-        progress_tx: Option<tokio::sync::mpsc::Sender<crate::transport::ProgressEvent>>,
+        progress_tx: Option<mpsc::Sender<ProgressEvent>>,
     ) -> Result<ToolResult, McpError> {
-        self.ensure_initialized()?;
-        let params = CallToolParams {
-            name,
-            arguments: Some(arguments),
+        let service = self.service()?.clone();
+        let arguments_obj = match arguments {
+            serde_json::Value::Object(map) => Some(map),
+            serde_json::Value::Null => None,
+            other => Some({
+                let mut map = serde_json::Map::new();
+                map.insert("value".into(), other);
+                map
+            }),
         };
-        let raw = self
-            .transport
-            .request_full("tools/call", Some(params), req_timeout, cancel, progress_tx)
-            .await?;
-        let parsed: CallToolResult =
-            serde_json::from_value(raw).map_err(|e| McpError::ProtocolViolation {
-                server: self.transport.server_name().to_string(),
-                message: format!("malformed tools/call result: {e}"),
-            })?;
+        let mut params = CallToolRequestParams::new(name.to_string());
+        if let Some(args) = arguments_obj {
+            params = params.with_arguments(args);
+        }
+
+        let to = req_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT);
+        let request = ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
+        let mut options = PeerRequestOptions::default();
+        options.timeout = Some(to);
+
+        let handle = service
+            .peer()
+            .send_cancellable_request(request, options)
+            .await
+            .map_err(|e| map_service_error(&self.server_name, e))?;
+
+        // Register a progress subscriber under the token rmcp picked.
+        // Held until the call returns (Drop deregisters).
+        let _progress_guard = match progress_tx {
+            Some(tx) => match &handle.progress_token {
+                ProgressToken(NumberOrString::Number(n)) => {
+                    Some(self.handler.register_progress(*n, tx).await)
+                }
+                ProgressToken(NumberOrString::String(_)) => None,
+            },
+            None => None,
+        };
+
+        let response_result = match cancel {
+            Some(c) => {
+                // We need both a cancel future and a response future, but
+                // `handle.await_response(self)` and `handle.cancel(self)`
+                // both consume the handle. So we first stash the id (for the
+                // cancel notification) and clone the peer (for sending it),
+                // then drive the response future; if the cancel token fires
+                // first we send notifications/cancelled directly.
+                let request_id = handle.id.clone();
+                let peer_for_cancel = service.peer().clone();
+                let response_fut = handle.await_response();
+                tokio::pin!(response_fut);
+                tokio::select! {
+                    biased;
+                    () = c.cancelled() => {
+                        // Best-effort cancel notification. If the server is
+                        // already dead the send will fail and we'll just
+                        // return Cancelled anyway.
+                        let cancel_notif = rmcp::model::CancelledNotification::new(
+                            rmcp::model::CancelledNotificationParam {
+                                request_id,
+                                reason: Some("client cancelled".into()),
+                            },
+                        );
+                        let _ = peer_for_cancel
+                            .send_notification(cancel_notif.into())
+                            .await;
+                        return Err(McpError::Cancelled {
+                            server: self.server_name.clone(),
+                        });
+                    }
+                    res = &mut response_fut => res,
+                }
+            }
+            None => handle.await_response().await,
+        };
+
+        let server_result = response_result.map_err(|e| map_service_error(&self.server_name, e))?;
+        let result: CallToolResult = match server_result {
+            rmcp::model::ServerResult::CallToolResult(r) => r,
+            _ => {
+                return Err(McpError::ProtocolViolation {
+                    server: self.server_name.clone(),
+                    message: "tools/call returned unexpected ServerResult variant".into(),
+                });
+            }
+        };
+
         Ok(ToolResult {
-            content: parsed.content,
-            is_error: parsed.is_error,
-            structured_content: parsed.structured_content,
+            content: result.content.into_iter().map(ContentBlock::from).collect(),
+            is_error: result.is_error.unwrap_or(false),
+            structured_content: result.structured_content,
         })
     }
 
-    /// Cleanly shut down the server (close stdin, wait briefly, kill if
-    /// still alive). Idempotent in the sense that drop also tears down.
-    pub async fn shutdown(self) -> Result<(), McpError> {
-        self.transport.shutdown().await
+    /// Cleanly shut down the server.
+    pub async fn shutdown(mut self) -> Result<(), McpError> {
+        if let Some(service) = self.service.take()
+            && let Ok(service) = Arc::try_unwrap(service)
+        {
+            let _ = service.cancel().await;
+        }
+        Ok(())
     }
 
-    fn ensure_initialized(&self) -> Result<(), McpError> {
-        if self.initialized {
-            Ok(())
-        } else {
-            Err(McpError::ProtocolViolation {
-                server: self.transport.server_name().to_string(),
+    fn service(&self) -> Result<&Arc<RunningService<RoleClient, AwidatHandler>>, McpError> {
+        self.service
+            .as_ref()
+            .ok_or_else(|| McpError::ProtocolViolation {
+                server: self.server_name.clone(),
                 message: "client used before initialize() handshake".into(),
             })
-        }
+    }
+}
+
+fn map_init_error(server: &str, e: rmcp::service::ClientInitializeError) -> McpError {
+    use rmcp::service::ClientInitializeError as CIE;
+    match e {
+        CIE::Cancelled => McpError::Cancelled {
+            server: server.into(),
+        },
+        CIE::ConnectionClosed(msg) => McpError::ServerCrashed {
+            server: server.into(),
+            message: msg,
+        },
+        CIE::TransportError { error, context } => McpError::Transport {
+            server: server.into(),
+            message: format!("{context}: {error}"),
+        },
+        CIE::JsonRpcError(err) => McpError::ToolError {
+            server: server.into(),
+            message: format!("[code {}] {}", err.code.0, err.message),
+        },
+        // ExpectedInitResponse, ExpectedInitResult, ConflictInitResponseId,
+        // and any future #[non_exhaustive] additions all fall here.
+        other => McpError::ProtocolViolation {
+            server: server.into(),
+            message: other.to_string(),
+        },
+    }
+}
+
+fn map_service_error(server: &str, e: rmcp::ServiceError) -> McpError {
+    use rmcp::ServiceError as SE;
+    match e {
+        SE::Timeout { timeout } => McpError::Timeout {
+            server: server.into(),
+            seconds: timeout.as_secs(),
+        },
+        SE::Cancelled { .. } => McpError::Cancelled {
+            server: server.into(),
+        },
+        SE::McpError(err) => McpError::ToolError {
+            server: server.into(),
+            message: format!("[code {}] {}", err.code.0, err.message),
+        },
+        SE::TransportSend(err) => McpError::Transport {
+            server: server.into(),
+            message: err.to_string(),
+        },
+        SE::TransportClosed => McpError::ServerCrashed {
+            server: server.into(),
+            message: "transport closed".into(),
+        },
+        SE::UnexpectedResponse => McpError::ProtocolViolation {
+            server: server.into(),
+            message: "unexpected response shape from server".into(),
+        },
+        // Future #[non_exhaustive] additions land here.
+        other => McpError::Transport {
+            server: server.into(),
+            message: other.to_string(),
+        },
     }
 }
 
@@ -399,7 +586,7 @@ mod tests {
     #[test]
     fn tool_result_single_text_works() {
         let r = ToolResult {
-            content: vec![ContentBlock::Text { text: "hi".into() }],
+            content: vec![ContentBlock::Text("hi".into())],
             is_error: false,
             structured_content: None,
         };
@@ -412,31 +599,12 @@ mod tests {
         assert_eq!(r.single_text(), None);
         let r = ToolResult {
             content: vec![
-                ContentBlock::Text { text: "a".into() },
-                ContentBlock::Text { text: "b".into() },
+                ContentBlock::Text("a".into()),
+                ContentBlock::Text("b".into()),
             ],
             is_error: false,
             structured_content: None,
         };
         assert_eq!(r.single_text(), None);
-    }
-
-    #[tokio::test]
-    async fn ensure_initialized_rejects_pre_handshake() {
-        // Construct a Client whose transport points at a benign program.
-        // We spawn `cat`, which never speaks MCP — so we don't actually
-        // call initialize / list / call. We only verify that ensure_*
-        // returns the right error type before initialization.
-        let cfg = ServerConfig {
-            name: "test-cat".into(),
-            command: "cat".into(),
-            args: vec![],
-            env: HashMap::new(),
-            cwd: None,
-        };
-        let client = Client::launch(cfg).unwrap();
-        let res = client.ensure_initialized();
-        assert!(matches!(res, Err(McpError::ProtocolViolation { .. })));
-        client.shutdown().await.unwrap();
     }
 }

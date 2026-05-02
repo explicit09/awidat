@@ -1,42 +1,16 @@
 //! Integration tests that exercise [`awidat_mcp::Client`] against the
 //! tiny `awidat-mcp-test-server` binary in the same crate.
 //!
-//! Cargo builds the binary as a side effect of `cargo test`. We locate it
-//! by walking up from the test binary's path to `target/<profile>/`.
+//! Test fixtures (the `cfg`/`client_info` helpers and the path-resolution
+//! for the test-server binary) live in `tests/common/mod.rs`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
-use awidat_mcp::{Client, ClientInfo, McpError, ServerConfig};
+use awidat_mcp::{Client, McpError, ServerConfig};
 
-fn test_server_path() -> PathBuf {
-    // Cargo runs integration tests from the per-crate target dir; the bins
-    // built for the same crate live in $CARGO_BIN_EXE_<name> when declared
-    // via `[[bin]]` at the crate root. We use that env (set by Cargo) for
-    // robustness.
-    let s = env!("CARGO_BIN_EXE_awidat-mcp-test-server");
-    PathBuf::from(s)
-}
-
-fn cfg(mode: &str) -> ServerConfig {
-    let mut env = HashMap::new();
-    env.insert("AWIDAT_MCP_TEST_MODE".into(), mode.into());
-    ServerConfig {
-        name: format!("test-{mode}"),
-        command: test_server_path().to_string_lossy().into_owned(),
-        args: vec![],
-        env,
-        cwd: None,
-    }
-}
-
-fn client_info() -> ClientInfo {
-    ClientInfo {
-        name: "awidat-test".into(),
-        version: "0.0.1".into(),
-    }
-}
+mod common;
+use common::{cfg, client_info};
 
 #[tokio::test]
 async fn happy_path_initialize_list_call() {

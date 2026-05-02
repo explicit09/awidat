@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Awidat MCP client (stdio JSON-RPC). Speaks Model Context Protocol — used by every indexer (Week 2) and every agent tool (Week 4+)."
+
+[lib]
+name = "awidat_mcp"
+path = "src/lib.rs"
 
 [dependencies]
 serde = { workspace = true }
@@ -12,10 +15,14 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "macros", "rt"] }
 tokio-util = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+rmcp = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "macros", "rt", "rt-multi-thread"] }
 tokio-util = { workspace = true }
+awidat-test-support = { workspace = true }
+pretty_assertions = { workspace = true }
 
 [[test]]
 name = "client_against_test_server"
