@@ -38,7 +38,7 @@ pub fn run(project_root: &Path, model_override: Option<&str>) -> Result<()> {
     runtime.block_on(run_async(project_root, model_override))
 }
 
-async fn run_async(_project_root: &Path, model_override: Option<&str>) -> Result<()> {
+async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<()> {
     let model = model_override.unwrap_or(models::SONNET).to_string();
     let client = Client::from_env_or_keychain(ClientConfig::default()).map_err(|e| {
         anyhow!(
@@ -55,6 +55,7 @@ async fn run_async(_project_root: &Path, model_override: Option<&str>) -> Result
         registry,
         model.clone(),
         Some(SYSTEM_PROMPT.into()),
+        project_root,
     ));
 
     println!("awidat chat — model={model}, tools={}", session.tool_count());
@@ -166,6 +167,31 @@ fn render_event(ev: &SessionEvent) -> bool {
             }
         },
         SessionEvent::SamplingComplete { .. } => {}
+        SessionEvent::EditPlanUpdate { items, note } => {
+            println!("\n📝 plan updated:");
+            for it in items {
+                let glyph = match it.status.as_str() {
+                    "completed" => "✓",
+                    "in_progress" => "▶",
+                    _ => " ",
+                };
+                println!("  [{glyph}] {}", it.step);
+            }
+            if let Some(n) = note {
+                println!("  note: {n}");
+            }
+        }
+        SessionEvent::AwaitingUserInput { question, options, .. } => {
+            println!("\n❓ {question}");
+            if let Some(opts) = options {
+                for (i, o) in opts.iter().enumerate() {
+                    println!("   [{i}] {o}");
+                }
+            }
+            // The chat REPL doesn't yet drive the user_input channel —
+            // wired in when we add the runtime input loop. For now this
+            // event is informational; the tool will time out / cancel.
+        }
         SessionEvent::TurnEnd => {
             println!();
             return true;

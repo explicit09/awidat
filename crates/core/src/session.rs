@@ -16,9 +16,10 @@
 //! Events are broadcast via `tokio::sync::broadcast` so the week-5 TUI
 //! can subscribe alongside the week-3 REPL.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -27,7 +28,7 @@ use crate::anthropic::{
     Client, ContentBlock, Message, MessagesRequest, Role, StopReason, StreamEvent, ToolChoice,
     Usage,
 };
-use crate::tool::{ToolInvocation, ToolRegistry};
+use crate::tool::{ToolContext, ToolInvocation, ToolRegistry, UserInputRequest};
 
 /// One event emitted by the agent loop. The REPL prints these; the TUI
 /// will render them more richly later.
@@ -82,6 +83,24 @@ pub enum SessionEvent {
     TurnEnd,
     /// A turn-fatal error. Loop stops; user can start a new turn.
     Error(String),
+    /// `update_plan` tool call landed. Carries the agent's full plan
+    /// snapshot. The REPL prints it; the TUI will render it richly.
+    EditPlanUpdate {
+        /// One bullet per item.
+        items: Vec<crate::tool::PlanItem>,
+        /// Free-form short note from the model (one sentence).
+        note: Option<String>,
+    },
+    /// `request_user_input` tool call landed. The runtime is now awaiting
+    /// the user's reply via the user_input channel.
+    AwaitingUserInput {
+        /// Tool call id.
+        call_id: String,
+        /// Question to display.
+        question: String,
+        /// Optional choices.
+        options: Option<Vec<String>>,
+    },
 }
 
 /// Errors that abort the turn loop. Per [`FunctionCallError`] semantics:
@@ -108,17 +127,25 @@ pub struct Session {
     registry: ToolRegistry,
     system_prompt: Option<String>,
     model: String,
+    project_root: PathBuf,
     history: Arc<Mutex<Vec<Message>>>,
     events_tx: broadcast::Sender<SessionEvent>,
+    /// Channel for surfacing `request_user_input` prompts to the REPL/TUI.
+    /// `None` if the session was constructed without one — calls to
+    /// `request_user_input` then return `RespondToModel`.
+    user_input_tx: Option<mpsc::Sender<UserInputRequest>>,
 }
 
 impl Session {
-    /// Build a fresh session.
+    /// Build a fresh session rooted at `project_root`. Tools that need a
+    /// project directory (most of week 4) read it from the
+    /// [`ToolContext`] handed to their `handle()`.
     pub fn new(
         client: Client,
         registry: ToolRegistry,
         model: impl Into<String>,
         system_prompt: Option<String>,
+        project_root: impl Into<PathBuf>,
     ) -> Self {
         let (events_tx, _) = broadcast::channel(128);
         Self {
@@ -126,9 +153,24 @@ impl Session {
             registry,
             system_prompt,
             model: model.into(),
+            project_root: project_root.into(),
             history: Arc::new(Mutex::new(Vec::new())),
             events_tx,
+            user_input_tx: None,
         }
+    }
+
+    /// Wire a user-input channel. The REPL/TUI receives one
+    /// [`UserInputRequest`] per `request_user_input` tool call and replies
+    /// via the embedded `oneshot`. Without this, that tool returns
+    /// `RespondToModel("interactive input not available in this runtime")`.
+    #[must_use]
+    pub fn with_user_input_channel(
+        mut self,
+        tx: mpsc::Sender<UserInputRequest>,
+    ) -> Self {
+        self.user_input_tx = Some(tx);
+        self
     }
 
     /// Subscribe to event broadcast. Multiple subscribers are supported
@@ -389,11 +431,16 @@ impl Session {
             name: call.name.clone(),
             args,
         };
+        let ctx = ToolContext {
+            project_root: self.project_root.clone(),
+            events_tx: self.events_tx.clone(),
+            user_input_tx: self.user_input_tx.clone(),
+        };
 
         let result = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(SessionError::Cancelled),
-            res = handler.handle(invocation) => res,
+            res = handler.handle(invocation, ctx) => res,
         };
 
         match result {
@@ -464,7 +511,13 @@ mod tests {
             crate::anthropic::ClientConfig::default(),
         )
         .expect("client construction without network");
-        let s = Session::new(client, ToolRegistry::new(), "claude-haiku-4-5-20251001", None);
+        let s = Session::new(
+            client,
+            ToolRegistry::new(),
+            "claude-haiku-4-5-20251001",
+            None,
+            std::env::temp_dir(),
+        );
         assert_eq!(s.tool_count(), 0);
     }
 }

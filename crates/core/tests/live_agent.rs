@@ -43,6 +43,7 @@ async fn agent_uses_bash_to_echo_sentinel_and_reports_back() {
              task. Use the bash tool when asked. Reply concisely."
                 .into(),
         ),
+        std::env::temp_dir(),
     ));
 
     let mut events = session.subscribe();

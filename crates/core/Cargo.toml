@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [dependencies]
 awidat-proto = { workspace = true }
 awidat-secrets = { workspace = true }
+awidat-index = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "process"] }

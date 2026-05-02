@@ -16,7 +16,7 @@ pub mod tools;
 
 pub use error::FunctionCallError;
 pub use session::{Session, SessionError, SessionEvent};
-pub use tool::{ToolHandler, ToolInvocation, ToolOutput, ToolRegistry};
+pub use tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry, UserInputRequest};
 
 /// Returns the version of the agent core.
 pub fn version() -> &'static str {

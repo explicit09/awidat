@@ -29,9 +29,11 @@ use tracing::{info, warn};
 
 mod manifest_io;
 mod sha;
+pub mod sidecar_io;
 
 pub use manifest_io::{read_manifest, write_manifest};
 pub use sha::asset_sha256;
+pub use sidecar_io::{SidecarError, read_sidecar, sidecar_path, walk_indexer};
 
 /// Errors from the indexer dispatcher. Per-asset / per-indexer errors land
 /// in [`IndexReport::failures`] instead.
@@ -293,7 +295,7 @@ async fn run_pair(
     client_info: ClientInfo,
 ) -> PairOutcome {
     // Idempotency: if a sidecar already exists with a matching sha, skip.
-    let sidecar_path = match sidecar_path(index_dir, &item.server.name, &item.asset_id) {
+    let sidecar_path = match sidecar_path_in_index_dir(index_dir, &item.server.name, &item.asset_id) {
         Ok(p) => p,
         Err(e) => {
             return PairOutcome::Failed {
@@ -445,7 +447,10 @@ fn server_config_from(server: &McpServer, project_root: &Path) -> ServerConfig {
     }
 }
 
-fn sidecar_path(
+/// Resolve a sidecar path under `<project>/index/`. The dispatcher passes
+/// `<project>/index` as `index_dir`; the public [`sidecar_io::sidecar_path`]
+/// is the rooted-at-project-root variant the editorial tools use.
+fn sidecar_path_in_index_dir(
     index_dir: &Path,
     indexer: &str,
     asset_id: &AssetId,

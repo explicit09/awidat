@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
@@ -39,6 +40,60 @@ pub struct ToolInvocation {
     pub name: String,
     /// Args, JSON-shaped per the tool's input schema.
     pub args: serde_json::Value,
+}
+
+/// One item in the agent's editorial plan, surfaced via `update_plan`
+/// and consumed by [`crate::SessionEvent::EditPlanUpdate`]. Mirrors
+/// codex `plan_tool`'s shape.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlanItem {
+    /// Step text.
+    pub step: String,
+    /// Status: `pending | in_progress | completed`. The `at most one
+    /// in_progress` invariant lives in the tool's schema description; we
+    /// don't enforce in code.
+    pub status: String,
+}
+
+/// Per-call context the agent loop hands to a tool handler.
+///
+/// Most tools ignore it (e.g. `bash`). Tools that need to **emit events**
+/// (`update_plan`) or **suspend the turn awaiting a user response**
+/// (`request_user_input`) consume it.
+///
+/// Cheaply cloneable; handlers should clone before crossing await points
+/// to satisfy `Send` bounds.
+#[derive(Clone)]
+pub struct ToolContext {
+    /// Project root the session was opened against.
+    pub project_root: std::path::PathBuf,
+    /// Broadcast channel the loop publishes [`crate::SessionEvent`]s on.
+    /// Tools can publish their own events here too — the REPL/TUI subscribe.
+    pub events_tx: broadcast::Sender<crate::SessionEvent>,
+    /// Channel for `request_user_input`-shaped suspension. Sending a
+    /// [`UserInputRequest`] here causes the REPL/TUI to surface a prompt;
+    /// the response arrives via the embedded `oneshot::Sender<String>`.
+    /// `None` if the runtime doesn't support input suspension (e.g.
+    /// non-interactive `awidat exec`-shape modes — not yet implemented).
+    pub user_input_tx: Option<mpsc::Sender<UserInputRequest>>,
+}
+
+/// One pending user-input request emitted by `request_user_input`. The
+/// REPL/TUI consumes it, prompts the user, and sends the response back via
+/// the embedded oneshot. Dropping the oneshot signals "cancelled".
+#[derive(Debug)]
+pub struct UserInputRequest {
+    /// Tool call id for correlation in the UI.
+    pub call_id: String,
+    /// Question to display.
+    pub question: String,
+    /// Optional choice list (multiple-choice question).
+    pub options: Option<Vec<String>>,
+    /// Optional default the UI can pre-fill.
+    pub default: Option<String>,
+    /// Reply channel. The receiver lives inside the tool handler; the
+    /// REPL/TUI sends the user's chosen string here.
+    pub reply: oneshot::Sender<String>,
 }
 
 /// Tool result. Carries the call_id so the loop can build a matching
@@ -69,9 +124,13 @@ pub trait ToolHandler: Send + Sync {
     }
 
     /// Perform the call.
+    ///
+    /// `ctx` carries the broadcast event channel and the user-input
+    /// suspension channel. Tools that don't need either can ignore it.
     async fn handle(
         &self,
         invocation: ToolInvocation,
+        ctx: ToolContext,
     ) -> Result<ToolOutput, FunctionCallError>;
 }
 
@@ -150,10 +209,23 @@ mod tests {
                 input_schema: serde_json::json!({"type": "object"}),
             }
         }
-        async fn handle(&self, _i: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+        async fn handle(
+            &self,
+            _i: ToolInvocation,
+            _ctx: ToolContext,
+        ) -> Result<ToolOutput, FunctionCallError> {
             Ok(ToolOutput {
                 content: "ok".into(),
             })
+        }
+    }
+
+    fn fake_ctx() -> ToolContext {
+        let (tx, _) = broadcast::channel(8);
+        ToolContext {
+            project_root: std::env::temp_dir(),
+            events_tx: tx,
+            user_input_tx: None,
         }
     }
 
@@ -185,11 +257,14 @@ mod tests {
         reg.register(Arc::new(Fake));
         let h = reg.get("fake").unwrap();
         let out = h
-            .handle(ToolInvocation {
-                call_id: "c".into(),
-                name: "fake".into(),
-                args: serde_json::json!({}),
-            })
+            .handle(
+                ToolInvocation {
+                    call_id: "c".into(),
+                    name: "fake".into(),
+                    args: serde_json::json!({}),
+                },
+                fake_ctx(),
+            )
             .await
             .unwrap();
         assert_eq!(out.content, "ok");

@@ -113,7 +113,11 @@ impl ToolHandler for BashTool {
         true
     }
 
-    async fn handle(&self, inv: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(
+        &self,
+        inv: ToolInvocation,
+        _ctx: crate::ToolContext,
+    ) -> Result<ToolOutput, FunctionCallError> {
         let args: BashArgs = serde_json::from_value(inv.args).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "bash: invalid args ({e}). Required: {{ \"command\": <string> }}."
@@ -250,11 +254,20 @@ mod tests {
         }
     }
 
+    fn ctx() -> crate::ToolContext {
+        let (tx, _) = tokio::sync::broadcast::channel(8);
+        crate::ToolContext {
+            project_root: std::env::temp_dir(),
+            events_tx: tx,
+            user_input_tx: None,
+        }
+    }
+
     #[tokio::test]
     async fn happy_path_runs_and_returns_stdout() {
         let tool = BashTool;
         let out = tool
-            .handle(invoke(serde_json::json!({"command": "echo hello-bash"})))
+            .handle(invoke(serde_json::json!({"command": "echo hello-bash"})), ctx())
             .await
             .unwrap();
         assert!(out.content.contains("exit code: 0"));
@@ -266,7 +279,7 @@ mod tests {
     async fn stderr_is_captured_separately() {
         let tool = BashTool;
         let out = tool
-            .handle(invoke(serde_json::json!({"command": "echo to-err 1>&2"})))
+            .handle(invoke(serde_json::json!({"command": "echo to-err 1>&2"})), ctx())
             .await
             .unwrap();
         assert!(out.content.contains("--- stderr ---"));
@@ -277,7 +290,7 @@ mod tests {
     async fn non_zero_exit_is_surfaced_not_an_error() {
         let tool = BashTool;
         let out = tool
-            .handle(invoke(serde_json::json!({"command": "false"})))
+            .handle(invoke(serde_json::json!({"command": "false"})), ctx())
             .await
             .unwrap();
         assert!(out.content.contains("exit code: 1"));
@@ -286,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn missing_command_arg_is_respond_to_model() {
         let tool = BashTool;
-        let err = tool.handle(invoke(serde_json::json!({}))).await.unwrap_err();
+        let err = tool.handle(invoke(serde_json::json!({})), ctx()).await.unwrap_err();
         match err {
             FunctionCallError::RespondToModel(msg) => {
                 assert!(msg.contains("invalid args"));
@@ -303,7 +316,7 @@ mod tests {
             .handle(invoke(serde_json::json!({
                 "command": "sleep 5",
                 "timeout_ms": 200,
-            })))
+            })), ctx())
             .await
             .unwrap_err();
         match err {
@@ -319,7 +332,7 @@ mod tests {
     async fn banned_command_is_rejected_with_helpful_message() {
         let tool = BashTool;
         let err = tool
-            .handle(invoke(serde_json::json!({"command": "curl https://example.com"})))
+            .handle(invoke(serde_json::json!({"command": "curl https://example.com"})), ctx())
             .await
             .unwrap_err();
         match err {
@@ -336,7 +349,7 @@ mod tests {
         // `echo curl` is fine; the first token is `echo`.
         let tool = BashTool;
         let out = tool
-            .handle(invoke(serde_json::json!({"command": "echo curl"})))
+            .handle(invoke(serde_json::json!({"command": "echo curl"})), ctx())
             .await
             .unwrap();
         assert!(out.content.contains("curl"));
@@ -350,7 +363,7 @@ mod tests {
             .handle(invoke(serde_json::json!({
                 "command": "pwd",
                 "workdir": dir.path().to_string_lossy(),
-            })))
+            })), ctx())
             .await
             .unwrap();
         assert!(out.content.contains(&*dir.path().to_string_lossy()));
