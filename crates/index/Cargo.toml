@@ -1,0 +1,31 @@
+[package]
+name = "awidat-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "awidat_index"
+path = "src/lib.rs"
+
+[dependencies]
+awidat-proto = { workspace = true }
+awidat-mcp = { workspace = true }
+awidat-config = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["fs", "process", "io-util", "sync", "time", "macros", "rt", "rt-multi-thread"] }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+awidat-test-support = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

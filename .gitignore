@@ -1,3 +1,9 @@
 target/
 .build-log/
 .DS_Store
+
+# Python workspace
+python/.venv/
+python/**/__pycache__/
+python/**/*.egg-info/
+python/**/.pytest_cache/

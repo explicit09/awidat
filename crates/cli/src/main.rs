@@ -1,8 +1,7 @@
 //! `awidat` binary entry point.
 //!
-//! Week 1 surface: `init`, `validate`, `version`. Future subcommands
-//! (`index`, `chat`, `render`, `skills`) land in later weeks per
-//! `PLAN.md` §15.
+//! Subcommands today: `init`, `validate`, `index`, `version`. Future
+//! (`chat`, `render`, `skills`) land in later weeks per `PLAN.md` §15.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -12,7 +11,9 @@ use awidat_proto::project::Project;
 use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
 
-/// Top-level CLI. Subcommands match `PLAN.md` §15 Week 1.
+mod index_cmd;
+
+/// Top-level CLI.
 #[derive(Parser, Debug)]
 #[command(
     name = "awidat",
@@ -39,6 +40,23 @@ enum Command {
         /// Project directory.
         path: PathBuf,
     },
+    /// Run footage indexers over the project's source assets and write
+    /// sidecars under `<project>/index/`.
+    Index {
+        /// Project directory.
+        path: PathBuf,
+        /// Specific assets to index (one or more). If omitted, all files
+        /// under `<project>/raw/` are indexed.
+        #[arg(long = "asset")]
+        assets: Vec<PathBuf>,
+        /// Restrict to specific indexers by name. If omitted, every
+        /// indexer-kinded server in config runs.
+        #[arg(long = "indexer")]
+        indexers: Vec<String>,
+        /// Maximum concurrent (server × asset) pairs. 0 = unbounded.
+        #[arg(long, default_value_t = 4)]
+        concurrency: usize,
+    },
     /// Print the version of the awidat binary.
     Version,
 }
@@ -48,6 +66,12 @@ fn main() -> ExitCode {
     let res = match cli.command {
         Command::Init { path } => cmd_init(&path),
         Command::Validate { path } => cmd_validate(&path),
+        Command::Index {
+            path,
+            assets,
+            indexers,
+            concurrency,
+        } => index_cmd::run(&path, assets, indexers, concurrency),
         Command::Version => {
             print_version();
             Ok(())
@@ -88,10 +112,21 @@ fn cmd_init(path: &std::path::Path) -> Result<()> {
         project.manifest.as_ref().map_or(0, |m| m.indexers.len())
     );
     println!("  - renders/, .awidat/");
+    println!();
+    println!("Next steps:");
+    println!("  1. Drop source media under {}/raw/", path.display());
     println!(
-        "Next: edit project.otio.json, or run `awidat validate {}`.",
+        "  2. Configure indexers — copy crates/config/EXAMPLE.toml to one of"
+    );
+    println!(
+        "       ~/.config/awidat/config.toml          (global)"
+    );
+    println!(
+        "       {}/.awidat/config.toml      (per-project)",
         path.display()
     );
+    println!("  3. Run `awidat index {}` to produce footage sidecars.", path.display());
+    println!("     Or `awidat validate {}` to inspect the project shape.", path.display());
     Ok(())
 }
 

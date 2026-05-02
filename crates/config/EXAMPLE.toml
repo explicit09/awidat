@@ -1,0 +1,49 @@
+# Example awidat config. Copy to one of:
+#   ~/.config/awidat/config.toml          (global; applies to every project)
+#   <project>/.awidat/config.toml         (project; overrides global per server name)
+#
+# The two are layered — see `crates/config/src/lib.rs::Config::overlay`.
+# Project entries with matching `name` replace the global entry; new names
+# append.
+#
+# `command` and `args` are exec'd as-is. `cwd` defaults to the parent
+# process's cwd; relative paths are resolved against the project root at
+# load time.
+#
+# Set the `AWIDAT_PYTHON_HOME` env var to the absolute path of your
+# `python/` workspace (the directory containing `pyproject.toml` and
+# `packages/`). The example below references it via shell-style
+# substitution, but TOML doesn't expand env vars — replace literally.
+
+[[mcp.servers]]
+name = "audio-energy"
+command = "uv"
+args = ["run", "--package", "audio-energy-mcp", "audio-energy-mcp"]
+cwd = "/abs/path/to/awidat/python"
+kind = "indexer"
+
+[[mcp.servers]]
+name = "scenedetect"
+command = "uv"
+args = ["run", "--package", "scenedetect-mcp", "scenedetect-mcp"]
+cwd = "/abs/path/to/awidat/python"
+kind = "indexer"
+
+[[mcp.servers]]
+name = "whisper"
+command = "uv"
+args = ["run", "--package", "whisper-mcp", "whisper-mcp"]
+cwd = "/abs/path/to/awidat/python"
+kind = "indexer"
+
+[mcp.servers.env]
+WHISPER_MODEL = "small.en"   # Default; bump to "large-v3-turbo" for quality.
+# WHISPER_DIARIZE = "false"  # Disable speaker labels (skips HF token requirement).
+# HF_TOKEN = "..."           # Better: store via `awidat secrets set hf_token` (week 3).
+
+[[mcp.servers]]
+name = "topic"
+command = "uv"
+args = ["run", "--package", "topic-mcp", "topic-mcp"]
+cwd = "/abs/path/to/awidat/python"
+kind = "indexer"

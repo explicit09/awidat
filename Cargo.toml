@@ -10,6 +10,9 @@ members = [
     "crates/cli",
     "crates/render",
     "crates/test-support",
+    "crates/config",
+    "crates/secrets",
+    "crates/index",
 ]
 
 [workspace.package]
@@ -78,6 +81,9 @@ awidat-mcp = { path = "crates/mcp" }
 awidat-sandboxing = { path = "crates/sandboxing" }
 awidat-tui = { path = "crates/tui" }
 awidat-render = { path = "crates/render" }
+awidat-config = { path = "crates/config" }
+awidat-secrets = { path = "crates/secrets" }
+awidat-index = { path = "crates/index" }
 
 # External (locked per Week 1 prompt).
 serde = { version = "1", features = ["derive"] }
@@ -93,6 +99,11 @@ tracing = { version = "0.1", default-features = false, features = ["std", "attri
 pretty_assertions = "1"
 tempfile = "3"
 awidat-test-support = { path = "crates/test-support" }
+toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
+sha2 = "0.10"
+keyring = "3"
+futures = { version = "0.3", default-features = false, features = ["std"] }
+dirs = "6"
 
 [profile.release]
 lto = "thin"

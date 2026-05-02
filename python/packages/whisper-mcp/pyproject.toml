@@ -1,0 +1,20 @@
+[project]
+name = "whisper-mcp"
+version = "0.1.0"
+description = "Awidat speech-to-text + diarization indexer (WhisperX)."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "awidat-mcp",
+    "whisperx>=3.8.5,<4",
+    "torch>=2.3,<3",
+]
+
+[project.scripts]
+whisper-mcp = "whisper_mcp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/whisper_mcp"]
