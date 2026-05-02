@@ -80,6 +80,53 @@ pub struct ToolContext {
     /// them via `poll_render`. Survives across tool calls within a
     /// session.
     pub job_manager: awidat_render::JobManager,
+    /// Channel the agent loop uses to ask the front-end for approval
+    /// before dispatching a mutating tool. Tools normally do not touch
+    /// this — the loop owns the gate. Surfaced on `ToolContext` only so
+    /// future work-spawning tools (week 6+) can recursively request
+    /// approvals for sub-calls. `None` ⇒ loop defaults to allow.
+    pub approval_tx: Option<mpsc::Sender<ApprovalRequest>>,
+}
+
+/// One pending approval request emitted by the agent loop before it
+/// dispatches a mutating tool. The REPL/TUI consumes it, asks the user,
+/// and sends the [`ApprovalDecision`] back via the embedded oneshot.
+///
+/// The agent loop builds these from `ToolHandler::is_mutating(&inv) == true`
+/// before calling `handle()`. If the session has no approval channel the
+/// loop defaults to `Allow` so non-interactive runtimes (tests, batch CLI,
+/// MCP server) keep working.
+#[derive(Debug)]
+pub struct ApprovalRequest {
+    /// Tool call id for correlation in the UI.
+    pub call_id: String,
+    /// Tool name (e.g. `apply_edl`, `start_render`, `bash`).
+    pub tool_name: String,
+    /// Short human-readable summary of the args. Caller-built — the loop
+    /// keeps the full args off the wire so the UI doesn't render a wall
+    /// of JSON. Tools that want richer summaries can override later via
+    /// `ToolHandler::approval_summary` (week 6+).
+    pub args_summary: String,
+    /// Reply channel. The receiver lives in the loop; the UI sends the
+    /// user's decision here. Dropping the oneshot signals `Deny`.
+    pub reply: oneshot::Sender<ApprovalDecision>,
+}
+
+/// User decision on a mutating tool call.
+///
+/// Three-way to match the Codex/Aider convention: one-shot allow, sticky
+/// allow for the rest of the session, or deny (with the model seeing an
+/// `is_error` tool result so it can self-correct).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    /// Allow this single invocation.
+    Allow,
+    /// Allow this tool name for the rest of the session — future calls
+    /// to the same tool skip the modal. The loop tracks this set.
+    AllowForSession,
+    /// Reject. The model sees a tool result with `is_error: true` and
+    /// "user denied execution" text so it can route around it.
+    Deny,
 }
 
 /// One pending user-input request emitted by `request_user_input`. The
@@ -254,6 +301,7 @@ mod tests {
             events_tx: tx,
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
+            approval_tx: None,
         }
     }
 

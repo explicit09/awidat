@@ -151,6 +151,8 @@ mod tests {
                 events_tx,
                 user_input_tx: Some(input_tx),
                 job_manager: awidat_render::JobManager::new(),
+
+                approval_tx: None,
             },
             events_rx,
             input_rx,
@@ -164,6 +166,8 @@ mod tests {
             events_tx,
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
+
+            approval_tx: None,
         }
     }
 

@@ -129,6 +129,8 @@ mod tests {
             events_tx: tx,
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
+
+            approval_tx: None,
         }
     }
 
@@ -201,6 +203,7 @@ mod tests {
             events_tx: tx,
             user_input_tx: None,
             job_manager: manager,
+            approval_tx: None,
         };
 
         // Poll up to 15s for terminal state.

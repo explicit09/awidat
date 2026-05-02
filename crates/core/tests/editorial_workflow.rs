@@ -124,6 +124,8 @@ fn ctx_at(root: &Path) -> ToolContext {
         events_tx: tx,
         user_input_tx: None,
         job_manager: awidat_render::JobManager::new(),
+
+        approval_tx: None,
     }
 }
 
