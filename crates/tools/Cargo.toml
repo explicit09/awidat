@@ -1,0 +1,10 @@
+[package]
+name = "awidat-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Awidat tool registry and tool implementations. Stub in Week 1."
+
+[dependencies]
+awidat-proto = { workspace = true }

@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/proto",
+    "crates/core",
+    "crates/tools",
+    "crates/mcp",
+    "crates/sandboxing",
+    "crates/tui",
+    "crates/cli",
+    "crates/render",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+authors = ["Awidat Authors"]
+license = "Apache-2.0"
+repository = "https://github.com/awidat/awidat"
+
+[workspace.dependencies]
+# Crates we own.
+awidat-proto = { path = "crates/proto" }
+awidat-core = { path = "crates/core" }
+awidat-tools = { path = "crates/tools" }
+awidat-mcp = { path = "crates/mcp" }
+awidat-sandboxing = { path = "crates/sandboxing" }
+awidat-tui = { path = "crates/tui" }
+awidat-render = { path = "crates/render" }
+
+# External (locked per Week 1 prompt).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "fs", "io-util", "sync", "time"] }
+anyhow = "1"
+thiserror = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,9 @@
+[package]
+name = "awidat-sandboxing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Awidat per-OS sandbox (seatbelt / landlock+seccomp). Stub in Week 1."
+
+[dependencies]

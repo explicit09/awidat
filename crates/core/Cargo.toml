@@ -1,0 +1,11 @@
+[package]
+name = "awidat-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Awidat agent loop, session state, and turn handling. Stub in Week 1."
+
+[dependencies]
+awidat-proto = { workspace = true }
+tokio = { workspace = true }
