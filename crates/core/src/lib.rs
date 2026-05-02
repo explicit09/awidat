@@ -9,6 +9,7 @@
 //! - Tools, `Session`, and the agent loop land in later phases of week 3.
 
 pub mod anthropic;
+pub mod edl;
 pub mod error;
 pub mod session;
 pub mod tool;

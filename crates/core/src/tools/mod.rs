@@ -3,6 +3,7 @@
 //! Week 3 ships [`bash`]. Week 4 adds the editorial tools per `PLAN.md`
 //! §6.
 
+pub mod apply_edl;
 pub mod bash;
 pub mod find_moment;
 pub mod inspect_clip;
