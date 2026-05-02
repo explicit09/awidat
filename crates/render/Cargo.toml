@@ -16,6 +16,7 @@ tokio = { workspace = true, features = ["process", "io-util", "sync", "time", "m
 tokio-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

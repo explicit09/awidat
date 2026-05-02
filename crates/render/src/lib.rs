@@ -1,17 +1,22 @@
 //! ffmpeg wrapper for awidat.
 //!
-//! Public surface for the editorial-tools batch:
+//! Public surface:
 //! - [`ffmpeg::ffmpeg_path`] / [`ffmpeg::ffprobe_path`] — locate the
 //!   binaries (env-var override → `which` lookup → fail).
-//! - [`ffmpeg::extract_frame`] — single-frame extraction at time `t_s`,
-//!   returns PNG bytes. Used by `view_frame`.
-//!
-//! The job manager + progress parsing for `start_render` / `poll_render`
-//! lands in the next batch.
+//! - [`ffmpeg::extract_frame`] — single-frame extraction at time `t_s`.
+//!   Used by `view_frame`.
+//! - [`job::JobManager`] — long-running ffmpeg job orchestrator. Used by
+//!   `start_render` / `poll_render`.
+//! - [`progress::ProgressSnapshot`] — parsed view of ffmpeg's stderr
+//!   progress lines (`frame=`, `time=`, `speed=`).
 
 pub mod ffmpeg;
+pub mod job;
+pub mod progress;
 
 pub use ffmpeg::{FfmpegError, ffmpeg_path, ffprobe_path};
+pub use job::{JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec};
+pub use progress::ProgressSnapshot;
 
 #[cfg(test)]
 mod tests {

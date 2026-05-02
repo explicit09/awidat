@@ -130,6 +130,7 @@ mod tests {
             project_root: std::env::temp_dir(),
             events_tx: tx,
             user_input_tx: None,
+            job_manager: awidat_render::JobManager::new(),
         };
         (c, rx)
     }

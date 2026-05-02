@@ -300,6 +300,7 @@ mod tests {
             project_root: root.to_path_buf(),
             events_tx: tx,
             user_input_tx: None,
+            job_manager: awidat_render::JobManager::new(),
         }
     }
 

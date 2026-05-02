@@ -152,6 +152,7 @@ dependencies = [
  "awidat-secrets",
  "base64",
  "bytes",
+ "chrono",
  "eventsource-stream",
  "futures",
  "pretty_assertions",
@@ -215,6 +216,7 @@ dependencies = [
 name = "awidat-render"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
  "tempfile",

@@ -134,6 +134,8 @@ pub struct Session {
     /// `None` if the session was constructed without one — calls to
     /// `request_user_input` then return `RespondToModel`.
     user_input_tx: Option<mpsc::Sender<UserInputRequest>>,
+    /// Shared render-job manager handed to every tool via `ToolContext`.
+    job_manager: awidat_render::JobManager,
 }
 
 impl Session {
@@ -157,6 +159,7 @@ impl Session {
             history: Arc::new(Mutex::new(Vec::new())),
             events_tx,
             user_input_tx: None,
+            job_manager: awidat_render::JobManager::new(),
         }
     }
 
@@ -435,6 +438,7 @@ impl Session {
             project_root: self.project_root.clone(),
             events_tx: self.events_tx.clone(),
             user_input_tx: self.user_input_tx.clone(),
+            job_manager: self.job_manager.clone(),
         };
 
         let result = tokio::select! {

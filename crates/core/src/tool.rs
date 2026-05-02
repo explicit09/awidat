@@ -57,9 +57,10 @@ pub struct PlanItem {
 
 /// Per-call context the agent loop hands to a tool handler.
 ///
-/// Most tools ignore it (e.g. `bash`). Tools that need to **emit events**
-/// (`update_plan`) or **suspend the turn awaiting a user response**
-/// (`request_user_input`) consume it.
+/// Most tools ignore most fields. Tools that need to **emit events**
+/// (`update_plan`), **suspend the turn awaiting user input**
+/// (`request_user_input`), or **start/poll long-running renders**
+/// (`start_render` / `poll_render`) consume the relevant field.
 ///
 /// Cheaply cloneable; handlers should clone before crossing await points
 /// to satisfy `Send` bounds.
@@ -73,9 +74,12 @@ pub struct ToolContext {
     /// Channel for `request_user_input`-shaped suspension. Sending a
     /// [`UserInputRequest`] here causes the REPL/TUI to surface a prompt;
     /// the response arrives via the embedded `oneshot::Sender<String>`.
-    /// `None` if the runtime doesn't support input suspension (e.g.
-    /// non-interactive `awidat exec`-shape modes — not yet implemented).
+    /// `None` if the runtime doesn't support input suspension.
     pub user_input_tx: Option<mpsc::Sender<UserInputRequest>>,
+    /// Shared render-job manager. Start jobs via `start_render`, poll
+    /// them via `poll_render`. Survives across tool calls within a
+    /// session.
+    pub job_manager: awidat_render::JobManager,
 }
 
 /// One pending user-input request emitted by `request_user_input`. The
@@ -249,6 +253,7 @@ mod tests {
             project_root: std::env::temp_dir(),
             events_tx: tx,
             user_input_tx: None,
+            job_manager: awidat_render::JobManager::new(),
         }
     }
 

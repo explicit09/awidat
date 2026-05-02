@@ -150,6 +150,7 @@ mod tests {
                 project_root: std::env::temp_dir(),
                 events_tx,
                 user_input_tx: Some(input_tx),
+                job_manager: awidat_render::JobManager::new(),
             },
             events_rx,
             input_rx,
@@ -162,6 +163,7 @@ mod tests {
             project_root: std::env::temp_dir(),
             events_tx,
             user_input_tx: None,
+            job_manager: awidat_render::JobManager::new(),
         }
     }
 
