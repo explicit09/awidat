@@ -19,12 +19,15 @@ Schema version: "1".
 from __future__ import annotations
 
 import math
+import os
+import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import pyloudnorm as pyln
-import soundfile as sf
 
 from awidat_mcp import IndexAssetRequest, IndexerServer
 
@@ -61,12 +64,69 @@ class _LoadedAudio:
     sample_rate: int
 
 
+def _ffmpeg_path() -> str:
+    """Locate ffmpeg. Prefer $AWIDAT_FFMPEG, fall back to PATH."""
+    explicit = os.environ.get("AWIDAT_FFMPEG")
+    if explicit:
+        return explicit
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    raise RuntimeError(
+        "ffmpeg not found on PATH; install ffmpeg or set AWIDAT_FFMPEG=/path/to/ffmpeg"
+    )
+
+
+# Working sample rate for downstream pyloudnorm + RMS analysis. 48kHz is
+# the cleanest mapping to EBU R128 short-term blocks (3s window =
+# 144,000 samples) and matches typical podcast/interview source rates.
+_TARGET_SR = 48_000
+
+
 def _load_mono(path: str) -> _LoadedAudio:
-    samples, sr = sf.read(path, dtype="float32", always_2d=False)
-    if samples.ndim == 2:
-        # Down-mix to mono.
-        samples = samples.mean(axis=1)
-    return _LoadedAudio(samples=samples, sample_rate=int(sr))
+    """Decode any audio/video container to mono 32-bit float PCM via ffmpeg.
+
+    Why not soundfile/libsndfile: it only handles WAV/FLAC/Ogg. Real
+    podcast/interview footage arrives as MOV/MP4/HEVC/AAC; libsndfile
+    rejects them with "Format not recognised". ffmpeg is already a
+    hard dependency for awidat (rendering), so we shell out to it
+    here for decode too.
+
+    Output: 32-bit float PCM, mono, resampled to _TARGET_SR.
+    """
+    ffmpeg = _ffmpeg_path()
+    cmd = [
+        ffmpeg,
+        "-nostdin",
+        "-loglevel", "error",
+        "-i", path,
+        "-vn",                  # discard any video stream
+        "-ac", "1",             # downmix to mono
+        "-ar", str(_TARGET_SR), # resample
+        "-f", "f32le",          # raw 32-bit float little-endian
+        "-",                    # to stdout
+    ]
+    proc = subprocess.run(
+        cmd,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"ffmpeg decode failed (exit {proc.returncode}) for {path}: {stderr}"
+        )
+    samples = np.frombuffer(proc.stdout, dtype=np.float32)
+    if samples.size == 0:
+        # No audio stream — emit a quiet silent buffer so downstream
+        # math doesn't divide by zero.
+        print(
+            f"audio-energy: no audio stream in {path}; emitting empty result",
+            file=sys.stderr,
+        )
+        samples = np.zeros(_TARGET_SR, dtype=np.float32)
+    return _LoadedAudio(samples=samples, sample_rate=_TARGET_SR)
 
 
 def _windowed_rms_db(audio: _LoadedAudio) -> list[dict[str, float]]:

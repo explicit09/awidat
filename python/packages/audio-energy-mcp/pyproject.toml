@@ -5,7 +5,6 @@ description = "Awidat audio energy indexer: RMS over windows, integrated LUFS, s
 requires-python = ">=3.11"
 dependencies = [
     "awidat-mcp",
-    "soundfile>=0.12,<0.14",
     "numpy>=1.26,<3",
     "pyloudnorm>=0.1.1,<0.3",
 ]

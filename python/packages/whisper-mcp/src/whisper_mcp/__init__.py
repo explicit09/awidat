@@ -23,6 +23,7 @@ Schema version: "1".
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 from typing import Any
@@ -32,6 +33,32 @@ from awidat_mcp import IndexAssetRequest, IndexerServer
 INDEXER_NAME = "whisper"
 INDEXER_VERSION = "0.1.0"
 SCHEMA_VERSION = "1"
+
+
+@contextlib.contextmanager
+def _silence_stdout():
+    """Redirect FD 1 (stdout) to /dev/null while yielding.
+
+    WhisperX, faster-whisper, and torch all write tqdm progress bars
+    and informational messages to stdout. The MCP server uses stdout
+    for its JSON-RPC channel — any pollution here makes the engine
+    drop the message and report "transport closed". OS-level FD
+    redirection (not `sys.stdout = …`) is what's needed because the
+    underlying C extensions write directly to FD 1.
+
+    stderr is left alone so genuine errors still reach the operator
+    via the engine's collected stderr stream.
+    """
+    sys.stdout.flush()
+    saved = os.dup(1)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 1)
+        yield
+    finally:
+        os.dup2(saved, 1)
+        os.close(devnull)
+        os.close(saved)
 
 DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
 WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE")  # None = auto-detect
@@ -72,25 +99,32 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         f"whisper-mcp: loading model={model_name} device={device} compute={compute_type}",
         file=sys.stderr,
     )
-    model = whisperx.load_model(model_name, device=device, compute_type=compute_type)
-
-    audio = whisperx.load_audio(req.asset_path)
+    # Every whisperx call below is wrapped in `_silence_stdout()` because
+    # the underlying torch / tqdm / faster-whisper code prints progress
+    # bars to FD 1 — which is the stdio MCP transport. Any byte that
+    # leaks corrupts JSON-RPC framing and the engine reports the server
+    # as crashed. See _silence_stdout docstring.
+    with _silence_stdout():
+        model = whisperx.load_model(model_name, device=device, compute_type=compute_type)
+        audio = whisperx.load_audio(req.asset_path)
     transcribe_kwargs: dict[str, Any] = {}
     if WHISPER_LANGUAGE:
         transcribe_kwargs["language"] = WHISPER_LANGUAGE
-    result = model.transcribe(audio, **transcribe_kwargs)
+    with _silence_stdout():
+        result = model.transcribe(audio, **transcribe_kwargs)
     language = result.get("language", "en")
 
     # Forced word alignment (wav2vec2). This is what gives us accurate
     # word boundaries — without this WhisperX is just faster-whisper.
     try:
-        align_model, align_meta = whisperx.load_align_model(
-            language_code=language, device=device
-        )
-        result = whisperx.align(
-            result["segments"], align_model, align_meta, audio, device,
-            return_char_alignments=False,
-        )
+        with _silence_stdout():
+            align_model, align_meta = whisperx.load_align_model(
+                language_code=language, device=device
+            )
+            result = whisperx.align(
+                result["segments"], align_model, align_meta, audio, device,
+                return_char_alignments=False,
+            )
     except Exception as e:  # noqa: BLE001
         print(f"whisper-mcp: word alignment failed ({e}); using segment-level", file=sys.stderr)
 
@@ -98,11 +132,12 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     speakers_used = False
     if DIARIZE and HF_TOKEN:
         try:
-            diarize_model = whisperx.diarize.DiarizationPipeline(
-                model_name=DIARIZATION_MODEL, use_auth_token=HF_TOKEN, device=device
-            )
-            diarize_segments = diarize_model(audio)
-            result = whisperx.assign_word_speakers(diarize_segments, result)
+            with _silence_stdout():
+                diarize_model = whisperx.diarize.DiarizationPipeline(
+                    model_name=DIARIZATION_MODEL, use_auth_token=HF_TOKEN, device=device
+                )
+                diarize_segments = diarize_model(audio)
+                result = whisperx.assign_word_speakers(diarize_segments, result)
             speakers_used = True
         except Exception as e:  # noqa: BLE001
             print(
