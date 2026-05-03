@@ -375,7 +375,7 @@ Make TWO edits in ONE apply_edl call (a single envelope with two ops):\
     assert!(called.contains("apply_edl"), "agent must call apply_edl");
     let payload = apply_payload.expect("apply_edl result captured");
     assert!(
-        payload.contains("applied 2 op"),
+        payload.contains("committed 2 op"),
         "envelope must commit 2 ops; got: {payload}"
     );
     assert!(payload.contains("trimmed"));

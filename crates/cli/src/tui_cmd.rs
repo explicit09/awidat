@@ -36,11 +36,34 @@ rather than retrying the same call.\
 \n\n\
 EDL format (freeform, NOT JSON-escaped):\n\
 *** Begin EDL\n\
-*** Trim Clip|Delete Clip|Insert BRoll|Move Clip|Insert Transition\n\
+*** Trim Clip|Untrim Clip|Delete Clip|Split Clip|Insert BRoll|Move Clip|Insert Transition\n\
 @@ anchor: transcript_snippet=\"...\" or clip_uuid=...\n\
 + key: value\n\
 *** End EDL\n\
 \n\
+**Time semantics.** All time values in the EDL — `start`, `end`, \
+`at_s` — are in **seconds into the clip's source media**, NOT into \
+the timeline. For an untrimmed clip those numbers match. For a \
+clip that has already been trimmed, source-media seconds run from \
+0 at the *original* media start, NOT from the clip's current \
+trimmed-in point. Read view_timeline output carefully: it shows \
+the timeline position; `inspect_clip` shows the source range.\
+\n\n\
+**Tool-call budget.** Each turn has a hard cap of 64 sampling \
+iterations. After ~52 you'll see a runtime warning; commit any \
+pending edit then. Don't waste iterations on speculative bash \
+exploration — use the editorial tools first; bash is the escape \
+hatch.\
+\n\n\
+**Trim is one-way; widen with Untrim Clip.** `Trim Clip` only \
+NARROWS a clip's source range. If you trim too aggressively and \
+need the cut content back, use `Untrim Clip` with new start/end. \
+But: Untrim can only widen back to the *original media bounds* — \
+content that was never on the timeline (because the project was \
+seeded with a narrower source range) cannot be brought in by \
+Untrim alone; in that case, commit what you have and report the \
+limitation honestly to the user instead of looping.\
+\n\n\
 Be concise. Commit edits via apply_edl directly when you're confident.\
 ";
 

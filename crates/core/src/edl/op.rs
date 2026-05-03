@@ -34,6 +34,46 @@ pub enum EdlOp {
         /// Anchor identifying the clip.
         anchor: Anchor,
     },
+    /// Split one clip into two at a timestamp. The original clip's
+    /// `source_range` partitions: `[start..at_s)` becomes the left
+    /// piece (keeps the original name + metadata), `[at_s..end)`
+    /// becomes a new right piece (new name `<original>-b`). Both
+    /// pieces share the same media reference.
+    ///
+    /// `at_s` is in seconds **into the source media**, not absolute
+    /// timeline seconds. The agent's typical flow is: find_moment to
+    /// get a transcript timestamp → that timestamp is already into
+    /// the source → pass it as `at_s`.
+    SplitClip {
+        /// Anchor identifying the clip to split.
+        anchor: Anchor,
+        /// Cut point, in seconds into the source media. Must lie
+        /// strictly inside the clip's source_range or the op fails.
+        at_s: f64,
+    },
+    /// Reset / extend a previously-trimmed clip's source range. This
+    /// is the inverse-direction op of `Trim Clip` — Trim can only
+    /// narrow; Untrim can widen back out (toward the original media
+    /// bounds). Required because the agent's most common failure mode
+    /// is overshoot-then-recover: trim too aggressively, realize the
+    /// kept content extends further, need to widen the source range
+    /// before splitting.
+    ///
+    /// Both fields are optional; omitted fields keep the current
+    /// source-range value. If the media reference declares an
+    /// `available_range`, the new range is capped to it; otherwise
+    /// the agent is trusted (OTIO round-trip validation catches the
+    /// pathological case).
+    UntrimClip {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// New source-range start in seconds, if widening backward.
+        /// `None` keeps the current start.
+        start: Option<f64>,
+        /// New source-range end in seconds, if widening forward.
+        /// `None` keeps the current end.
+        end: Option<f64>,
+    },
     /// Insert b-roll over an anchor moment. Currently F2; carried in the
     /// type so the parser/handler signatures stay stable.
     InsertBRoll {

@@ -17,9 +17,98 @@
 //! `aider/aider/coders/editblock_coder.py:91-106`). The agent gets these
 //! in the `RespondToModel` error so it can self-correct in the same turn.
 
+use std::path::{Path, PathBuf};
+
 use awidat_proto::otio::{StackChild, Timeline, TrackChild};
 
 use super::op::Anchor;
+
+/// Side data the resolver needs beyond the timeline itself. Bundles
+/// the project root (so the resolver can read whisper sidecars to
+/// match transcript phrases that aren't pre-seeded as clip metadata)
+/// and a cache of already-loaded sidecars to avoid hitting disk
+/// repeatedly inside one apply pass.
+///
+/// `AnchorContext::empty()` returns a context with no project root —
+/// the resolver falls back to clip-metadata-only matching, which is
+/// what every existing test relies on.
+#[derive(Debug, Default)]
+pub struct AnchorContext {
+    project_root: Option<PathBuf>,
+    /// Cache: asset_id → segments[]. Each segment is `(start_s,
+    /// end_s, text_lower)` ordered by start_s. Built lazily.
+    sidecar_cache: std::cell::RefCell<std::collections::HashMap<String, Vec<TranscriptSegment>>>,
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptSegment {
+    start_s: f64,
+    end_s: f64,
+    text: String,
+}
+
+impl AnchorContext {
+    /// No project root — resolver matches against clip metadata only.
+    /// This is the right context for most unit tests.
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Resolver may read whisper sidecars under `<project_root>/index/whisper/`
+    /// when matching transcript snippets that aren't seeded as clip
+    /// metadata.
+    pub fn with_project_root(root: impl Into<PathBuf>) -> Self {
+        Self {
+            project_root: Some(root.into()),
+            sidecar_cache: std::cell::RefCell::new(Default::default()),
+        }
+    }
+
+    /// Look up segments for the asset, loading the sidecar from disk
+    /// on first miss. Returns an empty Vec if the sidecar doesn't
+    /// exist or can't be parsed — that's a soft miss; the resolver
+    /// falls through to clip-metadata matching.
+    fn segments_for(&self, asset_id: &str) -> Vec<TranscriptSegment> {
+        let Some(root) = &self.project_root else {
+            return Vec::new();
+        };
+        if let Some(hit) = self.sidecar_cache.borrow().get(asset_id) {
+            return hit.clone();
+        }
+        let segments = load_segments(root, asset_id).unwrap_or_default();
+        self.sidecar_cache
+            .borrow_mut()
+            .insert(asset_id.to_string(), segments.clone());
+        segments
+    }
+}
+
+fn load_segments(project_root: &Path, asset_id: &str) -> Option<Vec<TranscriptSegment>> {
+    // Sidecar layout: <root>/index/whisper/<asset_id>.json. The asset
+    // id already includes any `raw/` prefix.
+    let path = project_root
+        .join("index")
+        .join("whisper")
+        .join(format!("{asset_id}.json"));
+    let bytes = std::fs::read(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let segs = v.pointer("/data/segments")?.as_array()?;
+    let mut out: Vec<TranscriptSegment> = segs
+        .iter()
+        .filter_map(|s| {
+            let text = s.get("text")?.as_str()?.to_string();
+            let start_s = s.get("start_s").and_then(|v| v.as_f64())?;
+            let end_s = s.get("end_s").and_then(|v| v.as_f64())?;
+            Some(TranscriptSegment {
+                start_s,
+                end_s,
+                text,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| a.start_s.partial_cmp(&b.start_s).unwrap_or(std::cmp::Ordering::Equal));
+    Some(out)
+}
 
 /// Where in the timeline a resolved clip lives. Track-relative.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +121,25 @@ pub struct ClipLocator {
 
 /// Resolve an anchor to a single clip locator. Returns `Err` with a
 /// "did you mean?" candidates list on miss.
-pub fn resolve(timeline: &Timeline, anchor: &Anchor) -> Result<ClipLocator, AnchorMiss> {
+///
+/// Resolution order for `transcript_snippet` anchors:
+///
+/// 1. Match the 4-tier cascade against each clip's seeded metadata
+///    (transcript_snippet, marker notes, clip name).
+/// 2. If `ctx.project_root` is set and tier 1 missed: load the whisper
+///    sidecar for each clip's asset, run the same 4-tier cascade
+///    against segment text, and map the matching segment back to a
+///    clip whose source_range covers that segment timestamp.
+///
+/// Step 2 is what makes anchoring against real footage work — when
+/// `awidat init` produces a clip with only `asset_id` in its anchor,
+/// the agent can still say `transcript_snippet="builders network"`
+/// and the resolver pulls the phrase out of the whisper transcript.
+pub fn resolve(
+    timeline: &Timeline,
+    anchor: &Anchor,
+    ctx: &AnchorContext,
+) -> Result<ClipLocator, AnchorMiss> {
     let clips = collect_clips(timeline);
 
     let needle = match anchor {
@@ -47,8 +154,7 @@ pub fn resolve(timeline: &Timeline, anchor: &Anchor) -> Result<ClipLocator, Anch
         }
     };
 
-    // Tier 1 → 4: progressively-relaxed substring matches against any
-    // available text on each clip.
+    // Tier 1 → 4 against seeded metadata.
     for tier in [Tier::Exact, Tier::TrimEnd, Tier::TrimBoth, Tier::UnicodeNorm] {
         let normalized_needle = normalize(needle, tier);
         for clip in &clips {
@@ -60,16 +166,109 @@ pub fn resolve(timeline: &Timeline, anchor: &Anchor) -> Result<ClipLocator, Anch
         }
     }
 
+    // Tier 5: search whisper sidecars when we have a project_root.
+    if let Some(loc) = resolve_via_whisper(&clips, needle, ctx) {
+        return Ok(loc);
+    }
+
     // Miss. Build candidates.
-    let candidates = nearest_candidates(needle, &clips, 3);
+    let candidates = nearest_candidates_from_clips_and_sidecars(needle, &clips, ctx, 3);
     Err(AnchorMiss {
         anchor: anchor.clone(),
         candidates,
         reason: format!(
             "no clip found whose transcript snippet contains {needle:?} \
-             (tried exact, whitespace-tolerant, and unicode-normalized matches)"
+             (tried exact, whitespace-tolerant, unicode-normalized, \
+             and whisper-sidecar matches)"
         ),
     })
+}
+
+/// Walk every clip's whisper sidecar looking for a segment whose text
+/// contains the needle (4-tier cascade). On a hit, return the
+/// locator of the clip that contains the matching segment's
+/// timestamp inside its source_range. We pick the *first* clip whose
+/// asset_id matches the segment's owning sidecar; if multiple clips
+/// reference the same asset, we further filter by source_range
+/// containment (start_s..start_s+duration covers the segment start).
+fn resolve_via_whisper(
+    clips: &[ClipEntry<'_>],
+    needle: &str,
+    ctx: &AnchorContext,
+) -> Option<ClipLocator> {
+    if ctx.project_root.is_none() {
+        return None;
+    }
+    for tier in [Tier::Exact, Tier::TrimEnd, Tier::TrimBoth, Tier::UnicodeNorm] {
+        let normalized_needle = normalize(needle, tier);
+        for clip in clips {
+            let asset_id = match &clip.asset_id {
+                Some(id) => id,
+                None => continue,
+            };
+            let segments = ctx.segments_for(asset_id);
+            if segments.is_empty() {
+                continue;
+            }
+            for seg in &segments {
+                if normalize(&seg.text, tier).contains(&normalized_needle)
+                    && clip_covers_segment(clip, seg)
+                {
+                    return Some(clip.locator);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// True iff the clip's source_range covers (or at least overlaps)
+/// the segment timestamp. We're conservative: the segment start has
+/// to fall inside `[clip_start, clip_end)` measured in seconds at
+/// the clip's media-rate. This keeps multi-clip-per-asset (e.g. a
+/// previously-split clip) anchoring correct.
+fn clip_covers_segment(clip: &ClipEntry<'_>, seg: &TranscriptSegment) -> bool {
+    let Some(range) = clip.source_range else {
+        return true; // no range info; be permissive
+    };
+    let clip_start = range.0;
+    let clip_end = range.0 + range.1;
+    seg.start_s >= clip_start && seg.start_s < clip_end
+}
+
+fn nearest_candidates_from_clips_and_sidecars(
+    needle: &str,
+    clips: &[ClipEntry<'_>],
+    ctx: &AnchorContext,
+    k: usize,
+) -> Vec<String> {
+    let needle_l = needle.to_lowercase();
+    let mut scored: Vec<(usize, String)> = clips
+        .iter()
+        .filter_map(|c| {
+            c.transcript_snippet
+                .map(|t| (overlap_score(&needle_l, &t.to_lowercase()), t.to_string()))
+        })
+        .collect();
+    // If we have a project root, pull candidate phrases from whisper too.
+    if ctx.project_root.is_some() {
+        let mut seen_assets = std::collections::HashSet::new();
+        for clip in clips {
+            let Some(asset_id) = &clip.asset_id else { continue };
+            if !seen_assets.insert(asset_id.clone()) {
+                continue;
+            }
+            for seg in ctx.segments_for(asset_id) {
+                let s = (
+                    overlap_score(&needle_l, &seg.text.to_lowercase()),
+                    seg.text.clone(),
+                );
+                scored.push(s);
+            }
+        }
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.into_iter().take(k).map(|(_, s)| s).collect()
 }
 
 /// What we couldn't find. Surfaced to the agent as a `RespondToModel`
@@ -142,9 +341,17 @@ struct ClipEntry<'a> {
     transcript_snippet: Option<&'a str>,
     awidat_uuid: Option<String>,
     marker_notes: Vec<&'a str>,
+    /// External asset id (e.g. `raw/clip-1.MOV`). Used by the whisper
+    /// sidecar lookup to find the matching transcript file.
+    asset_id: Option<String>,
+    /// Clip source_range as `(start_s, duration_s)` in seconds. Used
+    /// to filter sidecar segments to those that fall inside the
+    /// clip's media slice.
+    source_range: Option<(f64, f64)>,
 }
 
 fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
+    use awidat_proto::otio::{ExternalReference, MediaReference};
     let mut out = Vec::new();
     for (ti, sc) in timeline.tracks.children.iter().enumerate() {
         let StackChild::Track(track) = sc else { continue };
@@ -173,6 +380,19 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
                             .and_then(|am| am.note.as_deref())
                     })
                     .collect();
+                // Asset id from the external media reference's
+                // target_url. The awidat anchor doesn't carry this
+                // separately — clips on a track always resolve their
+                // media via `media_reference`.
+                let asset_id = match &c.media_reference {
+                    MediaReference::External(ExternalReference { target_url, .. }) => {
+                        Some(target_url.clone())
+                    }
+                    _ => None,
+                };
+                let source_range = c.source_range.as_ref().map(|r| {
+                    (r.start_time.to_seconds(), r.duration.to_seconds())
+                });
                 out.push(ClipEntry {
                     locator: ClipLocator {
                         track_index: ti,
@@ -182,6 +402,8 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
                     transcript_snippet: snippet,
                     awidat_uuid: uuid,
                     marker_notes,
+                    asset_id,
+                    source_range,
                 });
             }
         }
@@ -222,16 +444,6 @@ fn clip_text(clip: &ClipEntry<'_>) -> Option<String> {
         return None;
     }
     Some(parts.join(" \n "))
-}
-
-fn nearest_candidates(needle: &str, clips: &[ClipEntry<'_>], k: usize) -> Vec<String> {
-    let needle_l = needle.to_lowercase();
-    let mut scored: Vec<(usize, String)> = clips
-        .iter()
-        .filter_map(|c| c.transcript_snippet.map(|t| (overlap_score(&needle_l, &t.to_lowercase()), t.to_string())))
-        .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
-    scored.into_iter().take(k).map(|(_, s)| s).collect()
 }
 
 /// Crude overlap score: count of needle words that appear in the
@@ -289,6 +501,7 @@ mod tests {
             &Anchor::TranscriptSnippet {
                 text: "thing about Stripe".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap();
         assert_eq!(loc.child_index, 1);
@@ -303,6 +516,7 @@ mod tests {
             &Anchor::TranscriptSnippet {
                 text: "hello  world".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap();
         assert_eq!(loc.child_index, 0);
@@ -317,6 +531,7 @@ mod tests {
             &Anchor::TranscriptSnippet {
                 text: "\"stripe is great\"".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap();
         assert_eq!(loc.child_index, 0);
@@ -335,6 +550,7 @@ mod tests {
             &Anchor::TranscriptSnippet {
                 text: "spain weather is variable".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap_err();
         // top candidates should include the spain-bearing clips
@@ -350,6 +566,7 @@ mod tests {
             &Anchor::TranscriptSnippet {
                 text: "goodbye".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap_err();
         let msg = err.to_string();
@@ -374,6 +591,7 @@ mod tests {
             &Anchor::ClipUuid {
                 uuid: "c-9f2".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap();
         assert_eq!(loc.child_index, 0);
@@ -387,6 +605,7 @@ mod tests {
             &Anchor::ClipUuid {
                 uuid: "clip-0".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap();
         assert_eq!(loc.child_index, 0);
@@ -401,6 +620,7 @@ mod tests {
                 asset_id: "raw/x.mp4".into(),
                 index: 0,
             },
+            &AnchorContext::empty(),
         )
         .unwrap_err();
         assert!(err.reason.contains("v1.5"));
@@ -414,6 +634,7 @@ mod tests {
             &Anchor::TranscriptSnippet {
                 text: "anything".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap_err();
         assert!(err.candidates.is_empty());
@@ -430,9 +651,83 @@ mod tests {
             &Anchor::TranscriptSnippet {
                 text: "shared word".into(),
             },
+            &AnchorContext::empty(),
         )
         .unwrap();
         // Tier 1 (Exact) returns the first hit in iteration order.
+        assert_eq!(loc.child_index, 0);
+    }
+
+    /// The headline test for #64: the agent passes a phrase that's
+    /// nowhere in the seeded clip metadata, but lives inside the
+    /// whisper sidecar's transcript. With an `AnchorContext` rooted
+    /// at the project, the resolver should find the right clip.
+    #[test]
+    fn whisper_sidecar_search_resolves_phrase_outside_clip_metadata() {
+        use awidat_proto::otio::{Clip, ExternalReference, MediaReference};
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path();
+
+        // Build a one-clip timeline whose clip-level anchor is just
+        // an asset id (the realistic shape after `awidat init` and a
+        // manual seed). No transcript_snippet seeded.
+        let mut tl = Timeline::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut clip = Clip::empty("clip-0".to_string());
+        clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/clip-1.MOV"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(56.0 * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(clip));
+        tl.tracks.children.push(StackChild::Track(track));
+
+        // Drop a synthetic whisper sidecar at the canonical path.
+        let whisper_dir = project_root.join("index/whisper/raw");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        let body = serde_json::json!({
+            "indexer": "whisper",
+            "asset_id": "raw/clip-1.MOV",
+            "data": {
+                "language": "en",
+                "segments": [
+                    {"text": "Hello and welcome to Builders Network",
+                     "start_s": 0.0, "end_s": 3.0},
+                    {"text": "we connect founders with talent",
+                     "start_s": 3.0, "end_s": 6.0},
+                ]
+            }
+        });
+        std::fs::write(
+            whisper_dir.join("clip-1.MOV.json"),
+            serde_json::to_vec_pretty(&body).unwrap(),
+        )
+        .unwrap();
+
+        // Empty context: no project root → the resolver can't see
+        // the sidecar → miss.
+        let err = resolve(
+            &tl,
+            &Anchor::TranscriptSnippet {
+                text: "Builders Network".into(),
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(err.candidates.is_empty(), "no metadata, no candidates");
+
+        // Project-rooted context → resolver loads the sidecar and
+        // finds the segment, mapping it back to clip-0.
+        let ctx = AnchorContext::with_project_root(project_root);
+        let loc = resolve(
+            &tl,
+            &Anchor::TranscriptSnippet {
+                text: "Builders Network".into(),
+            },
+            &ctx,
+        )
+        .expect("sidecar search should resolve");
         assert_eq!(loc.child_index, 0);
     }
 }

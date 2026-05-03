@@ -40,7 +40,7 @@ pub enum EdlParseError {
     MissingEnd,
     /// Heading line that doesn't match a known op.
     #[error("line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Insert BRoll, Move Clip, Insert Transition")]
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert BRoll, Move Clip, Insert Transition")]
     UnknownOp {
         /// Line number.
         line: usize,
@@ -205,6 +205,8 @@ struct OpBuilder {
 enum OpKind {
     TrimClip,
     DeleteClip,
+    SplitClip,
+    UntrimClip,
     InsertBRoll,
     MoveClip,
     InsertTransition,
@@ -215,6 +217,8 @@ impl OpBuilder {
         let kind = match heading.trim() {
             "Trim Clip" => OpKind::TrimClip,
             "Delete Clip" => OpKind::DeleteClip,
+            "Split Clip" => OpKind::SplitClip,
+            "Untrim Clip" => OpKind::UntrimClip,
             "Insert BRoll" => OpKind::InsertBRoll,
             "Move Clip" => OpKind::MoveClip,
             "Insert Transition" => OpKind::InsertTransition,
@@ -269,6 +273,27 @@ impl OpBuilder {
                     line: head,
                     field: "anchor".into(),
                 })?,
+            }),
+            OpKind::SplitClip => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let at_s = take_field_f64(&mut fields, "at_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "at_s".into(),
+                    }
+                })?;
+                Ok(EdlOp::SplitClip { anchor, at_s })
+            }
+            OpKind::UntrimClip => Ok(EdlOp::UntrimClip {
+                anchor: self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?,
+                start: take_field_f64(&mut fields, "start"),
+                end: take_field_f64(&mut fields, "end"),
             }),
             OpKind::InsertBRoll => {
                 let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {

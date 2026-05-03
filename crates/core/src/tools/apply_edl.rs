@@ -24,7 +24,9 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::edl::{ApplyError, EdlParseError, apply as edl_apply, parse as edl_parse};
+use crate::edl::{
+    AnchorContext, ApplyError, EdlParseError, apply as edl_apply, parse as edl_parse,
+};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `apply_edl` tool.
@@ -65,6 +67,7 @@ impl ToolHandler for ApplyEdlTool {
                 },
                 "required": ["edl"]
             }),
+            ..Default::default()
         }
     }
 
@@ -108,9 +111,13 @@ impl ToolHandler for ApplyEdlTool {
                 ctx.project_root.display()
             ))
         })?;
-        let (new_timeline, outcome) = edl_apply(&project.timeline, &envelope).map_err(|e| {
-            FunctionCallError::RespondToModel(format_apply_error(&e))
-        })?;
+        // Hand the resolver a context so it can search whisper
+        // sidecars when the model anchors on a phrase that isn't
+        // pre-seeded as clip metadata. Without this the agent can
+        // only anchor on the short blurbs we seed at init time.
+        let anchor_ctx = AnchorContext::with_project_root(ctx.project_root.clone());
+        let (new_timeline, outcome) = edl_apply(&project.timeline, &envelope, &anchor_ctx)
+            .map_err(|e| FunctionCallError::RespondToModel(format_apply_error(&e)))?;
 
         // 6. Commit to disk (skip when dry_run).
         if !args.dry_run {
@@ -123,14 +130,22 @@ impl ToolHandler for ApplyEdlTool {
             })?;
         }
 
-        // Build the response. The model gets a one-line-per-op log so it
-        // can confirm what landed; the TUI subscribes to a future
-        // EditPlanUpdate for richer rendering.
-        let mut summary = format!(
-            "applied {} op(s){}:",
-            outcome.applied.len(),
-            if args.dry_run { " (dry-run, NOT committed)" } else { "" }
-        );
+        // Build the response. Lead with a loud DRY RUN banner when
+        // applicable — past traces showed agents quietly retrying a
+        // dry-run "succeeded" call in a loop, never noticing nothing
+        // landed on disk.
+        let mut summary = if args.dry_run {
+            format!(
+                "DRY RUN — no disk write. Pass dry_run:false to commit. \
+                 Validated {} op(s):",
+                outcome.applied.len()
+            )
+        } else {
+            format!(
+                "committed {} op(s) to project.otio.json:",
+                outcome.applied.len()
+            )
+        };
         for op in &outcome.applied {
             summary.push_str(&format!("\n  {}. {}", op.index + 1, op.description));
         }
@@ -139,12 +154,43 @@ impl ToolHandler for ApplyEdlTool {
 }
 
 fn format_parse_error(e: &EdlParseError) -> String {
-    format!(
-        "apply_edl: parse failed — {e}. The envelope must begin with `*** Begin EDL` and \
-         end with `*** End EDL`; ops are `*** Trim Clip | Delete Clip | Insert BRoll | \
+    // Tack on a per-field example for missing-field errors so the
+    // model knows the wire syntax. Real-video runs showed agents
+    // failing repeatedly on `at_s` / `start` / `duration_s` because
+    // the bare error didn't tell them how to write the field line.
+    let hint = match e {
+        EdlParseError::MissingField { field, .. } => match field.as_str() {
+            "at_s" => Some(
+                "Split Clip needs a cut point. Add `+ at_s: <seconds>` \
+                 (in source-media seconds) below the @@ anchor line.",
+            ),
+            "start" | "end" => Some(
+                "Trim Clip / Untrim Clip needs at least one of \
+                 `+ start: <seconds>` or `+ end: <seconds>` (in \
+                 source-media seconds).",
+            ),
+            "asset" => Some("Insert BRoll needs `+ asset: <project-relative path>`."),
+            "duration_s" => Some("Insert BRoll needs `+ duration_s: <seconds>`."),
+            "anchor" => Some(
+                "Every op needs an `@@ anchor: ...` line. Either \
+                 transcript_snippet=\"...\" or clip_uuid=<name>.",
+            ),
+            _ => None,
+        },
+        _ => None,
+    };
+    let mut msg = format!(
+        "apply_edl: parse failed — {e}. The envelope must begin with \
+         `*** Begin EDL` and end with `*** End EDL`; ops are `*** Trim \
+         Clip | Untrim Clip | Delete Clip | Split Clip | Insert BRoll | \
          Move Clip | Insert Transition`. Anchors look like `@@ anchor: \
          transcript_snippet=\"...\"` or `@@ anchor: clip_uuid=...`."
-    )
+    );
+    if let Some(extra) = hint {
+        msg.push_str("\n\nHint: ");
+        msg.push_str(extra);
+    }
+    msg
 }
 
 fn format_apply_error(e: &ApplyError) -> String {
@@ -152,14 +198,43 @@ fn format_apply_error(e: &ApplyError) -> String {
 }
 
 const DESCRIPTION: &str = "\
-Apply an Edit Decision List (EDL) to the project timeline. The EDL is a \
-freeform envelope (NOT JSON-escaped multi-line content — pass the raw \
-text). Begins with `*** Begin EDL` and ends with `*** End EDL`. \
-Operations: Trim Clip, Delete Clip (Insert BRoll / Move Clip / Insert \
-Transition land in a future batch). Each op identifies its target by \
-*content anchor* — transcript_snippet, clip_uuid, scene_change_index — \
-not absolute timestamps; this lets edits survive prior changes in the \
-same envelope. Set dry_run=true to validate without committing.\
+Commit an Edit Decision List (EDL) to the project timeline — this \
+WRITES project.otio.json. The EDL is a freeform envelope (NOT \
+JSON-escaped multi-line content — pass the raw text). Begins with \
+`*** Begin EDL` and ends with `*** End EDL`. \
+\n\n\
+Operations and their required `+ key: value` fields:\
+\n  - **Trim Clip**: `+ start: <source_s>` and/or `+ end: <source_s>` \
+(at least one). Times are seconds into the clip's source media. \
+Trim only NARROWS — to widen back out, use Untrim Clip.\
+\n  - **Untrim Clip**: `+ start: <source_s>` and/or `+ end: <source_s>` \
+(at least one). Widens a previously-trimmed clip back toward the \
+original media bounds. Capped to the media reference's available \
+range when known.\
+\n  - **Delete Clip**: no fields.\
+\n  - **Split Clip**: `+ at_s: <source_s>` (required). The cut \
+point in source-media seconds; must lie strictly inside the clip's \
+current source range.\
+\n  - **Insert BRoll** / **Move Clip** / **Insert Transition**: \
+deferred to a later batch.\
+\n\n\
+**Anchors.** Each op identifies its target by content anchor — \
+`transcript_snippet`, `clip_uuid`, `scene_change_index` — not \
+absolute timestamps; this lets edits survive prior changes in the \
+same envelope. transcript_snippet matches against the clip's \
+metadata first, then against the whisper sidecar's segment text \
+when the project has been indexed.\
+\n\n\
+**Time semantics.** All time fields are in seconds into the clip's \
+source media. After a Trim, the clip's source range narrows but \
+source-media seconds still count from the *original* media start \
+(at offset 0). Use `inspect_clip` to see the current source range \
+before another edit.\
+\n\n\
+By default this commits. Set dry_run=true ONLY if you want to \
+validate the parse without writing — in that case the response \
+leads with the banner `DRY RUN — no disk write`. Don't pass \
+dry_run if you intend to edit.\
 ";
 
 #[cfg(test)]
@@ -243,7 +318,7 @@ mod tests {
             .handle(invoke(serde_json::json!({"edl": edl})), ctx_at(dir.path()))
             .await
             .unwrap();
-        assert!(out.content.contains("applied 1 op"));
+        assert!(out.content.contains("committed 1 op"));
         assert!(out.content.contains("trimmed clip \"clip-1\""));
 
         // Re-read project: the trim should be persisted.
@@ -270,7 +345,8 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(out.content.contains("dry-run, NOT committed"));
+        assert!(out.content.contains("DRY RUN"));
+        assert!(out.content.contains("dry_run:false"));
 
         // On-disk timeline unchanged.
         let p = Project::read(dir.path()).unwrap();

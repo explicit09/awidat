@@ -235,7 +235,7 @@ async fn editorial_workflow_find_view_inspect_read_apply() {
         )
         .await
         .expect("apply_edl must succeed");
-    assert!(result.content.contains("applied 1 op"));
+    assert!(result.content.contains("committed 1 op"));
     assert!(result.content.contains("deleted clip \"clip-1\""));
 
     // Round-trip: re-read the project and confirm the clip is gone.
@@ -287,7 +287,7 @@ async fn apply_edl_dry_run_chain_does_not_persist() {
         )
         .await
         .unwrap();
-    assert!(apply_out.content.contains("dry-run, NOT committed"));
+    assert!(apply_out.content.contains("DRY RUN"));
 
     let view_out = ViewTimelineTool
         .handle(

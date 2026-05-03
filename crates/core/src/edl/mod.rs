@@ -14,7 +14,7 @@ pub mod apply;
 pub mod op;
 pub mod parser;
 
-pub use anchor::{AnchorMiss, ClipLocator, resolve};
+pub use anchor::{AnchorContext, AnchorMiss, ClipLocator, resolve};
 pub use apply::{ApplyError, ApplyOutcome, AppliedOp, apply};
 pub use op::{Anchor, BRollPosition, EdlEnvelope, EdlOp, TransitionBetween};
 pub use parser::{EdlParseError, parse};
