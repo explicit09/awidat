@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 
 mod chat_cmd;
 mod index_cmd;
+mod tui_cmd;
 
 /// Top-level CLI.
 #[derive(Parser, Debug)]
@@ -69,6 +70,17 @@ enum Command {
         #[arg(long)]
         model: Option<String>,
     },
+    /// Open a Ratatui chat against a project, with the full editorial
+    /// tool registry mounted and approvals routed through a modal.
+    /// Ctrl-C cancels the in-flight turn; Ctrl-D from an empty composer
+    /// or `:q` from the modal exits.
+    Tui {
+        /// Project directory.
+        path: PathBuf,
+        /// Override the default model id. Defaults to claude-sonnet-4-6.
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// Print the version of the awidat binary.
     Version,
 }
@@ -85,6 +97,7 @@ fn main() -> ExitCode {
             concurrency,
         } => index_cmd::run(&path, assets, indexers, concurrency),
         Command::Chat { path, model } => chat_cmd::run(&path, model.as_deref()),
+        Command::Tui { path, model } => tui_cmd::run(&path, model.as_deref()),
         Command::Version => {
             print_version();
             Ok(())
