@@ -140,6 +140,23 @@ fn apply_one(
         EdlOp::UntrimClip { anchor, start, end } => {
             apply_untrim(working, index, anchor, *start, *end, ctx)
         }
+        EdlOp::InsertClip {
+            asset,
+            track,
+            at_position,
+            start,
+            end,
+            name,
+        } => apply_insert_clip(
+            working,
+            index,
+            asset,
+            track,
+            *at_position,
+            *start,
+            *end,
+            name.as_deref(),
+        ),
         EdlOp::InsertBRoll { .. } => Err(ApplyError::NotImplemented {
             index,
             op: "Insert BRoll".into(),
@@ -370,6 +387,104 @@ fn apply_untrim(
 
 /// Split one clip into two at `at_s` seconds into the source media.
 ///
+/// Insert a new clip on a (possibly fresh) track from an asset on
+/// disk. This is the load-bearing op for *building* a timeline —
+/// every other op mutates an existing one.
+///
+/// Behavior:
+/// - If `track` doesn't exist, create it (Video kind by default) and
+///   append it to the timeline's tracks.
+/// - Auto-name the clip `clip-N` where N is the new child's index in
+///   the track, unless `name` is supplied.
+/// - Build an ExternalReference to `asset`.
+/// - Default `start = 0.0`, `end = 1.0` if neither supplied (the
+///   agent is expected to pass at least one — the OTIO validator
+///   will reject zero-duration clips, so the model gets a clear
+///   error if it forgot).
+/// - Insert at `at_position` (clamped to `[0, len]`); default
+///   `at_position = len` (append).
+#[allow(clippy::too_many_arguments)]
+fn apply_insert_clip(
+    working: &mut Timeline,
+    index: usize,
+    asset: &str,
+    track_name: &str,
+    at_position: Option<usize>,
+    start_s: Option<f64>,
+    end_s: Option<f64>,
+    name_override: Option<&str>,
+) -> Result<String, ApplyError> {
+    use awidat_proto::otio::{
+        Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track, TrackKind,
+    };
+
+    // Find or create the named track.
+    let track_idx = working
+        .tracks
+        .children
+        .iter()
+        .enumerate()
+        .find_map(|(i, sc)| match sc {
+            StackChild::Track(t) if t.name == track_name => Some(i),
+            _ => None,
+        });
+    let track_idx = match track_idx {
+        Some(i) => i,
+        None => {
+            let track = Track::empty(track_name.to_string(), TrackKind::Video);
+            working.tracks.children.push(StackChild::Track(track));
+            working.tracks.children.len() - 1
+        }
+    };
+
+    let StackChild::Track(track) = &mut working.tracks.children[track_idx] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "track index resolved to a non-track stack child".into(),
+        });
+    };
+
+    // Determine the source range.
+    let start = start_s.unwrap_or(0.0);
+    let end = end_s.unwrap_or(start + 1.0);
+    if end <= start {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "insert: end {end:.3}s must be > start {start:.3}s. \
+                 Pass `+ start: <s>` and `+ end: <s>` (in source-media \
+                 seconds). Use inspect_clip on the asset first to see \
+                 its duration."
+            ),
+        });
+    }
+    let rate = 24.0_f64;
+    let source_range = TimeRange::new(
+        RationalTime::new(start * rate, rate),
+        RationalTime::new((end - start) * rate, rate),
+    );
+
+    // Build the clip.
+    let position = at_position.unwrap_or(track.children.len()).min(track.children.len());
+    let chosen_name = name_override
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("clip-{position}"));
+    let mut clip = Clip::empty(chosen_name.clone());
+    clip.media_reference = MediaReference::External(ExternalReference::new(asset.to_string()));
+    clip.source_range = Some(source_range);
+
+    track
+        .children
+        .insert(position, TrackChild::Clip(clip));
+
+    Ok(format!(
+        "inserted clip {chosen_name:?} on track {track_name:?} at \
+         position {position}: asset={asset:?} source=[{start:.3}s..{end:.3}s] \
+         ({:.3}s)",
+        end - start
+    ))
+}
+
 /// Both pieces share the original media reference; the left piece
 /// keeps the original name and metadata, the right piece gets a
 /// `<name>-b` suffix so the agent can anchor each independently
@@ -785,6 +900,97 @@ mod tests {
             "expected duration capped to 4s; got {}",
             r.duration.to_seconds()
         );
+    }
+
+    #[test]
+    fn apply_insert_clip_creates_track_when_missing() {
+        // Empty timeline. Insert one clip — track gets created.
+        use awidat_proto::otio::Timeline as Tl;
+        let tl = Tl::empty("test");
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/clip-1.MOV".into(),
+                track: "V1".into(),
+                at_position: None,
+                start: Some(0.0),
+                end: Some(56.47),
+                name: None,
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert_eq!(outcome.applied.len(), 1);
+        assert_eq!(new_tl.tracks.children.len(), 1, "track created");
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        assert_eq!(t.name, "V1");
+        assert_eq!(t.children.len(), 1);
+        let TrackChild::Clip(c) = &t.children[0] else { panic!() };
+        assert_eq!(c.name, "clip-0");
+        let r = c.source_range.as_ref().unwrap();
+        assert!((r.duration.to_seconds() - 56.47).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_insert_clip_appends_to_existing_track() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/extra.mp4".into(),
+                track: "V1".into(),
+                at_position: None,
+                start: Some(0.0),
+                end: Some(2.0),
+                name: Some("intro".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        // 3 existing + 1 inserted at the end.
+        assert_eq!(t.children.len(), 4);
+        let TrackChild::Clip(c) = &t.children[3] else { panic!() };
+        assert_eq!(c.name, "intro");
+    }
+
+    #[test]
+    fn apply_insert_clip_at_position_inserts_in_middle() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/middle.mp4".into(),
+                track: "V1".into(),
+                at_position: Some(1),
+                start: Some(0.0),
+                end: Some(1.0),
+                name: Some("inserted".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        assert_eq!(t.children.len(), 4);
+        let TrackChild::Clip(c) = &t.children[1] else { panic!() };
+        assert_eq!(c.name, "inserted", "new clip lands at index 1");
+    }
+
+    #[test]
+    fn apply_insert_clip_rejects_zero_duration() {
+        use awidat_proto::otio::Timeline as Tl;
+        let tl = Tl::empty("test");
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/x.mp4".into(),
+                track: "V1".into(),
+                at_position: None,
+                start: Some(5.0),
+                end: Some(5.0),
+                name: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        match err {
+            ApplyError::Invalid { message, .. } => {
+                assert!(message.contains("must be > start"), "got: {message}");
+            }
+            other => panic!("want Invalid, got {other:?}"),
+        }
     }
 
     #[test]

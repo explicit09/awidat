@@ -36,7 +36,7 @@ rather than retrying the same call.\
 \n\n\
 EDL format (freeform, NOT JSON-escaped):\n\
 *** Begin EDL\n\
-*** Trim Clip|Untrim Clip|Delete Clip|Split Clip|Insert BRoll|Move Clip|Insert Transition\n\
+*** Trim Clip|Untrim Clip|Delete Clip|Split Clip|Insert Clip|Insert BRoll|Move Clip|Insert Transition\n\
 @@ anchor: transcript_snippet=\"...\" or clip_uuid=...\n\
 + key: value\n\
 *** End EDL\n\

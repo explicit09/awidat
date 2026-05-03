@@ -169,7 +169,13 @@ fn format_parse_error(e: &EdlParseError) -> String {
                  `+ start: <seconds>` or `+ end: <seconds>` (in \
                  source-media seconds).",
             ),
-            "asset" => Some("Insert BRoll needs `+ asset: <project-relative path>`."),
+            "asset" => Some(
+                "Insert Clip / Insert BRoll needs `+ asset: <project-relative path>`.",
+            ),
+            "track" => Some(
+                "Insert Clip needs `+ track: <track name>`. The track is created \
+                 if it doesn't exist (Video kind). Common default: `V1`.",
+            ),
             "duration_s" => Some("Insert BRoll needs `+ duration_s: <seconds>`."),
             "anchor" => Some(
                 "Every op needs an `@@ anchor: ...` line. Either \
@@ -182,9 +188,11 @@ fn format_parse_error(e: &EdlParseError) -> String {
     let mut msg = format!(
         "apply_edl: parse failed — {e}. The envelope must begin with \
          `*** Begin EDL` and end with `*** End EDL`; ops are `*** Trim \
-         Clip | Untrim Clip | Delete Clip | Split Clip | Insert BRoll | \
-         Move Clip | Insert Transition`. Anchors look like `@@ anchor: \
-         transcript_snippet=\"...\"` or `@@ anchor: clip_uuid=...`."
+         Clip | Untrim Clip | Delete Clip | Split Clip | Insert Clip | \
+         Insert BRoll | Move Clip | Insert Transition`. Anchors look \
+         like `@@ anchor: transcript_snippet=\"...\"` or `@@ anchor: \
+         clip_uuid=...`. Insert Clip skips the `@@ anchor:` line — \
+         it doesn't anchor against an existing clip."
     );
     if let Some(extra) = hint {
         msg.push_str("\n\nHint: ");
@@ -215,6 +223,12 @@ range when known.\
 \n  - **Split Clip**: `+ at_s: <source_s>` (required). The cut \
 point in source-media seconds; must lie strictly inside the clip's \
 current source range.\
+\n  - **Insert Clip**: `+ asset: <path>` and `+ track: <name>` \
+(required). Optional `+ start: <source_s>`, `+ end: <source_s>`, \
+`+ at_position: <index>`, `+ name: <clip_name>`. Creates a new \
+clip from a raw asset and inserts it on the named track (track is \
+created Video-kind if missing). The ONLY op that doesn't take an \
+`@@ anchor:` line — it builds a clip rather than locating one.\
 \n  - **Insert BRoll** / **Move Clip** / **Insert Transition**: \
 deferred to a later batch.\
 \n\n\

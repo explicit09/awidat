@@ -74,6 +74,41 @@ pub enum EdlOp {
         /// `None` keeps the current end.
         end: Option<f64>,
     },
+    /// Insert a fresh clip on a track from an asset on disk. The
+    /// load-bearing op for *building* a timeline from raw assets —
+    /// previous ops only mutate existing clips. Without this the
+    /// agent has to bash-edit the OTIO file to start a project.
+    ///
+    /// Track is identified by name; if the named track doesn't exist
+    /// the op creates it (Video kind by default — F2 will add an
+    /// `audio: true` field). The new clip's media_reference is an
+    /// `ExternalReference` to the asset; the source_range defaults
+    /// to `[0, available_range.duration)` if the asset declares an
+    /// available range, otherwise the agent must specify `start`/`end`.
+    ///
+    /// `at_position` controls insertion order in the track's children
+    /// vec. Default = append (end of track).
+    ///
+    /// New clip's `name` defaults to `clip-N` where N is the new
+    /// child's index. The model can override via the optional `name`
+    /// field.
+    InsertClip {
+        /// Project-relative asset path, e.g. `"raw/clip-1.MOV"`.
+        asset: String,
+        /// Track name; created with Video kind if missing.
+        track: String,
+        /// Where in the track to insert. `None` = append.
+        at_position: Option<usize>,
+        /// Source-media start in seconds. Defaults to 0.
+        start: Option<f64>,
+        /// Source-media end in seconds. Defaults to the asset's
+        /// available_range end (if known) or to start+1 (the agent
+        /// is expected to know the duration via inspect_clip /
+        /// list_assets first).
+        end: Option<f64>,
+        /// Optional clip name override.
+        name: Option<String>,
+    },
     /// Insert b-roll over an anchor moment. Currently F2; carried in the
     /// type so the parser/handler signatures stay stable.
     InsertBRoll {
