@@ -5,8 +5,10 @@
 
 pub mod apply_edl;
 pub mod bash;
+pub mod find_beat;
 pub mod find_moment;
 pub mod inspect_clip;
+pub mod inspect_moment;
 pub mod list_assets;
 pub mod poll_render;
 pub mod read_index;

@@ -161,6 +161,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "dirs",
  "eventsource-stream",
  "futures",
  "pretty_assertions",

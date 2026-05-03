@@ -25,6 +25,7 @@ members = [
     "packages/scenedetect-mcp",
     "packages/audio-energy-mcp",
     "packages/topic-mcp",
+    "packages/editorial-moments-mcp",
 ]
 
 [tool.uv.sources]
