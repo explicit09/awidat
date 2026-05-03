@@ -207,18 +207,30 @@ def _label(sentences: list[dict[str, Any]]) -> str:
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     transcript_path = _find_transcript_path(req.asset_path, req.asset_id)
     if transcript_path is None:
-        return {
-            "topics": [],
-            "note": (
-                "transcript sidecar not found; run whisper-mcp first then "
-                "re-run `awidat index --indexer topic`."
-            ),
-        }
+        # **Raise** rather than returning an empty success — past
+        # behavior wrote a `topics: []` sidecar with the asset's
+        # SHA, and the engine's idempotency cache then skipped
+        # topic forever after, even when whisper finished later.
+        # Raising surfaces an MCP `is_error: true` to the engine,
+        # which leaves no sidecar on disk so the next dispatcher
+        # pass re-tries this pair. The agent / user re-runs
+        # `awidat index --indexer topic` after whisper completes.
+        raise RuntimeError(
+            f"transcript sidecar not found at "
+            f"<project>/index/whisper/{req.asset_id}.json; run whisper-mcp "
+            f"first then re-run `awidat index --indexer topic`."
+        )
 
     transcript = json.loads(transcript_path.read_text())
     segments = _extract_segments(transcript)
     if not segments:
-        return {"topics": [], "note": "transcript has no segments"}
+        # Same reasoning as above: don't cache a no-segments empty
+        # success; a future whisper retry might produce real
+        # segments.
+        raise RuntimeError(
+            f"transcript at index/whisper/{req.asset_id}.json has no "
+            f"segments — whisper may have failed mid-run"
+        )
 
     boundaries = _segment_boundaries(segments)
     topics = _build_topics(segments, boundaries)
