@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
+use anyhow::{self, Context, Result};
 use awidat_proto::project::Project;
 use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
@@ -81,6 +81,14 @@ enum Command {
         #[arg(long)]
         model: Option<String>,
     },
+    /// Stash the Anthropic API key in the OS keychain so `awidat chat`
+    /// and `awidat tui` work without ANTHROPIC_API_KEY in the env.
+    /// Reads the key from stdin to avoid shell history.
+    SecretsSet {
+        /// Account name. Defaults to `anthropic_api_key`.
+        #[arg(default_value = "anthropic_api_key")]
+        account: String,
+    },
     /// Print the version of the awidat binary.
     Version,
 }
@@ -98,6 +106,7 @@ fn main() -> ExitCode {
         } => index_cmd::run(&path, assets, indexers, concurrency),
         Command::Chat { path, model } => chat_cmd::run(&path, model.as_deref()),
         Command::Tui { path, model } => tui_cmd::run(&path, model.as_deref()),
+        Command::SecretsSet { account } => cmd_secrets_set(&account),
         Command::Version => {
             print_version();
             Ok(())
@@ -110,6 +119,34 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn cmd_secrets_set(account: &str) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let stdin = std::io::stdin();
+    let value = if stdin.is_terminal() {
+        // Interactive: prompt without echo. We don't have rpassword as
+        // a dep so we just instruct the user to paste; it will echo,
+        // but that's the cost of zero deps. For pipes (the normal
+        // path) the value isn't echoed because it never passes
+        // through the terminal.
+        eprint!("API key: ");
+        std::io::stderr().flush().ok();
+        let mut buf = String::new();
+        stdin.lock().read_line(&mut buf).context("read stdin")?;
+        buf.trim().to_string()
+    } else {
+        let mut buf = String::new();
+        stdin.lock().read_line(&mut buf).context("read stdin")?;
+        buf.trim().to_string()
+    };
+    if value.is_empty() {
+        return Err(anyhow::anyhow!("empty API key"));
+    }
+    awidat_secrets::set(account, &value)
+        .with_context(|| format!("failed to store secret '{account}' in keychain"))?;
+    eprintln!("stored '{account}' in keychain ({} chars)", value.len());
+    Ok(())
 }
 
 fn print_version() {

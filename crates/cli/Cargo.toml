@@ -16,6 +16,7 @@ awidat-core = { workspace = true }
 awidat-index = { workspace = true }
 awidat-mcp = { workspace = true }
 awidat-tui = { workspace = true }
+awidat-secrets = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["io-std", "signal"] }
