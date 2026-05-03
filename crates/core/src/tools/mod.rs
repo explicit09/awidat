@@ -13,5 +13,6 @@ pub mod read_index;
 pub mod request_user_input;
 pub mod start_render;
 pub mod update_plan;
+pub mod view_episode;
 pub mod view_frame;
 pub mod view_timeline;

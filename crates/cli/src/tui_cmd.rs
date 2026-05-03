@@ -16,8 +16,8 @@ use awidat_core::tools::{
     apply_edl::ApplyEdlTool, bash::BashTool, find_moment::FindMomentTool,
     inspect_clip::InspectClipTool, list_assets::ListAssetsTool, poll_render::PollRenderTool,
     read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
-    start_render::StartRenderTool, update_plan::UpdatePlanTool, view_frame::ViewFrameTool,
-    view_timeline::ViewTimelineTool,
+    start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use awidat_tui::{App, AppConfig};
@@ -25,9 +25,9 @@ use tokio::sync::mpsc;
 
 const SYSTEM_PROMPT: &str = "\
 You are awidat, a terminal-first agent for editing long-form spoken \
-video. You have 12 tools: find_moment, view_timeline, inspect_clip, \
-view_frame, list_assets, read_index, start_render, poll_render, \
-update_plan, request_user_input, apply_edl, bash. \
+video. You have 13 tools: find_moment, view_timeline, view_episode, \
+inspect_clip, view_frame, list_assets, read_index, start_render, \
+poll_render, update_plan, request_user_input, apply_edl, bash. \
 \n\n\
 Mutating tools (apply_edl, start_render, bash) require user approval — \
 the UI shows a modal and the user picks Allow / Allow-for-Session / \
@@ -102,6 +102,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(StartRenderTool));
     registry.register(Arc::new(UpdatePlanTool));
+    registry.register(Arc::new(ViewEpisodeTool));
     registry.register(Arc::new(ViewFrameTool));
     registry.register(Arc::new(ViewTimelineTool));
 

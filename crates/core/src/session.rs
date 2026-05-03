@@ -20,6 +20,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use awidat_proto::project::Project;
+
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -152,6 +154,13 @@ impl Session {
     /// Build a fresh session rooted at `project_root`. Tools that need a
     /// project directory (most of week 4) read it from the
     /// [`ToolContext`] handed to their `handle()`.
+    ///
+    /// Discovery: if `AWIDAT.md` files exist (per
+    /// [`crate::awidat_md::discover`]), their concatenated contents
+    /// are appended to the supplied `system_prompt` so the model
+    /// inherits the producer's editorial conventions every session.
+    /// This appended block stays inside the tier-1 prompt cache, so
+    /// the cost is paid once per session.
     pub fn new(
         client: Client,
         registry: ToolRegistry,
@@ -160,12 +169,57 @@ impl Session {
         project_root: impl Into<PathBuf>,
     ) -> Self {
         let (events_tx, _) = broadcast::channel(128);
+        let project_root = project_root.into();
+
+        // Discover AWIDAT.md (user + project + local override) and
+        // splice into the system prompt under a fixed heading. dirs
+        // gives us the user home; if it's missing we just skip the
+        // user-scope layer and keep going.
+        let home_dir = dirs::home_dir();
+        let docs = crate::awidat_md::discover(&project_root, home_dir.as_deref());
+
+        // Render the episode-map (Aider repomap pattern, for video).
+        // Cheap to render — walks existing sidecars on disk + the
+        // OTIO timeline. Only included when the project actually
+        // reads cleanly; on a fresh-init/empty project this returns
+        // an empty string.
+        let episode_map_text = match Project::read(&project_root) {
+            Ok(project) => {
+                let map = crate::episode_map::render(&project, &project_root);
+                if map.trim().is_empty() {
+                    None
+                } else {
+                    Some(map)
+                }
+            }
+            Err(_) => None,
+        };
+
+        // Compose the final system prompt: base prompt → episode map
+        // → AWIDAT.md. Both extras stay in the tier-1 cache prefix so
+        // the cost is paid once per session, not per turn.
+        let mut sections: Vec<String> = Vec::new();
+        if let Some(base) = system_prompt {
+            sections.push(base);
+        }
+        if let Some(map) = episode_map_text {
+            sections.push(format!("## This episode\n\n{map}"));
+        }
+        if !docs.text.is_empty() {
+            sections.push(format!("## Project conventions (AWIDAT.md)\n\n{}", docs.text));
+        }
+        let final_system_prompt = if sections.is_empty() {
+            None
+        } else {
+            Some(sections.join("\n\n"))
+        };
+
         Self {
             client,
             registry,
-            system_prompt,
+            system_prompt: final_system_prompt,
             model: model.into(),
-            project_root: project_root.into(),
+            project_root,
             history: Arc::new(Mutex::new(Vec::new())),
             events_tx,
             user_input_tx: None,
