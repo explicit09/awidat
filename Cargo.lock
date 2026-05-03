@@ -128,6 +128,7 @@ dependencies = [
  "awidat-index",
  "awidat-mcp",
  "awidat-proto",
+ "awidat-secrets",
  "awidat-tui",
  "clap",
  "tokio",
@@ -273,7 +274,9 @@ dependencies = [
  "awidat-proto",
  "chrono",
  "crossterm",
+ "derive_more",
  "futures",
+ "libc",
  "pretty_assertions",
  "ratatui",
  "serde_json",
@@ -281,6 +284,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]
@@ -428,6 +432,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "convert_case"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -508,6 +521,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
 dependencies = [
  "darling_core",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "derive_more"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a9b99b9cbbe49445b21764dc0625032a89b145a2642e67603e1c936f5458d05"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7330aeadfbe296029522e6c40f315320aba36fc43a5b3632f3795348f3bd22"
+dependencies = [
+ "convert_case",
+ "proc-macro2",
  "quote",
  "syn",
 ]

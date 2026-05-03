@@ -111,6 +111,9 @@ futures = { version = "0.3", default-features = false, features = ["std"] }
 dirs = "6"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = { version = "0.28", default-features = false, features = ["events", "event-stream", "bracketed-paste"] }
+libc = "0.2"
+unicode-width = "0.2"
+derive_more = { version = "1", default-features = false, features = ["is_variant"] }
 
 [profile.release]
 lto = "thin"

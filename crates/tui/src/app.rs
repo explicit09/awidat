@@ -7,8 +7,10 @@
 //!
 //! 1. Caller hands us a `Session` and the receivers from
 //!    `subscribe()` / `with_approval_channel`.
-//! 2. We enter the alt-screen, drive the loop, painting on every Tick
-//!    or AppEvent that mutates state.
+//! 2. We probe the terminal cursor with a 100ms budget (falling back
+//!    to `Position::ORIGIN` if the terminal doesn't reply), build a
+//!    custom inline-viewport `Terminal` rooted at that position, and
+//!    drive the loop.
 //! 3. On Quit (Ctrl-C, Ctrl-D, `:q`) we restore the terminal.
 
 use std::io;
@@ -19,12 +21,10 @@ use anyhow::{Context, Result};
 use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
 use awidat_core::{Session, SessionEvent};
 use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyModifiers};
-use futures::StreamExt;
-use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::{TerminalOptions, Viewport};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use futures::StreamExt;
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -33,7 +33,10 @@ use tracing::{debug, warn};
 use crate::approval::ApprovalModal;
 use crate::chat::Chat;
 use crate::composer::Composer;
+use crate::custom_terminal::Terminal;
 use crate::event::AppEvent;
+use crate::insert_history;
+use crate::terminal_probe;
 use crate::timeline::Timeline;
 
 /// One-shot configuration the caller hands `App::new`.
@@ -289,52 +292,57 @@ impl App {
     }
 
     fn paint(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-        // Step 1: flush any frozen chat items into scrollback above
-        // the inline viewport. Each call to `insert_before` shifts the
-        // viewport down on the user's terminal and prints the item to
-        // the rolled-out region above.
+        // Step 1: drain any frozen chat items into the terminal's
+        // scrollback above our inline viewport. `insert_history_lines`
+        // uses DECSTBM scroll regions to slide existing content up
+        // and write new lines into the freed rows just above the
+        // viewport; the user scrolls up with their normal terminal
+        // scroll buffer to read history.
         let history = self.chat.take_history();
-        for item in history {
-            let lines = crate::chat::render_item_for_history(&item);
-            let height = lines.len() as u16;
-            if height == 0 {
-                continue;
-            }
-            // The width on insert_before's buffer matches the
-            // terminal, so use that.
-            let term_width = terminal.size().map(|s| s.width).unwrap_or(80);
-            let _ = terminal.insert_before(height, |buf| {
-                for (i, line) in lines.into_iter().enumerate() {
-                    buf.set_line(0, i as u16, &line, term_width);
+        if !history.is_empty() {
+            let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+            for (i, item) in history.iter().enumerate() {
+                if i > 0 {
+                    lines.push(ratatui::text::Line::from(""));
                 }
-            });
+                lines.extend(crate::chat::render_item_for_history(item));
+            }
+            insert_history::insert_history_lines(terminal, lines)?;
         }
 
-        // Step 2: paint the live region (inline viewport).
+        // Step 2: paint into the inline viewport. Layout: chat live
+        // region (active streaming text + running tool calls) → timeline
+        // → composer.
         terminal
             .draw(|f| {
                 let area = f.area();
                 let timeline_height =
                     pick_timeline_height(area.height, self.timeline.clip_count());
-                // chat (live items) → timeline → composer
+                let chat_height = self
+                    .chat
+                    .rendered_height()
+                    .min(area.height.saturating_sub(timeline_height + 1));
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Min(0),                  // active items
+                        Constraint::Min(0),                  // top spacer
+                        Constraint::Length(chat_height),     // active items
                         Constraint::Length(timeline_height), // timeline
                         Constraint::Length(1),               // composer
                     ])
                     .split(area);
-                f.render_widget(&self.chat, chunks[0]);
-                if timeline_height > 0 {
-                    f.render_widget(&self.timeline, chunks[1]);
+                if chat_height > 0 {
+                    f.render_widget(&self.chat, chunks[1]);
                 }
-                f.render_widget(&self.composer, chunks[2]);
+                if timeline_height > 0 {
+                    f.render_widget(&self.timeline, chunks[2]);
+                }
+                f.render_widget(&self.composer, chunks[3]);
                 if let Some(modal) = &self.modal {
                     f.render_widget(modal, area);
                 }
             })
-            .context("ratatui draw")?;
+            .context("custom terminal draw")?;
         Ok(())
     }
 }
@@ -353,41 +361,58 @@ fn pick_timeline_height(total_rows: u16, clip_count: usize) -> u16 {
     want.min(max_allowed).max(2)
 }
 
-/// Initial inline-viewport height. Big enough for:
+/// Initial inline-viewport height. Sized for:
 ///   - composer (1 row)
 ///   - timeline header + ~6 clip rows (7 rows)
-///   - a few rows for streaming text + spinner above
-/// Total ≈ 14 rows. The viewport is anchored to the bottom of the
-/// terminal so anything in the user's shell history above stays
-/// visible — they scroll up with native terminal scroll.
+///   - 6 rows of streaming text / spinner above the timeline
 const DEFAULT_VIEWPORT_ROWS: u16 = 14;
 
 fn enter_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    // Inline-viewport mode (Codex pattern). We do NOT take over the
-    // alt-screen; instead we own a small region at the bottom of the
-    // user's existing terminal, and chat history is `insert_before`d
-    // into the normal scrollback. Empty space above us belongs to
-    // whatever shell history was already there — and the user can
-    // scroll up with their terminal's native scroll buffer to see it.
+    // Inline-viewport mode (Codex-derived custom backend). The TUI
+    // owns a small region at the bottom of the user's existing
+    // terminal; finalized chat lines are pushed into the terminal's
+    // scrollback above the viewport (see `insert_history`). The user
+    // scrolls up with their normal terminal scroll buffer to read
+    // history.
+    //
+    // We cursor-probe with a bounded 100ms budget — ratatui's stock
+    // probe waits two seconds and crashes the TUI on slow terminals.
     enable_raw_mode().context("enable raw mode")?;
+    let cursor_pos = terminal_probe::cursor_position(terminal_probe::DEFAULT_TIMEOUT)
+        .unwrap_or(None)
+        .unwrap_or(Position::ORIGIN);
+
     let stdout = io::stdout();
     let backend = CrosstermBackend::new(stdout);
-    let terminal = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(DEFAULT_VIEWPORT_ROWS),
-        },
-    )
-    .context("create ratatui Terminal")?;
+    let mut terminal = Terminal::with_options_and_cursor_position(backend, cursor_pos)
+        .context("create custom Terminal")?;
+
+    // Carve out the initial inline viewport. We anchor it at the
+    // probed cursor row, capped to fit the screen — if the cursor is
+    // already near the bottom we let the viewport sit just below it
+    // and rely on `insert_history_lines` to scroll content above as
+    // needed.
+    let screen = terminal.size().unwrap_or(ratatui::layout::Size::new(80, 24));
+    let height = DEFAULT_VIEWPORT_ROWS.min(screen.height);
+    let y = cursor_pos.y.min(screen.height.saturating_sub(height));
+    terminal.set_viewport_area(Rect {
+        x: 0,
+        y,
+        width: screen.width,
+        height,
+    });
     Ok(terminal)
 }
 
 fn leave_terminal(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
 ) -> Result<()> {
-    // Move the cursor below the viewport so the user's next shell
-    // prompt doesn't overwrite our last frame.
-    let _ = terminal.clear();
+    // Show the cursor again, move below the viewport so the next
+    // shell prompt doesn't land on top of our last frame, and drop
+    // raw mode.
+    let _ = terminal.show_cursor();
+    let bottom_y = terminal.viewport_area.bottom();
+    let _ = terminal.set_cursor_position(Position { x: 0, y: bottom_y });
     let _ = disable_raw_mode();
     println!();
     Ok(())

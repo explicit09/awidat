@@ -127,6 +127,24 @@ impl Chat {
         &self.items
     }
 
+    /// Total number of rendered rows the live region needs. Used by
+    /// the App's layout to size the chat region exactly to its
+    /// content — so an empty live region collapses to zero rows
+    /// instead of reserving blank space.
+    pub fn rendered_height(&self) -> u16 {
+        if self.items.is_empty() {
+            return 0;
+        }
+        let mut total = 0usize;
+        for (i, item) in self.items.iter().enumerate() {
+            if i > 0 {
+                total += 1; // blank separator row
+            }
+            total += render_item(item, 0).len();
+        }
+        u16::try_from(total).unwrap_or(u16::MAX)
+    }
+
     /// Items waiting to be flushed into terminal scrollback.
     /// Returns a reference; callers should call [`Chat::take_history`]
     /// after rendering them via `Terminal::insert_before`.
@@ -139,6 +157,19 @@ impl Chat {
     /// calling this — the queue is consumed.
     pub fn take_history(&mut self) -> Vec<ChatItem> {
         std::mem::take(&mut self.pending_history)
+    }
+
+    /// Move all pending-history items to the front of `items` so the
+    /// chat pane renders them as ordered scrollback. Used in
+    /// full-screen alt-screen mode where the chat pane owns its own
+    /// scrollback (no terminal `insert_before`).
+    pub fn fold_history_into_items(&mut self) {
+        if self.pending_history.is_empty() {
+            return;
+        }
+        let mut combined = std::mem::take(&mut self.pending_history);
+        combined.extend(std::mem::take(&mut self.items));
+        self.items = combined;
     }
 
     /// Append a user prompt — commits straight to history (it's frozen

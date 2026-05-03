@@ -16,14 +16,21 @@
 //! `UserInputRequest`) lives in `awidat-core`; this crate only owns the
 //! presentation layer.
 
-#![forbid(unsafe_code)]
+// Crate-wide unsafe is denied by default. The `terminal_probe` module
+// individually allows it (with SAFETY: comments) for narrow libc
+// syscalls; nothing else in the crate should follow that lead. See
+// crates/tui/Cargo.toml for the rationale.
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod app;
 pub mod approval;
 pub mod chat;
 pub mod composer;
+pub mod custom_terminal;
 pub mod event;
+pub mod insert_history;
+pub mod terminal_probe;
 pub mod timeline;
 
 pub use app::{App, AppConfig};
