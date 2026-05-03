@@ -160,7 +160,6 @@ fn truncate(s: &str, cap: usize) -> String {
 
 impl Widget for &Timeline {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // No borders. One header row + one row per clip. Compact.
         if area.height == 0 {
             return;
         }
@@ -179,10 +178,7 @@ impl Widget for &Timeline {
             ))
         } else {
             Line::from(vec![
-                Span::styled(
-                    "timeline ",
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled("timeline ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!("{} clip", self.rows.len()),
                     Style::default().fg(Color::Cyan),
@@ -216,10 +212,7 @@ impl Widget for &Timeline {
                 ),
                 Span::raw(" "),
                 Span::styled(
-                    format!(
-                        "{:>6.2}s ",
-                        row.end_s - row.start_s
-                    ),
+                    format!("{:>6.2}s ", row.end_s - row.start_s),
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::styled(snippet, Style::default().fg(Color::DarkGray)),
@@ -300,8 +293,8 @@ mod tests {
     use super::*;
     use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
     use awidat_proto::otio::{
-        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
-        TimeRange, Track, TrackChild, TrackKind,
+        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+        Track, TrackChild, TrackKind,
     };
 
     fn seed_project(snippets: &[&str]) -> tempfile::TempDir {
@@ -328,7 +321,11 @@ mod tests {
             };
             track.children.push(TrackChild::Clip(clip));
         }
-        project.timeline.tracks.children.push(StackChild::Track(track));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
         project.write(dir.path()).unwrap();
         dir
     }
@@ -353,8 +350,7 @@ mod tests {
             panic!()
         };
         let mut new_clip = Clip::empty("clip-2");
-        new_clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/ep-2.mp4"));
+        new_clip.media_reference = MediaReference::External(ExternalReference::new("raw/ep-2.mp4"));
         new_clip.source_range = Some(TimeRange::new(
             RationalTime::new(0.0, 24.0),
             RationalTime::new(5.0 * 24.0, 24.0),
@@ -419,15 +415,27 @@ mod tests {
     fn diff_orders_delete_then_trim_then_insert() {
         let before = vec![row("clip-0", 0.0, 10.0), row("clip-1", 10.0, 15.0)];
         let after = vec![
-            row("clip-0", 0.0, 5.0),     // trimmed
-            row("clip-2", 5.0, 7.5),     // inserted
-                                         // clip-1 deleted
+            row("clip-0", 0.0, 5.0), // trimmed
+            row("clip-2", 5.0, 7.5), // inserted
+                                     // clip-1 deleted
         ];
         let d = diff_snapshots(&before, &after);
         assert_eq!(d.len(), 3);
-        assert!(d[0].starts_with("−") && d[0].contains("clip-1"), "delete first: {:?}", d);
-        assert!(d[1].contains("trimmed") && d[1].contains("clip-0"), "trim second: {:?}", d);
-        assert!(d[2].starts_with("+") && d[2].contains("clip-2"), "insert third: {:?}", d);
+        assert!(
+            d[0].starts_with("−") && d[0].contains("clip-1"),
+            "delete first: {:?}",
+            d
+        );
+        assert!(
+            d[1].contains("trimmed") && d[1].contains("clip-0"),
+            "trim second: {:?}",
+            d
+        );
+        assert!(
+            d[2].starts_with("+") && d[2].contains("clip-2"),
+            "insert third: {:?}",
+            d
+        );
     }
 
     #[test]

@@ -11,9 +11,10 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Block, Paragraph, Widget};
+use unicode_width::UnicodeWidthStr;
 
 /// One-line composer state.
 #[derive(Debug, Default)]
@@ -44,6 +45,13 @@ impl Composer {
     /// Whether the composer has any text.
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    /// Cursor column inside the composer render area.
+    pub fn cursor_column(&self) -> u16 {
+        let byte_idx = self.byte_idx_for_char(self.cursor);
+        let input_width = self.text[..byte_idx].width();
+        u16::try_from(2 + input_width).unwrap_or(u16::MAX)
     }
 
     /// Drain the current input and reset to empty. Returns `None` if the
@@ -133,22 +141,56 @@ impl Composer {
 
 impl Widget for &Composer {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // No border. Single-row prompt with a thin gutter character.
+        if area.height == 0 {
+            return;
+        }
+        let input_row = if area.height > 1 {
+            area.y + area.height / 2
+        } else {
+            area.y
+        };
+        let input_area = Rect {
+            x: area.x,
+            y: input_row,
+            width: area.width,
+            height: 1,
+        };
+        Block::default()
+            .style(Style::default().bg(Color::Rgb(45, 45, 45)))
+            .render(input_area, buf);
+
         let line = if self.text.is_empty() {
             Line::from(vec![
-                Span::styled("› ", Style::default().fg(Color::Magenta)),
+                Span::styled(
+                    "› ",
+                    Style::default()
+                        .fg(Color::Gray)
+                        .bg(Color::Rgb(45, 45, 45))
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(
                     self.placeholder.clone(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .bg(Color::Rgb(45, 45, 45)),
                 ),
             ])
         } else {
             Line::from(vec![
-                Span::styled("› ", Style::default().fg(Color::Magenta)),
-                Span::raw(self.text.clone()),
+                Span::styled(
+                    "› ",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .bg(Color::Rgb(45, 45, 45))
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    self.text.clone(),
+                    Style::default().bg(Color::Rgb(45, 45, 45)),
+                ),
             ])
         };
-        Paragraph::new(line).render(area, buf);
+        Paragraph::new(line).render(input_area, buf);
     }
 }
 
@@ -198,5 +240,14 @@ mod tests {
         c.handle_key(key(KeyCode::Backspace));
         c.handle_key(key(KeyCode::Backspace));
         assert_eq!(c.text(), "hél");
+    }
+
+    #[test]
+    fn cursor_column_accounts_for_prefix_and_text_width() {
+        let mut c = Composer::new("hint");
+        for ch in "hé".chars() {
+            c.handle_key(key(KeyCode::Char(ch)));
+        }
+        assert_eq!(c.cursor_column(), 4);
     }
 }

@@ -18,7 +18,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget, Wrap};
+use ratatui::widgets::{Paragraph, Widget};
 
 /// One row in the chat scrollback. Each variant renders to one or more
 /// lines depending on width.
@@ -127,6 +127,11 @@ impl Chat {
         &self.items
     }
 
+    /// Whether there is no live or pending conversation content.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.pending_history.is_empty()
+    }
+
     /// Total number of rendered rows the live region needs. Used by
     /// the App's layout to size the chat region exactly to its
     /// content — so an empty live region collapses to zero rows
@@ -136,11 +141,17 @@ impl Chat {
             return 0;
         }
         let mut total = 0usize;
+        let mut rendered_items = 0usize;
         for (i, item) in self.items.iter().enumerate() {
-            if i > 0 {
+            let item_height = render_item(item, 0).len();
+            if item_height == 0 {
+                continue;
+            }
+            if i > 0 && rendered_items > 0 {
                 total += 1; // blank separator row
             }
-            total += render_item(item, 0).len();
+            total += item_height;
+            rendered_items += 1;
         }
         u16::try_from(total).unwrap_or(u16::MAX)
     }
@@ -159,17 +170,15 @@ impl Chat {
         std::mem::take(&mut self.pending_history)
     }
 
-    /// Move all pending-history items to the front of `items` so the
-    /// chat pane renders them as ordered scrollback. Used in
-    /// full-screen alt-screen mode where the chat pane owns its own
-    /// scrollback (no terminal `insert_before`).
+    /// Append pending-history items to `items` so the chat pane renders
+    /// them chronologically. Used in full-screen alt-screen mode where
+    /// the chat pane owns its own scrollback (no terminal
+    /// `insert_before`).
     pub fn fold_history_into_items(&mut self) {
         if self.pending_history.is_empty() {
             return;
         }
-        let mut combined = std::mem::take(&mut self.pending_history);
-        combined.extend(std::mem::take(&mut self.items));
-        self.items = combined;
+        self.items.extend(std::mem::take(&mut self.pending_history));
     }
 
     /// Append a user prompt — commits straight to history (it's frozen
@@ -204,10 +213,20 @@ impl Chat {
     }
 
     /// Replace the most recent ApprovalPending crumb with a resolved
-    /// decision crumb. Looks in pending_history (the more common case
-    /// since approvals are usually still in the flush queue).
+    /// decision crumb.
     pub fn resolve_approval(&mut self, tool_name: &str, decision: &str) {
         for item in self.pending_history.iter_mut().rev() {
+            if let ChatItem::ApprovalPending { tool_name: t, .. } = item
+                && t == tool_name
+            {
+                *item = ChatItem::ApprovalResolved {
+                    tool_name: tool_name.into(),
+                    decision: decision.into(),
+                };
+                return;
+            }
+        }
+        for item in self.items.iter_mut().rev() {
             if let ChatItem::ApprovalPending { tool_name: t, .. } = item
                 && t == tool_name
             {
@@ -232,18 +251,10 @@ impl Chat {
         });
     }
 
-    /// If an Assistant item is currently streaming in `items`, freeze
-    /// it: move into `pending_history`. Called whenever a non-text
-    /// event arrives so the streaming text gets out of the way.
-    fn commit_active_assistant(&mut self) {
-        if let Some(idx) = self
-            .items
-            .iter()
-            .position(|i| matches!(i, ChatItem::Assistant(_)))
-        {
-            self.pending_history.push(self.items.remove(idx));
-        }
-    }
+    /// Historical compatibility hook from the inline-scrollback mode.
+    /// Full-screen rendering keeps assistant text in chronological
+    /// order inside `items`, so there is nothing to move here.
+    fn commit_active_assistant(&mut self) {}
 
     /// Apply a SessionEvent. Items that are already "frozen" (user
     /// prompts, finished tool calls, errors, plans, diffs) go directly
@@ -255,9 +266,6 @@ impl Chat {
             SessionEvent::TurnStart | SessionEvent::MessageStart { .. } => {}
             SessionEvent::TextDelta(s) => self.append_assistant_delta(&s),
             SessionEvent::ToolCallStart { id, name } => {
-                // The arrival of a tool call ends the current Assistant
-                // streaming chunk — commit that text.
-                self.commit_active_assistant();
                 self.items.push(ChatItem::ToolCall {
                     name,
                     call_id: id,
@@ -277,28 +285,23 @@ impl Chat {
                 }
             }
             SessionEvent::ToolResult { id, result, .. } => {
-                // Find the matching Running tool call in `items`,
-                // mark Done/Failed, and graduate it to history.
-                if let Some(idx) = self
+                // Find the matching Running tool call in `items` and
+                // mark Done/Failed in place. Moving it to pending
+                // history would reorder it ahead of the user's prompt.
+                if let Some(item) = self
                     .items
-                    .iter()
-                    .position(|i| matches!(i, ChatItem::ToolCall { call_id, .. } if call_id == &id))
+                    .iter_mut()
+                    .find(|i| matches!(i, ChatItem::ToolCall { call_id, .. } if call_id == &id))
+                    && let ChatItem::ToolCall { status, .. } = item
                 {
-                    let mut item = self.items.remove(idx);
-                    if let ChatItem::ToolCall { status, .. } = &mut item {
-                        *status = match result {
-                            Ok(out) => ToolStatus::Done(preview(&out)),
-                            Err(e) => ToolStatus::Failed(preview(&e)),
-                        };
-                    }
-                    self.pending_history.push(item);
+                    *status = match result {
+                        Ok(out) => ToolStatus::Done(preview(&out)),
+                        Err(e) => ToolStatus::Failed(preview(&e)),
+                    };
                 }
             }
             SessionEvent::SamplingComplete { .. } => {}
             SessionEvent::TurnEnd => {
-                // Commit any straggling assistant text, then drop a
-                // turn-ended marker so users can see boundaries.
-                self.commit_active_assistant();
                 self.pending_history.push(ChatItem::TurnEnded);
             }
             SessionEvent::Error(msg) => self.push_error(msg),
@@ -335,14 +338,13 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
         // Single-glyph role marks. No "you/awidat" labels — every line
         // gets too noisy. Magenta › for the user (matches the composer
         // glyph) and a soft white left-margin for the assistant.
-        ChatItem::User(text) => vec![Line::from(vec![
-            Span::styled("› ", Style::default().fg(Color::Magenta)),
-            Span::raw(text.clone()),
-        ])],
-        ChatItem::Assistant(text) => vec![Line::from(vec![
-            Span::raw("  "),
-            Span::raw(text.clone()),
-        ])],
+        ChatItem::User(text) => user_message_lines(text),
+        ChatItem::Assistant(text) => prefixed_text_lines(
+            Span::styled("• ", Style::default().fg(Color::Gray)),
+            "  ",
+            text,
+            Style::default(),
+        ),
         ChatItem::ToolCall {
             name,
             args_summary,
@@ -350,19 +352,30 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
             ..
         } => {
             let mut lines = Vec::new();
-            let glyph = match status {
+            let bullet = match status {
                 ToolStatus::Running => spinner_glyph(spinner_phase),
-                ToolStatus::Done(_) => "✓",
-                ToolStatus::Failed(_) => "✗",
+                ToolStatus::Done(_) => "•",
+                ToolStatus::Failed(_) => "•",
             };
-            let glyph_style = match status {
+            let bullet_style = match status {
                 ToolStatus::Running => Style::default().fg(Color::Yellow),
                 ToolStatus::Done(_) => Style::default().fg(Color::Green),
                 ToolStatus::Failed(_) => Style::default().fg(Color::Red),
             };
+            let verb = match status {
+                ToolStatus::Running => "Calling",
+                _ => "Called",
+            };
             let mut head = vec![
-                Span::styled(format!("{glyph} "), glyph_style),
-                Span::styled(name.clone(), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{bullet} "),
+                    bullet_style.add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{verb} "),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(name.clone(), Style::default()),
             ];
             if let Some(args) = args_summary {
                 head.push(Span::styled(
@@ -378,18 +391,15 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
                 ToolStatus::Done(out) => {
                     if let Some(summary) = summarize_tool_result(name, out) {
                         lines.push(Line::from(vec![
-                            Span::raw("    "),
+                            Span::styled("  └ ", Style::default().fg(Color::DarkGray)),
                             Span::styled(summary, Style::default().fg(Color::DarkGray)),
                         ]));
                     }
                 }
                 ToolStatus::Failed(err) => {
                     lines.push(Line::from(vec![
-                        Span::raw("    "),
-                        Span::styled(
-                            truncate_one_line(err, 120),
-                            Style::default().fg(Color::Red),
-                        ),
+                        Span::styled("  └ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(truncate_one_line(err, 120), Style::default().fg(Color::Red)),
                     ]));
                 }
                 ToolStatus::Running => {}
@@ -401,7 +411,9 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
                 Span::raw("  "),
                 Span::styled(
                     "plan",
-                    Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ])];
             for it in items {
@@ -413,13 +425,13 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
                 lines.push(Line::from(vec![
                     Span::raw("    "),
                     Span::styled(format!("{glyph} "), Style::default().fg(Color::Blue)),
-                    Span::raw(it.step.clone()),
+                    Span::raw(sanitize_inline(&it.step)),
                 ]));
             }
             if let Some(n) = note {
                 lines.push(Line::from(vec![
                     Span::raw("    "),
-                    Span::styled(n.clone(), Style::default().fg(Color::DarkGray)),
+                    Span::styled(sanitize_inline(n), Style::default().fg(Color::DarkGray)),
                 ]));
             }
             lines
@@ -452,12 +464,14 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
         ])],
         ChatItem::UserInputPending { question } => vec![Line::from(vec![
             Span::styled("? ", Style::default().fg(Color::Cyan)),
-            Span::raw(question.clone()),
+            Span::raw(sanitize_inline(question)),
         ])],
-        ChatItem::Error(msg) => vec![Line::from(vec![
+        ChatItem::Error(msg) => prefixed_text_lines(
             Span::styled("✗ ", Style::default().fg(Color::Red)),
-            Span::styled(msg.clone(), Style::default().fg(Color::Red)),
-        ])],
+            "  ",
+            msg,
+            Style::default().fg(Color::Red),
+        ),
         ChatItem::Diff(change_lines) => {
             let mut lines = Vec::new();
             for cl in change_lines {
@@ -470,16 +484,87 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
                 };
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(cl.clone(), style),
+                    Span::styled(sanitize_inline(cl), style),
                 ]));
             }
             lines
         }
-        ChatItem::TurnEnded => vec![Line::from(Span::styled(
-            "─ end of turn ─",
-            Style::default().fg(Color::DarkGray),
-        ))],
+        ChatItem::TurnEnded => Vec::new(),
     }
+}
+
+struct RenderedLine {
+    line: Line<'static>,
+    fill: Option<Style>,
+}
+
+fn render_item_rows(item: &ChatItem, spinner_phase: u8) -> Vec<RenderedLine> {
+    let fill = if matches!(item, ChatItem::User(_)) {
+        Some(Style::default().bg(Color::Rgb(45, 45, 45)))
+    } else {
+        None
+    };
+    render_item(item, spinner_phase)
+        .into_iter()
+        .map(|line| RenderedLine { line, fill })
+        .collect()
+}
+
+fn user_message_lines(text: &str) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from("")];
+    lines.extend(prefixed_text_lines(
+        Span::styled(
+            "› ",
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        "  ",
+        text,
+        Style::default(),
+    ));
+    lines.push(Line::from(""));
+    lines
+}
+
+fn prefixed_text_lines(
+    first_prefix: Span<'static>,
+    continuation_prefix: &'static str,
+    text: &str,
+    style: Style,
+) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for (idx, raw) in text.split('\n').enumerate() {
+        let prefix = if idx == 0 {
+            first_prefix.clone()
+        } else {
+            Span::raw(continuation_prefix)
+        };
+        out.push(Line::from(vec![
+            prefix,
+            Span::styled(sanitize_inline(raw), style),
+        ]));
+    }
+    if out.is_empty() {
+        out.push(Line::from(first_prefix));
+    }
+    out
+}
+
+fn sanitize_inline(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .map(|c| {
+            if c == '\t' {
+                ' '
+            } else if c.is_control() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    cleaned.replace("**", "").replace('`', "")
 }
 
 fn spinner_glyph(phase: u8) -> &'static str {
@@ -549,14 +634,15 @@ fn summarize_tool_result(name: &str, out: &str) -> Option<String> {
         return None;
     }
     match name {
-        "view_timeline" => trimmed
-            .lines()
-            .next()
-            .map(|l| truncate_one_line(l, 120)),
+        "view_timeline" => trimmed.lines().next().map(|l| truncate_one_line(l, 120)),
         "find_moment" => {
             // JSON: { "results": [...], "more_available": ... }.
             let v: serde_json::Value = serde_json::from_str(trimmed).ok()?;
-            let n = v.get("results").and_then(|r| r.as_array()).map(|a| a.len()).unwrap_or(0);
+            let n = v
+                .get("results")
+                .and_then(|r| r.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
             if n == 0 {
                 Some("no matches".into())
             } else {
@@ -568,55 +654,85 @@ fn summarize_tool_result(name: &str, out: &str) -> Option<String> {
                     .and_then(|s| s.as_str())
                     .unwrap_or("");
                 Some(truncate_one_line(
-                    &format!("{n} match{} · \"{first_snippet}\"", if n == 1 { "" } else { "es" }),
+                    &format!(
+                        "{n} match{} · \"{first_snippet}\"",
+                        if n == 1 { "" } else { "es" }
+                    ),
                     120,
                 ))
             }
         }
-        "apply_edl" => trimmed
-            .lines()
-            .next()
-            .map(|l| truncate_one_line(l, 120)),
+        "apply_edl" => trimmed.lines().next().map(|l| truncate_one_line(l, 120)),
         "list_assets" | "read_index" | "inspect_clip" => {
             Some(format!("{} char body", trimmed.chars().count()))
         }
         "view_frame" => Some("frame attached".into()),
-        "start_render" | "poll_render" => trimmed
-            .lines()
-            .next()
-            .map(|l| truncate_one_line(l, 120)),
-        "bash" => trimmed
-            .lines()
-            .next()
-            .map(|l| truncate_one_line(l, 120)),
+        "start_render" | "poll_render" => trimmed.lines().next().map(|l| truncate_one_line(l, 120)),
+        "bash" => trimmed.lines().next().map(|l| truncate_one_line(l, 120)),
         _ => Some(truncate_one_line(trimmed, 120)),
     }
 }
 
 impl Widget for &Chat {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Active items only — the live region. Frozen items have been
-        // moved to `pending_history` and printed into terminal
-        // scrollback already (above the inline viewport).
-        if self.items.is_empty() {
+        if area.height == 0 {
             return;
         }
-        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        if self.items.is_empty() {
+            let empty = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("ready", Style::default().fg(Color::DarkGray)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "Ask for an edit, search, render, or timeline change.",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]),
+            ];
+            Paragraph::new(empty).render(area, buf);
+            return;
+        }
+        let mut lines: Vec<RenderedLine> = Vec::new();
         for (i, item) in self.items.iter().enumerate() {
-            if i > 0 {
-                lines.push(Line::from(""));
+            let mut item_lines = render_item_rows(item, self.spinner_phase);
+            if item_lines.is_empty() {
+                continue;
             }
-            lines.extend(render_item(item, self.spinner_phase));
+            if i > 0 && !lines.is_empty() {
+                lines.push(RenderedLine {
+                    line: Line::from(""),
+                    fill: None,
+                });
+            }
+            lines.append(&mut item_lines);
         }
         // Tail-bias: if there are more lines than the viewport can
         // hold, show the *last* viewport-height lines (most recent
         // streaming text + spinner).
         let total = lines.len() as u16;
         let scroll_y = total.saturating_sub(area.height);
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll_y, 0))
-            .render(area, buf);
+        for (row_idx, rendered) in lines
+            .into_iter()
+            .skip(scroll_y as usize)
+            .take(area.height as usize)
+            .enumerate()
+        {
+            let row_area = Rect {
+                x: area.x,
+                y: area.y + row_idx as u16,
+                width: area.width,
+                height: 1,
+            };
+            if let Some(style) = rendered.fill {
+                buf.set_style(row_area, style);
+            }
+            Paragraph::new(rendered.line).render(row_area, buf);
+        }
     }
 }
 
@@ -645,8 +761,6 @@ mod tests {
 
     #[test]
     fn tool_lifecycle_running_to_done() {
-        // After ToolResult arrives the call is graduated from `items`
-        // (live region) into `pending_history` (ready for scrollback).
         let mut c = Chat::new();
         c.apply_session_event(SessionEvent::ToolCallStart {
             id: "c1".into(),
@@ -660,15 +774,17 @@ mod tests {
         // While Running, the call lives in items.
         assert!(matches!(
             c.items().last().unwrap(),
-            ChatItem::ToolCall { status: ToolStatus::Running, .. }
+            ChatItem::ToolCall {
+                status: ToolStatus::Running,
+                ..
+            }
         ));
         c.apply_session_event(SessionEvent::ToolResult {
             id: "c1".into(),
             name: "view_timeline".into(),
             result: Ok("clip-0\nclip-1".into()),
         });
-        assert!(c.items().is_empty(), "tool call moves to history");
-        match c.pending_history().last().unwrap() {
+        match c.items().last().unwrap() {
             ChatItem::ToolCall {
                 status: ToolStatus::Done(_),
                 ..
@@ -689,7 +805,7 @@ mod tests {
             name: "bash".into(),
             result: Err("denied".into()),
         });
-        match c.pending_history().last().unwrap() {
+        match c.items().last().unwrap() {
             ChatItem::ToolCall {
                 status: ToolStatus::Failed(e),
                 ..
@@ -715,5 +831,70 @@ mod tests {
         let drained = c.take_history();
         assert_eq!(drained.len(), 2);
         assert!(c.pending_history().is_empty(), "drained");
+    }
+
+    #[test]
+    fn folded_fullscreen_history_keeps_chronological_order() {
+        let mut c = Chat::new();
+        c.push_user("view the timeline");
+        c.fold_history_into_items();
+        c.apply_session_event(SessionEvent::ToolCallStart {
+            id: "c1".into(),
+            name: "view_timeline".into(),
+        });
+        c.apply_session_event(SessionEvent::ToolResult {
+            id: "c1".into(),
+            name: "view_timeline".into(),
+            result: Ok("timeline".into()),
+        });
+        c.apply_session_event(SessionEvent::TextDelta("done".into()));
+        c.apply_session_event(SessionEvent::TurnEnd);
+        c.fold_history_into_items();
+
+        assert!(matches!(c.items()[0], ChatItem::User(_)));
+        assert!(matches!(
+            c.items()[1],
+            ChatItem::ToolCall {
+                status: ToolStatus::Done(_),
+                ..
+            }
+        ));
+        assert!(matches!(c.items()[2], ChatItem::Assistant(_)));
+        assert!(matches!(c.items()[3], ChatItem::TurnEnded));
+    }
+
+    #[test]
+    fn render_splits_multiline_assistant_text() {
+        let lines = render_item(&ChatItem::Assistant("one\ntwo\rthree".into()), 0);
+        assert_eq!(lines.len(), 2);
+        let rendered = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(!rendered.contains('\n'));
+        assert!(!rendered.contains('\r'));
+        assert!(rendered.contains("one"));
+        assert!(rendered.contains("two three"));
+    }
+
+    #[test]
+    fn user_message_renders_as_padded_cell() {
+        let lines = render_item(&ChatItem::User("cut the intro".into()), 0);
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].spans.is_empty());
+        assert!(
+            lines[1]
+                .spans
+                .iter()
+                .any(|s| s.content.contains("cut the intro"))
+        );
+        assert!(lines[2].spans.is_empty());
+    }
+
+    #[test]
+    fn turn_end_is_not_rendered_as_transcript_noise() {
+        assert!(render_item(&ChatItem::TurnEnded, 0).is_empty());
     }
 }

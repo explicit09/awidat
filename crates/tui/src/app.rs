@@ -7,13 +7,11 @@
 //!
 //! 1. Caller hands us a `Session` and the receivers from
 //!    `subscribe()` / `with_approval_channel`.
-//! 2. We probe the terminal cursor with a 100ms budget (falling back
-//!    to `Position::ORIGIN` if the terminal doesn't reply), build a
-//!    custom inline-viewport `Terminal` rooted at that position, and
-//!    drive the loop.
+//! 2. We enter the alternate screen, build a custom full-screen
+//!    `Terminal`, and drive the loop.
 //! 3. On Quit (Ctrl-C, Ctrl-D, `:q`) we restore the terminal.
 
-use std::io;
+use std::io::{self, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,10 +19,16 @@ use anyhow::{Context, Result};
 use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
 use awidat_core::{Session, SessionEvent};
 use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::execute;
+use crossterm::terminal::{
+    Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -35,8 +39,6 @@ use crate::chat::Chat;
 use crate::composer::Composer;
 use crate::custom_terminal::Terminal;
 use crate::event::AppEvent;
-use crate::insert_history;
-use crate::terminal_probe;
 use crate::timeline::Timeline;
 
 /// One-shot configuration the caller hands `App::new`.
@@ -55,6 +57,7 @@ pub struct AppConfig {
 /// The TUI app.
 pub struct App {
     session: Arc<Session>,
+    project_label: String,
     chat: Chat,
     timeline: Timeline,
     composer: Composer,
@@ -80,6 +83,11 @@ impl App {
         let project_root = cfg.session.project_root().to_path_buf();
         Self {
             session: cfg.session.clone(),
+            project_label: project_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_else(|| project_root.to_str().unwrap_or("project"))
+                .to_string(),
             chat: Chat::new(),
             timeline: Timeline::new(&project_root),
             composer: Composer::new("ask awidat anything…"),
@@ -153,8 +161,7 @@ impl App {
                 if let SessionEvent::ToolCallStart { id, name } = &ev
                     && name == "apply_edl"
                 {
-                    self.pending_apply_edl_snapshot =
-                        Some((id.clone(), self.timeline.snapshot()));
+                    self.pending_apply_edl_snapshot = Some((id.clone(), self.timeline.snapshot()));
                 }
                 // On a successful apply_edl ToolResult, refresh the
                 // timeline pane and emit a chat-pane diff crumb.
@@ -166,8 +173,7 @@ impl App {
                     && name == "apply_edl"
                 {
                     self.timeline.refresh();
-                    if let Some((snap_id, before)) =
-                        self.pending_apply_edl_snapshot.take()
+                    if let Some((snap_id, before)) = self.pending_apply_edl_snapshot.take()
                         && &snap_id == id
                     {
                         let diff =
@@ -220,8 +226,7 @@ impl App {
                 if let Some(t) = self.turn_task.take() {
                     t.abort();
                 }
-                self.chat
-                    .push_error("turn cancelled".to_string());
+                self.chat.push_error("turn cancelled".to_string());
                 return true;
             }
             self.quit = true;
@@ -292,52 +297,52 @@ impl App {
     }
 
     fn paint(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
-        // Step 1: drain any frozen chat items into the terminal's
-        // scrollback above our inline viewport. `insert_history_lines`
-        // uses DECSTBM scroll regions to slide existing content up
-        // and write new lines into the freed rows just above the
-        // viewport; the user scrolls up with their normal terminal
-        // scroll buffer to read history.
-        let history = self.chat.take_history();
-        if !history.is_empty() {
-            let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-            for (i, item) in history.iter().enumerate() {
-                if i > 0 {
-                    lines.push(ratatui::text::Line::from(""));
-                }
-                lines.extend(crate::chat::render_item_for_history(item));
+        if let Ok(screen) = terminal.size() {
+            let full_screen = Rect {
+                x: 0,
+                y: 0,
+                width: screen.width,
+                height: screen.height,
+            };
+            if terminal.viewport_area != full_screen {
+                terminal.set_viewport_area(full_screen);
             }
-            insert_history::insert_history_lines(terminal, lines)?;
         }
+        self.chat.fold_history_into_items();
 
-        // Step 2: paint into the inline viewport. Layout: chat live
-        // region (active streaming text + running tool calls) → timeline
-        // → composer.
         terminal
             .draw(|f| {
                 let area = f.area();
-                let timeline_height =
-                    pick_timeline_height(area.height, self.timeline.clip_count());
-                let chat_height = self
-                    .chat
-                    .rendered_height()
-                    .min(area.height.saturating_sub(timeline_height + 1));
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Min(0),                  // top spacer
-                        Constraint::Length(chat_height),     // active items
-                        Constraint::Length(timeline_height), // timeline
-                        Constraint::Length(1),               // composer
-                    ])
-                    .split(area);
-                if chat_height > 0 {
-                    f.render_widget(&self.chat, chunks[1]);
-                }
-                if timeline_height > 0 {
-                    f.render_widget(&self.timeline, chunks[2]);
-                }
-                f.render_widget(&self.composer, chunks[3]);
+                let idle = self.chat.is_empty()
+                    && self.turn_task.is_none()
+                    && self.modal.is_none()
+                    && self.pending_user_input.is_none();
+
+                let composer_area = if idle && area.height >= 14 {
+                    self.render_idle(f, area)
+                } else {
+                    let area = if area.height >= 10 {
+                        self.render_active_header(f, area)
+                    } else {
+                        area
+                    };
+                    let (chat_area, composer_area, status_area) =
+                        active_content_areas(area, self.chat.rendered_height());
+                    f.render_widget(&self.chat, chat_area);
+                    f.render_widget(self.status_line(), status_area);
+                    composer_area
+                };
+
+                f.render_widget(&self.composer, composer_area);
+                let composer_row = composer_area.y + composer_area.height / 2;
+                let cursor_x = composer_area
+                    .x
+                    .saturating_add(self.composer.cursor_column())
+                    .min(composer_area.right().saturating_sub(1));
+                f.set_cursor_position(Position {
+                    x: cursor_x,
+                    y: composer_row,
+                });
                 if let Some(modal) = &self.modal {
                     f.render_widget(modal, area);
                 }
@@ -345,76 +350,370 @@ impl App {
             .context("custom terminal draw")?;
         Ok(())
     }
-}
 
-/// Pick a timeline height. The pane wants `1 header + clip_count`
-/// rows. We give the timeline up to ~half the inline viewport,
-/// reserving the rest for the live chat region + composer.
-/// Returns 0 if there are no clips or no room.
-fn pick_timeline_height(total_rows: u16, clip_count: usize) -> u16 {
-    if total_rows < 6 || clip_count == 0 {
-        return 0;
+    fn render_idle(&self, f: &mut crate::custom_terminal::Frame<'_>, area: Rect) -> Rect {
+        let card_x = area.x + if area.width >= 80 { 2 } else { 1 };
+        let card_y = area.y + top_gutter(area);
+        let available_width = area.right().saturating_sub(card_x + 1);
+        let card_width = available_width.min(96).max(44);
+        let card = Rect {
+            x: card_x.min(area.right().saturating_sub(1)),
+            y: card_y,
+            width: card_width,
+            height: 8,
+        };
+
+        let card_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(198, 123, 88)))
+            .title(format!(" Awidat TUI v{} ", crate::version()))
+            .title_style(
+                Style::default()
+                    .fg(Color::Rgb(198, 123, 88))
+                    .add_modifier(Modifier::BOLD),
+            );
+        let inner = card_block.inner(card);
+        f.render_widget(card_block, card);
+
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(32), Constraint::Min(20)])
+            .split(inner);
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("Awidat TUI v{}", crate::version()),
+                        Style::default()
+                            .fg(Color::Rgb(198, 123, 88))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        "ready to edit",
+                        Style::default()
+                            .fg(Color::Gray)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("project: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(self.project_label.clone(), Style::default().fg(Color::Gray)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("tools: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        self.session.tool_count().to_string(),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ]),
+            ]),
+            columns[0],
+        );
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![Span::styled(
+                    "Start with a direct editing request",
+                    Style::default()
+                        .fg(Color::Rgb(198, 123, 88))
+                        .add_modifier(Modifier::BOLD),
+                )]),
+                Line::from(vec![
+                    Span::styled("timeline ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!(
+                            "{} clip{} · {:.2}s",
+                            self.timeline.clip_count(),
+                            if self.timeline.clip_count() == 1 {
+                                ""
+                            } else {
+                                "s"
+                            },
+                            self.timeline.total_duration_s()
+                        ),
+                        Style::default().fg(Color::Gray),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("try ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        "delete the awkward pause after the intro",
+                        Style::default().fg(Color::Gray),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("or  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        "find the strongest quote and render a preview",
+                        Style::default().fg(Color::Gray),
+                    ),
+                ]),
+            ]),
+            columns[1],
+        );
+
+        let tip_y = card.bottom().saturating_add(2);
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("Tip: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "mutating tools ask for approval; Ctrl-C cancels a running turn.",
+                    Style::default().fg(Color::Gray),
+                ),
+            ])),
+            Rect {
+                x: card.x,
+                y: tip_y,
+                width: card.width,
+                height: 1,
+            },
+        );
+
+        let composer_y = tip_y.saturating_add(2);
+        let composer = Rect {
+            x: area.x + 1,
+            y: composer_y.min(area.bottom().saturating_sub(4)),
+            width: area.width.saturating_sub(2),
+            height: 3,
+        };
+        let footer_y = composer
+            .y
+            .saturating_add(2)
+            .min(area.bottom().saturating_sub(1));
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    format!(
+                        "awidat · {} · {} clip{}",
+                        self.project_label,
+                        self.timeline.clip_count(),
+                        if self.timeline.clip_count() == 1 {
+                            ""
+                        } else {
+                            "s"
+                        }
+                    ),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])),
+            Rect {
+                x: area.x + 1,
+                y: footer_y,
+                width: area.width.saturating_sub(2),
+                height: 1,
+            },
+        );
+        composer
     }
-    let want = clip_count.saturating_add(1) as u16; // header + clips
-    // Leave at least 3 rows for the live chat region + 1 for composer.
-    let max_allowed = total_rows.saturating_sub(4);
-    want.min(max_allowed).max(2)
+
+    fn render_active_header(&self, f: &mut crate::custom_terminal::Frame<'_>, area: Rect) -> Rect {
+        let card_x = area.x + if area.width >= 80 { 2 } else { 1 };
+        let card_y = area.y + top_gutter(area);
+        let available_width = area.right().saturating_sub(card_x + 1);
+        let card_width = available_width.min(72).max(38);
+        let card_height = if area.width >= 72 { 6 } else { 7 };
+        let card = Rect {
+            x: card_x.min(area.right().saturating_sub(1)),
+            y: card_y,
+            width: card_width,
+            height: card_height.min(area.height.saturating_sub(1)).max(1),
+        };
+
+        let card_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(format!(" Awidat TUI v{} ", crate::version()))
+            .title_style(
+                Style::default()
+                    .fg(Color::Rgb(198, 123, 88))
+                    .add_modifier(Modifier::BOLD),
+            );
+        let inner = card_block.inner(card);
+        f.render_widget(card_block, card);
+
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("Awidat TUI v{}", crate::version()),
+                        Style::default()
+                            .fg(Color::Rgb(198, 123, 88))
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("project: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        self.project_label.clone(),
+                        Style::default()
+                            .fg(Color::Gray)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("timeline: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!(
+                            "{} clip{} · {:.2}s",
+                            self.timeline.clip_count(),
+                            if self.timeline.clip_count() == 1 {
+                                ""
+                            } else {
+                                "s"
+                            },
+                            self.timeline.total_duration_s()
+                        ),
+                        Style::default().fg(Color::Gray),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("tools: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        self.session.tool_count().to_string(),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ]),
+            ]),
+            inner,
+        );
+
+        let content_y = card.bottom().saturating_add(2);
+        Rect {
+            x: area.x + 1,
+            y: content_y.min(area.bottom()),
+            width: area.width.saturating_sub(2),
+            height: area.bottom().saturating_sub(content_y),
+        }
+    }
+
+    fn status_line(&self) -> Paragraph<'static> {
+        let status = if self.modal.is_some() {
+            "approval"
+        } else if self.pending_user_input.is_some() {
+            "waiting"
+        } else if self.turn_task.is_some() {
+            "running"
+        } else {
+            "ready"
+        };
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                " awidat ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{} ", self.project_label),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!(
+                    "| {} clip{} | {:.2}s | ",
+                    self.timeline.clip_count(),
+                    if self.timeline.clip_count() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    },
+                    self.timeline.total_duration_s()
+                ),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(status, Style::default().fg(Color::Yellow)),
+        ]))
+    }
 }
 
-/// Initial inline-viewport height. Sized for:
-///   - composer (1 row)
-///   - timeline header + ~6 clip rows (7 rows)
-///   - 6 rows of streaming text / spinner above the timeline
-const DEFAULT_VIEWPORT_ROWS: u16 = 14;
+fn top_gutter(area: Rect) -> u16 {
+    if area.height >= 24 {
+        3
+    } else if area.height >= 14 {
+        2
+    } else {
+        1
+    }
+}
+
+fn active_content_areas(area: Rect, desired_chat_height: u16) -> (Rect, Rect, Rect) {
+    const COMPOSER_HEIGHT: u16 = 3;
+    const STATUS_HEIGHT: u16 = 1;
+
+    let max_chat_height = area.height.saturating_sub(COMPOSER_HEIGHT + STATUS_HEIGHT);
+    let chat_height = desired_chat_height.max(1).min(max_chat_height.max(1));
+    let gap = if chat_height < max_chat_height
+        && chat_height + 1 + COMPOSER_HEIGHT + STATUS_HEIGHT <= area.height
+    {
+        1
+    } else {
+        0
+    };
+    let composer_y = area.y + chat_height + gap;
+    let composer_height = COMPOSER_HEIGHT.min(area.bottom().saturating_sub(composer_y));
+    let status_y = composer_y + composer_height;
+    let status_height = STATUS_HEIGHT.min(area.bottom().saturating_sub(status_y));
+
+    (
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: chat_height.min(area.height),
+        },
+        Rect {
+            x: area.x,
+            y: composer_y,
+            width: area.width,
+            height: composer_height,
+        },
+        Rect {
+            x: area.x,
+            y: status_y,
+            width: area.width,
+            height: status_height,
+        },
+    )
+}
 
 fn enter_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    // Inline-viewport mode (Codex-derived custom backend). The TUI
-    // owns a small region at the bottom of the user's existing
-    // terminal; finalized chat lines are pushed into the terminal's
-    // scrollback above the viewport (see `insert_history`). The user
-    // scrolls up with their normal terminal scroll buffer to read
-    // history.
-    //
-    // We cursor-probe with a bounded 100ms budget — ratatui's stock
-    // probe waits two seconds and crashes the TUI on slow terminals.
     enable_raw_mode().context("enable raw mode")?;
-    let cursor_pos = terminal_probe::cursor_position(terminal_probe::DEFAULT_TIMEOUT)
-        .unwrap_or(None)
-        .unwrap_or(Position::ORIGIN);
-
-    let stdout = io::stdout();
+    let mut stdout = io::stdout();
+    if let Err(e) = execute!(stdout, EnterAlternateScreen, Clear(ClearType::All)) {
+        let _ = disable_raw_mode();
+        return Err(e).context("enter alternate screen");
+    }
+    stdout.flush().context("flush alternate screen setup")?;
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::with_options_and_cursor_position(backend, cursor_pos)
+    let mut terminal = Terminal::with_options_and_cursor_position(backend, Position::ORIGIN)
         .context("create custom Terminal")?;
 
-    // Carve out the initial inline viewport. We anchor it at the
-    // probed cursor row, capped to fit the screen — if the cursor is
-    // already near the bottom we let the viewport sit just below it
-    // and rely on `insert_history_lines` to scroll content above as
-    // needed.
-    let screen = terminal.size().unwrap_or(ratatui::layout::Size::new(80, 24));
-    let height = DEFAULT_VIEWPORT_ROWS.min(screen.height);
-    let y = cursor_pos.y.min(screen.height.saturating_sub(height));
+    let screen = terminal
+        .size()
+        .unwrap_or(ratatui::layout::Size::new(80, 24));
     terminal.set_viewport_area(Rect {
         x: 0,
-        y,
+        y: 0,
         width: screen.width,
-        height,
+        height: screen.height,
     });
     Ok(terminal)
 }
 
-fn leave_terminal(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) -> Result<()> {
-    // Show the cursor again, move below the viewport so the next
-    // shell prompt doesn't land on top of our last frame, and drop
-    // raw mode.
+fn leave_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let _ = terminal.show_cursor();
-    let bottom_y = terminal.viewport_area.bottom();
-    let _ = terminal.set_cursor_position(Position { x: 0, y: bottom_y });
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    let _ = terminal.backend_mut().flush();
     let _ = disable_raw_mode();
-    println!();
     Ok(())
 }
 
@@ -434,7 +733,13 @@ fn spawn_terminal_pump(tx: mpsc::UnboundedSender<AppEvent>) -> JoinHandle<()> {
                     }
                 }
                 Ok(CtEvent::Resize(w, h)) => {
-                    if tx.send(AppEvent::Resize { width: w, height: h }).is_err() {
+                    if tx
+                        .send(AppEvent::Resize {
+                            width: w,
+                            height: h,
+                        })
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -536,6 +841,7 @@ mod tests {
         ));
         App {
             session,
+            project_label: "test".into(),
             chat: Chat::new(),
             timeline: Timeline::new(&project_root),
             composer: Composer::new("hint"),
@@ -696,9 +1002,7 @@ mod tests {
     #[test]
     fn session_event_renders_into_chat() {
         let mut app = make_app();
-        let mutated = app.handle_event(AppEvent::Session(SessionEvent::TextDelta(
-            "hello".into(),
-        )));
+        let mutated = app.handle_event(AppEvent::Session(SessionEvent::TextDelta("hello".into())));
         assert!(mutated);
         assert!(matches!(
             app.chat.items().last().unwrap(),

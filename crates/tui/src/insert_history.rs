@@ -41,8 +41,8 @@ use crossterm::{
     cursor::MoveTo,
     queue,
     style::{
-        Attribute as CAttribute, Color as CColor, Colors, Print, SetAttribute,
-        SetBackgroundColor, SetColors, SetForegroundColor,
+        Attribute as CAttribute, Color as CColor, Colors, Print, SetAttribute, SetBackgroundColor,
+        SetColors, SetForegroundColor,
     },
     terminal::{Clear, ClearType},
 };
@@ -56,10 +56,7 @@ use ratatui::{
 use crate::custom_terminal::Terminal;
 
 /// Push `lines` into terminal scrollback above the viewport.
-pub fn insert_history_lines<B>(
-    terminal: &mut Terminal<B>,
-    lines: Vec<Line>,
-) -> io::Result<()>
+pub fn insert_history_lines<B>(terminal: &mut Terminal<B>, lines: Vec<Line>) -> io::Result<()>
 where
     B: Backend + Write,
 {
@@ -91,10 +88,9 @@ where
             queue!(writer, Print("\x1bM"))?; // Reverse Index
         }
         queue!(writer, ResetScrollRegion)?;
-        let new_cursor_top = area.top().saturating_sub(1);
         area.y += scroll_amount;
         should_update_area = true;
-        new_cursor_top
+        area.top().saturating_sub(1)
     } else {
         area.top().saturating_sub(1)
     };
@@ -207,9 +203,7 @@ impl Command for SetScrollRegion {
 
     #[cfg(windows)]
     fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
-            "SetScrollRegion is ANSI-only",
-        ))
+        Err(std::io::Error::other("SetScrollRegion is ANSI-only"))
     }
 
     #[cfg(windows)]
@@ -229,9 +223,7 @@ impl Command for ResetScrollRegion {
 
     #[cfg(windows)]
     fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::other(
-            "ResetScrollRegion is ANSI-only",
-        ))
+        Err(std::io::Error::other("ResetScrollRegion is ANSI-only"))
     }
 
     #[cfg(windows)]
@@ -323,7 +315,6 @@ mod tests {
 
     #[test]
     fn write_spans_writes_plain_content() {
-        use ratatui::style::Stylize;
         let spans = ["hello", " world"].map(Into::into);
         let mut out: Vec<u8> = Vec::new();
         write_spans(&mut out, spans.iter()).unwrap();
@@ -331,7 +322,9 @@ mod tests {
         assert!(rendered.contains("hello"), "got: {rendered:?}");
         assert!(rendered.contains("world"), "got: {rendered:?}");
         // Ensure we end with the SGR reset (modifier + colors).
-        assert!(rendered.contains("\x1b[0m"), "missing SGR reset: {rendered:?}");
-        let _unused = ratatui::style::Style::default(); // silence Stylize import
+        assert!(
+            rendered.contains("\x1b[0m"),
+            "missing SGR reset: {rendered:?}"
+        );
     }
 }
