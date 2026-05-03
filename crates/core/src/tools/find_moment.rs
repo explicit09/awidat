@@ -68,6 +68,7 @@ impl ToolHandler for FindMomentTool {
                 },
                 "required": ["query"]
             }),
+            ..Default::default()
         }
     }
 

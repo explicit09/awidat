@@ -69,6 +69,7 @@ impl ToolHandler for ListAssetsTool {
                     }
                 }
             }),
+            ..Default::default()
         }
     }
 

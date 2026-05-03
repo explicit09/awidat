@@ -81,6 +81,7 @@ impl ToolHandler for StartRenderTool {
                 },
                 "required": ["scope", "asset"]
             }),
+            ..Default::default()
         }
     }
 

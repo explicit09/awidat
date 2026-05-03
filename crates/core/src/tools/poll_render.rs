@@ -43,6 +43,7 @@ impl ToolHandler for PollRenderTool {
                 },
                 "required": ["job_id"]
             }),
+            ..Default::default()
         }
     }
 

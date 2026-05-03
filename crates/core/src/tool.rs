@@ -283,6 +283,7 @@ mod tests {
                 name: "fake".into(),
                 description: "test".into(),
                 input_schema: serde_json::json!({"type": "object"}),
+                cache_control: None,
             }
         }
         async fn handle(

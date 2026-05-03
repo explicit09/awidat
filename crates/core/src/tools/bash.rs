@@ -103,6 +103,7 @@ impl ToolHandler for BashTool {
                 },
                 "required": ["command"]
             }),
+            ..Default::default()
         }
     }
 

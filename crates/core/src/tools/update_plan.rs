@@ -68,6 +68,7 @@ impl ToolHandler for UpdatePlanTool {
                 },
                 "required": ["items"]
             }),
+            ..Default::default()
         }
     }
 

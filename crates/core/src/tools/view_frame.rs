@@ -82,6 +82,7 @@ impl ToolHandler for ViewFrameTool {
                 },
                 "required": ["asset", "t_s"]
             }),
+            ..Default::default()
         }
     }
 

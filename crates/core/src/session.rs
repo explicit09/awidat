@@ -243,23 +243,65 @@ impl Session {
 
         // 2. Outer loop: keep sampling until the model says end_turn (or
         //    we're cancelled).
-        const MAX_INNER_ITERATIONS: usize = 32;
-        for _iter in 0..MAX_INNER_ITERATIONS {
+        //
+        // Cap raised to 64 after first-real-video runs surfaced the
+        // editorial-flow agent burning 8-12 iterations on legitimate
+        // bash exploration before settling into the cut. We also emit
+        // a one-shot "approaching cap" warning at 80% so the agent
+        // can compact its plan before it hits the hard stop —
+        // anthropics' tool-use cookbook recommends this pattern.
+        const MAX_INNER_ITERATIONS: usize = 64;
+        const WARN_AT_ITERATION: usize = (MAX_INNER_ITERATIONS * 4) / 5; // 80%
+        let mut warned = false;
+        for iter in 0..MAX_INNER_ITERATIONS {
             if cancel.is_cancelled() {
                 let _ = self.events_tx.send(SessionEvent::Error("cancelled".into()));
                 return Err(SessionError::Cancelled);
             }
 
             // 3. Build the request from current history.
-            let history_snapshot = self.history.lock().await.clone();
+            //
+            // Two-tier prompt cache (mirrors aider/chat_chunks.py and
+            // swe-agent/CacheControlHistoryProcessor):
+            //
+            //   tier-1 (static): system + tools, marked once on the
+            //     last tool. Persists across the whole session.
+            //   tier-2 (moving): a breakpoint on the most recent
+            //     user-role message that's followed by an assistant
+            //     turn — i.e. the latest "stable" history boundary.
+            //     Walks forward each iteration; old breakpoints get
+            //     cleared first or Anthropic rejects the request.
+            //
+            // Net effect: the prefix of (system + tools + all prior
+            // turns) is cache-read at ~10% input price after the
+            // first turn. Cache writes cost +25% on the first turn
+            // through, which pays back after 1-2 reuses.
+            let mut history_snapshot = self.history.lock().await.clone();
+            apply_moving_cache_breakpoint(&mut history_snapshot);
+
             let mut req = MessagesRequest::new(self.model.clone(), history_snapshot)
                 .with_max_tokens(4096);
             if let Some(sys) = &self.system_prompt {
-                req = req.with_system(sys.clone());
+                req = req.with_system_cached(sys.clone());
             }
             let schemas = self.registry.schemas();
             if !schemas.is_empty() {
                 req = req.with_tools(schemas).with_tool_choice(ToolChoice::Auto);
+                req.cache_last_tool();
+            }
+
+            // Inject a budget warning into history when we cross the
+            // 80% threshold. The model sees it as a system reminder
+            // and can choose to compact / commit / wrap up.
+            if !warned && iter >= WARN_AT_ITERATION {
+                warned = true;
+                let remaining = MAX_INNER_ITERATIONS - iter;
+                let mut h = self.history.lock().await;
+                h.push(Message::user_text(format!(
+                    "[awidat-runtime] Heads up: {remaining} sampling iterations \
+                     remain in this turn before it auto-ends. If you have a \
+                     pending edit, commit it now; otherwise wrap up your reply."
+                )));
             }
 
             // 4. Inner sampling loop.
@@ -335,9 +377,9 @@ impl Session {
                             // tool block so message order matches what the
                             // model emitted.
                             if !current_text.is_empty() {
-                                assistant_blocks.push(ContentBlock::Text {
-                                    text: std::mem::take(&mut current_text),
-                                });
+                                assistant_blocks.push(ContentBlock::text(
+                                    std::mem::take(&mut current_text),
+                                ));
                             }
                             let _ = self.events_tx.send(SessionEvent::ToolCallStart {
                                 id: id.clone(),
@@ -383,7 +425,7 @@ impl Session {
 
         // Flush any final text into a block.
         if !current_text.is_empty() {
-            assistant_blocks.push(ContentBlock::Text { text: current_text });
+            assistant_blocks.push(ContentBlock::text(current_text));
         }
         // Append the assistant's tool_use blocks (with the input we parsed)
         // so the model's next view of history is complete.
@@ -624,6 +666,35 @@ fn summarize_args(args: &serde_json::Value) -> String {
     }
 }
 
+/// Walk the history and place the *moving* tier-2 cache breakpoint.
+///
+/// Strategy mirrors aider's `chat_chunks.py:add_cache_control_headers`
+/// and swe-agent's `CacheControlHistoryProcessor`:
+///
+/// 1. Clear cache marks from every prior message — Anthropic rejects
+///    requests that have stale breakpoints scattered through history.
+/// 2. Scan from the end backwards; mark the first User message we
+///    find. That covers the entire prefix from the start of the
+///    request up to and including that user turn.
+///
+/// On the first turn (history = `[Message::user_text(prompt)]`) the
+/// loop marks the very prompt the user just sent — fine; that
+/// becomes the next turn's tier-2 cache hit.
+///
+/// On later turns, marking the latest user message means everything
+/// before the assistant's *current* turn (which we're about to
+/// regenerate) is cached. The volatile bit — the new tool_result we
+/// just appended, or the fresh assistant emission — sits past the
+/// breakpoint and is fresh-billed. That's the right slice.
+fn apply_moving_cache_breakpoint(messages: &mut [Message]) {
+    for m in messages.iter_mut() {
+        m.clear_cache_breakpoint();
+    }
+    if let Some(latest_user) = messages.iter_mut().rev().find(|m| m.role == Role::User) {
+        latest_user.set_cache_breakpoint();
+    }
+}
+
 /// One in-progress tool call accumulating during the stream.
 struct PendingCall {
     id: String,
@@ -702,5 +773,70 @@ mod tests {
         let v = serde_json::json!({"edl": "line1\n\nline2\n   line3"});
         let s = summarize_args(&v);
         assert!(!s.contains('\n'), "newlines squashed: {s}");
+    }
+
+    #[test]
+    fn moving_cache_breakpoint_marks_latest_user_message_only() {
+        let mut history = vec![
+            Message::user_text("first user prompt"),
+            Message::assistant_text("first reply"),
+            Message::user_text("second user prompt"),
+            Message::assistant_text("second reply"),
+        ];
+        apply_moving_cache_breakpoint(&mut history);
+
+        // Helper: count text blocks with cache_control set.
+        fn marked(m: &Message) -> usize {
+            m.content
+                .iter()
+                .filter(|b| {
+                    matches!(
+                        b,
+                        crate::anthropic::ContentBlock::Text {
+                            cache_control: Some(_),
+                            ..
+                        }
+                    )
+                })
+                .count()
+        }
+        // Only the *last* user message should carry a breakpoint.
+        assert_eq!(marked(&history[0]), 0, "first user not marked");
+        assert_eq!(marked(&history[1]), 0, "first assistant not marked");
+        assert_eq!(marked(&history[2]), 1, "second user marked");
+        assert_eq!(marked(&history[3]), 0, "second assistant not marked");
+    }
+
+    #[test]
+    fn moving_cache_breakpoint_clears_old_marks_before_remarking() {
+        // Simulate a stale breakpoint left from a prior turn on an
+        // earlier user message.
+        let mut older = Message::user_text("old prompt");
+        older.set_cache_breakpoint();
+        let mut history = vec![
+            older,
+            Message::assistant_text("reply"),
+            Message::user_text("new prompt"),
+        ];
+        apply_moving_cache_breakpoint(&mut history);
+
+        // Old mark cleared.
+        let stale_marked = matches!(
+            &history[0].content[0],
+            crate::anthropic::ContentBlock::Text {
+                cache_control: Some(_),
+                ..
+            }
+        );
+        assert!(!stale_marked, "old breakpoint must be cleared");
+        // New mark on the latest user message.
+        let new_marked = matches!(
+            &history[2].content[0],
+            crate::anthropic::ContentBlock::Text {
+                cache_control: Some(_),
+                ..
+            }
+        );
+        assert!(new_marked, "new breakpoint must be set");
     }
 }

@@ -36,7 +36,7 @@ impl Message {
     pub fn user_text(text: impl Into<String>) -> Self {
         Self {
             role: Role::User,
-            content: vec![ContentBlock::Text { text: text.into() }],
+            content: vec![ContentBlock::text(text)],
         }
     }
 
@@ -44,7 +44,35 @@ impl Message {
     pub fn assistant_text(text: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,
-            content: vec![ContentBlock::Text { text: text.into() }],
+            content: vec![ContentBlock::text(text)],
+        }
+    }
+
+    /// Set a cache breakpoint on the last `Text` block of this
+    /// message. No-op if the message has no text blocks.
+    ///
+    /// Per Anthropic's docs, a cache breakpoint at any block N caches
+    /// the entire prefix `[0..=N]` of the request (system + tools +
+    /// all earlier messages + this block). Subsequent requests that
+    /// share the same prefix bytes hit the cache. The breakpoint
+    /// survives 5 minutes (ephemeral TTL).
+    pub fn set_cache_breakpoint(&mut self) {
+        if let Some(block) = self.content.iter_mut().rev().find(|b| b.is_text())
+            && let ContentBlock::Text { cache_control, .. } = block
+        {
+            *cache_control = Some(CacheControl::ephemeral());
+        }
+    }
+
+    /// Clear any cache breakpoint on every text block of this
+    /// message. The walker calls this on every prior message before
+    /// re-marking — Anthropic rejects requests with stale
+    /// breakpoints all over history.
+    pub fn clear_cache_breakpoint(&mut self) {
+        for block in &mut self.content {
+            if let ContentBlock::Text { cache_control, .. } = block {
+                *cache_control = None;
+            }
         }
     }
 }
@@ -53,10 +81,19 @@ impl Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
-    /// Plain text.
+    /// Plain text. Optionally carries a cache breakpoint — when set,
+    /// the API caches the prefix from the start of the request up
+    /// through this block. We mark exactly one text block per request
+    /// (the *moving* breakpoint on the most recent stable user
+    /// message); the static breakpoint goes on the last tool. Walking
+    /// breakpoint discipline mirrors aider's `chat_chunks.py` and
+    /// swe-agent's `CacheControlHistoryProcessor` — see Session.
     Text {
         /// The text payload.
         text: String,
+        /// Cache breakpoint (omitted when not marking).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        cache_control: Option<CacheControl>,
     },
     /// Model-emitted tool call. Inputs are JSON.
     ToolUse {
@@ -96,6 +133,22 @@ pub enum ContentBlock {
     Other,
 }
 
+impl ContentBlock {
+    /// Construct a plain text block (no cache control).
+    pub fn text(s: impl Into<String>) -> Self {
+        Self::Text {
+            text: s.into(),
+            cache_control: None,
+        }
+    }
+
+    /// True iff this block is a Text. Used by the cache walker to find
+    /// the last text block on a message.
+    pub fn is_text(&self) -> bool {
+        matches!(self, Self::Text { .. })
+    }
+}
+
 /// Helpers for constructing ToolResult content. Keeps the JSON-shape
 /// implementation detail off the call site.
 pub mod tool_result {
@@ -128,9 +181,38 @@ pub mod tool_result {
     }
 }
 
+/// Anthropic prompt-cache breakpoint marker. Attaching this to the
+/// last tool (or system block) tells the API to cache the prefix up
+/// through that point. Cache reads cost ~10% of normal input tokens
+/// with a 5-minute TTL; writes cost 25% more than uncached. For any
+/// session > ~3 turns the math is positive.
+///
+/// We only use the ephemeral variant — the 1-hour cache costs more
+/// to write and is overkill for our usage pattern (one project, one
+/// session).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheControl {
+    /// Always `"ephemeral"` for our usage.
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+impl CacheControl {
+    /// 5-minute ephemeral cache. The right default for an awidat session.
+    pub fn ephemeral() -> Self {
+        Self {
+            kind: "ephemeral".into(),
+        }
+    }
+}
+
 /// One tool the model can call. We register every entry in our
 /// `ToolRegistry` here so the model knows the surface.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// The `cache_control` field is set on the *last* tool of every
+/// request when caching is enabled — that one breakpoint covers
+/// every preceding tool plus the system prompt.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Tool {
     /// Tool name, e.g. `"bash"`.
     pub name: String,
@@ -138,6 +220,10 @@ pub struct Tool {
     pub description: String,
     /// JSON Schema for the inputs. The model is told to conform.
     pub input_schema: serde_json::Value,
+    /// Prompt-cache breakpoint. Set on the last tool only; omitted
+    /// otherwise.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_control: Option<CacheControl>,
 }
 
 /// `tool_choice` field on the request — controls whether the model is
@@ -158,6 +244,34 @@ pub enum ToolChoice {
     None,
 }
 
+/// One block of system prompt — text plus optional cache control.
+/// Serialized as `{"type":"text","text":"...","cache_control":{...}}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemBlock {
+    /// Always `"text"` for our usage.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The system-prompt body.
+    pub text: String,
+    /// Prompt-cache breakpoint; set on the last block when caching.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cache_control: Option<CacheControl>,
+}
+
+/// `system` field — the API accepts either a bare string or an array
+/// of typed blocks. We use the block form when caching, the string
+/// form otherwise (one fewer wire byte; matches what every API
+/// example shows).
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum System {
+    /// Plain text (no cache control).
+    Text(String),
+    /// Block form. The Anthropic API requires this shape when
+    /// `cache_control` is in play.
+    Blocks(Vec<SystemBlock>),
+}
+
 /// One messages-API request. Narrow to what we use.
 #[derive(Debug, Clone, Serialize)]
 pub struct MessagesRequest {
@@ -167,7 +281,7 @@ pub struct MessagesRequest {
     pub max_tokens: u32,
     /// System prompt (top-level field; not a `Message` with role=System).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
+    pub system: Option<System>,
     /// Conversation messages.
     pub messages: Vec<Message>,
     /// Available tools.
@@ -199,11 +313,35 @@ impl MessagesRequest {
         }
     }
 
-    /// Add a system prompt.
+    /// Add a system prompt as a plain string (no cache control).
     #[must_use]
     pub fn with_system(mut self, system: impl Into<String>) -> Self {
-        self.system = Some(system.into());
+        self.system = Some(System::Text(system.into()));
         self
+    }
+
+    /// Add a system prompt and mark it cacheable. Tier-1 of the
+    /// two-tier cache strategy: system + tools rarely change across
+    /// turns, so caching them gives a 90% input-token discount on
+    /// every subsequent turn within the 5-minute TTL.
+    #[must_use]
+    pub fn with_system_cached(mut self, system: impl Into<String>) -> Self {
+        self.system = Some(System::Blocks(vec![SystemBlock {
+            kind: "text".into(),
+            text: system.into(),
+            cache_control: Some(CacheControl::ephemeral()),
+        }]));
+        self
+    }
+
+    /// Mark the last tool in `self.tools` with a cache breakpoint.
+    /// No-op when `tools` is empty. The breakpoint covers the entire
+    /// `tools` array AND the system block (when cached) — Anthropic
+    /// applies cache prefixes top-down: system → tools → messages.
+    pub fn cache_last_tool(&mut self) {
+        if let Some(last) = self.tools.last_mut() {
+            last.cache_control = Some(CacheControl::ephemeral());
+        }
     }
 
     /// Set max tokens.

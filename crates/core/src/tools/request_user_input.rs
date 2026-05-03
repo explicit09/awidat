@@ -66,6 +66,7 @@ impl ToolHandler for RequestUserInputTool {
                 },
                 "required": ["question"]
             }),
+            ..Default::default()
         }
     }
 

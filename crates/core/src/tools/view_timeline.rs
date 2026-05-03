@@ -71,6 +71,7 @@ impl ToolHandler for ViewTimelineTool {
                         "description": "Max lines. Default 80, hard cap 200." }
                 }
             }),
+            ..Default::default()
         }
     }
 

@@ -66,6 +66,7 @@ impl ToolHandler for ReadIndexTool {
                 },
                 "required": ["asset_id", "channel"]
             }),
+            ..Default::default()
         }
     }
 

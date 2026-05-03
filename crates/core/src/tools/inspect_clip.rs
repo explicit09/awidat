@@ -45,6 +45,7 @@ impl ToolHandler for InspectClipTool {
                 },
                 "required": ["asset_id"]
             }),
+            ..Default::default()
         }
     }
 
