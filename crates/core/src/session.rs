@@ -219,6 +219,13 @@ impl Session {
         self.registry.len()
     }
 
+    /// Project root the session was opened against. The TUI's timeline
+    /// pane reads `project.otio.json` from here on every `apply_edl`
+    /// commit so what's painted stays authoritative.
+    pub fn project_root(&self) -> &std::path::Path {
+        &self.project_root
+    }
+
     /// Run one turn: append `user_input` to history, drive the two-loop
     /// engine until the model stops (or cancellation, or fatal error).
     pub async fn run_turn(
