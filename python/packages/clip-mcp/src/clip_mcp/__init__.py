@@ -1,0 +1,262 @@
+"""CLIP frame indexer for Awidat.
+
+Samples one frame per second from the source video, encodes each through
+ViT-B-32 (OpenAI weights, via open_clip), and writes the 512-dim
+embeddings into a sidecar. The embedding store is the substrate for a
+future `clip_search` tool that takes a free-text prompt ("close-up of
+a face", "dark room", "person holding a phone") and returns the top-K
+matching frames as `[t_s, score]` pairs.
+
+Why per-second, not per-frame: at 24 fps a 10-min episode is 14k frames.
+Embedding all of them costs ~$0 but writes ~30 MB of float32 per
+episode. One frame per second is enough granularity for editorial
+queries — the agent rarely asks "what was on screen at frame 1372",
+it asks "where is the user holding the phone." Per-second sampling
+keeps the sidecar under 1 MB for a 30-min episode.
+
+Why float16 base64: lists of 512 floats x N seconds, JSON-encoded as
+text decimals, balloons fast. Packing the embedding tensor as
+little-endian float16 and base64-encoding it is 4x smaller than text
+floats, and float16 loses no useful precision for cosine similarity at
+top-K retrieval scale.
+
+Schema version: "1".
+"""
+
+from __future__ import annotations
+
+import base64
+import logging
+import subprocess
+from typing import Any
+
+import numpy as np
+import open_clip
+import torch
+from PIL import Image
+
+from awidat_mcp import IndexAssetRequest, IndexerServer
+
+INDEXER_NAME = "clip"
+INDEXER_VERSION = "0.1.0"
+SCHEMA_VERSION = "1"
+
+# Pinned model id. ViT-B-32 / OpenAI is the smallest CLIP that gives
+# usable retrieval — ~150 MB, runs CPU-only at ~30 frames/sec on M-series.
+# Larger models (ViT-L-14, EVA-CLIP) live behind a config flag in v1.5.
+MODEL_ARCH = "ViT-B-32"
+MODEL_PRETRAINED = "openai"
+
+# One frame per second. See module docstring.
+SAMPLE_FPS = 1.0
+
+# Output pixel buffer ffmpeg writes per frame. Square crop matches the
+# CLIP preprocess input — saves a resize round-trip on the Python side.
+PROBE_W = 224
+PROBE_H = 224
+
+_log = logging.getLogger(INDEXER_NAME)
+
+
+server = IndexerServer(
+    name=INDEXER_NAME,
+    indexer_version=INDEXER_VERSION,
+    schema_version=SCHEMA_VERSION,
+)
+
+
+def _probe_duration_s(asset_path: str) -> float:
+    """Return duration in seconds via ffprobe. Float, fail-loud."""
+    out = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            asset_path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return float(out.stdout.strip())
+
+
+def _extract_frames(asset_path: str, fps: float) -> list[Image.Image]:
+    """Stream `fps`-rate RGB frames out of ffmpeg and return PIL Images.
+
+    ffmpeg writes raw rgb24 to stdout at PROBE_W x PROBE_H. We slice
+    that bytestream per-frame. No intermediate disk files — everything
+    in-memory. PIL images come back already at the CLIP input size, so
+    the model preprocess is essentially a normalization.
+    """
+    cmd = [
+        "ffmpeg",
+        "-v",
+        "error",
+        "-i",
+        asset_path,
+        "-vf",
+        f"fps={fps},scale={PROBE_W}:{PROBE_H}",
+        "-pix_fmt",
+        "rgb24",
+        "-f",
+        "rawvideo",
+        "-",
+    ]
+    proc = subprocess.run(cmd, check=True, capture_output=True)
+    raw = proc.stdout
+    frame_size = PROBE_W * PROBE_H * 3
+    n = len(raw) // frame_size
+    frames: list[Image.Image] = []
+    for i in range(n):
+        chunk = raw[i * frame_size : (i + 1) * frame_size]
+        img = Image.frombytes("RGB", (PROBE_W, PROBE_H), chunk)
+        frames.append(img)
+    return frames
+
+
+_MODEL_CACHE: dict[str, Any] = {}
+
+
+def _load_model() -> tuple[Any, Any, torch.device]:
+    """Lazy-load and cache the CLIP model so reindexing many assets in
+    one process pays the ~3s load only once."""
+    if "model" in _MODEL_CACHE:
+        return _MODEL_CACHE["model"], _MODEL_CACHE["preprocess"], _MODEL_CACHE["device"]
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        MODEL_ARCH, pretrained=MODEL_PRETRAINED, device=device
+    )
+    # Switch to inference mode (PyTorch API). We never train this model.
+    model.train(False)
+    _MODEL_CACHE["model"] = model
+    _MODEL_CACHE["preprocess"] = preprocess
+    _MODEL_CACHE["device"] = device
+    return model, preprocess, device
+
+
+def _encode_batch(images: list[Image.Image]) -> np.ndarray:
+    """Run the CLIP image encoder over `images`. Returns (N, 512) float32
+    numpy array. Embeddings are L2-normalized so cosine similarity is
+    just a dot product."""
+    model, preprocess, device = _load_model()
+    if not images:
+        return np.zeros((0, 512), dtype=np.float32)
+    tensors = torch.stack([preprocess(im) for im in images]).to(device)
+    with torch.no_grad():
+        feats = model.encode_image(tensors)
+        feats = feats / feats.norm(dim=-1, keepdim=True)
+    return feats.cpu().float().numpy().astype(np.float32)
+
+
+def _pack_embeddings_b64(arr: np.ndarray) -> str:
+    """Float32 -> float16 -> little-endian bytes -> base64. See module
+    docstring for the size-rationale."""
+    return base64.b64encode(arr.astype(np.float16).tobytes()).decode("ascii")
+
+
+@server.index_asset
+def handle(req: IndexAssetRequest) -> dict[str, Any]:
+    duration_s = _probe_duration_s(req.asset_path)
+    frames = _extract_frames(req.asset_path, SAMPLE_FPS)
+    _log.info(
+        "clip-mcp: asset=%s duration=%.2fs sampled=%d frames @ %.2f fps",
+        req.asset_id,
+        duration_s,
+        len(frames),
+        SAMPLE_FPS,
+    )
+
+    # Encode in batches of 32 — keeps peak RAM bounded on CPU.
+    BATCH = 32
+    chunks: list[np.ndarray] = []
+    for i in range(0, len(frames), BATCH):
+        chunks.append(_encode_batch(frames[i : i + BATCH]))
+    embeddings = (
+        np.concatenate(chunks, axis=0)
+        if chunks
+        else np.zeros((0, 512), dtype=np.float32)
+    )
+
+    # Build the per-second timeline — frame i corresponds to t_s = i / SAMPLE_FPS.
+    timestamps = [i / SAMPLE_FPS for i in range(len(frames))]
+
+    return {
+        "model": f"{MODEL_ARCH}/{MODEL_PRETRAINED}",
+        "embedding_dim": int(embeddings.shape[1]) if embeddings.size else 512,
+        "embedding_dtype": "float16",
+        "embedding_encoding": "base64",
+        "frame_rate_sampled": SAMPLE_FPS,
+        "duration_s": duration_s,
+        "frame_count": len(frames),
+        "timestamps_s": timestamps,
+        "embeddings_b64": _pack_embeddings_b64(embeddings),
+    }
+
+
+def decode_embeddings(body: dict[str, Any]) -> np.ndarray:
+    """Helper for downstream consumers (clip_search tool, tests).
+    Inverse of `_pack_embeddings_b64`. Public so the Rust core / future
+    Python tests can recover the float32 (N, dim) array."""
+    raw = base64.b64decode(body["embeddings_b64"])
+    n = body["frame_count"]
+    dim = body["embedding_dim"]
+    return np.frombuffer(raw, dtype=np.float16).reshape(n, dim).astype(np.float32)
+
+
+def encode_text(query: str) -> np.ndarray:
+    """Encode a free-text query into the same 512-dim CLIP embedding
+    space as the indexed frames. Returns a single L2-normalized
+    float32 vector, shape (512,).
+
+    Reuses `_load_model()`'s cache, so this is ~50ms warm. The first
+    call after server startup pays the ~3s model load — but then the
+    embedded model lives for the whole MCP session, so all subsequent
+    queries are cheap. This is the entire point of running clip-mcp
+    long-lived via McpHost: amortize the load cost across every
+    `clip_search` call in the agent's TUI session, not per call.
+    """
+    model, _preprocess, device = _load_model()
+    tokenizer = open_clip.get_tokenizer(MODEL_ARCH)
+    tokens = tokenizer([query]).to(device)
+    with torch.no_grad():
+        feat = model.encode_text(tokens)
+        feat = feat / feat.norm(dim=-1, keepdim=True)
+    return feat.cpu().float().numpy()[0].astype(np.float32)
+
+
+# Register the extra tool *after* the IndexerServer has built its
+# FastMCP instance. This is the official path to "an indexer with one
+# additional non-indexer tool"; the awidat-mcp shim deliberately keeps
+# the indexer surface clean and lets indexers reach into _mcp for the
+# few cases where they need to expose more (cross-indexer queries,
+# warm-cache reuse). Document the pattern in INDEX_SCHEMA.md if a
+# second indexer ever needs it.
+@server._mcp.tool(  # noqa: SLF001  -- intentional, see comment above.
+    description=(
+        "Encode a free-text query into the CLIP embedding space (512-dim, "
+        "L2-normalized, base64-packed float16). Used by the Rust-side "
+        "`clip_search` tool, which then computes cosine similarity against "
+        "the per-frame embeddings already in this asset's CLIP sidecar. "
+        "Reuses the model loaded during indexing — cheap warm, expensive cold."
+    )
+)
+def query_text(query: str) -> dict[str, Any]:
+    vec = encode_text(query)
+    return {
+        "model": f"{MODEL_ARCH}/{MODEL_PRETRAINED}",
+        "embedding_dim": int(vec.shape[0]),
+        "embedding_dtype": "float16",
+        "embedding_encoding": "base64",
+        "embedding_b64": base64.b64encode(vec.astype(np.float16).tobytes()).decode("ascii"),
+    }
+
+
+def main() -> None:
+    server.run()
