@@ -286,7 +286,9 @@ fn collect_timeline_segments(
     let mut warnings = Vec::new();
     let timeline = read_otio_timeline(&otio_path, &mut warnings).map_err(|e| {
         FunctionCallError::RespondToModel(format!(
-            "start_render: failed to load timeline ({e})"
+            "start_render: timeline parse failed ({e}). \
+             Run `awidat validate <project>` for the detailed diagnostic, \
+             then revert the most recent apply_edl that broke the OTIO."
         ))
     })?;
 

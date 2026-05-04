@@ -136,13 +136,21 @@ impl ToolHandler for FindEyeContactTool {
 
         // For the optional speaker filter, pre-load the face sidecars
         // we'll need to project face_id → box-at-frame.
-        let face_walker = walk_indexer(&ctx.project_root, "face")
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let face_walker = walk_indexer(&ctx.project_root, "face").map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "find_eye_contact: face sidecars not readable ({e}). \
+                 Run `awidat index --indexer face <project>` and retry."
+            ))
+        })?;
         let face_by_asset: std::collections::HashMap<String, serde_json::Value> =
             face_walker.collect();
 
-        let gaze_walker = walk_indexer(&ctx.project_root, "gaze")
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let gaze_walker = walk_indexer(&ctx.project_root, "gaze").map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "find_eye_contact: gaze sidecars not readable ({e}). \
+                 Run `awidat index --indexer gaze <project>` and retry."
+            ))
+        })?;
 
         let mut results: Vec<serde_json::Value> = Vec::new();
         let mut more = false;

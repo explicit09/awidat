@@ -153,7 +153,10 @@ impl ToolHandler for ClipSearchTool {
         // usually wants per-asset results so they can pick which asset
         // to draw from.
         let walker = walk_indexer(&ctx.project_root, "clip").map_err(|e| {
-            FunctionCallError::RespondToModel(format!("clip_search: {e}"))
+            FunctionCallError::RespondToModel(format!(
+                "clip_search: clip sidecars not readable ({e}). \
+                 Run `awidat index --indexer clip <project>` and retry."
+            ))
         })?;
 
         let mut all_results: Vec<serde_json::Value> = Vec::new();

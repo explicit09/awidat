@@ -64,8 +64,12 @@ impl ToolHandler for ShotSummaryTool {
             FunctionCallError::RespondToModel(format!("shot_summary: invalid args ({e})."))
         })?;
 
-        let walker = walk_indexer(&ctx.project_root, "shot")
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let walker = walk_indexer(&ctx.project_root, "shot").map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "shot_summary: shot sidecars not readable ({e}). \
+                 Run `awidat index --indexer shot <project>` and retry."
+            ))
+        })?;
 
         let mut summaries: Vec<serde_json::Value> = Vec::new();
         for (asset_id, sidecar) in walker {

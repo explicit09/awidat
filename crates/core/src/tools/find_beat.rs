@@ -105,8 +105,12 @@ impl ToolHandler for FindBeatTool {
         let min_score = args.min_score.unwrap_or(0.5);
         let limit = args.limit.unwrap_or(10).min(50);
 
-        let walker = walk_indexer(&ctx.project_root, "editorial-moments")
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let walker = walk_indexer(&ctx.project_root, "editorial-moments").map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "find_beat: editorial-moments sidecars not readable ({e}). \
+                 Run `awidat index --indexer editorial-moments <project>` and retry."
+            ))
+        })?;
 
         let mut all_hits = Vec::<serde_json::Value>::new();
         let mut more = false;

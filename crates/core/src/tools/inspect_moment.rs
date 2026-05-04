@@ -74,8 +74,12 @@ impl ToolHandler for InspectMomentTool {
         let context_s = args.context_s.unwrap_or(10.0).max(0.0);
 
         // Walk every editorial-moments sidecar; first match wins.
-        let walker = walk_indexer(&ctx.project_root, "editorial-moments")
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let walker = walk_indexer(&ctx.project_root, "editorial-moments").map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "inspect_moment: editorial-moments sidecars not readable ({e}). \
+                 Run `awidat index --indexer editorial-moments <project>` and retry."
+            ))
+        })?;
         let mut hit: Option<(String, serde_json::Value, Vec<serde_json::Value>)> = None;
         for (asset_id, sidecar) in walker {
             let moments = sidecar

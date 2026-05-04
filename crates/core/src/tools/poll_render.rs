@@ -75,7 +75,9 @@ impl ToolHandler for PollRenderTool {
             }
             Err(other) => {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "poll_render: status lookup failed: {other}"
+                    "poll_render: job-status lookup failed ({other}). The job \
+                     may have been reaped or the manager is in a bad state. \
+                     Re-call start_render to queue a fresh render."
                 )));
             }
         };

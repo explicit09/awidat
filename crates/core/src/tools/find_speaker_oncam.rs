@@ -93,8 +93,12 @@ impl ToolHandler for FindSpeakerOncamTool {
         let min_duration_s = args.min_duration_s.unwrap_or(1.0);
         let limit = args.limit.unwrap_or(50).min(200);
 
-        let walker = walk_indexer(&ctx.project_root, "face")
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let walker = walk_indexer(&ctx.project_root, "face").map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "find_speaker_oncam: face sidecars not readable ({e}). \
+                 Run `awidat index --indexer face <project>` and retry."
+            ))
+        })?;
 
         let mut results: Vec<serde_json::Value> = Vec::new();
         let mut more = false;

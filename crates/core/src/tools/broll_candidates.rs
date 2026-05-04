@@ -127,13 +127,21 @@ impl ToolHandler for BrollCandidatesTool {
         let limit = args.limit.unwrap_or(25).min(100);
 
         // Pre-load frame-quality sidecars by asset for the sharp-filter.
-        let fq_walker = walk_indexer(&ctx.project_root, "frame-quality")
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let fq_walker = walk_indexer(&ctx.project_root, "frame-quality").map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "broll_candidates: frame-quality sidecars not readable ({e}). \
+                 Run `awidat index --indexer frame-quality <project>` and retry."
+            ))
+        })?;
         let fq_by_asset: std::collections::HashMap<String, serde_json::Value> =
             fq_walker.collect();
 
-        let walker = walk_indexer(&ctx.project_root, "shot")
-            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
+        let walker = walk_indexer(&ctx.project_root, "shot").map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "broll_candidates: shot sidecars not readable ({e}). \
+                 Run `awidat index --indexer shot <project>` and retry."
+            ))
+        })?;
 
         let mut results: Vec<serde_json::Value> = Vec::new();
         for (asset_id, sidecar) in walker {
