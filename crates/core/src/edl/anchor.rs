@@ -222,18 +222,34 @@ fn resolve_via_whisper(
     None
 }
 
-/// True iff the clip's source_range covers (or at least overlaps)
-/// the segment timestamp. We're conservative: the segment start has
-/// to fall inside `[clip_start, clip_end)` measured in seconds at
-/// the clip's media-rate. This keeps multi-clip-per-asset (e.g. a
-/// previously-split clip) anchoring correct.
+/// True iff the clip's source_range OVERLAPS the segment's time range
+/// at all. Conservative-on-overlap, generous-on-boundary: the previous
+/// strict-containment check (segment start must fall inside the clip
+/// range) failed every Insert→Trim flow on real video because the
+/// agent picks round-ish editorial boundaries (19.4s) while whisper
+/// segments start mid-word (19.375s) — a 25ms mismatch was enough to
+/// kill the anchor, surfacing as "anchor not found" on every freshly-
+/// inserted clip in the 44-min real-video session.
+///
+/// Real-video evidence: whisper segments crossing the clip boundary
+/// by tens of milliseconds is the norm, not the exception. Overlap is
+/// the right semantic — if any of the segment's text appears anywhere
+/// inside the clip's window, that segment IS what the clip is about.
+///
+/// Multi-clip-per-asset (e.g. previously-split clips) still works
+/// because each candidate is evaluated independently; if a segment
+/// overlaps both clips A and B, the resolver picks the first match in
+/// the iteration order, which the existing 4-tier cascade already
+/// disambiguates by score.
 fn clip_covers_segment(clip: &ClipEntry<'_>, seg: &TranscriptSegment) -> bool {
     let Some(range) = clip.source_range else {
         return true; // no range info; be permissive
     };
     let clip_start = range.0;
     let clip_end = range.0 + range.1;
-    seg.start_s >= clip_start && seg.start_s < clip_end
+    // Overlap test: NOT (seg ends before clip starts OR seg starts
+    // after clip ends).
+    !(seg.end_s <= clip_start || seg.start_s >= clip_end)
 }
 
 fn nearest_candidates_from_clips_and_sidecars(
@@ -729,5 +745,192 @@ mod tests {
         )
         .expect("sidecar search should resolve");
         assert_eq!(loc.child_index, 0);
+    }
+
+    /// Regression test for the bug found in the 44-min real-video
+    /// session: an `Insert Clip` op produces a clip whose source_range
+    /// is at editorially-rounded boundaries (e.g. 19.4s, 146s,
+    /// 742.3s), but whisper segments start mid-word at unrelated
+    /// timestamps (19.375s, 145.95s, 744.758s). The previous
+    /// `clip_covers_segment` used strict containment
+    /// (`seg.start_s >= clip_start && seg.start_s < clip_end`) — a
+    /// 25ms boundary mismatch was enough to fail the anchor lookup,
+    /// breaking every Insert→Trim flow on real footage.
+    ///
+    /// The fix replaces strict containment with overlap: if the
+    /// segment's text-time-window overlaps the clip's source_range
+    /// at all, that segment IS what the clip is about. Editorial
+    /// rounding shouldn't kill anchoring.
+    #[test]
+    fn whisper_anchor_resolves_when_segment_starts_just_before_clip() {
+        use awidat_proto::otio::{Clip, ExternalReference, MediaReference};
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path();
+
+        // Inserted clip at [19.4, 34.6] — round-ish editorial bounds.
+        let mut tl = Timeline::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut clip = Clip::empty("clip-0".to_string());
+        clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/ep.mp4"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(19.4 * 24.0, 24.0),
+            RationalTime::new((34.6 - 19.4) * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(clip));
+        tl.tracks.children.push(StackChild::Track(track));
+
+        // Whisper segment starts at 19.375s — 25ms BEFORE clip_start.
+        // Pre-fix `clip_covers_segment` would reject this; post-fix
+        // the overlap test accepts it because the segment ends at
+        // 26.5s, well inside the clip range.
+        let whisper_dir = project_root.join("index/whisper/raw");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        let body = serde_json::json!({
+            "indexer": "whisper",
+            "asset_id": "raw/ep.mp4",
+            "data": {
+                "language": "en",
+                "segments": [
+                    {"text": "Samsung Galaxy S. One of the most popular names in the world of smartphones.",
+                     "start_s": 19.375, "end_s": 26.5},
+                    {"text": "Interestingly, it's kind of a long name.",
+                     "start_s": 26.579, "end_s": 28.0},
+                ]
+            }
+        });
+        std::fs::write(
+            whisper_dir.join("ep.mp4.json"),
+            serde_json::to_vec_pretty(&body).unwrap(),
+        )
+        .unwrap();
+
+        let ctx = AnchorContext::with_project_root(project_root);
+        let loc = resolve(
+            &tl,
+            &Anchor::TranscriptSnippet {
+                text: "One of the most popular names".into(),
+            },
+            &ctx,
+        )
+        .expect(
+            "overlap-tolerant resolution should match a segment that \
+             starts just before the clip's editorially-rounded start",
+        );
+        assert_eq!(loc.child_index, 0);
+    }
+
+    /// Companion regression: a segment that ends just AFTER the
+    /// clip ends should still match. Same overlap semantics, other
+    /// boundary.
+    #[test]
+    fn whisper_anchor_resolves_when_segment_ends_just_after_clip() {
+        use awidat_proto::otio::{Clip, ExternalReference, MediaReference};
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path();
+
+        let mut tl = Timeline::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut clip = Clip::empty("clip-0".to_string());
+        clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/ep.mp4"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(742.0 * 24.0, 24.0),
+            RationalTime::new(9.0 * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(clip));
+        tl.tracks.children.push(StackChild::Track(track));
+
+        let whisper_dir = project_root.join("index/whisper/raw");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        let body = serde_json::json!({
+            "indexer": "whisper",
+            "asset_id": "raw/ep.mp4",
+            "data": {
+                "language": "en",
+                "segments": [
+                    // Segment starts inside the clip but ends 0.4s
+                    // after the clip's end. Overlaps; should match.
+                    {"text": "phone battery swelling, catching fire and burning up",
+                     "start_s": 750.0, "end_s": 751.4},
+                ]
+            }
+        });
+        std::fs::write(
+            whisper_dir.join("ep.mp4.json"),
+            serde_json::to_vec_pretty(&body).unwrap(),
+        )
+        .unwrap();
+
+        let ctx = AnchorContext::with_project_root(project_root);
+        let loc = resolve(
+            &tl,
+            &Anchor::TranscriptSnippet {
+                text: "battery swelling".into(),
+            },
+            &ctx,
+        )
+        .expect("overlap-tolerant resolution should match a segment that crosses the trailing boundary");
+        assert_eq!(loc.child_index, 0);
+    }
+
+    /// And the negation: a segment that ends BEFORE the clip starts
+    /// (genuinely belongs to a different clip / the previous source
+    /// region) must NOT match. This guards multi-clip-per-asset
+    /// disambiguation.
+    #[test]
+    fn whisper_anchor_rejects_segment_outside_clip_range() {
+        use awidat_proto::otio::{Clip, ExternalReference, MediaReference};
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path();
+
+        let mut tl = Timeline::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut clip = Clip::empty("clip-0".to_string());
+        clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/ep.mp4"));
+        // Clip is at [100, 110] — the segment below ends at 50.
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(100.0 * 24.0, 24.0),
+            RationalTime::new(10.0 * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(clip));
+        tl.tracks.children.push(StackChild::Track(track));
+
+        let whisper_dir = project_root.join("index/whisper/raw");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        let body = serde_json::json!({
+            "indexer": "whisper",
+            "asset_id": "raw/ep.mp4",
+            "data": {
+                "language": "en",
+                "segments": [
+                    {"text": "this happened way earlier in the episode",
+                     "start_s": 45.0, "end_s": 50.0},
+                ]
+            }
+        });
+        std::fs::write(
+            whisper_dir.join("ep.mp4.json"),
+            serde_json::to_vec_pretty(&body).unwrap(),
+        )
+        .unwrap();
+
+        let ctx = AnchorContext::with_project_root(project_root);
+        let err = resolve(
+            &tl,
+            &Anchor::TranscriptSnippet {
+                text: "way earlier".into(),
+            },
+            &ctx,
+        )
+        .unwrap_err();
+        // Should NOT match — the segment ends 50s before the clip
+        // even starts. Overlap test correctly rejects this.
+        assert!(
+            err.reason.contains("no clip found"),
+            "expected miss; got {:?}",
+            err.reason
+        );
     }
 }

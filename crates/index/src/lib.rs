@@ -330,11 +330,13 @@ pub async fn run(
         // Launch as many ready items as the cap permits.
         let slots = inflight_cap.saturating_sub(inflight.len());
         for key in ready.into_iter().take(slots) {
-            let server = server_by_name
-                .get(&key.0)
-                .expect("server present")
-                .clone()
-                .clone();
+            // Single deep clone of the McpServer. The previous
+            // `.clone().clone()` triggered clippy's
+            // `suspicious_double_ref_op` because the outer `.clone()`
+            // was operating on a `&&McpServer` (returned by `.get()`),
+            // producing another reference rather than a deep clone.
+            // `(*..).clone()` is the explicit form.
+            let server = (*server_by_name.get(&key.0).expect("server present")).clone();
             let (asset_path, asset_sha) = asset_index
                 .get(&key.1)
                 .cloned()
