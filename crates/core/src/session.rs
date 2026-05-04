@@ -173,7 +173,17 @@ impl Session {
         system_prompt: Option<String>,
         project_root: impl Into<PathBuf>,
     ) -> Self {
-        let (events_tx, _) = broadcast::channel(128);
+        // Channel must be large enough to absorb a turn's worth of
+        // streaming deltas without forcing slow subscribers (the TUI
+        // paint loop, in particular) to lag and drop events. A long
+        // structural-read prompt against a fully-indexed project can
+        // emit 200+ TextDeltas plus tool-call/tool-result pairs in
+        // bursts. 128 was the original budget — too tight on long
+        // turns, and lag-drops surface as silent gaps in the
+        // transcript. 4096 buys us ~100KB of resident memory in the
+        // worst case (most events are small) and gives the paint
+        // loop generous slack.
+        let (events_tx, _) = broadcast::channel(4096);
         let project_root = project_root.into();
 
         // Discover AWIDAT.md (user + project + local override) and

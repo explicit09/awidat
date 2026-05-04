@@ -764,7 +764,22 @@ fn spawn_session_pump(
                         return;
                     }
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    // Surface lag as a visible Error event rather
+                    // than silently `continue`. Silent drops were
+                    // the prime suspect for the "TUI silently went
+                    // unresponsive" report on the 44-min real-video
+                    // session: if the paint loop ever did fall behind
+                    // by enough to drop deltas, the user would see
+                    // a partial transcript and have no signal that
+                    // anything went wrong. Now they get a tracing
+                    // line + an inline error in the chat pane.
+                    tracing::warn!(dropped = n, "TUI session pump lagged; some events lost");
+                    let _ = tx.send(AppEvent::Session(SessionEvent::Error(format!(
+                        "TUI fell behind by {n} event(s); some streaming output may be missing. \
+                         Increase the broadcast buffer in session.rs if this persists."
+                    ))));
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             }
         }
