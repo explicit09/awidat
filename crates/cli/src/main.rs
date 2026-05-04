@@ -176,20 +176,27 @@ fn cmd_init(path: &std::path::Path) -> Result<()> {
     );
     println!("  - renders/, .awidat/");
     println!();
+    let cfg = awidat_config::Config::load(Some(path)).unwrap_or_default();
+    let indexer_count = cfg.indexers().count();
     println!("Next steps:");
     println!("  1. Drop source media under {}/raw/", path.display());
     println!(
-        "  2. Configure indexers — copy crates/config/EXAMPLE.toml to one of"
+        "  2. Run `awidat index {}` — uses {} bundled indexer(s).",
+        path.display(),
+        indexer_count
     );
-    println!(
-        "       ~/.config/awidat/config.toml          (global)"
-    );
+    println!("     Override or disable any default in:");
+    println!("       ~/.config/awidat/config.toml          (global)");
     println!(
         "       {}/.awidat/config.toml      (per-project)",
         path.display()
     );
-    println!("  3. Run `awidat index {}` to produce footage sidecars.", path.display());
-    println!("     Or `awidat validate {}` to inspect the project shape.", path.display());
+    println!(
+        "     Example overlay (turn off whisper for music-only assets):"
+    );
+    println!("       [[mcp.servers]]");
+    println!("       name = \"whisper\"");
+    println!("       enabled = false");
     Ok(())
 }
 

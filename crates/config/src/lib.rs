@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::trace;
 
+pub mod defaults;
+
 /// Errors loading or parsing config.
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -86,6 +88,17 @@ pub struct McpServer {
     /// indexers.
     #[serde(default = "McpServerKind::default")]
     pub kind: McpServerKind,
+    /// Whether this entry is active. Defaults to `true`. Setting it to
+    /// `false` in user config disables a default-bundled indexer
+    /// (e.g. `whisper` when the user has no HF_TOKEN and doesn't want
+    /// repeated diarization-init failures). Disabled entries are
+    /// skipped by the indexer dispatcher and the MCP host.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Server-kind discriminator. We don't dispatch on this in v1 — it's
@@ -108,9 +121,35 @@ impl McpServerKind {
 }
 
 impl Config {
-    /// Load global + project, layering project on top of global.
-    /// Either may be absent (returns its defaults).
+    /// Load: defaults → global → project. Each layer overlays the
+    /// previous via [`Self::overlay`].
+    ///
+    /// The defaults layer registers the 10 bundled indexer servers
+    /// (whisper, clip, face, etc.) so a freshly-init'd project works
+    /// with zero user config. User config becomes additive: add new
+    /// servers, override fields on a default server (e.g. swap
+    /// whisper-large for whisper-tiny), or set `enabled = false` to
+    /// turn one off. See [`defaults`].
     pub fn load(project_root: Option<&Path>) -> Result<Self, ConfigError> {
+        let mut merged = defaults::with_defaults();
+        if let Some(p) = global_config_path()?
+            && p.exists()
+        {
+            merged = merged.overlay(Self::load_file(&p)?);
+        }
+        if let Some(root) = project_root {
+            let project_path = project_config_path(root);
+            if project_path.exists() {
+                merged = merged.overlay(Self::load_file(&project_path)?);
+            }
+        }
+        Ok(merged)
+    }
+
+    /// Variant of [`Self::load`] that skips the bundled defaults.
+    /// Used by tests that want to assert against a clean baseline,
+    /// and by tooling that wants to print only user-supplied config.
+    pub fn load_without_defaults(project_root: Option<&Path>) -> Result<Self, ConfigError> {
         let mut merged = match global_config_path()? {
             Some(p) if p.exists() => Self::load_file(&p)?,
             _ => Self::default(),
@@ -118,8 +157,7 @@ impl Config {
         if let Some(root) = project_root {
             let project_path = project_config_path(root);
             if project_path.exists() {
-                let project = Self::load_file(&project_path)?;
-                merged = merged.overlay(project);
+                merged = merged.overlay(Self::load_file(&project_path)?);
             }
         }
         Ok(merged)
@@ -161,12 +199,12 @@ impl Config {
         self.mcp.servers.iter().find(|s| s.name == name)
     }
 
-    /// Filter to indexer-kinded servers in registration order.
+    /// Filter to enabled indexer-kinded servers in registration order.
     pub fn indexers(&self) -> impl Iterator<Item = &McpServer> {
         self.mcp
             .servers
             .iter()
-            .filter(|s| s.kind == McpServerKind::Indexer)
+            .filter(|s| s.kind == McpServerKind::Indexer && s.enabled)
     }
 }
 
@@ -234,6 +272,7 @@ WHISPER_MODEL = "small.en"
                         env: HashMap::new(),
                         cwd: None,
                         kind: McpServerKind::Indexer,
+                        enabled: true,
                     },
                     McpServer {
                         name: "scenedetect".into(),
@@ -242,6 +281,7 @@ WHISPER_MODEL = "small.en"
                         env: HashMap::new(),
                         cwd: None,
                         kind: McpServerKind::Indexer,
+                        enabled: true,
                     },
                 ],
             },
@@ -259,6 +299,7 @@ WHISPER_MODEL = "small.en"
                         env: project_env,
                         cwd: None,
                         kind: McpServerKind::Indexer,
+                        enabled: true,
                     },
                     // New entry, appended.
                     McpServer {
@@ -268,6 +309,7 @@ WHISPER_MODEL = "small.en"
                         env: HashMap::new(),
                         cwd: None,
                         kind: McpServerKind::Indexer,
+                        enabled: true,
                     },
                 ],
             },
@@ -284,14 +326,27 @@ WHISPER_MODEL = "small.en"
     }
 
     #[test]
-    fn load_with_no_files_returns_default() {
-        // No global, no project — Config::load() returns default.
+    fn load_with_no_files_returns_just_defaults() {
+        // No global, no project — Config::load() returns the
+        // bundled defaults (10 indexers).
         let c = Config::load(None).unwrap();
+        assert_eq!(c.mcp.servers.len(), 10);
+        assert!(c.find_server("whisper").is_some());
+        assert!(c.find_server("clip").is_some());
+    }
+
+    #[test]
+    fn load_without_defaults_with_no_files_returns_empty() {
+        // The escape hatch: skip defaults entirely.
+        let c = Config::load_without_defaults(None).unwrap();
         assert!(c.mcp.servers.is_empty());
     }
 
     #[test]
-    fn load_project_only() {
+    fn load_project_overrides_a_default_server() {
+        // The headline overlay behavior: a project config entry with
+        // matching name replaces the corresponding default. New names
+        // append to the merged list.
         let dir = tempfile::tempdir().unwrap();
         let cfg = project_config_path(dir.path());
         write(
@@ -299,13 +354,51 @@ WHISPER_MODEL = "small.en"
             r#"
 [[mcp.servers]]
 name = "whisper"
+command = "/custom/uv"
+args = ["run", "whisper-tiny"]
+
+[[mcp.servers]]
+name = "my-custom-tool"
 command = "uv"
-args = ["run", "whisper-mcp"]
+args = ["run", "custom-mcp"]
 "#,
         );
         let c = Config::load(Some(dir.path())).unwrap();
-        assert_eq!(c.mcp.servers.len(), 1);
-        assert_eq!(c.mcp.servers[0].name, "whisper");
+        // Originally 10 defaults; project added one new ("my-custom-tool").
+        assert_eq!(c.mcp.servers.len(), 11);
+        let whisper = c.find_server("whisper").unwrap();
+        // Project config replaced the default whisper command/args.
+        assert_eq!(whisper.command, "/custom/uv");
+        assert_eq!(whisper.args, vec!["run", "whisper-tiny"]);
+        assert!(c.find_server("my-custom-tool").is_some());
+    }
+
+    #[test]
+    fn project_can_disable_a_default_indexer() {
+        // The "I don't have HF_TOKEN" use case: turn off whisper
+        // without removing it from the registry. Disabled entries
+        // are filtered out of `indexers()`.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = project_config_path(dir.path());
+        write(
+            &cfg,
+            r#"
+[[mcp.servers]]
+name = "whisper"
+command = "/dev/null"
+enabled = false
+"#,
+        );
+        let c = Config::load(Some(dir.path())).unwrap();
+        let names: Vec<&str> = c.indexers().map(|s| s.name.as_str()).collect();
+        assert!(
+            !names.contains(&"whisper"),
+            "disabled whisper should not appear in indexers(); got {names:?}"
+        );
+        // But the entry itself is still present (find_server sees it),
+        // so it survives further overlays without re-adding from defaults.
+        assert!(c.find_server("whisper").is_some());
+        assert!(!c.find_server("whisper").unwrap().enabled);
     }
 
     #[test]
@@ -329,6 +422,7 @@ args = ["run", "whisper-mcp"]
                         env: HashMap::new(),
                         cwd: None,
                         kind: McpServerKind::Indexer,
+                        enabled: true,
                     },
                     McpServer {
                         name: "bash".into(),
@@ -337,6 +431,7 @@ args = ["run", "whisper-mcp"]
                         env: HashMap::new(),
                         cwd: None,
                         kind: McpServerKind::Tool,
+                        enabled: true,
                     },
                 ],
             },

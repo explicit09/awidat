@@ -109,6 +109,14 @@ impl McpHost {
         let host = Self::new(client_info);
         let mut map = host.inner.try_lock().expect("fresh host has no contention");
         for s in servers {
+            // Skip disabled entries so a `enabled = false` overlay
+            // makes the server invisible to tools, not just the
+            // indexer dispatcher. clip_search etc. then return a
+            // clean UnknownServer error rather than launching a
+            // stub command and timing out.
+            if !s.enabled {
+                continue;
+            }
             let cfg = server_config_from(s, project_root);
             map.insert(
                 s.name.clone(),
@@ -284,6 +292,7 @@ mod tests {
             env: HashMap::new(),
             cwd: None,
             kind: awidat_config::McpServerKind::Indexer,
+            enabled: true,
         };
         let host = McpHost::from_servers(
             std::slice::from_ref(&server),
@@ -302,6 +311,45 @@ mod tests {
     }
 
     #[test]
+    fn from_servers_skips_disabled_entries() {
+        // A `enabled = false` overlay must keep the server invisible
+        // to MCP-host calls — clip_search etc. should see UnknownServer
+        // rather than dutifully launching the disabled stub.
+        let disabled = McpServer {
+            name: "whisper".into(),
+            command: "/dev/null".into(),
+            args: vec![],
+            env: HashMap::new(),
+            cwd: None,
+            kind: awidat_config::McpServerKind::Indexer,
+            enabled: false,
+        };
+        let enabled = McpServer {
+            name: "clip".into(),
+            command: "uv".into(),
+            args: vec!["run".into()],
+            env: HashMap::new(),
+            cwd: None,
+            kind: awidat_config::McpServerKind::Indexer,
+            enabled: true,
+        };
+        let host = McpHost::from_servers(
+            &[disabled, enabled],
+            std::path::Path::new("/proj"),
+            ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            },
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert!(!runtime.block_on(host.has_server("whisper")));
+        assert!(runtime.block_on(host.has_server("clip")));
+    }
+
+    #[test]
     fn server_config_from_resolves_relative_cwd() {
         let server = McpServer {
             name: "x".into(),
@@ -310,6 +358,7 @@ mod tests {
             env: HashMap::new(),
             cwd: Some(std::path::PathBuf::from("python")),
             kind: awidat_config::McpServerKind::Indexer,
+            enabled: true,
         };
         let cfg = server_config_from(&server, std::path::Path::new("/proj"));
         assert_eq!(cfg.cwd, Some(std::path::PathBuf::from("/proj/python")));

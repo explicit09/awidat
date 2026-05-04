@@ -48,6 +48,7 @@ fn audio_energy_server(python_dir: &Path) -> McpServer {
         env: HashMap::new(),
         cwd: Some(python_dir.to_path_buf()),
         kind: McpServerKind::Indexer,
+                        enabled: true,
     }
 }
 
