@@ -13,12 +13,15 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tools::{
-    apply_edl::ApplyEdlTool, bash::BashTool, find_beat::FindBeatTool,
-    find_moment::FindMomentTool, inspect_clip::InspectClipTool,
+    apply_edl::ApplyEdlTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
+    clip_search::ClipSearchTool, find_beat::FindBeatTool,
+    find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
+    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
     poll_render::PollRenderTool, read_index::ReadIndexTool,
-    request_user_input::RequestUserInputTool, start_render::StartRenderTool,
-    update_plan::UpdatePlanTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
+    request_user_input::RequestUserInputTool, shot_summary::ShotSummaryTool,
+    start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
     view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
@@ -27,21 +30,32 @@ use tokio::sync::mpsc;
 
 const SYSTEM_PROMPT: &str = "\
 You are awidat, a terminal-first agent for editing long-form spoken \
-video. You have 15 tools, organized by purpose:\
-\n  - **Discovery / map**: view_episode (compact map of the project), \
-view_timeline, list_assets.\
+video. You have 20 tools, organized by purpose:\
+\n  - **Discovery / map**: view_episode (compact map of the project — \
+includes which vision indexers have run), view_timeline, list_assets.\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
 hooks, punchlines, CTAs, etc.), inspect_moment (drill into one beat \
 with surrounding transcript + dependencies). Prefer these over \
 find_moment when the user asks for editorial intent ('find the \
 funny part', 'what's the strongest hook') — find_beat surfaces \
 typed editorial decisions, not just text matches.\
+\n  - **Vision** (only useful when view_episode shows the matching \
+indexer ran): clip_search (free-text frame search — \"person \
+holding a phone\", \"dark room\"), shot_summary (visual structure \
+overview), broll_candidates (cutaway/B-roll hunting — wide/no-face \
++ steady + sharp), find_speaker_oncam (when is speaker X's face \
+visible — needs whisper diarization + face), find_eye_contact \
+(direct-address moments).\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index \
 (any indexer channel), inspect_clip (one clip's metadata), \
 view_frame (extract a frame at a timestamp).\
 \n  - **Editing**: apply_edl (commit edits — Trim, Untrim, Delete, \
 Split, Insert).\
-\n  - **Render**: start_render, poll_render.\
+\n  - **Render**: start_render, poll_render. To render the *edited \
+timeline* (what the user sees as 'the edit'), use scope='timeline' — \
+that walks the OTIO and concats every clip's source_range with \
+re-encode at boundaries. Use scope='preview'/'segment'/'full' only \
+when the user wants a raw asset dumped, not the edit.\
 \n  - **Plan / collab**: update_plan, request_user_input, bash. \
 \n\n\
 Mutating tools (apply_edl, start_render, bash) require user approval — \
@@ -122,6 +136,12 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(ViewEpisodeTool));
     registry.register(Arc::new(ViewFrameTool));
     registry.register(Arc::new(ViewTimelineTool));
+    // Vision-side tools (Day 6/7 indexers).
+    registry.register(Arc::new(BrollCandidatesTool));
+    registry.register(Arc::new(ClipSearchTool));
+    registry.register(Arc::new(FindEyeContactTool));
+    registry.register(Arc::new(FindSpeakerOncamTool));
+    registry.register(Arc::new(ShotSummaryTool));
 
     let (approval_tx, approval_rx) = mpsc::channel(8);
     let (user_input_tx, user_input_rx) = mpsc::channel(8);

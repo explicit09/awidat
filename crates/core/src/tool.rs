@@ -86,6 +86,14 @@ pub struct ToolContext {
     /// future work-spawning tools (week 6+) can recursively request
     /// approvals for sub-calls. `None` ⇒ loop defaults to allow.
     pub approval_tx: Option<mpsc::Sender<ApprovalRequest>>,
+    /// Session-scoped MCP host. Tools that need warm ML processes
+    /// (e.g. `clip_search` calling `clip-mcp`'s `query_text`) call
+    /// `mcp_host.call_tool(server, tool, args)`. The first call to any
+    /// given server in the session lazily spawns it; subsequent calls
+    /// reuse the warm subprocess. Empty host (no registered servers)
+    /// means MCP-backed tools will return `UnknownServer` errors —
+    /// pure-Rust tools are unaffected.
+    pub mcp_host: crate::mcp_host::McpHost,
 }
 
 /// One pending approval request emitted by the agent loop before it
@@ -303,6 +311,7 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
         }
     }
 

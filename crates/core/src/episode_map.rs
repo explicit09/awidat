@@ -72,6 +72,19 @@ pub fn render(project: &Project, project_root: &Path) -> String {
         }
     }
 
+    // Vision-indexer presence: lets the agent know which vision tools
+    // (clip_search, find_speaker_oncam, broll_candidates, etc.) will
+    // actually return data instead of "no index found." We only check
+    // directory existence; presence ≠ coverage, but it's enough signal
+    // for the agent to choose the right tool to try first.
+    let vision_indexers: Vec<&str> = ["clip", "face", "shot", "gaze", "frame-quality"]
+        .into_iter()
+        .filter(|name| project_root.join("index").join(name).is_dir())
+        .collect();
+    if !vision_indexers.is_empty() {
+        out.push_str(&format!("Vision: {}\n", vision_indexers.join(", ")));
+    }
+
     // Editorial state from the OTIO timeline itself: clip count,
     // total duration, and a derived "untrimmed | trimmed" flag.
     let (clip_count, total_dur_s, trimmed_count) = timeline_summary(project);
@@ -312,6 +325,32 @@ mod tests {
         let map = render(&project, dir.path());
         assert!(map.contains("Speakers: 2"));
         assert!(map.contains("dominant: host"));
+    }
+
+    #[test]
+    fn render_lists_vision_indexers_when_their_dirs_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dummy_project(dir.path(), 60.0);
+        // Just create the dirs; the indexer presence is what matters,
+        // not the sidecar contents (other tools handle the read).
+        for name in ["clip", "face", "shot"] {
+            fs::create_dir_all(dir.path().join("index").join(name)).unwrap();
+        }
+        // gaze + frame-quality dirs deliberately absent.
+        let map = render(&project, dir.path());
+        assert!(map.contains("Vision:"));
+        assert!(map.contains("clip"));
+        assert!(map.contains("face"));
+        assert!(map.contains("shot"));
+        assert!(!map.contains("gaze"));
+    }
+
+    #[test]
+    fn render_omits_vision_line_when_no_vision_indexers_ran() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dummy_project(dir.path(), 60.0);
+        let map = render(&project, dir.path());
+        assert!(!map.contains("Vision:"));
     }
 
     #[test]

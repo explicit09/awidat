@@ -126,6 +126,10 @@ fn ctx_at(root: &Path) -> ToolContext {
         job_manager: awidat_render::JobManager::new(),
 
         approval_tx: None,
+        mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+            name: "test".into(),
+            version: "0.0.0".into(),
+        }),
     }
 }
 

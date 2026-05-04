@@ -14,6 +14,7 @@ pub mod compact;
 pub mod edl;
 pub mod episode_map;
 pub mod error;
+pub mod mcp_host;
 pub mod session;
 pub mod tool;
 pub mod tools;

@@ -148,6 +148,11 @@ pub struct Session {
     /// the session via [`ApprovalDecision::AllowForSession`]. Future calls
     /// to a name in this set skip the approval prompt.
     approved_for_session: Arc<Mutex<HashSet<String>>>,
+    /// Session-scoped MCP host. Tools that need warm ML processes
+    /// (clip_search → clip-mcp's query_text) call into this rather
+    /// than spawning per-call. Lazy: a registered server is only
+    /// launched on first use, and lives for the rest of the session.
+    mcp_host: crate::mcp_host::McpHost,
 }
 
 impl Session {
@@ -214,6 +219,30 @@ impl Session {
             Some(sections.join("\n\n"))
         };
 
+        // Build the session-scoped MCP host. Reads `[[mcp.servers]]`
+        // from the merged user+project config; servers are registered
+        // but NOT spawned — first tool call into a server lazily
+        // launches it. If config load fails (malformed TOML, etc.) we
+        // fall back to an empty host: vision tools that need a server
+        // will return UnknownServer, and pure-Rust tools keep working.
+        let mcp_host = match awidat_config::Config::load(Some(&project_root)) {
+            Ok(cfg) => crate::mcp_host::McpHost::from_servers(
+                &cfg.mcp.servers,
+                &project_root,
+                awidat_mcp::ClientInfo {
+                    name: "awidat".into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                },
+            ),
+            Err(e) => {
+                tracing::warn!(error = %e, "config load failed; MCP host will be empty");
+                crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                    name: "awidat".into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                })
+            }
+        };
+
         Self {
             client,
             registry,
@@ -226,6 +255,7 @@ impl Session {
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
             approved_for_session: Arc::new(Mutex::new(HashSet::new())),
+            mcp_host,
         }
     }
 
@@ -659,6 +689,7 @@ impl Session {
             user_input_tx: self.user_input_tx.clone(),
             job_manager: self.job_manager.clone(),
             approval_tx: self.approval_tx.clone(),
+            mcp_host: self.mcp_host.clone(),
         };
 
         let result = tokio::select! {
