@@ -46,11 +46,35 @@ SCHEMA_VERSION = "1"
 WINDOW_SENTENCES = 5
 
 # Boundary threshold: cosine-similarity drops below this between adjacent
-# windows mark a boundary. Tuned for spoken-word; tighter cuts on tighter
-# threshold.
+# windows mark a boundary.
+#
+# Empirical investigation on the 44-min Samsung Galaxy retrospective:
+# the cosine sim max across ALL adjacent 5-sentence windows in that
+# transcript was 0.416. That means EVERY window pair is below 0.55 —
+# the threshold doesn't filter, it just lets the WINDOW_SENTENCES
+# suppression cap the boundary rate. Spoken-word transcripts have low
+# inter-window coherence by nature; an absolute-threshold approach
+# can't distinguish "real topic shift" from "speaker normal cadence."
+#
+# The right fix is local-minimum detection on the sim curve — boundaries
+# are valleys relative to their neighbors, not absolute lows — but
+# that's a real refactor. Tracked as #122. For now we keep the original
+# 0.55 threshold which is essentially "fire on every position the
+# WINDOW_SENTENCES suppression allows" on this transcript shape.
 BOUNDARY_THRESHOLD = 0.55
 
 # Minimum segment length. Short ones get merged with the neighbor.
+#
+# CAVEAT: 30s here is intentionally low because the current merge
+# logic in `_build_topics` cascades — short chunks fold into the
+# previous one, lengthening it, which doesn't help the NEXT chunk
+# measure against the floor. Empirical: on the 44-min Samsung video,
+# bumping floor 30→60 collapsed 33 topics down to 1 (every chunk is
+# ~30-60s, so every chunk fails a floor of 60+, every chunk merges
+# into the previous, runaway). Real fix is direction-aware merging
+# (merge with the more-similar neighbor, not always previous),
+# tracked as #122. Until that lands, raising this floor without
+# fixing the algorithm makes the output worse, not better.
 MIN_SEGMENT_S = 30.0
 
 

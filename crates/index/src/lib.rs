@@ -294,10 +294,24 @@ pub async fn run(
             for dep_name in &server.depends_on {
                 if !server_by_name.contains_key(dep_name) {
                     // Dep wasn't included in this run (e.g. user
-                    // passed --indexer topic but not --indexer
-                    // whisper). Treat as a failed dep so we skip
-                    // the dependent with a clear message.
-                    failed_deps.push(dep_name.clone());
+                    // passed `--indexer topic` but not `--indexer
+                    // whisper`). Check whether the dep's sidecar is
+                    // already on disk for this asset — if it is,
+                    // treat the dep as satisfied. This is the
+                    // common case for re-running a single dependent
+                    // indexer to re-tune its output (e.g. iterating
+                    // on topic-mcp thresholds without paying for a
+                    // 10-minute whisper re-run). Only when the
+                    // sidecar truly doesn't exist do we mark the
+                    // dependent as dep-blocked.
+                    match sidecar_path_in_index_dir(&index_dir, dep_name, &key.1) {
+                        Ok(p) if p.exists() => {
+                            // Sidecar exists; producer satisfied.
+                        }
+                        _ => {
+                            failed_deps.push(dep_name.clone());
+                        }
+                    }
                     continue;
                 }
                 let dep_key = (dep_name.clone(), key.1.clone());
