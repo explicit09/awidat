@@ -22,6 +22,7 @@ sha2 = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "process"] }
 tokio-util = { workspace = true }
 reqwest = { workspace = true }

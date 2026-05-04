@@ -12,10 +12,12 @@ pub mod anthropic;
 pub mod awidat_md;
 pub mod compact;
 pub mod edl;
+pub mod context;
 pub mod episode_map;
 pub mod error;
 pub mod mcp_host;
 pub mod session;
+pub mod skills;
 pub mod tool;
 pub mod tools;
 

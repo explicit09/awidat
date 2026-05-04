@@ -14,6 +14,7 @@ pub mod find_speaker_oncam;
 pub mod inspect_clip;
 pub mod inspect_moment;
 pub mod list_assets;
+pub mod load_skill;
 pub mod poll_render;
 pub mod read_index;
 pub mod request_user_input;

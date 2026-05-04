@@ -16,11 +16,11 @@ use awidat_core::tools::{
     find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
-    poll_render::PollRenderTool, read_index::ReadIndexTool,
-    request_user_input::RequestUserInputTool, shot_summary::ShotSummaryTool,
-    start_render::StartRenderTool, update_plan::UpdatePlanTool,
-    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
-    view_timeline::ViewTimelineTool,
+    load_skill::LoadSkillTool, poll_render::PollRenderTool,
+    read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
+    shot_summary::ShotSummaryTool, start_render::StartRenderTool,
+    update_plan::UpdatePlanTool, view_episode::ViewEpisodeTool,
+    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
 use tokio_util::sync::CancellationToken;
@@ -28,7 +28,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 const SYSTEM_PROMPT: &str = "\
 You are awidat, a terminal-first agent for editing long-form spoken \
-video. You have 20 tools, organized by purpose:\
+video. You have 21 tools, organized by purpose:\
 \n  - **Discovery / map**: view_episode (compact map of the project — \
 includes which vision indexers have run), view_timeline, list_assets.\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
@@ -44,6 +44,10 @@ inspect_clip, view_frame.\
 \n  - **Render**: start_render, poll_render. Use scope='timeline' to \
 render the edited timeline; scope='preview' renders the raw asset.\
 \n  - **Plan / collab**: update_plan, request_user_input, bash.\
+\n  - **Skills**: load_skill — load a named editorial workflow's \
+full playbook (style + step-by-step). When the user's request maps \
+to a skill in the catalog below the system prompt, call \
+load_skill(name=...) BEFORE the work.\
 \n\n\
 Be concise. Commit edits via apply_edl directly when you're confident.\
 ";
@@ -96,6 +100,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));
     registry.register(Arc::new(ShotSummaryTool));
+    registry.register(Arc::new(LoadSkillTool));
 
     let session = Arc::new(Session::new(
         client,

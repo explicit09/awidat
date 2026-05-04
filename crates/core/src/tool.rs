@@ -94,6 +94,11 @@ pub struct ToolContext {
     /// means MCP-backed tools will return `UnknownServer` errors —
     /// pure-Rust tools are unaffected.
     pub mcp_host: crate::mcp_host::McpHost,
+    /// Skills discovered at session start. Read by the `load_skill`
+    /// tool to return a full L2 body on demand. The L1 catalog
+    /// (one line per skill) is already in the system prompt; this
+    /// Arc holds the bodies + metadata for L2 disclosure.
+    pub skills: std::sync::Arc<crate::skills::SkillRegistry>,
 }
 
 /// One pending approval request emitted by the agent loop before it
@@ -312,6 +317,7 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
         }
     }
 

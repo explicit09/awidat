@@ -133,6 +133,7 @@ mod tests {
 
             approval_tx: None,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
         }
     }
 
@@ -207,6 +208,7 @@ mod tests {
             job_manager: manager,
             approval_tx: None,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
         };
 
         // Poll up to 15s for terminal state.

@@ -100,6 +100,76 @@ fn walk_up_for_python(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Resolve the bundled-skills directory. Mirrors `python_root` —
+/// env override → dev walk-up → documented install paths. Returns
+/// `None` only when every fallback misses; the skill loader treats
+/// that as "no bundled skills" which is fine (user-installed skills
+/// still load via `~/.config/awidat/skills/`).
+///
+/// The dev-tree marker is `<repo>/skills/.bundled-marker` (an empty
+/// file we ship to disambiguate the bundled tree from any random
+/// directory called `skills/`).
+pub fn skills_root() -> Option<PathBuf> {
+    if let Ok(env) = std::env::var("AWIDAT_SKILLS_ROOT") {
+        return Some(PathBuf::from(env));
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(parent) = exe.parent()
+        && let Some(found) = walk_up_for_skills(parent)
+    {
+        return Some(found);
+    }
+    if let Ok(cwd) = std::env::current_dir()
+        && let Some(found) = walk_up_for_skills(&cwd)
+    {
+        return Some(found);
+    }
+    for candidate in [
+        "/opt/homebrew/share/awidat/skills",
+        "/usr/local/share/awidat/skills",
+    ] {
+        let p = PathBuf::from(candidate);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        // Tarball installs land bundled skills under
+        // `~/.local/share/awidat/current/share/awidat/skills` (per
+        // the layout written by dist/install.sh: bundled assets
+        // live next to the binary under `share/awidat/`).
+        for rel in [
+            ".local/share/awidat/current/share/awidat/skills",
+            ".local/share/awidat/skills",
+        ] {
+            let p = home.join(rel);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn walk_up_for_skills(start: &Path) -> Option<PathBuf> {
+    let mut cur: Option<&Path> = Some(start);
+    while let Some(dir) = cur {
+        let candidate = dir.join("skills");
+        if candidate.join(".bundled-marker").exists() {
+            return Some(candidate);
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+/// User-scoped skills dir: `~/.config/awidat/skills/`. Always
+/// resolved (even when it doesn't exist yet) so user can drop
+/// folders in and they'll be discovered next session.
+pub fn user_skills_root() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("awidat").join("skills"))
+}
+
 /// Resolve the `uv` executable path. Returns the absolute path when
 /// findable; falls back to the literal `"uv"` (assumes PATH).
 pub fn uv_command() -> String {

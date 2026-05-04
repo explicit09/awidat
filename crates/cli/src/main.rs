@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 mod chat_cmd;
 mod index_cmd;
 mod new_cmd;
+mod skills_cmd;
 mod tui_cmd;
 mod upgrade_cmd;
 
@@ -118,6 +119,12 @@ enum Command {
         #[arg(default_value = "anthropic_api_key")]
         account: String,
     },
+    /// List or invoke editorial skills (named workflows).
+    Skills {
+        /// What to do.
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
     /// Re-run the installer to upgrade in place. Without `--from`,
     /// fetches from AWIDAT_RELEASE_BASE env or the canonical GitHub
     /// Releases URL. Atomic-safe — never overwrites the running
@@ -138,6 +145,25 @@ enum Command {
     },
     /// Print the version of the awidat binary.
     Version,
+}
+
+/// Sub-action for `awidat skills`.
+#[derive(Subcommand, Debug)]
+enum SkillsAction {
+    /// List installed skills (bundled + user-installed).
+    List,
+    /// Open the TUI with a pre-staged "use the <name> skill" first turn.
+    /// The agent calls `load_skill(name=...)` itself on its first
+    /// response to fetch the playbook.
+    Run {
+        /// Skill name (must match an entry in `awidat skills list`).
+        name: String,
+        /// Project directory.
+        project: PathBuf,
+        /// Override the default model id.
+        #[arg(long)]
+        model: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -169,6 +195,18 @@ fn main() -> ExitCode {
         Command::Chat { path, model } => chat_cmd::run(&path, model.as_deref()),
         Command::Tui { path, model } => tui_cmd::run(&path, model.as_deref()),
         Command::SecretsSet { account } => cmd_secrets_set(&account),
+        Command::Skills { action } => match action {
+            SkillsAction::List => skills_cmd::list(skills_cmd::ListArgs),
+            SkillsAction::Run {
+                name,
+                project,
+                model,
+            } => skills_cmd::run(skills_cmd::RunArgs {
+                name,
+                project,
+                model,
+            }),
+        },
         Command::Upgrade {
             from,
             check,

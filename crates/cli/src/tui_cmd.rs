@@ -18,11 +18,11 @@ use awidat_core::tools::{
     find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
-    poll_render::PollRenderTool, read_index::ReadIndexTool,
-    request_user_input::RequestUserInputTool, shot_summary::ShotSummaryTool,
-    start_render::StartRenderTool, update_plan::UpdatePlanTool,
-    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
-    view_timeline::ViewTimelineTool,
+    load_skill::LoadSkillTool, poll_render::PollRenderTool,
+    read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
+    shot_summary::ShotSummaryTool, start_render::StartRenderTool,
+    update_plan::UpdatePlanTool, view_episode::ViewEpisodeTool,
+    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use awidat_tui::{App, AppConfig};
@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 
 const SYSTEM_PROMPT: &str = "\
 You are awidat, a terminal-first agent for editing long-form spoken \
-video. You have 20 tools, organized by purpose:\
+video. You have 21 tools, organized by purpose:\
 \n  - **Discovery / map**: view_episode (compact map of the project — \
 includes which vision indexers have run), view_timeline, list_assets.\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
@@ -57,6 +57,14 @@ that walks the OTIO and concats every clip's source_range with \
 re-encode at boundaries. Use scope='preview'/'segment'/'full' only \
 when the user wants a raw asset dumped, not the edit.\
 \n  - **Plan / collab**: update_plan, request_user_input, bash. \
+\n  - **Skills**: load_skill — load a named editorial workflow's full \
+playbook into the current turn. Check the 'Editorial skills' section \
+below the system prompt for the catalog of skill names + one-line \
+descriptions; if the user's request maps to one (e.g. \"tighten this \
+interview\" → interview-tightener), call load_skill(name=...) BEFORE \
+starting the work. The skill body has the editorial style + \
+step-by-step playbook; following it produces better cuts than \
+improvising.\
 \n\n\
 Mutating tools (apply_edl, start_render, bash) require user approval — \
 the UI shows a modal and the user picks Allow / Allow-for-Session / \
@@ -97,21 +105,36 @@ Be concise. Commit edits via apply_edl directly when you're confident.\
 ";
 
 pub fn run(project_root: &Path, model_override: Option<&str>) -> Result<()> {
+    run_with_initial_prompt(project_root, model_override, None)
+}
+
+/// Variant that pre-fills the composer with `initial_prompt`. Used
+/// by `awidat skills run <name>` to stage a first-turn message
+/// asking the agent to use a specific skill. The user can edit
+/// the prompt or hit enter to submit it.
+pub fn run_with_initial_prompt(
+    project_root: &Path,
+    model_override: Option<&str>,
+    initial_prompt: Option<String>,
+) -> Result<()> {
     if !project_root.is_dir() {
         return Err(anyhow!(
             "project root '{}' is not a directory",
             project_root.display()
         ));
     }
-
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to build tokio runtime")?;
-    runtime.block_on(run_async(project_root, model_override))
+    runtime.block_on(run_async(project_root, model_override, initial_prompt))
 }
 
-async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<()> {
+async fn run_async(
+    project_root: &Path,
+    model_override: Option<&str>,
+    initial_prompt: Option<String>,
+) -> Result<()> {
     let model = model_override.unwrap_or(models::SONNET).to_string();
     let client = Client::from_env_or_keychain(ClientConfig::default()).map_err(|e| {
         anyhow!(
@@ -142,6 +165,8 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));
     registry.register(Arc::new(ShotSummaryTool));
+    // Skills (Week 6).
+    registry.register(Arc::new(LoadSkillTool));
 
     let (approval_tx, approval_rx) = mpsc::channel(8);
     let (user_input_tx, user_input_rx) = mpsc::channel(8);
@@ -162,6 +187,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
         session: session.clone(),
         approval_rx,
         user_input_rx: Some(user_input_rx),
+        initial_prompt,
     };
     let app = App::new(&cfg);
     app.run(cfg).await

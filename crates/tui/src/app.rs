@@ -52,6 +52,11 @@ pub struct AppConfig {
     /// Receiver for user-input requests (`request_user_input` tool).
     /// Optional — None disables that tool.
     pub user_input_rx: Option<mpsc::Receiver<UserInputRequest>>,
+    /// Optional pre-filled first user turn. When set, the composer
+    /// starts with this text + the cursor at the end; the user can
+    /// edit it or hit enter to submit. Used by `awidat skills run
+    /// <name>` to stage a "use the X skill" prompt.
+    pub initial_prompt: Option<String>,
 }
 
 /// The TUI app.
@@ -99,7 +104,10 @@ impl App {
                 .to_string(),
             chat: Chat::new(),
             timeline: Timeline::new(&project_root),
-            composer: Composer::new("ask awidat anything…"),
+            composer: match cfg.initial_prompt.as_deref() {
+                Some(text) => Composer::with_text("ask awidat anything…", text),
+                None => Composer::new("ask awidat anything…"),
+            },
             modal: None,
             pending_user_input: None,
             turn_cancel: None,

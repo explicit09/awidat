@@ -153,6 +153,11 @@ pub struct Session {
     /// than spawning per-call. Lazy: a registered server is only
     /// launched on first use, and lives for the rest of the session.
     mcp_host: crate::mcp_host::McpHost,
+    /// Skills discovered at session start. The L1 catalog (one
+    /// line per skill) is already in `system_prompt`; this Arc is
+    /// surfaced through `ToolContext` so the `load_skill` tool can
+    /// retrieve a skill's full L2 body on demand.
+    skills: Arc<crate::skills::SkillRegistry>,
 }
 
 impl Session {
@@ -210,9 +215,28 @@ impl Session {
             Err(_) => None,
         };
 
+        // Discover skills from the bundled tree + user config dir.
+        // The L1 catalog is NOT in the static system prompt — it's
+        // emitted per-turn as a `<skills_instructions>`-tagged
+        // fragment via `crate::context::AvailableSkillsFragment`,
+        // which keeps tier-1 cache stable when users install new
+        // skills mid-session and lets the compaction pass identify
+        // injected catalog blocks via the marker tags.
+        let bundled_skills = awidat_config::defaults::skills_root();
+        let user_skills = awidat_config::defaults::user_skills_root();
+        let (skill_registry, skill_errors) = crate::skills::SkillRegistry::discover(
+            bundled_skills.as_deref(),
+            user_skills.as_deref(),
+        );
+        for err in &skill_errors {
+            tracing::warn!(error = %err, "failed to load skill");
+        }
+        let skill_registry = Arc::new(skill_registry);
+
         // Compose the final system prompt: base prompt → episode map
-        // → AWIDAT.md. Both extras stay in the tier-1 cache prefix so
-        // the cost is paid once per session, not per turn.
+        // → AWIDAT.md. All extras stay in the tier-1 cache prefix so
+        // the cost is paid once per session. Skills catalog is per-
+        // turn (see above).
         let mut sections: Vec<String> = Vec::new();
         if let Some(base) = system_prompt {
             sections.push(base);
@@ -266,6 +290,7 @@ impl Session {
             approval_tx: None,
             approved_for_session: Arc::new(Mutex::new(HashSet::new())),
             mcp_host,
+            skills: skill_registry,
         }
     }
 
@@ -379,7 +404,16 @@ impl Session {
             let mut history_snapshot = self.history.lock().await.clone();
             apply_moving_cache_breakpoint(&mut history_snapshot);
 
-            let mut req = MessagesRequest::new(self.model.clone(), history_snapshot)
+            // Prepend the L1 skills catalog as a tagged user-role
+            // fragment for THIS turn. Stays out of self.history so it
+            // doesn't accumulate; lives in the per-turn cache tier so
+            // tier-1 (system + tools) survives skill installs. Empty
+            // registry → no fragment emitted.
+            let history_with_context = inject_per_turn_fragments(
+                &self.skills,
+                history_snapshot,
+            );
+            let mut req = MessagesRequest::new(self.model.clone(), history_with_context)
                 .with_max_tokens(4096);
             if let Some(sys) = &self.system_prompt {
                 req = req.with_system_cached(sys.clone());
@@ -422,9 +456,16 @@ impl Session {
                                 .to_string(),
                         ));
                         // Update the in-flight request with the new
-                        // history before sampling.
+                        // history before sampling. Re-inject the
+                        // per-turn skills fragment too — compaction
+                        // doesn't preserve it (the fragment is per-
+                        // turn, not part of history).
                         let mut new_history = snapshot;
                         apply_moving_cache_breakpoint(&mut new_history);
+                        let new_history = inject_per_turn_fragments(
+                            &self.skills,
+                            new_history,
+                        );
                         req = MessagesRequest::new(self.model.clone(), new_history)
                             .with_max_tokens(4096);
                         if let Some(sys) = &self.system_prompt {
@@ -700,6 +741,7 @@ impl Session {
             job_manager: self.job_manager.clone(),
             approval_tx: self.approval_tx.clone(),
             mcp_host: self.mcp_host.clone(),
+            skills: self.skills.clone(),
         };
 
         let result = tokio::select! {
@@ -837,6 +879,27 @@ fn apply_moving_cache_breakpoint(messages: &mut [Message]) {
     if let Some(latest_user) = messages.iter_mut().rev().find(|m| m.role == Role::User) {
         latest_user.set_cache_breakpoint();
     }
+}
+
+/// Build the per-turn message list: prepend any contextual fragments
+/// (e.g. the L1 skills catalog) to the persisted history. The result
+/// is what we hand the API; `self.history` stays clean so fragments
+/// don't accumulate session-over-session.
+///
+/// Today's only fragment is the skills catalog. Future-us can add
+/// more (timeline-state delta, recent-edits log) by extending this
+/// function — it's the single splice point for per-turn context.
+fn inject_per_turn_fragments(
+    skills: &crate::skills::SkillRegistry,
+    history: Vec<Message>,
+) -> Vec<Message> {
+    use crate::context::ContextualUserFragment;
+    let mut out = Vec::with_capacity(history.len() + 1);
+    if let Some(frag) = skills.l1_fragment() {
+        out.push(frag.into_message());
+    }
+    out.extend(history);
+    out
 }
 
 /// One in-progress tool call accumulating during the stream.

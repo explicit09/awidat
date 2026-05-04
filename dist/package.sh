@@ -126,6 +126,19 @@ fi
 
 # 4. Bundled installer copy + version stamp.
 cp "$ROOT/dist/install.sh" "$stage/share/awidat/install.sh"
+
+# Bundled skills — ship the SKILL.md + scripts/ trees alongside the
+# binary. defaults::skills_root() resolves to <install>/share/awidat/
+# skills/ at runtime, so we land them under that exact path.
+if [ -d "$ROOT/skills" ]; then
+  echo "[package] copying bundled skills"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --exclude '__pycache__/' "$ROOT/skills/" "$stage/share/awidat/skills/"
+  else
+    cp -R "$ROOT/skills/." "$stage/share/awidat/skills/"
+    find "$stage/share/awidat/skills" -type d -name '__pycache__' -prune -exec rm -rf {} +
+  fi
+fi
 # VERSION file: one line each for cargo version, build timestamp,
 # git commit (when available). Single-purpose, machine-friendly —
 # `awidat upgrade --check` parses just the first line.

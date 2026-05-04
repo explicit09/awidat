@@ -130,6 +130,7 @@ fn ctx_at(root: &Path) -> ToolContext {
             name: "test".into(),
             version: "0.0.0".into(),
         }),
+        skills: std::sync::Arc::new(awidat_core::skills::SkillRegistry::default()),
     }
 }
 

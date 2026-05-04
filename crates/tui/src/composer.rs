@@ -37,6 +37,20 @@ impl Composer {
         }
     }
 
+    /// Build a composer pre-filled with `initial`. Used by
+    /// `awidat skills run <name>` to stage the first user turn.
+    /// Cursor is placed at the end so the user can edit or just
+    /// hit enter to submit.
+    pub fn with_text(placeholder: impl Into<String>, initial: impl Into<String>) -> Self {
+        let text: String = initial.into();
+        let cursor = text.chars().count();
+        Self {
+            text,
+            cursor,
+            placeholder: placeholder.into(),
+        }
+    }
+
     /// Current input.
     pub fn text(&self) -> &str {
         &self.text
