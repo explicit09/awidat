@@ -30,6 +30,7 @@ pub mod composer;
 pub mod custom_terminal;
 pub mod event;
 pub mod insert_history;
+pub mod project_insights;
 pub mod terminal_probe;
 pub mod timeline;
 

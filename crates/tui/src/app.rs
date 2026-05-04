@@ -74,6 +74,14 @@ pub struct App {
     /// Keyed on call_id so out-of-order or interleaved tool calls don't
     /// corrupt the snapshot.
     pending_apply_edl_snapshot: Option<(String, Vec<crate::timeline::Row>)>,
+    /// What we know about the project's indexer state at session
+    /// start. Read once in `App::new`; only the welcome card consumes
+    /// it (and the welcome card only renders before any prompt is
+    /// submitted), so a fixed-at-startup snapshot is fine. Re-running
+    /// indexers via shellout from inside the TUI doesn't refresh this
+    /// — by then the user has been past the welcome screen for a
+    /// while anyway.
+    insights: crate::project_insights::ProjectInsights,
     quit: bool,
 }
 
@@ -81,6 +89,7 @@ impl App {
     /// Build a fresh app from the config.
     pub fn new(cfg: &AppConfig) -> Self {
         let project_root = cfg.session.project_root().to_path_buf();
+        let insights = crate::project_insights::ProjectInsights::gather(&project_root);
         Self {
             session: cfg.session.clone(),
             project_label: project_root
@@ -96,6 +105,7 @@ impl App {
             turn_cancel: None,
             turn_task: None,
             pending_apply_edl_snapshot: None,
+            insights,
             quit: false,
         }
     }
@@ -356,11 +366,16 @@ impl App {
         let card_y = area.y + top_gutter(area);
         let available_width = area.right().saturating_sub(card_x + 1);
         let card_width = available_width.min(96).max(44);
+        // Card height = 2 (border) + content rows. Welcome card now
+        // shows 5 rows per column: title, status, project, tools,
+        // indexed-state. The right column adds an editorial-moments
+        // summary when that index has run, otherwise mirrors with a
+        // coachmark suggestion that exercises the live data.
         let card = Rect {
             x: card_x.min(area.right().saturating_sub(1)),
             y: card_y,
             width: card_width,
-            height: 8,
+            height: 9,
         };
 
         let card_block = Block::default()
@@ -379,6 +394,26 @@ impl App {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(32), Constraint::Min(20)])
             .split(inner);
+
+        // Left column: identity + status + indexed-state summary.
+        // The "indexed:" line is the headline addition — tells the
+        // user at a glance what the agent can answer questions about,
+        // without having to call view_episode first.
+        let indexed_line = match self.insights.welcome_indexers_line() {
+            Some(line) => Line::from(vec![
+                Span::raw("  "),
+                Span::styled("indexed: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(line, Style::default().fg(Color::Green)),
+            ]),
+            None => Line::from(vec![
+                Span::raw("  "),
+                Span::styled("indexed: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "(none yet — run `awidat index`)",
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]),
+        };
         f.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
@@ -412,9 +447,29 @@ impl App {
                         Style::default().fg(Color::Cyan),
                     ),
                 ]),
+                indexed_line,
             ]),
             columns[0],
         );
+
+        // Right column: editorial entry-points. The "moments:" line
+        // surfaces the editorial-moments roll-up when present —
+        // counts of hooks/punchlines/etc. — so the user knows
+        // immediately what's worth asking about. When the moments
+        // index hasn't run, we show a coachmark instead.
+        let moments_line = match self.insights.welcome_moments_line() {
+            Some(line) => Line::from(vec![
+                Span::styled("moments ", Style::default().fg(Color::DarkGray)),
+                Span::styled(line, Style::default().fg(Color::Cyan)),
+            ]),
+            None => Line::from(vec![
+                Span::styled("moments ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "(run editorial-moments indexer to populate)",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]),
+        };
         f.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![Span::styled(
@@ -439,17 +494,18 @@ impl App {
                         Style::default().fg(Color::Gray),
                     ),
                 ]),
+                moments_line,
                 Line::from(vec![
                     Span::styled("try ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
-                        "delete the awkward pause after the intro",
+                        "find the strongest hooks and compose a 30s reel",
                         Style::default().fg(Color::Gray),
                     ),
                 ]),
                 Line::from(vec![
                     Span::styled("or  ", Style::default().fg(Color::DarkGray)),
                     Span::styled(
-                        "find the strongest quote and render a preview",
+                        "show frames where someone is holding a phone",
                         Style::default().fg(Color::Gray),
                     ),
                 ]),
@@ -865,6 +921,7 @@ mod tests {
             turn_cancel: None,
             turn_task: None,
             pending_apply_edl_snapshot: None,
+            insights: crate::project_insights::ProjectInsights::gather(&project_root),
             quit: false,
         }
     }
