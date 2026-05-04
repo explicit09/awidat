@@ -27,6 +27,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 pub mod scenarios;
+pub mod stress;
 
 /// Outcome of one scenario run.
 #[derive(Debug, Clone)]

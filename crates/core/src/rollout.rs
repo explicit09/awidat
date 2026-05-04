@@ -111,9 +111,19 @@ enum WriterCmd {
 
 /// Append-only session recorder. Cheap to clone — clones share the same
 /// background writer task via the channel.
+///
+/// Uses an UNBOUNDED mpsc channel intentionally. A bounded channel
+/// caused dropped messages under sustained load: a real session
+/// chains 50+ tool calls per turn, faster than the writer task can
+/// flush 5KB JSONL lines to disk. With a bounded channel, `try_send`
+/// failures silently lost ~95% of messages on a 5K-message stress
+/// load (caught by `eval/src/stress.rs::large_rollout_resume`). The
+/// memory cost of unbounded is paid by the conversation history we
+/// already keep in `Vec<Message>` elsewhere — so the queue's worst
+/// case is the same as already-resident memory.
 #[derive(Clone)]
 pub struct Recorder {
-    tx: mpsc::Sender<WriterCmd>,
+    tx: mpsc::UnboundedSender<WriterCmd>,
     path: Arc<PathBuf>,
     meta: Arc<SessionMeta>,
     /// Held so the writer task lives at least as long as any clone. The
@@ -156,7 +166,7 @@ impl Recorder {
         // before we return a Recorder the caller will trust.
         write_line(&mut file, &RolloutItem::SessionMeta(meta.clone()))?;
 
-        let (tx, rx) = mpsc::channel::<WriterCmd>(256);
+        let (tx, rx) = mpsc::unbounded_channel::<WriterCmd>();
         let task = tokio::spawn(writer_loop(rx, file, path.clone()));
 
         Ok(Self {
@@ -327,8 +337,11 @@ impl Recorder {
     }
 
     fn send(&self, cmd: WriterCmd) {
-        if let Err(e) = self.tx.try_send(cmd) {
-            warn!(error = %e, "rollout: writer channel full or closed; dropping item");
+        // Unbounded channel — only fails when the receiver has been
+        // dropped (writer task exited). In that case logging is over;
+        // warn once but don't try to recover.
+        if let Err(e) = self.tx.send(cmd) {
+            warn!(error = %e, "rollout: writer task is gone; dropping item");
         }
     }
 
@@ -336,7 +349,7 @@ impl Recorder {
     /// log on disk reflects the full session.
     pub async fn flush(&self) -> std::io::Result<()> {
         let (ack, rx) = oneshot::channel();
-        if self.tx.send(WriterCmd::Flush(ack)).await.is_err() {
+        if self.tx.send(WriterCmd::Flush(ack)).is_err() {
             return Ok(()); // writer already gone — nothing to flush
         }
         rx.await.unwrap_or(Ok(()))
@@ -344,7 +357,7 @@ impl Recorder {
 
     /// Tell the writer task to drain and exit.
     pub async fn shutdown(&self) {
-        let _ = self.tx.send(WriterCmd::Shutdown).await;
+        let _ = self.tx.send(WriterCmd::Shutdown);
     }
 
     /// Path of the JSONL log on disk.
@@ -359,7 +372,7 @@ impl Recorder {
 }
 
 async fn writer_loop(
-    mut rx: mpsc::Receiver<WriterCmd>,
+    mut rx: mpsc::UnboundedReceiver<WriterCmd>,
     mut file: std::fs::File,
     path: PathBuf,
 ) {
@@ -556,6 +569,29 @@ mod tests {
             }
             _ => panic!("expected EditorialDecision"),
         }
+    }
+
+    /// Regression for the bounded-channel data loss caught by the
+    /// stress suite (`eval::stress::large_rollout_resume`). With the
+    /// old 256-slot bounded channel, a tight 5K-message loop dropped
+    /// ~95% of writes via `try_send`. Unbounded channel must replay
+    /// every message intact.
+    #[tokio::test]
+    async fn writes_are_lossless_under_burst() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = Recorder::create(
+            dir.path(),
+            PathBuf::from("/p"),
+            "m".into(),
+        )
+        .unwrap();
+        const N: usize = 2_000;
+        for i in 0..N {
+            rec.record_message(crate::anthropic::Message::user_text(format!("msg-{i}")));
+        }
+        rec.flush().await.unwrap();
+        let (_meta, msgs) = Recorder::resume(rec.path()).unwrap();
+        assert_eq!(msgs.len(), N, "every burst-written message must survive");
     }
 
     #[tokio::test]

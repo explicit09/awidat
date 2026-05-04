@@ -3,25 +3,36 @@
 //! check + local regression after large changes.
 //!
 //! Usage:
-//!   awidat-eval                # run all V1 scenarios
+//!   awidat-eval                # run regression scenarios
+//!   awidat-eval --stress       # run heavy stress scenarios (slow)
+//!   awidat-eval --all          # run regression + stress
 //!   awidat-eval --list         # print scenario id + description
-//!
-//! The `--list` flag is the discoverability surface — given the small
-//! number of V1 scenarios we don't need a filter mechanism yet. When
-//! the count crosses ~10, add `--filter <substring>`.
 
 use std::process::ExitCode;
 
-use awidat_eval::{format_report, run_all, scenarios};
+use awidat_eval::{Scenario, format_report, run_all, scenarios, stress};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.iter().any(|a| a == "--list" || a == "-l") {
-        for s in scenarios::defaults() {
+    let want_stress = args.iter().any(|a| a == "--stress");
+    let want_all = args.iter().any(|a| a == "--all");
+    let want_list = args.iter().any(|a| a == "--list" || a == "-l");
+
+    let mut chosen: Vec<Box<dyn Scenario>> = Vec::new();
+    if want_all || (!want_stress) {
+        chosen.extend(scenarios::defaults());
+    }
+    if want_all || want_stress {
+        chosen.extend(stress::defaults());
+    }
+
+    if want_list {
+        for s in &chosen {
             println!("  {:<46}  {}", s.id(), s.description());
         }
         return ExitCode::SUCCESS;
     }
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -32,7 +43,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let outcomes = runtime.block_on(async { run_all(&scenarios::defaults()).await });
+    let outcomes = runtime.block_on(async { run_all(&chosen).await });
     let (text, exit) = format_report(&outcomes);
     print!("{text}");
     ExitCode::from(exit as u8)

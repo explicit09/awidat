@@ -47,7 +47,7 @@ pub fn defaults() -> Vec<Box<dyn Scenario>> {
 
 // ---------- helpers ----------
 
-fn ctx_at(root: &std::path::Path) -> awidat_core::tool::ToolContext {
+pub(crate) fn ctx_at(root: &std::path::Path) -> awidat_core::tool::ToolContext {
     let (tx, _) = tokio::sync::broadcast::channel(8);
     awidat_core::tool::ToolContext {
         project_root: root.to_path_buf(),
@@ -64,7 +64,7 @@ fn ctx_at(root: &std::path::Path) -> awidat_core::tool::ToolContext {
     }
 }
 
-fn make_call(name: &str, args: serde_json::Value) -> awidat_core::tool::ToolInvocation {
+pub(crate) fn make_call(name: &str, args: serde_json::Value) -> awidat_core::tool::ToolInvocation {
     awidat_core::tool::ToolInvocation {
         call_id: "eval-1".into(),
         name: name.into(),
