@@ -107,6 +107,7 @@ tempfile = "3"
 awidat-test-support = { path = "crates/test-support" }
 toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
 serde_yaml = "0.9"
+bm25 = "2.3"
 sha2 = "0.10"
 # Real bug found in production: keyring 3.x ships with no platform
 # backend by default — `set_password` silently accepts then drops the
