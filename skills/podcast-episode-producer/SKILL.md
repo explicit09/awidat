@@ -147,3 +147,28 @@ or the source material genuinely demands it.
   A punchline without its setup is a lie.
 - Don't ask the user to confirm every clip. Confirm the OVERALL
   structure (step 4), then commit + render.
+
+## You are done when...
+
+Persist until ALL of these are true. Stopping early on a coding-style
+"that's enough" instinct produces half-edits that the user has to
+finish themselves — that's worse than not starting.
+
+- [ ] `view_episode` was called at least once and you understood the
+      shape (speakers, topics, indexed channels) before drafting.
+- [ ] Every clip on the timeline has been verified by either
+      `view_timeline` or `inspect_clip` — no clip you've never seen.
+- [ ] The user explicitly confirmed the **overall structure** (step
+      4 cut list). If the user said "looks good" or equivalent, that
+      counts. If they're silent, ask once and wait.
+- [ ] `start_render(scope="timeline")` was called (NOT `preview`,
+      NOT `segment`, NOT `full`).
+- [ ] `poll_render` returned `status="completed"` — not `running`,
+      not `failed`. If it failed, you investigated the cause before
+      handing back.
+- [ ] You reported the output path AND approximate duration to the
+      user in your final message.
+
+If a step blocked (indexer hadn't run, anchor failed, render errored),
+you surfaced the blocker explicitly with a one-line fix the user can
+take — not "I tried but it didn't work."

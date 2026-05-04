@@ -111,3 +111,32 @@ Removed:
 - The asset is < 5 minutes. Cut-pacing matters less than the
   individual edit decisions; the tightener's batch approach is
   overkill.
+
+## You are done when...
+
+Persist until ALL of these are true. A "20% tightened" report with
+half the cuts un-applied is a lie — finish the cut list before
+handing back.
+
+- [ ] You ran `view_episode` and confirmed the audio-energy and
+      editorial-moments indexers had output for this asset. Without
+      those, the playbook can't run; surface that to the user and
+      stop rather than improvise.
+- [ ] Every cut from the candidate list either landed (visible in
+      `view_timeline` after the corresponding `apply_edl`) or was
+      explicitly skipped with a reason (e.g. "skipped: load-bearing
+      dependency for moment 0xabcd"). No silent drops.
+- [ ] The final tightened percentage is between **15% and 35%**.
+      Less than 15% means the cut list was too conservative and the
+      promise of the skill wasn't kept. More than 35% means you
+      probably damaged meaning — pause and ask the user before
+      committing the last batch.
+- [ ] If the user wanted a render, `start_render(scope="timeline")`
+      was called and `poll_render` returned `status="completed"`.
+- [ ] Your final report names: original duration, tightened
+      duration, percent shorter, and breakdown by cut category
+      (dead air / filler / tangents).
+
+If you applied < 5 cuts before hitting "looks fine", you under-shot.
+The skill's contract is 20-30% — surface a reason if you stopped
+short, don't pretend the source was already tight.

@@ -132,3 +132,29 @@ clip on a new track named `broll`.
   good match exists for this passage.
 - Don't "be creative" with abstract metaphor cutaways. The skill is
   literal-visual-match. Metaphor is the editor's job.
+
+## You are done when...
+
+This skill is a *suggester* — the contract is to hand the user
+ranked candidates, not to commit cutaways unilaterally. You're done
+when ALL of these are true:
+
+- [ ] `view_episode` confirmed the clip / face / shot indexers ran.
+      If they didn't, you surfaced that immediately rather than
+      returning empty suggestions that look like "no good cutaways
+      exist."
+- [ ] For each spoken passage the user named (or each high-energy
+      beat you picked), you presented **at least 2 candidates** with
+      score, duration, type, and a one-line "why" reason. One
+      candidate is not a choice.
+- [ ] You filtered out anything with `clip_search` score < 0.18 —
+      below that is noise; suggesting it would mislead the user.
+- [ ] The user picked which candidates to use AND said "go" before
+      you called `apply_edl`. If you applied without confirmation,
+      that's a violation of the suggester contract.
+- [ ] After `apply_edl`, you called `view_timeline` and confirmed
+      the new b-roll track shows up where you placed it.
+
+If `clip_search` returned 0 results across all your queries, that's
+a real signal — say "no semantic match found for this passage" and
+move on, don't pad the list with weak alternatives.

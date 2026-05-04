@@ -23,6 +23,11 @@ const RESULT_CAP_BYTES: usize = 8 * 1024;
 /// Default count for windowed channels (transcript segments, scenes,
 /// short-term loudness). 50 entries fits comfortably in the cap.
 const DEFAULT_WINDOW: usize = 50;
+/// Hard cap on `limit`. Mirrors cline's ripgrep `MAX_RESULTS = 300` —
+/// validated across the harness corpus as the bulk-load ceiling that
+/// keeps the model from drowning a turn in one tool call. The model
+/// can paginate via `offset` if it genuinely needs more.
+const MAX_LIMIT: usize = 300;
 
 /// The `read_index` tool.
 pub struct ReadIndexTool;
@@ -62,7 +67,7 @@ impl ToolHandler for ReadIndexTool {
                         "description": "Which signal to read. transcript=words+segments; scenes=shot boundaries; audio_levels=RMS+LUFS+silences; topics=topic-segmentation; summary=one-line overview of all channels."
                     },
                     "offset": { "type": "integer", "minimum": 0, "description": "0-based first entry. Default 0." },
-                    "limit": { "type": "integer", "minimum": 1, "description": "Max entries. Default 50." }
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Max entries. Default 50, hard cap 300. For larger reads paginate via `offset`." }
                 },
                 "required": ["asset_id", "channel"]
             }),
@@ -102,7 +107,8 @@ impl ToolHandler for ReadIndexTool {
 
         let asset_id = AssetId::new(args.asset_id);
         let sidecar = read_sidecar(&ctx.project_root, indexer, &asset_id).map_err(map_err)?;
-        let projected = project_channel(&args.channel, &sidecar, args.offset.unwrap_or(0), args.limit.unwrap_or(DEFAULT_WINDOW));
+        let limit = args.limit.unwrap_or(DEFAULT_WINDOW).min(MAX_LIMIT);
+        let projected = project_channel(&args.channel, &sidecar, args.offset.unwrap_or(0), limit);
         let body = serde_json::to_string(&projected).map_err(|e| {
             FunctionCallError::Fatal(format!("read_index serialization failed: {e}"))
         })?;
@@ -272,6 +278,7 @@ mod tests {
             approval_tx: None,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
+            subagent_return: None,
         }
     }
 
@@ -323,6 +330,41 @@ mod tests {
         let segs = body["segments"].as_array().unwrap();
         assert_eq!(segs.len(), 10);
         assert_eq!(segs[0]["text"], "seg 50");
+    }
+
+    /// Regression: a model passing an absurdly large `limit` is clamped
+    /// to MAX_LIMIT (300) before windowing. We use a small sidecar so the
+    /// projected JSON fits under the byte-cap and `limit` round-trips
+    /// cleanly, which lets us assert the clamped value directly.
+    #[tokio::test]
+    async fn limit_is_clamped_to_max() {
+        let dir = tempfile::tempdir().unwrap();
+        write_sidecar(
+            dir.path(),
+            "whisper",
+            "raw/x.wav",
+            serde_json::json!({
+                "indexer": "whisper", "asset_id": "raw/x.wav",
+                "data": {
+                    "language": "en",
+                    "speakers": [],
+                    "segments": [{"text": "hi", "start_s": 0, "end_s": 1}],
+                }
+            }),
+        );
+        let out = ReadIndexTool
+            .handle(
+                invoke(serde_json::json!({
+                    "asset_id": "raw/x.wav",
+                    "channel": "transcript",
+                    "limit": 100000,
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(body["limit"], 300, "limit must be clamped to MAX_LIMIT=300");
     }
 
     #[tokio::test]
