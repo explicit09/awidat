@@ -106,7 +106,16 @@ tempfile = "3"
 awidat-test-support = { path = "crates/test-support" }
 toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
 sha2 = "0.10"
-keyring = "3"
+# Real bug found in production: keyring 3.x ships with no platform
+# backend by default — `set_password` silently accepts then drops the
+# value, `get_password` returns NoEntry. The user sees "stored 108
+# chars" and then "ANTHROPIC_API_KEY not set in env or keychain" on
+# the next call. Per keyring 3.x docs we have to opt in to native
+# backends explicitly. `apple-native` = Security Framework on macOS,
+# `windows-native` = Credential Manager on Windows,
+# `linux-native-sync-persistent` = Secret Service on Linux,
+# `sync-secret-service` = the fallback used inside that.
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native-sync-persistent", "sync-secret-service"] }
 futures = { version = "0.3", default-features = false, features = ["std"] }
 dirs = "6"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
