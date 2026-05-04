@@ -326,12 +326,14 @@ fn apply_untrim(
         None => (0.0, f64::INFINITY),
     };
 
-    let target_start = new_start.unwrap_or(avail_start_s.max(0.0));
-    let target_end = new_end.unwrap_or(if avail_end_s.is_finite() {
-        avail_end_s
-    } else {
-        cur_end_s
-    });
+    // Defaults: omitted fields keep the *current* source_range value,
+    // matching apply_trim's behavior. A previous version of this op
+    // defaulted to the available_range bounds — which meant an Untrim
+    // that only widens `end` would also reset `start` to 0, surprising
+    // the agent (real-video run trace: "the untrim wiped the start
+    // trim too"). Preserve-on-omit is the right contract.
+    let target_start = new_start.unwrap_or(cur_start_s);
+    let target_end = new_end.unwrap_or(cur_end_s);
 
     if target_end < target_start {
         return Err(ApplyError::Invalid {
@@ -898,6 +900,51 @@ mod tests {
         assert!(
             (r.duration.to_seconds() - 4.0).abs() < 1e-9,
             "expected duration capped to 4s; got {}",
+            r.duration.to_seconds()
+        );
+    }
+
+    /// Regression test for a real bug found in a live run: untrim with
+    /// only `end` specified used to default `start` to 0.0, wiping
+    /// the existing trimmed-in point. Now omitted fields preserve
+    /// the current value (matching apply_trim's contract).
+    #[test]
+    fn apply_untrim_preserves_start_when_only_end_specified() {
+        // Build a clip with source_range = [10s, 20s] (10s duration
+        // starting at 10s into the source media). Untrim with end=30
+        // and start=None should produce [10s, 30s] — NOT [0s, 30s].
+        let mut tl = awidat_proto::otio::Timeline::empty("preserve");
+        let mut track = awidat_proto::otio::Track::empty("V1", awidat_proto::otio::TrackKind::Video);
+        let mut clip = awidat_proto::otio::Clip::empty("clip-0".to_string());
+        clip.media_reference = awidat_proto::otio::MediaReference::External(
+            awidat_proto::otio::ExternalReference::new("raw/x.mp4"),
+        );
+        clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+            awidat_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
+            awidat_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
+        ));
+        track.children.push(awidat_proto::otio::TrackChild::Clip(clip));
+        tl.tracks.children.push(awidat_proto::otio::StackChild::Track(track));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::UntrimClip {
+                anchor: Anchor::ClipUuid { uuid: "clip-0".into() },
+                start: None,
+                end: Some(30.0),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        let TrackChild::Clip(c) = &t.children[0] else { panic!() };
+        let r = c.source_range.as_ref().unwrap();
+        assert!(
+            (r.start_time.to_seconds() - 10.0).abs() < 1e-9,
+            "start should be preserved at 10.0s, got {}",
+            r.start_time.to_seconds()
+        );
+        assert!(
+            (r.duration.to_seconds() - 20.0).abs() < 1e-9,
+            "duration should be 30-10=20s, got {}",
             r.duration.to_seconds()
         );
     }
