@@ -23,17 +23,25 @@ pub fn run(selector: Option<&str>, model_override: Option<&str>) -> Result<()> {
     let entries = Recorder::list(&state_root)
         .with_context(|| format!("failed to list sessions under {}", state_root.display()))?;
 
-    if entries.is_empty() {
-        println!("No sessions found under {}.", state_root.join("sessions").display());
-        println!("Sessions are recorded automatically when you run `awidat tui`.");
-        return Ok(());
-    }
-
     match selector {
+        // No selector → listing mode. Empty state root prints the
+        // friendly bringup message; otherwise the recent-sessions list.
         None => {
-            print_listing(&entries);
+            if entries.is_empty() {
+                println!(
+                    "No sessions found under {}.",
+                    state_root.join("sessions").display()
+                );
+                println!("Sessions are recorded automatically when you run `awidat tui`.");
+            } else {
+                print_listing(&entries);
+            }
             Ok(())
         }
+        // Selector → resume mode. `pick` handles path / list-index /
+        // id-prefix on its own and surfaces the right error if nothing
+        // matches. We still call it on an empty `entries` because the
+        // path branch may resolve a session outside the state root.
         Some(sel) => {
             let (path, meta) = pick(&entries, sel)?;
             resume_into_tui(path, meta, model_override)
