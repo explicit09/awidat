@@ -15,6 +15,7 @@ mod chat_cmd;
 mod index_cmd;
 mod new_cmd;
 mod tui_cmd;
+mod upgrade_cmd;
 
 /// Top-level CLI.
 #[derive(Parser, Debug)]
@@ -117,6 +118,24 @@ enum Command {
         #[arg(default_value = "anthropic_api_key")]
         account: String,
     },
+    /// Re-run the installer to upgrade in place. Without `--from`,
+    /// fetches from AWIDAT_RELEASE_BASE env or the canonical GitHub
+    /// Releases URL. Atomic-safe — never overwrites the running
+    /// binary.
+    Upgrade {
+        /// Override the release URL or local path. Examples:
+        ///   --from https://example.com/awidat/releases/latest
+        ///   --from file:///path/to/dist/build
+        ///   --from ./dist/build         (bare path is interpreted as file://)
+        #[arg(long)]
+        from: Option<String>,
+        /// Don't actually install — print what would change.
+        #[arg(long)]
+        check: bool,
+        /// Skip the post-install `uv sync` step (passthrough).
+        #[arg(long)]
+        skip_uv_sync: bool,
+    },
     /// Print the version of the awidat binary.
     Version,
 }
@@ -150,6 +169,15 @@ fn main() -> ExitCode {
         Command::Chat { path, model } => chat_cmd::run(&path, model.as_deref()),
         Command::Tui { path, model } => tui_cmd::run(&path, model.as_deref()),
         Command::SecretsSet { account } => cmd_secrets_set(&account),
+        Command::Upgrade {
+            from,
+            check,
+            skip_uv_sync,
+        } => upgrade_cmd::run(upgrade_cmd::UpgradeArgs {
+            from,
+            check,
+            skip_uv_sync,
+        }),
         Command::Version => {
             print_version();
             Ok(())

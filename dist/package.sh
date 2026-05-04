@@ -93,7 +93,16 @@ fi
 
 # 4. Bundled installer copy + version stamp.
 cp "$ROOT/dist/install.sh" "$stage/share/awidat/install.sh"
-"$stage/bin/awidat" version > "$stage/VERSION" 2>&1 || echo "unknown" > "$stage/VERSION"
+# VERSION file: one line each for cargo version, build timestamp,
+# git commit (when available). Single-purpose, machine-friendly —
+# `awidat upgrade --check` parses just the first line.
+{
+  "$stage/bin/awidat" version 2>/dev/null | head -n1 || echo "awidat unknown"
+  echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if git -C "$ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
+    echo "commit: $(git -C "$ROOT" rev-parse --short HEAD)"
+  fi
+} > "$stage/VERSION"
 
 # 5. Tar it up.
 out="${AWIDAT_TARBALL:-$BUILD_DIR/awidat-$triple.tar.gz}"
