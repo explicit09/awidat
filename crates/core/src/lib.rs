@@ -10,6 +10,7 @@
 
 pub mod anthropic;
 pub mod awidat_md;
+pub mod compact;
 pub mod edl;
 pub mod episode_map;
 pub mod error;

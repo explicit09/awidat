@@ -300,13 +300,19 @@ impl Session {
         //
         // Cap raised to 64 after first-real-video runs surfaced the
         // editorial-flow agent burning 8-12 iterations on legitimate
-        // bash exploration before settling into the cut. We also emit
-        // a one-shot "approaching cap" warning at 80% so the agent
-        // can compact its plan before it hits the hard stop —
-        // anthropics' tool-use cookbook recommends this pattern.
+        // bash exploration before settling into the cut.
+        //
+        // At 80% (52 iterations) we run a compaction pass: a separate
+        // Haiku call summarizes the conversation so far into a
+        // handoff text, and we replace history with [original user
+        // prompt + summary]. The tier-1 cache (system + tools)
+        // survives — only tier-2 (per-turn moving breakpoint)
+        // invalidates. Headroom restored without losing what was
+        // learned. Mirrors Codex/Claude Code: re-summarize what the
+        // agent already learned rather than re-retrieve.
         const MAX_INNER_ITERATIONS: usize = 64;
-        const WARN_AT_ITERATION: usize = (MAX_INNER_ITERATIONS * 4) / 5; // 80%
-        let mut warned = false;
+        const COMPACT_AT_ITERATION: usize = (MAX_INNER_ITERATIONS * 4) / 5; // 80%
+        let mut compacted = false;
         for iter in 0..MAX_INNER_ITERATIONS {
             if cancel.is_cancelled() {
                 let _ = self.events_tx.send(SessionEvent::Error("cancelled".into()));
@@ -344,18 +350,61 @@ impl Session {
                 req.cache_last_tool();
             }
 
-            // Inject a budget warning into history when we cross the
-            // 80% threshold. The model sees it as a system reminder
-            // and can choose to compact / commit / wrap up.
-            if !warned && iter >= WARN_AT_ITERATION {
-                warned = true;
-                let remaining = MAX_INNER_ITERATIONS - iter;
-                let mut h = self.history.lock().await;
-                h.push(Message::user_text(format!(
-                    "[awidat-runtime] Heads up: {remaining} sampling iterations \
-                     remain in this turn before it auto-ends. If you have a \
-                     pending edit, commit it now; otherwise wrap up your reply."
-                )));
+            // At 80% of the iteration cap, compact history once: a
+            // Haiku summarization replaces the conversation with a
+            // handoff text, restoring iteration headroom while
+            // preserving everything the agent learned.
+            //
+            // Compaction failures are non-fatal — we log and continue
+            // without compacting; the only cost is hitting the hard
+            // stop sooner.
+            if !compacted && iter >= COMPACT_AT_ITERATION {
+                compacted = true;
+                let history_for_summary = self.history.lock().await.clone();
+                match crate::compact::compact_history(
+                    &self.client,
+                    &history_for_summary,
+                    &cancel,
+                )
+                .await
+                {
+                    Ok(summary) if !summary.is_empty() => {
+                        let mut h = self.history.lock().await;
+                        let owned = std::mem::take(&mut *h);
+                        *h = crate::compact::replace_history_with_summary(owned, summary);
+                        // Re-snapshot since we just rewrote history.
+                        let snapshot = h.clone();
+                        drop(h);
+                        // Surface a TextDelta so the TUI shows the
+                        // compaction happened — matters for trust.
+                        let _ = self.events_tx.send(SessionEvent::TextDelta(
+                            "\n[awidat-compaction] history compacted; resuming with summary.\n"
+                                .to_string(),
+                        ));
+                        // Update the in-flight request with the new
+                        // history before sampling.
+                        let mut new_history = snapshot;
+                        apply_moving_cache_breakpoint(&mut new_history);
+                        req = MessagesRequest::new(self.model.clone(), new_history)
+                            .with_max_tokens(4096);
+                        if let Some(sys) = &self.system_prompt {
+                            req = req.with_system_cached(sys.clone());
+                        }
+                        let schemas = self.registry.schemas();
+                        if !schemas.is_empty() {
+                            req = req.with_tools(schemas).with_tool_choice(ToolChoice::Auto);
+                            req.cache_last_tool();
+                        }
+                    }
+                    Ok(_) => {
+                        // Empty summary — don't replace history with
+                        // nothing. Continue with the original history.
+                        warn!("compaction returned empty summary; continuing un-compacted");
+                    }
+                    Err(e) => {
+                        warn!("compaction failed: {e}; continuing un-compacted");
+                    }
+                }
             }
 
             // 4. Inner sampling loop.
