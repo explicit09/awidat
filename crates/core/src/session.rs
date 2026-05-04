@@ -32,7 +32,8 @@ use crate::anthropic::{
     Usage,
 };
 use crate::tool::{
-    ApprovalDecision, ApprovalRequest, ToolContext, ToolInvocation, ToolRegistry, UserInputRequest,
+    ApprovalDecision, ApprovalRequest, ModelFamily, ToolContext, ToolInvocation, ToolRegistry,
+    UserInputRequest,
 };
 
 /// One event emitted by the agent loop. The REPL prints these; the TUI
@@ -536,7 +537,8 @@ impl Session {
             if let Some(sys) = &self.system_prompt {
                 req = req.with_system_cached(sys.clone());
             }
-            let schemas = self.registry.schemas();
+            let family = ModelFamily::from_model_id(&self.model);
+            let schemas = self.registry.schemas_for_family(family);
             if !schemas.is_empty() {
                 req = req.with_tools(schemas).with_tool_choice(ToolChoice::Auto);
                 req.cache_last_tool();
@@ -598,7 +600,7 @@ impl Session {
                         if let Some(sys) = &self.system_prompt {
                             req = req.with_system_cached(sys.clone());
                         }
-                        let schemas = self.registry.schemas();
+                        let schemas = self.registry.schemas_for_family(family);
                         if !schemas.is_empty() {
                             req = req.with_tools(schemas).with_tool_choice(ToolChoice::Auto);
                             req.cache_last_tool();

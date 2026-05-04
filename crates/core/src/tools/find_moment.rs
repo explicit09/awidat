@@ -51,30 +51,18 @@ impl ToolHandler for FindMomentTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "find_moment".into(),
-            description: DESCRIPTION.into(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Substring (case-insensitive) to search for in transcript segments."
-                    },
-                    "asset_id": {
-                        "type": "string",
-                        "description": "Optional: restrict to one asset's transcript."
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Max results. Default 25, hard cap 100."
-                    }
-                },
-                "required": ["query"]
-            }),
-            ..Default::default()
+        find_moment_schema(DESCRIPTION)
+    }
+
+    fn schema_for_family(&self, family: crate::tool::ModelFamily) -> ToolSchema {
+        // Haiku is our compaction model + has the smallest context;
+        // a terser description leaves more room for actual query +
+        // result tokens. Sonnet/Opus get the full version. Per #154
+        // (cline `variants/<model>/overrides.ts` pattern): only the
+        // description text varies, not the args schema.
+        match family {
+            crate::tool::ModelFamily::Haiku => find_moment_schema(DESCRIPTION_HAIKU),
+            _ => find_moment_schema(DESCRIPTION),
         }
     }
 
@@ -212,6 +200,43 @@ with `view_frame` for visuals or `read_index` for fuller context. \
 Default limit 25, hard cap 100. Results are ordered by score (best \
 first).\
 ";
+
+/// Terser variant for Haiku per #154. Same args schema, different
+/// description. Haiku tolerates fewer tokens of preamble + benefits
+/// from a tight rule statement.
+const DESCRIPTION_HAIKU: &str = "\
+BM25 search of whisper transcript segments. Returns asset_id, \
+start/end timestamps, speaker_id, snippet, score. Paths/ranges only \
+— no audio or video. Default 25 results, max 100, ordered by score.\
+";
+
+fn find_moment_schema(description: &str) -> ToolSchema {
+    ToolSchema {
+        name: "find_moment".into(),
+        description: description.into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query for transcript segments."
+                },
+                "asset_id": {
+                    "type": "string",
+                    "description": "Optional: restrict to one asset's transcript."
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Max results. Default 25, hard cap 100."
+                }
+            },
+            "required": ["query"]
+        }),
+        ..Default::default()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -366,6 +391,25 @@ mod tests {
         assert!(!results.is_empty(), "BM25 must score the battery segment");
         assert_eq!(results[0]["asset_id"], "raw/ep.mp4");
         assert!(results[0]["snippet"].as_str().unwrap().contains("battery"));
+    }
+
+    /// #154: Haiku gets a terser description; Opus/Sonnet get the
+    /// canonical one. The args schema is unchanged across families
+    /// (the contract from cline's variants pattern).
+    #[test]
+    fn schema_for_family_picks_haiku_variant() {
+        let opus = FindMomentTool.schema_for_family(crate::tool::ModelFamily::Opus);
+        let sonnet = FindMomentTool.schema_for_family(crate::tool::ModelFamily::Sonnet);
+        let haiku = FindMomentTool.schema_for_family(crate::tool::ModelFamily::Haiku);
+
+        // Opus/Sonnet share the canonical description; Haiku differs.
+        assert_eq!(opus.description, sonnet.description);
+        assert_ne!(haiku.description, opus.description);
+        // Haiku's variant must be shorter (the whole point).
+        assert!(haiku.description.len() < opus.description.len());
+        // Args schema invariant — same shape across all families.
+        assert_eq!(opus.input_schema, sonnet.input_schema);
+        assert_eq!(opus.input_schema, haiku.input_schema);
     }
 
     /// Results carry a numeric `score` field. Used downstream by the

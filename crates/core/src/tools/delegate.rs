@@ -75,16 +75,17 @@ impl ToolHandler for DelegateTool {
     }
 
     fn schema(&self) -> ToolSchema {
-        // Inline the catalog so the parent knows what's available
-        // without a separate lookup.
+        // Inline the Research catalog so the parent knows what's
+        // available without a separate lookup. Personas are NOT
+        // surfaced here — they go through `delegate_all` instead.
         let catalog = self
             .subagents
-            .iter()
+            .iter_kind(crate::subagent::SubAgentKind::Research)
             .map(|a| format!("  - {}: {}", a.name, a.description))
             .collect::<Vec<_>>()
             .join("\n");
         let description = format!(
-            "{base}\n\nAvailable sub-agents:\n{catalog}",
+            "{base}\n\nAvailable research sub-agents:\n{catalog}",
             base = DESCRIPTION_BASE,
             catalog = catalog,
         );
@@ -131,15 +132,23 @@ impl ToolHandler for DelegateTool {
         let Some(spec) = self.subagents.get(&args.name) else {
             let available = self
                 .subagents
-                .iter()
+                .iter_kind(crate::subagent::SubAgentKind::Research)
                 .map(|a| a.name)
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(FunctionCallError::RespondToModel(format!(
-                "delegate: no sub-agent named '{}'. Available: {}.",
+                "delegate: no research sub-agent named '{}'. Available: {}.",
                 args.name, available
             )));
         };
+        if spec.kind != crate::subagent::SubAgentKind::Research {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "delegate: '{}' is a persona reviewer, not a research sub-agent. \
+                 Use `delegate_all(personas=[\"{}\"], task=...)` to spawn it as a \
+                 reviewer instead.",
+                args.name, args.name
+            )));
+        }
 
         // Reject delegating from inside a sub-session. V1 keeps the
         // call tree flat (no recursive delegation).
@@ -266,7 +275,7 @@ mod tests {
             "claude-haiku-4-5-20251001".into(),
         );
         let s = tool.schema();
-        assert!(s.description.contains("Available sub-agents:"));
+        assert!(s.description.contains("Available research sub-agents:"));
     }
 
     #[tokio::test]

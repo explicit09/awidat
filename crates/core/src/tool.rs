@@ -200,6 +200,44 @@ impl ToolOutput {
     }
 }
 
+/// Model family, used to dispatch per-model tool description variants
+/// (#154). Per cline's `variants/<model>/overrides.ts` pattern: tool-
+/// call accuracy is sensitive to prompt phrasing, and what works for
+/// one family regresses on another. We classify on the loose family
+/// rather than exact model id so a new haiku point release inherits
+/// the haiku variant by default.
+///
+/// V1 doesn't ship overrides for any tool — adding the mechanism
+/// without measurement would be guesswork. Tools opt into a variant
+/// by overriding `schema_for_family`; they get a measurable improvement
+/// from the eval harness (#155) before changing the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelFamily {
+    /// claude-opus-* (and unknown models — opus is the safest default
+    /// because it's the most capable + tolerates verbose descriptions).
+    Opus,
+    /// claude-sonnet-*.
+    Sonnet,
+    /// claude-haiku-*.
+    Haiku,
+}
+
+impl ModelFamily {
+    /// Classify by string-prefix. Unknown models default to `Opus` —
+    /// the most capable target, so under-pruned descriptions are the
+    /// safest failure mode.
+    pub fn from_model_id(model: &str) -> Self {
+        let lower = model.to_lowercase();
+        if lower.contains("haiku") {
+            ModelFamily::Haiku
+        } else if lower.contains("sonnet") {
+            ModelFamily::Sonnet
+        } else {
+            ModelFamily::Opus
+        }
+    }
+}
+
 /// One tool the agent can call. Object-safe via `BoxFuture` (`async_trait`).
 #[async_trait]
 pub trait ToolHandler: Send + Sync {
@@ -208,8 +246,22 @@ pub trait ToolHandler: Send + Sync {
 
     /// JSON Schema for the tool's args + a model-facing description.
     /// The agent loop builds an [`crate::anthropic::Tool`] from this for
-    /// every request.
+    /// every request. Default for the model family is what
+    /// `schema_for_family` returns; this base method returns the
+    /// canonical (Opus-targeted) shape.
     fn schema(&self) -> ToolSchema;
+
+    /// Per-model variant. Tools that have measurably-different optimal
+    /// descriptions across families override this; the default forwards
+    /// to `schema()` so existing tools keep their behavior.
+    ///
+    /// Per cline `variants/<model>/overrides.ts`: tools that override
+    /// here should keep the *args* schema identical across variants —
+    /// only `description` (and tweaks to per-arg description text) may
+    /// change. The model dispatches on the same arg shape regardless.
+    fn schema_for_family(&self, _family: ModelFamily) -> ToolSchema {
+        self.schema()
+    }
 
     /// True iff invocation might mutate the environment. Defensive
     /// default: `true`. Override to `false` only for genuinely read-only
@@ -263,9 +315,21 @@ impl ToolRegistry {
         self.handlers.keys()
     }
 
-    /// Build the schema list for an outgoing Messages request.
+    /// Build the schema list for an outgoing Messages request, using
+    /// the canonical (family-agnostic) schema for each tool. Used in
+    /// tests and any path that doesn't know the model family.
     pub fn schemas(&self) -> Vec<ToolSchema> {
         self.handlers.values().map(|h| h.schema()).collect()
+    }
+
+    /// Build the schema list using each tool's per-family variant.
+    /// `Session` calls this on the live request path so the model sees
+    /// the description tuned for whichever family it's in (#154).
+    pub fn schemas_for_family(&self, family: ModelFamily) -> Vec<ToolSchema> {
+        self.handlers
+            .values()
+            .map(|h| h.schema_for_family(family))
+            .collect()
     }
 
     /// Number of registered tools.
@@ -395,5 +459,50 @@ mod tests {
             args: serde_json::json!({}),
         };
         assert!(f.is_mutating(&inv), "defensive default per survey");
+    }
+
+    #[test]
+    fn model_family_classifier_recognizes_known_families() {
+        assert_eq!(
+            ModelFamily::from_model_id("claude-haiku-4-5-20251001"),
+            ModelFamily::Haiku
+        );
+        assert_eq!(
+            ModelFamily::from_model_id("claude-sonnet-4-6"),
+            ModelFamily::Sonnet
+        );
+        assert_eq!(
+            ModelFamily::from_model_id("claude-opus-4-7"),
+            ModelFamily::Opus
+        );
+    }
+
+    #[test]
+    fn model_family_classifier_defaults_unknown_to_opus() {
+        // The safest default — opus tolerates verbose descriptions.
+        assert_eq!(
+            ModelFamily::from_model_id("some-future-model-id"),
+            ModelFamily::Opus
+        );
+        assert_eq!(ModelFamily::from_model_id(""), ModelFamily::Opus);
+    }
+
+    #[test]
+    fn schema_for_family_default_forwards_to_schema() {
+        let f = Fake;
+        let canonical = f.schema();
+        let opus = f.schema_for_family(ModelFamily::Opus);
+        let haiku = f.schema_for_family(ModelFamily::Haiku);
+        assert_eq!(canonical.description, opus.description);
+        assert_eq!(canonical.description, haiku.description);
+    }
+
+    #[test]
+    fn registry_schemas_for_family_uses_per_handler_variants() {
+        // A registry containing only Fake (default impl) — schemas_for_family
+        // should match schemas() because Fake doesn't override.
+        let mut r = ToolRegistry::new();
+        r.register(Arc::new(Fake));
+        assert_eq!(r.schemas().len(), r.schemas_for_family(ModelFamily::Haiku).len());
     }
 }

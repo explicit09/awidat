@@ -14,7 +14,8 @@ use anyhow::{Context, Result, anyhow};
 use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
-    clip_search::ClipSearchTool, delegate::DelegateTool, find_beat::FindBeatTool,
+    clip_search::ClipSearchTool, delegate::DelegateTool,
+    delegate_all::DelegateAllTool, find_beat::FindBeatTool,
     find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
@@ -31,7 +32,7 @@ use tokio::sync::mpsc;
 
 const SYSTEM_PROMPT: &str = "\
 You are awidat, a terminal-first agent for editing long-form spoken \
-video. You have 22 tools, organized by purpose:\
+video. You have 23 tools, organized by purpose:\
 \n  - **Discovery / map**: view_episode (compact map of the project — \
 includes which vision indexers have run), view_timeline, list_assets.\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
@@ -66,13 +67,14 @@ interview\" → interview-tightener), call load_skill(name=...) BEFORE \
 starting the work. The skill body has the editorial style + \
 step-by-step playbook; following it produces better cuts than \
 improvising.\
-\n  - **Delegate**: delegate — spawn a read-only sub-agent for a focused \
-research question (e.g. 'episode-explorer: what's in this episode?'). \
-The sub-agent runs in isolation with a restricted tool surface and \
-returns one consolidated string. Use when the answer is paragraphs of \
-investigation that you don't need verbatim in the main turn — keeps \
-context clean. Sub-agents cannot mutate state; for edits, do the work \
-yourself.\
+\n  - **Delegate**: delegate — spawn a single read-only research \
+sub-agent (episode-explorer / cut-scout / b-roll-hunter) for a \
+focused question. delegate_all — spawn MULTIPLE persona reviewers \
+(editor / fact-checker / brand-voice) IN PARALLEL on the same task \
+and get a consolidated review back. Use delegate_all before shipping \
+a draft cut to get cross-cutting feedback in one pass; use delegate \
+for single-lens research. Sub-agents and personas are read-only — \
+for edits, do the work yourself.\
 \n\n\
 Mutating tools (apply_edl, start_render, bash) require user approval — \
 the UI shows a modal and the user picks Allow / Allow-for-Session / \
@@ -150,7 +152,16 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(LoadSkillTool));
     let subagents = Arc::new(SubAgentRegistry::defaults());
     let snapshot = registry.clone();
-    registry.register(Arc::new(DelegateTool::new(snapshot, subagents, model.to_string())));
+    registry.register(Arc::new(DelegateTool::new(
+        snapshot.clone(),
+        subagents.clone(),
+        model.to_string(),
+    )));
+    registry.register(Arc::new(DelegateAllTool::new(
+        snapshot,
+        subagents,
+        model.to_string(),
+    )));
     registry
 }
 
