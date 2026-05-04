@@ -199,15 +199,20 @@ match. **Returns paths/ranges only, no audio or video.** Follow up \
 with `view_frame` for visuals or `read_index` for fuller context. \
 Default limit 25, hard cap 100. Results are ordered by score (best \
 first).\
+\n\nNote: English stopwords (`the`, `and`, `is`, …) are filtered out \
+of the query before ranking. A query of just stopwords returns 0 \
+hits — use content words (`battery`, `kitchen`, `Samsung`).\
 ";
 
 /// Terser variant for Haiku per #154. Same args schema, different
 /// description. Haiku tolerates fewer tokens of preamble + benefits
-/// from a tight rule statement.
+/// from a tight rule statement. The stopword note is kept (one-line
+/// version) — it's a real footgun, worth the tokens.
 const DESCRIPTION_HAIKU: &str = "\
 BM25 search of whisper transcript segments. Returns asset_id, \
 start/end timestamps, speaker_id, snippet, score. Paths/ranges only \
-— no audio or video. Default 25 results, max 100, ordered by score.\
+— no audio or video. Default 25 results, max 100, ordered by score. \
+English stopwords (`the`, `and`, …) are filtered — use content words.\
 ";
 
 fn find_moment_schema(description: &str) -> ToolSchema {

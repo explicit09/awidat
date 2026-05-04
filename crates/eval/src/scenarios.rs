@@ -18,8 +18,8 @@ use std::time::Instant;
 
 use awidat_core::tool::ToolHandler;
 use awidat_core::tools::{
-    list_assets::ListAssetsTool, view_episode::ViewEpisodeTool,
-    view_timeline::ViewTimelineTool,
+    find_beat::FindBeatTool, find_moment::FindMomentTool, list_assets::ListAssetsTool,
+    read_index::ReadIndexTool, view_episode::ViewEpisodeTool, view_timeline::ViewTimelineTool,
 };
 use awidat_proto::project::Project;
 
@@ -28,11 +28,20 @@ use crate::{Scenario, ScenarioOutcome, ScenarioStatus};
 /// Build the default V1 scenario list. Add new scenarios here. The
 /// CLI runner takes a slice of `Box<dyn Scenario>` so wiring a new
 /// one in is a one-liner.
+///
+/// Scenarios opportunistically exercising `$AWIDAT_REAL_PROJECT`
+/// (a fully-indexed project on disk) self-skip when the env is
+/// unset. Used in Week 8 demo bringup against
+/// `/tmp/awidat-real/yt-test` and similar.
 pub fn defaults() -> Vec<Box<dyn Scenario>> {
     vec![
         Box::new(FreshProjectViewEpisode),
         Box::new(EmptyProjectListAssets),
         Box::new(EmptyTimelineViewTimeline),
+        Box::new(RealProjectViewEpisode),
+        Box::new(RealProjectFindMoment),
+        Box::new(RealProjectFindBeat),
+        Box::new(RealProjectReadIndexTranscript),
     ]
 }
 
@@ -206,6 +215,278 @@ impl Scenario for EmptyTimelineViewTimeline {
     }
 }
 
+// ---------- real-project scenarios ----------
+//
+// These exercise the read-tool surface against an actually-indexed
+// project on disk (`$AWIDAT_REAL_PROJECT`). They self-skip when the
+// env is unset so the suite stays green on a fresh checkout.
+
+fn real_project_root() -> Option<std::path::PathBuf> {
+    std::env::var("AWIDAT_REAL_PROJECT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
+}
+
+fn skip_no_real_project(id: &str, started: Instant) -> ScenarioOutcome {
+    ScenarioOutcome {
+        id: id.into(),
+        status: ScenarioStatus::Skipped,
+        elapsed: started.elapsed(),
+        message: "AWIDAT_REAL_PROJECT not set or not a dir; skipping".into(),
+    }
+}
+
+/// `view_episode` against a real, fully-indexed project. Catches
+/// regressions in episode-map rendering on real timelines (vs. the
+/// fresh-init empty case).
+struct RealProjectViewEpisode;
+
+#[async_trait]
+impl Scenario for RealProjectViewEpisode {
+    fn id(&self) -> &'static str {
+        "real::view_episode"
+    }
+    fn description(&self) -> &'static str {
+        "view_episode against $AWIDAT_REAL_PROJECT renders a non-trivial map."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let Some(root) = real_project_root() else {
+            return Ok(skip_no_real_project(self.id(), started));
+        };
+        let out = ViewEpisodeTool
+            .handle(make_call("view_episode", serde_json::json!({})), ctx_at(&root))
+            .await;
+        let elapsed = started.elapsed();
+        Ok(match out {
+            Ok(t) if t.content.len() > 100 => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Pass,
+                elapsed,
+                message: format!("rendered {} chars of map", t.content.len()),
+            },
+            Ok(t) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!(
+                    "expected substantial map (>100 chars); got {} chars",
+                    t.content.len()
+                ),
+            },
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("view_episode errored: {e}"),
+            },
+        })
+    }
+}
+
+/// BM25 `find_moment` against the real whisper transcript with a
+/// generic stop-word query that should match many segments. Catches
+/// regressions in BM25 wiring against real corpus shape.
+struct RealProjectFindMoment;
+
+#[async_trait]
+impl Scenario for RealProjectFindMoment {
+    fn id(&self) -> &'static str {
+        "real::find_moment_returns_hits"
+    }
+    fn description(&self) -> &'static str {
+        "find_moment against the real transcript returns ≥1 hit for a content query."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let Some(root) = real_project_root() else {
+            return Ok(skip_no_real_project(self.id(), started));
+        };
+        // Try several content-bearing queries. BM25's `Language::English`
+        // strips stopwords (`the`, `and`, `is`, …) — that's correct
+        // behavior, not a bug, but it means the test query has to be
+        // a real content word. At least one of these should match any
+        // non-trivial transcript; if all five miss, that's a wiring
+        // regression worth flagging.
+        let mut hits = 0usize;
+        let mut best_query = String::new();
+        for q in ["video", "people", "thing", "really", "one"] {
+            let out = FindMomentTool
+                .handle(
+                    make_call(
+                        "find_moment",
+                        serde_json::json!({"query": q, "limit": 5}),
+                    ),
+                    ctx_at(&root),
+                )
+                .await;
+            if let Ok(t) = out {
+                let body: serde_json::Value =
+                    serde_json::from_str(&t.content).unwrap_or(serde_json::Value::Null);
+                let n = body["results"].as_array().map(Vec::len).unwrap_or(0);
+                if n > hits {
+                    hits = n;
+                    best_query = q.into();
+                }
+                if n > 0 {
+                    break;
+                }
+            }
+        }
+        let elapsed = started.elapsed();
+        Ok(if hits > 0 {
+            ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Pass,
+                elapsed,
+                message: format!("query='{best_query}' → {hits} hits"),
+            }
+        } else {
+            ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: "no content query matched any transcript segment".into(),
+            }
+        })
+    }
+}
+
+/// `find_beat` against the real editorial-moments index. Catches
+/// regressions in the editorial-moments sidecar shape contract.
+struct RealProjectFindBeat;
+
+#[async_trait]
+impl Scenario for RealProjectFindBeat {
+    fn id(&self) -> &'static str {
+        "real::find_beat_runs"
+    }
+    fn description(&self) -> &'static str {
+        "find_beat against the real editorial-moments index returns a parseable response."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let Some(root) = real_project_root() else {
+            return Ok(skip_no_real_project(self.id(), started));
+        };
+        // No `kind` filter — just verify the tool runs end-to-end.
+        let out = FindBeatTool
+            .handle(make_call("find_beat", serde_json::json!({})), ctx_at(&root))
+            .await;
+        let elapsed = started.elapsed();
+        Ok(match out {
+            Ok(t) => {
+                let parsed: Result<serde_json::Value, _> = serde_json::from_str(&t.content);
+                if parsed.is_ok() {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Pass,
+                        elapsed,
+                        message: format!("returned {} chars of valid JSON", t.content.len()),
+                    }
+                } else {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Fail,
+                        elapsed,
+                        message: "find_beat returned non-JSON content".into(),
+                    }
+                }
+            }
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("find_beat errored: {e}"),
+            },
+        })
+    }
+}
+
+/// `read_index(channel="transcript")` end-to-end. Verifies the
+/// MAX_LIMIT cap (#156) doesn't break real-corpus reads.
+struct RealProjectReadIndexTranscript;
+
+#[async_trait]
+impl Scenario for RealProjectReadIndexTranscript {
+    fn id(&self) -> &'static str {
+        "real::read_index_transcript"
+    }
+    fn description(&self) -> &'static str {
+        "read_index transcript channel against real corpus returns segments."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let Some(root) = real_project_root() else {
+            return Ok(skip_no_real_project(self.id(), started));
+        };
+        // Find an asset id from the project's manifest by scanning raw/.
+        let raw_dir = root.join("raw");
+        let asset_id = match std::fs::read_dir(&raw_dir) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok())
+                .find_map(|e| e.path().file_name().map(|n| format!("raw/{}", n.to_string_lossy()))),
+            Err(_) => None,
+        };
+        let Some(asset_id) = asset_id else {
+            return Ok(ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed: started.elapsed(),
+                message: "no raw/ assets found in real project".into(),
+            });
+        };
+        let out = ReadIndexTool
+            .handle(
+                make_call(
+                    "read_index",
+                    serde_json::json!({
+                        "asset_id": asset_id,
+                        "channel": "transcript",
+                        "limit": 10,
+                    }),
+                ),
+                ctx_at(&root),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        Ok(match out {
+            Ok(t) => {
+                let body: serde_json::Value =
+                    serde_json::from_str(&t.content).unwrap_or(serde_json::Value::Null);
+                let n = body["segments"].as_array().map(Vec::len).unwrap_or(0);
+                if n > 0 {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Pass,
+                        elapsed,
+                        message: format!("read {n} transcript segments for {asset_id}"),
+                    }
+                } else {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Fail,
+                        elapsed,
+                        message: format!("0 segments for {asset_id}"),
+                    }
+                }
+            }
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("read_index errored: {e}"),
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,18 +494,25 @@ mod tests {
 
     #[tokio::test]
     async fn defaults_runs_clean_on_fresh_machine() {
+        // Real-project scenarios self-skip without `AWIDAT_REAL_PROJECT`,
+        // so on a fresh checkout the structural ones pass and the
+        // real:: ones skip — neither should fail.
         let scenarios = defaults();
         assert!(!scenarios.is_empty());
         let outcomes = run_all(&scenarios).await;
         for o in &outcomes {
-            assert_eq!(
-                o.status,
-                ScenarioStatus::Pass,
-                "scenario {} expected to pass; failed: {}",
+            assert!(
+                matches!(o.status, ScenarioStatus::Pass | ScenarioStatus::Skipped),
+                "scenario {} must Pass or Skip; got Fail: {}",
                 o.id,
-                o.message
+                o.message,
             );
         }
+        let pass = outcomes
+            .iter()
+            .filter(|o| o.status == ScenarioStatus::Pass)
+            .count();
+        assert!(pass >= 3, "the 3 structural scenarios must always pass");
     }
 
     #[tokio::test]

@@ -268,8 +268,15 @@ pub fn render_markdown(patterns: &[Pattern], total_decisions: usize) -> Option<S
 
 /// Default location for the rendered learned-style file. Lives under
 /// the user config dir so it survives `awidat upgrade` and follows
-/// XDG conventions.
+/// XDG conventions. Override with `AWIDAT_LEARNED_STYLE` (used by
+/// tests, by sandboxed dev runs, and by users who want the file
+/// somewhere other than the default).
 pub fn default_output_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("AWIDAT_LEARNED_STYLE")
+        && !p.is_empty()
+    {
+        return Some(PathBuf::from(p));
+    }
     dirs::config_dir().map(|d| d.join("awidat").join("learned-style.md"))
 }
 
