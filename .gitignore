@@ -2,6 +2,9 @@ target/
 .build-log/
 .DS_Store
 
+# Distribution build output (tarballs + staging dirs).
+dist/build/
+
 # Python workspace
 python/.venv/
 python/**/__pycache__/
