@@ -124,6 +124,9 @@ pub enum SessionError {
     /// User cancelled the turn.
     #[error("cancelled")]
     Cancelled,
+    /// Catch-all for setup-time errors (resume failures, etc).
+    #[error("{0}")]
+    Other(String),
 }
 
 /// Per-conversation state. Cheaply cloneable (`Arc`-wrapped internals).
@@ -158,6 +161,16 @@ pub struct Session {
     /// surfaced through `ToolContext` so the `load_skill` tool can
     /// retrieve a skill's full L2 body on demand.
     skills: Arc<crate::skills::SkillRegistry>,
+    /// Append-only JSONL session log. `None` ⇒ recording disabled
+    /// (tests, MCP server, ad-hoc batch jobs). Mounted by
+    /// [`Session::with_recorder`] or [`Session::resume`].
+    recorder: Option<crate::rollout::Recorder>,
+    /// Sub-agent return slot. `Some` only when this session was
+    /// constructed by `delegate` to act as a sub-agent — the
+    /// `attempt_completion` tool writes here, and the parent's
+    /// `delegate` reads after the sub-session ends. The dispatcher
+    /// threads this through `ToolContext.subagent_return`.
+    subagent_return: Option<Arc<Mutex<Option<String>>>>,
 }
 
 impl Session {
@@ -291,7 +304,82 @@ impl Session {
             approved_for_session: Arc::new(Mutex::new(HashSet::new())),
             mcp_host,
             skills: skill_registry,
+            recorder: None,
+            subagent_return: None,
         }
+    }
+
+    /// Mount a sub-agent return slot. Used by `delegate` when spawning
+    /// a sub-session — the slot is the channel by which the sub-agent's
+    /// `attempt_completion` call sends its result back to the parent.
+    /// Calling this on a non-sub-session is a no-op semantically (the
+    /// `attempt_completion` tool isn't mounted) but harmless.
+    #[must_use]
+    pub fn with_subagent_return(
+        mut self,
+        slot: Arc<Mutex<Option<String>>>,
+    ) -> Self {
+        self.subagent_return = Some(slot);
+        self
+    }
+
+    /// Mount a JSONL recorder rooted at `state_root`. The recorder writes
+    /// the `SessionMeta` line synchronously; if disk I/O fails the
+    /// session continues un-recorded (logged as `warn!`) rather than
+    /// aborting — losing the agent loop on a disk hiccup is worse than
+    /// losing the rollout.
+    #[must_use]
+    pub fn with_recorder(mut self, state_root: &std::path::Path) -> Self {
+        match crate::rollout::Recorder::create(
+            state_root,
+            self.project_root.clone(),
+            self.model.clone(),
+        ) {
+            Ok(rec) => {
+                debug!(path = %rec.path().display(), "rollout: recording session");
+                self.recorder = Some(rec);
+            }
+            Err(e) => {
+                warn!(error = %e, "rollout: failed to create recorder; continuing un-recorded");
+            }
+        }
+        self
+    }
+
+    /// Resume a prior session from a rollout JSONL log. Replays the
+    /// log into history. A *new* JSONL file is opened for the resumed
+    /// run with `resumed_from = <prior session id>` in its meta — this
+    /// keeps each file append-only-once and makes lineage explicit.
+    pub async fn resume(
+        client: Client,
+        registry: ToolRegistry,
+        log_path: &std::path::Path,
+        state_root: &std::path::Path,
+    ) -> Result<Self, SessionError> {
+        let (meta, history) = crate::rollout::Recorder::resume(log_path)
+            .map_err(|e| SessionError::Other(format!("rollout resume failed: {e}")))?;
+        let mut session = Self::new(
+            client,
+            registry,
+            meta.model.clone(),
+            None,
+            meta.project_root.clone(),
+        );
+        // Replay history.
+        *session.history.lock().await = history;
+        // Open a fresh recorder with lineage stamped in.
+        match crate::rollout::Recorder::create_resumed(
+            state_root,
+            meta.project_root,
+            meta.model,
+            meta.id,
+        ) {
+            Ok(rec) => session.recorder = Some(rec),
+            Err(e) => {
+                warn!(error = %e, "rollout: failed to open recorder for resume; continuing un-recorded");
+            }
+        }
+        Ok(session)
     }
 
     /// Wire an approval channel. The REPL/TUI receives one
@@ -352,12 +440,30 @@ impl Session {
         user_input: impl Into<String>,
         cancel: CancellationToken,
     ) -> Result<(), SessionError> {
+        self.run_turn_capped(user_input, cancel, 64).await
+    }
+
+    /// Like [`Session::run_turn`] but with a caller-supplied cap on
+    /// outer-loop iterations. Used by `delegate` to cap sub-agent runs
+    /// (cline's `SubagentBuilder` pattern: research sub-agents are
+    /// bounded — long sub-sessions are usually a confused-prompt smell,
+    /// not a real research need).
+    pub async fn run_turn_capped(
+        &self,
+        user_input: impl Into<String>,
+        cancel: CancellationToken,
+        max_iterations: usize,
+    ) -> Result<(), SessionError> {
         let _ = self.events_tx.send(SessionEvent::TurnStart);
 
-        // 1. Append user input to history.
+        // 1. Append user input to history (and rollout log).
+        let user_msg = Message::user_text(user_input);
+        if let Some(rec) = &self.recorder {
+            rec.record_message(user_msg.clone());
+        }
         {
             let mut h = self.history.lock().await;
-            h.push(Message::user_text(user_input));
+            h.push(user_msg);
         }
 
         // 2. Outer loop: keep sampling until the model says end_turn (or
@@ -375,10 +481,10 @@ impl Session {
         // invalidates. Headroom restored without losing what was
         // learned. Mirrors Codex/Claude Code: re-summarize what the
         // agent already learned rather than re-retrieve.
-        const MAX_INNER_ITERATIONS: usize = 64;
-        const COMPACT_AT_ITERATION: usize = (MAX_INNER_ITERATIONS * 4) / 5; // 80%
+        let max_inner_iterations = max_iterations;
+        let compact_at_iteration = (max_inner_iterations * 4) / 5; // 80%
         let mut compacted = false;
-        for iter in 0..MAX_INNER_ITERATIONS {
+        for iter in 0..max_inner_iterations {
             if cancel.is_cancelled() {
                 let _ = self.events_tx.send(SessionEvent::Error("cancelled".into()));
                 return Err(SessionError::Cancelled);
@@ -432,7 +538,7 @@ impl Session {
             // Compaction failures are non-fatal — we log and continue
             // without compacting; the only cost is hitting the hard
             // stop sooner.
-            if !compacted && iter >= COMPACT_AT_ITERATION {
+            if !compacted && iter >= compact_at_iteration {
                 compacted = true;
                 let history_for_summary = self.history.lock().await.clone();
                 match crate::compact::compact_history(
@@ -444,8 +550,17 @@ impl Session {
                 {
                     Ok(summary) if !summary.is_empty() => {
                         let mut h = self.history.lock().await;
+                        let replaced_count = h.len();
                         let owned = std::mem::take(&mut *h);
                         *h = crate::compact::replace_history_with_summary(owned, summary);
+                        if let Some(rec) = &self.recorder {
+                            rec.record_compaction(replaced_count);
+                            // Mirror the new (summary-bearing) history
+                            // into the log so resume reconstructs it.
+                            for m in h.iter() {
+                                rec.record_message(m.clone());
+                            }
+                        }
                         // Re-snapshot since we just rewrote history.
                         let snapshot = h.clone();
                         drop(h);
@@ -507,9 +622,9 @@ impl Session {
             }
         }
         // Iteration cap reached — defensive against runaway tool loops.
-        warn!("hit MAX_INNER_ITERATIONS; ending turn");
+        warn!(max_inner_iterations, "hit iteration cap; ending turn");
         let _ = self.events_tx.send(SessionEvent::Error(format!(
-            "turn exceeded {MAX_INNER_ITERATIONS} sampling iterations; ending"
+            "turn exceeded {max_inner_iterations} sampling iterations; ending"
         )));
         let _ = self.events_tx.send(SessionEvent::TurnEnd);
         Ok(())
@@ -621,11 +736,15 @@ impl Session {
             });
         }
         if !assistant_blocks.is_empty() {
-            let mut h = self.history.lock().await;
-            h.push(Message {
+            let assistant_msg = Message {
                 role: Role::Assistant,
                 content: assistant_blocks,
-            });
+            };
+            if let Some(rec) = &self.recorder {
+                rec.record_message(assistant_msg.clone());
+            }
+            let mut h = self.history.lock().await;
+            h.push(assistant_msg);
         }
 
         // Dispatch tool calls and append their results as a single user
@@ -637,11 +756,15 @@ impl Session {
                 let block = self.dispatch_tool(call, cancel).await?;
                 result_blocks.push(block);
             }
-            let mut h = self.history.lock().await;
-            h.push(Message {
+            let tool_result_msg = Message {
                 role: Role::User,
                 content: result_blocks,
-            });
+            };
+            if let Some(rec) = &self.recorder {
+                rec.record_message(tool_result_msg.clone());
+            }
+            let mut h = self.history.lock().await;
+            h.push(tool_result_msg);
         }
 
         let _ = self.events_tx.send(SessionEvent::SamplingComplete {
@@ -742,6 +865,7 @@ impl Session {
             approval_tx: self.approval_tx.clone(),
             mcp_host: self.mcp_host.clone(),
             skills: self.skills.clone(),
+            subagent_return: self.subagent_return.clone(),
         };
 
         let result = tokio::select! {
@@ -942,6 +1066,31 @@ mod tests {
             std::env::temp_dir(),
         );
         assert_eq!(s.tool_count(), 0);
+    }
+
+    /// Wiring smoke: `with_recorder` mounts a recorder and the JSONL
+    /// path lands under the supplied state root. Doesn't run a turn —
+    /// that needs a live API; this just exercises the constructor path.
+    #[tokio::test]
+    async fn with_recorder_creates_log_under_state_root() {
+        let client = Client::new(
+            "test-key",
+            crate::anthropic::ClientConfig::default(),
+        )
+        .expect("client");
+        let dir = tempfile::tempdir().unwrap();
+        let s = Session::new(
+            client,
+            ToolRegistry::new(),
+            "claude-haiku-4-5-20251001",
+            None,
+            std::env::temp_dir(),
+        )
+        .with_recorder(dir.path());
+        assert!(s.recorder.is_some(), "recorder must be mounted");
+        let path = s.recorder.as_ref().unwrap().path();
+        assert!(path.starts_with(dir.path().join("sessions")));
+        assert!(path.exists(), "log file should be created");
     }
 
     /// Wiring smoke: `with_approval_channel` populates the field. The

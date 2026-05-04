@@ -156,6 +156,7 @@ mod tests {
                 approval_tx: None,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
+            subagent_return: None,
             },
             events_rx,
             input_rx,
@@ -173,6 +174,7 @@ mod tests {
             approval_tx: None,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
+            subagent_return: None,
         }
     }
 

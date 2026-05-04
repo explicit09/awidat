@@ -4,9 +4,11 @@
 //! §6.
 
 pub mod apply_edl;
+pub mod attempt_completion;
 pub mod bash;
 pub mod broll_candidates;
 pub mod clip_search;
+pub mod delegate;
 pub mod find_beat;
 pub mod find_eye_contact;
 pub mod find_moment;

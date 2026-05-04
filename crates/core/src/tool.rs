@@ -20,7 +20,7 @@
 //! buys us nothing. Wiring the trait method now means week 4+ tools slot
 //! in without a refactor.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -99,6 +99,13 @@ pub struct ToolContext {
     /// (one line per skill) is already in the system prompt; this
     /// Arc holds the bodies + metadata for L2 disclosure.
     pub skills: std::sync::Arc<crate::skills::SkillRegistry>,
+    /// Sub-agent return slot — `Some` only when this `ToolContext` is
+    /// running inside a `delegate`-spawned sub-session. The
+    /// `attempt_completion` tool writes the sub-agent's final answer
+    /// here; `delegate` reads it after the sub-session ends. Always
+    /// `None` for the root agent, so any non-sub-agent context cannot
+    /// accidentally call `attempt_completion`.
+    pub subagent_return: Option<std::sync::Arc<tokio::sync::Mutex<Option<String>>>>,
 }
 
 /// One pending approval request emitted by the agent loop before it
@@ -270,6 +277,22 @@ impl ToolRegistry {
     pub fn is_empty(&self) -> bool {
         self.handlers.is_empty()
     }
+
+    /// Build a new registry containing only handlers whose names appear
+    /// in `allowed`. Used when launching a sub-agent to constrain its
+    /// tool surface (cline `SubagentBuilder.ts:14-23` pattern). Names
+    /// in `allowed` that don't exist in `self` are silently skipped —
+    /// the subagent simply doesn't get them.
+    pub fn restrict_to(&self, allowed: &[&str]) -> Self {
+        let allow: HashSet<&str> = allowed.iter().copied().collect();
+        let handlers = self
+            .handlers
+            .iter()
+            .filter(|(name, _)| allow.contains(**name))
+            .map(|(name, h)| (*name, h.clone()))
+            .collect();
+        Self { handlers }
+    }
 }
 
 impl std::fmt::Debug for ToolRegistry {
@@ -318,6 +341,7 @@ mod tests {
             approval_tx: None,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
+            subagent_return: None,
         }
     }
 

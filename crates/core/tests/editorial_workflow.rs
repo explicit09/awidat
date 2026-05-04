@@ -131,6 +131,7 @@ fn ctx_at(root: &Path) -> ToolContext {
             version: "0.0.0".into(),
         }),
         skills: std::sync::Arc::new(awidat_core::skills::SkillRegistry::default()),
+        subagent_return: None,
     }
 }
 

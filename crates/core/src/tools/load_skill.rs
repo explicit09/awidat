@@ -154,6 +154,7 @@ mod tests {
                 version: "0.0.0".into(),
             }),
             skills: Arc::new(reg),
+            subagent_return: None,
         }
     }
 

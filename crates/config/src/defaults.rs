@@ -170,6 +170,19 @@ pub fn user_skills_root() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("awidat").join("skills"))
 }
 
+/// Persistent state root: where session logs (`sessions/<date>/...jsonl`)
+/// live. Override with `AWIDAT_STATE_ROOT` (used in tests). Defaults to
+/// `~/.local/share/awidat`, sibling of the install layout so a user
+/// wiping the install doesn't lose conversation history.
+pub fn state_root() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("AWIDAT_STATE_ROOT")
+        && !p.is_empty()
+    {
+        return Some(PathBuf::from(p));
+    }
+    dirs::home_dir().map(|h| h.join(".local/share/awidat"))
+}
+
 /// Resolve the `uv` executable path. Returns the absolute path when
 /// findable; falls back to the literal `"uv"` (assumes PATH).
 pub fn uv_command() -> String {

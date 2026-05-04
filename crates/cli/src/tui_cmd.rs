@@ -14,7 +14,7 @@ use anyhow::{Context, Result, anyhow};
 use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
-    clip_search::ClipSearchTool, find_beat::FindBeatTool,
+    clip_search::ClipSearchTool, delegate::DelegateTool, find_beat::FindBeatTool,
     find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
@@ -24,13 +24,14 @@ use awidat_core::tools::{
     update_plan::UpdatePlanTool, view_episode::ViewEpisodeTool,
     view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
+use awidat_core::subagent::SubAgentRegistry;
 use awidat_core::{Session, ToolRegistry};
 use awidat_tui::{App, AppConfig};
 use tokio::sync::mpsc;
 
 const SYSTEM_PROMPT: &str = "\
 You are awidat, a terminal-first agent for editing long-form spoken \
-video. You have 21 tools, organized by purpose:\
+video. You have 22 tools, organized by purpose:\
 \n  - **Discovery / map**: view_episode (compact map of the project — \
 includes which vision indexers have run), view_timeline, list_assets.\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
@@ -65,6 +66,13 @@ interview\" → interview-tightener), call load_skill(name=...) BEFORE \
 starting the work. The skill body has the editorial style + \
 step-by-step playbook; following it produces better cuts than \
 improvising.\
+\n  - **Delegate**: delegate — spawn a read-only sub-agent for a focused \
+research question (e.g. 'episode-explorer: what's in this episode?'). \
+The sub-agent runs in isolation with a restricted tool surface and \
+returns one consolidated string. Use when the answer is paragraphs of \
+investigation that you don't need verbatim in the main turn — keeps \
+context clean. Sub-agents cannot mutate state; for edits, do the work \
+yourself.\
 \n\n\
 Mutating tools (apply_edl, start_render, bash) require user approval — \
 the UI shows a modal and the user picks Allow / Allow-for-Session / \
@@ -112,6 +120,64 @@ pub fn run(project_root: &Path, model_override: Option<&str>) -> Result<()> {
 /// by `awidat skills run <name>` to stage a first-turn message
 /// asking the agent to use a specific skill. The user can edit
 /// the prompt or hit enter to submit it.
+/// Build the full editorial-tool registry the TUI mounts. Factored out
+/// so `resume_cmd` mounts the same surface when re-opening a session.
+/// The `delegate` tool is added on top of the base registry, since it
+/// needs a snapshot of the registry to filter against per call. `model`
+/// is the default sub-agent model.
+pub fn build_full_registry(model: &str) -> ToolRegistry {
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(ApplyEdlTool));
+    registry.register(Arc::new(BashTool));
+    registry.register(Arc::new(FindMomentTool));
+    registry.register(Arc::new(InspectClipTool));
+    registry.register(Arc::new(ListAssetsTool));
+    registry.register(Arc::new(PollRenderTool));
+    registry.register(Arc::new(ReadIndexTool));
+    registry.register(Arc::new(RequestUserInputTool));
+    registry.register(Arc::new(StartRenderTool));
+    registry.register(Arc::new(UpdatePlanTool));
+    registry.register(Arc::new(FindBeatTool));
+    registry.register(Arc::new(InspectMomentTool));
+    registry.register(Arc::new(ViewEpisodeTool));
+    registry.register(Arc::new(ViewFrameTool));
+    registry.register(Arc::new(ViewTimelineTool));
+    registry.register(Arc::new(BrollCandidatesTool));
+    registry.register(Arc::new(ClipSearchTool));
+    registry.register(Arc::new(FindEyeContactTool));
+    registry.register(Arc::new(FindSpeakerOncamTool));
+    registry.register(Arc::new(ShotSummaryTool));
+    registry.register(Arc::new(LoadSkillTool));
+    let subagents = Arc::new(SubAgentRegistry::defaults());
+    let snapshot = registry.clone();
+    registry.register(Arc::new(DelegateTool::new(snapshot, subagents, model.to_string())));
+    registry
+}
+
+/// Run the TUI against a fully built `Session` — used by
+/// `resume_cmd` after `Session::resume` has replayed history.
+pub fn run_with_session(
+    session: std::sync::Arc<Session>,
+    approval_rx: mpsc::Receiver<awidat_core::tool::ApprovalRequest>,
+    user_input_rx: mpsc::Receiver<awidat_core::tool::UserInputRequest>,
+    initial_prompt: Option<String>,
+) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime")?;
+    runtime.block_on(async move {
+        let cfg = AppConfig {
+            session,
+            approval_rx,
+            user_input_rx: Some(user_input_rx),
+            initial_prompt,
+        };
+        let app = App::new(&cfg);
+        app.run(cfg).await
+    })
+}
+
 pub fn run_with_initial_prompt(
     project_root: &Path,
     model_override: Option<&str>,
@@ -143,45 +209,28 @@ async fn run_async(
         )
     })?;
 
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(ApplyEdlTool));
-    registry.register(Arc::new(BashTool));
-    registry.register(Arc::new(FindMomentTool));
-    registry.register(Arc::new(InspectClipTool));
-    registry.register(Arc::new(ListAssetsTool));
-    registry.register(Arc::new(PollRenderTool));
-    registry.register(Arc::new(ReadIndexTool));
-    registry.register(Arc::new(RequestUserInputTool));
-    registry.register(Arc::new(StartRenderTool));
-    registry.register(Arc::new(UpdatePlanTool));
-    registry.register(Arc::new(FindBeatTool));
-    registry.register(Arc::new(InspectMomentTool));
-    registry.register(Arc::new(ViewEpisodeTool));
-    registry.register(Arc::new(ViewFrameTool));
-    registry.register(Arc::new(ViewTimelineTool));
-    // Vision-side tools (Day 6/7 indexers).
-    registry.register(Arc::new(BrollCandidatesTool));
-    registry.register(Arc::new(ClipSearchTool));
-    registry.register(Arc::new(FindEyeContactTool));
-    registry.register(Arc::new(FindSpeakerOncamTool));
-    registry.register(Arc::new(ShotSummaryTool));
-    // Skills (Week 6).
-    registry.register(Arc::new(LoadSkillTool));
+    let registry = build_full_registry(&model);
 
     let (approval_tx, approval_rx) = mpsc::channel(8);
     let (user_input_tx, user_input_rx) = mpsc::channel(8);
 
-    let session = Arc::new(
-        Session::new(
-            client,
-            registry,
-            model,
-            Some(SYSTEM_PROMPT.into()),
-            project_root,
-        )
-        .with_approval_channel(approval_tx)
-        .with_user_input_channel(user_input_tx),
-    );
+    let mut session_builder = Session::new(
+        client,
+        registry,
+        model,
+        Some(SYSTEM_PROMPT.into()),
+        project_root,
+    )
+    .with_approval_channel(approval_tx)
+    .with_user_input_channel(user_input_tx);
+    // Mount the rollout recorder so this session is `awidat resume`-able
+    // later. Disabled by `AWIDAT_NO_ROLLOUT=1` (tests, ad-hoc runs).
+    if std::env::var("AWIDAT_NO_ROLLOUT").ok().as_deref() != Some("1")
+        && let Some(state_root) = awidat_config::defaults::state_root()
+    {
+        session_builder = session_builder.with_recorder(&state_root);
+    }
+    let session = Arc::new(session_builder);
 
     let cfg = AppConfig {
         session: session.clone(),

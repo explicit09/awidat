@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 mod chat_cmd;
 mod index_cmd;
 mod new_cmd;
+mod resume_cmd;
 mod skills_cmd;
 mod tui_cmd;
 mod upgrade_cmd;
@@ -143,6 +144,19 @@ enum Command {
         #[arg(long)]
         skip_uv_sync: bool,
     },
+    /// List or resume prior sessions. With no args, lists the 20 most
+    /// recent rollout logs (newest first). With `<selector>`, resumes
+    /// that session in the TUI: `selector` may be a session id, a
+    /// list-index ("1" = most recent), or an absolute path to a JSONL
+    /// file.
+    Resume {
+        /// Session id, list-index, or path. Omit to list.
+        selector: Option<String>,
+        /// Override the default model id when resuming. Defaults to the
+        /// model the original session ran on.
+        #[arg(long)]
+        model: Option<String>,
+    },
     /// Print the version of the awidat binary.
     Version,
 }
@@ -207,6 +221,7 @@ fn main() -> ExitCode {
                 model,
             }),
         },
+        Command::Resume { selector, model } => resume_cmd::run(selector.as_deref(), model.as_deref()),
         Command::Upgrade {
             from,
             check,

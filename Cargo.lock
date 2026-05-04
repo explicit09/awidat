@@ -131,6 +131,7 @@ dependencies = [
  "awidat-secrets",
  "awidat-tui",
  "clap",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
@@ -178,6 +179,23 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "awidat-eval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "awidat-core",
+ "awidat-mcp",
+ "awidat-proto",
+ "awidat-render",
+ "awidat-test-support",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
