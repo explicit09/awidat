@@ -390,30 +390,22 @@ impl App {
         let inner = card_block.inner(card);
         f.render_widget(card_block, card);
 
+        // Vertical split: top 4 rows = two-column layout, bottom row =
+        // full-width "indexed: ..." line. Pulling that out of the
+        // narrow left column was needed because the indexer list runs
+        // 60–80 chars (whisper + topic + editorial-moments + 5 vision
+        // names + separators) — clipped at 32 chars in the column it
+        // truncated to "edior" mid-word, which a real run surfaced.
+        let card_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(4), Constraint::Length(1)])
+            .split(inner);
         let columns = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(32), Constraint::Min(20)])
-            .split(inner);
+            .split(card_rows[0]);
 
-        // Left column: identity + status + indexed-state summary.
-        // The "indexed:" line is the headline addition — tells the
-        // user at a glance what the agent can answer questions about,
-        // without having to call view_episode first.
-        let indexed_line = match self.insights.welcome_indexers_line() {
-            Some(line) => Line::from(vec![
-                Span::raw("  "),
-                Span::styled("indexed: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(line, Style::default().fg(Color::Green)),
-            ]),
-            None => Line::from(vec![
-                Span::raw("  "),
-                Span::styled("indexed: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    "(none yet — run `awidat index`)",
-                    Style::default().fg(Color::Yellow),
-                ),
-            ]),
-        };
+        // Left column: identity + status (4 rows).
         f.render_widget(
             Paragraph::new(vec![
                 Line::from(vec![
@@ -447,7 +439,6 @@ impl App {
                         Style::default().fg(Color::Cyan),
                     ),
                 ]),
-                indexed_line,
             ]),
             columns[0],
         );
@@ -469,6 +460,20 @@ impl App {
                     Style::default().fg(Color::DarkGray),
                 ),
             ]),
+        };
+        // Right column: 4 rows. We dropped one example prompt to
+        // make room for the editorial-moments summary, since the
+        // moments roll-up actually changes per project (live data
+        // signal) and the example prompts are static. Pick the
+        // example based on what's been indexed: vision-tool prompt
+        // when clip-mcp ran, beat prompt otherwise — both are
+        // proven Cursor-moments from the real-video session.
+        let example_prompt = if !self.insights.vision_indexers.is_empty() {
+            "show frames where someone is holding a phone"
+        } else if !self.insights.editorial_indexers.is_empty() {
+            "find the strongest hooks and compose a 30s reel"
+        } else {
+            "drop a video under raw/ and run `awidat index`"
         };
         f.render_widget(
             Paragraph::new(vec![
@@ -497,21 +502,32 @@ impl App {
                 moments_line,
                 Line::from(vec![
                     Span::styled("try ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        "find the strongest hooks and compose a 30s reel",
-                        Style::default().fg(Color::Gray),
-                    ),
-                ]),
-                Line::from(vec![
-                    Span::styled("or  ", Style::default().fg(Color::DarkGray)),
-                    Span::styled(
-                        "show frames where someone is holding a phone",
-                        Style::default().fg(Color::Gray),
-                    ),
+                    Span::styled(example_prompt, Style::default().fg(Color::Gray)),
                 ]),
             ]),
             columns[1],
         );
+
+        // Full-width "indexed: ..." row. Pulled out of the narrow
+        // left column so the indexer name list (whisper · topic ·
+        // editorial-moments · clip · face · shot · gaze ·
+        // frame-quality, ~80 chars) doesn't get truncated.
+        let indexed_line = match self.insights.welcome_indexers_line() {
+            Some(line) => Line::from(vec![
+                Span::raw("  "),
+                Span::styled("indexed: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(line, Style::default().fg(Color::Green)),
+            ]),
+            None => Line::from(vec![
+                Span::raw("  "),
+                Span::styled("indexed: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    "(none yet — run `awidat index <project>` to build the brain)",
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]),
+        };
+        f.render_widget(Paragraph::new(indexed_line), card_rows[1]);
 
         let tip_y = card.bottom().saturating_add(2);
         f.render_widget(

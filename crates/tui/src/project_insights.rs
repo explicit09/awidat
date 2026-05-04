@@ -83,11 +83,17 @@ impl ProjectInsights {
 
     /// One-line moments summary like "12 moments · 5 hooks · 3
     /// punchlines · 2 ctas · 2 other". Returns `None` when the
-    /// editorial-moments index hasn't run.
+    /// editorial-moments index hasn't run OR has run but produced
+    /// zero moments — both states want the coachmark, not a misleading
+    /// "0 moments" line that suggests the indexer succeeded with empty
+    /// output. Real-world session bug: stale empty `raw/` dir from a
+    /// mid-investigation rm of a sidecar produced "0 moments" in the
+    /// welcome card even though the live data was 159 moments after
+    /// re-indexing.
     pub fn welcome_moments_line(&self) -> Option<String> {
         let total = self.moment_count?;
         if total == 0 {
-            return Some("0 moments".to_string());
+            return None;
         }
         let mut parts = vec![format!("{total} moments")];
         for (kind, n) in self.moment_kinds.iter().take(3) {
@@ -179,6 +185,23 @@ mod tests {
         let line = i.welcome_indexers_line().unwrap();
         // Editorial first, then vision — both in canonical order.
         assert_eq!(line, "whisper · topic · clip · face");
+    }
+
+    #[test]
+    fn empty_editorial_moments_dir_returns_none_not_zero_moments() {
+        // Real-world session bug: the editorial-moments dir exists
+        // (because the indexer was run earlier in the session) but
+        // contains no sidecars (because the user rm'd the file
+        // mid-investigation, or because the indexer crashed before
+        // writing). welcome_moments_line should return None and let
+        // the welcome card render the coachmark, NOT "0 moments"
+        // which falsely suggests the indexer ran successfully with
+        // empty output.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("index/editorial-moments/raw")).unwrap();
+        let i = ProjectInsights::gather(dir.path());
+        assert_eq!(i.moment_count, Some(0));
+        assert!(i.welcome_moments_line().is_none(), "empty dir should hide the line");
     }
 
     #[test]
