@@ -18,7 +18,10 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
 use awidat_core::{Session, SessionEvent};
-use crossterm::event::{Event as CtEvent, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    DisableBracketedPaste, EnableBracketedPaste, Event as CtEvent, EventStream, KeyCode, KeyEvent,
+    KeyModifiers,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -165,6 +168,14 @@ impl App {
             }
             AppEvent::Resize { .. } => true,
             AppEvent::Key(key) => self.handle_key(key),
+            AppEvent::Paste(s) => {
+                // Bracketed paste — insert at cursor without
+                // submitting. Newlines in `s` are preserved as literal
+                // newlines so the user's multi-line paste stays intact
+                // and they submit explicitly with Enter.
+                self.composer.insert_str(&s);
+                true
+            }
             AppEvent::Mouse(_) => false,
             AppEvent::Session(ev) => {
                 // Turn lifecycle signals — clear in-flight state when
@@ -336,6 +347,7 @@ impl App {
                     && self.modal.is_none()
                     && self.pending_user_input.is_none();
 
+                let composer_height = self.composer.desired_height(area.width);
                 let composer_area = if idle && area.height >= 14 {
                     self.render_idle(f, area)
                 } else {
@@ -345,21 +357,30 @@ impl App {
                         area
                     };
                     let (chat_area, composer_area, status_area) =
-                        active_content_areas(area, self.chat.rendered_height());
+                        active_content_areas(area, self.chat.rendered_height(), composer_height);
                     f.render_widget(&self.chat, chat_area);
                     f.render_widget(self.status_line(), status_area);
                     composer_area
                 };
 
                 f.render_widget(&self.composer, composer_area);
-                let composer_row = composer_area.y + composer_area.height / 2;
+                // Cursor positioning honors soft-wrap. `cursor_position`
+                // returns (col_in_text_area, row_offset). The "› "
+                // prefix occupies 2 cells of the first row.
+                let inner_width = composer_area.width.saturating_sub(2);
+                let (col_in_text, row_offset) = self.composer.cursor_position(inner_width);
                 let cursor_x = composer_area
                     .x
-                    .saturating_add(self.composer.cursor_column())
+                    .saturating_add(2)
+                    .saturating_add(col_in_text)
                     .min(composer_area.right().saturating_sub(1));
+                let cursor_y = composer_area
+                    .y
+                    .saturating_add(row_offset)
+                    .min(composer_area.bottom().saturating_sub(1));
                 f.set_cursor_position(Position {
                     x: cursor_x,
-                    y: composer_row,
+                    y: cursor_y,
                 });
                 if let Some(modal) = &self.modal {
                     f.render_widget(modal, area);
@@ -736,21 +757,30 @@ fn top_gutter(area: Rect) -> u16 {
     }
 }
 
-fn active_content_areas(area: Rect, desired_chat_height: u16) -> (Rect, Rect, Rect) {
-    const COMPOSER_HEIGHT: u16 = 3;
+fn active_content_areas(
+    area: Rect,
+    desired_chat_height: u16,
+    desired_composer_height: u16,
+) -> (Rect, Rect, Rect) {
     const STATUS_HEIGHT: u16 = 1;
+    // Composer grows with multi-line input but never below 3 (border
+    // + one input row + breathing room) and is capped by the
+    // composer's own MAX_ROWS (currently 6).
+    let composer_height_target = desired_composer_height.max(3);
 
-    let max_chat_height = area.height.saturating_sub(COMPOSER_HEIGHT + STATUS_HEIGHT);
+    let max_chat_height = area
+        .height
+        .saturating_sub(composer_height_target + STATUS_HEIGHT);
     let chat_height = desired_chat_height.max(1).min(max_chat_height.max(1));
     let gap = if chat_height < max_chat_height
-        && chat_height + 1 + COMPOSER_HEIGHT + STATUS_HEIGHT <= area.height
+        && chat_height + 1 + composer_height_target + STATUS_HEIGHT <= area.height
     {
         1
     } else {
         0
     };
     let composer_y = area.y + chat_height + gap;
-    let composer_height = COMPOSER_HEIGHT.min(area.bottom().saturating_sub(composer_y));
+    let composer_height = composer_height_target.min(area.bottom().saturating_sub(composer_y));
     let status_y = composer_y + composer_height;
     let status_height = STATUS_HEIGHT.min(area.bottom().saturating_sub(status_y));
 
@@ -777,12 +807,38 @@ fn active_content_areas(area: Rect, desired_chat_height: u16) -> (Rect, Rect, Re
 }
 
 fn enter_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
-    enable_raw_mode().context("enable raw mode")?;
+    // The TUI needs an interactive terminal. Detect non-tty contexts
+    // up front (piped stdin, CI, IDE consoles that don't expose a
+    // pty) and surface a clear error instead of crossterm's opaque
+    // "Device not configured (os error 6)".
+    use std::io::IsTerminal;
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(anyhow::anyhow!(
+            "awidat tui needs an interactive terminal — stdin/stdout aren't a TTY. \
+             Run from a real terminal (Terminal.app, iTerm2, kitty, etc.), not a pipe \
+             or non-interactive shell."
+        ));
+    }
+    enable_raw_mode().context(
+        "enable raw mode (this usually means stdin isn't a TTY — \
+         re-run from an interactive terminal)",
+    )?;
     let mut stdout = io::stdout();
     if let Err(e) = execute!(stdout, EnterAlternateScreen, Clear(ClearType::All)) {
         let _ = disable_raw_mode();
         return Err(e).context("enter alternate screen");
     }
+    // Bracketed paste: terminal sends one Event::Paste(String) for an
+    // entire clipboard payload (possibly multi-line) instead of
+    // streaming Char + Enter events. Without this, pasting code that
+    // contains a newline auto-submits at the first \n, fragmenting
+    // the user's input across multiple turns. Codex pattern from
+    // `harnesses/codex/codex-rs/tui/src/tui.rs:107`.
+    //
+    // Failure is non-fatal — terminals that don't support bracketed
+    // paste (notably some Windows consoles) keep working with the
+    // PasteBurst fallback in the composer.
+    let _ = execute!(stdout, EnableBracketedPaste);
     stdout.flush().context("flush alternate screen setup")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::with_options_and_cursor_position(backend, Position::ORIGIN)
@@ -802,6 +858,7 @@ fn enter_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
 
 fn leave_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let _ = terminal.show_cursor();
+    let _ = execute!(terminal.backend_mut(), DisableBracketedPaste);
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.backend_mut().flush();
     let _ = disable_raw_mode();
@@ -831,6 +888,11 @@ fn spawn_terminal_pump(tx: mpsc::UnboundedSender<AppEvent>) -> JoinHandle<()> {
                         })
                         .is_err()
                     {
+                        break;
+                    }
+                }
+                Ok(CtEvent::Paste(s)) => {
+                    if tx.send(AppEvent::Paste(s)).is_err() {
                         break;
                     }
                 }

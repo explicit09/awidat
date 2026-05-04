@@ -797,14 +797,22 @@ impl Session {
         cancel: &CancellationToken,
     ) -> Result<ContentBlock, SessionError> {
         // If args failed to parse, surface the parse error directly without
-        // dispatching.
+        // dispatching. We MUST emit a ToolResult event before returning,
+        // otherwise the TUI's Running tool-call state stays stuck on
+        // the spinner forever (caught by Week-8 demo bringup).
         if let Some(err) = call.args_err {
+            let msg = format!(
+                "tool '{}' arguments failed to parse: {err}",
+                call.name
+            );
+            let _ = self.events_tx.send(SessionEvent::ToolResult {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                result: Err(msg.clone()),
+            });
             return Ok(ContentBlock::ToolResult {
                 tool_use_id: call.id,
-                content: crate::anthropic::tool_result::text(format!(
-                    "tool '{}' arguments failed to parse: {err}",
-                    call.name
-                )),
+                content: crate::anthropic::tool_result::text(msg),
                 is_error: Some(true),
             });
         }
@@ -894,7 +902,17 @@ impl Session {
 
         let result = tokio::select! {
             biased;
-            () = cancel.cancelled() => return Err(SessionError::Cancelled),
+            () = cancel.cancelled() => {
+                // Emit a ToolResult event before bailing — otherwise
+                // the TUI's Running spinner for this call sits there
+                // forever after a Ctrl-C cancel.
+                let _ = self.events_tx.send(SessionEvent::ToolResult {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    result: Err("cancelled".into()),
+                });
+                return Err(SessionError::Cancelled);
+            }
             res = handler.handle(invocation, ctx) => res,
         };
 
@@ -923,6 +941,14 @@ impl Session {
                 })
             }
             Err(FunctionCallError::Fatal(msg)) => {
+                // Emit a terminal ToolResult so the TUI clears the
+                // Running spinner for this specific call before we
+                // surface the fatal error globally.
+                let _ = self.events_tx.send(SessionEvent::ToolResult {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    result: Err(format!("fatal: {msg}")),
+                });
                 let _ = self.events_tx.send(SessionEvent::Error(format!(
                     "fatal: {msg}"
                 )));

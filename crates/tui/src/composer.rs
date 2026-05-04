@@ -14,7 +14,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Widget};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// One-line composer state.
 #[derive(Debug, Default)]
@@ -61,11 +61,76 @@ impl Composer {
         self.text.is_empty()
     }
 
-    /// Cursor column inside the composer render area.
+    /// Cursor column inside the composer render area, accounting for
+    /// soft-wrap at `inner_width` (text-area width inside the
+    /// composer's frame, NOT including the "› " prefix). Returns
+    /// (column_in_text_area, row_offset_from_first_text_row).
+    /// The 2-cell prefix is added by the caller.
+    pub fn cursor_position(&self, inner_width: u16) -> (u16, u16) {
+        let inner_width = inner_width.max(1) as usize;
+        let byte_idx = self.byte_idx_for_char(self.cursor);
+        let before = &self.text[..byte_idx];
+        // Walk the text up to the cursor, tracking wrap. Newlines
+        // force a hard wrap; otherwise we wrap when the running width
+        // would exceed inner_width.
+        let mut col: usize = 0;
+        let mut row: usize = 0;
+        for ch in before.chars() {
+            if ch == '\n' {
+                row += 1;
+                col = 0;
+                continue;
+            }
+            let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if col + w > inner_width {
+                row += 1;
+                col = 0;
+            }
+            col += w;
+        }
+        (col as u16, row as u16)
+    }
+
+    /// Legacy single-row cursor column used by the old call site
+    /// (see TUI #2). Computes the column AS IF the input were one line.
+    /// Kept so existing tests and callers that don't know about wrap
+    /// keep compiling.
     pub fn cursor_column(&self) -> u16 {
         let byte_idx = self.byte_idx_for_char(self.cursor);
         let input_width = self.text[..byte_idx].width();
         u16::try_from(2 + input_width).unwrap_or(u16::MAX)
+    }
+
+    /// Number of rows this composer would occupy when rendered at
+    /// `total_width` (border + padding included). Soft-wraps long lines
+    /// and respects literal newlines from a multi-line paste. Capped
+    /// at MAX_ROWS to keep the composer from eating the chat pane.
+    pub fn desired_height(&self, total_width: u16) -> u16 {
+        const MAX_ROWS: u16 = 6;
+        const FRAME_OVERHEAD: u16 = 2; // border-ish padding
+        // The "› " prefix occupies 2 cells of the first wrap segment.
+        let inner_width = total_width.saturating_sub(2).max(1) as usize;
+        let text = if self.text.is_empty() {
+            self.placeholder.as_str()
+        } else {
+            self.text.as_str()
+        };
+        let mut row_count: u16 = 1;
+        let mut col: usize = 0;
+        for ch in text.chars() {
+            if ch == '\n' {
+                row_count = row_count.saturating_add(1);
+                col = 0;
+                continue;
+            }
+            let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if col + w > inner_width {
+                row_count = row_count.saturating_add(1);
+                col = 0;
+            }
+            col += w;
+        }
+        (row_count + FRAME_OVERHEAD).min(MAX_ROWS)
     }
 
     /// Drain the current input and reset to empty. Returns `None` if the
@@ -123,6 +188,20 @@ impl Composer {
         self.cursor += 1;
     }
 
+    /// Insert a (possibly multi-line) string at the cursor without
+    /// submitting. Called from the bracketed-paste path
+    /// (`AppEvent::Paste`). Newlines are preserved in `self.text` so
+    /// the user's pasted multi-line input stays intact and they
+    /// submit explicitly with Enter.
+    pub fn insert_str(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        let byte_idx = self.byte_idx_for_char(self.cursor);
+        self.text.insert_str(byte_idx, s);
+        self.cursor += s.chars().count();
+    }
+
     fn backspace(&mut self) -> bool {
         if self.cursor == 0 {
             return false;
@@ -155,23 +234,16 @@ impl Composer {
 
 impl Widget for &Composer {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        if area.height == 0 {
+        if area.height == 0 || area.width == 0 {
             return;
         }
-        let input_row = if area.height > 1 {
-            area.y + area.height / 2
-        } else {
-            area.y
-        };
-        let input_area = Rect {
-            x: area.x,
-            y: input_row,
-            width: area.width,
-            height: 1,
-        };
+        // Paint the composer background across the full allotted area
+        // so it reads as one box even when text wraps to multiple
+        // rows. The full area is the "input area" now (no centering
+        // tricks); the cursor logic in `app.rs` honors wrap rows.
         Block::default()
             .style(Style::default().bg(Color::Rgb(45, 45, 45)))
-            .render(input_area, buf);
+            .render(area, buf);
 
         let line = if self.text.is_empty() {
             Line::from(vec![
@@ -204,7 +276,13 @@ impl Widget for &Composer {
                 ),
             ])
         };
-        Paragraph::new(line).render(input_area, buf);
+        // Wrap long input. `trim: false` preserves leading whitespace
+        // the user typed; ratatui wraps on whitespace-or-overflow when
+        // wrap is set, which gives natural soft-wrap for English-ish
+        // text and falls back to hard-wrap for long unbroken tokens.
+        Paragraph::new(line)
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .render(area, buf);
     }
 }
 
@@ -263,5 +341,84 @@ mod tests {
             c.handle_key(key(KeyCode::Char(ch)));
         }
         assert_eq!(c.cursor_column(), 4);
+    }
+
+    #[test]
+    fn insert_str_preserves_newlines_without_submitting() {
+        // Regression for bug #1 (TUI #160): pasted multi-line text
+        // used to fragment turns at every \n. Bracketed-paste path
+        // calls insert_str, which keeps newlines as literal chars and
+        // does NOT submit.
+        let mut c = Composer::new("hint");
+        c.insert_str("line one\nline two\nline three");
+        assert_eq!(c.text(), "line one\nline two\nline three");
+        assert!(!c.is_empty());
+    }
+
+    #[test]
+    fn insert_str_at_cursor_position() {
+        let mut c = Composer::new("hint");
+        for ch in "ABCD".chars() {
+            c.handle_key(key(KeyCode::Char(ch)));
+        }
+        c.handle_key(key(KeyCode::Left));
+        c.handle_key(key(KeyCode::Left));
+        // Cursor between B and C.
+        c.insert_str("XYZ");
+        assert_eq!(c.text(), "ABXYZCD");
+    }
+
+    #[test]
+    fn insert_str_handles_unicode() {
+        let mut c = Composer::new("hint");
+        c.insert_str("café\n你好");
+        assert_eq!(c.text(), "café\n你好");
+    }
+
+    #[test]
+    fn desired_height_grows_with_explicit_newlines() {
+        // 3 lines of pasted text → composer needs 3 text rows + frame
+        // overhead, capped at MAX_ROWS=6.
+        let mut c = Composer::new("hint");
+        c.insert_str("a\nb\nc");
+        // total_width=80 → 3 text rows → 5 with overhead
+        assert_eq!(c.desired_height(80), 5);
+    }
+
+    #[test]
+    fn desired_height_grows_when_text_overflows_width() {
+        let mut c = Composer::new("hint");
+        // Single 200-char line at width 50 wraps to 4 rows of text.
+        c.insert_str(&"x".repeat(200));
+        // inner_width = 50 - 2 = 48, 200/48 = 5 rows → 5 + 2 overhead
+        // = 7, capped at MAX_ROWS=6
+        assert_eq!(c.desired_height(50), 6);
+    }
+
+    #[test]
+    fn desired_height_caps_at_max() {
+        let mut c = Composer::new("hint");
+        c.insert_str(&"line\n".repeat(20));
+        assert!(c.desired_height(80) <= 6, "must respect MAX_ROWS cap");
+    }
+
+    #[test]
+    fn cursor_position_tracks_wrap() {
+        let mut c = Composer::new("hint");
+        // 25 chars at inner_width=10 → wraps to row 2 col 5
+        // (rows 0–9, 10–19 fill; chars 20..24 land on row 2).
+        c.insert_str(&"x".repeat(25));
+        let (col, row) = c.cursor_position(10);
+        assert_eq!(row, 2);
+        assert_eq!(col, 5);
+    }
+
+    #[test]
+    fn cursor_position_respects_explicit_newlines() {
+        let mut c = Composer::new("hint");
+        c.insert_str("ab\ncd");
+        let (col, row) = c.cursor_position(80);
+        assert_eq!(row, 1);
+        assert_eq!(col, 2);
     }
 }

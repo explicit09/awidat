@@ -24,6 +24,11 @@ use crossterm::event::{KeyEvent, MouseEvent};
 pub enum AppEvent {
     /// User pressed a key.
     Key(KeyEvent),
+    /// User pasted a (possibly multi-line) string. Delivered as one
+    /// event by terminals that support bracketed paste, instead of
+    /// streaming Char + Enter keys (which would auto-submit at the
+    /// first \n). Composer inserts the whole string at the cursor.
+    Paste(String),
     /// User scrolled / clicked. Currently unused but plumbed so we can
     /// add scrollback navigation without rewiring the loop.
     Mouse(MouseEvent),
