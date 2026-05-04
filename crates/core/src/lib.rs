@@ -15,6 +15,7 @@ pub mod edl;
 pub mod context;
 pub mod episode_map;
 pub mod error;
+pub mod lessons;
 pub mod mcp_host;
 pub mod rollout;
 pub mod session;

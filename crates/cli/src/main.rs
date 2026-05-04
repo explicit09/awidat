@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 
 mod chat_cmd;
 mod index_cmd;
+mod lessons_cmd;
 mod new_cmd;
 mod resume_cmd;
 mod skills_cmd;
@@ -144,6 +145,17 @@ enum Command {
         #[arg(long)]
         skip_uv_sync: bool,
     },
+    /// Distill or display learned style from past sessions.
+    /// `awidat lessons learn` reads every captured editorial decision
+    /// (recorded automatically when you Allow / Deny a modal in the
+    /// TUI) and writes patterns to `~/.config/awidat/learned-style.md`.
+    /// That file is auto-spliced into the system prompt at session
+    /// start. `awidat lessons show` prints the current file.
+    Lessons {
+        /// What to do.
+        #[command(subcommand)]
+        action: LessonsAction,
+    },
     /// List or resume prior sessions. With no args, lists the 20 most
     /// recent rollout logs (newest first). With `<selector>`, resumes
     /// that session in the TUI: `selector` may be a session id, a
@@ -159,6 +171,16 @@ enum Command {
     },
     /// Print the version of the awidat binary.
     Version,
+}
+
+/// Sub-action for `awidat lessons`.
+#[derive(Subcommand, Debug)]
+enum LessonsAction {
+    /// Read every captured editorial decision and rewrite
+    /// `~/.config/awidat/learned-style.md` with the distilled patterns.
+    Learn,
+    /// Print the current `learned-style.md` body.
+    Show,
 }
 
 /// Sub-action for `awidat skills`.
@@ -220,6 +242,10 @@ fn main() -> ExitCode {
                 project,
                 model,
             }),
+        },
+        Command::Lessons { action } => match action {
+            LessonsAction::Learn => lessons_cmd::learn(),
+            LessonsAction::Show => lessons_cmd::show(),
         },
         Command::Resume { selector, model } => resume_cmd::run(selector.as_deref(), model.as_deref()),
         Command::Upgrade {

@@ -48,6 +48,34 @@ pub enum RolloutItem {
         /// dropped when it spliced in the summary.
         replaced_messages: usize,
     },
+    /// Captured user decision on a mutating tool call. Per #149: every
+    /// approval modal outcome (Allow, AllowForSession, Deny) is logged
+    /// here so the offline `awidat lessons learn` step can build
+    /// patterns. The `args_summary` is the short truncated form already
+    /// rendered to the user in the modal — not the full args, since
+    /// EDLs can be large.
+    EditorialDecision(EditorialDecision),
+}
+
+/// One captured editorial decision. Stable on disk: extending this
+/// struct must be additive (new fields with `#[serde(default)]`), since
+/// older session logs may already be on disk when a new awidat reads
+/// them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorialDecision {
+    /// Tool name (`apply_edl`, `start_render`, `bash`, …).
+    pub tool: String,
+    /// Same short summary the modal showed the user. Truncated; carries
+    /// just enough signal for pattern extraction (e.g. `apply_edl: 3
+    /// ops, score=0.72, kind=hook`). Caller-supplied — `Session`
+    /// builds it from the args + tool-specific summarizer.
+    pub args_summary: String,
+    /// What the user picked. String form for forward-compat: a future
+    /// awidat may add new decision variants and we don't want a session
+    /// log to be unreadable just because the enum grew.
+    pub decision: String,
+    /// When the modal was shown.
+    pub timestamp: DateTime<Utc>,
 }
 
 /// Per-session metadata written as the first line of the JSONL log.
@@ -192,6 +220,11 @@ impl Recorder {
                     );
                     messages.clear();
                 }
+                Ok(RolloutItem::EditorialDecision(_)) => {
+                    // Decisions are pure metadata — they don't affect
+                    // the resumed conversation history. Read offline by
+                    // `awidat lessons learn` (see #150).
+                }
                 Err(e) => {
                     warn!(
                         line = lineno + 1,
@@ -208,6 +241,35 @@ impl Recorder {
             ));
         };
         Ok((meta, messages))
+    }
+
+    /// Read every `EditorialDecision` from every rollout under
+    /// `state_root`. Used by `awidat lessons learn` (see #150) to build
+    /// a histogram of accept/reject patterns. Order is best-effort
+    /// chronological (newest-session-last); within a session the
+    /// log-order is preserved. Files that fail to parse are skipped.
+    pub fn collect_decisions(state_root: &Path) -> std::io::Result<Vec<EditorialDecision>> {
+        let entries = Self::list(state_root)?;
+        let mut out = Vec::new();
+        // `list` returned newest-first; reverse so the resulting vec is
+        // oldest-first, which makes "trend over time" computations
+        // straightforward downstream.
+        for (path, _meta) in entries.into_iter().rev() {
+            let Ok(body) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in body.lines() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(RolloutItem::EditorialDecision(d)) =
+                    serde_json::from_str::<RolloutItem>(line)
+                {
+                    out.push(d);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// List rollout files under `state_root`, newest first. Each entry
@@ -248,6 +310,20 @@ impl Recorder {
     /// `record_message` for the summary.
     pub fn record_compaction(&self, replaced_messages: usize) {
         self.send(WriterCmd::Append(RolloutItem::Compaction { replaced_messages }));
+    }
+
+    /// Append an editorial decision (#149). Called by `Session` after
+    /// the user replies to the approval modal. Fire-and-forget on the
+    /// writer task.
+    pub fn record_decision(&self, tool: String, args_summary: String, decision: String) {
+        self.send(WriterCmd::Append(RolloutItem::EditorialDecision(
+            EditorialDecision {
+                tool,
+                args_summary,
+                decision,
+                timestamp: Utc::now(),
+            },
+        )));
     }
 
     fn send(&self, cmd: WriterCmd) {
@@ -449,6 +525,56 @@ mod tests {
         let entries = Recorder::list(dir.path()).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].1.project_root, PathBuf::from("/b"));
+    }
+
+    #[tokio::test]
+    async fn record_decision_appends_typed_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = Recorder::create(
+            dir.path(),
+            PathBuf::from("/proj"),
+            "m".into(),
+        )
+        .unwrap();
+        rec.record_decision(
+            "apply_edl".into(),
+            "3 ops, kind=hook".into(),
+            "Allow".into(),
+        );
+        rec.flush().await.unwrap();
+        let body = std::fs::read_to_string(rec.path()).unwrap();
+        let line = body
+            .lines()
+            .find(|l| l.contains("editorial_decision"))
+            .expect("decision line on disk");
+        let parsed: RolloutItem = serde_json::from_str(line).unwrap();
+        match parsed {
+            RolloutItem::EditorialDecision(d) => {
+                assert_eq!(d.tool, "apply_edl");
+                assert_eq!(d.decision, "Allow");
+                assert!(d.args_summary.contains("kind=hook"));
+            }
+            _ => panic!("expected EditorialDecision"),
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_decisions_walks_all_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let r1 = Recorder::create(dir.path(), PathBuf::from("/p"), "m".into()).unwrap();
+        r1.record_decision("apply_edl".into(), "op A".into(), "Allow".into());
+        r1.flush().await.unwrap();
+        // Force second session a tick later for stable ordering.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let r2 = Recorder::create(dir.path(), PathBuf::from("/p"), "m".into()).unwrap();
+        r2.record_decision("apply_edl".into(), "op B".into(), "Deny".into());
+        r2.flush().await.unwrap();
+
+        let decisions = Recorder::collect_decisions(dir.path()).unwrap();
+        assert_eq!(decisions.len(), 2);
+        // collect_decisions returns oldest-session-first.
+        assert_eq!(decisions[0].args_summary, "op A");
+        assert_eq!(decisions[1].args_summary, "op B");
     }
 
     #[tokio::test]

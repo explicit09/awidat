@@ -246,16 +246,28 @@ impl Session {
         }
         let skill_registry = Arc::new(skill_registry);
 
+        // Read the distilled `learned-style.md` (if `awidat lessons learn`
+        // has been run) so the agent inherits the user's accept/reject
+        // patterns from past sessions. Stays inside the tier-1 cache
+        // prefix; the file changes only between sessions, so the
+        // cache stays warm across turns. Missing file = empty string.
+        let learned_style = crate::lessons::default_output_path()
+            .as_deref()
+            .and_then(crate::lessons::read_learned_style);
+
         // Compose the final system prompt: base prompt → episode map
-        // → AWIDAT.md. All extras stay in the tier-1 cache prefix so
-        // the cost is paid once per session. Skills catalog is per-
-        // turn (see above).
+        // → AWIDAT.md → learned style. All extras stay in the tier-1
+        // cache prefix so the cost is paid once per session. Skills
+        // catalog is per-turn (see above).
         let mut sections: Vec<String> = Vec::new();
         if let Some(base) = system_prompt {
             sections.push(base);
         }
         if let Some(map) = episode_map_text {
             sections.push(format!("## This episode\n\n{map}"));
+        }
+        if let Some(style) = learned_style {
+            sections.push(format!("## Learned style\n\n{style}"));
         }
         if !docs.text.is_empty() {
             sections.push(format!("## Project conventions (AWIDAT.md)\n\n{}", docs.text));
@@ -832,6 +844,16 @@ impl Session {
                 let decision = self
                     .request_approval(&tx, &invocation, cancel)
                     .await?;
+                // #149 — capture the decision in the rollout for
+                // offline pattern extraction. Best-effort: a missing
+                // recorder (tests, MCP server) just skips this.
+                if let Some(rec) = &self.recorder {
+                    rec.record_decision(
+                        call.name.clone(),
+                        summarize_args(&invocation.args),
+                        format!("{decision:?}"),
+                    );
+                }
                 match decision {
                     ApprovalDecision::Allow => {}
                     ApprovalDecision::AllowForSession => {
