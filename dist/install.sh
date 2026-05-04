@@ -67,8 +67,23 @@ fi
 
 # Materialize per-indexer venvs. First run downloads ~3 GB of wheels;
 # subsequent installs hit uv's cache and are fast.
-echo "Resolving python indexers (this is a one-time ~3 GB download)..."
-( cd "$AWIDAT_HOME/python" && "$AWIDAT_HOME/bin/uv" sync --all-packages )
+#
+# AWIDAT_SKIP_UV_SYNC=1 skips this step. Useful for:
+#   - Local-dev installs when the user already has a working .venv
+#     elsewhere (uv's wheel cache is shared across venvs anyway, but
+#     materializing another tree doubles disk usage).
+#   - CI smoke-tests of the install flow that don't need real wheels.
+# Without uv sync, the indexers can't run — but `awidat init`,
+# `awidat new`, `awidat tui` (the Rust-side surface) work, and the
+# user can run uv sync themselves later.
+if [ -n "${AWIDAT_SKIP_UV_SYNC:-}" ]; then
+  echo "Skipping uv sync (AWIDAT_SKIP_UV_SYNC set)."
+  echo "  To finish setup later, run:"
+  echo "    cd $AWIDAT_HOME/python && uv sync --all-packages"
+else
+  echo "Resolving python indexers (this is a one-time ~3 GB download)..."
+  ( cd "$AWIDAT_HOME/python" && "$AWIDAT_HOME/bin/uv" sync --all-packages )
+fi
 
 echo
 echo "awidat installed."
