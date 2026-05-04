@@ -45,37 +45,27 @@ SCHEMA_VERSION = "1"
 # window). Higher = coarser segmentation.
 WINDOW_SENTENCES = 5
 
-# Boundary threshold: cosine-similarity drops below this between adjacent
-# windows mark a boundary.
-#
-# Empirical investigation on the 44-min Samsung Galaxy retrospective:
-# the cosine sim max across ALL adjacent 5-sentence windows in that
-# transcript was 0.416. That means EVERY window pair is below 0.55 —
-# the threshold doesn't filter, it just lets the WINDOW_SENTENCES
-# suppression cap the boundary rate. Spoken-word transcripts have low
-# inter-window coherence by nature; an absolute-threshold approach
-# can't distinguish "real topic shift" from "speaker normal cadence."
-#
-# The right fix is local-minimum detection on the sim curve — boundaries
-# are valleys relative to their neighbors, not absolute lows — but
-# that's a real refactor. Tracked as #122. For now we keep the original
-# 0.55 threshold which is essentially "fire on every position the
-# WINDOW_SENTENCES suppression allows" on this transcript shape.
-BOUNDARY_THRESHOLD = 0.55
+# Boundary detection: TextTiling-style local-minimum on the cosine-
+# similarity curve. We DON'T use an absolute threshold — empirical
+# investigation on the 44-min Samsung Galaxy retrospective showed the
+# max sim across all adjacent 5-sentence windows was 0.416, so any
+# absolute threshold either fires on every position or none. Instead
+# we identify *valleys*: positions where similarity dips meaningfully
+# below the surrounding peaks. The depth score is
+# (peak_left - sim) + (peak_right - sim); positions whose depth
+# exceeds (mean_depth + DEPTH_THRESHOLD_STD * std_depth) become
+# boundaries. This is the original TextTiling formulation per
+# Hearst (1997) and now the standard approach for spoken-word
+# transcripts where absolute similarity values aren't meaningful.
+DEPTH_THRESHOLD_STD = 1.2  # k in mean + k*std; tighter = fewer boundaries
 
-# Minimum segment length. Short ones get merged with the neighbor.
-#
-# CAVEAT: 30s here is intentionally low because the current merge
-# logic in `_build_topics` cascades — short chunks fold into the
-# previous one, lengthening it, which doesn't help the NEXT chunk
-# measure against the floor. Empirical: on the 44-min Samsung video,
-# bumping floor 30→60 collapsed 33 topics down to 1 (every chunk is
-# ~30-60s, so every chunk fails a floor of 60+, every chunk merges
-# into the previous, runaway). Real fix is direction-aware merging
-# (merge with the more-similar neighbor, not always previous),
-# tracked as #122. Until that lands, raising this floor without
-# fixing the algorithm makes the output worse, not better.
-MIN_SEGMENT_S = 30.0
+# Minimum segment length. Sub-floor chunks get absorbed into the
+# closer-by-content neighbor (NOT always the previous one). The
+# direction-aware merge means short chunks within a topic get
+# absorbed locally without cascading — a chunk in the middle of a
+# topic merges sideways, a chunk at a real boundary stays distinct
+# because both neighbors are equally dissimilar.
+MIN_SEGMENT_S = 60.0
 
 
 server = IndexerServer(
@@ -126,28 +116,113 @@ def _embed(texts: list[str]) -> np.ndarray:
     return model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
 
 
-def _segment_boundaries(segments: list[dict[str, Any]]) -> list[int]:
-    """Return indices into `segments` where a topic boundary falls."""
+def _segment_boundaries(
+    segments: list[dict[str, Any]],
+) -> tuple[list[int], np.ndarray]:
+    """Return (boundary_indices, embeddings) using local-minimum
+    detection on the cosine-similarity curve.
+
+    Algorithm (Hearst 1997 TextTiling, lightly adapted):
+      1. Compute sims[i] = cosine(left_window, right_window) for
+         every valid position i (i.e. where both windows fit).
+      2. Find every local minimum in `sims` — positions where the
+         value is <= both neighbors (with shallow ties broken by
+         picking the rightmost).
+      3. For each local min, compute its depth: how far it dips
+         below the nearest peak on each side. Sum the two dips.
+      4. Boundaries are the local mins whose depth exceeds
+         (mean(depths) + DEPTH_THRESHOLD_STD * std(depths)).
+
+    Returning embeddings alongside is a small efficiency win for
+    `_build_topics`, which uses them again for the direction-aware
+    merge step. Computing them once per indexer run.
+    """
     if len(segments) < 2 * WINDOW_SENTENCES:
-        return []
+        return [], np.zeros((0, 384))  # 384 = MiniLM-L6's dim
     embeddings = _embed([s["text"] for s in segments])
-    boundaries: list[int] = []
     n = len(segments)
+
+    # Step 1: build the sims curve. sims[j] is the similarity at
+    # position j+WINDOW_SENTENCES (the j-th valid position).
+    sims: list[float] = []
     for i in range(WINDOW_SENTENCES, n - WINDOW_SENTENCES):
         left = embeddings[i - WINDOW_SENTENCES : i].mean(axis=0)
         right = embeddings[i : i + WINDOW_SENTENCES].mean(axis=0)
-        # Cosine similarity (vectors are normalized).
-        sim = float(np.dot(left, right))
-        if sim < BOUNDARY_THRESHOLD:
-            # Suppress duplicates within a small window.
-            if not boundaries or i - boundaries[-1] > WINDOW_SENTENCES:
-                boundaries.append(i)
-    return boundaries
+        sims.append(float(np.dot(left, right)))
+    if not sims:
+        return [], embeddings
+    sims_arr = np.array(sims)
+
+    # Step 2: local minima. A point is a local min iff it's <= both
+    # immediate neighbors. Skip the endpoints (no left/right peak).
+    local_mins: list[int] = []
+    for j in range(1, len(sims_arr) - 1):
+        if sims_arr[j] <= sims_arr[j - 1] and sims_arr[j] <= sims_arr[j + 1]:
+            local_mins.append(j)
+    if not local_mins:
+        return [], embeddings
+
+    # Step 3: depth score. Walk left and right from each min until
+    # we find a position higher than the min — that's the local peak.
+    depths: list[float] = []
+    for j in local_mins:
+        # Walk left.
+        peak_l = sims_arr[j]
+        for k in range(j - 1, -1, -1):
+            if sims_arr[k] >= peak_l:
+                peak_l = sims_arr[k]
+            else:
+                break
+        # Walk right.
+        peak_r = sims_arr[j]
+        for k in range(j + 1, len(sims_arr)):
+            if sims_arr[k] >= peak_r:
+                peak_r = sims_arr[k]
+            else:
+                break
+        depths.append((peak_l - sims_arr[j]) + (peak_r - sims_arr[j]))
+
+    # Step 4: threshold. Pick boundaries whose depth meaningfully
+    # exceeds the mean — those are real valleys, not just every
+    # local wiggle.
+    depths_arr = np.array(depths)
+    threshold = float(depths_arr.mean() + DEPTH_THRESHOLD_STD * depths_arr.std())
+    boundaries: list[int] = []
+    for j, depth in zip(local_mins, depths_arr, strict=True):
+        if float(depth) >= threshold:
+            # Map sims-curve index j back to segment index. sims[0]
+            # corresponds to segment index WINDOW_SENTENCES.
+            boundaries.append(j + WINDOW_SENTENCES)
+    return boundaries, embeddings
 
 
 def _build_topics(
-    segments: list[dict[str, Any]], boundaries: list[int]
+    segments: list[dict[str, Any]],
+    boundaries: list[int],
+    embeddings: np.ndarray,
 ) -> list[dict[str, Any]]:
+    """Cut `segments` at `boundaries`, then absorb sub-floor chunks
+    into their more-similar neighbor (NOT always the previous one).
+
+    Direction-aware merge breaks the cascade we hit before:
+    previously, a sub-floor chunk in the middle of a uniformly-paced
+    transcript merged into the previous topic, lengthening it; the
+    next chunk then failed the floor and merged again, runaway
+    collapsing the whole episode to one topic. Comparing each
+    sub-floor chunk to BOTH neighbors and picking the more-similar
+    one means:
+
+      - A chunk in the middle of a topic merges sideways (absorbed
+        locally).
+      - A chunk at a real boundary stays distinct because both
+        neighbors are equally dissimilar — the merge picks one but
+        doesn't cascade because the other neighbor remains a real
+        boundary.
+
+    Two-pass: build the initial topic list with raw boundaries, THEN
+    run the direction-aware merge. We compare centroids of each
+    candidate's sentences in MiniLM embedding space.
+    """
     if not segments:
         return []
     cuts = [0, *boundaries, len(segments)]
@@ -157,14 +232,80 @@ def _build_topics(
         if b <= a:
             continue
         chunk = segments[a:b]
-        start_s = chunk[0]["start_s"]
-        end_s = chunk[-1]["end_s"]
-        if end_s - start_s < MIN_SEGMENT_S and topics:
-            # Merge into previous.
-            topics[-1]["end_s"] = end_s
-            topics[-1]["sentences"].extend(chunk)
-            continue
-        topics.append({"start_s": start_s, "end_s": end_s, "sentences": chunk})
+        topics.append({
+            "start_s": chunk[0]["start_s"],
+            "end_s": chunk[-1]["end_s"],
+            "sentences": chunk,
+            # Track segment-index range so we can pull centroids
+            # from `embeddings` without re-embedding.
+            "_a": a,
+            "_b": b,
+        })
+
+    # Direction-aware merge pass. We walk the topics list and for
+    # each sub-floor topic, decide which neighbor to absorb it into.
+    # Repeat until no sub-floor topics remain. Bounded loop — each
+    # pass strictly reduces the topic count.
+    def centroid(topic: dict[str, Any]) -> np.ndarray:
+        a, b = topic["_a"], topic["_b"]
+        if b <= a or embeddings.shape[0] == 0:
+            return np.zeros(embeddings.shape[1] if embeddings.ndim == 2 else 384)
+        return embeddings[a:b].mean(axis=0)
+
+    def merge_into(dst: dict[str, Any], src: dict[str, Any]) -> None:
+        """Absorb src into dst (left-or-right neighbor). dst gets the
+        union range + concatenated sentences; src gets dropped by
+        the caller."""
+        # Decide which is earlier; keep that's start_s, take the
+        # later's end_s.
+        if dst["_a"] < src["_a"]:
+            dst["sentences"].extend(src["sentences"])
+            dst["end_s"] = src["end_s"]
+            dst["_b"] = src["_b"]
+        else:
+            dst["sentences"] = src["sentences"] + dst["sentences"]
+            dst["start_s"] = src["start_s"]
+            dst["_a"] = src["_a"]
+
+    while True:
+        # Find the first sub-floor topic.
+        idx = next(
+            (
+                i
+                for i, t in enumerate(topics)
+                if (t["end_s"] - t["start_s"]) < MIN_SEGMENT_S
+            ),
+            None,
+        )
+        if idx is None:
+            break
+        # If there's only one topic left, leave it as-is.
+        if len(topics) <= 1:
+            break
+        target = topics[idx]
+        target_c = centroid(target)
+        # Compare to neighbors. If only one side has a neighbor,
+        # merge there. Otherwise pick the more-similar centroid.
+        prev_t = topics[idx - 1] if idx > 0 else None
+        next_t = topics[idx + 1] if idx + 1 < len(topics) else None
+        if prev_t is None and next_t is None:
+            break
+        elif prev_t is None:
+            chosen_idx = idx + 1
+        elif next_t is None:
+            chosen_idx = idx - 1
+        else:
+            sim_prev = float(np.dot(target_c, centroid(prev_t)))
+            sim_next = float(np.dot(target_c, centroid(next_t)))
+            chosen_idx = idx - 1 if sim_prev >= sim_next else idx + 1
+        # Merge target INTO chosen, drop target.
+        merge_into(topics[chosen_idx], target)
+        topics.pop(idx)
+
+    # Strip private bookkeeping fields before returning.
+    for t in topics:
+        t.pop("_a", None)
+        t.pop("_b", None)
     return topics
 
 
@@ -256,8 +397,8 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
             f"segments — whisper may have failed mid-run"
         )
 
-    boundaries = _segment_boundaries(segments)
-    topics = _build_topics(segments, boundaries)
+    boundaries, embeddings = _segment_boundaries(segments)
+    topics = _build_topics(segments, boundaries, embeddings)
     for topic in topics:
         topic["label"] = _label(topic["sentences"])
         # Drop the heavy `sentences` list from the sidecar — agents read
@@ -268,7 +409,8 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
 
     return {
         "topics": topics,
-        "boundary_threshold": BOUNDARY_THRESHOLD,
+        "depth_threshold_std": DEPTH_THRESHOLD_STD,
+        "min_segment_s": MIN_SEGMENT_S,
         "window_sentences": WINDOW_SENTENCES,
         "labeler": "claude" if os.environ.get("ANTHROPIC_API_KEY") else "heuristic",
     }
