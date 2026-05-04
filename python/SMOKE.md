@@ -23,7 +23,9 @@ transformers, opencv). On first model use, models also download:
 | whisper (`small.en` fallback) | ~470MB | same |
 | whisper diarization (`pyannote/speaker-diarization-community-1`) | ~30MB | same; requires `HF_TOKEN` and accepting the model EULA at <https://huggingface.co/pyannote/speaker-diarization-community-1> |
 | topic (`all-MiniLM-L6-v2`) | ~80MB | same |
-| scenedetect, audio-energy | none | n/a |
+| clip (`ViT-B-32` / OpenAI) | ~150MB | `~/.cache/clip/` (open_clip default) |
+| face, gaze (dlib `face_recognition_models`) | ~70MB | bundled in the wheel |
+| scenedetect, audio-energy, shot, frame-quality | none | n/a |
 
 ## Smoke each indexer
 
@@ -64,6 +66,42 @@ WHISPER_MODEL = "small.en"
 name = "topic"
 command = "$HOME/.local/bin/uv"
 args = ["run", "--package", "topic-mcp", "topic-mcp"]
+cwd = "$PWD/python"
+kind = "indexer"
+
+[[mcp.servers]]
+name = "clip"
+command = "$HOME/.local/bin/uv"
+args = ["run", "--package", "clip-mcp", "clip-mcp"]
+cwd = "$PWD/python"
+kind = "indexer"
+
+[[mcp.servers]]
+name = "face"
+command = "$HOME/.local/bin/uv"
+args = ["run", "--package", "face-mcp", "face-mcp"]
+cwd = "$PWD/python"
+kind = "indexer"
+
+# shot reads scenedetect + face sidecars — run those first.
+[[mcp.servers]]
+name = "shot"
+command = "$HOME/.local/bin/uv"
+args = ["run", "--package", "shot-mcp", "shot-mcp"]
+cwd = "$PWD/python"
+kind = "indexer"
+
+[[mcp.servers]]
+name = "gaze"
+command = "$HOME/.local/bin/uv"
+args = ["run", "--package", "gaze-mcp", "gaze-mcp"]
+cwd = "$PWD/python"
+kind = "indexer"
+
+[[mcp.servers]]
+name = "frame-quality"
+command = "$HOME/.local/bin/uv"
+args = ["run", "--package", "frame-quality-mcp", "frame-quality-mcp"]
 cwd = "$PWD/python"
 kind = "indexer"
 EOF

@@ -1,0 +1,20 @@
+[project]
+name = "frame-quality-mcp"
+version = "0.1.0"
+description = "Awidat frame-quality indexer — blur + exposure + signal scores per second."
+requires-python = ">=3.11"
+dependencies = [
+    "awidat-mcp",
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+frame-quality-mcp = "frame_quality_mcp:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/frame_quality_mcp"]

@@ -26,6 +26,11 @@ members = [
     "packages/audio-energy-mcp",
     "packages/topic-mcp",
     "packages/editorial-moments-mcp",
+    "packages/clip-mcp",
+    "packages/face-mcp",
+    "packages/shot-mcp",
+    "packages/gaze-mcp",
+    "packages/frame-quality-mcp",
 ]
 
 [tool.uv.sources]
