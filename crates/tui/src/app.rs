@@ -448,7 +448,18 @@ impl App {
         // counts of hooks/punchlines/etc. — so the user knows
         // immediately what's worth asking about. When the moments
         // index hasn't run, we show a coachmark instead.
-        let moments_line = match self.insights.welcome_moments_line() {
+        //
+        // Width-aware: the right column's width depends on the
+        // terminal. We pass the available budget (column width
+        // minus the "moments " prefix label, ~8 chars) to the
+        // insights helper so it can degrade gracefully — drop
+        // the "N other" suffix, then drop kind labels right-to-
+        // left, until it fits. No mid-word truncation.
+        let moments_budget = columns[1].width.saturating_sub(8);
+        let moments_line = match self
+            .insights
+            .welcome_moments_line_for_width(moments_budget)
+        {
             Some(line) => Line::from(vec![
                 Span::styled("moments ", Style::default().fg(Color::DarkGray)),
                 Span::styled(line, Style::default().fg(Color::Cyan)),

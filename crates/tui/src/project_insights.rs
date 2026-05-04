@@ -91,21 +91,69 @@ impl ProjectInsights {
     /// welcome card even though the live data was 159 moments after
     /// re-indexing.
     pub fn welcome_moments_line(&self) -> Option<String> {
+        // Equivalent to width-unaware caller: assume ample width.
+        self.welcome_moments_line_for_width(u16::MAX)
+    }
+
+    /// Width-aware moments line. Builds the verbose form first, then
+    /// progressively trims if it exceeds `max_width`:
+    ///   1. Drop the "N other" suffix.
+    ///   2. Drop kind labels one at a time (rightmost first) but
+    ///      keep the total count + "more" suffix so the user still
+    ///      sees how many moments exist.
+    ///   3. Last resort: just "<total> moments".
+    /// Each fallback is still informative — the caller never gets
+    /// a clipped mid-word string.
+    pub fn welcome_moments_line_for_width(&self, max_width: u16) -> Option<String> {
         let total = self.moment_count?;
         if total == 0 {
             return None;
         }
-        let mut parts = vec![format!("{total} moments")];
+        let max = max_width as usize;
+        let total_label = format!("{total} moments");
+
+        // Build the full part list (verbose form).
+        let mut parts: Vec<String> = vec![total_label.clone()];
         for (kind, n) in self.moment_kinds.iter().take(3) {
             parts.push(format!("{n} {kind}{}", if *n == 1 { "" } else { "s" }));
         }
-        // Roll the rest into "other" so the card never grows.
         let listed: usize = self.moment_kinds.iter().take(3).map(|(_, n)| n).sum();
         let remainder = total.saturating_sub(listed);
         if remainder > 0 {
             parts.push(format!("{remainder} other"));
         }
-        Some(parts.join(" · "))
+        // Try the verbose form; if it fits, ship it.
+        let verbose = parts.join(" · ");
+        if verbose.chars().count() <= max {
+            return Some(verbose);
+        }
+        // Drop the "N other" suffix first — it's the lowest-info
+        // part. Recompute parts without it.
+        if remainder > 0 {
+            parts.pop();
+        }
+        let trimmed = parts.join(" · ");
+        if trimmed.chars().count() <= max {
+            return Some(trimmed);
+        }
+        // Drop kinds rightmost-first; replace with "+N more" tag so
+        // the user still knows there were more kinds. Walk down to
+        // the totals-only form if needed.
+        while parts.len() > 1 {
+            parts.pop();
+            let visible_kinds = parts.len() - 1; // -1 for the "N moments" total
+            let remaining_kinds = self.moment_kinds.len().saturating_sub(visible_kinds);
+            let candidate = if remaining_kinds > 0 {
+                format!("{} · +{remaining_kinds} more", parts.join(" · "))
+            } else {
+                parts.join(" · ")
+            };
+            if candidate.chars().count() <= max {
+                return Some(candidate);
+            }
+        }
+        // Last-resort: just the total.
+        Some(total_label)
     }
 }
 
@@ -262,5 +310,83 @@ mod tests {
         // Story + tangent NOT broken out separately (rolled into "other").
         assert!(!line.contains("story"));
         assert!(!line.contains("tangent"));
+    }
+
+    #[test]
+    fn width_aware_drops_other_first_then_kinds_rightmost() {
+        // Real-world from the 44-min Samsung session: 159 moments
+        // distributed across 11 kinds. Verbose form is way too
+        // long for a narrow column. Width-aware degrades cleanly.
+        let dir = tempfile::tempdir().unwrap();
+        let em = dir.path().join("index/editorial-moments/raw");
+        // Build distribution mimicking the real session.
+        let counts = [
+            ("explanation", 41), ("hook", 29), ("setup", 22),
+            ("punchline", 21), ("story", 19), ("answer", 14),
+            ("cta", 4), ("question", 4), ("emotional_peak", 2),
+            ("tangent", 2), ("dead_air", 1),
+        ];
+        let moments: Vec<serde_json::Value> = counts
+            .iter()
+            .flat_map(|(k, n)| {
+                let k = *k;
+                (0..*n).map(move |_| serde_json::json!({"kind": k}))
+            })
+            .collect();
+        write_json(
+            &em.join("a.json"),
+            serde_json::json!({"data": {"moments": moments}}),
+        );
+        let i = ProjectInsights::gather(dir.path());
+
+        // Plenty of width: full verbose form.
+        let big = i.welcome_moments_line_for_width(200).unwrap();
+        assert!(big.contains("159 moments"));
+        assert!(big.contains("41 explanations"));
+        assert!(big.contains("29 hooks"));
+        assert!(big.contains("22 setups"));
+        assert!(big.contains("other")); // remainder
+
+        // Medium width: should drop "other" suffix first.
+        // Verbose form length on this data is ~70 chars; force
+        // mid-width that's just below verbose.
+        let medium_width = (big.chars().count() - 5) as u16;
+        let medium = i.welcome_moments_line_for_width(medium_width).unwrap();
+        assert!(medium.contains("41 explanations"));
+        assert!(!medium.contains("other"), "should drop the 'N other' suffix first");
+
+        // Tight width: should drop kinds rightmost-first, replace
+        // with "+N more".
+        let tight = i.welcome_moments_line_for_width(40).unwrap();
+        assert!(tight.contains("159 moments"), "always keep the total");
+        assert!(
+            tight.contains("more"),
+            "should append '+N more' tag when truncating: {tight:?}"
+        );
+        assert!(
+            tight.chars().count() <= 40,
+            "tight form should fit within budget; got {} chars",
+            tight.chars().count()
+        );
+
+        // Last-resort: just the total.
+        let minimal = i.welcome_moments_line_for_width(15).unwrap();
+        assert_eq!(minimal, "159 moments");
+    }
+
+    #[test]
+    fn width_aware_with_zero_kinds_still_returns_total() {
+        // Edge case: moments without `kind` fields (malformed
+        // sidecar, or future schema change). welcome_moments_line
+        // should still report the total; degradation never panics.
+        let dir = tempfile::tempdir().unwrap();
+        let em = dir.path().join("index/editorial-moments/raw");
+        write_json(
+            &em.join("a.json"),
+            serde_json::json!({"data": {"moments": [{}, {}, {}]}}),
+        );
+        let i = ProjectInsights::gather(dir.path());
+        let line = i.welcome_moments_line_for_width(20).unwrap();
+        assert!(line.contains("3 moments"));
     }
 }

@@ -73,19 +73,23 @@ cascade because a chunk in the middle of a topic merges sideways
 (absorbed locally) while a boundary between two distinct topics
 doesn't get falsely glued together. **Tracked as #122.**
 
-### Why we're keeping defaults at 0.55 / 30s anyway
+### Status: fixed (#122, #123 landed)
 
-Until #122 + #123 land, parameter tuning makes things worse:
+Both algorithmic refactors landed in commit
+`topic-mcp: TextTiling local-min boundaries + direction-aware merge`.
 
-- Lowering threshold below 0.55 → never fires (max sim is 0.416)
-- Raising threshold → no effect (every position already triggers)
-- Raising MIN_SEGMENT_S → cliff to 1 topic
-- Lowering MIN_SEGMENT_S below 30s → even more sub-beat noise
+After the fix on the same 44-min Samsung retrospective:
+- 12 topics (down from 33)
+- Mean duration ~140s, range 65s–622s
+- Labels are chapter-grade ("Galaxy S Evolution Through S4",
+  "Battery Issues and Improvements") rather than sub-beat
+  ("AMOLED Display Innovation Early Android Era", "Glass Back
+  and Wireless Charging Innovation").
 
-The 33-topic baseline is at least navigable. The agent in live
-sessions has been ignoring topics anyway and using `find_beat`
-(editorial-moments-mcp output) as the chapter primitive — so the
-over-segmentation doesn't actively block any workflow today.
+The new defaults are `DEPTH_THRESHOLD_STD = 1.2` (k in mean +
+k*std cutoff) and `MIN_SEGMENT_S = 60.0`. The old absolute
+`BOUNDARY_THRESHOLD` is gone — local-minimum detection on the
+shape of the sim curve is what's running now.
 
 ## When this changes
 
