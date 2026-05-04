@@ -737,6 +737,12 @@ Schema in §3 / §5 must be designed so deeper indexers slot in cleanly without 
 
 **Design rule for v1:** the indexer pipeline (`crates/mcp/` extension config + `index/` sidecar layout) must accept new indexers as additional MCP servers without engine changes. Treat this as a hard requirement on Week 2's design — if the v1.5 indexers would need a refactor to slot in, the Week 2 design is wrong.
 
+### 16.8 Canonical-helpers lint (deferred — task #158)
+
+- **Question:** Should the agent loop run a "canonical helper" lint that nudges the model when it picked a suboptimal-but-working tool? Examples: `find_moment` for editorial intent (should be `find_beat`), `scope="preview"` for the final cut (should be `scope="timeline"`), N separate `apply_edl` calls (should be one EDL). Cross-harness survey says **nobody has a programmatic verifier of canonical helpers**; codex / aider / cline all rely on prose in the system prompt.
+- **Default:** **defer.** Hand-writing the rules now is guessing — get the rules wrong and you nag the agent into bad cuts. The cross-harness research flagged this as "original to me; possibly hard, possibly overkill."
+- **Test for promotion:** revisit after ≥50 real sessions of usage. The lessons-learned bullets from #150's pattern extraction are *already* doing ~60% of what the lint would do, **derived from the user's data instead of hand-coded rules**. If after 50 sessions the rejection patterns surfaced by `awidat lessons learn` cluster on 3+ canonical-helpers categories that lessons can't fully address (e.g. *systematic* `find_moment`-when-should-be-`find_beat` from the model, not from the user), then build the lint with those clusters as the seeded rules. Until then, skip — the lint adds maintenance burden + a guess-rule failure mode for a feature that #150 may already cover.
+
 ---
 
 ## Appendix A — citation crib sheet
