@@ -13,6 +13,7 @@ use clap::{Parser, Subcommand};
 
 mod chat_cmd;
 mod index_cmd;
+mod new_cmd;
 mod tui_cmd;
 
 /// Top-level CLI.
@@ -35,6 +36,33 @@ enum Command {
     Init {
         /// Project directory to create. Must not exist or must be empty.
         path: PathBuf,
+    },
+    /// Create a new project with optional source import + auto-indexing.
+    /// The "one command per video" UX: scaffold + acquire source +
+    /// index + drop a starter AWIDAT.md.
+    New {
+        /// Project name. Used as the directory name under `cwd` (or
+        /// under `--at`).
+        name: String,
+        /// Optional URL or local path to import as the first source.
+        /// URLs go through yt-dlp; local paths are copied (or linked
+        /// with `--link`) into `raw/`.
+        #[arg(long)]
+        import: Option<String>,
+        /// Where to create the project dir. Defaults to the current
+        /// working directory.
+        #[arg(long)]
+        at: Option<PathBuf>,
+        /// Skip the post-creation `awidat index` run. Useful when
+        /// dropping multiple assets before a single batch index pass.
+        #[arg(long)]
+        no_index: bool,
+        /// Skip writing the starter `AWIDAT.md`.
+        #[arg(long)]
+        no_md: bool,
+        /// Symlink instead of copying when `--import` is a local path.
+        #[arg(long)]
+        link: bool,
     },
     /// Validate an existing project: OTIO + awidat namespace + edit-plan +
     /// index manifest.
@@ -97,6 +125,21 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let res = match cli.command {
         Command::Init { path } => cmd_init(&path),
+        Command::New {
+            name,
+            import,
+            at,
+            no_index,
+            no_md,
+            link,
+        } => new_cmd::run(new_cmd::NewArgs {
+            name,
+            import,
+            at,
+            no_index,
+            no_md,
+            link,
+        }),
         Command::Validate { path } => cmd_validate(&path),
         Command::Index {
             path,
