@@ -101,6 +101,20 @@ pub enum PairOutcome {
         /// Diagnostic.
         message: String,
     },
+    /// Indexer was not run because one of its declared `depends_on`
+    /// indexers failed (or was itself skipped via this same path)
+    /// for this asset. We skip rather than launch so the user sees
+    /// one root-cause failure per asset, not a cascade of identical
+    /// "missing prerequisite sidecar" errors.
+    SkippedDep {
+        /// Indexer name.
+        indexer: String,
+        /// Asset id.
+        asset: AssetId,
+        /// Names of failed prerequisite indexers (in declaration
+        /// order, deduplicated).
+        missing: Vec<String>,
+    },
 }
 
 /// Aggregate report from [`run`].
@@ -123,19 +137,25 @@ impl IndexReport {
         self.failures().next().is_some()
     }
 
-    /// Counts: (skipped, wrote, failed).
-    pub fn counts(&self) -> (usize, usize, usize) {
+    /// Counts: (skipped, wrote, failed, dep-skipped). The two skipped
+    /// counts are reported separately because they have different
+    /// causes — `skipped` means the sidecar was already up-to-date
+    /// (the idempotency win), `dep_skipped` means a prerequisite
+    /// indexer failed for this asset so we elided the launch.
+    pub fn counts(&self) -> (usize, usize, usize, usize) {
         let mut s = 0;
         let mut w = 0;
         let mut f = 0;
+        let mut d = 0;
         for o in &self.outcomes {
             match o {
                 PairOutcome::Skipped { .. } => s += 1,
                 PairOutcome::Wrote { .. } => w += 1,
                 PairOutcome::Failed { .. } => f += 1,
+                PairOutcome::SkippedDep { .. } => d += 1,
             }
         }
-        (s, w, f)
+        (s, w, f, d)
     }
 }
 
@@ -205,51 +225,191 @@ pub async fn run(
 
     let report = Arc::new(Mutex::new(IndexReport::default()));
 
-    // Build the (indexer × asset) work list.
-    let mut work = Vec::new();
+    // Topo-aware scheduler.
+    //
+    // Per-(indexer, asset) state, keyed by `(server-name, asset-id)`.
+    // An item starts `Pending`; the scheduler launches it once every
+    // dep listed in `server.depends_on` has reached `Wrote` (or
+    // pre-existing `Skipped` — already-on-disk sidecars satisfy
+    // dependencies, since the producer's output is right where the
+    // dependent expects it). If any dep ends up `Failed` or
+    // `SkippedDep`, the item is recorded as `SkippedDep` and the
+    // child indexer is never launched — the user sees one root-cause
+    // failure per asset, not a cascade of identical "missing
+    // prerequisite sidecar" errors.
+    //
+    // Cross-asset parallelism is preserved: asset A's `topic` waits
+    // only on asset A's `whisper`, not asset B's. Within a layer,
+    // the inflight cap caps total concurrent (indexer, asset)
+    // launches.
+    use std::collections::HashMap as StdMap;
+    type ItemKey = (String, AssetId);
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum ItemState {
+        Pending, // Not yet launched. Eligible for `ready` once deps are Done.
+        Running, // Launched; result not yet observed. NOT eligible for re-launch.
+        Done,    // Wrote or pre-existing Skipped — counts as a satisfied dep.
+        Failed,  // Indexer reported error / launch failed / dep-skipped.
+    }
+    let mut state: StdMap<ItemKey, ItemState> = StdMap::new();
+    let mut server_by_name: StdMap<String, &McpServer> = StdMap::new();
     for server in servers {
-        for (id, path, sha) in &hashes {
-            work.push(WorkItem {
-                server: server.clone(),
-                asset_id: id.clone(),
-                asset_path: path.clone(),
-                asset_sha: sha.clone(),
-            });
+        server_by_name.insert(server.name.clone(), server);
+        for (id, _path, _sha) in &hashes {
+            state.insert((server.name.clone(), id.clone()), ItemState::Pending);
         }
     }
 
     let inflight_cap = if max_concurrent == 0 {
-        work.len().max(1)
+        state.len().max(1)
     } else {
         max_concurrent
     };
 
-    let mut inflight = FuturesUnordered::new();
-    let mut work_iter = work.into_iter();
+    // Loop: pick `Pending` items whose deps are all `Done`, launch
+    // up to the inflight cap, await one, repeat. Items whose deps
+    // contain a `Failed` flip to `SkippedDep` synchronously.
+    let mut inflight: FuturesUnordered<
+        tokio::task::JoinHandle<(ItemKey, ItemState)>,
+    > = FuturesUnordered::new();
 
-    // Prime the in-flight set up to the cap.
-    for _ in 0..inflight_cap {
-        if let Some(item) = work_iter.next() {
-            inflight.push(spawn_pair(
-                project_root.to_path_buf(),
-                index_dir.clone(),
-                item,
-                client_info.clone(),
-                manifest.clone(),
-                report.clone(),
-            ));
+    // Per-asset hash lookup (path + sha) so we can build WorkItems
+    // on the fly.
+    let asset_index: StdMap<AssetId, (PathBuf, String)> = hashes
+        .iter()
+        .map(|(id, p, sha)| (id.clone(), (p.clone(), sha.clone())))
+        .collect();
+
+    loop {
+        // Find ready-to-launch items.
+        let mut ready: Vec<ItemKey> = Vec::new();
+        let mut to_skip_dep: Vec<(ItemKey, Vec<String>)> = Vec::new();
+        for (key, st) in state.iter() {
+            if *st != ItemState::Pending {
+                continue;
+            }
+            let server = server_by_name.get(&key.0).expect("server registered");
+            let mut all_deps_done = true;
+            let mut failed_deps: Vec<String> = Vec::new();
+            for dep_name in &server.depends_on {
+                if !server_by_name.contains_key(dep_name) {
+                    // Dep wasn't included in this run (e.g. user
+                    // passed --indexer topic but not --indexer
+                    // whisper). Treat as a failed dep so we skip
+                    // the dependent with a clear message.
+                    failed_deps.push(dep_name.clone());
+                    continue;
+                }
+                let dep_key = (dep_name.clone(), key.1.clone());
+                match state.get(&dep_key) {
+                    Some(ItemState::Done) => {}
+                    Some(ItemState::Failed) => failed_deps.push(dep_name.clone()),
+                    // Pending or Running — dep not yet resolved; defer.
+                    _ => {
+                        all_deps_done = false;
+                    }
+                }
+            }
+            if !failed_deps.is_empty() {
+                to_skip_dep.push((key.clone(), failed_deps));
+            } else if all_deps_done {
+                ready.push(key.clone());
+            }
         }
-    }
-    while inflight.next().await.is_some() {
-        if let Some(item) = work_iter.next() {
-            inflight.push(spawn_pair(
-                project_root.to_path_buf(),
-                index_dir.clone(),
-                item,
-                client_info.clone(),
-                manifest.clone(),
-                report.clone(),
-            ));
+
+        // Mark dep-skipped items synchronously; record the outcome.
+        for (key, missing) in to_skip_dep {
+            state.insert(key.clone(), ItemState::Failed);
+            report.lock().await.outcomes.push(PairOutcome::SkippedDep {
+                indexer: key.0.clone(),
+                asset: key.1.clone(),
+                missing,
+            });
+        }
+
+        // Launch as many ready items as the cap permits.
+        let slots = inflight_cap.saturating_sub(inflight.len());
+        for key in ready.into_iter().take(slots) {
+            let server = server_by_name
+                .get(&key.0)
+                .expect("server present")
+                .clone()
+                .clone();
+            let (asset_path, asset_sha) = asset_index
+                .get(&key.1)
+                .cloned()
+                .expect("asset present in index");
+            // Flip to Running so the next ready-scan doesn't re-pick
+            // this same item; the spawned task overwrites with the
+            // final state on completion. Without this we'd double-
+            // dispatch the same indexer over and over while waiting
+            // for the first launch to finish.
+            state.insert(key.clone(), ItemState::Running);
+            let item = WorkItem {
+                server,
+                asset_id: key.1.clone(),
+                asset_path,
+                asset_sha,
+            };
+            let project_root_owned = project_root.to_path_buf();
+            let index_dir_owned = index_dir.clone();
+            let client_info_clone = client_info.clone();
+            let manifest_clone = manifest.clone();
+            let report_clone = report.clone();
+            let key_for_task = key.clone();
+            inflight.push(tokio::spawn(async move {
+                let outcome =
+                    run_pair(&project_root_owned, &index_dir_owned, &item, client_info_clone)
+                        .await;
+                let result_state = match &outcome {
+                    PairOutcome::Wrote { .. } | PairOutcome::Skipped { .. } => ItemState::Done,
+                    PairOutcome::Failed { .. } | PairOutcome::SkippedDep { .. } => {
+                        ItemState::Failed
+                    }
+                };
+                if let PairOutcome::Wrote { indexer, asset, .. } = &outcome {
+                    let mut m = manifest_clone.lock().await;
+                    update_manifest(&mut m, indexer, asset, &item.server);
+                }
+                report_clone.lock().await.outcomes.push(outcome);
+                (key_for_task, result_state)
+            }));
+        }
+
+        if inflight.is_empty() {
+            // No tasks running and no ready work — loop is finished
+            // when every state is non-Pending.
+            let any_pending = state.values().any(|s| *s == ItemState::Pending);
+            if !any_pending {
+                break;
+            }
+            // We have Pending items but nothing's ready and nothing's
+            // in flight. That's a cycle (or mis-declared deps); bail
+            // by marking all remaining Pending as failed.
+            for (key, st) in state.iter_mut() {
+                if *st == ItemState::Pending {
+                    let outcome = PairOutcome::SkippedDep {
+                        indexer: key.0.clone(),
+                        asset: key.1.clone(),
+                        missing: vec!["<dependency cycle>".to_string()],
+                    };
+                    report.lock().await.outcomes.push(outcome);
+                    *st = ItemState::Failed;
+                }
+            }
+            break;
+        }
+
+        // Await one completion before re-checking ready set.
+        if let Some(joined) = inflight.next().await {
+            match joined {
+                Ok((key, new_state)) => {
+                    state.insert(key, new_state);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "indexer task join failed");
+                }
+            }
         }
     }
 
@@ -267,25 +427,6 @@ struct WorkItem {
     asset_id: AssetId,
     asset_path: PathBuf,
     asset_sha: String,
-}
-
-fn spawn_pair(
-    project_root: PathBuf,
-    index_dir: PathBuf,
-    item: WorkItem,
-    client_info: ClientInfo,
-    manifest: Arc<Mutex<Manifest>>,
-    report: Arc<Mutex<IndexReport>>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let outcome = run_pair(&project_root, &index_dir, &item, client_info).await;
-        // Update manifest on success.
-        if let PairOutcome::Wrote { indexer, asset, .. } = &outcome {
-            let mut m = manifest.lock().await;
-            update_manifest(&mut m, indexer, asset, &item.server);
-        }
-        report.lock().await.outcomes.push(outcome);
-    })
 }
 
 async fn run_pair(
@@ -545,8 +686,32 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(r.counts(), (1, 1, 1));
+        assert_eq!(r.counts(), (1, 1, 1, 0));
         assert!(r.has_failures());
         assert_eq!(r.failures().count(), 1);
+    }
+
+    #[test]
+    fn report_counts_includes_dep_skipped() {
+        let r = IndexReport {
+            outcomes: vec![
+                PairOutcome::Wrote {
+                    indexer: "whisper".into(),
+                    asset: AssetId::new("a"),
+                    path: PathBuf::from("/x.json"),
+                },
+                PairOutcome::Failed {
+                    indexer: "whisper".into(),
+                    asset: AssetId::new("b"),
+                    message: "boom".into(),
+                },
+                PairOutcome::SkippedDep {
+                    indexer: "topic".into(),
+                    asset: AssetId::new("b"),
+                    missing: vec!["whisper".into()],
+                },
+            ],
+        };
+        assert_eq!(r.counts(), (0, 1, 1, 1));
     }
 }

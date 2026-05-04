@@ -291,7 +291,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         per_frame.append({"t_s": i / SAMPLE_FPS, "faces": out_faces})
 
     # Pass 3: speaker-to-face mapping (cross-indexer; fail-soft).
-    project_root = Path(req.asset_path).resolve()
+    project_root = Path(req.asset_path).absolute()
     # Walk up to find the project root — the dir containing `index/`.
     while project_root != project_root.parent:
         if (project_root / "index").is_dir():

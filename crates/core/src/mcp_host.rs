@@ -293,6 +293,7 @@ mod tests {
             cwd: None,
             kind: awidat_config::McpServerKind::Indexer,
             enabled: true,
+            depends_on: vec![],
         };
         let host = McpHost::from_servers(
             std::slice::from_ref(&server),
@@ -323,6 +324,7 @@ mod tests {
             cwd: None,
             kind: awidat_config::McpServerKind::Indexer,
             enabled: false,
+            depends_on: vec![],
         };
         let enabled = McpServer {
             name: "clip".into(),
@@ -332,6 +334,7 @@ mod tests {
             cwd: None,
             kind: awidat_config::McpServerKind::Indexer,
             enabled: true,
+            depends_on: vec![],
         };
         let host = McpHost::from_servers(
             &[disabled, enabled],
@@ -359,6 +362,7 @@ mod tests {
             cwd: Some(std::path::PathBuf::from("python")),
             kind: awidat_config::McpServerKind::Indexer,
             enabled: true,
+            depends_on: vec![],
         };
         let cfg = server_config_from(&server, std::path::Path::new("/proj"));
         assert_eq!(cfg.cwd, Some(std::path::PathBuf::from("/proj/python")));

@@ -72,12 +72,12 @@ server = IndexerServer(
 
 def _project_root_from(asset_path: str) -> Path:
     """Walk up from the asset to the dir containing `index/`."""
-    p = Path(asset_path).resolve()
+    p = Path(asset_path).absolute()
     while p != p.parent:
         if (p / "index").is_dir():
             return p
         p = p.parent
-    return Path(asset_path).resolve().parent
+    return Path(asset_path).absolute().parent
 
 
 def _read_sidecar(project_root: Path, indexer: str, asset_id: str) -> dict[str, Any] | None:

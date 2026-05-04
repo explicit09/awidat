@@ -129,6 +129,10 @@ struct IndexerRecipe {
     package: &'static str,
     /// Optional baseline env vars (e.g. `WHISPER_MODEL = "small.en"`).
     env: &'static [(&'static str, &'static str)],
+    /// Names of other indexers whose sidecars this one reads. The
+    /// dispatcher will not launch this indexer until every name
+    /// here has produced its sidecar successfully.
+    depends_on: &'static [&'static str],
 }
 
 /// The canonical list. Adding a new indexer to the awidat install
@@ -141,11 +145,13 @@ const RECIPES: &[IndexerRecipe] = &[
         name: "audio-energy",
         package: "audio-energy-mcp",
         env: &[],
+        depends_on: &[],
     },
     IndexerRecipe {
         name: "scenedetect",
         package: "scenedetect-mcp",
         env: &[],
+        depends_on: &[],
     },
     IndexerRecipe {
         name: "whisper",
@@ -153,41 +159,49 @@ const RECIPES: &[IndexerRecipe] = &[
         // Default to the small model; users override via global/project
         // config or via setting the env directly.
         env: &[("WHISPER_MODEL", "small.en")],
+        depends_on: &[],
     },
     IndexerRecipe {
         name: "topic",
         package: "topic-mcp",
         env: &[],
+        depends_on: &["whisper"],
     },
     IndexerRecipe {
         name: "editorial-moments",
         package: "editorial-moments-mcp",
         env: &[],
+        depends_on: &["whisper", "topic"],
     },
     IndexerRecipe {
         name: "clip",
         package: "clip-mcp",
         env: &[],
+        depends_on: &[],
     },
     IndexerRecipe {
         name: "face",
         package: "face-mcp",
         env: &[],
+        depends_on: &[],
     },
     IndexerRecipe {
         name: "shot",
         package: "shot-mcp",
         env: &[],
+        depends_on: &["scenedetect", "face"],
     },
     IndexerRecipe {
         name: "gaze",
         package: "gaze-mcp",
         env: &[],
+        depends_on: &[],
     },
     IndexerRecipe {
         name: "frame-quality",
         package: "frame-quality-mcp",
         env: &[],
+        depends_on: &[],
     },
 ];
 
@@ -223,6 +237,7 @@ pub fn with_defaults() -> crate::Config {
                 cwd: python_cwd.clone(),
                 kind: McpServerKind::Indexer,
                 enabled: true,
+                depends_on: recipe.depends_on.iter().map(|s| (*s).into()).collect(),
             }
         })
         .collect();
@@ -273,6 +288,38 @@ mod tests {
             whisper.env.get("WHISPER_MODEL").map(String::as_str),
             Some("small.en")
         );
+    }
+
+    #[test]
+    fn dep_graph_matches_python_indexer_contract() {
+        // The three known producer→consumer relationships. Locking
+        // these in the registry means the dispatcher's topo
+        // schedule matches what the python indexers expect to find
+        // on disk; mismatch surfaces as the
+        // "missing prerequisite sidecar" failure we hit on the
+        // first 44-min real-video run.
+        let cfg = with_defaults();
+        let topic = cfg.find_server("topic").unwrap();
+        assert_eq!(topic.depends_on, vec!["whisper".to_string()]);
+        let em = cfg.find_server("editorial-moments").unwrap();
+        assert_eq!(em.depends_on, vec!["whisper", "topic"]);
+        let shot = cfg.find_server("shot").unwrap();
+        assert_eq!(shot.depends_on, vec!["scenedetect", "face"]);
+        // No-dep indexers: spot-check.
+        for name in [
+            "audio-energy",
+            "scenedetect",
+            "whisper",
+            "clip",
+            "face",
+            "gaze",
+            "frame-quality",
+        ] {
+            assert!(
+                cfg.find_server(name).unwrap().depends_on.is_empty(),
+                "{name} should have no dependencies"
+            );
+        }
     }
 
     #[test]

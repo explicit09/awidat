@@ -156,8 +156,15 @@ fn derive_asset_id(project_root: &Path, abs: &Path) -> String {
 }
 
 fn print_report(report: &IndexReport) {
-    let (skipped, wrote, failed) = report.counts();
-    println!("Index summary: {wrote} wrote, {skipped} skipped, {failed} failed");
+    let (skipped, wrote, failed, dep_skipped) = report.counts();
+    if dep_skipped > 0 {
+        println!(
+            "Index summary: {wrote} wrote, {skipped} skipped, {failed} failed, \
+             {dep_skipped} blocked-by-dep"
+        );
+    } else {
+        println!("Index summary: {wrote} wrote, {skipped} skipped, {failed} failed");
+    }
     for outcome in &report.outcomes {
         match outcome {
             PairOutcome::Wrote { indexer, asset, path } => {
@@ -172,6 +179,16 @@ fn print_report(report: &IndexReport) {
                 message,
             } => {
                 println!("  ✗ {indexer:>14}  {asset}  FAILED: {message}");
+            }
+            PairOutcome::SkippedDep {
+                indexer,
+                asset,
+                missing,
+            } => {
+                println!(
+                    "  ⊘ {indexer:>14}  {asset}  blocked: prerequisite indexer(s) {} did not produce a sidecar",
+                    missing.join(", ")
+                );
             }
         }
     }

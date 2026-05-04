@@ -58,7 +58,7 @@ def _find_sibling_sidecar(
     Mirrors topic-mcp._find_transcript_path. Stops at the project
     root marker (.awidat/ directory).
     """
-    asset = Path(asset_path).resolve()
+    asset = Path(asset_path).absolute()
     for ancestor in asset.parents:
         candidate = ancestor / "index" / indexer / f"{asset_id}.json"
         if candidate.exists():

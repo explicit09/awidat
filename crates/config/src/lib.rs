@@ -95,6 +95,17 @@ pub struct McpServer {
     /// skipped by the indexer dispatcher and the MCP host.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Names of other indexers this one reads sidecars from. The
+    /// dispatcher topo-sorts on this graph: an indexer doesn't run
+    /// until every name in `depends_on` has produced its sidecar
+    /// successfully. If a producer fails, dependents are skipped
+    /// (with a clean message) rather than run-and-error. Defaults
+    /// to empty for user-added indexers (today's behavior); the
+    /// bundled defaults populate this for `topic` (→ whisper),
+    /// `editorial-moments` (→ whisper, topic), and `shot` (→
+    /// scenedetect, face).
+    #[serde(default)]
+    pub depends_on: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -273,6 +284,7 @@ WHISPER_MODEL = "small.en"
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
+            depends_on: vec![],
                     },
                     McpServer {
                         name: "scenedetect".into(),
@@ -282,6 +294,7 @@ WHISPER_MODEL = "small.en"
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
+            depends_on: vec![],
                     },
                 ],
             },
@@ -300,6 +313,7 @@ WHISPER_MODEL = "small.en"
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
+            depends_on: vec![],
                     },
                     // New entry, appended.
                     McpServer {
@@ -310,6 +324,7 @@ WHISPER_MODEL = "small.en"
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
+            depends_on: vec![],
                     },
                 ],
             },
@@ -423,6 +438,7 @@ enabled = false
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
+            depends_on: vec![],
                     },
                     McpServer {
                         name: "bash".into(),
@@ -432,6 +448,7 @@ enabled = false
                         cwd: None,
                         kind: McpServerKind::Tool,
                         enabled: true,
+            depends_on: vec![],
                     },
                 ],
             },

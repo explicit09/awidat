@@ -49,6 +49,7 @@ fn audio_energy_server(python_dir: &Path) -> McpServer {
         cwd: Some(python_dir.to_path_buf()),
         kind: McpServerKind::Indexer,
                         enabled: true,
+            depends_on: vec![],
     }
 }
 

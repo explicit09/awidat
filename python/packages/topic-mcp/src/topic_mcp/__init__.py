@@ -63,7 +63,7 @@ server = IndexerServer(
 
 def _find_transcript_path(asset_path: str, asset_id: str) -> Path | None:
     """Walk up from `asset_path` to find `<project>/index/whisper/<asset_id>.json`."""
-    asset = Path(asset_path).resolve()
+    asset = Path(asset_path).absolute()
     for ancestor in asset.parents:
         candidate = ancestor / "index" / "whisper" / f"{asset_id}.json"
         if candidate.exists():
