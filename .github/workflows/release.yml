@@ -1,0 +1,175 @@
+# Release pipeline. Triggered on tag push (v*); builds tarballs for
+# all 4 supported triples, uploads them as a GitHub Release, and
+# publishes install.sh as a release asset so the documented
+# `curl ... | sh` flow works against `releases/latest/download/`.
+#
+# Cross-compile model: macOS arm64 + Intel build natively on macOS
+# runners; Linux x86_64 builds natively on Ubuntu; Linux aarch64
+# uses `cross` (Docker-backed toolchain). uv is downloaded per
+# target from the official release pages and vendored in.
+#
+# Trigger workflow_dispatch is also wired for manual reruns / dev
+# release rehearsal.
+#
+# Security note: every ${{ }} substitution in this file is either
+# matrix-pinned (whitelisted strings) or system-controlled
+# (github.workspace, github.ref). No untrusted input flows into
+# `run:` blocks. See:
+# https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag for manual release rehearsal (will not create a real release)'
+        required: false
+        default: 'v0.0.0-dev'
+
+# Don't allow concurrent releases for the same ref — releases mutate
+# shared remote state (Git tags, GitHub Releases) and concurrent runs
+# would race.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write  # required to create releases + upload assets
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            uv_url: https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-apple-darwin.tar.gz
+            uv_asset: uv-aarch64-apple-darwin/uv
+            cross: false
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            uv_url: https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-apple-darwin.tar.gz
+            uv_asset: uv-x86_64-apple-darwin/uv
+            cross: false
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            uv_url: https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz
+            uv_asset: uv-x86_64-unknown-linux-gnu/uv
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            uv_url: https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-unknown-linux-gnu.tar.gz
+            uv_asset: uv-aarch64-unknown-linux-gnu/uv
+            cross: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (for aarch64-linux from x86_64 host)
+        if: ${{ matrix.cross }}
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        env:
+          AWIDAT_TARGET: ${{ matrix.target }}
+        run: cargo build --release --target "$AWIDAT_TARGET" -p awidat-cli
+
+      - name: Build (cross)
+        if: ${{ matrix.cross }}
+        env:
+          AWIDAT_TARGET: ${{ matrix.target }}
+        run: cross build --release --target "$AWIDAT_TARGET" -p awidat-cli
+
+      - name: Download vendored uv
+        env:
+          UV_URL: ${{ matrix.uv_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p .uv-bundle
+          curl -fsSL "$UV_URL" -o .uv-bundle/uv.tar.gz
+          tar -xzf .uv-bundle/uv.tar.gz -C .uv-bundle
+          ls -la .uv-bundle
+
+      - name: Package
+        env:
+          AWIDAT_TARGET: ${{ matrix.target }}
+          AWIDAT_UV_BINARY: ${{ github.workspace }}/.uv-bundle/${{ matrix.uv_asset }}
+        run: ./dist/package.sh
+
+      - name: Compute checksum
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd dist/build
+          shasum -a 256 "awidat-$TARGET.tar.gz" \
+            | tee "awidat-$TARGET.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: awidat-${{ matrix.target }}
+          path: |
+            dist/build/awidat-${{ matrix.target }}.tar.gz
+            dist/build/awidat-${{ matrix.target }}.tar.gz.sha256
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    # Skip the release-publish step on workflow_dispatch (which is
+    # for build-pipeline rehearsal, not real releases). Only fire
+    # on real tag pushes.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find artifacts -name 'awidat-*.tar.gz' -exec cp {} release-assets/ \;
+          find artifacts -name 'awidat-*.tar.gz.sha256' -exec cp {} release-assets/ \;
+          # Combined checksums.txt for `sha256sum -c`.
+          ( cd release-assets && cat ./*.sha256 > checksums.txt && rm ./*.sha256 )
+          # Bundle the installer script as a release asset so users
+          # can `curl https://github.com/.../releases/latest/download/install.sh | sh`.
+          cp dist/install.sh release-assets/install.sh
+          ls -la release-assets
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true

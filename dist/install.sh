@@ -24,7 +24,13 @@ set -euo pipefail
 
 AWIDAT_HOME="${AWIDAT_HOME:-$HOME/.local/share/awidat}"
 BIN_DIR="${AWIDAT_BIN_DIR:-$HOME/.local/bin}"
-RELEASE_BASE="${AWIDAT_RELEASE_BASE:-https://example.com/awidat/releases/latest}"
+# Default release URL points at the canonical GitHub Releases
+# `latest` endpoint. Override via AWIDAT_RELEASE_BASE for:
+#   - Specific version pins (e.g.
+#     https://github.com/explicit09/awidat/releases/download/v0.2.0)
+#   - Local dev iteration (e.g. file:///path/to/dist/build)
+#   - Mirrors / private forks
+RELEASE_BASE="${AWIDAT_RELEASE_BASE:-https://github.com/explicit09/awidat/releases/latest/download}"
 
 # Detect platform.
 os="$(uname -s | tr '[:upper:]' '[:lower:]')"

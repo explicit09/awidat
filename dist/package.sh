@@ -30,47 +30,80 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROFILE="${AWIDAT_PROFILE:-release}"
 BUILD_DIR="${AWIDAT_BUILD_DIR:-$ROOT/dist/build}"
 
-# Triple detection. We'd ideally read from `rustc -vV` but that's
-# overkill for the supported set; uname covers it.
-os="$(uname -s | tr '[:upper:]' '[:lower:]')"
-arch="$(uname -m)"
-case "$os-$arch" in
-  darwin-arm64)   triple="aarch64-apple-darwin" ;;
-  darwin-x86_64)  triple="x86_64-apple-darwin" ;;
-  linux-x86_64)   triple="x86_64-unknown-linux-gnu" ;;
-  linux-aarch64)  triple="aarch64-unknown-linux-gnu" ;;
-  *)
-    echo "package.sh: unsupported platform: $os-$arch" >&2
-    exit 1
-    ;;
-esac
+# Triple detection. By default we infer from `uname`, which is fine
+# for local dev where build host == target. CI cross-builds override
+# via AWIDAT_TARGET (e.g. `AWIDAT_TARGET=aarch64-unknown-linux-gnu
+# ./dist/package.sh` from an x86_64 runner). When overridden, we
+# also expect the cargo target dir to be target/<triple>/release/
+# (cargo's standard cross-compile output layout) and the vendored
+# uv to be set explicitly via AWIDAT_UV_BINARY (path to a uv binary
+# matching the target triple).
+if [ -n "${AWIDAT_TARGET:-}" ]; then
+  triple="$AWIDAT_TARGET"
+  cross_compile=1
+else
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  arch="$(uname -m)"
+  case "$os-$arch" in
+    darwin-arm64)   triple="aarch64-apple-darwin" ;;
+    darwin-x86_64)  triple="x86_64-apple-darwin" ;;
+    linux-x86_64)   triple="x86_64-unknown-linux-gnu" ;;
+    linux-aarch64)  triple="aarch64-unknown-linux-gnu" ;;
+    *)
+      echo "package.sh: unsupported platform: $os-$arch" >&2
+      exit 1
+      ;;
+  esac
+  cross_compile=0
+fi
 
 stage="$BUILD_DIR/awidat-$triple"
 rm -rf "$stage"
 mkdir -p "$stage/bin" "$stage/share/awidat"
 
 # 1. Build the Rust binary.
-echo "[package] cargo build --profile=$PROFILE -p awidat-cli"
-( cd "$ROOT" && cargo build --profile "$PROFILE" -p awidat-cli )
-
-# `release` profile lives at target/release; named profiles (e.g.
-# 'dist') would be at target/<name>. We only ship release.
-case "$PROFILE" in
-  release) bin_src="$ROOT/target/release/awidat" ;;
-  dev|debug) bin_src="$ROOT/target/debug/awidat" ;;
-  *) bin_src="$ROOT/target/$PROFILE/awidat" ;;
-esac
+if [ "$cross_compile" = "1" ]; then
+  echo "[package] cargo build --profile=$PROFILE --target=$triple -p awidat-cli"
+  ( cd "$ROOT" && cargo build --profile "$PROFILE" --target "$triple" -p awidat-cli )
+  case "$PROFILE" in
+    release) bin_src="$ROOT/target/$triple/release/awidat" ;;
+    dev|debug) bin_src="$ROOT/target/$triple/debug/awidat" ;;
+    *) bin_src="$ROOT/target/$triple/$PROFILE/awidat" ;;
+  esac
+else
+  echo "[package] cargo build --profile=$PROFILE -p awidat-cli"
+  ( cd "$ROOT" && cargo build --profile "$PROFILE" -p awidat-cli )
+  case "$PROFILE" in
+    release) bin_src="$ROOT/target/release/awidat" ;;
+    dev|debug) bin_src="$ROOT/target/debug/awidat" ;;
+    *) bin_src="$ROOT/target/$PROFILE/awidat" ;;
+  esac
+fi
 cp "$bin_src" "$stage/bin/awidat"
-strip "$stage/bin/awidat" 2>/dev/null || true
+# `strip` on macOS doesn't accept Linux ELF binaries and vice
+# versa — only strip when host arch can plausibly handle the
+# binary. Cross-built tarballs ship with debug info; ~5 MB extra.
+if [ "$cross_compile" = "0" ]; then
+  strip "$stage/bin/awidat" 2>/dev/null || true
+fi
 
 # 2. Vendor uv. Required so the installer doesn't depend on the
-# user already having uv. We just take whichever uv is on the
-# build machine — it'll be the right triple by construction since
-# we're packaging for the host.
-if command -v uv >/dev/null 2>&1; then
+# user already having uv. For host-local builds we copy whichever
+# uv is on PATH. For CI cross-builds the caller passes
+# AWIDAT_UV_BINARY pointing at a target-matching uv binary
+# (downloaded by the workflow).
+if [ -n "${AWIDAT_UV_BINARY:-}" ]; then
+  if [ ! -f "$AWIDAT_UV_BINARY" ]; then
+    echo "[package] AWIDAT_UV_BINARY=$AWIDAT_UV_BINARY does not exist" >&2
+    exit 1
+  fi
+  cp "$AWIDAT_UV_BINARY" "$stage/bin/uv"
+  chmod +x "$stage/bin/uv"
+elif command -v uv >/dev/null 2>&1; then
   cp "$(command -v uv)" "$stage/bin/uv"
 else
-  echo "[package] uv not found on PATH; skipping vendored uv (installer will require uv)" >&2
+  echo "[package] uv not found on PATH and AWIDAT_UV_BINARY not set; \
+skipping vendored uv (installer will require system uv)" >&2
 fi
 
 # 3. Copy the python workspace. Sources + lockfile + pyproject;

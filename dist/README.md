@@ -1,24 +1,49 @@
 # awidat distribution
 
 This directory contains the packaging + installation pieces for end-user
-distribution of `awidat`. Compiled in Phase 3 of the v1.5 plan.
+distribution of `awidat`.
 
 ## End-user install
 
+Two equivalent paths.
+
+**curl (works everywhere):**
+
 ```bash
-curl -fsSL https://awidat.example/install.sh | sh
+curl -fsSL https://github.com/explicit09/awidat/releases/latest/download/install.sh | sh
 ```
 
-That's it. Behind the scenes:
+**Homebrew (macOS / Linuxbrew, after the tap is set up):**
+
+```bash
+brew install explicit09/awidat/awidat
+```
+
+Both end at the same place: `awidat` on your `$PATH`, python indexer
+tree resolved, ready for `awidat new` / `awidat tui` / `awidat secrets-set`.
+Behind the scenes (curl path):
 
 1. Detects OS+arch (macOS arm64/x86_64, Linux x86_64/aarch64).
-2. Downloads `awidat-<triple>.tar.gz`.
-3. Extracts to `~/.local/share/awidat/` (override with `AWIDAT_HOME`).
-4. Symlinks `awidat` into `~/.local/bin/`.
+2. Downloads `awidat-<triple>.tar.gz` from GitHub Releases.
+3. Extracts to `~/.local/share/awidat/versions/<sha>/` (versioned for
+   atomic upgrades; override the parent dir with `AWIDAT_HOME`).
+4. Symlinks the `current` pointer + `~/.local/bin/awidat`.
 5. Runs `uv sync --all-packages` once to materialize the per-indexer
    venvs (~3 GB of wheels — torch, dlib, opencv, faster-whisper).
 
-Subsequent re-runs of the script are idempotent and upgrade in place.
+Subsequent runs use the same script and are idempotent.
+
+## Upgrading
+
+```bash
+awidat upgrade
+```
+
+Same end result as re-running `install.sh`. Atomic: never overwrites
+the running binary (extracts new version to a sibling dir, swaps the
+`current` symlink). Use `--from <url-or-path>` to install from a
+specific source, `--check` to print what's installed without
+fetching.
 
 ## Why this distribution model
 
@@ -70,18 +95,66 @@ AWIDAT_RELEASE_BASE=file://$(pwd)/dist/build \
 That tells the installer to fetch from the local build dir, mirroring
 exactly what the real release flow looks like minus the curl.
 
+## CI / release pipeline
+
+`/.github/workflows/release.yml` triggers on `v*` tag pushes. It:
+
+1. Builds tarballs for all 4 supported triples (matrix: macOS arm64
+   + macOS Intel native; Linux x86_64 native; Linux aarch64 via
+   `cross`).
+2. Downloads the matching `uv` release per triple and vendors it
+   into the tarball.
+3. Computes SHA256 per tarball.
+4. Publishes a GitHub Release with all tarballs + `checksums.txt`
+   + `install.sh` as assets.
+
+After the release publishes, `homebrew-bump.yml` triggers automatically:
+fetches the per-platform SHAs from the new release, rewrites the
+`AUTOBUMP_*` blocks in `dist/homebrew/awidat.rb`, and pushes the new
+formula to the `explicit09/homebrew-awidat` tap repo.
+
+### One-time setup before the first release
+
+The release workflow runs end-to-end on every `v*` tag with no
+manual setup. The Homebrew tap, however, has prerequisites:
+
+1. Create a public repo at `github.com/explicit09/homebrew-awidat`
+   (Homebrew requires the `homebrew-` prefix for taps).
+2. Create a fine-grained PAT with `contents: write` on that tap
+   repo. Save it as `HOMEBREW_TAP_TOKEN` in this repo's Actions
+   secrets.
+3. Push the initial Formula by hand:
+   ```
+   cp dist/homebrew/awidat.rb /path/to/homebrew-awidat/Formula/awidat.rb
+   cd /path/to/homebrew-awidat && git add . && git commit && git push
+   ```
+
+After that, every subsequent release auto-bumps the formula.
+
+### Cutting a release
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+That's it. Watch the Actions tab — release builds in ~10-15 min,
+homebrew-bump runs once the release publishes, and within ~20 min
+the new version is live at:
+
+- `curl ...releases/latest/download/install.sh | sh`
+- `awidat upgrade` (for users already on a previous version)
+- `brew install explicit09/awidat/awidat` (after `brew update`)
+
 ## What's NOT here yet (deferred)
 
-- **CI release pipeline.** No GitHub Actions yaml that builds for all
-  triples and publishes to a releases page. Single-platform local
-  packaging works today; cross-compilation + multi-platform CI is the
-  next packaging arc.
 - **Code signing / notarization.** macOS Gatekeeper will warn on the
   first run. Real ship: get a Developer ID, codesign + notarize.
-- **Homebrew formula.** Layered on top of #1 once the install URL is
-  stable. `brew install awidat` becomes a one-liner that runs the
-  install.sh under the hood.
-- **Auto-update.** `awidat upgrade` re-runs install.sh. Cheap to add
-  once the release endpoint is live.
 - **Bundled ffmpeg.** Currently relies on `ffmpeg` being on PATH. Can
   bundle a static ffmpeg in `bin/` if user-install friction warrants.
+- **Windows support.** Not a target today. Awidat assumes a POSIX
+  shell + uv + ffmpeg. Windows would need MSI packaging + WSL detection.
+- **Stable VERSION endpoint for `awidat upgrade --check`.** Currently
+  prints what's installed but doesn't fetch the remote VERSION for
+  comparison. Add when there's a release.json (or equivalent) at
+  the canonical URL.
