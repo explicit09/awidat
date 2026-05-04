@@ -20,6 +20,7 @@ pub mod session;
 pub mod skills;
 pub mod tool;
 pub mod tools;
+pub mod verify;
 
 pub use error::FunctionCallError;
 pub use session::{Session, SessionError, SessionEvent};

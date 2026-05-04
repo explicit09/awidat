@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::{McpConfig, McpServer, McpServerKind};
+use crate::{HooksConfig, McpConfig, McpServer, McpServerKind};
 
 /// Resolve the python workspace root per the priority model in the
 /// module doc. Returns `None` only when every fallback misses; in
@@ -314,6 +314,7 @@ pub fn with_defaults() -> crate::Config {
 
     crate::Config {
         mcp: McpConfig { servers },
+        hooks: HooksConfig::default(),
     }
 }
 

@@ -53,6 +53,32 @@ pub struct Config {
     /// MCP server registrations (indexers + week-4 agent tools).
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Editorial hooks. Shell commands fired at lifecycle points
+    /// (`pre_apply_edl`, `post_apply_edl`). Per PLAN.md §15 Week 7.
+    #[serde(default)]
+    pub hooks: HooksConfig,
+}
+
+/// `[hooks]` section. Each field is a shell command (run via
+/// `bash -lc`); empty / unset means no hook for that event.
+///
+/// Pre-hooks can fail and abort the operation: a non-zero exit
+/// status surfaces as an apply_edl error to the agent.
+/// Post-hooks fire fire-and-forget; their stderr is captured into
+/// the SessionEvent stream for diagnostics but doesn't block the
+/// agent.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct HooksConfig {
+    /// Run before each `apply_edl` commit. Receives the EDL text
+    /// on stdin (so the hook can lint / reject); the hook's
+    /// stdout is logged but ignored. Non-zero exit aborts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_apply_edl: Option<String>,
+    /// Run after each successful `apply_edl` commit. Receives
+    /// `{"applied": [<op summaries>]}` on stdin. Side-effect-only;
+    /// exit status is logged but doesn't block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_apply_edl: Option<String>,
 }
 
 /// `[mcp]` section.
@@ -202,6 +228,7 @@ impl Config {
         }
         Self {
             mcp: McpConfig { servers },
+            hooks: HooksConfig::default(),
         }
     }
 
@@ -298,6 +325,7 @@ WHISPER_MODEL = "small.en"
                     },
                 ],
             },
+            hooks: HooksConfig::default(),
         };
         let mut project_env = HashMap::new();
         project_env.insert("WHISPER_MODEL".into(), "large-v3-turbo".into());
@@ -328,6 +356,7 @@ WHISPER_MODEL = "small.en"
                     },
                 ],
             },
+            hooks: HooksConfig::default(),
         };
         let merged = global.overlay(project);
         let names: Vec<&str> = merged.mcp.servers.iter().map(|s| s.name.as_str()).collect();
@@ -452,6 +481,7 @@ enabled = false
                     },
                 ],
             },
+            hooks: HooksConfig::default(),
         };
         let names: Vec<&str> = c.indexers().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["whisper"]);

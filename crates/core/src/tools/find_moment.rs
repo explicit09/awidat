@@ -89,7 +89,10 @@ impl ToolHandler for FindMomentTool {
         let query = args.query.trim().to_lowercase();
         if query.is_empty() {
             return Err(FunctionCallError::RespondToModel(
-                "find_moment: query is empty".into(),
+                "find_moment: `query` was empty (or just whitespace). Pass a \
+                 non-empty substring to search transcript text for. \
+                 Example: find_moment(query=\"battery fire\")."
+                    .into(),
             ));
         }
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).min(100);

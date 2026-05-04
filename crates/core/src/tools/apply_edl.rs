@@ -104,6 +104,36 @@ impl ToolHandler for ApplyEdlTool {
             ));
         }
 
+        // Tier-1 verification (PLAN.md §9.1): asset-existence check
+        // for every Insert Clip op. Catches the common bug of
+        // referencing a path that's been moved/deleted before it
+        // hits the OTIO writer (where the error is more cryptic).
+        // Other tier-1 checks (anchor resolution, frame-range
+        // bounds, OTIO round-trip) are inside edl_apply already.
+        for (i, op) in envelope.ops.iter().enumerate() {
+            if let crate::edl::op::EdlOp::InsertClip { asset, .. } = op {
+                let abs = ctx.project_root.join(asset);
+                if !abs.exists() {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "apply_edl: op #{i} (Insert Clip) references {asset:?} \
+                         but no such file at {}. Use `list_assets` to see what's \
+                         actually under raw/ in this project, or fix the path.",
+                        abs.display()
+                    )));
+                }
+            }
+        }
+
+        // pre_apply_edl hook (PLAN.md §15 Week 7). Runs before
+        // edl_apply; receives the raw EDL text on stdin. Non-zero
+        // exit aborts the apply_edl call. Hook config is loaded
+        // fresh per call to support live-edit during a session.
+        if let Ok(cfg) = awidat_config::Config::load(Some(&ctx.project_root))
+            && let Some(cmd) = cfg.hooks.pre_apply_edl.as_deref()
+        {
+            run_apply_edl_hook("pre_apply_edl", cmd, &args.edl, &ctx.project_root)?;
+        }
+
         // 2-4. Apply against a clone of the current timeline.
         let project = Project::read(&ctx.project_root).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
@@ -128,6 +158,28 @@ impl ToolHandler for ApplyEdlTool {
                     "apply_edl: timeline written-validate ok but disk write failed: {e}"
                 ))
             })?;
+
+            // post_apply_edl hook (PLAN.md §15 Week 7). Fires
+            // fire-and-forget after the disk write succeeds. Non-
+            // zero exit is logged but doesn't fail the apply_edl —
+            // we already committed; the agent shouldn't have to
+            // un-commit on a side-effect's failure.
+            if let Ok(cfg) = awidat_config::Config::load(Some(&ctx.project_root))
+                && let Some(cmd) = cfg.hooks.post_apply_edl.as_deref()
+            {
+                let stdin_payload = serde_json::json!({
+                    "applied": outcome.applied.iter().map(|a| &a.description).collect::<Vec<_>>(),
+                })
+                .to_string();
+                if let Err(e) = run_post_hook(
+                    "post_apply_edl",
+                    cmd,
+                    &stdin_payload,
+                    &ctx.project_root,
+                ) {
+                    tracing::warn!(error = %e, "post_apply_edl hook failed");
+                }
+            }
         }
 
         // Build the response. Lead with a loud DRY RUN banner when
@@ -203,6 +255,93 @@ fn format_parse_error(e: &EdlParseError) -> String {
 
 fn format_apply_error(e: &ApplyError) -> String {
     format!("apply_edl: apply failed — {e}")
+}
+
+/// Run a pre-apply hook. Synchronous, blocking; non-zero exit
+/// raises `RespondToModel` so the agent sees the hook's stderr +
+/// can self-correct or retry.
+fn run_apply_edl_hook(
+    name: &str,
+    command: &str,
+    stdin_payload: &str,
+    cwd: &std::path::Path,
+) -> Result<(), FunctionCallError> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("bash")
+        .arg("-lc")
+        .arg(command)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "apply_edl: hook {name:?} failed to spawn ({e}). Check that the command \
+                 is on PATH and the bash interpreter is available."
+            ))
+        })?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(stdin_payload.as_bytes());
+    }
+    let out = child.wait_with_output().map_err(|e| {
+        FunctionCallError::RespondToModel(format!(
+            "apply_edl: hook {name:?} I/O error ({e})"
+        ))
+    })?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        return Err(FunctionCallError::RespondToModel(format!(
+            "apply_edl: pre-hook {name:?} rejected the call (exit {}). \
+             stdout: {} \
+             stderr: {} \
+             Adjust the EDL or update the hook config under [hooks].",
+            out.status.code().unwrap_or(-1),
+            if stdout.is_empty() { "(empty)".into() } else { stdout },
+            if stderr.is_empty() { "(empty)".into() } else { stderr }
+        )));
+    }
+    Ok(())
+}
+
+/// Run a post-apply hook. Same shell semantics as
+/// `run_apply_edl_hook` but failure is logged, not surfaced — the
+/// edit already committed.
+fn run_post_hook(
+    name: &str,
+    command: &str,
+    stdin_payload: &str,
+    cwd: &std::path::Path,
+) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("bash")
+        .arg("-lc")
+        .arg(command)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("hook {name:?} failed to spawn: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(stdin_payload.as_bytes());
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("hook {name:?} I/O: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "hook {name:?} exit {}: {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(())
 }
 
 const DESCRIPTION: &str = "\

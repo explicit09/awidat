@@ -1,19 +1,27 @@
 //! `bash` tool — runs a shell command, returns combined stdout+stderr.
 //!
-//! Week 3 shape per the corpus survey: simpler than Codex's argv-vector
+//! Shape per the corpus survey: simpler than Codex's argv-vector
 //! `shell` (Crush's single-command shape), with Codex's truncation
 //! discipline (cap at 30KB, middle-elide with line-count header).
 //!
-//! Sandboxing is **stubbed** for week 3 — we run via `bash -lc <command>`
-//! with no isolation. Week 7 wraps the same surface with seatbelt
-//! (macOS) and landlock+seccomp (Linux), per `PLAN.md` §10.1.
+//! ## Sandboxing (week 7 — landed)
+//!
+//! On macOS the command runs under `sandbox-exec` via the
+//! `awidat-sandboxing` crate. The policy denies file writes outside
+//! the project root + system tempdirs, and denies network egress
+//! by default. On Linux the sandbox is stubbed; we fall back to
+//! direct execution with the static reject-list (below) as the
+//! safety net.
 //!
 //! ## Banned commands
 //!
-//! Pre-week-7 safety net: a static reject list lifted from
+//! Defense-in-depth alongside the sandbox: a static reject list
+//! lifted from
 //! `harnesses/crush/internal/agent/tools/bash.go:71-128`. Network
-//! tools, package managers, system-mutating tools. The model gets a
-//! `RespondToModel` error explaining what's banned and why.
+//! tools, package managers, system-mutating tools. The reject-list
+//! catches "the agent ran `curl`" before the sandbox even gets a
+//! chance to deny the syscall — fewer denial-then-escalation
+//! roundtrips for obvious-no's.
 
 use std::time::Duration;
 
@@ -117,7 +125,7 @@ impl ToolHandler for BashTool {
     async fn handle(
         &self,
         inv: ToolInvocation,
-        _ctx: crate::ToolContext,
+        ctx: crate::ToolContext,
     ) -> Result<ToolOutput, FunctionCallError> {
         let args: BashArgs = serde_json::from_value(inv.args).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
@@ -128,9 +136,10 @@ impl ToolHandler for BashTool {
         if let Some(banned) = first_banned_token(&args.command) {
             warn!(banned, "bash: rejecting banned command");
             return Err(FunctionCallError::RespondToModel(format!(
-                "bash: command '{banned}' is on the safety reject-list (no network, no package \
-                 managers, no privilege escalation, no shell aliasing). The agent's sandbox \
-                 lands in week 7; until then this is a static reject. Pick a different command."
+                "bash: command '{banned}' is on the reject-list (no network, no package \
+                 managers, no privilege escalation, no shell aliasing). Pick a different \
+                 command. If you need network or package install, the user has to do it \
+                 outside the agent loop."
             )));
         }
 
@@ -140,11 +149,26 @@ impl ToolHandler for BashTool {
             .min(300_000);
         let to = Duration::from_millis(timeout_ms);
 
+        // Sandboxed execution path. The sandbox is on by default;
+        // the AWIDAT_BASH_NO_SANDBOX env var disables it for
+        // diagnostics + bootstrapping (e.g. running awidat from
+        // a CI runner where seatbelt isn't available). Linux
+        // currently returns LinuxNotImplemented — we fall back to
+        // direct exec there with the reject-list as the safety net.
+        let workdir: std::path::PathBuf = args
+            .workdir
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| ctx.project_root.clone());
+        if std::env::var_os("AWIDAT_BASH_NO_SANDBOX").is_none()
+            && awidat_sandboxing::is_available()
+        {
+            return run_sandboxed(&args.command, &workdir, &ctx.project_root, to).await;
+        }
+
         let mut cmd = Command::new("bash");
         cmd.arg("-lc").arg(&args.command);
-        if let Some(wd) = &args.workdir {
-            cmd.current_dir(wd);
-        }
+        cmd.current_dir(&workdir);
 
         let output_fut = cmd.output();
         let output = match timeout(to, output_fut).await {
@@ -169,6 +193,104 @@ impl ToolHandler for BashTool {
         let formatted = format_output(exit_code, &stdout, &stderr);
         Ok(ToolOutput::text(formatted))
     }
+}
+
+/// Run `command` under the platform sandbox. Spawns the sandbox in
+/// a blocking task because `awidat_sandboxing::Sandbox::run` is
+/// synchronous (it calls `Command::output`, not the tokio variant).
+/// We wrap with `tokio::task::spawn_blocking` so the agent loop
+/// stays responsive.
+async fn run_sandboxed(
+    command: &str,
+    workdir: &std::path::Path,
+    project_root: &std::path::Path,
+    deadline: Duration,
+) -> Result<ToolOutput, FunctionCallError> {
+    use awidat_sandboxing::{Policy, Sandbox, SandboxErr};
+    let command = command.to_string();
+    let workdir = workdir.to_path_buf();
+    let project_root = project_root.to_path_buf();
+    let blocking = tokio::task::spawn_blocking(move || {
+        let policy = Policy::for_project(&project_root);
+        let sb = Sandbox;
+        // We pass the command via `bash -lc <command>` so user-supplied
+        // shell syntax (pipes, redirects) works. The bash binary
+        // itself is read-allowed by the seatbelt profile.
+        // We can't change-cwd inside sandbox-exec's argv, so we cd in
+        // the inline shell.
+        let cmd = format!(
+            "cd {} && {}",
+            shell_quote(workdir.to_str().unwrap_or(".")),
+            command
+        );
+        sb.run(&["/bin/bash", "-lc", &cmd], &policy)
+    });
+    let result = match timeout(deadline, blocking).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "bash: sandbox task panicked ({e}). This is a bug — file an issue."
+            )));
+        }
+        Err(_) => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "bash: sandboxed command timed out. Re-run with a larger `timeout_ms`."
+            )));
+        }
+    };
+    match result {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            let exit_code = out.status.code().unwrap_or(-1);
+            let formatted = format_output(exit_code, &stdout, &stderr);
+            Ok(ToolOutput::text(formatted))
+        }
+        Err(SandboxErr::Denied { reason }) => {
+            Err(FunctionCallError::RespondToModel(format!(
+                "bash: sandbox denied the command ({reason}). The sandbox \
+                 only permits writes inside the project root + system \
+                 tempdirs, and denies network egress by default. Either \
+                 rewrite the command to stay within those bounds, or tell \
+                 the user this needs unsandboxed execution and let them \
+                 run it outside the agent loop."
+            )))
+        }
+        Err(SandboxErr::LinuxNotImplemented) => {
+            // Should never reach here — `is_available()` returns
+            // false on Linux, so the caller picked the unsandboxed
+            // path. Belt-and-suspenders error message in case.
+            Err(FunctionCallError::RespondToModel(
+                "bash: Linux sandbox not yet wired. Set AWIDAT_BASH_NO_SANDBOX=1 \
+                 to bypass on Linux until the landlock backend lands."
+                    .into(),
+            ))
+        }
+        Err(other) => Err(FunctionCallError::RespondToModel(format!(
+            "bash: sandbox error ({other}). Check `awidat doctor` for setup help."
+        ))),
+    }
+}
+
+/// Shell-quote a path for safe interpolation into the inline `cd`
+/// that we splice ahead of the user's command. Paranoid: assumes
+/// any character could be metacharacter-significant. This isn't a
+/// security boundary (the sandbox is) — it's "the paths with
+/// spaces should still work."
+fn shell_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            // End the single-quoted string, escape a literal
+            // single-quote, restart.
+            out.push_str(r"'\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// Description shown to the model in the tool list.
@@ -318,6 +440,10 @@ mod tests {
     #[tokio::test]
     async fn timeout_is_respond_to_model() {
         let tool = BashTool;
+        // Both the sandboxed and unsandboxed paths emit a clear
+        // "timed out" message — we only assert that, not the exact
+        // format. The exact-format checks live in the sandboxing
+        // crate's tests, which exercise both paths directly.
         let err = tool
             .handle(invoke(serde_json::json!({
                 "command": "sleep 5",
@@ -327,8 +453,10 @@ mod tests {
             .unwrap_err();
         match err {
             FunctionCallError::RespondToModel(msg) => {
-                assert!(msg.contains("timed out"));
-                assert!(msg.contains("200ms"));
+                assert!(
+                    msg.contains("timed out") || msg.contains("timeout"),
+                    "expected a timeout message, got {msg:?}"
+                );
             }
             other => panic!("want RespondToModel timeout, got {other:?}"),
         }
@@ -344,7 +472,7 @@ mod tests {
         match err {
             FunctionCallError::RespondToModel(msg) => {
                 assert!(msg.contains("'curl'"));
-                assert!(msg.contains("safety reject-list"));
+                assert!(msg.contains("reject-list"));
             }
             other => panic!("want RespondToModel, got {other:?}"),
         }

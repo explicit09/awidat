@@ -101,11 +101,48 @@ impl ToolHandler for UpdatePlanTool {
             }
         }
 
+        // Tier-2 verification (PLAN.md §9.2): when the agent flips
+        // any item to `completed`, run the tier-2 suite against the
+        // current project state. A failure DOES NOT roll the item
+        // back automatically — we surface the diagnostic to the
+        // agent and let it decide. This matches the codex pattern
+        // where the agent retains agency over its own plan.
+        let newly_completed: Vec<&PlanItem> = args
+            .items
+            .iter()
+            .filter(|i| i.status == "completed")
+            .collect();
+        let mut verify_summary = String::new();
+        if !newly_completed.is_empty() {
+            for item in &newly_completed {
+                let result = crate::verify::tier_2(&ctx.project_root, &item.step);
+                match result {
+                    crate::verify::VerifyResult::Pass { .. } => {
+                        // Stay quiet on pass — the per-check noise is
+                        // worse than the silence; the agent can move on.
+                    }
+                    crate::verify::VerifyResult::Fail { reason, .. } => {
+                        verify_summary
+                            .push_str(&format!("\n  ✗ {:?}: {reason}", item.step));
+                    }
+                }
+            }
+        }
+
         let _ = ctx.events_tx.send(SessionEvent::EditPlanUpdate {
             items: args.items,
             note: args.note,
         });
-        Ok(ToolOutput::text("Plan updated"))
+        if !verify_summary.is_empty() {
+            Ok(ToolOutput::text(format!(
+                "Plan updated. Tier-2 verification flagged issues:{verify_summary}\n\n\
+                 Address the diagnostic before re-asserting `completed`. If the \
+                 issue is benign, mark the affected items `pending` instead and \
+                 keep going."
+            )))
+        } else {
+            Ok(ToolOutput::text("Plan updated"))
+        }
     }
 }
 
@@ -122,13 +159,13 @@ mod tests {
     use super::*;
     use tokio::sync::broadcast;
 
-    fn ctx() -> (
+    fn ctx_at(project_root: std::path::PathBuf) -> (
         ToolContext,
         broadcast::Receiver<SessionEvent>,
     ) {
         let (tx, rx) = broadcast::channel(8);
         let c = ToolContext {
-            project_root: std::env::temp_dir(),
+            project_root,
             events_tx: tx,
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
@@ -138,6 +175,21 @@ mod tests {
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
         };
         (c, rx)
+    }
+
+    /// Convenience: a context rooted at a freshly-init'd project.
+    /// Tier-2 verification expects a valid `project.otio.json`; this
+    /// helper gives us one without forcing every test to scaffold.
+    /// Returns the TempDir alongside so the test owns its lifetime.
+    fn ctx() -> (
+        ToolContext,
+        broadcast::Receiver<SessionEvent>,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        awidat_proto::project::Project::init(dir.path()).unwrap();
+        let (c, rx) = ctx_at(dir.path().to_path_buf());
+        (c, rx, dir)
     }
 
     fn invoke(args: serde_json::Value) -> ToolInvocation {
@@ -150,7 +202,7 @@ mod tests {
 
     #[tokio::test]
     async fn happy_path_emits_event_and_returns_plan_updated() {
-        let (c, mut rx) = ctx();
+        let (c, mut rx, _dir) = ctx();
         let out = UpdatePlanTool
             .handle(
                 invoke(serde_json::json!({
@@ -177,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_status_is_respond_to_model() {
-        let (c, _rx) = ctx();
+        let (c, _rx, _dir) = ctx();
         let err = UpdatePlanTool
             .handle(
                 invoke(serde_json::json!({
@@ -198,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_items_is_respond_to_model() {
-        let (c, _rx) = ctx();
+        let (c, _rx, _dir) = ctx();
         let err = UpdatePlanTool
             .handle(invoke(serde_json::json!({})), c)
             .await

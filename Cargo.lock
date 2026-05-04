@@ -159,6 +159,7 @@ dependencies = [
  "awidat-mcp",
  "awidat-proto",
  "awidat-render",
+ "awidat-sandboxing",
  "awidat-secrets",
  "base64",
  "bytes",
@@ -241,6 +242,10 @@ dependencies = [
 [[package]]
 name = "awidat-sandboxing"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "awidat-secrets"
