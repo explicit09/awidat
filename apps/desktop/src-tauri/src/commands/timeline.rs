@@ -81,9 +81,21 @@ fn flatten_timeline(project: &Project, project_root: &Path) -> TimelineSnapshot 
                         ),
                         MediaReference::Missing(_) => None,
                     };
+                    // Anchor uuid: prefer clip.metadata.awidat.extra["clip_uuid"];
+                    // fall back to display name (the EDL resolver also
+                    // matches names, so the fallback round-trips).
+                    let clip_uuid = clip
+                        .metadata
+                        .awidat
+                        .as_ref()
+                        .and_then(|m| m.extra.get("clip_uuid"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| clip.name.clone());
                     items.push(TimelineItem::Clip {
                         index: i,
                         name: clip.name.clone(),
+                        clip_uuid,
                         track_start_s: track_cursor_s,
                         duration_s,
                         asset_id,

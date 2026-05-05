@@ -14,6 +14,15 @@ index: number,
  */
 name: string, 
 /**
+ * Anchor uuid for `Anchor::ClipUuid` in EDL ops. Pulled from
+ * `clip.metadata.awidat.extra["clip_uuid"]` if present;
+ * otherwise falls back to the clip's display name (which the
+ * `awidat_core::edl::anchor` resolver also matches against).
+ * Step 8's drag-to-trim builds `TrimClip { anchor:
+ * ClipUuid { uuid } }` from this field.
+ */
+clip_uuid: string, 
+/**
  * Start of this clip on the track timeline, in seconds.
  */
 track_start_s: number, 
