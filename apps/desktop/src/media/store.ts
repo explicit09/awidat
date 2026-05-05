@@ -24,6 +24,19 @@ type MediaState = {
   durationS: number;
   /** True between play() and pause()/ended. */
   isPlaying: boolean;
+  /**
+   * Monotonically-increasing tick that bumps when an external caller
+   * requests a seek (e.g. the timeline canvas). The MediaPane
+   * subscribes to this and imperatively sets `videoRef.currentTime`
+   * to `seekTargetS`. We can't drive seeks via `currentTime` alone
+   * because the player itself owns currentTime — the store mirrors
+   * it, doesn't command it. Bumping a separate counter lets the
+   * player distinguish "store updated because I emitted timeupdate"
+   * from "an external caller wants me to seek now."
+   */
+  seekRequestId: number;
+  /** Target seconds for the most recent seek request. */
+  seekTargetS: number;
 
   /** Refresh from `list_proxies`. */
   refresh: () => Promise<void>;
@@ -35,6 +48,8 @@ type MediaState = {
   setDuration: (d: number) => void;
   /** Called on `play` / `pause` / `ended`. */
   setPlaying: (p: boolean) => void;
+  /** External caller asks the player to seek to `t` seconds. */
+  requestSeek: (t: number) => void;
 };
 
 export const useMediaStore = create<MediaState>((set, get) => ({
@@ -43,6 +58,8 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   currentTime: 0,
   durationS: 0,
   isPlaying: false,
+  seekRequestId: 0,
+  seekTargetS: 0,
 
   refresh: async () => {
     try {
@@ -82,4 +99,9 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   setTime: (t) => set({ currentTime: t }),
   setDuration: (d) => set({ durationS: d }),
   setPlaying: (p) => set({ isPlaying: p }),
+  requestSeek: (t) =>
+    set((state) => ({
+      seekRequestId: state.seekRequestId + 1,
+      seekTargetS: Math.max(0, t),
+    })),
 }));

@@ -89,7 +89,21 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
   const currentTime = useMediaStore((s) => s.currentTime);
   const durationS = useMediaStore((s) => s.durationS);
   const isPlaying = useMediaStore((s) => s.isPlaying);
+  const seekRequestId = useMediaStore((s) => s.seekRequestId);
+  const seekTargetS = useMediaStore((s) => s.seekTargetS);
   const lastPushedSecondRef = useRef<number>(-1);
+
+  // External seek requests (from timeline canvas click/drag) drive
+  // the video element imperatively. We watch seekRequestId rather
+  // than seekTargetS so back-to-back seeks to the same time still
+  // re-trigger.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (v && seekRequestId > 0 && Number.isFinite(seekTargetS)) {
+      v.currentTime = seekTargetS;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seekRequestId]);
 
   // Reset playback when switching assets so the new video starts
   // from frame 0 instead of inheriting the prior video's currentTime.

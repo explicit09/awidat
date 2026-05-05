@@ -928,6 +928,8 @@ body,
 .timeline-canvas {
   display: block;
   width: 100%;
+  cursor: col-resize;
+  touch-action: none; /* don't let the OS hijack drags as scroll/back */
 }
 
 .timeline-empty {

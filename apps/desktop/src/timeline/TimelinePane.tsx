@@ -83,6 +83,10 @@ function TimelineCanvas({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Latest pps used for paint, captured into a ref so click handlers
+  // can convert x → seconds without recomputing layout.
+  const ppsRef = useRef<number>(PX_PER_SECOND_BASE);
+  const requestSeek = useMediaStore((s) => s.requestSeek);
 
   // Compute pixel layout. Auto-fit pps so the whole project is
   // visible without horizontal scroll for the read-only v1.
@@ -109,14 +113,8 @@ function TimelineCanvas({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-      // pps: fit the whole project to the available width if there
-      // are clips; otherwise fall back to the base for the empty
-      // ruler.
-      const fitPps =
-        snapshot.duration_s > 0
-          ? (cssWidth - 8) / snapshot.duration_s
-          : PX_PER_SECOND_BASE;
-      const pps = Math.max(2, Math.min(fitPps, PX_PER_SECOND_BASE * 8));
+      const pps = computePps(snapshot.duration_s, cssWidth);
+      ppsRef.current = pps;
 
       drawRuler(ctx, cssWidth, snapshot.duration_s, pps);
       drawTracks(ctx, cssWidth, snapshot.tracks, pps);
@@ -132,6 +130,39 @@ function TimelineCanvas({
     return () => ro.disconnect();
   }, [snapshot, currentTime]);
 
+  // Click + drag on the canvas → seek the player. We use pointer
+  // events (covers mouse + trackpad + touch) and capture the
+  // pointer on mousedown so the drag tracks even outside the
+  // canvas bounds (Premiere/Resolve behavior).
+  function timeFromClientX(clientX: number): number {
+    const canvas = canvasRef.current;
+    if (!canvas) return 0;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const t = x / Math.max(0.001, ppsRef.current);
+    // Clamp to project duration so we don't ask the player to seek
+    // past the end (HTMLMediaElement clamps anyway, but this keeps
+    // the visual feedback clean).
+    return Math.max(0, Math.min(t, snapshot.duration_s || t));
+  }
+
+  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (snapshot.duration_s <= 0) return; // nothing to seek into
+    e.currentTarget.setPointerCapture(e.pointerId);
+    requestSeek(timeFromClientX(e.clientX));
+  }
+
+  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    requestSeek(timeFromClientX(e.clientX));
+  }
+
+  function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }
+
   return (
     <div className="timeline-canvas-wrap" ref={containerRef}>
       {snapshot.tracks.length === 0 && (
@@ -140,9 +171,25 @@ function TimelineCanvas({
           ("trim filler", "cut to the punchline") and they'll show up here.
         </div>
       )}
-      <canvas ref={canvasRef} className="timeline-canvas" />
+      <canvas
+        ref={canvasRef}
+        className="timeline-canvas"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      />
     </div>
   );
+}
+
+/** pps: fit the whole project to the available width if there are
+ *  clips; otherwise fall back to the base for the empty ruler. The
+ *  upper bound (8× base) prevents a 2-second project from drawing
+ *  ridiculous spacing. */
+function computePps(durationS: number, cssWidth: number): number {
+  const fitPps = durationS > 0 ? (cssWidth - 8) / durationS : PX_PER_SECOND_BASE;
+  return Math.max(2, Math.min(fitPps, PX_PER_SECOND_BASE * 8));
 }
 
 /** Draw the time ruler with tick marks every 1, 5, or 10 seconds
