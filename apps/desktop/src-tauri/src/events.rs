@@ -40,3 +40,98 @@ pub fn emit_item(app: &AppHandle, item: Item) {
         warn!(error = %e, "emit item failed");
     }
 }
+
+/// Helpers for emitting the [`Item::Job`] lifecycle without the
+/// callers having to remember the lifecycle/upsert rules. Use one
+/// `JobEmitter` per job: build with [`JobEmitter::start`], call
+/// [`JobEmitter::progress`] zero or more times, finish with
+/// [`JobEmitter::ok`] / [`JobEmitter::err`] / [`JobEmitter::cancelled`].
+pub struct JobEmitter {
+    app: AppHandle,
+    id: awidat_desktop_protocol::Id,
+    kind: awidat_desktop_protocol::JobKind,
+}
+
+impl JobEmitter {
+    /// Emit a `Started` lifecycle event and return the emitter.
+    pub fn start(
+        app: AppHandle,
+        id: awidat_desktop_protocol::Id,
+        kind: awidat_desktop_protocol::JobKind,
+        status: impl Into<String>,
+    ) -> Self {
+        emit_item(
+            &app,
+            Item::Job {
+                id: id.clone(),
+                phase: awidat_desktop_protocol::ItemLifecycle::Started,
+                job_kind: kind,
+                percent: None,
+                status: status.into(),
+                result: None,
+            },
+        );
+        Self { app, id, kind }
+    }
+
+    /// Emit a `Delta` lifecycle event with current progress.
+    pub fn progress(&self, percent: Option<u8>, status: impl Into<String>) {
+        emit_item(
+            &self.app,
+            Item::Job {
+                id: self.id.clone(),
+                phase: awidat_desktop_protocol::ItemLifecycle::Delta,
+                job_kind: self.kind,
+                percent,
+                status: status.into(),
+                result: None,
+            },
+        );
+    }
+
+    /// Finish the job with success.
+    pub fn ok(self, summary: Option<String>) {
+        emit_item(
+            &self.app,
+            Item::Job {
+                id: self.id,
+                phase: awidat_desktop_protocol::ItemLifecycle::Completed,
+                job_kind: self.kind,
+                percent: Some(100),
+                status: summary.clone().unwrap_or_else(|| "done".into()),
+                result: Some(awidat_desktop_protocol::JobResult::Ok { summary }),
+            },
+        );
+    }
+
+    /// Finish the job with an error.
+    pub fn err(self, message: impl Into<String>) {
+        let message = message.into();
+        emit_item(
+            &self.app,
+            Item::Job {
+                id: self.id,
+                phase: awidat_desktop_protocol::ItemLifecycle::Completed,
+                job_kind: self.kind,
+                percent: None,
+                status: message.clone(),
+                result: Some(awidat_desktop_protocol::JobResult::Err { message }),
+            },
+        );
+    }
+
+    /// Finish the job because the user cancelled it.
+    pub fn cancelled(self) {
+        emit_item(
+            &self.app,
+            Item::Job {
+                id: self.id,
+                phase: awidat_desktop_protocol::ItemLifecycle::Completed,
+                job_kind: self.kind,
+                percent: None,
+                status: "cancelled".into(),
+                result: Some(awidat_desktop_protocol::JobResult::Cancelled),
+            },
+        );
+    }
+}

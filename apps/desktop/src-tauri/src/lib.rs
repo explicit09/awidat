@@ -47,6 +47,7 @@ pub fn run() {
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::turn::start_turn,
@@ -57,6 +58,10 @@ pub fn run() {
             commands::project::current_project_root,
             commands::project::init_project,
             commands::project::recent_projects,
+            commands::project::cancel_job,
+            commands::import::import_local,
+            commands::import::import_url,
+            commands::index::index_project,
         ])
         .run(tauri::generate_context!());
 

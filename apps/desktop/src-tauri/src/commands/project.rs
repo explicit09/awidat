@@ -171,6 +171,19 @@ async fn update_recents(p: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Cancel an in-flight long job (yt-dlp download, indexer run) by
+/// its protocol-Item id. No-op if the id isn't currently running.
+#[tauri::command]
+pub async fn cancel_job(
+    state: State<'_, AwidatState>,
+    job_id: String,
+) -> Result<(), String> {
+    if let Some(handle) = state.jobs.lock().await.get(&job_id) {
+        handle.cancel.cancel();
+    }
+    Ok(())
+}
+
 /// Path to the recents file.
 ///
 /// macOS: `~/Library/Application Support/awidat-desktop/recents.json`
