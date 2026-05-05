@@ -974,6 +974,109 @@ body,
   border-radius: 3px;
 }
 
+/* Custom transport row — replaces native HTML5 controls. Sits
+   directly under the <video> element. */
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px;
+}
+
+.transport-play {
+  background: var(--bg-elev2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.transport-play:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.transport-play svg {
+  display: block;
+}
+
+/* Scrub bar — restyled <input type=range>. Cross-browser thumb
+   styling because each engine has its own pseudo-element. */
+.transport-scrub {
+  flex: 1;
+  appearance: none;
+  background: transparent;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.transport-scrub::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--bg-elev2);
+  border-radius: 2px;
+  /* Fill effect via a linear-gradient driven inline-style would be
+     nicer, but webkit doesn't expose progress on a plain input. The
+     muted track + bright thumb still reads as "scrub bar" cleanly. */
+}
+
+.transport-scrub::-moz-range-track {
+  height: 4px;
+  background: var(--bg-elev2);
+  border-radius: 2px;
+}
+
+.transport-scrub::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  margin-top: -5px; /* center on the 4px track */
+  cursor: pointer;
+}
+
+.transport-scrub::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  cursor: pointer;
+}
+
+.transport-scrub:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.transport-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.transport-time-sep {
+  color: var(--text-muted);
+}
+
+.transport-time-total {
+  color: var(--text-muted);
+}
+
 .media-empty {
   flex: 1;
   display: flex;

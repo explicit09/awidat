@@ -1,6 +1,8 @@
 // Zustand store for the media pane: which assets have proxies on
-// disk, which one's currently selected for playback, current
-// playback time. Refreshed when transcode jobs land.
+// disk, which one's currently selected for playback, and live
+// playback state (current time, duration, isPlaying). The next
+// commit will wire the playback state into the agent's per-turn
+// context so the agent knows what the user is looking at.
 
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
@@ -16,15 +18,32 @@ type MediaState = {
   proxies: ProxyEntry[];
   /** Stem of the currently-selected asset, or null if none / no proxies. */
   selectedStem: string | null;
+  /** Live playhead position in seconds. */
+  currentTime: number;
+  /** Source duration in seconds (0 until the video element loads metadata). */
+  durationS: number;
+  /** True between play() and pause()/ended. */
+  isPlaying: boolean;
+
   /** Refresh from `list_proxies`. */
   refresh: () => Promise<void>;
-  /** Pick which asset plays. */
+  /** Pick which asset plays. Resets playback state. */
   select: (stem: string | null) => void;
+  /** Called by the player on `timeupdate` / scrub. */
+  setTime: (t: number) => void;
+  /** Called on `loadedmetadata`. */
+  setDuration: (d: number) => void;
+  /** Called on `play` / `pause` / `ended`. */
+  setPlaying: (p: boolean) => void;
 };
 
 export const useMediaStore = create<MediaState>((set, get) => ({
   proxies: [],
   selectedStem: null,
+  currentTime: 0,
+  durationS: 0,
+  isPlaying: false,
+
   refresh: async () => {
     try {
       const proxies = await invoke<ProxyEntry[]>("list_proxies");
@@ -47,12 +66,20 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   },
   select: (stem) => {
     if (stem === null) {
-      set({ selectedStem: null });
+      set({ selectedStem: null, currentTime: 0, durationS: 0, isPlaying: false });
       return;
     }
     const proxies = get().proxies;
     if (proxies.some((p) => p.stem === stem)) {
-      set({ selectedStem: stem });
+      set({
+        selectedStem: stem,
+        currentTime: 0,
+        durationS: 0,
+        isPlaying: false,
+      });
     }
   },
+  setTime: (t) => set({ currentTime: t }),
+  setDuration: (d) => set({ durationS: d }),
+  setPlaying: (p) => set({ isPlaying: p }),
 }));

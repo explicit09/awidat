@@ -1,8 +1,13 @@
-// Right-side media pane: video preview + transport. Source is
-// always the proxy mp4 (720p H.264, all-keyframes) — never the
-// original — so scrubbing is fast on any source bitrate.
+// Right-side media pane: video preview + custom transport row.
+// Source is always the proxy mp4 (720p H.264, all-keyframes) — never
+// the original — so scrubbing is fast on any source bitrate.
+//
+// Custom controls: play/pause button, scrub bar, MM:SS / MM:SS
+// time display. Native HTML5 controls hidden because they overlay
+// platform-styled UI (AirPlay, PiP, volume) that clashes with the
+// app's flat dark theme. Volume is left to the OS for now.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { useAgentStore } from "../agent/store";
@@ -14,7 +19,6 @@ export function MediaPane() {
   const refresh = useMediaStore((s) => s.refresh);
 
   const items = useAgentStore((s) => s.items);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   // Refresh proxies once at mount, and again whenever a transcode
   // job lands as Completed — that's the signal a new proxy has been
@@ -24,35 +28,29 @@ export function MediaPane() {
   }, [refresh]);
 
   useEffect(() => {
-    const lastTranscodeCompleted = items
-      .filter(
-        (it): it is Extract<typeof items[number], { kind: "job" }> =>
-          it.kind === "job" &&
-          it.job_kind === "transcode" &&
-          it.phase === "completed",
-      )
-      .map((it) => it.id);
-    if (lastTranscodeCompleted.length > 0) {
+    const completedTranscodes = items.filter(
+      (it) =>
+        it.kind === "job" &&
+        it.job_kind === "transcode" &&
+        it.phase === "completed",
+    ).length;
+    if (completedTranscodes > 0) {
       refresh();
     }
     // We re-run when the count of completed transcodes changes, not
     // on every chat-item churn, so we don't thrash the backend.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    items.filter((it) => it.kind === "job" && it.job_kind === "transcode" && it.phase === "completed").length,
+    items.filter(
+      (it) =>
+        it.kind === "job" &&
+        it.job_kind === "transcode" &&
+        it.phase === "completed",
+    ).length,
   ]);
 
   const selected = proxies.find((p) => p.stem === selectedStem) ?? null;
   const src = selected ? convertFileSrc(selected.proxy_path) : null;
-
-  // Reset playback when switching assets so the new video starts
-  // from frame 0 instead of inheriting the prior video's currentTime.
-  useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = 0;
-      videoRef.current.pause();
-    }
-  }, [src]);
 
   return (
     <aside className="media-pane">
@@ -74,7 +72,7 @@ export function MediaPane() {
       </header>
       <div className="media-stage">
         {src ? (
-          <VideoView src={src} videoRef={videoRef} stem={selectedStem ?? ""} />
+          <VideoView src={src} stem={selectedStem ?? ""} />
         ) : (
           <MediaEmpty hasAnyProxies={proxies.length > 0} />
         )}
@@ -83,41 +81,128 @@ export function MediaPane() {
   );
 }
 
-function VideoView({
-  src,
-  videoRef,
-  stem,
-}: {
-  src: string;
-  videoRef: React.MutableRefObject<HTMLVideoElement | null>;
-  stem: string;
-}) {
-  const [error, setError] = useState<string | null>(null);
+function VideoView({ src, stem }: { src: string; stem: string }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const setTime = useMediaStore((s) => s.setTime);
+  const setDuration = useMediaStore((s) => s.setDuration);
+  const setPlaying = useMediaStore((s) => s.setPlaying);
+  const currentTime = useMediaStore((s) => s.currentTime);
+  const durationS = useMediaStore((s) => s.durationS);
+  const isPlaying = useMediaStore((s) => s.isPlaying);
+
+  // Reset playback when switching assets so the new video starts
+  // from frame 0 instead of inheriting the prior video's currentTime.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (v) {
+      v.currentTime = 0;
+      v.pause();
+    }
+  }, [src]);
+
+  // Keyboard: spacebar play/pause when the pane is focused.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      // Don't capture when the user is typing in the composer.
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
+      if (tag === "textarea" || tag === "input") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        togglePlay();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function togglePlay() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) {
+      v.play().catch(() => {});
+    } else {
+      v.pause();
+    }
+  }
+
+  function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
+    const v = videoRef.current;
+    const t = Number(e.target.value);
+    if (v && Number.isFinite(t)) {
+      v.currentTime = t;
+      setTime(t);
+    }
+  }
 
   return (
     <div className="video-wrap">
       <video
         ref={videoRef}
         className="video-el"
-        controls
         preload="metadata"
         src={src}
-        onError={(e) => {
-          const target = e.currentTarget;
-          // Browsers don't expose much error detail; surface what
-          // we can so a missing proxy or codec issue isn't silent.
-          const code = target.error?.code ?? null;
-          setError(`failed to load proxy (code ${code})`);
-        }}
-        onLoadedMetadata={() => setError(null)}
+        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onClick={togglePlay}
       />
+      <div className="transport">
+        <button
+          className="transport-play"
+          onClick={togglePlay}
+          aria-label={isPlaying ? "Pause" : "Play"}
+        >
+          {isPlaying ? <PauseIcon /> : <PlayIcon />}
+        </button>
+        <input
+          className="transport-scrub"
+          type="range"
+          min={0}
+          max={durationS || 0}
+          step={0.01}
+          value={currentTime}
+          onChange={onScrub}
+          disabled={durationS === 0}
+        />
+        <div className="transport-time">
+          <span>{formatTime(currentTime)}</span>
+          <span className="transport-time-sep">/</span>
+          <span className="transport-time-total">{formatTime(durationS)}</span>
+        </div>
+      </div>
       <div className="video-meta">
         <span className="video-meta-label">proxy</span>
         <code className="video-stem">{stem}</code>
       </div>
-      {error && <div className="video-error">{error}</div>}
     </div>
   );
+}
+
+function PlayIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <path d="M3 2.5v9l8-4.5z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+      <rect x="3" y="2.5" width="3" height="9" rx="0.5" />
+      <rect x="8" y="2.5" width="3" height="9" rx="0.5" />
+    </svg>
+  );
+}
+
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function MediaEmpty({ hasAnyProxies }: { hasAnyProxies: boolean }) {
