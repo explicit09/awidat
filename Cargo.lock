@@ -379,6 +379,7 @@ dependencies = [
  "awidat-mcp",
  "awidat-proto",
  "awidat-render",
+ "awidat-secrets",
  "chrono",
  "dirs",
  "serde",

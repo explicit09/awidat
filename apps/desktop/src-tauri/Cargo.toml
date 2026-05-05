@@ -29,6 +29,7 @@ awidat-config = { path = "../../../crates/config" }
 awidat-index = { workspace = true }
 awidat-mcp = { path = "../../../crates/mcp" }
 awidat-render = { workspace = true }
+awidat-secrets = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -21,6 +21,7 @@
 mod bridges;
 mod commands;
 mod events;
+mod secrets;
 mod session;
 mod state;
 
@@ -32,6 +33,12 @@ use tracing::{error, warn};
 /// Tauri entrypoint. Called from `main.rs`.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Resolve API keys (Anthropic, HuggingFace) before any thread
+    // spawns. If they live in the OS keychain, also export them to
+    // the parent env so MCP indexer subprocesses inherit them.
+    // Safe to call any number of times; the OnceLock guards repeats.
+    secrets::resolve_at_startup();
+
     let state = AwidatState::default();
 
     // Pre-populate project_root from env if set, for dev convenience.
