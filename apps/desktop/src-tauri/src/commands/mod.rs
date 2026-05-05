@@ -5,6 +5,7 @@ pub mod import;
 pub mod index;
 pub mod media;
 pub mod project;
+pub mod timeline;
 pub mod transcode;
 pub mod turn;
 pub mod view;

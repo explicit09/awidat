@@ -73,6 +73,7 @@ pub fn run() {
             commands::media::list_proxies,
             commands::media::proxy_path_for_stem,
             commands::view::set_view_state,
+            commands::timeline::read_timeline,
         ])
         .run(tauri::generate_context!());
 
