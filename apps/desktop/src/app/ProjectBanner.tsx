@@ -1,83 +1,129 @@
-// Shows the currently-loaded project root and lets the user change
-// it. Step 1 has no proper file picker — users paste a path into a
-// text input. Step 2 will replace this with a directory picker.
+// Top-of-window project bar. Shows the active project path and a
+// "Change" affordance that opens a popover with: native folder picker,
+// "New project…" button, and a recents list.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { useProjectStore } from "./state";
+import { NewProjectForm } from "./NewProjectForm";
 
 type Props = {
-  /** Called whenever the project root successfully changes. */
+  /** Called whenever the active project changes (open/new/clear). */
   onChange: (path: string | null) => void;
 };
 
 export function ProjectBanner({ onChange }: Props) {
-  const [current, setCurrent] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
+  const current = useProjectStore((s) => s.current);
+  const recent = useProjectStore((s) => s.recent);
+  const refresh = useProjectStore((s) => s.refresh);
+  const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const popRef = useRef<HTMLDivElement | null>(null);
 
+  // Initial load + close popover on outside click.
   useEffect(() => {
-    invoke<string | null>("current_project_root")
-      .then((p) => {
-        setCurrent(p);
-        onChange(p);
-      })
-      .catch((err) => setError(String(err)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    refresh().catch((e) => setError(String(e)));
+    function onClick(e: MouseEvent) {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [refresh]);
 
-  async function save() {
-    const p = draft.trim();
-    if (!p) return;
+  async function pickAndOpen() {
     setError(null);
     try {
-      await invoke("set_project_root", { path: p });
-      setCurrent(p);
-      setEditing(false);
-      setDraft("");
-      onChange(p);
-    } catch (err) {
-      setError(String(err));
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Open Awidat project",
+      });
+      if (typeof picked === "string") {
+        await invoke("set_project_root", { path: picked });
+        await refresh();
+        onChange(picked);
+        setOpen(false);
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function openRecent(path: string) {
+    setError(null);
+    try {
+      await invoke("set_project_root", { path });
+      await refresh();
+      onChange(path);
+      setOpen(false);
+    } catch (e) {
+      setError(String(e));
     }
   }
 
   return (
-    <div className="project-banner">
+    <div className="project-banner" ref={popRef}>
       <span className="project-label">project:</span>
-      {editing ? (
-        <form
-          className="project-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            save();
-          }}
-        >
-          <input
-            type="text"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="/absolute/path/to/project"
-            autoFocus
-          />
-          <button type="submit">Set</button>
-          <button type="button" onClick={() => setEditing(false)}>
-            Cancel
+      <code className="project-path">
+        {current ?? "(none — open or create one to start)"}
+      </code>
+      <button onClick={() => setOpen((v) => !v)}>
+        {current ? "Change" : "Open…"}
+      </button>
+      {open && (
+        <div className="project-popover" role="menu">
+          <button className="popover-action" onClick={pickAndOpen}>
+            <strong>Open existing project…</strong>
+            <span className="popover-hint">pick a folder</span>
           </button>
-        </form>
-      ) : (
-        <>
-          <code className="project-path">{current ?? "(none — set one to start)"}</code>
           <button
+            className="popover-action"
             onClick={() => {
-              setDraft(current ?? "");
-              setEditing(true);
+              setShowNew(true);
+              setOpen(false);
             }}
           >
-            {current ? "Change" : "Set"}
+            <strong>New project…</strong>
+            <span className="popover-hint">init in a chosen folder</span>
           </button>
-        </>
+          {recent.length > 0 && (
+            <>
+              <div className="popover-divider">Recent</div>
+              {recent.map((p) => (
+                <button
+                  key={p}
+                  className="popover-recent"
+                  onClick={() => openRecent(p)}
+                  title={p}
+                >
+                  <span className="recent-name">{basename(p)}</span>
+                  <span className="recent-path">{p}</span>
+                </button>
+              ))}
+            </>
+          )}
+          {error && <div className="popover-error">{error}</div>}
+        </div>
       )}
-      {error && <span className="project-error">{error}</span>}
+      {showNew && (
+        <NewProjectForm
+          onClose={() => setShowNew(false)}
+          onCreated={(path) => {
+            setShowNew(false);
+            onChange(path);
+            refresh().catch(() => {});
+          }}
+        />
+      )}
     </div>
   );
+}
+
+function basename(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i === -1 ? p : p.slice(i + 1);
 }
