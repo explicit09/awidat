@@ -77,6 +77,10 @@ pub fn run() {
             commands::render::start_timeline_render,
             commands::render::poll_timeline_render,
             commands::render::cancel_timeline_render,
+            commands::proposal::accept_proposal,
+            commands::proposal::reject_proposal,
+            commands::proposal::adjust_proposal,
+            commands::proposal::propose_user_edit,
         ])
         .run(tauri::generate_context!());
 

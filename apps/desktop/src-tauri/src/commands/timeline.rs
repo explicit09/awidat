@@ -32,7 +32,7 @@ pub async fn read_timeline(
     let snapshot = tokio::task::spawn_blocking(move || -> Result<TimelineSnapshot, String> {
         let project = Project::read(&project_root)
             .map_err(|e| format!("read project: {e}"))?;
-        Ok(flatten_timeline(&project, &project_root))
+        Ok(flatten_timeline_public(&project.timeline, &project_root))
     })
     .await
     .map_err(|e| format!("join: {e}"))??;
@@ -46,11 +46,19 @@ fn empty_snapshot() -> TimelineSnapshot {
     }
 }
 
-fn flatten_timeline(project: &Project, project_root: &Path) -> TimelineSnapshot {
+/// Public flattener: walk an OTIO `Timeline` and produce the
+/// frontend-friendly `TimelineSnapshot`. Used by `read_timeline`
+/// (which loads the timeline from disk) and by the proposal
+/// pipeline (which already has the timeline in memory after
+/// `apply()`).
+pub fn flatten_timeline_public(
+    timeline: &awidat_proto::otio::Timeline,
+    project_root: &Path,
+) -> TimelineSnapshot {
     let mut tracks: Vec<TimelineTrack> = Vec::new();
     let mut max_end_s = 0.0_f64;
 
-    for stack_child in &project.timeline.tracks.children {
+    for stack_child in &timeline.tracks.children {
         let StackChild::Track(track) = stack_child else {
             // Nested stacks aren't drawn in v1 — they're a multi-cam
             // primitive we'll wire up later.

@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use awidat_core::Session;
+use awidat_core::edl::{AppliedOp, EdlEnvelope};
 use awidat_core::tool::ApprovalDecision;
+use awidat_proto::otio::Timeline;
 use awidat_render::JobManager;
 use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -51,6 +53,58 @@ pub struct AwidatState {
     /// is for desktop-initiated renders that don't go through the
     /// agent (Export button).
     pub render_jobs: JobManager,
+    /// In-flight EDL proposals awaiting user accept / reject /
+    /// adjust. Keyed by call_id (agent path) or a freshly-allocated
+    /// id (user path). The Mutex is async because the proposal
+    /// lifecycle hops between the bridge thread (when the agent
+    /// proposes) and the command-thread pool (when the user
+    /// responds).
+    pub pending_proposals: Mutex<HashMap<String, PendingProposal>>,
+}
+
+/// One in-flight EDL proposal. Created by the bridge when an agent
+/// `apply_edl` lands in the approval channel, or by
+/// `propose_user_edit` for drag-to-trim / transcript-delete flows.
+/// Mutated by `adjust_proposal`; consumed (and removed from the
+/// state map) by `accept_proposal` or `reject_proposal`.
+///
+/// Several fields are unread until the commands::proposal module
+/// (next commits) consumes them; allow(dead_code) keeps the warning
+/// out while the struct shape lands ahead of its consumers.
+#[allow(dead_code)]
+pub struct PendingProposal {
+    /// Stable identifier — matches the agent's tool `call_id` for
+    /// agent-initiated proposals, freshly-allocated for user-initiated.
+    pub call_id: String,
+    /// Project root the proposal applies to. Captured at proposal
+    /// time so the accept path doesn't have to re-resolve project
+    /// state if the user changed projects mid-proposal (we'd reject
+    /// in that case anyway, but defense in depth).
+    pub project_root: PathBuf,
+    /// Untouched current EDL envelope. Replaced on each
+    /// `adjust_proposal` call. The accept path serializes the
+    /// adjusted envelope back through `Project::write` after a
+    /// final apply.
+    pub envelope: EdlEnvelope,
+    /// Cached current timeline as it was when the proposal opened.
+    /// `apply()` runs against a clone of this; commit also writes
+    /// the post-apply state (no second apply needed).
+    pub original_timeline: Timeline,
+    /// Result of applying `envelope` against `original_timeline`.
+    /// Re-computed on each `adjust_proposal`.
+    pub proposed_timeline: Timeline,
+    /// `apply()` outcome, for diff-hints + final commit logging.
+    pub applied: Vec<AppliedOp>,
+    /// Monotonic adjustment counter. Bumped on each
+    /// `adjust_proposal` so the frontend can drop stale Deltas
+    /// from rapid drag races. Starts at 0 (the initial Started
+    /// emit).
+    pub revision: u32,
+    /// Reply oneshot for agent-initiated proposals. `None` for
+    /// user-initiated. On accept we drop or send `Allow` per
+    /// the "Deny + apply user's version" semantics described in
+    /// the plan.
+    pub reply: Option<oneshot::Sender<ApprovalDecision>>,
 }
 
 /// Snapshot of what the user is looking at in the media pane.
