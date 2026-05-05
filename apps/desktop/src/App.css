@@ -348,6 +348,23 @@ body,
   border-color: var(--err);
 }
 
+/* Inline reference card for an active EDL proposal. The actual
+   ghost overlay lives on the timeline; this card just acknowledges
+   in chat that a proposal is open / closed. */
+.item-proposal {
+  border-color: var(--warn);
+}
+
+.item-proposal .item-meta {
+  color: var(--warn);
+}
+
+.proposal-phase-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .item-error .item-meta {
   color: var(--err);
 }

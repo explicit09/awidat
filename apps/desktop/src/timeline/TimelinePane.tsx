@@ -9,6 +9,8 @@ import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "./st
 import { useMediaStore } from "../media/store";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
+import { useProposalStore } from "./proposal";
+import type { AppliedDiff } from "../protocol";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -87,10 +89,13 @@ function TimelineCanvas({
   // can convert x → seconds without recomputing layout.
   const ppsRef = useRef<number>(PX_PER_SECOND_BASE);
   const requestSeek = useMediaStore((s) => s.requestSeek);
+  const proposal = useProposalStore((s) => s.active);
 
-  // Compute pixel layout. Auto-fit pps so the whole project is
-  // visible without horizontal scroll for the read-only v1.
-  // (Once we add zoom controls in Step 5+, this becomes user-driven.)
+  // Compute pixel layout. When a proposal is active, the canvas
+  // paints two passes: original snapshot at α=0.45 (the "before")
+  // and the proposed snapshot at α=1.0 with diff-hint coloring
+  // (the "after"). pps is sized by the larger of the two durations
+  // so both fit; otherwise the post-state would clip if it grew.
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -100,7 +105,15 @@ function TimelineCanvas({
       if (!canvas || !container) return;
       const dpr = window.devicePixelRatio || 1;
       const cssWidth = container.clientWidth;
-      const lanesCount = Math.max(snapshot.tracks.length, 1);
+      // Use the wider snapshot for layout — picking max of
+      // current/proposed track counts keeps the canvas tall
+      // enough that no track gets clipped.
+      const proposedTrackCount = proposal?.snapshot.tracks.length ?? 0;
+      const lanesCount = Math.max(
+        snapshot.tracks.length,
+        proposedTrackCount,
+        1,
+      );
       const cssHeight = RULER_HEIGHT + lanesCount * LANE_HEIGHT;
 
       canvas.width = Math.floor(cssWidth * dpr);
@@ -113,11 +126,34 @@ function TimelineCanvas({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-      const pps = computePps(snapshot.duration_s, cssWidth);
+      // Pps from the max of current vs proposed durations so the
+      // whole post-state fits even when a proposal extends past
+      // the original.
+      const proposedDuration = proposal?.snapshot.duration_s ?? 0;
+      const totalDuration = Math.max(snapshot.duration_s, proposedDuration);
+      const pps = computePps(totalDuration, cssWidth);
       ppsRef.current = pps;
 
-      drawRuler(ctx, cssWidth, snapshot.duration_s, pps);
-      drawTracks(ctx, cssWidth, snapshot.tracks, pps);
+      drawRuler(ctx, cssWidth, totalDuration, pps);
+
+      if (proposal) {
+        // Pass A — current state under, dimmed, with delete strike.
+        const deletedKeys = collectDeletedKeys(proposal.diffHints);
+        ctx.globalAlpha = 0.45;
+        drawTracks(ctx, cssWidth, snapshot.tracks, pps, {
+          deletedKeys,
+        });
+        ctx.globalAlpha = 1.0;
+        // Pass B — proposed state on top, full opacity, with
+        // diff-hint highlights for trimmed/inserted/split items.
+        const highlightKeys = collectHighlightKeys(proposal.diffHints);
+        drawTracks(ctx, cssWidth, proposal.snapshot.tracks, pps, {
+          highlightKeys,
+        });
+      } else {
+        drawTracks(ctx, cssWidth, snapshot.tracks, pps, {});
+      }
+
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
     }
 
@@ -128,7 +164,7 @@ function TimelineCanvas({
     const ro = new ResizeObserver(() => paint());
     ro.observe(container);
     return () => ro.disconnect();
-  }, [snapshot, currentTime]);
+  }, [snapshot, currentTime, proposal]);
 
   // Click + drag on the canvas → seek the player. We use pointer
   // events (covers mouse + trackpad + touch) and capture the
@@ -231,11 +267,15 @@ function drawRuler(
   }
 }
 
+/** Draw all tracks. `opts` carries optional diff-hint key sets:
+ *  `deletedKeys` items get strike-through styling; `highlightKeys`
+ *  items get an accent ring. Keys are `"${trackIdx}:${itemIdx}"`. */
 function drawTracks(
   ctx: CanvasRenderingContext2D,
   width: number,
   tracks: { kind: string; items: TimelineItem[] }[],
   pps: number,
+  opts: { deletedKeys?: Set<string>; highlightKeys?: Set<string> },
 ) {
   for (let row = 0; row < tracks.length; row++) {
     const track = tracks[row];
@@ -253,10 +293,19 @@ function drawTracks(
     for (const item of track.items) {
       const x = Math.round(item.track_start_s * pps);
       const w = Math.max(2, Math.round(item.duration_s * pps));
-      drawItem(ctx, item, x, y + 4, w, LANE_HEIGHT - 8, track.kind);
+      const key = `${row}:${item.index}`;
+      const flag =
+        opts.deletedKeys?.has(key)
+          ? "deleted"
+          : opts.highlightKeys?.has(key)
+          ? "highlight"
+          : "normal";
+      drawItem(ctx, item, x, y + 4, w, LANE_HEIGHT - 8, track.kind, flag);
     }
   }
 }
+
+type ItemFlag = "normal" | "deleted" | "highlight";
 
 function drawItem(
   ctx: CanvasRenderingContext2D,
@@ -266,13 +315,27 @@ function drawItem(
   w: number,
   h: number,
   trackKind: string,
+  flag: ItemFlag,
 ) {
   const radius = 4;
   if (item.kind === "clip") {
     ctx.fillStyle = trackKind === "audio" ? "#1f4d3f" : "#1f3d5d";
     fillRoundedRect(ctx, x, y, w, h, radius);
-    ctx.strokeStyle = trackKind === "audio" ? "#3fb950" : "#58a6ff";
+    // Border color: red for deletes (this clip is going away),
+    // amber for highlights (this clip is changing in the
+    // proposal), normal accent otherwise.
+    const stroke =
+      flag === "deleted"
+        ? "#f85149"
+        : flag === "highlight"
+        ? "#d29922"
+        : trackKind === "audio"
+        ? "#3fb950"
+        : "#58a6ff";
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = flag === "normal" ? 1 : 2;
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+    ctx.lineWidth = 1;
     // Clip label — centered, truncated if width too small.
     if (w > 24) {
       ctx.fillStyle = "#e6edf3";
@@ -280,6 +343,17 @@ function drawItem(
       ctx.textBaseline = "middle";
       const label = truncateToWidth(ctx, item.name, w - 2 * CLIP_PADDING_X);
       ctx.fillText(label, x + CLIP_PADDING_X, y + h / 2);
+    }
+    if (flag === "deleted") {
+      // Strike-through line so the "before" is visually marked
+      // for deletion even at low contrast.
+      ctx.strokeStyle = "#f85149";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x + 2, y + h / 2);
+      ctx.lineTo(x + w - 2, y + h / 2);
+      ctx.stroke();
+      ctx.lineWidth = 1;
     }
   } else if (item.kind === "gap") {
     ctx.fillStyle = "rgba(139, 148, 158, 0.12)";
@@ -296,6 +370,36 @@ function drawItem(
     ctx.strokeStyle = "#d29922";
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
   }
+}
+
+/** Build the set of `${trackIdx}:${itemIdx}` keys whose items in the
+ *  *original* snapshot are being deleted by the proposal. */
+function collectDeletedKeys(diffs: AppliedDiff[]): Set<string> {
+  const out = new Set<string>();
+  for (const d of diffs) {
+    if (d.kind === "delete") {
+      out.add(`${d.track_index}:${d.item_index}`);
+    }
+  }
+  return out;
+}
+
+/** Build the set of `${trackIdx}:${itemIdx}` keys whose items in the
+ *  *proposed* snapshot are being changed (trimmed, split, inserted). */
+function collectHighlightKeys(diffs: AppliedDiff[]): Set<string> {
+  const out = new Set<string>();
+  for (const d of diffs) {
+    if (d.kind === "trim_edge") {
+      out.add(`${d.track_index}:${d.item_index}`);
+    } else if (d.kind === "split") {
+      // Both halves of a split are "new" relative to the original.
+      out.add(`${d.track_index}:${d.item_index}`);
+      out.add(`${d.track_index}:${d.item_index + 1}`);
+    } else if (d.kind === "insert") {
+      out.add(`${d.track_index}:${d.item_index}`);
+    }
+  }
+  return out;
 }
 
 function drawPlayhead(

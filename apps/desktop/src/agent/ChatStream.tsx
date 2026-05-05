@@ -19,6 +19,7 @@ import { UserInputCard } from "./UserInputCard";
 import { JobCard } from "./JobCard";
 import { EmptyState } from "../app/EmptyState";
 import { useProjectStore } from "../app/state";
+import { useProposalStore, isProposedEditItem } from "../timeline/proposal";
 
 export function ChatStream() {
   const items = useAgentStore((s) => s.items);
@@ -27,11 +28,19 @@ export function ChatStream() {
   const upsert = useAgentStore((s) => s.upsert);
   const setRunning = useAgentStore((s) => s.setRunning);
   const setTurnError = useAgentStore((s) => s.setTurnError);
+  const ingestProposal = useProposalStore((s) => s.ingest);
 
   // Subscribe to backend events for the lifetime of the component.
   useEffect(() => {
     const itemsUnlisten = listen<ItemEvent>(ITEM_EVENT, (e) => {
-      upsert(e.payload.item);
+      const item = e.payload.item;
+      // Proposed edits feed two stores: the chat (so the user sees
+      // a compact reference card) and the proposal store (so the
+      // timeline canvas can render the ghost overlay).
+      if (isProposedEditItem(item)) {
+        ingestProposal(item);
+      }
+      upsert(item);
     });
     const endUnlisten = listen<TurnEndEvent>(TURN_END_EVENT, (e) => {
       if (e.payload.error) {
@@ -43,7 +52,7 @@ export function ChatStream() {
       itemsUnlisten.then((u) => u());
       endUnlisten.then((u) => u());
     };
-  }, [upsert, setRunning, setTurnError]);
+  }, [upsert, setRunning, setTurnError, ingestProposal]);
 
   const projectReady = useProjectStore((s) => s.current !== null);
 
@@ -133,6 +142,32 @@ function ItemView({ item }: { item: Item }) {
       return <ApprovalCard item={item} />;
     case "job":
       return <JobCard item={item} />;
+    case "proposed_edit": {
+      // Compact reference card. The actual ghost overlay lives on
+      // the timeline canvas; this card just acknowledges in chat
+      // that a proposal is open / closed.
+      const sourceLabel =
+        item.source.source === "agent"
+          ? `agent · ${item.source.tool_name}`
+          : "you";
+      const phaseLabel =
+        item.phase === "completed"
+          ? item.summary // accept/reject summary lands here
+          : "see timeline";
+      return (
+        <article className="item item-proposal">
+          <div className="item-meta">
+            proposed edit · {sourceLabel}
+          </div>
+          <div className="item-body">
+            <strong>{item.summary}</strong>
+            {item.phase !== "completed" && (
+              <span className="proposal-phase-hint"> — {phaseLabel}</span>
+            )}
+          </div>
+        </article>
+      );
+    }
     case "error":
       return (
         <article className="item item-error">
