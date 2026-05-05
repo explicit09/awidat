@@ -18,10 +18,15 @@
 pub mod ffmpeg;
 pub mod job;
 pub mod progress;
+pub mod timeline;
 
 pub use ffmpeg::{
     FfmpegError, TranscodeProgress, TranscodeProgressCallback, extract_frame, ffmpeg_path,
     ffprobe_path, probe_duration_s, transcode_proxy,
+};
+pub use timeline::{
+    RenderTimelineError, TimelineSegment, build_timeline_argv, build_timeline_render_spec,
+    collect_timeline_segments,
 };
 pub use job::{JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec};
 pub use progress::ProgressSnapshot;

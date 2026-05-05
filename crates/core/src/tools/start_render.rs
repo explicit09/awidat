@@ -112,22 +112,48 @@ impl ToolHandler for StartRenderTool {
         tokio::fs::create_dir_all(&renders_dir).await.ok();
         let timestamp = chrono::Utc::now().format("%H%M%S");
 
-        // Fork on scope. Timeline scope walks the OTIO; the asset-based
-        // scopes keep their original path-validation flow.
+        // Fork on scope. Timeline scope delegates to awidat-render's
+        // shared planner so the agent and the desktop's Export button
+        // produce identical specs. The asset-based scopes keep their
+        // original path-validation flow.
         let (argv, total_duration_s, asset_label, output_path) = if args.scope == "timeline" {
-            let segs = collect_timeline_segments(&ctx.project_root)?;
-            if segs.is_empty() {
-                return Err(FunctionCallError::RespondToModel(
-                    "start_render: timeline has no clips to render. \
-                     Add clips via apply_edl first, or use scope=preview to render \
-                     the raw asset."
-                        .into(),
-                ));
-            }
-            let total = segs.iter().map(|s| s.duration_s).sum::<f64>();
-            let output_path = renders_dir.join(format!("timeline-{}.mp4", timestamp));
-            let argv = build_timeline_argv(&segs, &output_path);
-            (argv, Some(total), "<timeline>".to_string(), output_path)
+            let spec = awidat_render::build_timeline_render_spec(&ctx.project_root).map_err(|e| {
+                use awidat_render::RenderTimelineError;
+                let msg = match e {
+                    RenderTimelineError::EmptyTimeline => {
+                        "start_render: timeline has no clips to render. \
+                         Add clips via apply_edl first, or use scope=preview to render \
+                         the raw asset."
+                            .to_string()
+                    }
+                    RenderTimelineError::NoOtio(p) => format!(
+                        "start_render: no project.otio.json found at {} — \
+                         this isn't an awidat project root.",
+                        p.display()
+                    ),
+                    RenderTimelineError::OtioParse { message } => format!(
+                        "start_render: timeline parse failed ({message}). \
+                         Run `awidat validate <project>` for the detailed diagnostic, \
+                         then revert the most recent apply_edl that broke the OTIO."
+                    ),
+                    RenderTimelineError::MissingAsset { clip_name, missing } => format!(
+                        "start_render: timeline references missing asset {} \
+                         (clip '{clip_name}'). Re-import the source file.",
+                        missing.display()
+                    ),
+                    RenderTimelineError::ClipMissingRange { clip_name } => format!(
+                        "start_render: clip '{clip_name}' has no source_range — \
+                         can't extract a renderable segment."
+                    ),
+                };
+                FunctionCallError::RespondToModel(msg)
+            })?;
+            (
+                spec.args,
+                spec.total_duration_s,
+                "<timeline>".to_string(),
+                spec.output_path,
+            )
         } else {
             // Asset-based scope: preview / segment / full.
             let asset = args.asset.as_deref().ok_or_else(|| {
@@ -252,129 +278,6 @@ fn build_ffmpeg_argv(
     Ok(argv)
 }
 
-/// One source-media segment to feed into the timeline-render concat.
-#[derive(Debug, Clone)]
-struct TimelineSegment {
-    /// Absolute path to the source media.
-    asset_path: PathBuf,
-    /// Seconds into the source media where the cut starts.
-    start_s: f64,
-    /// Seconds of duration to take from the source.
-    duration_s: f64,
-}
-
-/// Walk `<project_root>/project.otio.json` and collect every video-track
-/// clip's `(asset, source_range)` in playback order. Skips Gap, Transition,
-/// and nested Stack children for v1 — those land later. Audio tracks are
-/// not enumerated separately because most awidat projects keep video and
-/// audio paired in the same source file; the concat filter uses the audio
-/// stream from each input.
-fn collect_timeline_segments(
-    project_root: &std::path::Path,
-) -> Result<Vec<TimelineSegment>, FunctionCallError> {
-    use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
-    use awidat_proto::project::read_otio_timeline;
-
-    let otio_path = project_root.join("project.otio.json");
-    if !otio_path.exists() {
-        return Err(FunctionCallError::RespondToModel(format!(
-            "start_render: no project.otio.json found at {} — \
-             this isn't an awidat project root.",
-            otio_path.display()
-        )));
-    }
-    let mut warnings = Vec::new();
-    let timeline = read_otio_timeline(&otio_path, &mut warnings).map_err(|e| {
-        FunctionCallError::RespondToModel(format!(
-            "start_render: timeline parse failed ({e}). \
-             Run `awidat validate <project>` for the detailed diagnostic, \
-             then revert the most recent apply_edl that broke the OTIO."
-        ))
-    })?;
-
-    let mut segs = Vec::new();
-    for child in &timeline.tracks.children {
-        let StackChild::Track(track) = child else { continue };
-        if !matches!(track.kind, TrackKind::Video) {
-            continue;
-        }
-        for tc in &track.children {
-            let TrackChild::Clip(clip) = tc else { continue };
-            let MediaReference::External(ext) = &clip.media_reference else { continue };
-            let Some(range) = clip.source_range.as_ref() else {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "start_render: clip '{}' has no source_range — \
-                     can't extract a renderable segment.",
-                    clip.name
-                )));
-            };
-            let asset_path = project_root.join(&ext.target_url);
-            if !asset_path.exists() {
-                return Err(FunctionCallError::RespondToModel(format!(
-                    "start_render: timeline references missing asset {} \
-                     (clip '{}'). Re-import the source file.",
-                    asset_path.display(),
-                    clip.name
-                )));
-            }
-            segs.push(TimelineSegment {
-                asset_path,
-                start_s: range.start_time.to_seconds(),
-                duration_s: range.duration.to_seconds(),
-            });
-        }
-    }
-    Ok(segs)
-}
-
-/// Build the ffmpeg argv that concats `segs` into `output_path` with a
-/// single re-encode. Each segment becomes one input with `-ss/-t`; the
-/// concat filter glues them and the encoder writes one well-formed mp4.
-/// The re-encode is what fixes the DTS-seam scratch — stream-copy concat
-/// at non-keyframe-aligned cuts produces audible clicks.
-fn build_timeline_argv(
-    segs: &[TimelineSegment],
-    output_path: &std::path::Path,
-) -> Vec<String> {
-    let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
-    for s in segs {
-        argv.extend([
-            "-ss".into(),
-            format!("{}", s.start_s),
-            "-t".into(),
-            format!("{}", s.duration_s),
-            "-i".into(),
-            s.asset_path.to_string_lossy().into_owned(),
-        ]);
-    }
-    let n = segs.len();
-    let mut filter = String::new();
-    for i in 0..n {
-        filter.push_str(&format!("[{i}:v:0][{i}:a:0]"));
-    }
-    filter.push_str(&format!("concat=n={n}:v=1:a=1[outv][outa]"));
-    argv.extend([
-        "-filter_complex".into(),
-        filter,
-        "-map".into(),
-        "[outv]".into(),
-        "-map".into(),
-        "[outa]".into(),
-        "-c:v".into(),
-        "libx264".into(),
-        "-preset".into(),
-        "veryfast".into(),
-        "-crf".into(),
-        "20".into(),
-        "-c:a".into(),
-        "aac".into(),
-        "-b:a".into(),
-        "192k".into(),
-        output_path.to_string_lossy().into_owned(),
-    ]);
-    argv
-}
-
 const DESCRIPTION: &str = "\
 Kick off a background ffmpeg render. Returns a job_id IMMEDIATELY — the \
 render runs in the background and you call `poll_render` to check status. \
@@ -491,33 +394,9 @@ mod tests {
         assert!(argv.iter().any(|a| a == "2.5"));
     }
 
-    #[test]
-    fn argv_for_timeline_uses_concat_filter_and_reencode() {
-        let segs = vec![
-            TimelineSegment {
-                asset_path: PathBuf::from("/proj/raw/a.mp4"),
-                start_s: 0.0,
-                duration_s: 5.0,
-            },
-            TimelineSegment {
-                asset_path: PathBuf::from("/proj/raw/b.mp4"),
-                start_s: 12.5,
-                duration_s: 3.25,
-            },
-        ];
-        let out = std::path::Path::new("/proj/renders/timeline-000000.mp4");
-        let argv = build_timeline_argv(&segs, out);
-        // Both inputs present with correct -ss/-t.
-        let cmd = argv.join(" ");
-        assert!(cmd.contains("-ss 0 -t 5"));
-        assert!(cmd.contains("-ss 12.5 -t 3.25"));
-        // Concat filter wires both streams with v+a, n=2.
-        assert!(argv.iter().any(|a| a == "-filter_complex"));
-        assert!(argv.iter().any(|a| a.contains("concat=n=2:v=1:a=1[outv][outa]")));
-        // Re-encode (not stream-copy) — this is the scratch fix.
-        assert!(argv.iter().any(|a| a == "libx264"));
-        assert!(!argv.iter().any(|a| a == "copy"));
-    }
+    // Pure-function tests for the timeline-render planner moved to
+    // `awidat-render::timeline` alongside the implementation. The
+    // tests below exercise the tool's error-mapping path end-to-end.
 
     #[tokio::test]
     async fn timeline_scope_without_otio_is_respond_to_model() {
@@ -547,53 +426,4 @@ mod tests {
         assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("no clips")));
     }
 
-    #[test]
-    fn collect_timeline_segments_skips_audio_tracks_and_gaps() {
-        use awidat_proto::otio::{
-            Clip, ExternalReference, Gap, MediaReference, RationalTime, Stack, StackChild,
-            TimeRange as OtioRange, Timeline, Track, TrackChild, TrackKind,
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let asset_rel = "raw/x.mp4";
-        std::fs::create_dir_all(dir.path().join("raw")).unwrap();
-        std::fs::write(dir.path().join(asset_rel), b"stub").unwrap();
-
-        let mut clip = Clip::empty("c1".to_string());
-        clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
-        clip.source_range = Some(OtioRange::new(
-            RationalTime::new(2.0 * 24.0, 24.0),
-            RationalTime::new(3.0 * 24.0, 24.0),
-        ));
-        let gap = Gap::of_duration(0.5, 24.0);
-        let mut vtrack = Track::empty("V1", TrackKind::Video);
-        vtrack.children.push(TrackChild::Clip(clip));
-        vtrack.children.push(TrackChild::Gap(gap));
-
-        // Audio track with a clip that should NOT show up.
-        let mut atrack = Track::empty("A1", TrackKind::Audio);
-        let mut aclip = Clip::empty("a-only".to_string());
-        aclip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
-        aclip.source_range = Some(OtioRange::new(
-            RationalTime::new(0.0, 24.0),
-            RationalTime::new(24.0, 24.0),
-        ));
-        atrack.children.push(TrackChild::Clip(aclip));
-
-        let mut tl = Timeline::empty("p");
-        let mut stack = Stack::empty("root");
-        stack.children.push(StackChild::Track(vtrack));
-        stack.children.push(StackChild::Track(atrack));
-        tl.tracks = stack;
-
-        std::fs::write(
-            dir.path().join("project.otio.json"),
-            serde_json::to_string_pretty(&tl).unwrap(),
-        )
-        .unwrap();
-
-        let segs = collect_timeline_segments(dir.path()).unwrap();
-        assert_eq!(segs.len(), 1, "should have one video clip, no gap, no audio-only");
-        assert!((segs[0].start_s - 2.0).abs() < 1e-9);
-        assert!((segs[0].duration_s - 3.0).abs() < 1e-9);
-    }
 }

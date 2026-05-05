@@ -473,6 +473,7 @@ dependencies = [
 name = "awidat-render"
 version = "0.1.0"
 dependencies = [
+ "awidat-proto",
  "chrono",
  "serde",
  "serde_json",
