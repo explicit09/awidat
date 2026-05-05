@@ -1,84 +1,20 @@
 //! Timeline-pane Tauri commands. Reads `project.otio.json` and
-//! returns a flattened, frontend-friendly view: per-track lists of
-//! clips with `start_s` / `duration_s` and the asset they reference.
+//! returns a flattened, frontend-friendly view via the protocol
+//! crate's [`TimelineSnapshot`].
 //!
 //! The shape we return is intentionally small — the timeline canvas
 //! draws rounded rectangles + a ruler, not the full OTIO graph.
-//! Transitions, effects, and gaps are surfaced as their own variants
-//! so the frontend can color them differently.
+//! Transitions and gaps surface as variants so the canvas can color
+//! them differently.
 
 use std::path::Path;
 
+use awidat_desktop_protocol::{TimelineItem, TimelineSnapshot, TimelineTrack};
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::project::Project;
-use serde::Serialize;
 use tauri::State;
 
 use crate::state::AwidatState;
-
-/// One row in the timeline pane — a track with a sequence of items.
-#[derive(Debug, Clone, Serialize)]
-pub struct TimelineTrack {
-    /// Track name from the OTIO file.
-    pub name: String,
-    /// Track kind: "video" or "audio".
-    pub kind: String,
-    /// Items in this track in playback order.
-    pub items: Vec<TimelineItem>,
-}
-
-/// One drawable item on a track. Variant-tagged so the frontend can
-/// render each kind differently.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TimelineItem {
-    /// A clip — references an asset, has a source range.
-    Clip {
-        /// Index of this item within its track. Stable across reads.
-        index: usize,
-        /// Display name (clip's OTIO `name` field).
-        name: String,
-        /// Start of this clip on the track timeline, in seconds.
-        track_start_s: f64,
-        /// Duration on the track, in seconds.
-        duration_s: f64,
-        /// Asset id (project-relative path), if the clip references
-        /// one. `None` for clips with missing or non-external refs.
-        asset_id: Option<String>,
-        /// Source-asset start offset, in seconds. Useful when the
-        /// frontend wants to map "this clip plays source[12.5s..]".
-        source_start_s: Option<f64>,
-    },
-    /// Empty time on the track (silence / black frames).
-    Gap {
-        index: usize,
-        track_start_s: f64,
-        duration_s: f64,
-    },
-    /// Transition (cross-dissolve, fade) between two clips. Sits at
-    /// the cut point; doesn't have its own duration on the timeline.
-    Transition {
-        index: usize,
-        track_start_s: f64,
-        /// Cumulative effect duration (in_offset + out_offset).
-        duration_s: f64,
-        /// Effect name from the OTIO transition (e.g.
-        /// "SMPTE_Dissolve").
-        effect_name: String,
-    },
-}
-
-/// Snapshot of the project's timeline. Empty `tracks` is a normal
-/// "fresh project, no clips yet" state — not an error.
-#[derive(Debug, Clone, Serialize)]
-pub struct TimelineSnapshot {
-    /// Total project duration in seconds (max track end across all
-    /// tracks). Zero when timeline is empty.
-    pub duration_s: f64,
-    /// Tracks in order: video first, then audio. Empty when project
-    /// has no clips.
-    pub tracks: Vec<TimelineTrack>,
-}
 
 /// Read `<project>/project.otio.json` and return the flattened
 /// timeline view. Empty snapshot when no project loaded or OTIO

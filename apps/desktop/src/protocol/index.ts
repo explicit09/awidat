@@ -13,6 +13,17 @@ export type { JobResult } from "./generated/JobResult";
 export type { PlanStep } from "./generated/PlanStep";
 export type { Turn } from "./generated/Turn";
 export type { Thread } from "./generated/Thread";
+// Timeline shapes — single source of truth for both `read_timeline`
+// responses and the `Item::ProposedEdit.snapshot` field.
+export type { TimelineItem } from "./generated/TimelineItem";
+export type { TimelineTrack } from "./generated/TimelineTrack";
+export type { TimelineSnapshot } from "./generated/TimelineSnapshot";
+// Approval-as-diff additions.
+export type { ProposalSource } from "./generated/ProposalSource";
+export type { AppliedDiff } from "./generated/AppliedDiff";
+export type { Side } from "./generated/Side";
+export type { EditAdjustment } from "./generated/EditAdjustment";
+export type { AdjustField } from "./generated/AdjustField";
 
 // Tauri event channel names. Mirror the constants in
 // `apps/desktop/src-tauri/src/lib.rs` — there is no runtime check.

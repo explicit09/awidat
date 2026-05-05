@@ -5,41 +5,17 @@
 
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
-
-export type TimelineItem =
-  | {
-      kind: "clip";
-      index: number;
-      name: string;
-      track_start_s: number;
-      duration_s: number;
-      asset_id: string | null;
-      source_start_s: number | null;
-    }
-  | {
-      kind: "gap";
-      index: number;
-      track_start_s: number;
-      duration_s: number;
-    }
-  | {
-      kind: "transition";
-      index: number;
-      track_start_s: number;
-      duration_s: number;
-      effect_name: string;
-    };
-
-export type TimelineTrack = {
-  name: string;
-  kind: "video" | "audio" | string;
-  items: TimelineItem[];
-};
-
-export type TimelineSnapshot = {
-  duration_s: number;
-  tracks: TimelineTrack[];
-};
+// TimelineItem / TimelineTrack / TimelineSnapshot are generated from
+// the Rust protocol crate via ts-rs — drift is impossible because
+// `cargo test -p awidat-desktop-protocol` re-exports them on every
+// build. The frontend re-exports them here so existing call sites
+// don't have to learn a new import path.
+export type {
+  TimelineItem,
+  TimelineTrack,
+  TimelineSnapshot,
+} from "../protocol";
+import type { TimelineSnapshot } from "../protocol";
 
 type State = {
   snapshot: TimelineSnapshot;

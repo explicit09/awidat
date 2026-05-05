@@ -174,6 +174,50 @@ pub enum Item {
         /// Error message.
         message: String,
     },
+    /// A proposed edit to the project's timeline — the
+    /// approval-as-diff replacement for `ApprovalRequest` on
+    /// `apply_edl`. Carries the proposed post-state snapshot + diff
+    /// hints so the timeline canvas can render a ghost overlay on
+    /// top of the current timeline. The user accepts, rejects, or
+    /// drags handles to adjust before accepting.
+    ///
+    /// The frontend never re-runs `apply()` itself — adjustments
+    /// flow back through `adjust_proposal` (which mutates the
+    /// backend's stored `PendingProposal`, re-runs apply, emits a
+    /// Delta with bumped `revision`).
+    ///
+    /// `revision` exists for the rapid-drag race: two adjustments
+    /// in quick succession produce two Deltas; the frontend drops
+    /// any whose revision is older than the latest seen.
+    ProposedEdit {
+        /// Stable id matching either the agent's `call_id` (Agent
+        /// source) or a freshly-allocated id (User source).
+        id: Id,
+        /// Lifecycle phase. Started when first emitted; Delta on
+        /// each adjustment; Completed when accepted or rejected
+        /// (the frontend uses Completed to fade / collapse the
+        /// overlay).
+        phase: ItemLifecycle,
+        /// Where the proposal came from.
+        source: ProposalSource,
+        /// The full EDL text the user can preview in a "show EDL"
+        /// toggle. Round-trippable through the awidat-core parser.
+        edl_text: String,
+        /// Post-apply snapshot of the timeline. Same shape
+        /// `read_timeline` returns. The canvas paints this at
+        /// alpha 1.0 over the current snapshot at alpha 0.45.
+        snapshot: TimelineSnapshot,
+        /// Per-op coloring metadata. Length matches the op count
+        /// in the underlying `EdlEnvelope`; ordering is preserved.
+        diff_hints: Vec<AppliedDiff>,
+        /// One-line human summary ("trim 3 clips, insert 1") for
+        /// the chat-side ProposedEdit reference card.
+        summary: String,
+        /// Monotonic counter bumped on each adjustment. Frontend
+        /// drops Deltas with older revisions to absorb rapid-drag
+        /// races.
+        revision: u32,
+    },
     /// Long-running background work (asset import, indexing,
     /// timeline render). Streams over the same item channel as
     /// agent emissions because the frontend renders the chat as a
@@ -264,6 +308,197 @@ pub struct PlanStep {
     /// (not an enum) because the agent may emit other states the
     /// frontend should render as "unknown" rather than crash.
     pub status: String,
+}
+
+/// Snapshot of the project's timeline. Returned from
+/// `read_timeline`, also embedded in [`Item::ProposedEdit`]'s
+/// `snapshot` field. Empty `tracks` is a normal "fresh project, no
+/// clips yet" state.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineSnapshot {
+    /// Total project duration in seconds (max track end across all
+    /// tracks). Zero when timeline is empty.
+    pub duration_s: f64,
+    /// Tracks in order: video first, then audio. Empty when project
+    /// has no clips.
+    pub tracks: Vec<TimelineTrack>,
+}
+
+/// One row in [`TimelineSnapshot::tracks`].
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineTrack {
+    /// Track name from the OTIO file.
+    pub name: String,
+    /// Track kind: `"video"` or `"audio"`.
+    pub kind: String,
+    /// Items in this track in playback order.
+    pub items: Vec<TimelineItem>,
+}
+
+/// One drawable item on a track. Variant-tagged so the frontend can
+/// render each kind differently.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TimelineItem {
+    /// A clip — references an asset, has a source range.
+    Clip {
+        /// Index of this item within its track. Stable across reads.
+        index: usize,
+        /// Display name (clip's OTIO `name` field).
+        name: String,
+        /// Start of this clip on the track timeline, in seconds.
+        track_start_s: f64,
+        /// Duration on the track, in seconds.
+        duration_s: f64,
+        /// Asset id (project-relative path), if the clip references
+        /// one. `None` for clips with missing or non-external refs.
+        asset_id: Option<String>,
+        /// Source-asset start offset, in seconds. Useful when the
+        /// frontend wants to map "this clip plays source[12.5s..]".
+        source_start_s: Option<f64>,
+    },
+    /// Empty time on the track (silence / black frames).
+    Gap {
+        /// Index of this item within its track.
+        index: usize,
+        /// Start position on the track, in seconds.
+        track_start_s: f64,
+        /// Gap duration, in seconds.
+        duration_s: f64,
+    },
+    /// Transition (cross-dissolve, fade) between two clips.
+    Transition {
+        /// Index of this item within its track.
+        index: usize,
+        /// Anchor position on the track, in seconds.
+        track_start_s: f64,
+        /// Cumulative effect duration (in_offset + out_offset).
+        duration_s: f64,
+        /// Effect name from the OTIO transition (e.g.
+        /// `"SMPTE_Dissolve"`).
+        effect_name: String,
+    },
+}
+
+/// Where a proposed edit came from. The frontend renders agent and
+/// user proposals identically (same ghost overlay, same handles,
+/// same Accept/Reject), but the source helps with chat-side
+/// summaries ("agent proposed…" vs "you proposed…").
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum ProposalSource {
+    /// The agent emitted an `apply_edl` tool call. The proposal
+    /// rides on the same `call_id` as the underlying ApprovalRequest;
+    /// accepting wires through to the agent's reply oneshot.
+    Agent {
+        /// Tool name (always `"apply_edl"` today; future EDL-emitting
+        /// tools fold into this same path).
+        tool_name: String,
+    },
+    /// The user initiated the edit (drag-to-trim, transcript
+    /// delete-range, etc.). No agent oneshot — the desktop applies
+    /// directly on accept.
+    User,
+}
+
+/// Which side of a clip's edge a `TrimEdge` diff hint refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    /// Left (start) edge.
+    Left,
+    /// Right (end) edge.
+    Right,
+}
+
+/// Per-op diff metadata. Tells the canvas how to color the proposed
+/// snapshot relative to the original — the canvas doesn't compute
+/// the diff itself; the backend produced it from the `apply()`
+/// outcome and ships it alongside the post-state snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AppliedDiff {
+    /// A clip's edge moved. Track + item indexes refer to the
+    /// **proposed** snapshot; `delta_s` is signed (positive =
+    /// trimmed inward, negative = extended outward via Untrim).
+    TrimEdge {
+        /// Track index in the proposed snapshot.
+        track_index: usize,
+        /// Item index within that track.
+        item_index: usize,
+        /// Which edge moved.
+        side: Side,
+        /// Signed shift in seconds.
+        delta_s: f64,
+    },
+    /// A clip was removed. Indexes refer to the **original**
+    /// snapshot — the proposed snapshot doesn't contain it.
+    Delete {
+        /// Track index in the original snapshot.
+        track_index: usize,
+        /// Item index within that track.
+        item_index: usize,
+    },
+    /// A clip was split into two. Indexes refer to the **proposed**
+    /// snapshot — the left half keeps the original index, the
+    /// right half is at `item_index + 1`.
+    Split {
+        /// Track index in the proposed snapshot.
+        track_index: usize,
+        /// Index of the left half within that track.
+        item_index: usize,
+        /// Cut point in source-media seconds.
+        at_s: f64,
+    },
+    /// A new clip was inserted. Indexes refer to the **proposed**
+    /// snapshot.
+    Insert {
+        /// Track index in the proposed snapshot.
+        track_index: usize,
+        /// Index of the inserted item within that track.
+        item_index: usize,
+    },
+}
+
+/// One adjustment the user applied to a proposed edit before
+/// accepting. The `op_index` is into the proposal's `EdlEnvelope`
+/// (which the backend keeps in `PendingProposal`), so the frontend
+/// only needs to send what changed — the backend re-runs `apply()`
+/// to get the new snapshot + diff hints.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct EditAdjustment {
+    /// Position in the proposal's EDL envelope.
+    pub op_index: usize,
+    /// Which field of that op the user changed.
+    pub field: AdjustField,
+    /// New value in seconds. Interpretation depends on the field.
+    pub value_s: f64,
+}
+
+/// Which field of an `EdlOp` an [`EditAdjustment`] is targeting.
+/// Only the fields the user can drag handles for show up here —
+/// boolean / asset-path fields aren't draggable in v1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum AdjustField {
+    /// `TrimClip.start` / `UntrimClip.start`.
+    TrimStart,
+    /// `TrimClip.end` / `UntrimClip.end`.
+    TrimEnd,
+    /// `SplitClip.at_s`.
+    SplitAt,
+    /// `InsertClip.start`.
+    InsertStart,
+    /// `InsertClip.end`.
+    InsertEnd,
 }
 
 /// What phase of its lifecycle an [`Item`] is in.
@@ -366,6 +601,68 @@ mod tests {
             }
             _ => panic!("expected Item::ToolCall"),
         }
+    }
+
+    #[test]
+    fn item_proposed_edit_roundtrips_json() {
+        let item = Item::ProposedEdit {
+            id: Id::new("proposal-1"),
+            phase: ItemLifecycle::Started,
+            source: ProposalSource::Agent {
+                tool_name: "apply_edl".into(),
+            },
+            edl_text: "*** Begin EDL\n*** End EDL\n".into(),
+            snapshot: TimelineSnapshot {
+                duration_s: 12.5,
+                tracks: vec![],
+            },
+            diff_hints: vec![AppliedDiff::TrimEdge {
+                track_index: 0,
+                item_index: 1,
+                side: Side::Right,
+                delta_s: 1.5,
+            }],
+            summary: "trim 1 clip".into(),
+            revision: 0,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let back: Item = serde_json::from_str(&json).unwrap();
+        match back {
+            Item::ProposedEdit {
+                id,
+                source,
+                edl_text,
+                summary,
+                revision,
+                diff_hints,
+                ..
+            } => {
+                assert_eq!(id.0, "proposal-1");
+                assert!(matches!(
+                    source,
+                    ProposalSource::Agent { ref tool_name } if tool_name == "apply_edl"
+                ));
+                assert_eq!(edl_text, "*** Begin EDL\n*** End EDL\n");
+                assert_eq!(summary, "trim 1 clip");
+                assert_eq!(revision, 0);
+                assert_eq!(diff_hints.len(), 1);
+            }
+            _ => panic!("expected Item::ProposedEdit"),
+        }
+    }
+
+    #[test]
+    fn edit_adjustment_roundtrips_json() {
+        let adj = EditAdjustment {
+            op_index: 2,
+            field: AdjustField::TrimEnd,
+            value_s: 4.21,
+        };
+        let json = serde_json::to_string(&adj).unwrap();
+        let back: EditAdjustment = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.op_index, 2);
+        assert_eq!(back.field, AdjustField::TrimEnd);
+        assert!((back.value_s - 4.21).abs() < 1e-9);
     }
 
     #[test]
