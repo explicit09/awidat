@@ -84,6 +84,7 @@ pub fn run(
             &assets,
             client_info,
             concurrency,
+            None,
         ))
         .context("indexer dispatcher failed")?;
 

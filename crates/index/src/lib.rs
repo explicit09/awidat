@@ -117,6 +117,47 @@ pub enum PairOutcome {
     },
 }
 
+/// One progress event emitted during a [`run`] invocation when the
+/// caller supplies a [`ProgressCallback`]. The CLI ignores progress
+/// (it prints the final report); the desktop translates these into
+/// protocol items so the GUI can render a live progress bar.
+///
+/// Events are best-effort and unordered with respect to actual disk
+/// I/O — they fire when the dispatcher loop observes state changes,
+/// not when the underlying MCP server returns a chunk. Pair `total`
+/// is `indexers.len() * assets.len()` modulo the dep-skipped subset
+/// resolved synchronously up front; treat it as the upper bound.
+#[derive(Debug, Clone)]
+pub enum IndexProgress {
+    /// Emitted once at the start of [`run`], after assets have been
+    /// hashed but before any pair launches. Carries the total pair
+    /// count the run will attempt to execute.
+    Started {
+        /// Number of `(indexer, asset)` pairs that will be attempted.
+        total: usize,
+    },
+    /// Emitted as soon as a pair finishes (Wrote / Skipped / Failed /
+    /// SkippedDep). `completed` is the running count of pairs that
+    /// have reached any terminal state, including this one.
+    PairCompleted {
+        /// The terminal outcome.
+        outcome: PairOutcome,
+        /// Pairs completed so far (including this one).
+        completed: usize,
+        /// Total pairs in the run.
+        total: usize,
+    },
+}
+
+/// Caller-supplied progress sink for [`run`]. The dispatcher invokes
+/// this synchronously from the loop task, so callbacks should be
+/// quick (typically: forward to a channel, return immediately).
+///
+/// `Send + Sync` because the dispatcher loop runs on a tokio task
+/// distinct from the caller's; `'static` because we move it into the
+/// dispatcher state.
+pub type ProgressCallback = Arc<dyn Fn(IndexProgress) + Send + Sync + 'static>;
+
 /// Aggregate report from [`run`].
 #[derive(Debug, Default, Clone)]
 pub struct IndexReport {
@@ -178,6 +219,12 @@ pub struct AssetInput {
 ///
 /// Concurrency: bounded by `max_concurrent` (typically the number of
 /// physical cores). 0 disables the limit.
+///
+/// `progress` is an optional sink that fires on
+/// [`IndexProgress::Started`] (once at the top of the run) and
+/// [`IndexProgress::PairCompleted`] (one event per pair as it reaches
+/// a terminal state). The CLI passes `None`; the desktop forwards
+/// events to a protocol channel.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     project_root: &Path,
@@ -185,6 +232,7 @@ pub async fn run(
     assets: &[AssetInput],
     client_info: ClientInfo,
     max_concurrent: usize,
+    progress: Option<ProgressCallback>,
 ) -> Result<IndexReport, IndexError> {
     if !project_root.is_dir() {
         return Err(IndexError::BadRoot(project_root.display().to_string()));
@@ -224,6 +272,35 @@ pub async fn run(
     let manifest = Arc::new(Mutex::new(manifest));
 
     let report = Arc::new(Mutex::new(IndexReport::default()));
+
+    // Pair total = indexers × assets, computed up front. The
+    // dep-skipped path resolves a subset synchronously before any
+    // launch, but those still count toward `total` (they're real
+    // pairs we visited). `completed` ticks up as each pair lands in
+    // any terminal state.
+    let total_pairs = servers.len() * hashes.len();
+    let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    if let Some(cb) = progress.as_ref() {
+        cb(IndexProgress::Started { total: total_pairs });
+    }
+    // Bump the completed counter and fire the callback if present.
+    // Inlined here as a closure rather than a free fn so it can
+    // close over `progress` and `completed` without threading.
+    let emit_completed = {
+        let progress = progress.clone();
+        let completed = completed.clone();
+        move |outcome: PairOutcome| {
+            if let Some(cb) = progress.as_ref() {
+                let n =
+                    completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                cb(IndexProgress::PairCompleted {
+                    outcome,
+                    completed: n,
+                    total: total_pairs,
+                });
+            }
+        }
+    };
 
     // Topo-aware scheduler.
     //
@@ -334,11 +411,13 @@ pub async fn run(
         // Mark dep-skipped items synchronously; record the outcome.
         for (key, missing) in to_skip_dep {
             state.insert(key.clone(), ItemState::Failed);
-            report.lock().await.outcomes.push(PairOutcome::SkippedDep {
+            let outcome = PairOutcome::SkippedDep {
                 indexer: key.0.clone(),
                 asset: key.1.clone(),
                 missing,
-            });
+            };
+            report.lock().await.outcomes.push(outcome.clone());
+            emit_completed(outcome);
         }
 
         // Launch as many ready items as the cap permits.
@@ -373,6 +452,7 @@ pub async fn run(
             let manifest_clone = manifest.clone();
             let report_clone = report.clone();
             let key_for_task = key.clone();
+            let emit_completed = emit_completed.clone();
             inflight.push(tokio::spawn(async move {
                 let outcome =
                     run_pair(&project_root_owned, &index_dir_owned, &item, client_info_clone)
@@ -387,7 +467,8 @@ pub async fn run(
                     let mut m = manifest_clone.lock().await;
                     update_manifest(&mut m, indexer, asset, &item.server);
                 }
-                report_clone.lock().await.outcomes.push(outcome);
+                report_clone.lock().await.outcomes.push(outcome.clone());
+                emit_completed(outcome);
                 (key_for_task, result_state)
             }));
         }
@@ -409,7 +490,8 @@ pub async fn run(
                         asset: key.1.clone(),
                         missing: vec!["<dependency cycle>".to_string()],
                     };
-                    report.lock().await.outcomes.push(outcome);
+                    report.lock().await.outcomes.push(outcome.clone());
+                    emit_completed(outcome);
                     *st = ItemState::Failed;
                 }
             }
