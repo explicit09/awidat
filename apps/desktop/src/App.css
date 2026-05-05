@@ -1215,6 +1215,20 @@ body,
   border-color: var(--err);
 }
 
+.job-action {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.job-action:hover {
+  border-color: var(--accent);
+}
+
 .job-status {
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;

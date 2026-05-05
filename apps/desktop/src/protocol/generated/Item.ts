@@ -154,4 +154,11 @@ status: string,
  * the card and show a retry button on Failed. None during
  * Started / Delta.
  */
-result: JobResult | null, };
+result: JobResult | null, 
+/**
+ * Absolute path to the artifact this job produced, if any.
+ * Set for `Render` (the rendered mp4) and `Transcode` (the
+ * proxy mp4); `None` otherwise. Frontend uses it for the
+ * "Show in Finder" button on Render's Completed-Ok phase.
+ */
+output_path: string | null, };

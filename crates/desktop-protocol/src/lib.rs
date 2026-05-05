@@ -174,11 +174,11 @@ pub enum Item {
         /// Error message.
         message: String,
     },
-    /// Long-running background work (asset import, indexing). Streams
-    /// over the same item channel as agent emissions because the
-    /// frontend renders the chat as a single timeline of project
-    /// activity — "I downloaded foo.mp4" and "I indexed it" sit in
-    /// the same place as "I cut clip 3."
+    /// Long-running background work (asset import, indexing,
+    /// timeline render). Streams over the same item channel as
+    /// agent emissions because the frontend renders the chat as a
+    /// single timeline of project activity — "I downloaded foo.mp4"
+    /// and "I indexed it" sit in the same place as "I cut clip 3."
     ///
     /// The same id is reused across a Started → many Delta →
     /// Completed lifecycle, so the frontend upserts in place.
@@ -202,6 +202,11 @@ pub enum Item {
         /// the card and show a retry button on Failed. None during
         /// Started / Delta.
         result: Option<JobResult>,
+        /// Absolute path to the artifact this job produced, if any.
+        /// Set for `Render` (the rendered mp4) and `Transcode` (the
+        /// proxy mp4); `None` otherwise. Frontend uses it for the
+        /// "Show in Finder" button on Render's Completed-Ok phase.
+        output_path: Option<String>,
     },
 }
 
@@ -222,6 +227,11 @@ pub enum JobKind {
     Transcode,
     /// `awidat_index::run` over the project.
     Indexing,
+    /// `awidat_render::build_timeline_render_spec` + `JobManager::start`
+    /// — desktop-initiated timeline export. Distinct from `Transcode`
+    /// (proxy generation) and from agent-initiated `start_render` tool
+    /// calls (those surface as `Item::ToolCall`).
+    Render,
 }
 
 /// Terminal state of an [`Item::Job`].

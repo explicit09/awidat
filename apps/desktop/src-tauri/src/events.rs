@@ -69,6 +69,7 @@ impl JobEmitter {
                 percent: None,
                 status: status.into(),
                 result: None,
+                output_path: None,
             },
         );
         Self { app, id, kind }
@@ -85,12 +86,15 @@ impl JobEmitter {
                 percent,
                 status: status.into(),
                 result: None,
+                output_path: None,
             },
         );
     }
 
-    /// Finish the job with success.
-    pub fn ok(self, summary: Option<String>) {
+    /// Finish the job with success. `output_path` is the absolute
+    /// path of the artifact produced (the rendered mp4, the proxy,
+    /// etc.) so the frontend can show "Show in Finder."
+    pub fn ok_with_path(self, summary: Option<String>, output_path: Option<String>) {
         emit_item(
             &self.app,
             Item::Job {
@@ -100,8 +104,14 @@ impl JobEmitter {
                 percent: Some(100),
                 status: summary.clone().unwrap_or_else(|| "done".into()),
                 result: Some(awidat_desktop_protocol::JobResult::Ok { summary }),
+                output_path,
             },
         );
+    }
+
+    /// Finish the job with success — no output artifact.
+    pub fn ok(self, summary: Option<String>) {
+        self.ok_with_path(summary, None);
     }
 
     /// Finish the job with an error.
@@ -116,6 +126,7 @@ impl JobEmitter {
                 percent: None,
                 status: message.clone(),
                 result: Some(awidat_desktop_protocol::JobResult::Err { message }),
+                output_path: None,
             },
         );
     }
@@ -131,6 +142,7 @@ impl JobEmitter {
                 percent: None,
                 status: "cancelled".into(),
                 result: Some(awidat_desktop_protocol::JobResult::Cancelled),
+                output_path: None,
             },
         );
     }
