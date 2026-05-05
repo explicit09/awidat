@@ -848,6 +848,156 @@ body,
   font-size: 12px;
 }
 
+/* Split workspace: chat | media. CSS grid with a fixed-width media
+   pane on the right; chat fills remaining width. */
+.workspace {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+
+.workspace-media {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.media-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.media-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  gap: 8px;
+}
+
+.media-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.media-asset-select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  max-width: 60%;
+}
+
+.media-asset-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.media-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 12px;
+  gap: 8px;
+}
+
+.video-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.video-el {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  background: black;
+  border-radius: 6px;
+  outline: 1px solid var(--border);
+}
+
+.video-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.video-meta-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.video-stem {
+  background: var(--bg-elev2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.video-error {
+  color: var(--err);
+  font-size: 12px;
+  background: rgba(248, 81, 73, 0.08);
+  border-left: 2px solid var(--err);
+  padding: 6px 10px;
+  border-radius: 3px;
+}
+
+.media-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  gap: 8px;
+}
+
+.media-empty-title {
+  margin: 0;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.media-empty-hint {
+  margin: 0;
+  max-width: 80%;
+  line-height: 1.55;
+}
+
 /* Job card — yt-dlp download / local import / indexing */
 .item-job {
   border-color: var(--accent);

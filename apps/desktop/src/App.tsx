@@ -1,8 +1,9 @@
 // App shell.
 //
-// Layout: top banner (project picker), chat pane filling the middle,
-// composer pinned to the bottom. Step 3 will introduce a side-by-side
-// pane layout (chat | video); Step 4 adds a timeline strip below.
+// Layout when a project is loaded: header → action bar → split workspace
+// (chat on the left, media pane on the right) → composer pinned to the
+// bottom. Layout when no project is loaded: header → ChatStream's
+// "open or create a project" placeholder → disabled composer.
 
 import { useEffect } from "react";
 import { ProjectBanner } from "./app/ProjectBanner";
@@ -10,6 +11,7 @@ import { ActionBar } from "./app/ActionBar";
 import { useProjectStore } from "./app/state";
 import { ChatStream } from "./agent/ChatStream";
 import { Composer } from "./agent/Composer";
+import { MediaPane } from "./media/MediaPane";
 import "./App.css";
 
 function App() {
@@ -33,7 +35,18 @@ function App() {
         <ProjectBanner onChange={setCurrent} />
       </header>
       {projectReady && <ActionBar />}
-      <ChatStream />
+      {projectReady ? (
+        <div className="workspace">
+          <div className="workspace-chat">
+            <ChatStream />
+          </div>
+          <div className="workspace-media">
+            <MediaPane />
+          </div>
+        </div>
+      ) : (
+        <ChatStream />
+      )}
       <Composer projectReady={projectReady} />
     </main>
   );
