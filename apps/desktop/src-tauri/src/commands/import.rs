@@ -107,9 +107,51 @@ fn spawn_post_import_chain(app: AppHandle, asset: PathBuf) {
         )
         .await
         {
-            tracing::warn!(error = %e, asset = %asset.display(), "auto-transcode failed; skipping index");
+            tracing::warn!(error = %e, asset = %asset.display(), "auto-transcode failed; skipping auto-insert + index");
             return;
         }
+
+        // Auto-insert this asset onto the timeline if (and only if)
+        // the timeline has no video clips yet. First-asset-on-fresh-
+        // project case — users expect to see what they just
+        // imported, not have to ask the agent to add it.
+        if let Some(project_root) = state.project_root.lock().await.clone() {
+            match awidat_render::probe_duration_s(&asset).await {
+                Ok(Some(duration_s)) => {
+                    match crate::commands::auto_insert::auto_insert_if_empty(
+                        &project_root,
+                        &asset,
+                        duration_s,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            tracing::info!(
+                                asset = %asset.display(),
+                                duration_s,
+                                "auto-inserted first asset onto empty timeline",
+                            );
+                        }
+                        Ok(false) => {
+                            // Non-empty timeline; user is arranging.
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "auto-insert failed");
+                        }
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        asset = %asset.display(),
+                        "auto-insert: ffprobe couldn't determine duration; skipping",
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "auto-insert: probe failed");
+                }
+            }
+        }
+
         // Index the whole project. The indexer is sha-keyed so this
         // is idempotent for already-indexed assets — only the new
         // asset's pairs do real work.
