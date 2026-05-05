@@ -16,6 +16,9 @@ import {
 import { useAgentStore } from "./store";
 import { ApprovalCard } from "./ApprovalCard";
 import { UserInputCard } from "./UserInputCard";
+import { JobCard } from "./JobCard";
+import { EmptyState } from "../app/EmptyState";
+import { useProjectStore } from "../app/state";
 
 export function ChatStream() {
   const items = useAgentStore((s) => s.items);
@@ -42,12 +45,16 @@ export function ChatStream() {
     };
   }, [upsert, setRunning, setTurnError]);
 
+  const projectReady = useProjectStore((s) => s.current !== null);
+
   return (
     <div className="chat-items" aria-live="polite">
-      {items.length === 0 && !running && !turnError && (
+      {items.length === 0 && !running && !turnError && projectReady && (
+        <EmptyState />
+      )}
+      {items.length === 0 && !running && !turnError && !projectReady && (
         <p className="chat-empty">
-          Type a message below. The agent will respond with text and tool calls
-          here.
+          Open or create a project to get started.
         </p>
       )}
       {items.map((item) => (
@@ -124,6 +131,8 @@ function ItemView({ item }: { item: Item }) {
       return <UserInputCard item={item} />;
     case "approval_request":
       return <ApprovalCard item={item} />;
+    case "job":
+      return <JobCard item={item} />;
     case "error":
       return (
         <article className="item item-error">

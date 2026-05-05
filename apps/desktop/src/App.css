@@ -802,3 +802,192 @@ body,
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Job card — yt-dlp download / local import / indexing */
+.item-job {
+  border-color: var(--accent);
+}
+
+.item-job-ok {
+  border-color: var(--ok);
+}
+
+.item-job-err {
+  border-color: var(--err);
+}
+
+.item-job-cancelled {
+  border-color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.job-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.job-cancel {
+  background: transparent;
+  color: var(--err);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.job-cancel:hover {
+  border-color: var(--err);
+}
+
+.job-status {
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  color: var(--text);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.job-progress {
+  position: relative;
+  background: var(--bg-elev2);
+  border-radius: 3px;
+  height: 18px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.job-progress-fill {
+  background: var(--accent);
+  height: 100%;
+  transition: width 240ms ease;
+}
+
+.item-job-ok .job-progress-fill {
+  background: var(--ok);
+}
+
+.item-job-err .job-progress-fill {
+  background: var(--err);
+}
+
+.job-progress-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--bg);
+  mix-blend-mode: difference;
+  /* difference makes it readable over both filled and unfilled regions */
+}
+
+/* Empty-state in chat pane — first-time import + index nudge */
+.empty-state {
+  max-width: 560px;
+  margin: 24px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.empty-state h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.empty-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.empty-hint code {
+  background: var(--bg-elev2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.empty-action {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty-action header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.empty-action header strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.empty-action header span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.empty-action button {
+  align-self: flex-start;
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-weight: 500;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.empty-action button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.empty-action form {
+  display: flex;
+  gap: 6px;
+}
+
+.empty-action form input {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.empty-action form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.empty-action form button {
+  align-self: stretch;
+}
+
+.empty-error {
+  color: var(--err);
+  font-size: 12px;
+  background: rgba(248, 81, 73, 0.08);
+  border-left: 2px solid var(--err);
+  padding: 8px 10px;
+  border-radius: 3px;
+}

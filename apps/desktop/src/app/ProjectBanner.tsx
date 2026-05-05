@@ -20,6 +20,8 @@ export function ProjectBanner({ onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [showUrl, setShowUrl] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
   const popRef = useRef<HTMLDivElement | null>(null);
 
   // Initial load + close popover on outside click.
@@ -65,6 +67,46 @@ export function ProjectBanner({ onChange }: Props) {
     }
   }
 
+  async function importLocal() {
+    setError(null);
+    try {
+      const picked = await openDialog({
+        directory: false,
+        multiple: false,
+        title: "Choose media file to import",
+      });
+      if (typeof picked === "string") {
+        await invoke("import_local", { srcPath: picked, link: false });
+        setOpen(false);
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function importUrl() {
+    const u = urlInput.trim();
+    if (!u) return;
+    setError(null);
+    try {
+      setUrlInput("");
+      setShowUrl(false);
+      await invoke("import_url", { url: u });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function runIndex() {
+    setError(null);
+    try {
+      await invoke("index_project");
+      setOpen(false);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <div className="project-banner" ref={popRef}>
       <span className="project-label">project:</span>
@@ -90,6 +132,29 @@ export function ProjectBanner({ onChange }: Props) {
             <strong>New project…</strong>
             <span className="popover-hint">init in a chosen folder</span>
           </button>
+          {current && (
+            <>
+              <div className="popover-divider">Current project</div>
+              <button className="popover-action" onClick={importLocal}>
+                <strong>Import media file…</strong>
+                <span className="popover-hint">copy/symlink into raw/</span>
+              </button>
+              <button
+                className="popover-action"
+                onClick={() => {
+                  setShowUrl(true);
+                  setOpen(false);
+                }}
+              >
+                <strong>Import from URL…</strong>
+                <span className="popover-hint">yt-dlp into raw/</span>
+              </button>
+              <button className="popover-action" onClick={runIndex}>
+                <strong>Run indexers</strong>
+                <span className="popover-hint">whisper, scenes, audio…</span>
+              </button>
+            </>
+          )}
           {recent.length > 0 && (
             <>
               <div className="popover-divider">Recent</div>
@@ -118,6 +183,48 @@ export function ProjectBanner({ onChange }: Props) {
             refresh().catch(() => {});
           }}
         />
+      )}
+      {showUrl && (
+        <div className="modal-backdrop" onClick={() => setShowUrl(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <header className="modal-header">
+              <h2>Import from URL</h2>
+              <button
+                className="modal-close"
+                onClick={() => setShowUrl(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </header>
+            <div className="modal-body">
+              <label className="field">
+                <span>URL</span>
+                <input
+                  type="text"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  placeholder="https://www.youtube.com/watch?v=…"
+                  autoFocus
+                />
+              </label>
+              <p className="field-hint">
+                Awidat downloads via yt-dlp at up to 1080p mp4. The download
+                runs in the background; cancel from the chat any time.
+              </p>
+            </div>
+            <footer className="modal-footer">
+              <button onClick={() => setShowUrl(false)}>Cancel</button>
+              <button
+                className="primary"
+                onClick={importUrl}
+                disabled={!urlInput.trim()}
+              >
+                Download
+              </button>
+            </footer>
+          </div>
+        </div>
       )}
     </div>
   );

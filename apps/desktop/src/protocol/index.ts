@@ -8,6 +8,8 @@
 export type { Id } from "./generated/Id";
 export type { Item } from "./generated/Item";
 export type { ItemLifecycle } from "./generated/ItemLifecycle";
+export type { JobKind } from "./generated/JobKind";
+export type { JobResult } from "./generated/JobResult";
 export type { PlanStep } from "./generated/PlanStep";
 export type { Turn } from "./generated/Turn";
 export type { Thread } from "./generated/Thread";
