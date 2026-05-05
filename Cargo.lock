@@ -372,10 +372,14 @@ name = "awidat-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "awidat-config",
  "awidat-core",
  "awidat-desktop-protocol",
+ "awidat-index",
+ "awidat-mcp",
  "awidat-proto",
  "chrono",
+ "dirs",
  "serde",
  "serde_json",
  "tauri",

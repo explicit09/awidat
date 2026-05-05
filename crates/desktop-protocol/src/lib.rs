@@ -174,6 +174,68 @@ pub enum Item {
         /// Error message.
         message: String,
     },
+    /// Long-running background work (asset import, indexing). Streams
+    /// over the same item channel as agent emissions because the
+    /// frontend renders the chat as a single timeline of project
+    /// activity — "I downloaded foo.mp4" and "I indexed it" sit in
+    /// the same place as "I cut clip 3."
+    ///
+    /// The same id is reused across a Started → many Delta →
+    /// Completed lifecycle, so the frontend upserts in place.
+    Job {
+        /// Stable id (one per job invocation, e.g. one yt-dlp run or
+        /// one indexer dispatch).
+        id: Id,
+        /// Lifecycle phase.
+        phase: ItemLifecycle,
+        /// Job kind. The frontend keys per-kind UI off this.
+        /// Renamed from `kind` to avoid clashing with the enum's
+        /// own serde-tag field.
+        job_kind: JobKind,
+        /// 0..=100 if the job has known progress, `None` for
+        /// indeterminate (e.g. yt-dlp before it parses bitrate).
+        percent: Option<u8>,
+        /// One-line status (e.g. "downloading: 45.2 MB / 120 MB",
+        /// "whisper · ep1.mp4: 12 / 84 pairs").
+        status: String,
+        /// On Completed: terminal state. Frontend uses it to color
+        /// the card and show a retry button on Failed. None during
+        /// Started / Delta.
+        result: Option<JobResult>,
+    },
+}
+
+/// Discriminator for [`Item::Job`]. The frontend doesn't render
+/// kinds it doesn't know about — keep variants small and concrete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    /// `yt-dlp` URL download into the project's `raw/` dir.
+    UrlImport,
+    /// Local-file copy / symlink into `raw/`.
+    LocalImport,
+    /// `awidat_index::run` over the project.
+    Indexing,
+}
+
+/// Terminal state of an [`Item::Job`].
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum JobResult {
+    /// Job finished cleanly. Optional one-liner ("Imported foo.mp4 (84MB)").
+    Ok {
+        /// Optional success summary.
+        summary: Option<String>,
+    },
+    /// Job failed. Error string for display.
+    Err {
+        /// Error message.
+        message: String,
+    },
+    /// User cancelled the job.
+    Cancelled,
 }
 
 /// One row in a Plan item — mirrors `awidat_core::tool::PlanItem` but

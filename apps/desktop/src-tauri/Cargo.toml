@@ -24,6 +24,9 @@ tauri-plugin-dialog = "2"
 awidat-core = { workspace = true }
 awidat-desktop-protocol = { workspace = true }
 awidat-proto = { workspace = true }
+awidat-config = { path = "../../../crates/config" }
+awidat-index = { workspace = true }
+awidat-mcp = { path = "../../../crates/mcp" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -32,6 +35,7 @@ tokio-util = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+dirs = { workspace = true }
 
 # This crate intentionally does NOT inherit workspace lints. Tauri's
 # generated code (via the `tauri::generate_handler!` macro) emits
