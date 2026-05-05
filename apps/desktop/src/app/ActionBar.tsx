@@ -11,9 +11,13 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAgentStore } from "../agent/store";
+import { useTimelineStore } from "../timeline/store";
+import { useExportJob } from "./useExportJob";
 
 export function ActionBar() {
   const items = useAgentStore((s) => s.items);
+  const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
+  const { start: startExport } = useExportJob();
   const [showUrl, setShowUrl] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +37,8 @@ export function ActionBar() {
     runningKinds.includes("url_import");
   const transcodeBusy = runningKinds.includes("transcode");
   const indexBusy = runningKinds.includes("indexing");
+  const exportBusy = runningKinds.includes("render");
+  const exportDisabled = exportBusy || timelineDuration === 0;
 
   async function importLocal() {
     setError(null);
@@ -72,6 +78,16 @@ export function ActionBar() {
     }
   }
 
+  async function runExport() {
+    setError(null);
+    if (exportDisabled) return;
+    try {
+      await startExport();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <>
       <div className="action-bar">
@@ -84,6 +100,20 @@ export function ActionBar() {
         <span className="action-bar-divider" aria-hidden="true" />
         <button onClick={runIndex} disabled={indexBusy || transcodeBusy}>
           Run indexers
+        </button>
+        <span className="action-bar-divider" aria-hidden="true" />
+        <button
+          onClick={runExport}
+          disabled={exportDisabled}
+          title={
+            timelineDuration === 0
+              ? "Add clips to the timeline before exporting"
+              : exportBusy
+              ? "Export in progress"
+              : "Render the timeline to mp4"
+          }
+        >
+          Export…
         </button>
         {error && <span className="action-bar-error">{error}</span>}
       </div>
