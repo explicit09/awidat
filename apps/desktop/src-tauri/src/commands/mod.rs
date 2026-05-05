@@ -7,3 +7,4 @@ pub mod media;
 pub mod project;
 pub mod transcode;
 pub mod turn;
+pub mod view;

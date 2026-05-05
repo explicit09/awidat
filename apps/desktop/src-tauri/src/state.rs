@@ -38,6 +38,27 @@ pub struct AwidatState {
     /// commands in the next commit.
     #[allow(dead_code)]
     pub jobs: Mutex<HashMap<String, JobHandle>>,
+    /// Latest media-pane state pushed by the frontend: which proxy
+    /// is loaded and where the user has the playhead. Prefixed onto
+    /// `start_turn` user input so the agent knows what's on screen.
+    /// `None` when nothing is loaded or no playback events have
+    /// arrived yet.
+    pub view_state: Mutex<Option<ViewState>>,
+}
+
+/// Snapshot of what the user is looking at in the media pane.
+/// Pushed by the frontend on scrub / play / pause, consumed by
+/// `start_turn`'s context-injection step.
+#[derive(Debug, Clone)]
+pub struct ViewState {
+    /// Stem of the asset currently loaded in the preview.
+    pub stem: String,
+    /// Playhead position in seconds.
+    pub current_time_s: f64,
+    /// Whether the player is actively playing. Mostly for context
+    /// flavor — "user paused at 0:23" reads differently from "user
+    /// is watching at 0:23."
+    pub is_playing: bool,
 }
 
 /// Handle on a running turn. Owned by `AwidatState::turn`.

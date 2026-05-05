@@ -8,7 +8,7 @@
 // app's flat dark theme. Volume is left to the OS for now.
 
 import { useEffect, useRef } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { useAgentStore } from "../agent/store";
 
@@ -89,6 +89,7 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
   const currentTime = useMediaStore((s) => s.currentTime);
   const durationS = useMediaStore((s) => s.durationS);
   const isPlaying = useMediaStore((s) => s.isPlaying);
+  const lastPushedSecondRef = useRef<number>(-1);
 
   // Reset playback when switching assets so the new video starts
   // from frame 0 instead of inheriting the prior video's currentTime.
@@ -98,7 +99,24 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
       v.currentTime = 0;
       v.pause();
     }
+    lastPushedSecondRef.current = -1;
   }, [src]);
+
+  // Push view-state to the backend whenever stem / play state /
+  // integer-second of currentTime changes. Throttling on integer
+  // seconds keeps the IPC traffic to ~1 Hz during playback while
+  // still capturing every scrub-stop and play/pause toggle.
+  useEffect(() => {
+    if (!stem) return;
+    const sec = Math.floor(currentTime);
+    if (sec === lastPushedSecondRef.current) return;
+    lastPushedSecondRef.current = sec;
+    invoke("set_view_state", {
+      stem,
+      currentTimeS: currentTime,
+      isPlaying,
+    }).catch(() => {});
+  }, [stem, currentTime, isPlaying]);
 
   // Keyboard: spacebar play/pause when the pane is focused.
   useEffect(() => {

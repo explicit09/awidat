@@ -47,7 +47,14 @@ the GUI's import flow, so this is the rare-case tool — don't \
 proactively re-index already-indexed projects.\
 \nMutating tools (apply_edl, start_render, start_indexing, bash) \
 require user approval — you'll see the result come back as a \
-tool_result, not a direct yes/no.";
+tool_result, not a direct yes/no.\
+\n\nThe user's input may be prefixed with a metadata line like \
+`[user is watching <stem> at MM:SS]`. That's the desktop's \
+preview pane reporting where the user has the playhead. When \
+the user says \"here\", \"this\", \"now\", or asks about the \
+current moment, that timestamp is the answer to \"where.\" Use \
+inspect_clip / view_frame / find_moment scoped to that time \
+rather than guessing.";
 
 /// Build the full editorial-tool registry. Mirrors the TUI's set; the
 /// desktop is the buyer surface and gets every tool the agent has.

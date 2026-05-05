@@ -70,9 +70,24 @@ pub async fn start_turn(
         &app,
         Item::UserInput {
             id: Id::new(&user_item_id),
+            // The chat shows the user's plain text — the view-state
+            // prefix is metadata, not something the user typed.
             text: input.clone(),
         },
     );
+
+    // Prefix view-state context onto the input the model actually
+    // sees. If the user is scrubbed to 0:23 and asks "what's
+    // happening here?", the agent now has the answer to "here."
+    // No-op when no media is loaded.
+    let model_input = match state.view_state.lock().await.as_ref() {
+        Some(v) => format!(
+            "{}\n\n{}",
+            crate::commands::view::format_view_context(v),
+            input
+        ),
+        None => input.clone(),
+    };
 
     let mut events = session.subscribe();
 
@@ -80,7 +95,7 @@ pub async fn start_turn(
     let cancel_for_turn = cancel.clone();
     let app_for_turn = app.clone();
     tokio::spawn(async move {
-        let result = session_for_turn.run_turn(input, cancel_for_turn).await;
+        let result = session_for_turn.run_turn(model_input, cancel_for_turn).await;
         let payload = TurnEndEvent {
             error: match result {
                 Ok(()) => None,
