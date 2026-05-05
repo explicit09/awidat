@@ -10,6 +10,7 @@ import { useMediaStore } from "../media/store";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
 import { useProposalStore } from "./proposal";
+import { ProposalActions } from "./ProposalActions";
 import type { AppliedDiff } from "../protocol";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
@@ -71,6 +72,7 @@ export function TimelinePane() {
       </header>
       <div className="timeline-stage">
         <TimelineCanvas snapshot={snapshot} currentTime={currentTime} />
+        <ProposalActions />
       </div>
     </section>
   );

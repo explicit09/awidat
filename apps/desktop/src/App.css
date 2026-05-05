@@ -965,6 +965,109 @@ body,
   z-index: 1;
 }
 
+/* Proposal action toolbar — floats over the timeline when a
+   proposal is active. Sits at the top so it doesn't cover clips. */
+.proposal-actions {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  font-size: 12px;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  flex-wrap: wrap;
+}
+
+.proposal-actions-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.proposal-actions-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  color: var(--warn);
+}
+
+.proposal-actions-source {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+}
+
+.proposal-actions-summary {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.proposal-actions-secondary,
+.proposal-actions-primary {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--bg-elev2);
+  color: var(--text);
+}
+
+.proposal-actions-secondary:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.proposal-actions-reject:hover:not(:disabled) {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.proposal-actions-primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.proposal-actions-primary:disabled,
+.proposal-actions-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.proposal-actions-error {
+  color: var(--err);
+  font-size: 11px;
+  flex-basis: 100%;
+}
+
+.proposal-edl-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.proposal-edl-popover pre {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
 .media-pane {
   display: flex;
   flex-direction: column;
