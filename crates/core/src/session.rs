@@ -987,6 +987,7 @@ impl Session {
             call_id: invocation.call_id.clone(),
             tool_name: invocation.name.clone(),
             args_summary: summarize_args(&invocation.args),
+            args_full: invocation.args.clone(),
             reply: reply_tx,
         };
         // If the channel is closed (no live UI), default to allow rather

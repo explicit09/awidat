@@ -349,15 +349,18 @@ impl App {
 
                 let composer_height = self.composer.desired_height(area.width);
                 let composer_area = if idle && area.height >= 14 {
-                    self.render_idle(f, area)
+                    self.render_idle(f, area, composer_height)
                 } else {
                     let area = if area.height >= 10 {
                         self.render_active_header(f, area)
                     } else {
                         area
                     };
-                    let (chat_area, composer_area, status_area) =
-                        active_content_areas(area, self.chat.rendered_height(), composer_height);
+                    let (chat_area, composer_area, status_area) = active_content_areas(
+                        area,
+                        self.chat.rendered_height_for_width(area.width),
+                        composer_height,
+                    );
                     f.render_widget(&self.chat, chat_area);
                     f.render_widget(self.status_line(), status_area);
                     composer_area
@@ -368,7 +371,9 @@ impl App {
                 // returns (col_in_text_area, row_offset). The "› "
                 // prefix occupies 2 cells of the first row.
                 let inner_width = composer_area.width.saturating_sub(2);
-                let (col_in_text, row_offset) = self.composer.cursor_position(inner_width);
+                let (col_in_text, row_offset) = self
+                    .composer
+                    .visible_cursor_position(inner_width, composer_area.height);
                 let cursor_x = composer_area
                     .x
                     .saturating_add(2)
@@ -390,7 +395,12 @@ impl App {
         Ok(())
     }
 
-    fn render_idle(&self, f: &mut crate::custom_terminal::Frame<'_>, area: Rect) -> Rect {
+    fn render_idle(
+        &self,
+        f: &mut crate::custom_terminal::Frame<'_>,
+        area: Rect,
+        composer_height: u16,
+    ) -> Rect {
         let card_x = area.x + if area.width >= 80 { 2 } else { 1 };
         let card_y = area.y + top_gutter(area);
         let available_width = area.right().saturating_sub(card_x + 1);
@@ -485,10 +495,7 @@ impl App {
         // the "N other" suffix, then drop kind labels right-to-
         // left, until it fits. No mid-word truncation.
         let moments_budget = columns[1].width.saturating_sub(8);
-        let moments_line = match self
-            .insights
-            .welcome_moments_line_for_width(moments_budget)
-        {
+        let moments_line = match self.insights.welcome_moments_line_for_width(moments_budget) {
             Some(line) => Line::from(vec![
                 Span::styled("moments ", Style::default().fg(Color::DarkGray)),
                 Span::styled(line, Style::default().fg(Color::Cyan)),
@@ -587,15 +594,17 @@ impl App {
         );
 
         let composer_y = tip_y.saturating_add(2);
+        let composer_height = composer_height.max(3);
+        let composer_y = composer_y.min(area.bottom().saturating_sub(composer_height + 1));
         let composer = Rect {
             x: area.x + 1,
-            y: composer_y.min(area.bottom().saturating_sub(4)),
+            y: composer_y,
             width: area.width.saturating_sub(2),
-            height: 3,
+            height: composer_height.min(area.bottom().saturating_sub(composer_y)),
         };
         let footer_y = composer
             .y
-            .saturating_add(2)
+            .saturating_add(composer.height)
             .min(area.bottom().saturating_sub(1));
         f.render_widget(
             Paragraph::new(Line::from(vec![
@@ -1039,6 +1048,7 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "apply_edl".into(),
             args_summary: "{\"edl\":\"...\"}".into(),
+            args_full: serde_json::Value::Null,
             reply: tx,
         };
         let mutated = app.handle_event(AppEvent::Approval(req));
@@ -1060,6 +1070,7 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "apply_edl".into(),
             args_summary: "summary".into(),
+            args_full: serde_json::Value::Null,
             reply: tx,
         };
         app.handle_event(AppEvent::Approval(req));
@@ -1080,6 +1091,7 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "apply_edl".into(),
             args_summary: "x".into(),
+            args_full: serde_json::Value::Null,
             reply: tx,
         };
         app.handle_event(AppEvent::Approval(req));
@@ -1098,6 +1110,7 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "bash".into(),
             args_summary: "rm -rf /".into(),
+            args_full: serde_json::Value::Null,
             reply: tx,
         };
         app.handle_event(AppEvent::Approval(req));
@@ -1114,6 +1127,7 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "start_render".into(),
             args_summary: "scope=preview".into(),
+            args_full: serde_json::Value::Null,
             reply: tx,
         };
         app.handle_event(AppEvent::Approval(req));

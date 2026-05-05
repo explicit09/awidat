@@ -127,6 +127,13 @@ pub struct ApprovalRequest {
     /// of JSON. Tools that want richer summaries can override later via
     /// `ToolHandler::approval_summary` (week 6+).
     pub args_summary: String,
+    /// Untruncated tool arguments. The TUI ignores this; the desktop's
+    /// approval-as-diff path needs it to re-parse the EDL for the
+    /// proposal preview without losing characters to `args_summary`'s
+    /// 200-char cap. Carry the full `serde_json::Value` rather than
+    /// re-serializing — preserves number precision, key order on
+    /// objects, and avoids the parser round-trip cost.
+    pub args_full: serde_json::Value,
     /// Reply channel. The receiver lives in the loop; the UI sends the
     /// user's decision here. Dropping the oneshot signals `Deny`.
     pub reply: oneshot::Sender<ApprovalDecision>,
