@@ -1,0 +1,351 @@
+// Bottom-row timeline pane. Read-only in this step: renders OTIO
+// clips as horizontal rectangles per track, draws a time ruler at
+// the top and a playhead synced to the media pane's currentTime.
+// Refreshes when the project changes or when an apply_edl tool
+// call lands in chat (the agent just rewrote the OTIO).
+
+import { useEffect, useRef } from "react";
+import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "./store";
+import { useMediaStore } from "../media/store";
+import { useAgentStore } from "../agent/store";
+import { useProjectStore } from "../app/state";
+
+/** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
+ *  default pane width without horizontal scroll. */
+const PX_PER_SECOND_BASE = 12;
+
+/** Height of one track lane in pixels. */
+const LANE_HEIGHT = 38;
+
+/** Height of the time ruler at the top of the canvas. */
+const RULER_HEIGHT = 22;
+
+/** Padding inside each clip block. */
+const CLIP_PADDING_X = 6;
+
+export function TimelinePane() {
+  const projectReady = useProjectStore((s) => s.current !== null);
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  const refresh = useTimelineStore((s) => s.refresh);
+  const items = useAgentStore((s) => s.items);
+  const currentTime = useMediaStore((s) => s.currentTime);
+
+  // Refresh on mount + on project change.
+  useEffect(() => {
+    if (projectReady) {
+      refresh();
+    }
+  }, [projectReady, refresh]);
+
+  // Refresh after every completed apply_edl. The OTIO file just
+  // changed; the canvas should reflect it. We watch the count of
+  // completed apply_edl tool calls (a stable scalar) rather than
+  // the items array (changes on every text delta).
+  const completedEdits = items.filter(
+    (it) =>
+      it.kind === "tool_call" &&
+      it.name === "apply_edl" &&
+      it.phase === "completed",
+  ).length;
+  useEffect(() => {
+    if (projectReady && completedEdits > 0) {
+      refresh();
+    }
+  }, [completedEdits, projectReady, refresh]);
+
+  if (!projectReady) {
+    return null;
+  }
+
+  return (
+    <section className="timeline-pane">
+      <header className="timeline-header">
+        <span className="timeline-label">Timeline</span>
+        <span className="timeline-meta">
+          {snapshot.tracks.length === 0
+            ? "no tracks yet"
+            : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
+        </span>
+      </header>
+      <div className="timeline-stage">
+        <TimelineCanvas snapshot={snapshot} currentTime={currentTime} />
+      </div>
+    </section>
+  );
+}
+
+function TimelineCanvas({
+  snapshot,
+  currentTime,
+}: {
+  snapshot: TimelineSnapshot;
+  currentTime: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Compute pixel layout. Auto-fit pps so the whole project is
+  // visible without horizontal scroll for the read-only v1.
+  // (Once we add zoom controls in Step 5+, this becomes user-driven.)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+
+    function paint() {
+      if (!canvas || !container) return;
+      const dpr = window.devicePixelRatio || 1;
+      const cssWidth = container.clientWidth;
+      const lanesCount = Math.max(snapshot.tracks.length, 1);
+      const cssHeight = RULER_HEIGHT + lanesCount * LANE_HEIGHT;
+
+      canvas.width = Math.floor(cssWidth * dpr);
+      canvas.height = Math.floor(cssHeight * dpr);
+      canvas.style.width = `${cssWidth}px`;
+      canvas.style.height = `${cssHeight}px`;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+      // pps: fit the whole project to the available width if there
+      // are clips; otherwise fall back to the base for the empty
+      // ruler.
+      const fitPps =
+        snapshot.duration_s > 0
+          ? (cssWidth - 8) / snapshot.duration_s
+          : PX_PER_SECOND_BASE;
+      const pps = Math.max(2, Math.min(fitPps, PX_PER_SECOND_BASE * 8));
+
+      drawRuler(ctx, cssWidth, snapshot.duration_s, pps);
+      drawTracks(ctx, cssWidth, snapshot.tracks, pps);
+      drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
+    }
+
+    paint();
+
+    // Repaint on resize. ResizeObserver is the right tool — covers
+    // window resize AND parent flex/grid resizes.
+    const ro = new ResizeObserver(() => paint());
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [snapshot, currentTime]);
+
+  return (
+    <div className="timeline-canvas-wrap" ref={containerRef}>
+      {snapshot.tracks.length === 0 && (
+        <div className="timeline-empty">
+          No clips on the timeline yet — ask the agent for an edit
+          ("trim filler", "cut to the punchline") and they'll show up here.
+        </div>
+      )}
+      <canvas ref={canvasRef} className="timeline-canvas" />
+    </div>
+  );
+}
+
+/** Draw the time ruler with tick marks every 1, 5, or 10 seconds
+ *  depending on zoom. Larger ticks are labeled. */
+function drawRuler(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  duration: number,
+  pps: number,
+) {
+  ctx.fillStyle = "#161b22";
+  ctx.fillRect(0, 0, width, RULER_HEIGHT);
+  ctx.strokeStyle = "#30363d";
+  ctx.beginPath();
+  ctx.moveTo(0, RULER_HEIGHT - 0.5);
+  ctx.lineTo(width, RULER_HEIGHT - 0.5);
+  ctx.stroke();
+
+  // Choose a tick interval that gives ~1 tick every 60-80px.
+  const desiredPx = 64;
+  const candidates = [0.5, 1, 2, 5, 10, 30, 60, 120, 300];
+  let interval =
+    candidates.find((c) => c * pps >= desiredPx) ?? candidates[candidates.length - 1];
+
+  ctx.fillStyle = "#8b949e";
+  ctx.font =
+    "11px ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace";
+  ctx.textBaseline = "middle";
+
+  for (let t = 0; t <= duration + interval; t += interval) {
+    const x = Math.round(t * pps) + 0.5;
+    if (x > width) break;
+    ctx.strokeStyle = "#30363d";
+    ctx.beginPath();
+    ctx.moveTo(x, RULER_HEIGHT - 8);
+    ctx.lineTo(x, RULER_HEIGHT);
+    ctx.stroke();
+    ctx.fillText(formatTime(t), x + 4, RULER_HEIGHT / 2 - 1);
+  }
+}
+
+function drawTracks(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  tracks: { kind: string; items: TimelineItem[] }[],
+  pps: number,
+) {
+  for (let row = 0; row < tracks.length; row++) {
+    const track = tracks[row];
+    const y = RULER_HEIGHT + row * LANE_HEIGHT;
+
+    // Lane background — subtle alternating tint for video vs audio.
+    ctx.fillStyle = track.kind === "audio" ? "#0d1117" : "#0f141b";
+    ctx.fillRect(0, y, width, LANE_HEIGHT);
+    ctx.strokeStyle = "#30363d";
+    ctx.beginPath();
+    ctx.moveTo(0, y + LANE_HEIGHT - 0.5);
+    ctx.lineTo(width, y + LANE_HEIGHT - 0.5);
+    ctx.stroke();
+
+    for (const item of track.items) {
+      const x = Math.round(item.track_start_s * pps);
+      const w = Math.max(2, Math.round(item.duration_s * pps));
+      drawItem(ctx, item, x, y + 4, w, LANE_HEIGHT - 8, track.kind);
+    }
+  }
+}
+
+function drawItem(
+  ctx: CanvasRenderingContext2D,
+  item: TimelineItem,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  trackKind: string,
+) {
+  const radius = 4;
+  if (item.kind === "clip") {
+    ctx.fillStyle = trackKind === "audio" ? "#1f4d3f" : "#1f3d5d";
+    fillRoundedRect(ctx, x, y, w, h, radius);
+    ctx.strokeStyle = trackKind === "audio" ? "#3fb950" : "#58a6ff";
+    strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+    // Clip label — centered, truncated if width too small.
+    if (w > 24) {
+      ctx.fillStyle = "#e6edf3";
+      ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+      ctx.textBaseline = "middle";
+      const label = truncateToWidth(ctx, item.name, w - 2 * CLIP_PADDING_X);
+      ctx.fillText(label, x + CLIP_PADDING_X, y + h / 2);
+    }
+  } else if (item.kind === "gap") {
+    ctx.fillStyle = "rgba(139, 148, 158, 0.12)";
+    fillRoundedRect(ctx, x, y, w, h, radius);
+    // Cross-hatch pattern feel via dashed border so gaps stand out.
+    ctx.strokeStyle = "#30363d";
+    ctx.setLineDash([3, 3]);
+    strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+    ctx.setLineDash([]);
+  } else {
+    // transition
+    ctx.fillStyle = "rgba(210, 153, 34, 0.18)";
+    fillRoundedRect(ctx, x, y, w, h, radius);
+    ctx.strokeStyle = "#d29922";
+    strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+  }
+}
+
+function drawPlayhead(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  currentTime: number,
+  pps: number,
+) {
+  const x = Math.round(currentTime * pps) + 0.5;
+  if (x < 0 || x > width) return;
+  ctx.strokeStyle = "#f85149";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, height);
+  ctx.stroke();
+  // Triangle handle at top.
+  ctx.fillStyle = "#f85149";
+  ctx.beginPath();
+  ctx.moveTo(x - 5, 0);
+  ctx.lineTo(x + 5, 0);
+  ctx.lineTo(x, 6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.lineWidth = 1;
+}
+
+function fillRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  pathRoundedRect(ctx, x, y, w, h, r);
+  ctx.fill();
+}
+
+function strokeRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  pathRoundedRect(ctx, x, y, w, h, r);
+  ctx.stroke();
+}
+
+function pathRoundedRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+}
+
+function truncateToWidth(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  // Binary-search down. For the widths we deal with (clip names) a
+  // linear walk is fine, but binary is cheap.
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (ctx.measureText(text.slice(0, mid) + "…").width <= maxWidth) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo > 0 ? text.slice(0, lo) + "…" : "";
+}
+
+function formatTime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}

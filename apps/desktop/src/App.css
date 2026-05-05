@@ -848,10 +848,18 @@ body,
   font-size: 12px;
 }
 
-/* Split workspace: chat | media. CSS grid with a fixed-width media
-   pane on the right; chat fills remaining width. */
+/* Workspace layout when a project is loaded: chat | media on top,
+   timeline strip on bottom. The top row is the dominant area; the
+   timeline is a fixed-min-height strip that grows on demand. */
 .workspace {
   flex: 1;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-top {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
   min-height: 0;
@@ -871,6 +879,71 @@ body,
   flex-direction: column;
   min-height: 0;
   background: var(--bg);
+}
+
+/* Timeline pane — bottom strip. */
+.timeline-pane {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-height: 140px;
+  max-height: 280px;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+  flex-shrink: 0;
+}
+
+.timeline-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.timeline-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+.timeline-stage {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.timeline-canvas-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.timeline-canvas {
+  display: block;
+  width: 100%;
+}
+
+.timeline-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 0 24px;
+  pointer-events: none;
+  /* Sit above the canvas so users see the message first. The
+     canvas still draws the empty ruler underneath. */
+  z-index: 1;
 }
 
 .media-pane {

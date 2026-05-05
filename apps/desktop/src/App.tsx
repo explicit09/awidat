@@ -12,6 +12,7 @@ import { useProjectStore } from "./app/state";
 import { ChatStream } from "./agent/ChatStream";
 import { Composer } from "./agent/Composer";
 import { MediaPane } from "./media/MediaPane";
+import { TimelinePane } from "./timeline/TimelinePane";
 import "./App.css";
 
 function App() {
@@ -37,12 +38,15 @@ function App() {
       {projectReady && <ActionBar />}
       {projectReady ? (
         <div className="workspace">
-          <div className="workspace-chat">
-            <ChatStream />
+          <div className="workspace-top">
+            <div className="workspace-chat">
+              <ChatStream />
+            </div>
+            <div className="workspace-media">
+              <MediaPane />
+            </div>
           </div>
-          <div className="workspace-media">
-            <MediaPane />
-          </div>
+          <TimelinePane />
         </div>
       ) : (
         <ChatStream />
