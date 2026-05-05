@@ -803,6 +803,51 @@ body,
   cursor: not-allowed;
 }
 
+/* Persistent action bar between header and chat */
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.action-bar button {
+  background: var(--bg-elev2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.action-bar button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.action-bar button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.action-bar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.action-bar-error {
+  margin-left: auto;
+  color: var(--err);
+  font-size: 12px;
+}
+
 /* Job card — yt-dlp download / local import / indexing */
 .item-job {
   border-color: var(--accent);
@@ -886,18 +931,19 @@ body,
   /* difference makes it readable over both filled and unfilled regions */
 }
 
-/* Empty-state in chat pane — first-time import + index nudge */
+/* Empty-state nudge in chat pane — points at the persistent
+   ActionBar above; doesn't duplicate buttons. */
 .empty-state {
   max-width: 560px;
-  margin: 24px auto;
+  margin: 32px auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .empty-state h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
 }
 
@@ -913,81 +959,4 @@ body,
   padding: 1px 5px;
   border-radius: 3px;
   font-size: 12px;
-}
-
-.empty-action {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.empty-action header {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.empty-action header strong {
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.empty-action header span {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.empty-action button {
-  align-self: flex-start;
-  background: var(--accent);
-  color: var(--bg);
-  border: 0;
-  padding: 6px 14px;
-  border-radius: 4px;
-  font-weight: 500;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.empty-action button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.empty-action form {
-  display: flex;
-  gap: 6px;
-}
-
-.empty-action form input {
-  flex: 1;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  padding: 6px 10px;
-  border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-  font-size: 12px;
-}
-
-.empty-action form input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.empty-action form button {
-  align-self: stretch;
-}
-
-.empty-error {
-  color: var(--err);
-  font-size: 12px;
-  background: rgba(248, 81, 73, 0.08);
-  border-left: 2px solid var(--err);
-  padding: 8px 10px;
-  border-radius: 3px;
 }

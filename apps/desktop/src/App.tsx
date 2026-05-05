@@ -6,6 +6,7 @@
 
 import { useEffect } from "react";
 import { ProjectBanner } from "./app/ProjectBanner";
+import { ActionBar } from "./app/ActionBar";
 import { useProjectStore } from "./app/state";
 import { ChatStream } from "./agent/ChatStream";
 import { Composer } from "./agent/Composer";
@@ -31,6 +32,7 @@ function App() {
         <h1>Awidat</h1>
         <ProjectBanner onChange={setCurrent} />
       </header>
+      {projectReady && <ActionBar />}
       <ChatStream />
       <Composer projectReady={projectReady} />
     </main>
