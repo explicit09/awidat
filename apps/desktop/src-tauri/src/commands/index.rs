@@ -167,7 +167,27 @@ pub async fn index_project_inner(
                 "{wrote} wrote, {skipped} skipped, {failed} failed, {dep_skipped} dep-skipped"
             );
             if report.has_failures() {
-                emitter.err(format!("indexing finished with failures: {summary}"));
+                // Pull each PairOutcome::Failed out so the user sees
+                // *which* indexer failed on *which* asset *why*. With
+                // 10+ indexers per asset, "1 failed" alone leaves the
+                // user (or the agent) guessing.
+                let mut detail = format!("indexing finished with failures: {summary}");
+                for outcome in &report.outcomes {
+                    if let PairOutcome::Failed { indexer, asset, message } = outcome {
+                        // First line of the message is usually the
+                        // root cause; trailing lines are stack
+                        // context. Cap to first line + 200 chars so
+                        // the card stays a card.
+                        let first = message.lines().next().unwrap_or(message);
+                        let truncated = if first.len() > 200 {
+                            format!("{}…", &first[..200])
+                        } else {
+                            first.to_string()
+                        };
+                        detail.push_str(&format!("\n  ✗ {indexer} · {asset}: {truncated}"));
+                    }
+                }
+                emitter.err(detail);
                 Err(summary)
             } else {
                 emitter.ok(Some(summary));
