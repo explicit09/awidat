@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use awidat_core::Session;
 use awidat_core::tool::ApprovalDecision;
+use awidat_render::JobManager;
 use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -44,6 +45,12 @@ pub struct AwidatState {
     /// `None` when nothing is loaded or no playback events have
     /// arrived yet.
     pub view_state: Mutex<Option<ViewState>>,
+    /// Background ffmpeg jobs the desktop owns directly — currently
+    /// only timeline exports. The agent's `start_render` tool runs
+    /// inside a Session and uses Session's own job_manager; this one
+    /// is for desktop-initiated renders that don't go through the
+    /// agent (Export button).
+    pub render_jobs: JobManager,
 }
 
 /// Snapshot of what the user is looking at in the media pane.
