@@ -70,6 +70,8 @@ pub fn run() {
             commands::import::import_url,
             commands::index::index_project,
             commands::transcode::transcode_project_proxies,
+            commands::media::list_proxies,
+            commands::media::proxy_path_for_stem,
         ])
         .run(tauri::generate_context!());
 

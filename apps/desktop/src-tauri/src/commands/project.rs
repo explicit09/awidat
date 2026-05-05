@@ -2,13 +2,33 @@
 //! a new one, listing recent ones. Import + index commands live in
 //! `import.rs` / `index.rs` (next commits).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use awidat_proto::project::Project;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use tokio::fs;
 
 use crate::state::AwidatState;
+
+/// Reconfigure Tauri's asset-protocol scope so the webview can fetch
+/// proxy mp4s out of `<project>/.awidat/proxies/` via
+/// `convertFileSrc()`. We allow only that one directory at a time —
+/// the scope is otherwise empty (set in tauri.conf.json) so the
+/// asset protocol cannot be abused to read arbitrary files. Called
+/// from `set_project_root` and `init_project`.
+fn allow_proxies_dir(app: &AppHandle, project_root: &Path) {
+    let proxies = project_root.join(".awidat").join("proxies");
+    // The dir may not exist yet (first import will create it). Allow
+    // it preemptively — the scope check is a glob, not a stat.
+    let scope = app.asset_protocol_scope();
+    if let Err(e) = scope.allow_directory(&proxies, true) {
+        tracing::warn!(
+            error = %e,
+            path = %proxies.display(),
+            "failed to allow proxies dir in asset-protocol scope",
+        );
+    }
+}
 
 /// Maximum number of recent project paths to remember.
 const MAX_RECENTS: usize = 10;
@@ -18,6 +38,7 @@ const MAX_RECENTS: usize = 10;
 /// new root. Pushes the path to the recents list on success.
 #[tauri::command]
 pub async fn set_project_root(
+    app: AppHandle,
     state: State<'_, AwidatState>,
     path: String,
 ) -> Result<(), String> {
@@ -38,6 +59,7 @@ pub async fn set_project_root(
 
     *state.project_root.lock().await = Some(buf.clone());
     *state.session.lock().await = None;
+    allow_proxies_dir(&app, &buf);
 
     // Best-effort: ignore failures so a corrupted recents file
     // doesn't block project opening.
@@ -67,6 +89,7 @@ pub async fn current_project_root(
 /// import is a separate step the frontend can chain after.
 #[tauri::command]
 pub async fn init_project(
+    app: AppHandle,
     state: State<'_, AwidatState>,
     parent_dir: String,
     name: String,
@@ -114,6 +137,7 @@ pub async fn init_project(
 
     *state.project_root.lock().await = Some(project_dir.clone());
     *state.session.lock().await = None;
+    allow_proxies_dir(&app, &project_dir);
     if let Err(e) = update_recents(&project_dir).await {
         tracing::warn!(error = %e, "failed to update recents file");
     }

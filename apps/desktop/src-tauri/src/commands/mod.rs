@@ -3,6 +3,7 @@
 
 pub mod import;
 pub mod index;
+pub mod media;
 pub mod project;
 pub mod transcode;
 pub mod turn;
