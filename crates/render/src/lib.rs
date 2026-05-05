@@ -5,6 +5,11 @@
 //!   binaries (env-var override → `which` lookup → fail).
 //! - [`ffmpeg::extract_frame`] — single-frame extraction at time `t_s`.
 //!   Used by `view_frame`.
+//! - [`ffmpeg::probe_duration_s`] — ffprobe wrapper returning the
+//!   asset's duration in seconds.
+//! - [`ffmpeg::transcode_proxy`] — produce a 720p H.264 all-keyframe
+//!   proxy of an asset, with progress callbacks. Used by the desktop
+//!   import flow to make scrubbable previews.
 //! - [`job::JobManager`] — long-running ffmpeg job orchestrator. Used by
 //!   `start_render` / `poll_render`.
 //! - [`progress::ProgressSnapshot`] — parsed view of ffmpeg's stderr
@@ -14,7 +19,10 @@ pub mod ffmpeg;
 pub mod job;
 pub mod progress;
 
-pub use ffmpeg::{FfmpegError, ffmpeg_path, ffprobe_path};
+pub use ffmpeg::{
+    FfmpegError, TranscodeProgress, TranscodeProgressCallback, extract_frame, ffmpeg_path,
+    ffprobe_path, probe_duration_s, transcode_proxy,
+};
 pub use job::{JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec};
 pub use progress::ProgressSnapshot;
 
