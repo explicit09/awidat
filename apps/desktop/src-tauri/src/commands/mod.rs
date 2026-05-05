@@ -4,4 +4,5 @@
 pub mod import;
 pub mod index;
 pub mod project;
+pub mod transcode;
 pub mod turn;

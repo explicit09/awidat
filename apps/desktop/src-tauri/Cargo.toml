@@ -28,6 +28,7 @@ awidat-proto = { workspace = true }
 awidat-config = { path = "../../../crates/config" }
 awidat-index = { workspace = true }
 awidat-mcp = { path = "../../../crates/mcp" }
+awidat-render = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -37,6 +38,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 # This crate intentionally does NOT inherit workspace lints. Tauri's
 # generated code (via the `tauri::generate_handler!` macro) emits

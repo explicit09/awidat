@@ -215,6 +215,11 @@ pub enum JobKind {
     UrlImport,
     /// Local-file copy / symlink into `raw/`.
     LocalImport,
+    /// `awidat_render::transcode_proxy` over a single asset. Produces
+    /// a 720p H.264 all-keyframe mp4 under `<project>/.awidat/proxies/`
+    /// that the live preview pane can scrub against without choking
+    /// on the original's bitrate.
+    Transcode,
     /// `awidat_index::run` over the project.
     Indexing,
 }

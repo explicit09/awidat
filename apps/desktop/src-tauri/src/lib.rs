@@ -62,6 +62,7 @@ pub fn run() {
             commands::import::import_local,
             commands::import::import_url,
             commands::index::index_project,
+            commands::transcode::transcode_project_proxies,
         ])
         .run(tauri::generate_context!());
 

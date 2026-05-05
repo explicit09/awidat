@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 
 use awidat_desktop_protocol::{Id, JobKind};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandEvent;
 use tokio::fs;
@@ -71,6 +71,12 @@ pub async fn import_local(
                     .to_string_lossy()
             );
             emitter.ok(Some(summary));
+            // Fire the auto-chain (transcode → index) in the
+            // background so the command returns promptly. Each step
+            // emits its own job card; failures don't roll back
+            // earlier steps (a transcoded file with no index is
+            // still useful — the user can retry indexing).
+            spawn_post_import_chain(app.clone(), dst.clone());
             Ok(dst.to_string_lossy().into_owned())
         }
         Err(_e) if cancel.is_cancelled() => {
@@ -82,6 +88,35 @@ pub async fn import_local(
             Err(e)
         }
     }
+}
+
+/// Spawn the post-import auto-chain (proxy transcode → indexer
+/// pipeline). Runs as a background tokio task so the originating
+/// import command returns immediately. Each step emits its own job
+/// card; the chain stops at the first hard error but the partial
+/// progress survives — a transcoded-but-not-yet-indexed asset is
+/// still scrubbable in the preview pane.
+fn spawn_post_import_chain(app: AppHandle, asset: PathBuf) {
+    tokio::spawn(async move {
+        let state = app.state::<AwidatState>();
+        // Transcode the just-imported asset.
+        if let Err(e) = crate::commands::transcode::transcode_single_asset(
+            &app,
+            &state,
+            &asset,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, asset = %asset.display(), "auto-transcode failed; skipping index");
+            return;
+        }
+        // Index the whole project. The indexer is sha-keyed so this
+        // is idempotent for already-indexed assets — only the new
+        // asset's pairs do real work.
+        if let Err(e) = crate::commands::index::index_project_inner(&app, &state).await {
+            tracing::warn!(error = %e, "auto-index failed");
+        }
+    });
 }
 
 /// Implementation of the local-import logic. Separated so the
@@ -183,6 +218,7 @@ pub async fn import_url(
                 path.file_name().unwrap_or_default().to_string_lossy()
             );
             emitter.ok(Some(summary));
+            spawn_post_import_chain(app.clone(), path.clone());
             Ok(path.to_string_lossy().into_owned())
         }
         Err(_e) if cancel.is_cancelled() => {

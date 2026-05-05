@@ -15,6 +15,7 @@ export function JobCard({ item }: Props) {
   const labelMap: Record<JobKind, string> = {
     url_import: "url import",
     local_import: "local import",
+    transcode: "transcode (proxy)",
     indexing: "indexing",
   };
   const cls = resultClass(item.result);

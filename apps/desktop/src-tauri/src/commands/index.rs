@@ -17,13 +17,23 @@ use tokio_util::sync::CancellationToken;
 use crate::events::JobEmitter;
 use crate::state::{AwidatState, JobHandle};
 
-/// Run every configured indexer over every asset under the project's
-/// `raw/` dir. Streams progress as an `Item::Job` (kind = `Indexing`).
-/// Cancellable via `cancel_job(job_id)`.
+/// Tauri-facing entrypoint. Thin wrapper over [`index_project_inner`]
+/// so the auto-chain in `import.rs` can call the real implementation
+/// directly without re-entering the command machinery.
 #[tauri::command]
 pub async fn index_project(
     app: AppHandle,
     state: State<'_, AwidatState>,
+) -> Result<(), String> {
+    index_project_inner(&app, &state).await
+}
+
+/// Run every configured indexer over every asset under the project's
+/// `raw/` dir. Streams progress as an `Item::Job` (kind = `Indexing`).
+/// Cancellable via `cancel_job(job_id)`.
+pub async fn index_project_inner(
+    app: &AppHandle,
+    state: &State<'_, AwidatState>,
 ) -> Result<(), String> {
     let project_root = state
         .project_root
