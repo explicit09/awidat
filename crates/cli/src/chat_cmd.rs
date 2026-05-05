@@ -18,8 +18,9 @@ use awidat_core::tools::{
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
     load_skill::LoadSkillTool, poll_render::PollRenderTool,
     read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
-    shot_summary::ShotSummaryTool, start_render::StartRenderTool,
-    update_plan::UpdatePlanTool, view_episode::ViewEpisodeTool,
+    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
+    start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    view_episode::ViewEpisodeTool,
     view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
@@ -41,6 +42,12 @@ broll_candidates, find_speaker_oncam, find_eye_contact.\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index, \
 inspect_clip, view_frame.\
 \n  - **Editing**: apply_edl (Trim, Untrim, Delete, Split, Insert).\
+\n  - **Indexing**: start_indexing — run the configured indexers \
+(whisper, scenes, audio energy, beats, etc.) over assets in raw/. \
+Sha-keyed so re-runs on already-indexed assets are fast no-ops. \
+Call when view_episode shows missing sidecars and the user has \
+asked for an editorial operation that needs them. Don't proactively \
+re-index already-indexed projects.\
 \n  - **Render**: start_render, poll_render. Use scope='timeline' to \
 render the edited timeline; scope='preview' renders the raw asset.\
 \n  - **Plan / collab**: update_plan, request_user_input, bash.\
@@ -89,6 +96,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(StartRenderTool));
+    registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(UpdatePlanTool));
     registry.register(Arc::new(FindBeatTool));
     registry.register(Arc::new(InspectMomentTool));

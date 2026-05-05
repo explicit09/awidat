@@ -22,6 +22,7 @@ pub mod poll_render;
 pub mod read_index;
 pub mod request_user_input;
 pub mod shot_summary;
+pub mod start_indexing;
 pub mod start_render;
 pub mod update_plan;
 pub mod view_episode;

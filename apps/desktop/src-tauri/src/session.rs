@@ -15,8 +15,9 @@ use awidat_core::tools::{
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
     load_skill::LoadSkillTool, poll_render::PollRenderTool,
     read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
-    shot_summary::ShotSummaryTool, start_render::StartRenderTool,
-    update_plan::UpdatePlanTool, view_episode::ViewEpisodeTool,
+    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
+    start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    view_episode::ViewEpisodeTool,
     view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
@@ -26,7 +27,20 @@ const SYSTEM_PROMPT: &str = "\
 You are awidat, a desktop agent for editing long-form spoken video. \
 You operate inside a GUI: the user sees the chat, the timeline, and \
 the video preview live. Be concise. Commit edits via apply_edl \
-directly when you're confident.";
+directly when you're confident.\
+\n\nKey tools:\
+\n- view_episode: map of the project (assets + which indexers ran).\
+\n- find_beat / find_moment / inspect_moment: editorial moment lookup.\
+\n- apply_edl: cut/trim/delete/split/insert clips on the timeline.\
+\n- start_render (scope='timeline'): render the edited timeline to mp4.\
+\n- start_indexing: (re)run the configured indexers on raw/. Use when \
+view_episode shows missing sidecars and the user asked for an \
+operation that needs them. Imports auto-chain through indexing in \
+the GUI's import flow, so this is the rare-case tool — don't \
+proactively re-index already-indexed projects.\
+\nMutating tools (apply_edl, start_render, start_indexing, bash) \
+require user approval — you'll see the result come back as a \
+tool_result, not a direct yes/no.";
 
 /// Build the full editorial-tool registry. Mirrors the TUI's set; the
 /// desktop is the buyer surface and gets every tool the agent has.
@@ -41,6 +55,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(StartRenderTool));
+    registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(UpdatePlanTool));
     registry.register(Arc::new(FindBeatTool));
     registry.register(Arc::new(InspectMomentTool));

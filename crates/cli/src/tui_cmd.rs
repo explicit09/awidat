@@ -21,8 +21,9 @@ use awidat_core::tools::{
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
     load_skill::LoadSkillTool, poll_render::PollRenderTool,
     read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
-    shot_summary::ShotSummaryTool, start_render::StartRenderTool,
-    update_plan::UpdatePlanTool, view_episode::ViewEpisodeTool,
+    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
+    start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    view_episode::ViewEpisodeTool,
     view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::subagent::SubAgentRegistry;
@@ -53,6 +54,12 @@ visible — needs whisper diarization + face), find_eye_contact \
 view_frame (extract a frame at a timestamp).\
 \n  - **Editing**: apply_edl (commit edits — Trim, Untrim, Delete, \
 Split, Insert).\
+\n  - **Indexing**: start_indexing — run the configured indexers \
+(whisper, scenes, audio energy, beats, etc.) over assets in raw/. \
+Sha-keyed so re-runs on already-indexed assets are fast no-ops. \
+Call when view_episode shows missing sidecars and the user has \
+asked for an editorial operation that needs them. Don't proactively \
+re-index already-indexed projects.\
 \n  - **Render**: start_render, poll_render. To render the *edited \
 timeline* (what the user sees as 'the edit'), use scope='timeline' — \
 that walks the OTIO and concats every clip's source_range with \
@@ -76,7 +83,7 @@ a draft cut to get cross-cutting feedback in one pass; use delegate \
 for single-lens research. Sub-agents and personas are read-only — \
 for edits, do the work yourself.\
 \n\n\
-Mutating tools (apply_edl, start_render, bash) require user approval — \
+Mutating tools (apply_edl, start_render, start_indexing, bash) require user approval — \
 the UI shows a modal and the user picks Allow / Allow-for-Session / \
 Deny. If the user denies, you'll see is_error=true; route around it \
 rather than retrying the same call.\
@@ -138,6 +145,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(StartRenderTool));
+    registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(UpdatePlanTool));
     registry.register(Arc::new(FindBeatTool));
     registry.register(Arc::new(InspectMomentTool));
