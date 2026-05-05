@@ -1,0 +1,64 @@
+[package]
+name = "awidat-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Awidat — collaborative video editor with an agent inside"
+
+[lib]
+# Tauri convention: lib name must differ from bin name (Windows quirk
+# per https://github.com/rust-lang/cargo/issues/8519).
+name = "awidat_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+
+# Awidat crates we wrap.
+awidat-core = { workspace = true }
+awidat-desktop-protocol = { workspace = true }
+awidat-proto = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+# This crate intentionally does NOT inherit workspace lints. Tauri's
+# generated code (via the `tauri::generate_handler!` macro) emits
+# patterns that trip several of the workspace's deny-level clippy
+# lints (`needless_borrow`, `redundant_closure`, etc) which we cannot
+# `allow` because workspace lints are deny. Mirroring the pattern
+# crates/tui already uses for the same reason.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+await_holding_invalid_type = "deny"
+await_holding_lock = "deny"
+expect_used = "deny"
+identity_op = "deny"
+manual_clamp = "deny"
+manual_filter = "deny"
+manual_find = "deny"
+manual_flatten = "deny"
+manual_map = "deny"
+manual_memcpy = "deny"
+manual_non_exhaustive = "deny"
+manual_ok_or = "deny"
+manual_range_contains = "deny"
+manual_retain = "deny"
+manual_strip = "deny"
+manual_try_fold = "deny"
+manual_unwrap_or = "deny"
+unwrap_used = "deny"

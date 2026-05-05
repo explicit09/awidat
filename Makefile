@@ -1,4 +1,4 @@
-.PHONY: check fmt clippy test package install-local clean-dist
+.PHONY: check fmt clippy test package install-local clean-dist desktop desktop-deps
 
 check: fmt clippy test
 
@@ -32,3 +32,12 @@ install-local: package
 
 clean-dist:
 	rm -rf dist/build
+
+# Awidat desktop (Tauri) — install frontend deps + run dev shell.
+# Frontend deps live under apps/desktop/node_modules; the Rust
+# backend builds via cargo-tauri's `tauri dev` invocation.
+desktop-deps:
+	cd apps/desktop && pnpm install
+
+desktop: desktop-deps
+	cd apps/desktop && pnpm tauri dev

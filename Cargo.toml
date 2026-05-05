@@ -14,6 +14,8 @@ members = [
     "crates/secrets",
     "crates/index",
     "crates/eval",
+    "crates/desktop-protocol",
+    "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
@@ -85,6 +87,7 @@ awidat-render = { path = "crates/render" }
 awidat-config = { path = "crates/config" }
 awidat-secrets = { path = "crates/secrets" }
 awidat-index = { path = "crates/index" }
+awidat-desktop-protocol = { path = "crates/desktop-protocol" }
 
 # External (locked per Week 1 prompt).
 serde = { version = "1", features = ["derive"] }

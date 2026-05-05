@@ -1,0 +1,135 @@
+// The chat pane: subscribes to `awidat://item` and `awidat://turn-end`,
+// renders every protocol Item variant, and houses the inline approval /
+// input cards.
+
+import { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  ITEM_EVENT,
+  TURN_END_EVENT,
+  type ItemEvent,
+  type TurnEndEvent,
+  type Item,
+} from "../protocol";
+import { useAgentStore } from "./store";
+import { ApprovalCard } from "./ApprovalCard";
+import { UserInputCard } from "./UserInputCard";
+
+export function ChatStream() {
+  const items = useAgentStore((s) => s.items);
+  const running = useAgentStore((s) => s.running);
+  const turnError = useAgentStore((s) => s.turnError);
+  const upsert = useAgentStore((s) => s.upsert);
+  const setRunning = useAgentStore((s) => s.setRunning);
+  const setTurnError = useAgentStore((s) => s.setTurnError);
+
+  // Subscribe to backend events for the lifetime of the component.
+  useEffect(() => {
+    const itemsUnlisten = listen<ItemEvent>(ITEM_EVENT, (e) => {
+      upsert(e.payload.item);
+    });
+    const endUnlisten = listen<TurnEndEvent>(TURN_END_EVENT, (e) => {
+      if (e.payload.error) {
+        setTurnError(e.payload.error);
+      }
+      setRunning(false);
+    });
+    return () => {
+      itemsUnlisten.then((u) => u());
+      endUnlisten.then((u) => u());
+    };
+  }, [upsert, setRunning, setTurnError]);
+
+  return (
+    <div className="chat-items" aria-live="polite">
+      {items.length === 0 && !running && !turnError && (
+        <p className="chat-empty">
+          Type a message below. The agent will respond with text and tool calls
+          here.
+        </p>
+      )}
+      {items.map((item) => (
+        <ItemView key={item.id} item={item} />
+      ))}
+      {turnError && (
+        <article className="item item-error">
+          <div className="item-meta">turn error</div>
+          <div className="item-body">{turnError}</div>
+        </article>
+      )}
+    </div>
+  );
+}
+
+function ItemView({ item }: { item: Item }) {
+  switch (item.kind) {
+    case "user_input":
+      return (
+        <article className="item item-user">
+          <div className="item-meta">you</div>
+          <div className="item-body">{item.text}</div>
+        </article>
+      );
+    case "text":
+      return (
+        <article className={`item item-text item-phase-${item.phase}`}>
+          <div className="item-body markdown">
+            {item.text ? (
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
+            ) : (
+              <em>…</em>
+            )}
+          </div>
+        </article>
+      );
+    case "tool_call":
+      return (
+        <article className={`item item-tool item-phase-${item.phase}`}>
+          <div className="item-meta">
+            tool · <code>{item.name}</code>
+            {item.phase !== "completed" && <span className="phase-tag"> · {item.phase}</span>}
+          </div>
+          <pre className="item-args">{JSON.stringify(item.args ?? {}, null, 2)}</pre>
+          {item.result !== null && (
+            <div className="item-result">
+              {"Ok" in item.result ? (
+                <pre className="result-ok">{item.result.Ok}</pre>
+              ) : (
+                <pre className="result-err">{item.result.Err}</pre>
+              )}
+            </div>
+          )}
+        </article>
+      );
+    case "plan":
+      return (
+        <article className="item item-plan">
+          <div className="item-meta">plan</div>
+          <ul className="plan-list">
+            {item.items.map((step, i) => (
+              <li key={i} className={`plan-step status-${step.status}`}>
+                <span className="plan-glyph">
+                  {step.status === "completed" ? "✓" : step.status === "in_progress" ? "▶" : "·"}
+                </span>
+                {step.step}
+              </li>
+            ))}
+          </ul>
+          {item.note && <div className="plan-note">{item.note}</div>}
+        </article>
+      );
+    case "awaiting_user_input":
+      return <UserInputCard item={item} />;
+    case "approval_request":
+      return <ApprovalCard item={item} />;
+    case "error":
+      return (
+        <article className="item item-error">
+          <div className="item-meta">error</div>
+          <div className="item-body">{item.message}</div>
+        </article>
+      );
+  }
+}

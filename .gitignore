@@ -2,6 +2,9 @@ target/
 .build-log/
 .DS_Store
 
+# Superpowers brainstorming session artifacts
+.superpowers/
+
 # Distribution build output (tarballs + staging dirs).
 dist/build/
 
