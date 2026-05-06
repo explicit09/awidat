@@ -12,20 +12,17 @@ use anyhow::{Context, Result, anyhow};
 use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
-    clip_search::ClipSearchTool, find_beat::FindBeatTool,
-    find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
-    load_skill::LoadSkillTool, poll_render::PollRenderTool,
-    read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
-    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
-    start_render::StartRenderTool, update_plan::UpdatePlanTool,
-    view_episode::ViewEpisodeTool,
-    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    clip_search::ClipSearchTool, find_beat::FindBeatTool, find_eye_contact::FindEyeContactTool,
+    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
+    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
+    load_skill::LoadSkillTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    request_user_input::RequestUserInputTool, shot_summary::ShotSummaryTool,
+    start_indexing::StartIndexingTool, start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
-use tokio_util::sync::CancellationToken;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio_util::sync::CancellationToken;
 
 const SYSTEM_PROMPT: &str = "\
 You are awidat, a terminal-first agent for editing long-form spoken \
@@ -49,7 +46,14 @@ indexer ran): clip_search (free-text frame search), shot_summary, \
 broll_candidates, find_speaker_oncam, find_eye_contact.\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index, \
 inspect_clip, view_frame.\
-\n  - **Editing**: apply_edl (Trim, Untrim, Delete, Split, Insert).\
+\n  - **Editing**: apply_edl (Trim, Untrim, Delete, Split, Insert). \
+For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
+view_timeline, usually the clip name like `clip-0`; never use the \
+asset filename, proxy stem, or raw media basename as clip_uuid. \
+Times are source-media seconds. view_timeline shows current \
+`source=[start..end]`; to trim the first N seconds of the visible \
+clip, set `start` to source start + N, and to trim the last N \
+seconds, set `end` to source end - N.\
 \n  - **Indexing**: start_indexing — run the configured indexers \
 (whisper, scenes, audio energy, beats, etc.) over assets in raw/. \
 Sha-keyed so re-runs on already-indexed assets are fast no-ops. \
@@ -126,7 +130,10 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
         project_root,
     ));
 
-    println!("awidat chat — model={model}, tools={}", session.tool_count());
+    println!(
+        "awidat chat — model={model}, tools={}",
+        session.tool_count()
+    );
     println!("Type a prompt. EOF (Ctrl-D) or :quit to exit. Ctrl-C cancels the in-flight turn.\n");
 
     let stdin = tokio::io::stdin();
@@ -161,9 +168,8 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
         let session_clone = session.clone();
         let cancel_clone = cancel.clone();
         let user_input = trimmed.to_string();
-        let turn_handle = tokio::spawn(async move {
-            session_clone.run_turn(user_input, cancel_clone).await
-        });
+        let turn_handle =
+            tokio::spawn(async move { session_clone.run_turn(user_input, cancel_clone).await });
 
         // Wire Ctrl-C to cancel; restore on next prompt.
         let cancel_for_signal = cancel.clone();
@@ -249,7 +255,9 @@ fn render_event(ev: &SessionEvent) -> bool {
                 println!("  note: {n}");
             }
         }
-        SessionEvent::AwaitingUserInput { question, options, .. } => {
+        SessionEvent::AwaitingUserInput {
+            question, options, ..
+        } => {
             println!("\n❓ {question}");
             if let Some(opts) = options {
                 for (i, o) in opts.iter().enumerate() {

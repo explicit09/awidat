@@ -94,9 +94,8 @@ impl ToolHandler for ApplyEdlTool {
         })?;
 
         // 1. Parse.
-        let envelope = edl_parse(&args.edl).map_err(|e| {
-            FunctionCallError::RespondToModel(format_parse_error(&e))
-        })?;
+        let envelope = edl_parse(&args.edl)
+            .map_err(|e| FunctionCallError::RespondToModel(format_parse_error(&e)))?;
 
         if envelope.is_empty() {
             return Ok(ToolOutput::text(
@@ -171,12 +170,9 @@ impl ToolHandler for ApplyEdlTool {
                     "applied": outcome.applied.iter().map(|a| &a.description).collect::<Vec<_>>(),
                 })
                 .to_string();
-                if let Err(e) = run_post_hook(
-                    "post_apply_edl",
-                    cmd,
-                    &stdin_payload,
-                    &ctx.project_root,
-                ) {
+                if let Err(e) =
+                    run_post_hook("post_apply_edl", cmd, &stdin_payload, &ctx.project_root)
+                {
                     tracing::warn!(error = %e, "post_apply_edl hook failed");
                 }
             }
@@ -221,9 +217,7 @@ fn format_parse_error(e: &EdlParseError) -> String {
                  `+ start: <seconds>` or `+ end: <seconds>` (in \
                  source-media seconds).",
             ),
-            "asset" => Some(
-                "Insert Clip / Insert BRoll needs `+ asset: <project-relative path>`.",
-            ),
+            "asset" => Some("Insert Clip / Insert BRoll needs `+ asset: <project-relative path>`."),
             "track" => Some(
                 "Insert Clip needs `+ track: <track name>`. The track is created \
                  if it doesn't exist (Video kind). Common default: `V1`.",
@@ -231,7 +225,7 @@ fn format_parse_error(e: &EdlParseError) -> String {
             "duration_s" => Some("Insert BRoll needs `+ duration_s: <seconds>`."),
             "anchor" => Some(
                 "Every op needs an `@@ anchor: ...` line. Either \
-                 transcript_snippet=\"...\" or clip_uuid=<name>.",
+                 transcript_snippet=\"...\" or clip_uuid=<clip name from view_timeline>.",
             ),
             _ => None,
         },
@@ -243,7 +237,7 @@ fn format_parse_error(e: &EdlParseError) -> String {
          Clip | Untrim Clip | Delete Clip | Split Clip | Insert Clip | \
          Insert BRoll | Move Clip | Insert Transition`. Anchors look \
          like `@@ anchor: transcript_snippet=\"...\"` or `@@ anchor: \
-         clip_uuid=...`. Insert Clip skips the `@@ anchor:` line — \
+         clip_uuid=clip-0`. Insert Clip skips the `@@ anchor:` line — \
          it doesn't anchor against an existing clip."
     );
     if let Some(extra) = hint {
@@ -287,9 +281,7 @@ fn run_apply_edl_hook(
         let _ = stdin.write_all(stdin_payload.as_bytes());
     }
     let out = child.wait_with_output().map_err(|e| {
-        FunctionCallError::RespondToModel(format!(
-            "apply_edl: hook {name:?} I/O error ({e})"
-        ))
+        FunctionCallError::RespondToModel(format!("apply_edl: hook {name:?} I/O error ({e})"))
     })?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
@@ -300,8 +292,16 @@ fn run_apply_edl_hook(
              stderr: {} \
              Adjust the EDL or update the hook config under [hooks].",
             out.status.code().unwrap_or(-1),
-            if stdout.is_empty() { "(empty)".into() } else { stdout },
-            if stderr.is_empty() { "(empty)".into() } else { stderr }
+            if stdout.is_empty() {
+                "(empty)".into()
+            } else {
+                stdout
+            },
+            if stderr.is_empty() {
+                "(empty)".into()
+            } else {
+                stderr
+            }
         )));
     }
     Ok(())
@@ -353,7 +353,11 @@ JSON-escaped multi-line content — pass the raw text). Begins with \
 Operations and their required `+ key: value` fields:\
 \n  - **Trim Clip**: `+ start: <source_s>` and/or `+ end: <source_s>` \
 (at least one). Times are seconds into the clip's source media. \
-Trim only NARROWS — to widen back out, use Untrim Clip.\
+Trim only NARROWS — to widen back out, use Untrim Clip. Use \
+`view_timeline` first: it shows each clip's current `source=[start..end]`. \
+For \"trim the first N seconds\" of a current clip, set `start` to current \
+source start + N; for \"trim the last N seconds\", set `end` to current \
+source end - N.\
 \n  - **Untrim Clip**: `+ start: <source_s>` and/or `+ end: <source_s>` \
 (at least one). Widens a previously-trimmed clip back toward the \
 original media bounds. Capped to the media reference's available \
@@ -376,7 +380,11 @@ deferred to a later batch.\
 absolute timestamps; this lets edits survive prior changes in the \
 same envelope. transcript_snippet matches against the clip's \
 metadata first, then against the whisper sidecar's segment text \
-when the project has been indexed.\
+when the project has been indexed. For `clip_uuid=...`, use the \
+clip anchor shown by `view_timeline` (usually the clip name, e.g. \
+`clip-0`). Do NOT use the asset filename, proxy stem, or raw media \
+basename as the clip_uuid anchor. Call `view_timeline` first when \
+you need the clip names.\
 \n\n\
 **Time semantics.** All time fields are in seconds into the clip's \
 source media. After a Trim, the clip's source range narrows but \
@@ -395,8 +403,8 @@ mod tests {
     use super::*;
     use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
     use awidat_proto::otio::{
-        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
-        TimeRange, Track, TrackChild, TrackKind,
+        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+        Track, TrackChild, TrackKind,
     };
     use std::path::Path;
     use tokio::sync::broadcast;
@@ -410,7 +418,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -479,8 +490,12 @@ mod tests {
 
         // Re-read project: the trim should be persisted.
         let p = Project::read(dir.path()).unwrap();
-        let StackChild::Track(t) = &p.timeline.tracks.children[0] else { panic!() };
-        let TrackChild::Clip(c) = &t.children[1] else { panic!() };
+        let StackChild::Track(t) = &p.timeline.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &t.children[1] else {
+            panic!()
+        };
         assert!((c.source_range.as_ref().unwrap().duration.to_seconds() - 3.0).abs() < 1e-9);
     }
 
@@ -506,8 +521,12 @@ mod tests {
 
         // On-disk timeline unchanged.
         let p = Project::read(dir.path()).unwrap();
-        let StackChild::Track(t) = &p.timeline.tracks.children[0] else { panic!() };
-        let TrackChild::Clip(c) = &t.children[1] else { panic!() };
+        let StackChild::Track(t) = &p.timeline.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &t.children[1] else {
+            panic!()
+        };
         assert!((c.source_range.as_ref().unwrap().duration.to_seconds() - 5.0).abs() < 1e-9);
     }
 
@@ -516,10 +535,7 @@ mod tests {
         let dir = project_with_three_clips();
         let edl = "this is not an EDL";
         let err = ApplyEdlTool
-            .handle(
-                invoke(serde_json::json!({"edl": edl})),
-                ctx_at(dir.path()),
-            )
+            .handle(invoke(serde_json::json!({"edl": edl})), ctx_at(dir.path()))
             .await
             .unwrap_err();
         match err {

@@ -107,7 +107,12 @@ impl ToolHandler for ViewTimelineTool {
             ))
         })?;
 
-        Ok(ToolOutput::text(render(&project.timeline, start_s, end_s, line_cap)))
+        Ok(ToolOutput::text(render(
+            &project.timeline,
+            start_s,
+            end_s,
+            line_cap,
+        )))
     }
 }
 
@@ -164,12 +169,13 @@ fn render(timeline: &Timeline, start_s: f64, end_s: f64, line_cap: usize) -> Str
         format!(
             "({total_visible} of {total_clips} clips shown; \
              window contains {} additional out-of-cap clips)",
-            total_clips_in_window(timeline, start_s, end_s)
-                .saturating_sub(total_visible)
+            total_clips_in_window(timeline, start_s, end_s).saturating_sub(total_visible)
         )
     };
 
-    let mut out = String::with_capacity(header.len() + lines.iter().map(|l| l.len() + 1).sum::<usize>() + footer.len() + 8);
+    let mut out = String::with_capacity(
+        header.len() + lines.iter().map(|l| l.len() + 1).sum::<usize>() + footer.len() + 8,
+    );
     out.push_str(&header);
     out.push('\n');
     for l in lines {
@@ -196,13 +202,31 @@ fn format_line(
                 awidat_proto::otio::MediaReference::External(r) => r.target_url.clone(),
                 awidat_proto::otio::MediaReference::Missing(_) => "<missing>".into(),
             };
+            let clip_uuid = c
+                .metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.extra.get("clip_uuid"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(c.name.as_str());
             let active = if c.active { "" } else { " inactive" };
+            let source_bounds = c
+                .source_range
+                .as_ref()
+                .map(|r| {
+                    let source_start = r.start_time.to_seconds();
+                    let source_end = source_start + r.duration.to_seconds();
+                    format!(" source=[{source_start:.3}..{source_end:.3}]")
+                })
+                .unwrap_or_default();
             format!(
-                "[{kind} {:>7.3}-{:>7.3}s {:.3}s] clip {:?} → {media}{active}",
+                "[{kind} {:>7.3}-{:>7.3}s {:.3}s] clip {:?} anchor=clip_uuid={}{} → {media}{active}",
                 start_s,
                 end_s,
                 end_s - start_s,
-                c.name
+                c.name,
+                clip_uuid,
+                source_bounds,
             )
         }
         TrackChild::Gap(g) => format!(
@@ -220,10 +244,7 @@ fn format_line(
             t.name,
             t.transition_type
         ),
-        TrackChild::Stack(_) => format!(
-            "[{kind} {:>7.3}-{:>7.3}s] nested-stack",
-            start_s, end_s
-        ),
+        TrackChild::Stack(_) => format!("[{kind} {:>7.3}-{:>7.3}s] nested-stack", start_s, end_s),
     }
 }
 
@@ -272,8 +293,13 @@ fn truncate(s: String, cap: usize) -> String {
 
 const DESCRIPTION: &str = "\
 Show clips in the project timeline within a time window. Each line is \
-one clip/gap/transition: track-kind, time range, duration, name, media \
-reference. Default window 60s starting at 0. The header shows total \
+one clip/gap/transition: track-kind, timeline time range, duration, name, \
+the exact `anchor=clip_uuid=<clip name>` value to use in apply_edl, \
+current `source=[start..end]` bounds, and media reference. For a user \
+request like \"trim the first N seconds\" of an existing clip, set Trim \
+Clip `start` to current source start + N; for \"trim the last N seconds\", \
+set `end` to current source end - N. Default window 60s starting at 0. \
+The header shows total \
 timeline duration; the footer notes how many clips are out of cap. Use \
 `start_s`/`end_s`/`lines` to navigate. Stateless across calls — pass \
 `start_s` to scroll.\
@@ -304,7 +330,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -354,6 +383,7 @@ mod tests {
         assert!(out.content.contains("clip \"clip-0\""));
         assert!(out.content.contains("clip \"clip-1\""));
         assert!(out.content.contains("clip \"clip-2\""));
+        assert!(out.content.contains("source=[0.000..5.000]"));
         assert!(out.content.contains("total_duration=15.000s"));
     }
 

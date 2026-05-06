@@ -9,16 +9,13 @@ use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tool::{ApprovalRequest, UserInputRequest};
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
-    clip_search::ClipSearchTool, find_beat::FindBeatTool,
-    find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
-    load_skill::LoadSkillTool, poll_render::PollRenderTool,
-    read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
-    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
-    start_render::StartRenderTool, update_plan::UpdatePlanTool,
-    view_episode::ViewEpisodeTool,
-    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    clip_search::ClipSearchTool, find_beat::FindBeatTool, find_eye_contact::FindEyeContactTool,
+    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
+    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
+    load_skill::LoadSkillTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    request_user_input::RequestUserInputTool, shot_summary::ShotSummaryTool,
+    start_indexing::StartIndexingTool, start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use tokio::sync::mpsc;
@@ -38,7 +35,14 @@ and makes everything after it correct.\
 \n\nKey tools:\
 \n- view_episode: map of the project (assets + which indexers ran).\
 \n- find_beat / find_moment / inspect_moment: editorial moment lookup.\
-\n- apply_edl: cut/trim/delete/split/insert clips on the timeline.\
+\n- apply_edl: cut/trim/delete/split/insert clips on the timeline. \
+For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
+view_timeline, usually the clip name like `clip-0`; never use the \
+asset filename, proxy stem, or raw media basename as clip_uuid. \
+Times are source-media seconds. view_timeline shows current \
+`source=[start..end]`; to trim the first N seconds of the visible \
+clip, set `start` to source start + N, and to trim the last N \
+seconds, set `end` to source end - N.\
 \n- start_render (scope='timeline'): render the edited timeline to mp4.\
 \n- start_indexing: (re)run the configured indexers on raw/. Use when \
 view_episode shows missing sidecars and the user asked for an \

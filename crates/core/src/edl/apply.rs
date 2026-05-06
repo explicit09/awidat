@@ -100,8 +100,8 @@ pub fn apply(
     let mut applied = Vec::with_capacity(envelope.ops.len());
 
     for (index, op) in envelope.ops.iter().enumerate() {
-        let description = apply_one(&mut working, index, op, ctx)?;
-        let locator = locator_for_log(op, &working, ctx);
+        let locator = resolve_locator_for_op(&working, index, op, ctx)?;
+        let description = apply_one(&mut working, index, op, ctx, locator)?;
         applied.push(AppliedOp {
             index,
             description,
@@ -128,17 +128,18 @@ fn apply_one(
     index: usize,
     op: &EdlOp,
     ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
     match op {
-        EdlOp::TrimClip {
-            anchor,
-            start,
-            end,
-        } => apply_trim(working, index, anchor, *start, *end, ctx),
-        EdlOp::DeleteClip { anchor } => apply_delete(working, index, anchor, ctx),
-        EdlOp::SplitClip { anchor, at_s } => apply_split(working, index, anchor, *at_s, ctx),
+        EdlOp::TrimClip { anchor, start, end } => {
+            apply_trim(working, index, anchor, *start, *end, ctx, locator)
+        }
+        EdlOp::DeleteClip { anchor } => apply_delete(working, index, anchor, ctx, locator),
+        EdlOp::SplitClip { anchor, at_s } => {
+            apply_split(working, index, anchor, *at_s, ctx, locator)
+        }
         EdlOp::UntrimClip { anchor, start, end } => {
-            apply_untrim(working, index, anchor, *start, *end, ctx)
+            apply_untrim(working, index, anchor, *start, *end, ctx, locator)
         }
         EdlOp::InsertClip {
             asset,
@@ -172,6 +173,34 @@ fn apply_one(
     }
 }
 
+fn resolve_locator_for_op(
+    working: &Timeline,
+    index: usize,
+    op: &EdlOp,
+    ctx: &AnchorContext,
+) -> Result<Option<ClipLocator>, ApplyError> {
+    let anchor = match op {
+        EdlOp::TrimClip { anchor, .. }
+        | EdlOp::DeleteClip { anchor }
+        | EdlOp::SplitClip { anchor, .. }
+        | EdlOp::UntrimClip { anchor, .. } => anchor,
+        EdlOp::InsertClip { .. }
+        | EdlOp::InsertBRoll { .. }
+        | EdlOp::MoveClip { .. }
+        | EdlOp::InsertTransition { .. } => return Ok(None),
+    };
+    resolve(working, anchor, ctx)
+        .map(Some)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })
+}
+
+fn required_locator(index: usize, locator: Option<ClipLocator>) -> Result<ClipLocator, ApplyError> {
+    locator.ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: "internal error: anchored op applied without a resolved locator".into(),
+    })
+}
+
 fn apply_trim(
     working: &mut Timeline,
     index: usize,
@@ -179,9 +208,10 @@ fn apply_trim(
     new_start: Option<f64>,
     new_end: Option<f64>,
     ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
-    let locator =
-        resolve(working, anchor, ctx).map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
@@ -208,9 +238,7 @@ fn apply_trim(
     if target_end < target_start {
         return Err(ApplyError::Invalid {
             index,
-            message: format!(
-                "trim: end {target_end} must be >= start {target_start}"
-            ),
+            message: format!("trim: end {target_end} must be >= start {target_start}"),
         });
     }
     // If the agent asks for a trim that *expands* past the current
@@ -239,6 +267,19 @@ fn apply_trim(
                  range start {original_start_s:.3}s. Trim can only narrow a \
                  clip's source range, not extend it backward. inspect_clip \
                  to see the current bounds before re-trimming."
+            ),
+        });
+    }
+    if (target_start - original_start_s).abs() < 1e-6 && (target_end - original_end_s).abs() < 1e-6
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "trim: requested range [{target_start:.3}s..{target_end:.3}s] is a no-op; \
+                 the clip is already at that source range. view_timeline shows each clip's \
+                 current source=[start..end]. To trim the first N seconds from the current \
+                 visible clip, set start to current source start + N. To trim the last N \
+                 seconds, set end to current source end - N."
             ),
         });
     }
@@ -281,10 +322,11 @@ fn apply_untrim(
     new_start: Option<f64>,
     new_end: Option<f64>,
     ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
     use awidat_proto::otio::{ExternalReference, MediaReference};
-    let locator =
-        resolve(working, anchor, ctx).map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
@@ -338,9 +380,7 @@ fn apply_untrim(
     if target_end < target_start {
         return Err(ApplyError::Invalid {
             index,
-            message: format!(
-                "untrim: end {target_end} must be >= start {target_start}"
-            ),
+            message: format!("untrim: end {target_end} must be >= start {target_start}"),
         });
     }
 
@@ -467,17 +507,17 @@ fn apply_insert_clip(
     );
 
     // Build the clip.
-    let position = at_position.unwrap_or(track.children.len()).min(track.children.len());
+    let position = at_position
+        .unwrap_or(track.children.len())
+        .min(track.children.len());
     let chosen_name = name_override
         .map(str::to_string)
-        .unwrap_or_else(|| format!("clip-{position}"));
+        .unwrap_or_else(|| next_clip_name_in_track(track));
     let mut clip = Clip::empty(chosen_name.clone());
     clip.media_reference = MediaReference::External(ExternalReference::new(asset.to_string()));
     clip.source_range = Some(source_range);
 
-    track
-        .children
-        .insert(position, TrackChild::Clip(clip));
+    track.children.insert(position, TrackChild::Clip(clip));
 
     Ok(format!(
         "inserted clip {chosen_name:?} on track {track_name:?} at \
@@ -485,6 +525,24 @@ fn apply_insert_clip(
          ({:.3}s)",
         end - start
     ))
+}
+
+fn next_clip_name_in_track(track: &awidat_proto::otio::Track) -> String {
+    let used = track
+        .children
+        .iter()
+        .filter_map(|tc| match tc {
+            TrackChild::Clip(clip) => Some(clip.name.as_str()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    for i in 0usize.. {
+        let candidate = format!("clip-{i}");
+        if !used.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    unreachable!("usize iterator is unbounded")
 }
 
 /// Both pieces share the original media reference; the left piece
@@ -501,9 +559,10 @@ fn apply_split(
     anchor: &Anchor,
     at_s: f64,
     ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
-    let locator =
-        resolve(working, anchor, ctx).map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
@@ -575,9 +634,10 @@ fn apply_delete(
     index: usize,
     anchor: &Anchor,
     ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
-    let locator =
-        resolve(working, anchor, ctx).map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
@@ -590,14 +650,6 @@ fn apply_delete(
         _ => "<non-clip>".to_string(),
     };
     Ok(format!("deleted clip {name:?}"))
-}
-
-fn locator_for_log(op: &EdlOp, _working: &Timeline, _ctx: &AnchorContext) -> Option<ClipLocator> {
-    // We don't re-resolve here — too late, the clip may be gone.
-    // The applied description carries enough info; the locator is best-
-    // effort. Return None for now; week-5 TUI will use the description.
-    let _ = op;
-    None
 }
 
 /// Lightweight validate hook on Timeline. We reach into the proto crate's
@@ -620,7 +672,9 @@ impl ValidateForApply for Timeline {
         // Timeline::validate is pub(crate).
         let mut warnings = Vec::new();
         for sc in &self.tracks.children {
-            let StackChild::Track(track) = sc else { continue };
+            let StackChild::Track(track) = sc else {
+                continue;
+            };
             for tc in &track.children {
                 if let TrackChild::Clip(c) = tc
                     && let Some(r) = &c.source_range
@@ -648,8 +702,8 @@ mod tests {
     use super::*;
     use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
     use awidat_proto::otio::{
-        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
-        TimeRange, Track, TrackChild, TrackKind,
+        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+        Track, TrackChild, TrackKind,
     };
 
     fn timeline_with_three_clips() -> Timeline {
@@ -696,6 +750,14 @@ mod tests {
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert_eq!(outcome.applied.len(), 1);
+        assert_eq!(
+            outcome.applied[0].locator,
+            Some(ClipLocator {
+                track_index: 0,
+                child_index: 1,
+            }),
+            "trim proposals need the resolved locator for diff hints and drag handles",
+        );
         let StackChild::Track(t) = &new_tl.tracks.children[0] else {
             panic!()
         };
@@ -704,6 +766,60 @@ mod tests {
         };
         let r = c.source_range.as_ref().unwrap();
         assert!((r.duration.to_seconds() - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_trim_start_only_shortens_from_current_end() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::TrimClip {
+                anchor: Anchor::ClipUuid {
+                    uuid: "clip-1".into(),
+                },
+                start: Some(1.0),
+                end: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &t.children[1] else {
+            panic!()
+        };
+        let r = c.source_range.as_ref().unwrap();
+        assert!((r.start_time.to_seconds() - 1.0).abs() < 1e-9);
+        assert!((r.duration.to_seconds() - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_trim_rejects_no_op_range() {
+        let mut tl = timeline_with_three_clips();
+        let StackChild::Track(t) = &mut tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &mut t.children[1] else {
+            panic!()
+        };
+        c.source_range = Some(TimeRange::new(
+            RationalTime::new(5.0 * 24.0, 24.0),
+            RationalTime::new(5.0 * 24.0, 24.0),
+        ));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::TrimClip {
+                anchor: Anchor::ClipUuid {
+                    uuid: "clip-1".into(),
+                },
+                start: Some(5.0),
+                end: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("no-op")),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -723,7 +839,9 @@ mod tests {
         };
         assert_eq!(t.children.len(), 2);
         // Remaining clips: alpha, charlie.
-        let TrackChild::Clip(c1) = &t.children[1] else { panic!() };
+        let TrackChild::Clip(c1) = &t.children[1] else {
+            panic!()
+        };
         assert_eq!(c1.name, "clip-2");
     }
 
@@ -742,11 +860,17 @@ mod tests {
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert_eq!(outcome.applied.len(), 1);
-        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
         // alpha, bravo (left), bravo-b (right), charlie. 4 clips.
         assert_eq!(t.children.len(), 4);
-        let TrackChild::Clip(left) = &t.children[1] else { panic!() };
-        let TrackChild::Clip(right) = &t.children[2] else { panic!() };
+        let TrackChild::Clip(left) = &t.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(right) = &t.children[2] else {
+            panic!()
+        };
         assert_eq!(left.name, "clip-1");
         assert_eq!(right.name, "clip-1-b");
         let lr = left.source_range.as_ref().unwrap();
@@ -772,7 +896,10 @@ mod tests {
         match err {
             ApplyError::Invalid { index, message } => {
                 assert_eq!(index, 0);
-                assert!(message.contains("must lie strictly inside"), "got: {message}");
+                assert!(
+                    message.contains("must lie strictly inside"),
+                    "got: {message}"
+                );
             }
             other => panic!("want Invalid, got {other:?}"),
         }
@@ -786,25 +913,33 @@ mod tests {
         let env = EdlEnvelope {
             ops: vec![
                 EdlOp::SplitClip {
-                    anchor: Anchor::TranscriptSnippet { text: "bravo".into() },
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo".into(),
+                    },
                     at_s: 2.0,
                 },
                 // After the first split, bravo-b ([2s, 5s]) is the
                 // right piece. Split it again at 4s to isolate the
                 // middle [2s, 4s] chunk.
                 EdlOp::SplitClip {
-                    anchor: Anchor::ClipUuid { uuid: "clip-1-b".into() },
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1-b".into(),
+                    },
                     at_s: 4.0,
                 },
                 // Delete the now-isolated middle.
                 EdlOp::DeleteClip {
-                    anchor: Anchor::ClipUuid { uuid: "clip-1-b".into() },
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1-b".into(),
+                    },
                 },
             ],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert_eq!(outcome.applied.len(), 3);
-        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
         // alpha, bravo[0..2], bravo-b-b[4..5], charlie = 4 clips.
         assert_eq!(t.children.len(), 4);
     }
@@ -816,12 +951,16 @@ mod tests {
         let env = EdlEnvelope {
             ops: vec![
                 EdlOp::TrimClip {
-                    anchor: Anchor::TranscriptSnippet { text: "bravo".into() },
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo".into(),
+                    },
                     start: None,
                     end: Some(2.0),
                 },
                 EdlOp::UntrimClip {
-                    anchor: Anchor::ClipUuid { uuid: "clip-1".into() },
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
                     start: None,
                     end: Some(5.0),
                 },
@@ -829,8 +968,12 @@ mod tests {
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert_eq!(outcome.applied.len(), 2);
-        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
-        let TrackChild::Clip(c) = &t.children[1] else { panic!() };
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &t.children[1] else {
+            panic!()
+        };
         let r = c.source_range.as_ref().unwrap();
         assert!((r.duration.to_seconds() - 5.0).abs() < 1e-9);
     }
@@ -842,7 +985,9 @@ mod tests {
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
             ops: vec![EdlOp::UntrimClip {
-                anchor: Anchor::TranscriptSnippet { text: "bravo".into() },
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo".into(),
+                },
                 start: None,
                 end: Some(3.0),
             }],
@@ -887,14 +1032,20 @@ mod tests {
 
         let env = EdlEnvelope {
             ops: vec![EdlOp::UntrimClip {
-                anchor: Anchor::ClipUuid { uuid: "clip-0".into() },
+                anchor: Anchor::ClipUuid {
+                    uuid: "clip-0".into(),
+                },
                 start: None,
                 end: Some(999.0),
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
-        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
-        let TrackChild::Clip(c) = &t.children[0] else { panic!() };
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &t.children[0] else {
+            panic!()
+        };
         let r = c.source_range.as_ref().unwrap();
         // Capped to available_range end (4s).
         assert!(
@@ -914,7 +1065,8 @@ mod tests {
         // starting at 10s into the source media). Untrim with end=30
         // and start=None should produce [10s, 30s] — NOT [0s, 30s].
         let mut tl = awidat_proto::otio::Timeline::empty("preserve");
-        let mut track = awidat_proto::otio::Track::empty("V1", awidat_proto::otio::TrackKind::Video);
+        let mut track =
+            awidat_proto::otio::Track::empty("V1", awidat_proto::otio::TrackKind::Video);
         let mut clip = awidat_proto::otio::Clip::empty("clip-0".to_string());
         clip.media_reference = awidat_proto::otio::MediaReference::External(
             awidat_proto::otio::ExternalReference::new("raw/x.mp4"),
@@ -923,19 +1075,29 @@ mod tests {
             awidat_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
             awidat_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
         ));
-        track.children.push(awidat_proto::otio::TrackChild::Clip(clip));
-        tl.tracks.children.push(awidat_proto::otio::StackChild::Track(track));
+        track
+            .children
+            .push(awidat_proto::otio::TrackChild::Clip(clip));
+        tl.tracks
+            .children
+            .push(awidat_proto::otio::StackChild::Track(track));
 
         let env = EdlEnvelope {
             ops: vec![EdlOp::UntrimClip {
-                anchor: Anchor::ClipUuid { uuid: "clip-0".into() },
+                anchor: Anchor::ClipUuid {
+                    uuid: "clip-0".into(),
+                },
                 start: None,
                 end: Some(30.0),
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
-        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
-        let TrackChild::Clip(c) = &t.children[0] else { panic!() };
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &t.children[0] else {
+            panic!()
+        };
         let r = c.source_range.as_ref().unwrap();
         assert!(
             (r.start_time.to_seconds() - 10.0).abs() < 1e-9,
@@ -967,10 +1129,14 @@ mod tests {
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert_eq!(outcome.applied.len(), 1);
         assert_eq!(new_tl.tracks.children.len(), 1, "track created");
-        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
         assert_eq!(t.name, "V1");
         assert_eq!(t.children.len(), 1);
-        let TrackChild::Clip(c) = &t.children[0] else { panic!() };
+        let TrackChild::Clip(c) = &t.children[0] else {
+            panic!()
+        };
         assert_eq!(c.name, "clip-0");
         let r = c.source_range.as_ref().unwrap();
         assert!((r.duration.to_seconds() - 56.47).abs() < 1e-6);
@@ -990,10 +1156,14 @@ mod tests {
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
-        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
         // 3 existing + 1 inserted at the end.
         assert_eq!(t.children.len(), 4);
-        let TrackChild::Clip(c) = &t.children[3] else { panic!() };
+        let TrackChild::Clip(c) = &t.children[3] else {
+            panic!()
+        };
         assert_eq!(c.name, "intro");
     }
 
@@ -1011,10 +1181,42 @@ mod tests {
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
-        let StackChild::Track(t) = &new_tl.tracks.children[0] else { panic!() };
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
         assert_eq!(t.children.len(), 4);
-        let TrackChild::Clip(c) = &t.children[1] else { panic!() };
+        let TrackChild::Clip(c) = &t.children[1] else {
+            panic!()
+        };
         assert_eq!(c.name, "inserted", "new clip lands at index 1");
+    }
+
+    #[test]
+    fn apply_insert_clip_default_name_avoids_duplicate_when_inserted_in_middle() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/middle.mp4".into(),
+                track: "V1".into(),
+                at_position: Some(1),
+                start: Some(0.0),
+                end: Some(1.0),
+                name: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let names = t
+            .children
+            .iter()
+            .filter_map(|tc| match tc {
+                TrackChild::Clip(c) => Some(c.name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["clip-0", "clip-3", "clip-1", "clip-2"]);
     }
 
     #[test]
@@ -1101,7 +1303,9 @@ mod tests {
         };
         // Alpha trimmed, bravo unchanged, charlie gone.
         assert_eq!(t.children.len(), 2);
-        let TrackChild::Clip(alpha) = &t.children[0] else { panic!() };
+        let TrackChild::Clip(alpha) = &t.children[0] else {
+            panic!()
+        };
         assert!((alpha.source_range.as_ref().unwrap().duration.to_seconds() - 2.0).abs() < 1e-9);
     }
 
@@ -1118,7 +1322,9 @@ mod tests {
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
-        assert!(matches!(err, ApplyError::Invalid { message, .. } if message.contains("must be >= start")));
+        assert!(
+            matches!(err, ApplyError::Invalid { message, .. } if message.contains("must be >= start"))
+        );
     }
 
     #[test]

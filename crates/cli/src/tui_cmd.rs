@@ -12,21 +12,18 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use awidat_core::anthropic::{Client, ClientConfig, models};
+use awidat_core::subagent::SubAgentRegistry;
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
-    clip_search::ClipSearchTool, delegate::DelegateTool,
-    delegate_all::DelegateAllTool, find_beat::FindBeatTool,
-    find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
+    clip_search::ClipSearchTool, delegate::DelegateTool, delegate_all::DelegateAllTool,
+    find_beat::FindBeatTool, find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
-    load_skill::LoadSkillTool, poll_render::PollRenderTool,
-    read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
-    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
-    start_render::StartRenderTool, update_plan::UpdatePlanTool,
-    view_episode::ViewEpisodeTool,
-    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
+    poll_render::PollRenderTool, read_index::ReadIndexTool,
+    request_user_input::RequestUserInputTool, shot_summary::ShotSummaryTool,
+    start_indexing::StartIndexingTool, start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
-use awidat_core::subagent::SubAgentRegistry;
 use awidat_core::{Session, ToolRegistry};
 use awidat_tui::{App, AppConfig};
 use tokio::sync::mpsc;
@@ -61,7 +58,13 @@ visible — needs whisper diarization + face), find_eye_contact \
 (any indexer channel), inspect_clip (one clip's metadata), \
 view_frame (extract a frame at a timestamp).\
 \n  - **Editing**: apply_edl (commit edits — Trim, Untrim, Delete, \
-Split, Insert).\
+Split, Insert). For `@@ anchor: clip_uuid=...`, use the clip \
+anchor shown by view_timeline, usually the clip name like `clip-0`; \
+never use the asset filename, proxy stem, or raw media basename as \
+clip_uuid. Times are source-media seconds. view_timeline shows current \
+`source=[start..end]`; to trim the first N seconds of the visible clip, \
+set `start` to source start + N, and to trim the last N seconds, set \
+`end` to source end - N.\
 \n  - **Indexing**: start_indexing — run the configured indexers \
 (whisper, scenes, audio energy, beats, etc.) over assets in raw/. \
 Sha-keyed so re-runs on already-indexed assets are fast no-ops. \
@@ -103,13 +106,17 @@ EDL format (freeform, NOT JSON-escaped):\n\
 + key: value\n\
 *** End EDL\n\
 \n\
+For `clip_uuid=...`, use the clip anchor shown by view_timeline \
+(usually the clip name, e.g. `clip-0`), NOT the asset filename. \
+Call view_timeline first if you don't know the clip names.\n\
+\n\
 **Time semantics.** All time values in the EDL — `start`, `end`, \
 `at_s` — are in **seconds into the clip's source media**, NOT into \
 the timeline. For an untrimmed clip those numbers match. For a \
 clip that has already been trimmed, source-media seconds run from \
 0 at the *original* media start, NOT from the clip's current \
 trimmed-in point. Read view_timeline output carefully: it shows \
-the timeline position; `inspect_clip` shows the source range.\
+the timeline position and current source range.\
 \n\n\
 **Tool-call budget.** Each turn has a hard cap of 64 sampling \
 iterations. After ~52 you'll see a runtime warning; commit any \

@@ -10,7 +10,9 @@
 //! 4. **Unicode-normalize** — fold smart quotes, dashes, NBSPs to ASCII.
 //! 5. **Clip-uuid fallback** — only if the model passed
 //!    `Anchor::ClipUuid`, match exactly against `name` or
-//!    `awidat.clip_uuid` extra.
+//!    `awidat.clip_uuid` extra. As a final recovery path, also match
+//!    the clip's media-reference target URL / filename / stem when
+//!    exactly one clip references that asset.
 //!
 //! On miss, return up to 3 closest candidates by simple character-overlap
 //! score (Aider's "did you mean?" pattern at
@@ -106,7 +108,11 @@ fn load_segments(project_root: &Path, asset_id: &str) -> Option<Vec<TranscriptSe
             })
         })
         .collect();
-    out.sort_by(|a, b| a.start_s.partial_cmp(&b.start_s).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        a.start_s
+            .partial_cmp(&b.start_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Some(out)
 }
 
@@ -155,7 +161,12 @@ pub fn resolve(
     };
 
     // Tier 1 → 4 against seeded metadata.
-    for tier in [Tier::Exact, Tier::TrimEnd, Tier::TrimBoth, Tier::UnicodeNorm] {
+    for tier in [
+        Tier::Exact,
+        Tier::TrimEnd,
+        Tier::TrimBoth,
+        Tier::UnicodeNorm,
+    ] {
         let normalized_needle = normalize(needle, tier);
         for clip in &clips {
             if let Some(haystack) = clip_text(clip)
@@ -199,7 +210,12 @@ fn resolve_via_whisper(
     if ctx.project_root.is_none() {
         return None;
     }
-    for tier in [Tier::Exact, Tier::TrimEnd, Tier::TrimBoth, Tier::UnicodeNorm] {
+    for tier in [
+        Tier::Exact,
+        Tier::TrimEnd,
+        Tier::TrimBoth,
+        Tier::UnicodeNorm,
+    ] {
         let normalized_needle = normalize(needle, tier);
         for clip in clips {
             let asset_id = match &clip.asset_id {
@@ -270,7 +286,9 @@ fn nearest_candidates_from_clips_and_sidecars(
     if ctx.project_root.is_some() {
         let mut seen_assets = std::collections::HashSet::new();
         for clip in clips {
-            let Some(asset_id) = &clip.asset_id else { continue };
+            let Some(asset_id) = &clip.asset_id else {
+                continue;
+            };
             if !seen_assets.insert(asset_id.clone()) {
                 continue;
             }
@@ -339,11 +357,11 @@ fn unicode_fold(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
-            '\u{2018}' | '\u{2019}' => out.push('\''),    // smart single quotes
-            '\u{201c}' | '\u{201d}' => out.push('"'),     // smart double quotes
-            '\u{2013}' | '\u{2014}' => out.push('-'),     // en-dash / em-dash
-            '\u{00a0}' => out.push(' '),                  // non-breaking space
-            '\u{2026}' => out.push_str("..."),            // ellipsis
+            '\u{2018}' | '\u{2019}' => out.push('\''), // smart single quotes
+            '\u{201c}' | '\u{201d}' => out.push('"'),  // smart double quotes
+            '\u{2013}' | '\u{2014}' => out.push('-'),  // en-dash / em-dash
+            '\u{00a0}' => out.push(' '),               // non-breaking space
+            '\u{2026}' => out.push_str("..."),         // ellipsis
             other => out.push(other.to_ascii_lowercase()),
         }
     }
@@ -370,7 +388,9 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
     use awidat_proto::otio::{ExternalReference, MediaReference};
     let mut out = Vec::new();
     for (ti, sc) in timeline.tracks.children.iter().enumerate() {
-        let StackChild::Track(track) = sc else { continue };
+        let StackChild::Track(track) = sc else {
+            continue;
+        };
         for (ci, tc) in track.children.iter().enumerate() {
             if let TrackChild::Clip(c) = tc {
                 let snippet = c
@@ -389,12 +409,7 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
                 let marker_notes: Vec<&str> = c
                     .markers
                     .iter()
-                    .filter_map(|m| {
-                        m.metadata
-                            .awidat
-                            .as_ref()
-                            .and_then(|am| am.note.as_deref())
-                    })
+                    .filter_map(|m| m.metadata.awidat.as_ref().and_then(|am| am.note.as_deref()))
                     .collect();
                 // Asset id from the external media reference's
                 // target_url. The awidat anchor doesn't carry this
@@ -406,9 +421,10 @@ fn collect_clips(timeline: &Timeline) -> Vec<ClipEntry<'_>> {
                     }
                     _ => None,
                 };
-                let source_range = c.source_range.as_ref().map(|r| {
-                    (r.start_time.to_seconds(), r.duration.to_seconds())
-                });
+                let source_range = c
+                    .source_range
+                    .as_ref()
+                    .map(|r| (r.start_time.to_seconds(), r.duration.to_seconds()));
                 out.push(ClipEntry {
                     locator: ClipLocator {
                         track_index: ti,
@@ -433,18 +449,67 @@ fn resolve_by_uuid(clips: &[ClipEntry<'_>], uuid: &str) -> Result<ClipLocator, A
             return Ok(clip.locator);
         }
     }
+
+    let asset_matches = clips
+        .iter()
+        .filter(|clip| {
+            clip.asset_id
+                .as_deref()
+                .is_some_and(|asset_id| asset_reference_matches(asset_id, uuid))
+        })
+        .collect::<Vec<_>>();
+    if asset_matches.len() == 1 {
+        return Ok(asset_matches[0].locator);
+    }
+
     let candidates = clips
         .iter()
-        .filter_map(|c| c.awidat_uuid.clone())
+        .flat_map(|c| {
+            let mut values = Vec::new();
+            if let Some(uuid) = &c.awidat_uuid {
+                values.push(uuid.clone());
+            }
+            if !c.name.is_empty() {
+                values.push(c.name.to_string());
+            }
+            if let Some(asset_id) = &c.asset_id {
+                values.push(asset_id.clone());
+            }
+            values
+        })
         .take(3)
         .collect::<Vec<_>>();
+    let reason = if asset_matches.len() > 1 {
+        format!(
+            "uuid '{uuid}' matched {} clips by asset filename/stem; use the clip name from view_timeline instead",
+            asset_matches.len()
+        )
+    } else {
+        format!(
+            "no clip with uuid '{uuid}' (matched against awidat.clip_uuid, clip name, and unique media filename/stem)"
+        )
+    };
     Err(AnchorMiss {
         anchor: Anchor::ClipUuid {
             uuid: uuid.to_string(),
         },
         candidates,
-        reason: format!("no clip with uuid '{uuid}' (matched against awidat.clip_uuid and clip name)"),
+        reason,
     })
+}
+
+fn asset_reference_matches(asset_id: &str, needle: &str) -> bool {
+    if asset_id == needle {
+        return true;
+    }
+    let path = Path::new(asset_id);
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|name| name == needle)
+        || path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|stem| stem == needle)
 }
 
 fn clip_text(clip: &ClipEntry<'_>) -> Option<String> {
@@ -466,7 +531,10 @@ fn clip_text(clip: &ClipEntry<'_>) -> Option<String> {
 /// haystack. Cheap and roughly right for "did you mean?" suggestions.
 fn overlap_score(needle: &str, haystack: &str) -> usize {
     let h_words: std::collections::HashSet<&str> = haystack.split_whitespace().collect();
-    needle.split_whitespace().filter(|w| h_words.contains(w)).count()
+    needle
+        .split_whitespace()
+        .filter(|w| h_words.contains(w))
+        .count()
 }
 
 #[cfg(test)]
@@ -474,8 +542,8 @@ mod tests {
     use super::*;
     use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
     use awidat_proto::otio::{
-        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
-        TimeRange, Timeline, Track, TrackChild, TrackKind,
+        Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+        Timeline, Track, TrackChild, TrackKind,
     };
 
     fn timeline_with(snippets: &[&str]) -> Timeline {
@@ -595,8 +663,12 @@ mod tests {
     fn clip_uuid_anchor_matches_extra_field() {
         let mut tl = timeline_with(&["foo"]);
         // Inject a uuid via the awidat extra map.
-        let StackChild::Track(t) = &mut tl.tracks.children[0] else { panic!() };
-        let TrackChild::Clip(c) = &mut t.children[0] else { panic!() };
+        let StackChild::Track(t) = &mut tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &mut t.children[0] else {
+            panic!()
+        };
         c.metadata.awidat.as_mut().unwrap().extra.insert(
             "clip_uuid".into(),
             serde_json::Value::String("c-9f2".into()),
@@ -625,6 +697,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(loc.child_index, 0);
+    }
+
+    #[test]
+    fn clip_uuid_falls_back_to_unique_asset_filename_stem() {
+        let mut tl = timeline_with(&["foo"]);
+        let StackChild::Track(t) = &mut tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &mut t.children[0] else {
+            panic!()
+        };
+        c.media_reference = MediaReference::External(ExternalReference::new(
+            "raw/copy_F65206FA-9AEC-4CA8-BD2F-ACD63775F7FA.MOV",
+        ));
+
+        let loc = resolve(
+            &tl,
+            &Anchor::ClipUuid {
+                uuid: "copy_F65206FA-9AEC-4CA8-BD2F-ACD63775F7FA".into(),
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap();
+        assert_eq!(loc.child_index, 0);
+    }
+
+    #[test]
+    fn clip_uuid_asset_fallback_rejects_ambiguous_asset_matches() {
+        let mut tl = timeline_with(&["foo", "bar"]);
+        let StackChild::Track(t) = &mut tl.tracks.children[0] else {
+            panic!()
+        };
+        for child in &mut t.children {
+            let TrackChild::Clip(c) = child else { panic!() };
+            c.media_reference = MediaReference::External(ExternalReference::new("raw/shared.MOV"));
+        }
+
+        let err = resolve(
+            &tl,
+            &Anchor::ClipUuid {
+                uuid: "shared".into(),
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(err.reason.contains("matched 2 clips"));
     }
 
     #[test]
@@ -658,10 +776,7 @@ mod tests {
 
     #[test]
     fn first_match_wins_when_multiple_overlap() {
-        let tl = timeline_with(&[
-            "shared word here",
-            "shared word also here",
-        ]);
+        let tl = timeline_with(&["shared word here", "shared word also here"]);
         let loc = resolve(
             &tl,
             &Anchor::TranscriptSnippet {
@@ -690,8 +805,7 @@ mod tests {
         let mut tl = Timeline::empty("test");
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("clip-0".to_string());
-        clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/clip-1.MOV"));
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/clip-1.MOV"));
         clip.source_range = Some(TimeRange::new(
             RationalTime::zero(24.0),
             RationalTime::new(56.0 * 24.0, 24.0),
@@ -771,8 +885,7 @@ mod tests {
         let mut tl = Timeline::empty("test");
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("clip-0".to_string());
-        clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/ep.mp4"));
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/ep.mp4"));
         clip.source_range = Some(TimeRange::new(
             RationalTime::new(19.4 * 24.0, 24.0),
             RationalTime::new((34.6 - 19.4) * 24.0, 24.0),
@@ -832,8 +945,7 @@ mod tests {
         let mut tl = Timeline::empty("test");
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("clip-0".to_string());
-        clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/ep.mp4"));
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/ep.mp4"));
         clip.source_range = Some(TimeRange::new(
             RationalTime::new(742.0 * 24.0, 24.0),
             RationalTime::new(9.0 * 24.0, 24.0),
@@ -870,7 +982,9 @@ mod tests {
             },
             &ctx,
         )
-        .expect("overlap-tolerant resolution should match a segment that crosses the trailing boundary");
+        .expect(
+            "overlap-tolerant resolution should match a segment that crosses the trailing boundary",
+        );
         assert_eq!(loc.child_index, 0);
     }
 
@@ -887,8 +1001,7 @@ mod tests {
         let mut tl = Timeline::empty("test");
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("clip-0".to_string());
-        clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/ep.mp4"));
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/ep.mp4"));
         // Clip is at [100, 110] — the segment below ends at 50.
         clip.source_range = Some(TimeRange::new(
             RationalTime::new(100.0 * 24.0, 24.0),
