@@ -10,5 +10,6 @@ pub mod proposal;
 pub mod render;
 pub mod timeline;
 pub mod transcode;
+pub mod transcript;
 pub mod turn;
 pub mod view;

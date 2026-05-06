@@ -24,6 +24,11 @@ export type { AppliedDiff } from "./generated/AppliedDiff";
 export type { Side } from "./generated/Side";
 export type { EditAdjustment } from "./generated/EditAdjustment";
 export type { AdjustField } from "./generated/AdjustField";
+// Transcript pane (Step 6).
+export type { Transcript } from "./generated/Transcript";
+export type { TranscriptSegment } from "./generated/TranscriptSegment";
+export type { TranscriptWord } from "./generated/TranscriptWord";
+export type { TranscriptSpeaker } from "./generated/TranscriptSpeaker";
 
 // Tauri event channel names. Mirror the constants in
 // `apps/desktop/src-tauri/src/lib.rs` — there is no runtime check.

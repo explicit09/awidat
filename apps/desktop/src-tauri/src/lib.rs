@@ -93,6 +93,7 @@ pub fn run() {
             commands::proposal::reject_proposal,
             commands::proposal::adjust_proposal,
             commands::proposal::propose_user_edit,
+            commands::transcript::read_transcript,
         ])
         .run(tauri::generate_context!());
 

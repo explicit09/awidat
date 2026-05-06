@@ -397,6 +397,72 @@ pub enum TimelineItem {
     },
 }
 
+/// One paragraph-sized segment from a whisper transcript sidecar.
+/// Segment-level granularity is what the transcript pane renders as
+/// a virtualized row; word-level granularity drives selection,
+/// click-to-seek, and active-word highlight.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TranscriptSegment {
+    /// Concatenated text of the segment (whisper's own merging).
+    pub text: String,
+    /// Source-time start, in seconds.
+    pub start_s: f64,
+    /// Source-time end, in seconds.
+    pub end_s: f64,
+    /// Diarized speaker id (e.g. `"SPEAKER_00"`), if available.
+    pub speaker_id: Option<String>,
+}
+
+/// One word-level alignment from a whisper transcript sidecar.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TranscriptWord {
+    /// Word text (whisper-trimmed, may include punctuation).
+    pub text: String,
+    /// Source-time start, in seconds.
+    pub start_s: f64,
+    /// Source-time end, in seconds.
+    pub end_s: f64,
+    /// Diarized speaker id, if available.
+    pub speaker_id: Option<String>,
+}
+
+/// Speaker summary from a diarized whisper sidecar. Empty when
+/// diarization wasn't run.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TranscriptSpeaker {
+    /// Diarized id (e.g. `"SPEAKER_00"`).
+    pub id: String,
+    /// Total seconds of speech attributed to this speaker.
+    pub total_speech_s: f64,
+}
+
+/// Full transcript for a single asset, deserialized from the
+/// project's whisper sidecar. The frontend renders this in the
+/// transcript pane (Step 6 — Descript-style click-word-to-seek +
+/// drag-select-to-delete).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct Transcript {
+    /// Asset stem this transcript is for. Matches `ProxyEntry.stem`
+    /// so the frontend can key transcripts by the same id it uses
+    /// for the media pane.
+    pub asset_stem: String,
+    /// BCP-47 language tag (e.g. `"en"`).
+    pub language: String,
+    /// Whether diarization ran (`speakers` will be empty when false).
+    pub diarized: bool,
+    /// Segment-level paragraphs.
+    pub segments: Vec<TranscriptSegment>,
+    /// Word-level alignment. May be empty if the indexer didn't
+    /// produce word timestamps for this asset.
+    pub words: Vec<TranscriptWord>,
+    /// Speaker summary (empty when not diarized).
+    pub speakers: Vec<TranscriptSpeaker>,
+}
+
 /// Where a proposed edit came from. The frontend renders agent and
 /// user proposals identically (same ghost overlay, same handles,
 /// same Accept/Reject), but the source helps with chat-side

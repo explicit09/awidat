@@ -8,6 +8,7 @@ use std::sync::Arc;
 use awidat_core::Session;
 use awidat_core::edl::{AppliedOp, EdlEnvelope};
 use awidat_core::tool::ApprovalDecision;
+use awidat_desktop_protocol::Transcript;
 use awidat_proto::otio::Timeline;
 use awidat_render::JobManager;
 use tokio::sync::{Mutex, oneshot};
@@ -60,6 +61,13 @@ pub struct AwidatState {
     /// proposes) and the command-thread pool (when the user
     /// responds).
     pub pending_proposals: Mutex<HashMap<String, PendingProposal>>,
+    /// Whisper-transcript cache keyed by proxy stem. Populated on
+    /// first `read_transcript(stem)` call; invalidated when a
+    /// whisper-indexer job completes (signal that the sidecar may
+    /// have been refreshed). Keeps the transcript pane snappy on
+    /// tab toggles — a 4 MB sidecar parses in single-digit ms but
+    /// re-parsing on every tab click adds up.
+    pub transcript_cache: Mutex<HashMap<String, Transcript>>,
 }
 
 /// One in-flight EDL proposal. Created by the bridge when an agent
