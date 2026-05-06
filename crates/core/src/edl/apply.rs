@@ -160,10 +160,21 @@ fn apply_one(
             *end,
             name.as_deref(),
         ),
-        EdlOp::InsertBRoll { .. } => Err(ApplyError::NotImplemented {
+        EdlOp::InsertBRoll {
+            anchor,
+            asset,
+            duration_s,
+            position,
+        } => apply_insert_broll(
+            working,
             index,
-            op: "Insert BRoll".into(),
-        }),
+            anchor,
+            asset,
+            *duration_s,
+            *position,
+            ctx,
+            locator,
+        ),
         EdlOp::MoveClip {
             anchor,
             to_position,
@@ -187,10 +198,9 @@ fn resolve_locator_for_op(
         | EdlOp::DeleteClip { anchor }
         | EdlOp::SplitClip { anchor, .. }
         | EdlOp::UntrimClip { anchor, .. }
-        | EdlOp::MoveClip { anchor, .. } => anchor,
-        EdlOp::InsertClip { .. }
-        | EdlOp::InsertBRoll { .. }
-        | EdlOp::InsertTransition { .. } => return Ok(None),
+        | EdlOp::MoveClip { anchor, .. }
+        | EdlOp::InsertBRoll { anchor, .. } => anchor,
+        EdlOp::InsertClip { .. } | EdlOp::InsertTransition { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
         .map(Some)
@@ -856,6 +866,260 @@ fn apply_move_clip(
         "moved clip {:?} from position {} to position {} on track {}",
         c.name, locator.child_index, target_user, locator.track_index,
     ))
+}
+
+/// Insert a b-roll clip near an anchor, either replacing footage in
+/// place (`Replace`) or layering on a higher video track (`Overlay`).
+///
+/// In v1 the broll always lands at the *anchor clip's start* position
+/// (no in-clip offset field). The op carries `duration_s`, the broll's
+/// length on the timeline.
+///
+/// `Replace`: the anchor clip's leading `duration_s` window is swapped
+/// for the broll. The anchor clip's residual tail (if any) stays on
+/// the same track immediately after the broll. If `duration_s` is
+/// >= the anchor's full duration, the broll fully consumes the anchor
+/// — no tail piece is reinserted.
+///
+/// `Overlay`: a new video track (named `V<N>` for the next free
+/// number) is created if no video track besides the anchor's exists,
+/// and the broll lands on it. v1 places the broll at the anchor
+/// clip's track-time start; nothing on the lower track is mutated.
+fn apply_insert_broll(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    asset: &str,
+    duration_s: f64,
+    position: super::op::BRollPosition,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    use awidat_proto::otio::{
+        Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track, TrackKind,
+    };
+    let _ = (anchor, ctx);
+
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("broll duration {duration_s} must be > 0"),
+        });
+    }
+
+    let locator = required_locator(index, locator)?;
+
+    // Snapshot the anchor clip's source range + name + rate before
+    // mutating anything — we'll need them in both branches and
+    // referencing back into `working` via locator after a structural
+    // change is fragile.
+    let (anchor_name, rate, anchor_source_start, anchor_source_dur) = {
+        let StackChild::Track(track) = &working.tracks.children[locator.track_index] else {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "broll: anchor resolved to a non-track stack child".into(),
+            });
+        };
+        let TrackChild::Clip(clip) = &track.children[locator.child_index] else {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "broll: anchor resolved to a non-clip track child".into(),
+            });
+        };
+        let range = clip.source_range.as_ref().ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: "broll: anchor clip has no source_range".into(),
+        })?;
+        (
+            clip.name.clone(),
+            range.start_time.rate,
+            range.start_time.to_seconds(),
+            range.duration.to_seconds(),
+        )
+    };
+
+    // Build the broll clip — same shape as apply_insert_clip's clip
+    // construction.
+    let mut broll = Clip::empty(format!("broll-from-{anchor_name}"));
+    broll.media_reference =
+        MediaReference::External(ExternalReference::new(asset.to_string()));
+    broll.source_range = Some(TimeRange::new(
+        RationalTime::new(0.0, rate),
+        RationalTime::new(duration_s * rate, rate),
+    ));
+    stamp_fresh_clip_uuid(&mut broll);
+
+    match position {
+        super::op::BRollPosition::Replace => {
+            // Compute the residual tail BEFORE we touch the track —
+            // we'll only insert it if the broll doesn't fully consume
+            // the anchor clip.
+            let StackChild::Track(track) = &mut working.tracks.children[locator.track_index]
+            else {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: "broll: anchor resolved to a non-track stack child".into(),
+                });
+            };
+
+            // Pull the anchor clip out as the template for the
+            // residual tail.
+            let TrackChild::Clip(orig) = track.children.remove(locator.child_index) else {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: "broll: anchor resolved to a non-clip child".into(),
+                });
+            };
+            track
+                .children
+                .insert(locator.child_index, TrackChild::Clip(broll));
+
+            if duration_s < anchor_source_dur {
+                let residual_start = anchor_source_start + duration_s;
+                let residual_dur = anchor_source_dur - duration_s;
+                let mut tail = orig;
+                tail.name = format!("{anchor_name}-tail");
+                tail.source_range = Some(TimeRange::new(
+                    RationalTime::new(residual_start * rate, rate),
+                    RationalTime::new(residual_dur * rate, rate),
+                ));
+                stamp_fresh_clip_uuid(&mut tail);
+                track
+                    .children
+                    .insert(locator.child_index + 1, TrackChild::Clip(tail));
+            }
+
+            Ok(format!(
+                "inserted b-roll over {anchor_name:?} on track {}: \
+                 asset={asset:?} duration={duration_s:.3}s (replace)",
+                locator.track_index,
+            ))
+        }
+        super::op::BRollPosition::Overlay => {
+            // Find an overlay-target video track. v1: any video track
+            // that isn't the anchor's track. If none, create a fresh
+            // one named V<N+1> where N is the highest existing
+            // V-prefixed track number (or fall back to "V2").
+            let target_idx = working
+                .tracks
+                .children
+                .iter()
+                .enumerate()
+                .find_map(|(i, sc)| match sc {
+                    StackChild::Track(t)
+                        if matches!(t.kind, TrackKind::Video)
+                            && i != locator.track_index =>
+                    {
+                        Some(i)
+                    }
+                    _ => None,
+                });
+
+            let target_idx = match target_idx {
+                Some(i) => i,
+                None => {
+                    let next_name = next_video_track_name(working);
+                    let track = Track::empty(next_name, TrackKind::Video);
+                    working.tracks.children.push(StackChild::Track(track));
+                    working.tracks.children.len() - 1
+                }
+            };
+
+            // Anchor's track-time = sum of preceding child durations.
+            // We need this so the agent can place the overlay
+            // correctly even when the lower track has lots of
+            // earlier clips. v1 implementation: append at the end of
+            // the overlay track if its current duration is at-or-past
+            // the anchor's track-time; otherwise pad with a Gap.
+            let anchor_track_time =
+                track_time_at(working, locator.track_index, locator.child_index);
+            let StackChild::Track(target) = &mut working.tracks.children[target_idx] else {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: "broll: overlay target resolved to a non-track stack child".into(),
+                });
+            };
+            let target_cursor = track_cursor(target);
+            if target_cursor < anchor_track_time {
+                // Pad with a Gap so the broll lines up under the
+                // anchor on the lower track.
+                let gap_dur = anchor_track_time - target_cursor;
+                target
+                    .children
+                    .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                        gap_dur, rate,
+                    )));
+            }
+            target.children.push(TrackChild::Clip(broll));
+            Ok(format!(
+                "inserted b-roll over {anchor_name:?} on overlay track {}: \
+                 asset={asset:?} duration={duration_s:.3}s (overlay)",
+                target.name,
+            ))
+        }
+    }
+}
+
+/// Sum the durations of children before `child_index` on the given
+/// track. Used by the overlay broll path to compute the anchor's
+/// track-time start so the broll on V2 lines up with the underlying
+/// clip on V1.
+fn track_time_at(timeline: &Timeline, track_index: usize, child_index: usize) -> f64 {
+    let StackChild::Track(track) = &timeline.tracks.children[track_index] else {
+        return 0.0;
+    };
+    let mut t = 0.0;
+    for (i, child) in track.children.iter().enumerate() {
+        if i >= child_index {
+            break;
+        }
+        t += child_duration(child);
+    }
+    t
+}
+
+/// Total duration of a track's children. Used to know where to
+/// append on the overlay track without recomputing per-element.
+fn track_cursor(track: &awidat_proto::otio::Track) -> f64 {
+    track.children.iter().map(child_duration).sum()
+}
+
+fn child_duration(child: &TrackChild) -> f64 {
+    match child {
+        TrackChild::Clip(c) => c
+            .source_range
+            .as_ref()
+            .map(|r| r.duration.to_seconds())
+            .unwrap_or(0.0),
+        TrackChild::Gap(g) => g.source_range.duration.to_seconds(),
+        // Transitions overlap their neighbors in source-time terms
+        // (their `in_offset + out_offset` is the *visual* duration,
+        // not extra timeline length). For the cursor math here we
+        // treat them as zero — they don't push later clips later.
+        TrackChild::Transition(_) => 0.0,
+        // Nested stacks aren't produced anywhere in the awidat
+        // pipeline today; treat as zero rather than panicking.
+        TrackChild::Stack(_) => 0.0,
+    }
+}
+
+/// Pick the next free `V<N>` name for a brand-new video track.
+/// Walks existing track names that match `V<digits>` and returns the
+/// max+1; falls back to `V2` if the parse misses (no `V1` in scope,
+/// or all names are non-numeric).
+fn next_video_track_name(timeline: &Timeline) -> String {
+    let mut max_n: u32 = 1;
+    for sc in &timeline.tracks.children {
+        let StackChild::Track(t) = sc else { continue };
+        if let Some(rest) = t.name.strip_prefix('V')
+            && let Ok(n) = rest.parse::<u32>()
+        {
+            if n > max_n {
+                max_n = n;
+            }
+        }
+    }
+    format!("V{}", max_n + 1)
 }
 
 /// Lightweight validate hook on Timeline. We reach into the proto crate's
@@ -1627,23 +1891,126 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_op_returns_clear_error() {
-        // InsertBRoll lands in 14.3; until then it surfaces a clear
-        // NotImplemented error. (MoveClip was on this list pre-14.2;
-        // InsertTransition was on this list pre-14.1.)
+    fn apply_insert_broll_replace_swaps_in_place_with_tail() {
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
             ops: vec![EdlOp::InsertBRoll {
                 anchor: Anchor::TranscriptSnippet {
-                    text: "alpha snippet".into(),
+                    text: "bravo snippet".into(),
                 },
                 asset: "raw/broll.mp4".into(),
                 duration_s: 2.0,
                 position: super::super::op::BRollPosition::Replace,
             }],
         };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        // 3 originals → 4 children (broll inserted in place of bravo,
+        // plus the bravo tail).
+        assert_eq!(t.children.len(), 4);
+        let TrackChild::Clip(broll) = &t.children[1] else {
+            panic!("expected broll at idx 1, got {:?}", t.children[1])
+        };
+        assert!(broll.name.starts_with("broll-from-clip-1"));
+        assert_eq!(
+            broll
+                .source_range
+                .as_ref()
+                .map(|r| r.duration.to_seconds())
+                .unwrap_or(0.0),
+            2.0,
+        );
+        let TrackChild::Clip(tail) = &t.children[2] else {
+            panic!("expected tail at idx 2, got {:?}", t.children[2])
+        };
+        assert!(tail.name.starts_with("clip-1-tail"));
+        // tail.source_range = [2.0, 5.0] → start 2s, duration 3s.
+        let r = tail.source_range.as_ref().unwrap();
+        assert!((r.start_time.to_seconds() - 2.0).abs() < 1e-9);
+        assert!((r.duration.to_seconds() - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_insert_broll_replace_consumes_anchor_when_duration_meets_or_exceeds() {
+        let tl = timeline_with_three_clips();
+        // Anchor source duration is 5s; broll for 5s → no tail.
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertBRoll {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                asset: "raw/broll.mp4".into(),
+                duration_s: 5.0,
+                position: super::super::op::BRollPosition::Replace,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.children.len(), 3); // 3 originals, bravo replaced by broll.
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name.starts_with("broll-from")));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-2"));
+    }
+
+    #[test]
+    fn apply_insert_broll_overlay_creates_v2_track_with_padding_gap() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertBRoll {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                asset: "raw/broll.mp4".into(),
+                duration_s: 2.0,
+                position: super::super::op::BRollPosition::Overlay,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        // V1 is unchanged.
+        let StackChild::Track(v1) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(v1.children.len(), 3);
+        assert_eq!(v1.name, "V1");
+        // V2 was created with a 5s Gap + the broll clip (anchor's
+        // track-time start = 5s).
+        assert_eq!(new_tl.tracks.children.len(), 2);
+        let StackChild::Track(v2) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        assert_eq!(v2.name, "V2");
+        assert_eq!(v2.children.len(), 2);
+        let TrackChild::Gap(g) = &v2.children[0] else {
+            panic!("expected gap at v2 idx 0")
+        };
+        assert!((g.source_range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        let TrackChild::Clip(broll) = &v2.children[1] else {
+            panic!("expected broll at v2 idx 1")
+        };
+        assert!(broll.name.starts_with("broll-from-clip-1"));
+    }
+
+    #[test]
+    fn apply_insert_broll_rejects_zero_duration() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertBRoll {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                asset: "raw/broll.mp4".into(),
+                duration_s: 0.0,
+                position: super::super::op::BRollPosition::Replace,
+            }],
+        };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
-        assert!(matches!(err, ApplyError::NotImplemented { op, .. } if op == "Insert BRoll"));
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("must be > 0")),
+            "expected duration error, got {err:?}",
+        );
     }
 
     #[test]
