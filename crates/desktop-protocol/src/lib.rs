@@ -366,6 +366,13 @@ pub enum TimelineItem {
         /// Source-asset start offset, in seconds. Useful when the
         /// frontend wants to map "this clip plays source[12.5s..]".
         source_start_s: Option<f64>,
+        /// Absolute path to the asset's 720p proxy mp4 on disk, if
+        /// the proxy has finished generating. The frontend feeds this
+        /// into `convertFileSrc()` and `<video src>` to play the
+        /// segment without ever touching the original media. `None`
+        /// when the asset is missing, the proxy hasn't finished
+        /// transcoding, or the proxies dir doesn't exist yet.
+        proxy_path: Option<String>,
     },
     /// Empty time on the track (silence / black frames).
     Gap {

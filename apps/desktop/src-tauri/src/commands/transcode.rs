@@ -19,6 +19,7 @@ use tauri::{AppHandle, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::commands::media::proxy_path_for;
 use crate::events::JobEmitter;
 use crate::state::{AwidatState, JobHandle};
 
@@ -62,19 +63,16 @@ pub async fn transcode_project_proxies(
     Ok(generated)
 }
 
-/// Transcode a single asset (used by the auto-chain path after a
-/// fresh import). Skips silently if the proxy is already fresh.
-pub async fn transcode_single_asset(
+/// Transcode one asset into the proxy directory for a specific project.
+/// Used by the post-import chain so project switches cannot redirect
+/// work into whichever project is current by the time the background
+/// task wakes up.
+pub async fn transcode_single_asset_in_project(
     app: &AppHandle,
     state: &State<'_, AwidatState>,
+    project_root: &Path,
     asset_path: &Path,
 ) -> Result<Option<PathBuf>, String> {
-    let project_root = state
-        .project_root
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "no project loaded".to_string())?;
     let proxies_dir = project_root.join(".awidat").join("proxies");
     tokio::fs::create_dir_all(&proxies_dir)
         .await
@@ -145,8 +143,7 @@ async fn transcode_one(
         let _ = done_tx.send(emitter_for_task);
     });
 
-    let result =
-        awidat_render::transcode_proxy(asset, proxy_path, Some(cb), cancel.clone()).await;
+    let result = awidat_render::transcode_proxy(asset, proxy_path, Some(cb), cancel.clone()).await;
 
     unregister_job(state, &job_id).await;
     let emitter = done_rx
@@ -157,16 +154,11 @@ async fn transcode_one(
         Ok(()) => {
             emitter.ok(Some(format!(
                 "proxy ready: {}",
-                proxy_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
+                proxy_path.file_name().unwrap_or_default().to_string_lossy()
             )));
             Ok(())
         }
-        Err(awidat_render::FfmpegError::NonZero { stderr_tail, .. })
-            if cancel.is_cancelled() =>
-        {
+        Err(awidat_render::FfmpegError::NonZero { stderr_tail, .. }) if cancel.is_cancelled() => {
             // Cancelled is reported as NonZero with stderr_tail =
             // "cancelled" (see transcode_proxy).
             let _ = stderr_tail;
@@ -179,20 +171,6 @@ async fn transcode_one(
             Err(msg)
         }
     }
-}
-
-/// Where the proxy for `asset` lives under `proxies/`. The proxy
-/// shares the asset's stem; extension is always `.mp4` regardless of
-/// source format. Collisions are theoretically possible (two assets
-/// with the same stem in different subdirs of raw/) but raw/ is
-/// flat in practice; if collisions become a real problem, we'll
-/// hash the relative path into the filename.
-fn proxy_path_for(proxies_dir: &Path, asset: &Path) -> PathBuf {
-    let stem = asset
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("asset");
-    proxies_dir.join(format!("{stem}.mp4"))
 }
 
 /// True iff `proxy` exists and its mtime is at-or-after `asset`'s.
@@ -263,14 +241,6 @@ async fn unregister_job(state: &State<'_, AwidatState>, id: &Id) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn proxy_path_replaces_extension_with_mp4() {
-        let proxies = PathBuf::from("/tmp/proj/.awidat/proxies");
-        let asset = PathBuf::from("/tmp/proj/raw/foo.mov");
-        let p = proxy_path_for(&proxies, &asset);
-        assert_eq!(p, PathBuf::from("/tmp/proj/.awidat/proxies/foo.mp4"));
-    }
 
     #[test]
     fn proxy_is_stale_when_missing() {

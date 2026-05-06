@@ -20,9 +20,7 @@ use crate::state::AwidatState;
 /// timeline view. Empty snapshot when no project loaded or OTIO
 /// has no clips.
 #[tauri::command]
-pub async fn read_timeline(
-    state: State<'_, AwidatState>,
-) -> Result<TimelineSnapshot, String> {
+pub async fn read_timeline(state: State<'_, AwidatState>) -> Result<TimelineSnapshot, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => return Ok(empty_snapshot()),
@@ -30,8 +28,7 @@ pub async fn read_timeline(
     // Project::read is sync; spawn_blocking so we don't hold the
     // tokio runtime on disk I/O.
     let snapshot = tokio::task::spawn_blocking(move || -> Result<TimelineSnapshot, String> {
-        let project = Project::read(&project_root)
-            .map_err(|e| format!("read project: {e}"))?;
+        let project = Project::read(&project_root).map_err(|e| format!("read project: {e}"))?;
         Ok(flatten_timeline_public(&project.timeline, &project_root))
     })
     .await
@@ -84,11 +81,22 @@ pub fn flatten_timeline_public(
                         .as_ref()
                         .map(|r| r.start_time.to_seconds());
                     let asset_id = match &clip.media_reference {
-                        MediaReference::External(ext) => Some(
-                            project_root_relative(project_root, &ext.target_url),
-                        ),
+                        MediaReference::External(ext) => {
+                            Some(project_root_relative(project_root, &ext.target_url))
+                        }
                         MediaReference::Missing(_) => None,
                     };
+                    // Resolve the proxy path once per clip so the
+                    // frontend can play this segment without doing
+                    // its own filesystem lookups. `None` is fine —
+                    // the frontend treats it as "still transcoding"
+                    // and falls back to its empty-state placeholder
+                    // for that clip's window.
+                    let proxy_path = asset_id
+                        .as_deref()
+                        .and_then(|aid| {
+                            crate::commands::media::proxy_path_for_asset_id(project_root, aid)
+                        });
                     // Anchor uuid: prefer clip.metadata.awidat.extra["clip_uuid"];
                     // fall back to display name (the EDL resolver also
                     // matches names, so the fallback round-trips).
@@ -108,6 +116,7 @@ pub fn flatten_timeline_public(
                         duration_s,
                         asset_id,
                         source_start_s,
+                        proxy_path,
                     });
                     track_cursor_s += duration_s;
                 }

@@ -107,3 +107,103 @@ pub async fn proxy_path_for_stem(
         None
     })
 }
+
+/// Compute the absolute proxy-mp4 path for an asset path.
+///
+/// Used by the transcoder when generating proxies AND by the
+/// timeline flattener when telling the frontend which mp4 to play
+/// for each clip's segment. Both paths must agree byte-for-byte —
+/// hence one shared helper rather than parallel implementations.
+///
+/// The proxy filename is `<asset-stem>-<hash>.mp4`. The hash is FNV-1a
+/// over the asset's absolute path string and disambiguates two raw/
+/// files that share the same stem in nested subdirectories. Callers
+/// must pass the absolute path (not project-relative) — feeding in a
+/// relative path produces a different hash and the resulting proxy
+/// path won't match the one the transcoder wrote.
+pub fn proxy_path_for(proxies_dir: &Path, asset_abs_path: &Path) -> PathBuf {
+    let stem = asset_abs_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("asset");
+    proxies_dir.join(format!("{stem}-{:08x}.mp4", stable_path_hash(asset_abs_path)))
+}
+
+fn stable_path_hash(path: &Path) -> u32 {
+    let mut hash = 0x811c9dc5_u32;
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
+}
+
+/// Resolve the absolute proxy path for a project-relative asset id
+/// (e.g. `raw/foo.MOV`). Returns `Some(path)` if the proxy exists on
+/// disk, `None` otherwise. Mirrors `proxy_is_fresh`-aware lookup
+/// without checking mtime — for the live preview we accept any proxy
+/// the transcoder has finished writing; staleness is rare and the
+/// post-import chain refreshes proxies whenever a raw file changes.
+pub fn proxy_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<String> {
+    let abs = project_root.join(asset_id);
+    if !abs.is_file() {
+        return None;
+    }
+    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxy = proxy_path_for(&proxies_dir, &abs);
+    proxy.is_file().then(|| proxy.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_path_disambiguates_same_stem_assets() {
+        let proxies = PathBuf::from("/tmp/proj/.awidat/proxies");
+        let a = proxy_path_for(&proxies, &PathBuf::from("/tmp/proj/raw/a/foo.mov"));
+        let b = proxy_path_for(&proxies, &PathBuf::from("/tmp/proj/raw/b/foo.mov"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn proxy_path_replaces_extension_with_mp4() {
+        let proxies = PathBuf::from("/tmp/proj/.awidat/proxies");
+        let asset = PathBuf::from("/tmp/proj/raw/foo.mov");
+        let p = proxy_path_for(&proxies, &asset);
+        assert_eq!(p.extension().and_then(|e| e.to_str()), Some("mp4"));
+        assert!(
+            p.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .starts_with("foo-")
+        );
+    }
+
+    #[test]
+    fn proxy_path_for_asset_id_returns_none_when_proxy_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("foo.mov");
+        std::fs::write(&asset, b"x").unwrap();
+
+        assert!(proxy_path_for_asset_id(dir.path(), "raw/foo.mov").is_none());
+
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let proxy = proxy_path_for(&proxies_dir, &asset);
+        std::fs::write(&proxy, b"y").unwrap();
+
+        assert_eq!(
+            proxy_path_for_asset_id(dir.path(), "raw/foo.mov").as_deref(),
+            Some(proxy.to_string_lossy().as_ref()),
+        );
+    }
+
+    #[test]
+    fn proxy_path_for_asset_id_returns_none_when_asset_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(proxy_path_for_asset_id(dir.path(), "raw/nonexistent.mp4").is_none());
+    }
+}
