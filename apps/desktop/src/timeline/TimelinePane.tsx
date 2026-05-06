@@ -41,16 +41,27 @@ export function TimelinePane() {
     }
   }, [projectReady, refresh]);
 
-  // Refresh after every completed apply_edl. The OTIO file just
-  // changed; the canvas should reflect it. We watch the count of
-  // completed apply_edl tool calls (a stable scalar) rather than
-  // the items array (changes on every text delta).
-  const completedEdits = items.filter(
-    (it) =>
-      it.kind === "tool_call" &&
-      it.name === "apply_edl" &&
-      it.phase === "completed",
-  ).length;
+  // Refresh after every completed apply_edl OR every completed
+  // proposed_edit. Both paths can mutate the OTIO on disk:
+  //   - apply_edl Completed lands when the agent's tool handler
+  //     finishes (Allow path: agent wrote the file).
+  //   - proposed_edit Completed lands when a proposal accept /
+  //     reject finishes (Deny-with-adjustment path: desktop wrote
+  //     the file, no agent tool ran; user-initiated edits via
+  //     propose_user_edit also take this path).
+  // We watch a stable scalar (count of completions) rather than
+  // the full items array so React doesn't re-fire the effect on
+  // every text delta.
+  const completedEdits =
+    items.filter(
+      (it) =>
+        it.kind === "tool_call" &&
+        it.name === "apply_edl" &&
+        it.phase === "completed",
+    ).length +
+    items.filter(
+      (it) => it.kind === "proposed_edit" && it.phase === "completed",
+    ).length;
   useEffect(() => {
     if (projectReady && completedEdits > 0) {
       refresh();

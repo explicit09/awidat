@@ -11,18 +11,19 @@ use tracing::{debug, warn};
 use crate::events::emit_item;
 use crate::state::AwidatState;
 
-/// Env-flag that opts the desktop into the approval-as-diff overlay
-/// for `apply_edl`. When unset (the default during the Step-5 rollout),
-/// every approval — including `apply_edl` — renders as the legacy
-/// inline ApprovalCard. Once 5.6–5.9 land and the overlay is wired
-/// end-to-end, commit 5.9 flips this default to on.
+/// Env-flag for the approval-as-diff overlay on `apply_edl`.
+/// **Default: ON.** Set `AWIDAT_DESKTOP_PROPOSAL_OVERLAY=0` to fall
+/// back to the legacy inline ApprovalCard (kept around as the
+/// escape hatch in case the overlay surfaces a regression on a
+/// proposal shape we haven't tested yet — drag-handle math for
+/// Insert / Untrim / etc).
 const PROPOSAL_OVERLAY_ENV: &str = "AWIDAT_DESKTOP_PROPOSAL_OVERLAY";
 
 fn proposal_overlay_enabled() -> bool {
-    matches!(
-        std::env::var(PROPOSAL_OVERLAY_ENV).as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE")
-    )
+    match std::env::var(PROPOSAL_OVERLAY_ENV).as_deref() {
+        Ok("0") | Ok("false") | Ok("FALSE") => false,
+        _ => true,
+    }
 }
 
 /// Forward `ApprovalRequest`s from the agent loop into either the
