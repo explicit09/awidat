@@ -372,8 +372,31 @@ current source range.\
 clip from a raw asset and inserts it on the named track (track is \
 created Video-kind if missing). The ONLY op that doesn't take an \
 `@@ anchor:` line — it builds a clip rather than locating one.\
-\n  - **Insert BRoll** / **Move Clip** / **Insert Transition**: \
-deferred to a later batch.\
+\n  - **Insert Transition**: `+ kind: <name>` and `+ duration_s: \
+<seconds>` (required). Anchored via `@@ between: ANCHOR_A and \
+ANCHOR_B` where the two anchors identify ADJACENT clips on the \
+same track (the transition sits between them at the cut). Common \
+kinds: `SMPTE_Dissolve` (cross-fade), `awidat.fade_in`, \
+`awidat.fade_out`. The render pipeline maps these to ffmpeg's \
+xfade transition names. duration_s applies symmetrically — half \
+reaches into the outgoing clip, half into the incoming. v1 does \
+not support transitions across gaps or chained transitions \
+sharing a clip; if you ask for both, the second one is dropped \
+at render time.\
+\n  - **Move Clip**: `+ to_position: <index>` (required). Moves \
+the anchored clip to a new position within its current track \
+(no cross-track moves in v1). Index is the clip's slot in the \
+post-move track, clamped to len-1.\
+\n  - **Insert BRoll**: `+ asset: <path>` and `+ duration_s: \
+<seconds>` (required). Optional `+ position: <replace|overlay>` \
+(default `overlay`). Anchored to a clip on the timeline. \
+`replace`: the leading duration_s of the anchor clip is swapped \
+for the broll. The anchor's residual tail (if any) stays right \
+after the broll on the same track. `overlay`: the broll lands on \
+a higher video track (a fresh `V<N+1>` is created if no other \
+video track exists), at the anchor clip's track-time start, with \
+a leading Gap on the overlay track so it lines up under the \
+anchor.\
 \n\n\
 **Anchors.** Each op identifies its target by content anchor — \
 `transcript_snippet`, `clip_uuid`, `scene_change_index` — not \
@@ -564,29 +587,6 @@ mod tests {
             FunctionCallError::RespondToModel(msg) => {
                 assert!(msg.contains("apply failed"));
                 assert!(msg.contains("Did you mean"));
-            }
-            other => panic!("want RespondToModel, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn unimplemented_op_surfaces_clear_error() {
-        let dir = project_with_three_clips();
-        let edl = "\
-*** Begin EDL
-*** Move Clip
-@@ anchor: clip_uuid=clip-0
-+ to_position: 2
-*** End EDL
-";
-        let err = ApplyEdlTool
-            .handle(invoke(serde_json::json!({"edl": edl})), ctx_at(dir.path()))
-            .await
-            .unwrap_err();
-        match err {
-            FunctionCallError::RespondToModel(msg) => {
-                assert!(msg.contains("Move Clip"));
-                assert!(msg.contains("not yet implemented"));
             }
             other => panic!("want RespondToModel, got {other:?}"),
         }
