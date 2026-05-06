@@ -20,6 +20,11 @@
 import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranscriptStore } from "./store";
+import { useMediaStore } from "../media/store";
+import {
+  timelineTimeForSource,
+  usePlaySegments,
+} from "../timeline/usePlaySegments";
 import type {
   Transcript,
   TranscriptSegment,
@@ -76,12 +81,21 @@ export function TranscriptView({ stem }: { stem: string | null }) {
     );
   }
 
-  return <LoadedTranscript transcript={state.transcript} />;
+  return <LoadedTranscript transcript={state.transcript} stem={stem} />;
 }
 
-function LoadedTranscript({ transcript }: { transcript: Transcript }) {
+function LoadedTranscript({
+  transcript,
+  stem,
+}: {
+  transcript: Transcript;
+  stem: string;
+}) {
   const t = transcript;
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const segments = usePlaySegments();
+  const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+  const requestSeek = useMediaStore((s) => s.requestSeek);
 
   // Pre-compute segment rows once per transcript. Words are sorted
   // by start_s (the backend already sorts on parse) so we can walk
@@ -117,6 +131,34 @@ function LoadedTranscript({ transcript }: { transcript: Transcript }) {
     overscan: 6,
   });
 
+  // Click-to-seek. Event delegation on the scroll container catches
+  // every word/segment click without registering thousands of
+  // handlers. Walks up to the nearest [data-word-start] (preferred,
+  // word-precision) or [data-segment-start] (fallback, when the
+  // segment lacked word-level alignment).
+  function onClick(e: React.MouseEvent<HTMLDivElement>) {
+    const target = (e.target as HTMLElement).closest(
+      "[data-word-start], [data-segment-start]",
+    ) as HTMLElement | null;
+    if (!target) return;
+    const sourceStr =
+      target.getAttribute("data-word-start") ??
+      target.getAttribute("data-segment-start");
+    if (!sourceStr) return;
+    const sourceTime = Number(sourceStr);
+    if (!Number.isFinite(sourceTime)) return;
+    // Map source-time → timeline-time when the clip is on the
+    // current timeline. If not (the clip was trimmed out), fall
+    // back to a source-time seek so the source-preview pane (if
+    // active) still jumps to the right spot.
+    const tlTime = timelineTimeForSource(segments, stem, sourceTime);
+    if (tlTime !== null) {
+      requestTimelineSeek(tlTime);
+    } else {
+      requestSeek(sourceTime);
+    }
+  }
+
   return (
     <div className="transcript-pane">
       <header className="transcript-meta">
@@ -128,7 +170,7 @@ function LoadedTranscript({ transcript }: { transcript: Transcript }) {
           {t.segments.length} segments · {t.words.length} words
         </span>
       </header>
-      <div ref={scrollRef} className="transcript-scroll">
+      <div ref={scrollRef} className="transcript-scroll" onClick={onClick}>
         <div
           style={{
             height: virtualizer.getTotalSize(),

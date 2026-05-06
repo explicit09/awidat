@@ -32,6 +32,9 @@ import { useTimelineStore } from "./store";
 export type PlaySegment = {
   /** Absolute path to the proxy mp4 — pass to convertFileSrc(). */
   proxyPath: string;
+  /** Proxy stem (filename without extension). Same id used by
+   *  `useMediaStore.proxies[].stem` and `read_transcript(stem)`. */
+  proxyStem: string;
   /** Start offset into the proxy media, in seconds. */
   sourceStart: number;
   /** End offset into the proxy media, in seconds. */
@@ -74,6 +77,7 @@ export function usePlaySegments(): PlaySegment[] {
       const sourceStart = item.source_start_s ?? 0;
       segments.push({
         proxyPath: item.proxy_path,
+        proxyStem: stemFromProxyPath(item.proxy_path),
         sourceStart,
         sourceEnd: sourceStart + item.duration_s,
         timelineStart: item.track_start_s,
@@ -86,6 +90,34 @@ export function usePlaySegments(): PlaySegment[] {
     segments.sort((a, b) => a.timelineStart - b.timelineStart);
     return segments;
   }, [snapshot]);
+}
+
+/** Extract the stem (filename minus extension) from a proxy path. */
+function stemFromProxyPath(path: string): string {
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const file = slash >= 0 ? path.slice(slash + 1) : path;
+  const dot = file.lastIndexOf(".");
+  return dot > 0 ? file.slice(0, dot) : file;
+}
+
+/**
+ * Map a `(stem, source-time)` pair to its timeline-time, if the
+ * stem appears as a segment whose source range covers the time.
+ * Used by the transcript pane to seek the timeline preview to the
+ * spot the user clicked. Returns `null` when the moment isn't
+ * currently on the timeline (the clip was trimmed out).
+ */
+export function timelineTimeForSource(
+  segments: PlaySegment[],
+  stem: string,
+  sourceTime: number,
+): number | null {
+  for (const seg of segments) {
+    if (seg.proxyStem !== stem) continue;
+    if (sourceTime < seg.sourceStart || sourceTime > seg.sourceEnd) continue;
+    return seg.timelineStart + (sourceTime - seg.sourceStart);
+  }
+  return null;
 }
 
 /**
