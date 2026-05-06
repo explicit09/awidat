@@ -29,6 +29,7 @@ export type { AdjustField } from "./generated/AdjustField";
 // `apps/desktop/src-tauri/src/lib.rs` — there is no runtime check.
 export const ITEM_EVENT = "awidat://item";
 export const TURN_END_EVENT = "awidat://turn-end";
+export const TIMELINE_CHANGED_EVENT = "awidat://timeline-changed";
 
 // Envelope shape emitted by the backend over `ITEM_EVENT`.
 import type { Item } from "./generated/Item";

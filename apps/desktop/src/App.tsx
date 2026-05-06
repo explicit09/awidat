@@ -9,16 +9,24 @@ import { useEffect } from "react";
 import { ProjectBanner } from "./app/ProjectBanner";
 import { ActionBar } from "./app/ActionBar";
 import { useProjectStore } from "./app/state";
+import { useAgentStore } from "./agent/store";
 import { ChatStream } from "./agent/ChatStream";
 import { Composer } from "./agent/Composer";
 import { MediaPane } from "./media/MediaPane";
+import { useMediaStore } from "./media/store";
 import { TimelinePane } from "./timeline/TimelinePane";
+import { useProposalStore } from "./timeline/proposal";
+import { useTimelineStore } from "./timeline/store";
 import "./App.css";
 
 function App() {
   const current = useProjectStore((s) => s.current);
   const setCurrent = useProjectStore((s) => s.setCurrent);
   const refresh = useProjectStore((s) => s.refresh);
+  const clearAgent = useAgentStore((s) => s.clear);
+  const clearProposal = useProposalStore((s) => s.clear);
+  const clearMediaSelection = useMediaStore((s) => s.select);
+  const refreshTimeline = useTimelineStore((s) => s.refresh);
 
   // Keep the banner's local-state callback wired to the store so any
   // path change (open / new / future close) propagates to Composer's
@@ -26,6 +34,15 @@ function App() {
   useEffect(() => {
     refresh().catch(() => {});
   }, [refresh]);
+
+  useEffect(() => {
+    clearAgent();
+    clearProposal();
+    clearMediaSelection(null);
+    if (current !== null) {
+      refreshTimeline().catch(() => {});
+    }
+  }, [current, clearAgent, clearProposal, clearMediaSelection, refreshTimeline]);
 
   const projectReady = current !== null;
 

@@ -35,11 +35,12 @@ pub async fn set_view_state(
 /// metadata rather than user text.
 pub fn format_view_context(view: &ViewState) -> String {
     let mm_ss = format_mm_ss(view.current_time_s);
-    let verb = if view.is_playing { "watching" } else { "viewing" };
-    format!(
-        "[user is {verb} {} at {mm_ss}]",
-        view.stem
-    )
+    let verb = if view.is_playing {
+        "watching"
+    } else {
+        "viewing"
+    };
+    format!("[user is {verb} {} at {mm_ss}]", view.stem)
 }
 
 fn format_mm_ss(seconds: f64) -> String {

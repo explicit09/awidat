@@ -28,6 +28,7 @@ mod state;
 use std::path::PathBuf;
 
 use state::AwidatState;
+use tauri::Manager;
 use tracing::{error, warn};
 
 /// Tauri entrypoint. Called from `main.rs`.
@@ -44,10 +45,10 @@ pub fn run() {
     // Pre-populate project_root from env if set, for dev convenience.
     if let Ok(p) = std::env::var("AWIDAT_DESKTOP_PROJECT") {
         let buf = PathBuf::from(&p);
-        if buf.is_dir() {
+        if buf.is_dir() && buf.join("project.otio.json").is_file() {
             *state.project_root.blocking_lock() = Some(buf);
         } else {
-            warn!(path = %p, "AWIDAT_DESKTOP_PROJECT is not a directory; ignoring");
+            warn!(path = %p, "AWIDAT_DESKTOP_PROJECT is not an awidat project; ignoring");
         }
     }
 
@@ -56,6 +57,17 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(state)
+        .setup(|app| {
+            if let Some(project_root) = app
+                .state::<AwidatState>()
+                .project_root
+                .blocking_lock()
+                .clone()
+            {
+                commands::project::allow_proxies_dir(app.handle(), &project_root);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::turn::start_turn,
             commands::turn::cancel_turn,

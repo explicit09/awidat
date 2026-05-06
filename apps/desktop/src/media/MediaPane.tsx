@@ -11,12 +11,14 @@ import { useEffect, useRef } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { useAgentStore } from "../agent/store";
+import { useProjectStore } from "../app/state";
 
 export function MediaPane() {
   const proxies = useMediaStore((s) => s.proxies);
   const selectedStem = useMediaStore((s) => s.selectedStem);
   const select = useMediaStore((s) => s.select);
   const refresh = useMediaStore((s) => s.refresh);
+  const projectRoot = useProjectStore((s) => s.current);
 
   const items = useAgentStore((s) => s.items);
 
@@ -25,7 +27,7 @@ export function MediaPane() {
   // written to disk.
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  }, [projectRoot, refresh]);
 
   useEffect(() => {
     const completedTranscodes = items.filter(
@@ -91,7 +93,7 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
   const isPlaying = useMediaStore((s) => s.isPlaying);
   const seekRequestId = useMediaStore((s) => s.seekRequestId);
   const seekTargetS = useMediaStore((s) => s.seekTargetS);
-  const lastPushedSecondRef = useRef<number>(-1);
+  const lastPushedViewRef = useRef<string>("");
 
   // External seek requests (from timeline canvas click/drag) drive
   // the video element imperatively. We watch seekRequestId rather
@@ -113,7 +115,7 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
       v.currentTime = 0;
       v.pause();
     }
-    lastPushedSecondRef.current = -1;
+    lastPushedViewRef.current = "";
   }, [src]);
 
   // Push view-state to the backend whenever stem / play state /
@@ -123,8 +125,9 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
   useEffect(() => {
     if (!stem) return;
     const sec = Math.floor(currentTime);
-    if (sec === lastPushedSecondRef.current) return;
-    lastPushedSecondRef.current = sec;
+    const key = `${stem}:${sec}:${isPlaying ? "play" : "pause"}`;
+    if (key === lastPushedViewRef.current) return;
+    lastPushedViewRef.current = key;
     invoke("set_view_state", {
       stem,
       currentTimeS: currentTime,

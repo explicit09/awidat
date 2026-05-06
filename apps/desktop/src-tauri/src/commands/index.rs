@@ -21,10 +21,7 @@ use crate::state::{AwidatState, JobHandle};
 /// so the auto-chain in `import.rs` can call the real implementation
 /// directly without re-entering the command machinery.
 #[tauri::command]
-pub async fn index_project(
-    app: AppHandle,
-    state: State<'_, AwidatState>,
-) -> Result<(), String> {
+pub async fn index_project(app: AppHandle, state: State<'_, AwidatState>) -> Result<(), String> {
     index_project_inner(&app, &state).await
 }
 
@@ -41,23 +38,33 @@ pub async fn index_project_inner(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
+    index_project_at_root(app, state, project_root).await
+}
 
+/// Run every configured indexer over every asset under `project_root`.
+/// The explicit root keeps background post-import chains tied to the
+/// project that created them, even if the UI opens another project.
+pub async fn index_project_at_root(
+    app: &AppHandle,
+    state: &State<'_, AwidatState>,
+    project_root: std::path::PathBuf,
+) -> Result<(), String> {
     // Load config (project-scoped overlays the global one). If no
     // indexers are configured the message mirrors the CLI's so a
     // user troubleshooting can match.
-    let config = Config::load(Some(&project_root))
-        .map_err(|e| format!("load config: {e}"))?;
+    let config = Config::load(Some(&project_root)).map_err(|e| format!("load config: {e}"))?;
     let servers: Vec<_> = config.indexers().cloned().collect();
     if servers.is_empty() {
-        return Err("no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \
+        return Err(
+            "no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \
                     to your project's `.awidat/config.toml` or `~/.config/awidat/config.toml`."
-            .into());
+                .into(),
+        );
     }
 
     // Discover assets under raw/ — same walk as the CLI's
     // `index_cmd::collect_assets` minus the explicit-paths branch.
-    let assets = collect_assets(&project_root)
-        .map_err(|e| format!("scan raw/: {e}"))?;
+    let assets = collect_assets(&project_root).map_err(|e| format!("scan raw/: {e}"))?;
     if assets.is_empty() {
         return Err(format!(
             "no assets to index. Drop source files under '{}/raw' or use Import.",
@@ -74,7 +81,11 @@ pub async fn index_project_inner(
         app.clone(),
         job_id.clone(),
         JobKind::Indexing,
-        format!("indexing {} asset(s) with {} indexer(s)", assets.len(), servers.len()),
+        format!(
+            "indexing {} asset(s) with {} indexer(s)",
+            assets.len(),
+            servers.len()
+        ),
     );
 
     // Channel: `awidat_index::run`'s callback (sync, fires from the
@@ -100,10 +111,7 @@ pub async fn index_project_inner(
             match evt {
                 IndexProgress::Started { total: t } => {
                     total = t;
-                    emitter_for_task.progress(
-                        Some(0),
-                        format!("0 / {t} pairs"),
-                    );
+                    emitter_for_task.progress(Some(0), format!("0 / {t} pairs"));
                 }
                 IndexProgress::PairCompleted {
                     outcome,
@@ -118,10 +126,7 @@ pub async fn index_project_inner(
                     };
                     last_percent = pct;
                     let label = pair_label(&outcome);
-                    emitter_for_task.progress(
-                        Some(pct),
-                        format!("{label} · {completed} / {t}"),
-                    );
+                    emitter_for_task.progress(Some(pct), format!("{label} · {completed} / {t}"));
                 }
             }
         }
@@ -130,7 +135,9 @@ pub async fn index_project_inner(
         // mirrors progress.
         let _ = (last_percent, total, app_for_task);
         // Preserve the emitter for the outer task's final transition.
-        let _ = done_tx.send(JobOutcome { emitter: emitter_for_task });
+        let _ = done_tx.send(JobOutcome {
+            emitter: emitter_for_task,
+        });
     });
 
     // Drive the dispatcher.
@@ -139,14 +146,7 @@ pub async fn index_project_inner(
         version: env!("CARGO_PKG_VERSION").into(),
     };
 
-    let dispatch = awidat_index::run(
-        &project_root,
-        &servers,
-        &assets,
-        client_info,
-        4,
-        Some(cb),
-    );
+    let dispatch = awidat_index::run(&project_root, &servers, &assets, client_info, 4, Some(cb));
 
     let result = tokio::select! {
         _ = cancel.cancelled() => Err("cancelled".into()),
@@ -173,7 +173,12 @@ pub async fn index_project_inner(
                 // user (or the agent) guessing.
                 let mut detail = format!("indexing finished with failures: {summary}");
                 for outcome in &report.outcomes {
-                    if let PairOutcome::Failed { indexer, asset, message } = outcome {
+                    if let PairOutcome::Failed {
+                        indexer,
+                        asset,
+                        message,
+                    } = outcome
+                    {
                         // First line of the message is usually the
                         // root cause; trailing lines are stack
                         // context. Cap to first line + 200 chars so

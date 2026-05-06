@@ -16,7 +16,7 @@ use crate::state::AwidatState;
 /// the scope is otherwise empty (set in tauri.conf.json) so the
 /// asset protocol cannot be abused to read arbitrary files. Called
 /// from `set_project_root` and `init_project`.
-fn allow_proxies_dir(app: &AppHandle, project_root: &Path) {
+pub(crate) fn allow_proxies_dir(app: &AppHandle, project_root: &Path) {
     let proxies = project_root.join(".awidat").join("proxies");
     // The dir may not exist yet (first import will create it). Allow
     // it preemptively — the scope check is a glob, not a stat.
@@ -42,6 +42,7 @@ pub async fn set_project_root(
     state: State<'_, AwidatState>,
     path: String,
 ) -> Result<(), String> {
+    ensure_project_switch_allowed(&state).await?;
     let buf = PathBuf::from(&path);
     if !buf.is_dir() {
         return Err(format!("not a directory: {path}"));
@@ -72,9 +73,7 @@ pub async fn set_project_root(
 
 /// Read the currently-configured project root, if any.
 #[tauri::command]
-pub async fn current_project_root(
-    state: State<'_, AwidatState>,
-) -> Result<Option<String>, String> {
+pub async fn current_project_root(state: State<'_, AwidatState>) -> Result<Option<String>, String> {
     Ok(state
         .project_root
         .lock()
@@ -94,6 +93,7 @@ pub async fn init_project(
     parent_dir: String,
     name: String,
 ) -> Result<String, String> {
+    ensure_project_switch_allowed(&state).await?;
     let parent = PathBuf::from(&parent_dir);
     if !parent.is_dir() {
         return Err(format!("parent is not a directory: {parent_dir}"));
@@ -145,6 +145,19 @@ pub async fn init_project(
     Ok(project_dir.to_string_lossy().into_owned())
 }
 
+async fn ensure_project_switch_allowed(state: &State<'_, AwidatState>) -> Result<(), String> {
+    if state.turn.lock().await.is_some() {
+        return Err("cannot change projects while a turn is running; stop it first".into());
+    }
+    if !state.pending_proposals.lock().await.is_empty() {
+        return Err("cannot change projects while an edit proposal is pending".into());
+    }
+    if !state.jobs.lock().await.is_empty() {
+        return Err("cannot change projects while an import/index/transcode job is running".into());
+    }
+    Ok(())
+}
+
 /// Return the most recently opened project paths, newest first.
 /// Stale paths (deleted directories, moved projects) are filtered
 /// out so the UI never offers a path that won't open.
@@ -163,7 +176,8 @@ pub async fn recent_projects() -> Result<Vec<String>, String> {
         serde_json::from_slice(&bytes).map_err(|e| format!("parse recents: {e}"))?;
     let mut out = Vec::with_capacity(raw.len());
     for p in raw {
-        if PathBuf::from(&p).is_dir() {
+        let path = PathBuf::from(&p);
+        if path.is_dir() && path.join("project.otio.json").is_file() {
             out.push(p);
         }
     }
@@ -189,8 +203,7 @@ async fn update_recents(p: &std::path::Path) -> std::io::Result<()> {
     existing.retain(|x| x != &p_str);
     existing.insert(0, p_str);
     existing.truncate(MAX_RECENTS);
-    let serialized = serde_json::to_vec_pretty(&existing)
-        .unwrap_or_else(|_| b"[]".to_vec());
+    let serialized = serde_json::to_vec_pretty(&existing).unwrap_or_else(|_| b"[]".to_vec());
     fs::write(&file, serialized).await?;
     Ok(())
 }
@@ -198,10 +211,7 @@ async fn update_recents(p: &std::path::Path) -> std::io::Result<()> {
 /// Cancel an in-flight long job (yt-dlp download, indexer run) by
 /// its protocol-Item id. No-op if the id isn't currently running.
 #[tauri::command]
-pub async fn cancel_job(
-    state: State<'_, AwidatState>,
-    job_id: String,
-) -> Result<(), String> {
+pub async fn cancel_job(state: State<'_, AwidatState>, job_id: String) -> Result<(), String> {
     if let Some(handle) = state.jobs.lock().await.get(&job_id) {
         handle.cancel.cancel();
     }

@@ -1,8 +1,10 @@
 //! Turn lifecycle: `start_turn`, `cancel_turn`,
 //! `respond_approval`, `respond_user_input`.
 
-use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
+use std::collections::HashMap;
+
 use awidat_core::SessionEvent;
+use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
 use awidat_desktop_protocol::{Id, Item, ItemLifecycle, PlanStep};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::mpsc;
@@ -95,7 +97,9 @@ pub async fn start_turn(
     let cancel_for_turn = cancel.clone();
     let app_for_turn = app.clone();
     tokio::spawn(async move {
-        let result = session_for_turn.run_turn(model_input, cancel_for_turn).await;
+        let result = session_for_turn
+            .run_turn(model_input, cancel_for_turn)
+            .await;
         let payload = TurnEndEvent {
             error: match result {
                 Ok(()) => None,
@@ -204,6 +208,10 @@ struct TextStreamer {
     /// Active text item id + accumulated text. None when no text item
     /// is currently open.
     active: Option<(Id, String)>,
+    /// Latest tool args by call id. ToolResult events do not carry
+    /// args, but the frontend's upsert replaces by id, so Completed
+    /// must replay the latest args instead of `{}`.
+    tool_args: HashMap<String, serde_json::Value>,
 }
 
 impl TextStreamer {
@@ -256,6 +264,20 @@ impl TextStreamer {
             None => vec![],
         }
     }
+
+    fn start_tool(&mut self, id: &str) {
+        self.tool_args.insert(id.to_string(), serde_json::json!({}));
+    }
+
+    fn update_tool_args(&mut self, id: &str, args: serde_json::Value) {
+        self.tool_args.insert(id.to_string(), args);
+    }
+
+    fn take_tool_args(&mut self, id: &str) -> serde_json::Value {
+        self.tool_args
+            .remove(id)
+            .unwrap_or_else(|| serde_json::json!({}))
+    }
 }
 
 /// Map one [`SessionEvent`] into zero or more protocol [`Item`]s.
@@ -264,30 +286,39 @@ fn map_event(ev: &SessionEvent, streamer: &mut TextStreamer) -> Vec<Item> {
         SessionEvent::TurnStart | SessionEvent::MessageStart { .. } => vec![],
         SessionEvent::TextDelta(t) => streamer.on_delta(t),
         SessionEvent::SamplingComplete { .. } => streamer.close(),
-        SessionEvent::ToolCallStart { id, name } => vec![Item::ToolCall {
-            id: Id::new(id),
-            phase: ItemLifecycle::Started,
-            name: name.clone(),
-            args: serde_json::json!({}),
-            result: None,
-        }],
-        SessionEvent::ToolCallArgs { id, name, args } => vec![Item::ToolCall {
-            id: Id::new(id),
-            phase: ItemLifecycle::Delta,
-            name: name.clone(),
-            args: args.clone(),
-            result: None,
-        }],
-        SessionEvent::ToolResult { id, name, result } => vec![Item::ToolCall {
-            id: Id::new(id),
-            phase: ItemLifecycle::Completed,
-            name: name.clone(),
-            args: serde_json::json!({}),
-            result: Some(match result {
-                Ok(s) => Ok(s.clone()),
-                Err(e) => Err(e.clone()),
-            }),
-        }],
+        SessionEvent::ToolCallStart { id, name } => {
+            streamer.start_tool(id);
+            vec![Item::ToolCall {
+                id: Id::new(id),
+                phase: ItemLifecycle::Started,
+                name: name.clone(),
+                args: serde_json::json!({}),
+                result: None,
+            }]
+        }
+        SessionEvent::ToolCallArgs { id, name, args } => {
+            streamer.update_tool_args(id, args.clone());
+            vec![Item::ToolCall {
+                id: Id::new(id),
+                phase: ItemLifecycle::Delta,
+                name: name.clone(),
+                args: args.clone(),
+                result: None,
+            }]
+        }
+        SessionEvent::ToolResult { id, name, result } => {
+            let args = streamer.take_tool_args(id);
+            vec![Item::ToolCall {
+                id: Id::new(id),
+                phase: ItemLifecycle::Completed,
+                name: name.clone(),
+                args,
+                result: Some(match result {
+                    Ok(s) => Ok(s.clone()),
+                    Err(e) => Err(e.clone()),
+                }),
+            }]
+        }
         SessionEvent::EditPlanUpdate { items, note } => vec![Item::Plan {
             id: Id::new("plan"),
             phase: ItemLifecycle::Completed,
@@ -322,5 +353,38 @@ fn map_event(ev: &SessionEvent, streamer: &mut TextStreamer) -> Vec<Item> {
             });
             out
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_result_preserves_latest_args_for_upsert() {
+        let mut streamer = TextStreamer::default();
+        let start = SessionEvent::ToolCallStart {
+            id: "call-1".into(),
+            name: "apply_edl".into(),
+        };
+        let args = SessionEvent::ToolCallArgs {
+            id: "call-1".into(),
+            name: "apply_edl".into(),
+            args: serde_json::json!({"edl": "*** Begin EDL\n*** End EDL\n"}),
+        };
+        let result = SessionEvent::ToolResult {
+            id: "call-1".into(),
+            name: "apply_edl".into(),
+            result: Ok("done".into()),
+        };
+
+        let _ = map_event(&start, &mut streamer);
+        let _ = map_event(&args, &mut streamer);
+        let completed = map_event(&result, &mut streamer);
+
+        let [Item::ToolCall { args, .. }] = completed.as_slice() else {
+            panic!("expected one completed tool call");
+        };
+        assert_eq!(args["edl"], "*** Begin EDL\n*** End EDL\n");
     }
 }

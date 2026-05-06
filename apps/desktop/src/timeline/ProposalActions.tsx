@@ -18,6 +18,12 @@ export function ProposalActions() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setShowEdl(false);
+    setBusy(false);
+    setError(null);
+  }, [proposal?.callId]);
+
+  useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (!proposal) return;
       // Don't capture when the user is typing in the composer or

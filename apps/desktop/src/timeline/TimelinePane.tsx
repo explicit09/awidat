@@ -4,7 +4,8 @@
 // Refreshes when the project changes or when an apply_edl tool
 // call lands in chat (the agent just rewrote the OTIO).
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "./store";
 import { useMediaStore } from "../media/store";
 import { useAgentStore } from "../agent/store";
@@ -12,7 +13,7 @@ import { useProjectStore } from "../app/state";
 import { useProposalStore } from "./proposal";
 import { ProposalActions } from "./ProposalActions";
 import { ProposalHandles } from "./ProposalHandles";
-import type { AppliedDiff } from "../protocol";
+import { TIMELINE_CHANGED_EVENT, type AppliedDiff } from "../protocol";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -29,6 +30,7 @@ const CLIP_PADDING_X = 6;
 
 export function TimelinePane() {
   const projectReady = useProjectStore((s) => s.current !== null);
+  const projectRoot = useProjectStore((s) => s.current);
   const snapshot = useTimelineStore((s) => s.snapshot);
   const refresh = useTimelineStore((s) => s.refresh);
   const items = useAgentStore((s) => s.items);
@@ -39,7 +41,18 @@ export function TimelinePane() {
     if (projectReady) {
       refresh();
     }
-  }, [projectReady, refresh]);
+  }, [projectReady, projectRoot, refresh]);
+
+  useEffect(() => {
+    const unlisten = listen<string>(TIMELINE_CHANGED_EVENT, (event) => {
+      if (useProjectStore.getState().current === event.payload) {
+        refresh();
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+  }, [refresh]);
 
   // Refresh after every completed apply_edl OR every completed
   // proposed_edit. Both paths can mutate the OTIO on disk:
@@ -60,7 +73,11 @@ export function TimelinePane() {
         it.phase === "completed",
     ).length +
     items.filter(
-      (it) => it.kind === "proposed_edit" && it.phase === "completed",
+      (it) =>
+        it.kind === "proposed_edit" &&
+        it.phase === "completed" &&
+        it.source.source === "user" &&
+        it.snapshot.tracks.length > 0,
     ).length;
   useEffect(() => {
     if (projectReady && completedEdits > 0) {
@@ -104,19 +121,20 @@ function TimelineSurface({
     pps: PX_PER_SECOND_BASE,
     width: 0,
   });
+  const handleLayout = useCallback((pps: number, width: number) => {
+    // Only update if it actually changed — paint() runs on
+    // every frame React re-renders, but layout changes only
+    // on resize / snapshot swap.
+    setLayout((prev) =>
+      prev.pps === pps && prev.width === width ? prev : { pps, width },
+    );
+  }, []);
   return (
     <>
       <TimelineCanvas
         snapshot={snapshot}
         currentTime={currentTime}
-        onLayout={(pps, width) => {
-          // Only update if it actually changed — paint() runs on
-          // every frame React re-renders, but layout changes only
-          // on resize / snapshot swap.
-          setLayout((prev) =>
-            prev.pps === pps && prev.width === width ? prev : { pps, width },
-          );
-        }}
+        onLayout={handleLayout}
       />
       <ProposalHandles containerWidth={layout.width} pps={layout.pps} />
     </>

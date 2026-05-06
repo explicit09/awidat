@@ -59,13 +59,14 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                 if let (Some(edl_text), Some(project_root)) = (edl_text, project_root_opt) {
                     // Decompose the request so we can hand `reply`
                     // to build_proposal but keep the rest available
-                    // for an error-recovery path (legacy
-                    // ApprovalRequest can't be re-issued — the
-                    // oneshot is one-time — so on failure we surface
-                    // the parse/apply error to chat and Deny.)
-                    let ApprovalRequest {
-                        call_id, reply, ..
-                    } = req;
+                    // for an error-recovery path. If preview
+                    // construction fails during parse/apply,
+                    // build_proposal allows the underlying tool call
+                    // to continue so the agent receives the same
+                    // actionable apply_edl error it would see in the
+                    // TUI. We also surface the preview failure to chat
+                    // so the user knows why no overlay appeared.
+                    let ApprovalRequest { call_id, reply, .. } = req;
                     if let Err(e) = crate::commands::proposal::build_proposal(
                         &app,
                         &state,
@@ -81,25 +82,20 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                     {
                         warn!(error = %e, call_id = %call_id, "build_proposal failed");
                         // build_proposal failed before stashing the
-                        // PendingProposal AND took ownership of the
-                        // reply oneshot. The oneshot has already been
-                        // consumed/dropped inside build_proposal's
-                        // error path → the agent saw Deny. Surface
-                        // the actual parse/apply error to chat as an
-                        // Item::Error so the user knows why nothing
-                        // showed up.
+                        // PendingProposal. For parse/apply failures,
+                        // it allowed the original apply_edl call to
+                        // proceed and fail in the tool handler, giving
+                        // the agent a self-correction path. Surface
+                        // the preview error too so the user knows why
+                        // nothing showed up.
                         emit_item(
                             &app,
                             Item::Error {
                                 id: Id::new(format!(
                                     "proposal-err-{}",
-                                    chrono::Utc::now()
-                                        .timestamp_nanos_opt()
-                                        .unwrap_or(0)
+                                    chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
                                 )),
-                                message: format!(
-                                    "couldn't build proposal preview: {e}",
-                                ),
+                                message: format!("couldn't build proposal preview: {e}",),
                             },
                         );
                     }
@@ -141,7 +137,11 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                 tool_name: req.tool_name.clone(),
                 args_summary: req.args_summary.clone(),
             };
-            state.pending_approvals.lock().await.insert(call_id, req.reply);
+            state
+                .pending_approvals
+                .lock()
+                .await
+                .insert(call_id, req.reply);
             emit_item(&app, item);
         }
         debug!("approval bridge closed");

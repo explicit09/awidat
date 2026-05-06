@@ -4,6 +4,8 @@
 //! `apps/desktop/src/protocol/index.ts` — there's no runtime check,
 //! changes have to land on both sides.
 
+use std::path::Path;
+
 use awidat_desktop_protocol::Item;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -14,6 +16,10 @@ pub const ITEM_EVENT: &str = "awidat://item";
 
 /// Fires once per turn when the run-loop returns.
 pub const TURN_END_EVENT: &str = "awidat://turn-end";
+
+/// Fires when the backend mutates `project.otio.json` outside the
+/// agent tool-result stream, e.g. first-import auto-insert.
+pub const TIMELINE_CHANGED_EVENT: &str = "awidat://timeline-changed";
 
 /// Wraps an [`Item`] for transport over Tauri's event bus. Adds an
 /// envelope so we can grow it (turn-id, thread-id correlation) later
@@ -38,6 +44,14 @@ pub struct TurnEndEvent {
 pub fn emit_item(app: &AppHandle, item: Item) {
     if let Err(e) = app.emit(ITEM_EVENT, ItemEvent { item }) {
         warn!(error = %e, "emit item failed");
+    }
+}
+
+/// Notify the frontend that one project's on-disk timeline changed.
+pub fn emit_timeline_changed(app: &AppHandle, project_root: &Path) {
+    let payload = project_root.to_string_lossy().into_owned();
+    if let Err(e) = app.emit(TIMELINE_CHANGED_EVENT, payload) {
+        warn!(error = %e, "emit timeline-changed failed");
     }
 }
 

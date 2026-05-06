@@ -63,27 +63,45 @@ pub async fn build_proposal(
     source: ProposalSource,
     reply: Option<tokio::sync::oneshot::Sender<ApprovalDecision>>,
 ) -> Result<(), String> {
-    let envelope = parse(&edl_text).map_err(|e| format!("parse EDL: {e}"))?;
+    let mut reply = reply;
+    let envelope = match parse(&edl_text) {
+        Ok(envelope) => envelope,
+        Err(e) => {
+            allow_agent_to_receive_apply_error(&mut reply);
+            return Err(format!("parse EDL: {e}"));
+        }
+    };
 
     let project_root_buf = project_root.to_path_buf();
-    let project = tokio::task::spawn_blocking(move || Project::read(&project_root_buf))
-        .await
-        .map_err(|e| format!("project join: {e}"))?
-        .map_err(|e| format!("project read: {e}"))?;
+    let project = match tokio::task::spawn_blocking(move || Project::read(&project_root_buf)).await
+    {
+        Ok(Ok(project)) => project,
+        Ok(Err(e)) => {
+            allow_agent_to_receive_apply_error(&mut reply);
+            return Err(format!("project read: {e}"));
+        }
+        Err(e) => return Err(format!("project join: {e}")),
+    };
 
     let original_timeline = project.timeline.clone();
     let envelope_for_apply = envelope.clone();
     let project_root_for_ctx = project_root.to_path_buf();
     let original_for_apply = original_timeline.clone();
     let (proposed_timeline, applied) =
-        tokio::task::spawn_blocking(move || -> Result<_, ApplyError> {
+        match tokio::task::spawn_blocking(move || -> Result<_, ApplyError> {
             let ctx = awidat_core::edl::AnchorContext::with_project_root(&project_root_for_ctx);
             let (proposed, outcome) = apply(&original_for_apply, &envelope_for_apply, &ctx)?;
             Ok((proposed, outcome.applied))
         })
         .await
-        .map_err(|e| format!("apply join: {e}"))?
-        .map_err(|e| format!("apply: {e}"))?;
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                allow_agent_to_receive_apply_error(&mut reply);
+                return Err(format!("apply: {e}"));
+            }
+            Err(e) => return Err(format!("apply join: {e}")),
+        };
 
     let snapshot =
         crate::commands::timeline::flatten_timeline_public(&proposed_timeline, project_root);
@@ -121,6 +139,14 @@ pub async fn build_proposal(
         },
     );
     Ok(())
+}
+
+fn allow_agent_to_receive_apply_error(
+    reply: &mut Option<tokio::sync::oneshot::Sender<ApprovalDecision>>,
+) {
+    if let Some(reply) = reply.take() {
+        let _ = reply.send(ApprovalDecision::Allow);
+    }
 }
 
 /// User accepted the proposal (possibly with adjustments). Three
@@ -166,8 +192,8 @@ pub async fn accept_proposal(
         let project_root = proposal.project_root.clone();
         let proposed_timeline = proposal.proposed_timeline.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let mut project = Project::read(&project_root)
-                .map_err(|e| format!("project read: {e}"))?;
+            let mut project =
+                Project::read(&project_root).map_err(|e| format!("project read: {e}"))?;
             project.timeline = proposed_timeline;
             project
                 .write(&project_root)
@@ -212,7 +238,18 @@ pub async fn accept_proposal(
         Item::ProposedEdit {
             id: Id::new(&call_id),
             phase: ItemLifecycle::Completed,
-            source: ProposalSource::User, // accept-time source label is informational
+            // Refresh semantics on the frontend key off this completed
+            // source: User means the desktop already wrote the proposed
+            // timeline; Agent means the accepted original apply_edl is
+            // about to run and emit its own tool completion after disk
+            // write.
+            source: if desktop_writes {
+                ProposalSource::User
+            } else {
+                ProposalSource::Agent {
+                    tool_name: "apply_edl".into(),
+                }
+            },
             edl_text: String::new(),
             snapshot,
             diff_hints,
@@ -301,10 +338,16 @@ pub async fn adjust_proposal(
     proposal.proposed_timeline = proposed_timeline.clone();
     proposal.applied = applied.clone();
 
-    let snapshot =
-        crate::commands::timeline::flatten_timeline_public(&proposed_timeline, &proposal.project_root);
-    let diff_hints =
-        build_diff_hints(&proposal.envelope, &applied, &proposal.original_timeline, &proposed_timeline);
+    let snapshot = crate::commands::timeline::flatten_timeline_public(
+        &proposed_timeline,
+        &proposal.project_root,
+    );
+    let diff_hints = build_diff_hints(
+        &proposal.envelope,
+        &applied,
+        &proposal.original_timeline,
+        &proposed_timeline,
+    );
     let summary = summarize_envelope(&proposal.envelope);
     let edl_text = String::new(); // EDL text could be re-serialized; not needed for Delta
 
@@ -428,14 +471,19 @@ fn build_diff_hints(
                     });
                 }
             }
-            EdlOp::InsertClip { track, .. } => {
-                // Find the named track in the proposed snapshot; the
-                // inserted item lives at the end of it (or at
-                // at_position, but the resulting index is the same
-                // for our render purposes since there are no other
-                // ops competing for it in this op's own application).
+            EdlOp::InsertClip {
+                track,
+                at_position,
+                name,
+                ..
+            } => {
+                // Find the named track in the proposed snapshot. Use
+                // the explicit inserted name when present; otherwise
+                // use the requested insertion index clamped to the
+                // original track length. This keeps middle inserts
+                // highlighted where they actually landed.
                 if let Some((track_index, item_index)) =
-                    find_inserted_position(proposed, track, original, op_index, applied)
+                    find_inserted_position(proposed, track, original, *at_position, name.as_deref())
                 {
                     hints.push(AppliedDiff::Insert {
                         op_index,
@@ -445,9 +493,8 @@ fn build_diff_hints(
                 }
             }
             // F2 ops; not rendered in v1.
-            EdlOp::InsertBRoll { .. }
-            | EdlOp::MoveClip { .. }
-            | EdlOp::InsertTransition { .. } => {}
+            EdlOp::InsertBRoll { .. } | EdlOp::MoveClip { .. } | EdlOp::InsertTransition { .. } => {
+            }
         }
     }
     hints
@@ -456,10 +503,7 @@ fn build_diff_hints(
 /// Read a clip's source_range bounds at the given locator. Returns
 /// (0.0, 0.0) for non-clip locators (transitions/gaps shouldn't be
 /// the target of trim ops; defensive).
-fn clip_source_range(
-    timeline: &Timeline,
-    loc: awidat_core::edl::ClipLocator,
-) -> (f64, f64) {
+fn clip_source_range(timeline: &Timeline, loc: awidat_core::edl::ClipLocator) -> (f64, f64) {
     use awidat_proto::otio::{StackChild, TrackChild};
     let Some(StackChild::Track(track)) = timeline.tracks.children.get(loc.track_index) else {
         return (0.0, 0.0);
@@ -482,25 +526,37 @@ fn clip_source_range(
 fn find_inserted_position(
     proposed: &Timeline,
     track_name: &str,
-    _original: &Timeline,
-    _op_index: usize,
-    _applied: &[awidat_core::edl::AppliedOp],
+    original: &Timeline,
+    at_position: Option<usize>,
+    name: Option<&str>,
 ) -> Option<(usize, usize)> {
     use awidat_proto::otio::{StackChild, TrackChild};
+    let original_len = original
+        .tracks
+        .children
+        .iter()
+        .find_map(|child| match child {
+            StackChild::Track(track) if track.name == track_name => Some(track.children.len()),
+            _ => None,
+        })
+        .unwrap_or(0);
     for (track_index, child) in proposed.tracks.children.iter().enumerate() {
-        let StackChild::Track(track) = child else { continue };
+        let StackChild::Track(track) = child else {
+            continue;
+        };
         if track.name != track_name {
             continue;
         }
-        // Naive "last clip in this track is the insert" — works for
-        // the common append case. For at_position-in-the-middle
-        // we'd need to diff with `original`; skip that edge case in
-        // v1 (rendering as if appended is still a defensible
-        // overlay).
-        for (item_index, tc) in track.children.iter().enumerate().rev() {
-            if matches!(tc, TrackChild::Clip(_)) {
-                return Some((track_index, item_index));
+        if let Some(name) = name {
+            for (item_index, tc) in track.children.iter().enumerate() {
+                if matches!(tc, TrackChild::Clip(c) if c.name == name) {
+                    return Some((track_index, item_index));
+                }
             }
+        }
+        let item_index = at_position.unwrap_or(original_len).min(original_len);
+        if matches!(track.children.get(item_index), Some(TrackChild::Clip(_))) {
+            return Some((track_index, item_index));
         }
     }
     None
@@ -573,7 +629,11 @@ fn summarize_envelope(envelope: &EdlEnvelope) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_core::edl::{Anchor, EdlOp};
+    use awidat_core::edl::{Anchor, AppliedOp, ClipLocator, EdlOp};
+    use awidat_proto::otio::{
+        Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
+        TrackChild, TrackKind,
+    };
 
     #[test]
     fn summarize_counts_per_op_kind() {
@@ -678,5 +738,61 @@ mod tests {
         };
         let err = apply_adjustment_to_envelope(&mut env, &adj).unwrap_err();
         assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    #[test]
+    fn trim_diff_hint_uses_applied_locator_for_handles() {
+        let mut original = Timeline::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut clip = Clip::empty("clip-0".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/a.mp4"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(10.0 * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(clip));
+        original.tracks.children.push(StackChild::Track(track));
+
+        let mut proposed = original.clone();
+        let StackChild::Track(track) = &mut proposed.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &mut track.children[0] else {
+            panic!()
+        };
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(5.0 * 24.0, 24.0),
+        ));
+
+        let envelope = EdlEnvelope {
+            ops: vec![EdlOp::TrimClip {
+                anchor: Anchor::ClipUuid {
+                    uuid: "clip-0".into(),
+                },
+                start: None,
+                end: Some(5.0),
+            }],
+        };
+        let applied = vec![AppliedOp {
+            index: 0,
+            description: "trimmed".into(),
+            locator: Some(ClipLocator {
+                track_index: 0,
+                child_index: 0,
+            }),
+        }];
+
+        let hints = build_diff_hints(&envelope, &applied, &original, &proposed);
+        assert!(matches!(
+            hints.as_slice(),
+            [AppliedDiff::TrimEdge {
+                op_index: 0,
+                track_index: 0,
+                item_index: 0,
+                side: Side::Right,
+                delta_s
+            }] if (*delta_s - 5.0).abs() < 1e-9
+        ));
     }
 }

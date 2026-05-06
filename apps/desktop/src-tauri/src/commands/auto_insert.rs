@@ -18,7 +18,9 @@ use awidat_proto::project::Project;
 /// start with audio-tracking placeholders.
 pub fn timeline_has_video_clips(project: &Project) -> bool {
     for stack_child in &project.timeline.tracks.children {
-        let StackChild::Track(track) = stack_child else { continue };
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
         if !matches!(track.kind, TrackKind::Video) {
             continue;
         }
@@ -60,8 +62,8 @@ pub async fn auto_insert_if_empty(
     let project_root = project_root.to_path_buf();
     let asset_abs_path = asset_abs_path.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<bool, String> {
-        let project = Project::read(&project_root)
-            .map_err(|e| format!("auto-insert: read project: {e}"))?;
+        let project =
+            Project::read(&project_root).map_err(|e| format!("auto-insert: read project: {e}"))?;
 
         if timeline_has_video_clips(&project) {
             // User has clips on the timeline already — don't disturb.
@@ -92,21 +94,18 @@ pub async fn auto_insert_if_empty(
         };
 
         let ctx = AnchorContext::with_project_root(&project_root);
-        let (new_timeline, _outcome) =
-            apply(&project.timeline, &envelope, &ctx).map_err(|e| {
-                format!("auto-insert: edl apply: {e}")
-            })?;
+        let (new_timeline, _outcome) = apply(&project.timeline, &envelope, &ctx)
+            .map_err(|e| format!("auto-insert: edl apply: {e}"))?;
 
         // Persist. Project::write writes the OTIO + edit-plan +
         // manifest atomically; we only mutated the timeline.
         let mut updated = project;
         updated.timeline = new_timeline;
-        updated.write(&project_root).map_err(|e| {
-            format!("auto-insert: write project: {e}")
-        })?;
+        updated
+            .write(&project_root)
+            .map_err(|e| format!("auto-insert: write project: {e}"))?;
         Ok(true)
     })
     .await
     .map_err(|e| format!("auto-insert: join: {e}"))?
 }
-

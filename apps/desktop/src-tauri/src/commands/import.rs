@@ -66,9 +66,7 @@ pub async fn import_local(
         Ok(dst) => {
             let summary = format!(
                 "imported {}",
-                dst.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
+                dst.file_name().unwrap_or_default().to_string_lossy()
             );
             emitter.ok(Some(summary));
             // Fire the auto-chain (transcode → index) in the
@@ -76,7 +74,7 @@ pub async fn import_local(
             // emits its own job card; failures don't roll back
             // earlier steps (a transcoded file with no index is
             // still useful — the user can retry indexing).
-            spawn_post_import_chain(app.clone(), dst.clone());
+            spawn_post_import_chain(app.clone(), project_root.clone(), dst.clone());
             Ok(dst.to_string_lossy().into_owned())
         }
         Err(_e) if cancel.is_cancelled() => {
@@ -96,13 +94,14 @@ pub async fn import_local(
 /// card; the chain stops at the first hard error but the partial
 /// progress survives — a transcoded-but-not-yet-indexed asset is
 /// still scrubbable in the preview pane.
-fn spawn_post_import_chain(app: AppHandle, asset: PathBuf) {
+fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf) {
     tokio::spawn(async move {
         let state = app.state::<AwidatState>();
         // Transcode the just-imported asset.
-        if let Err(e) = crate::commands::transcode::transcode_single_asset(
+        if let Err(e) = crate::commands::transcode::transcode_single_asset_in_project(
             &app,
             &state,
+            &project_root,
             &asset,
         )
         .await
@@ -115,47 +114,48 @@ fn spawn_post_import_chain(app: AppHandle, asset: PathBuf) {
         // the timeline has no video clips yet. First-asset-on-fresh-
         // project case — users expect to see what they just
         // imported, not have to ask the agent to add it.
-        if let Some(project_root) = state.project_root.lock().await.clone() {
-            match awidat_render::probe_duration_s(&asset).await {
-                Ok(Some(duration_s)) => {
-                    match crate::commands::auto_insert::auto_insert_if_empty(
-                        &project_root,
-                        &asset,
-                        duration_s,
-                    )
-                    .await
-                    {
-                        Ok(true) => {
-                            tracing::info!(
-                                asset = %asset.display(),
-                                duration_s,
-                                "auto-inserted first asset onto empty timeline",
-                            );
-                        }
-                        Ok(false) => {
-                            // Non-empty timeline; user is arranging.
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "auto-insert failed");
-                        }
+        match awidat_render::probe_duration_s(&asset).await {
+            Ok(Some(duration_s)) => {
+                match crate::commands::auto_insert::auto_insert_if_empty(
+                    &project_root,
+                    &asset,
+                    duration_s,
+                )
+                .await
+                {
+                    Ok(true) => {
+                        crate::events::emit_timeline_changed(&app, &project_root);
+                        tracing::info!(
+                            asset = %asset.display(),
+                            duration_s,
+                            "auto-inserted first asset onto empty timeline",
+                        );
+                    }
+                    Ok(false) => {
+                        // Non-empty timeline; user is arranging.
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "auto-insert failed");
                     }
                 }
-                Ok(None) => {
-                    tracing::warn!(
-                        asset = %asset.display(),
-                        "auto-insert: ffprobe couldn't determine duration; skipping",
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "auto-insert: probe failed");
-                }
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    asset = %asset.display(),
+                    "auto-insert: ffprobe couldn't determine duration; skipping",
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "auto-insert: probe failed");
             }
         }
 
         // Index the whole project. The indexer is sha-keyed so this
         // is idempotent for already-indexed assets — only the new
         // asset's pairs do real work.
-        if let Err(e) = crate::commands::index::index_project_inner(&app, &state).await {
+        if let Err(e) =
+            crate::commands::index::index_project_at_root(&app, &state, project_root.clone()).await
+        {
             tracing::warn!(error = %e, "auto-index failed");
         }
     });
@@ -177,7 +177,9 @@ async fn run_local_import(
         return Err(format!("source is not a file: {src_path}"));
     }
     let raw = project_root.join("raw");
-    fs::create_dir_all(&raw).await.map_err(|e| format!("create raw/: {e}"))?;
+    fs::create_dir_all(&raw)
+        .await
+        .map_err(|e| format!("create raw/: {e}"))?;
     let filename = src
         .file_name()
         .ok_or_else(|| format!("source path has no filename: {src_path}"))?;
@@ -260,7 +262,7 @@ pub async fn import_url(
                 path.file_name().unwrap_or_default().to_string_lossy()
             );
             emitter.ok(Some(summary));
-            spawn_post_import_chain(app.clone(), path.clone());
+            spawn_post_import_chain(app.clone(), project_root.clone(), path.clone());
             Ok(path.to_string_lossy().into_owned())
         }
         Err(_e) if cancel.is_cancelled() => {
@@ -282,7 +284,9 @@ async fn run_url_import(
     cancel: &CancellationToken,
 ) -> Result<PathBuf, String> {
     let raw = project_root.join("raw");
-    fs::create_dir_all(&raw).await.map_err(|e| format!("create raw/: {e}"))?;
+    fs::create_dir_all(&raw)
+        .await
+        .map_err(|e| format!("create raw/: {e}"))?;
     let output_template = raw.join("yt-%(id)s.%(ext)s");
 
     // `--newline` makes yt-dlp emit one progress line per percent
@@ -308,9 +312,7 @@ async fn run_url_import(
         ]);
     let _ = (Stdio::null(),); // silence unused-import on some cfgs
 
-    let (mut rx, child) = cmd
-        .spawn()
-        .map_err(|e| format!("spawn yt-dlp: {e}"))?;
+    let (mut rx, child) = cmd.spawn().map_err(|e| format!("spawn yt-dlp: {e}"))?;
 
     let mut last_filepath: Option<String> = None;
     let mut error_lines: Vec<String> = Vec::new();
@@ -365,8 +367,7 @@ async fn run_url_import(
         }
     }
 
-    let path = last_filepath
-        .ok_or_else(|| "yt-dlp produced no filepath".to_string())?;
+    let path = last_filepath.ok_or_else(|| "yt-dlp produced no filepath".to_string())?;
     let pb = PathBuf::from(&path);
     if !pb.exists() {
         return Err(format!("yt-dlp reported {path} but file is not on disk"));
