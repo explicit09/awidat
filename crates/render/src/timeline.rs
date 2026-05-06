@@ -75,9 +75,27 @@ pub struct TimelineSegment {
 /// Walk `<project_root>/project.otio.json` and collect every
 /// video-track clip's `(asset, source_range)` in playback order.
 /// Skips Gap, Transition, and nested Stack children for v1.
+///
+/// Wraps [`collect_timeline_plan`] and drops the transitions —
+/// preserved for callers that don't need transition awareness.
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
+    let (segs, _) = collect_timeline_plan(project_root)?;
+    Ok(segs)
+}
+
+/// Walk `<project_root>/project.otio.json` and collect both the
+/// renderable segments AND the transitions between adjacent
+/// segments. Returned in playback order; `TransitionPlan` indices
+/// reference the returned segments slice.
+///
+/// Step 14.5: the render pipeline uses this to splice xfade filters
+/// between the segments that have a [`TrackChild::Transition`]
+/// between them on the OTIO track.
+pub fn collect_timeline_plan(
+    project_root: &Path,
+) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
     let otio_path = project_root.join(files::OTIO);
     if !otio_path.exists() {
         return Err(RenderTimelineError::NoOtio(otio_path));
@@ -90,34 +108,65 @@ pub fn collect_timeline_segments(
     })?;
 
     let mut segs = Vec::new();
+    let mut transitions = Vec::new();
     for child in &timeline.tracks.children {
         let StackChild::Track(track) = child else { continue };
         if !matches!(track.kind, TrackKind::Video) {
             continue;
         }
+        // Walk the track's children. Clips become segments; a
+        // Transition immediately following a Clip queues a transition
+        // pointing at the *next* clip we'll see (`pending_transition`).
+        // Other children (Gap, Stack) reset the pending state — they
+        // can't sit between clips that share a transition in v1.
+        let mut pending_transition: Option<(String, f64)> = None;
         for tc in &track.children {
-            let TrackChild::Clip(clip) = tc else { continue };
-            let MediaReference::External(ext) = &clip.media_reference else { continue };
-            let Some(range) = clip.source_range.as_ref() else {
-                return Err(RenderTimelineError::ClipMissingRange {
-                    clip_name: clip.name.clone(),
-                });
-            };
-            let asset_path = project_root.join(&ext.target_url);
-            if !asset_path.exists() {
-                return Err(RenderTimelineError::MissingAsset {
-                    clip_name: clip.name.clone(),
-                    missing: asset_path,
-                });
+            match tc {
+                TrackChild::Clip(clip) => {
+                    let MediaReference::External(ext) = &clip.media_reference else {
+                        pending_transition = None;
+                        continue;
+                    };
+                    let Some(range) = clip.source_range.as_ref() else {
+                        return Err(RenderTimelineError::ClipMissingRange {
+                            clip_name: clip.name.clone(),
+                        });
+                    };
+                    let asset_path = project_root.join(&ext.target_url);
+                    if !asset_path.exists() {
+                        return Err(RenderTimelineError::MissingAsset {
+                            clip_name: clip.name.clone(),
+                            missing: asset_path,
+                        });
+                    }
+                    let new_index = segs.len();
+                    segs.push(TimelineSegment {
+                        asset_path,
+                        start_s: range.start_time.to_seconds(),
+                        duration_s: range.duration.to_seconds(),
+                    });
+                    if let Some((kind, duration_s)) = pending_transition.take()
+                        && new_index > 0
+                    {
+                        transitions.push(TransitionPlan {
+                            from_segment_index: new_index - 1,
+                            to_segment_index: new_index,
+                            kind,
+                            duration_s,
+                        });
+                    }
+                }
+                TrackChild::Transition(t) => {
+                    let total = t.in_offset.to_seconds() + t.out_offset.to_seconds();
+                    pending_transition = Some((t.transition_type.clone(), total));
+                }
+                TrackChild::Gap(_) | TrackChild::Stack(_) => {
+                    pending_transition = None;
+                }
             }
-            segs.push(TimelineSegment {
-                asset_path,
-                start_s: range.start_time.to_seconds(),
-                duration_s: range.duration.to_seconds(),
-            });
         }
     }
-    Ok(segs)
+    Ok((segs, transitions))
 }
 
 /// One transition between two segments in the timeline. Step 14.4
@@ -187,19 +236,31 @@ impl<'a> FilterPlanner<'a> {
 
     /// Build the filter complex + output labels.
     ///
-    /// 14.4 implementation: emit the same monolithic
+    /// With no transitions: emits the same monolithic
     /// `[0:v:0][0:a:0]…concat=n=N:v=1:a=1[outv][outa]` graph the
-    /// pre-extract code produced, regardless of whether
-    /// `transitions` is empty (panics if not — the transition path
-    /// is wired in 14.5).
+    /// pre-extract code produced.
+    ///
+    /// With transitions (Step 14.5): groups consecutive segments
+    /// connected by a transition into "chunks." Each pair-chunk
+    /// emits `xfade` + `acrossfade` filters into a `[xv<i>][xa<i>]`
+    /// pair which then participates in the final concat in place
+    /// of the two raw segment streams. Lone segments still feed in
+    /// directly via `[i:v:0][i:a:0]`.
+    ///
+    /// v1 chunk policy: each segment can participate in at most one
+    /// transition. If two transitions try to share the same middle
+    /// segment (a chain of three), the second transition is dropped
+    /// with a debug-trace log — the render still produces a valid
+    /// output, just without that overlap. Multi-transition chains
+    /// land in a future commit.
     pub fn plan(&self) -> FilterPlan {
-        // 14.4 invariant: transitions slice is unused this commit.
-        // 14.5 will branch when non-empty.
-        debug_assert!(
-            self.transitions.is_empty(),
-            "FilterPlanner: non-empty transitions handled in 14.5",
-        );
+        if self.transitions.is_empty() {
+            return self.plan_no_transitions();
+        }
+        self.plan_with_transitions()
+    }
 
+    fn plan_no_transitions(&self) -> FilterPlan {
         let n = self.segments.len();
         let mut filter = String::new();
         for i in 0..n {
@@ -211,6 +272,107 @@ impl<'a> FilterPlanner<'a> {
             video_out_label: "[outv]".into(),
             audio_out_label: "[outa]".into(),
         }
+    }
+
+    fn plan_with_transitions(&self) -> FilterPlan {
+        let n = self.segments.len();
+
+        // Build a "next-segment-of-the-same-chunk" map. seg `i`'s
+        // partner is `j` iff there's a transition between them. We
+        // enforce v1 single-transition-per-segment by only
+        // remembering the *first* transition for any given segment.
+        let mut paired_with: Vec<Option<&TransitionPlan>> = vec![None; n];
+        for t in self.transitions {
+            if t.from_segment_index >= n || t.to_segment_index != t.from_segment_index + 1 {
+                tracing::debug!(
+                    transition = ?t,
+                    "FilterPlanner: dropping transition with non-adjacent indices"
+                );
+                continue;
+            }
+            // Either segment already taken? Drop this one.
+            if paired_with[t.from_segment_index].is_some()
+                || paired_with[t.to_segment_index].is_some()
+            {
+                tracing::debug!(
+                    transition = ?t,
+                    "FilterPlanner: dropping transition (segment already part of a chunk)",
+                );
+                continue;
+            }
+            paired_with[t.from_segment_index] = Some(t);
+        }
+
+        let mut filter = String::new();
+        // Track the order of concat input pairs (each entry is a
+        // pre-built (video_label, audio_label) ready to drop in).
+        let mut concat_inputs: Vec<(String, String)> = Vec::with_capacity(n);
+
+        let mut i = 0;
+        let mut chunk_id: usize = 0;
+        while i < n {
+            if let Some(t) = paired_with[i] {
+                let j = t.to_segment_index;
+                let v_label = format!("[xv{chunk_id}]");
+                let a_label = format!("[xa{chunk_id}]");
+                let xfade_kind = map_transition_kind(&t.kind);
+                // xfade offset = the from-segment's duration minus
+                // the transition duration. Both inputs must be at
+                // the cut point at offset `from.duration - duration`.
+                let from_dur = self.segments[i].duration_s;
+                let offset = (from_dur - t.duration_s).max(0.0);
+                filter.push_str(&format!(
+                    "[{i}:v:0][{j}:v:0]xfade=transition={kind}:duration={dur}:offset={off}{out};",
+                    kind = xfade_kind,
+                    dur = t.duration_s,
+                    off = offset,
+                    out = v_label,
+                ));
+                filter.push_str(&format!(
+                    "[{i}:a:0][{j}:a:0]acrossfade=d={dur}{out};",
+                    dur = t.duration_s,
+                    out = a_label,
+                ));
+                concat_inputs.push((v_label, a_label));
+                chunk_id += 1;
+                i += 2;
+            } else {
+                concat_inputs.push((format!("[{i}:v:0]"), format!("[{i}:a:0]")));
+                i += 1;
+            }
+        }
+
+        // Tail: single-input concat would just rename, so when we
+        // have one chunk it might be a paired-xfade output already.
+        // ffmpeg's concat takes n>=1; we always wrap so the caller's
+        // `-map [outv] -map [outa]` is uniform.
+        for (v, a) in &concat_inputs {
+            filter.push_str(v);
+            filter.push_str(a);
+        }
+        filter.push_str(&format!(
+            "concat=n={n}:v=1:a=1[outv][outa]",
+            n = concat_inputs.len(),
+        ));
+
+        FilterPlan {
+            filter_complex: filter,
+            video_out_label: "[outv]".into(),
+            audio_out_label: "[outa]".into(),
+        }
+    }
+}
+
+/// Map an OTIO transition kind to an ffmpeg `xfade=transition=` name.
+/// Unknown kinds pass through verbatim — ffmpeg will reject them at
+/// render time with a clear error, which is better than silently
+/// substituting a wrong-but-valid kind.
+fn map_transition_kind(kind: &str) -> String {
+    match kind {
+        "SMPTE_Dissolve" => "fade".into(),
+        "awidat.fade_in" => "fadeblack".into(),
+        "awidat.fade_out" => "fadeblack".into(),
+        other => other.to_string(),
     }
 }
 
@@ -279,15 +441,20 @@ pub fn build_timeline_argv_with_transitions(
 pub fn build_timeline_render_spec(
     project_root: &Path,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
-    let segs = collect_timeline_segments(project_root)?;
+    let (segs, transitions) = collect_timeline_plan(project_root)?;
     if segs.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
     }
-    let total_duration_s = segs.iter().map(|s| s.duration_s).sum::<f64>();
+    // Total duration accounts for each transition's overlap — the
+    // visual timeline is shorter than the sum of segment durations
+    // by the cumulative transition durations.
+    let raw_total: f64 = segs.iter().map(|s| s.duration_s).sum();
+    let trans_total: f64 = transitions.iter().map(|t| t.duration_s).sum();
+    let total_duration_s = (raw_total - trans_total).max(0.0);
     let renders_dir = project_root.join("renders");
     let timestamp = Utc::now().format("%H%M%S");
     let output_path = renders_dir.join(format!("timeline-{}.mp4", timestamp));
-    let argv = build_timeline_argv(&segs, &output_path);
+    let argv = build_timeline_argv_with_transitions(&segs, &transitions, &output_path);
     Ok(RenderJobSpec {
         args: argv,
         total_duration_s: Some(total_duration_s),
@@ -397,6 +564,130 @@ mod tests {
         );
         assert_eq!(plan.video_out_label, "[outv]");
         assert_eq!(plan.audio_out_label, "[outa]");
+    }
+
+    #[test]
+    fn filter_planner_with_one_transition_emits_xfade_pair() {
+        let segs = vec![
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/a.mp4"),
+                start_s: 0.0,
+                duration_s: 5.0,
+            },
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/b.mp4"),
+                start_s: 0.0,
+                duration_s: 4.0,
+            },
+        ];
+        let trans = vec![TransitionPlan {
+            from_segment_index: 0,
+            to_segment_index: 1,
+            kind: "SMPTE_Dissolve".into(),
+            duration_s: 1.0,
+        }];
+        let plan = FilterPlanner::new(&segs, &trans).plan();
+        // xfade with kind=fade (mapped from SMPTE_Dissolve), offset =
+        // from.duration - transition.duration = 4.0.
+        assert!(
+            plan.filter_complex
+                .contains("xfade=transition=fade:duration=1:offset=4"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // acrossfade for audio.
+        assert!(
+            plan.filter_complex.contains("acrossfade=d=1"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // The chunk pair feeds into a 1-input concat (the merged xfade
+        // counts as one input pair).
+        assert!(
+            plan.filter_complex.contains("concat=n=1:v=1:a=1[outv][outa]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_with_transition_in_middle_of_three_segments() {
+        // [A, B, C] with a transition between A and B → concat n=2:
+        // input 1 = xfade(A, B), input 2 = C alone.
+        let segs = vec![
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/a.mp4"),
+                start_s: 0.0,
+                duration_s: 3.0,
+            },
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/b.mp4"),
+                start_s: 0.0,
+                duration_s: 4.0,
+            },
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/c.mp4"),
+                start_s: 0.0,
+                duration_s: 2.0,
+            },
+        ];
+        let trans = vec![TransitionPlan {
+            from_segment_index: 0,
+            to_segment_index: 1,
+            kind: "SMPTE_Dissolve".into(),
+            duration_s: 0.5,
+        }];
+        let plan = FilterPlanner::new(&segs, &trans).plan();
+        assert!(plan.filter_complex.contains("xfade="));
+        // Concat takes 2 inputs: chunk(A,B) + raw C.
+        assert!(plan.filter_complex.contains("concat=n=2:v=1:a=1[outv][outa]"));
+        // C's raw streams must appear in the concat input list.
+        assert!(plan.filter_complex.contains("[2:v:0][2:a:0]"));
+    }
+
+    #[test]
+    fn filter_planner_drops_chained_transitions() {
+        // [A, B, C] with transitions A-B AND B-C: B can only belong
+        // to one chunk in v1. The first transition wins; the second
+        // is dropped (with a debug-trace log we can't easily assert
+        // here). Resulting concat: xfade(A,B) + raw C.
+        let segs = vec![
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/a.mp4"),
+                start_s: 0.0,
+                duration_s: 3.0,
+            },
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/b.mp4"),
+                start_s: 0.0,
+                duration_s: 4.0,
+            },
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/c.mp4"),
+                start_s: 0.0,
+                duration_s: 2.0,
+            },
+        ];
+        let trans = vec![
+            TransitionPlan {
+                from_segment_index: 0,
+                to_segment_index: 1,
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.5,
+            },
+            TransitionPlan {
+                from_segment_index: 1,
+                to_segment_index: 2,
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.5,
+            },
+        ];
+        let plan = FilterPlanner::new(&segs, &trans).plan();
+        // Exactly one xfade (A-B).
+        let xfade_count = plan.filter_complex.matches("xfade=").count();
+        assert_eq!(xfade_count, 1, "filter graph: {}", plan.filter_complex);
+        // C still in the concat as a raw input.
+        assert!(plan.filter_complex.contains("[2:v:0][2:a:0]"));
     }
 
     #[test]
