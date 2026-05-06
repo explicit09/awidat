@@ -115,3 +115,32 @@ export function findClipItem(
   if (!track) return null;
   return track.items.find((it) => it.index === clipIndex) ?? null;
 }
+
+/**
+ * Find the clip body under `(canvasX, canvasY)`, if any. Used by
+ * the click-to-select branch in onPointerDown to populate the
+ * properties pane. Returns the matching `{ trackIndex, clipIndex }`
+ * when the pointer is inside a clip rect — anywhere inside, not
+ * just the edges. Returns null when the pointer is in the ruler,
+ * between lanes, or over a gap / transition / empty area.
+ */
+export function hitTestClipBody(
+  canvasX: number,
+  canvasY: number,
+  snapshot: TimelineSnapshot,
+  pps: number,
+): { trackIndex: number; clipIndex: number } | null {
+  if (canvasY < RULER_HEIGHT) return null;
+  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / LANE_HEIGHT);
+  if (trackIndex < 0 || trackIndex >= snapshot.tracks.length) return null;
+  const track = snapshot.tracks[trackIndex];
+  for (const item of track.items) {
+    if (item.kind !== "clip") continue;
+    const startX = item.track_start_s * pps;
+    const endX = (item.track_start_s + item.duration_s) * pps;
+    if (canvasX >= startX && canvasX <= endX) {
+      return { trackIndex, clipIndex: item.index };
+    }
+  }
+  return null;
+}

@@ -17,12 +17,14 @@ import { ProposalHandles } from "./ProposalHandles";
 import { TIMELINE_CHANGED_EVENT, type AppliedDiff } from "../protocol";
 import { serializeEdl } from "./edlBuilder";
 import {
+  hitTestClipBody,
   hitTestEdge,
   pxDeltaToSourceDelta,
   type EdgeHit,
 } from "./hitDetect";
 import { getStrip, onThumbnailDecoded } from "./thumbnailCache";
 import { getBuckets, onWaveformDecoded } from "./waveformCache";
+import { useTimelineSelectionStore } from "../properties/store";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -189,6 +191,15 @@ function TimelineCanvas({
   const [edgeHover, setEdgeHover] = useState<EdgeHit | null>(null);
   // Active drag, set on pointerdown-near-edge, cleared on pointerup.
   const [userTrim, setUserTrim] = useState<UserTrimDrag | null>(null);
+  // Properties-pane selection: which clip is currently inspected.
+  // The canvas paints a subtle amber outline on the selected clip
+  // so the link between timeline selection and right-rail content
+  // is visible.
+  const selectedClipKey = useTimelineSelectionStore(
+    (s) => s.selectedClipKey,
+  );
+  const selectClip = useTimelineSelectionStore((s) => s.select);
+  const clearSelection = useTimelineSelectionStore((s) => s.clear);
 
   // Compute pixel layout. When a proposal is active, the canvas
   // paints two passes: original snapshot at α=0.45 (the "before")
@@ -236,6 +247,9 @@ function TimelineCanvas({
 
       drawRuler(ctx, cssWidth, totalDuration, pps);
 
+      const selectedKey = selectedClipKey
+        ? `${selectedClipKey.trackIndex}:${selectedClipKey.clipIndex}`
+        : undefined;
       if (proposal) {
         // Pass A — current state under, dimmed, with delete strike.
         const deletedKeys = collectDeletedKeys(proposal.diffHints);
@@ -246,12 +260,15 @@ function TimelineCanvas({
         ctx.globalAlpha = 1.0;
         // Pass B — proposed state on top, full opacity, with
         // diff-hint highlights for trimmed/inserted/split items.
+        // Selection ring rides on the post-state pass so the user
+        // sees which clip in the *new* timeline they're inspecting.
         const highlightKeys = collectHighlightKeys(proposal.diffHints);
         drawTracks(ctx, cssWidth, proposal.snapshot.tracks, pps, {
           highlightKeys,
+          selectedKey,
         });
       } else {
-        drawTracks(ctx, cssWidth, snapshot.tracks, pps, {});
+        drawTracks(ctx, cssWidth, snapshot.tracks, pps, { selectedKey });
       }
 
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
@@ -300,7 +317,15 @@ function TimelineCanvas({
       unsubThumb();
       unsubWave();
     };
-  }, [snapshot, currentTime, proposal, onLayout, userTrim, edgeHover]);
+  }, [
+    snapshot,
+    currentTime,
+    proposal,
+    onLayout,
+    userTrim,
+    edgeHover,
+    selectedClipKey,
+  ]);
 
   // Pointer dispatch:
   //   - On a clip edge → start user-trim drag
@@ -352,7 +377,16 @@ function TimelineCanvas({
       // scrubbing.
       return;
     }
-    // Plain click → scrub.
+    // No edge hit — update the properties-pane selection. Clip body
+    // under the pointer = select; empty space = clear. Either way
+    // the click also scrubs the playhead (preserving the existing
+    // seek-on-click behaviour).
+    const body = hitTestClipBody(x, y, snapshot, ppsRef.current);
+    if (body) {
+      selectClip(body);
+    } else {
+      clearSelection();
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     requestTimelineSeek(timeFromClientX(clientX));
   }
@@ -552,13 +586,19 @@ function drawRuler(
 
 /** Draw all tracks. `opts` carries optional diff-hint key sets:
  *  `deletedKeys` items get strike-through styling; `highlightKeys`
- *  items get an accent ring. Keys are `"${trackIdx}:${itemIdx}"`. */
+ *  items get an accent ring; `selectedKey` (a single key string) gets
+ *  an amber selection outline drawn over everything else.
+ *  Keys are `"${trackIdx}:${itemIdx}"`. */
 function drawTracks(
   ctx: CanvasRenderingContext2D,
   width: number,
   tracks: { kind: string; items: TimelineItem[] }[],
   pps: number,
-  opts: { deletedKeys?: Set<string>; highlightKeys?: Set<string> },
+  opts: {
+    deletedKeys?: Set<string>;
+    highlightKeys?: Set<string>;
+    selectedKey?: string;
+  },
 ) {
   for (let row = 0; row < tracks.length; row++) {
     const track = tracks[row];
@@ -583,7 +623,18 @@ function drawTracks(
           : opts.highlightKeys?.has(key)
           ? "highlight"
           : "normal";
-      drawItem(ctx, item, x, y + 4, w, LANE_HEIGHT - 8, track.kind, flag);
+      const selected = opts.selectedKey === key;
+      drawItem(
+        ctx,
+        item,
+        x,
+        y + 4,
+        w,
+        LANE_HEIGHT - 8,
+        track.kind,
+        flag,
+        selected,
+      );
     }
   }
 }
@@ -599,6 +650,7 @@ function drawItem(
   h: number,
   trackKind: string,
   flag: ItemFlag,
+  selected: boolean,
 ) {
   const radius = 4;
   if (item.kind === "clip") {
@@ -658,6 +710,18 @@ function drawItem(
       ctx.moveTo(x + 2, y + h / 2);
       ctx.lineTo(x + w - 2, y + h / 2);
       ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+    if (selected) {
+      // Outer amber ring to show "this clip is the inspector's
+      // current target". Drawn after the regular border so it
+      // wins z-order; stays visible when the clip is also a
+      // proposal highlight (amber over amber is still distinct
+      // because the proposal stroke is inside the rect, this
+      // one straddles it).
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 2;
+      strokeRoundedRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, radius + 1);
       ctx.lineWidth = 1;
     }
   } else if (item.kind === "gap") {
