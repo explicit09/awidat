@@ -2,7 +2,7 @@
 //! (`ApprovalRequest`, `UserInputRequest`) into the protocol stream
 //! the frontend consumes.
 
-use awidat_core::tool::{ApprovalRequest, UserInputRequest};
+use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
 use awidat_desktop_protocol::{Id, Item, ItemLifecycle, ProposalSource};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
@@ -47,60 +47,88 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                 // of args_full — we added that field in commit 5.1
                 // exactly so the bridge could re-parse the full EDL
                 // without losing characters to args_summary truncation.
-                if let Some(edl_text) = req
+                let edl_text = req
                     .args_full
                     .as_object()
                     .and_then(|m| m.get("edl"))
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                {
-                    // Resolve the project root the proposal applies
-                    // to — fail soft if no project is loaded
-                    // (shouldn't happen in practice; the agent loop
-                    // refuses to run without one).
-                    if let Some(project_root) =
-                        state.project_root.lock().await.clone()
+                    .map(|s| s.to_string());
+                let project_root_opt = state.project_root.lock().await.clone();
+
+                if let (Some(edl_text), Some(project_root)) = (edl_text, project_root_opt) {
+                    // Decompose the request so we can hand `reply`
+                    // to build_proposal but keep the rest available
+                    // for an error-recovery path (legacy
+                    // ApprovalRequest can't be re-issued — the
+                    // oneshot is one-time — so on failure we surface
+                    // the parse/apply error to chat and Deny.)
+                    let ApprovalRequest {
+                        call_id, reply, ..
+                    } = req;
+                    if let Err(e) = crate::commands::proposal::build_proposal(
+                        &app,
+                        &state,
+                        call_id.clone(),
+                        edl_text,
+                        &project_root,
+                        ProposalSource::Agent {
+                            tool_name: "apply_edl".into(),
+                        },
+                        Some(reply),
+                    )
+                    .await
                     {
-                        if let Err(e) = crate::commands::proposal::build_proposal(
+                        warn!(error = %e, call_id = %call_id, "build_proposal failed");
+                        // build_proposal failed before stashing the
+                        // PendingProposal AND took ownership of the
+                        // reply oneshot. The oneshot has already been
+                        // consumed/dropped inside build_proposal's
+                        // error path → the agent saw Deny. Surface
+                        // the actual parse/apply error to chat as an
+                        // Item::Error so the user knows why nothing
+                        // showed up.
+                        emit_item(
                             &app,
-                            &state,
-                            req.call_id.clone(),
-                            edl_text,
-                            &project_root,
-                            ProposalSource::Agent {
-                                tool_name: req.tool_name.clone(),
+                            Item::Error {
+                                id: Id::new(format!(
+                                    "proposal-err-{}",
+                                    chrono::Utc::now()
+                                        .timestamp_nanos_opt()
+                                        .unwrap_or(0)
+                                )),
+                                message: format!(
+                                    "couldn't build proposal preview: {e}",
+                                ),
                             },
-                            Some(req.reply),
-                        )
-                        .await
-                        {
-                            warn!(error = %e, call_id = %req.call_id, "build_proposal failed; falling back to ApprovalRequest");
-                            // Defensive: if the proposal build failed
-                            // (parse error, apply error, project read
-                            // failure), the user still needs *some*
-                            // approval surface. Re-emit the original
-                            // approval card by reconstructing the
-                            // request — but we already moved `reply`
-                            // into build_proposal, so we can't here.
-                            // Log and bail; the agent will see its
-                            // turn time out / get cancelled.
-                        }
-                        continue;
-                    } else {
-                        warn!(
-                            call_id = %req.call_id,
-                            "apply_edl approved with no project_root; routing to legacy ApprovalCard",
                         );
                     }
-                } else {
-                    warn!(
-                        call_id = %req.call_id,
-                        "apply_edl args_full had no `edl` string; routing to legacy ApprovalCard",
-                    );
+                    continue;
                 }
-                // Fall through to the legacy path on any of the soft
-                // failures above — the user still sees an approval
-                // surface, even if it's the old card.
+
+                // Soft failures: missing edl arg, no project loaded.
+                // Surface the failure to chat (otherwise the user
+                // sees nothing happen — the legacy card would show
+                // up but req.reply has not been moved yet so we
+                // could fall through here. We Deny explicitly to
+                // be safe.)
+                warn!(
+                    call_id = %req.call_id,
+                    "apply_edl missing args.edl or project_root; denying without preview",
+                );
+                let _ = req.reply.send(ApprovalDecision::Deny);
+                emit_item(
+                    &app,
+                    Item::Error {
+                        id: Id::new(format!(
+                            "proposal-err-{}",
+                            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+                        )),
+                        message:
+                            "apply_edl proposal could not be built — no project loaded or args.edl missing"
+                                .into(),
+                    },
+                );
+                continue;
             }
 
             // Legacy / non-apply_edl path: emit Item::ApprovalRequest,
