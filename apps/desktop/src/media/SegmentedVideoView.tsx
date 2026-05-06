@@ -74,6 +74,15 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   // the source.
   const lastViewKeyRef = useRef<string>("");
 
+  // Latest segments captured into a ref so the rVFC tick can read
+  // them without forcing the rAF-style callback to re-register on
+  // every render. The render-time effect that mounts rVFC reads
+  // this ref each frame.
+  const segmentsRef = useRef<PlaySegment[]>(segments);
+  useEffect(() => {
+    segmentsRef.current = segments;
+  }, [segments]);
+
   // Whenever timelineTime moves into a new segment, swap src and
   // align video.currentTime. The "timelineTime moves" trigger covers
   // playback (timeupdate-driven) AND external seeks (request-id-
@@ -125,35 +134,87 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     activeSegRef.current = -1; // force the resync effect above
   }, [segments]);
 
-  // timeupdate → translate source-time back to timeline-time.
-  function onTimeUpdate(e: React.SyntheticEvent<HTMLVideoElement>) {
-    const v = e.currentTarget;
+  // Per-frame boundary check + time translation. Called from rVFC
+  // (preferred, ~per-frame granularity) and from `timeupdate` as a
+  // fallback (~250ms granularity, used when rVFC isn't available).
+  // Pulls segments through the ref so the closure doesn't capture
+  // a stale array.
+  function tickAtVideoTime(v: HTMLVideoElement, vTime: number) {
+    const segs = segmentsRef.current;
     const segIdx = activeSegRef.current;
-    if (segIdx < 0 || segIdx >= segments.length) return;
-    const seg = segments[segIdx];
-    // Boundary check: if we've played past the end of this segment,
-    // advance. Crude in v1 (timeupdate fires every ~250ms so the
-    // boundary is jittery); 9.4 replaces this with rVFC.
-    if (v.currentTime >= seg.sourceEnd - 0.001) {
+    if (segIdx < 0 || segIdx >= segs.length) return;
+    const seg = segs[segIdx];
+    if (vTime >= seg.sourceEnd - 0.001) {
       const nextIdx = segIdx + 1;
-      if (nextIdx >= segments.length) {
-        // End of timeline — park, pause, push the timestamp.
+      if (nextIdx >= segs.length) {
+        // End of timeline — park, pause, push the final timestamp.
         setTimelineTime(seg.timelineEnd);
         v.pause();
         return;
       }
-      const next = segments[nextIdx];
+      const next = segs[nextIdx];
       activeSegRef.current = nextIdx;
       v.src = convertFileSrc(next.proxyPath);
       tryAssignCurrentTime(v, next.sourceStart);
-      // Resume play if we were playing — Safari pauses on src swap.
+      // Safari pauses on src swap — resume if the user was playing.
       v.play().catch(() => {});
       setTimelineTime(next.timelineStart);
       return;
     }
-    // Within segment: regular update.
-    const tlTime = seg.timelineStart + (v.currentTime - seg.sourceStart);
-    setTimelineTime(tlTime);
+    // Within segment: smooth playhead translation.
+    setTimelineTime(seg.timelineStart + (vTime - seg.sourceStart));
+  }
+
+  // requestVideoFrameCallback: per-frame ticks. Replaces the
+  // timeupdate-based boundary check on browsers that have it
+  // (Chromium + Safari, all current versions). Older / non-supporting
+  // browsers fall through to the onTimeUpdate handler. The flag is
+  // checked once per useEffect mount via feature-detection.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    type RVFCMetadata = {
+      mediaTime: number;
+      // …other fields we don't use
+    };
+    type RVFCVideo = HTMLVideoElement & {
+      requestVideoFrameCallback?: (
+        cb: (now: number, metadata: RVFCMetadata) => void,
+      ) => number;
+      cancelVideoFrameCallback?: (id: number) => void;
+    };
+    const rvfcVideo = v as RVFCVideo;
+    if (typeof rvfcVideo.requestVideoFrameCallback !== "function") {
+      // Fallback path: timeupdate handler runs unmodified.
+      return;
+    }
+
+    let cancelled = false;
+    let handle = 0;
+    const tick = (_now: number, metadata: RVFCMetadata) => {
+      if (cancelled) return;
+      // metadata.mediaTime is the proxy-source time of the rendered
+      // frame — more accurate than v.currentTime which can lag.
+      tickAtVideoTime(v, metadata.mediaTime);
+      const next = rvfcVideo.requestVideoFrameCallback;
+      if (next) handle = next(tick);
+    };
+    handle = rvfcVideo.requestVideoFrameCallback(tick);
+
+    return () => {
+      cancelled = true;
+      rvfcVideo.cancelVideoFrameCallback?.(handle);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // timeupdate fallback. On rVFC-capable browsers it still fires
+  // (rVFC doesn't replace it) — we no-op when an rVFC tick has
+  // already advanced the segment, since `tickAtVideoTime` is
+  // idempotent on the within-segment translation. The boundary
+  // advance is also idempotent (segIdx check guards re-entry).
+  function onTimeUpdate(e: React.SyntheticEvent<HTMLVideoElement>) {
+    tickAtVideoTime(e.currentTarget, e.currentTarget.currentTime);
   }
 
   // Push view-state (~1Hz, integer-second granularity) so the agent
