@@ -21,6 +21,7 @@ import {
   pxDeltaToSourceDelta,
   type EdgeHit,
 } from "./hitDetect";
+import { getStrip, onThumbnailDecoded } from "./thumbnailCache";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -289,7 +290,13 @@ function TimelineCanvas({
     // window resize AND parent flex/grid resizes.
     const ro = new ResizeObserver(() => paint());
     ro.observe(container);
-    return () => ro.disconnect();
+    // Repaint when a thumbnail finishes decoding so the strip
+    // populates progressively as frames load.
+    const unsub = onThumbnailDecoded(() => paint());
+    return () => {
+      ro.disconnect();
+      unsub();
+    };
   }, [snapshot, currentTime, proposal, onLayout, userTrim, edgeHover]);
 
   // Pointer dispatch:
@@ -602,6 +609,12 @@ function drawItem(
   if (item.kind === "clip") {
     ctx.fillStyle = trackKind === "audio" ? "#1f4d3f" : "#1f3d5d";
     fillRoundedRect(ctx, x, y, w, h, radius);
+    // Filmstrip: draw on top of the coloured fill, under the
+    // border. Video clips only — audio gets waveforms in Step 11.
+    let drewStrip = false;
+    if (trackKind !== "audio" && item.thumbnail_dir && w > 24) {
+      drewStrip = drawClipFilmstrip(ctx, item, x, y, w, h, radius);
+    }
     // Border color: red for deletes (this clip is going away),
     // amber for highlights (this clip is changing in the
     // proposal), normal accent otherwise.
@@ -617,13 +630,26 @@ function drawItem(
     ctx.lineWidth = flag === "normal" ? 1 : 2;
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
     ctx.lineWidth = 1;
-    // Clip label — centered, truncated if width too small.
+    // Clip label — centered, truncated if width too small. When the
+    // filmstrip drew, paint the label on a translucent dark band so
+    // it stays legible over the frames; otherwise plain.
     if (w > 24) {
-      ctx.fillStyle = "#e6edf3";
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
       ctx.textBaseline = "middle";
       const label = truncateToWidth(ctx, item.name, w - 2 * CLIP_PADDING_X);
-      ctx.fillText(label, x + CLIP_PADDING_X, y + h / 2);
+      const labelY = y + h / 2;
+      if (drewStrip) {
+        const metrics = ctx.measureText(label);
+        ctx.fillStyle = "rgba(13, 17, 23, 0.7)";
+        ctx.fillRect(
+          x + CLIP_PADDING_X - 2,
+          labelY - 7,
+          Math.min(w - 2 * CLIP_PADDING_X + 4, metrics.width + 4),
+          14,
+        );
+      }
+      ctx.fillStyle = "#e6edf3";
+      ctx.fillText(label, x + CLIP_PADDING_X, labelY);
     }
     if (flag === "deleted") {
       // Strike-through line so the "before" is visually marked
@@ -651,6 +677,72 @@ function drawItem(
     ctx.strokeStyle = "#d29922";
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
   }
+}
+
+/** Tile filmstrip JPEGs across a video clip's pixel area.
+ *
+ *  Returns true if at least one frame painted (so the caller knows
+ *  to overlay the label on a dark band for legibility). Returns
+ *  false when the cache is still listing or no frames are decoded
+ *  yet — caller falls back to the plain coloured rect, which the
+ *  fill above already painted.
+ *
+ *  Frame placement: the source range is `[source_start_s,
+ *  source_start_s + duration_s]`. Frames are 1/sec, so the indices
+ *  needed are roughly floor(source_start) … floor(source_start +
+ *  duration). We pick `frames_to_show = round(w / 50)` evenly-spaced
+ *  frames from that range and stretch them across `w` so each tile
+ *  is `w / frames_to_show` wide. */
+function drawClipFilmstrip(
+  ctx: CanvasRenderingContext2D,
+  item: Extract<TimelineItem, { kind: "clip" }>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+): boolean {
+  if (!item.thumbnail_dir) return false;
+  const strip = getStrip(item.thumbnail_dir);
+  if (!strip || strip.paths.length === 0) return false;
+
+  const sourceStart = item.source_start_s ?? 0;
+  const sourceEnd = sourceStart + item.duration_s;
+  // Target ~one tile per 50 px of clip width. Min 1, cap at one tile
+  // per second of source-time so a 5-second clip never gets more
+  // than 5 tiles (and matches the 1-fps generation density).
+  const tilesByWidth = Math.max(1, Math.round(w / 50));
+  const tilesByDuration = Math.max(1, Math.floor(item.duration_s));
+  const tileCount = Math.min(tilesByWidth, tilesByDuration);
+
+  // Clip the drawing region to the rounded clip rect so JPEG tiles
+  // don't bleed past the borders.
+  ctx.save();
+  pathRoundedRect(ctx, x, y, w, h, radius);
+  ctx.clip();
+
+  let drewAny = false;
+  const tileWidth = w / tileCount;
+  for (let i = 0; i < tileCount; i++) {
+    // Pick the source-time at tile center, then floor to the
+    // nearest generated frame index.
+    const sourceTime =
+      sourceStart + (sourceEnd - sourceStart) * ((i + 0.5) / tileCount);
+    const frameIndex = Math.min(
+      strip.paths.length - 1,
+      Math.max(0, Math.floor(sourceTime)),
+    );
+    const img = strip.images[frameIndex];
+    if (!img) continue;
+    const tx = x + i * tileWidth;
+    // drawImage with destination size scales the 120-px wide source
+    // jpeg to fill the tile; aspect ratio differences just letterbox
+    // a tiny bit, which is fine at this size.
+    ctx.drawImage(img, tx, y, tileWidth, h);
+    drewAny = true;
+  }
+  ctx.restore();
+  return drewAny;
 }
 
 /** Build the set of `${trackIdx}:${itemIdx}` keys whose items in the

@@ -122,6 +122,42 @@ fn thumbnails_are_fresh(asset: &Path, dir: &Path) -> bool {
     false
 }
 
+/// List the absolute paths of every `frame-*.jpg` in a thumbnails
+/// dir, sorted lexicographically (which lines up with frame-NNNN
+/// numeric order). Returned paths are suitable for `convertFileSrc()`
+/// on the frontend. Empty list when the dir doesn't exist or is empty.
+///
+/// `dir` MUST be a path the frontend already has from the protocol
+/// (e.g. `TimelineItem::Clip.thumbnail_dir`). We don't validate that
+/// it lives under the project — the asset-protocol scope is the real
+/// gate; this command exists only to save the frontend from having
+/// to walk a directory through the (locked-down) asset protocol.
+#[tauri::command]
+pub async fn list_thumbnail_frames(dir: String) -> Result<Vec<String>, String> {
+    let path = std::path::Path::new(&dir);
+    if !path.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut entries = tokio::fs::read_dir(path)
+        .await
+        .map_err(|e| format!("read thumbnails dir: {e}"))?;
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("read thumbnails entry: {e}"))?
+    {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("frame-") || !name.ends_with(".jpg") {
+            continue;
+        }
+        out.push(entry.path().to_string_lossy().into_owned());
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// Tauri command exposed for the unusual case where the frontend wants
 /// to refresh thumbnails on demand for one asset (not currently wired
 /// to any UI; here for parity with `proxy_path_for_stem` and as the
