@@ -12,6 +12,7 @@
 // "Show in Finder" button. Transcode doesn't need one — proxies
 // are an internal artifact users don't navigate to manually.
 
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Item, JobKind, JobResult } from "../protocol";
@@ -24,6 +25,7 @@ type Props = {
 
 export function JobCard({ item }: Props) {
   const isRunning = item.phase !== "completed";
+  const [copied, setCopied] = useState(false);
   const labelMap: Record<JobKind, string> = {
     url_import: "url import",
     local_import: "local import",
@@ -63,6 +65,28 @@ export function JobCard({ item }: Props) {
     item.output_path !== null &&
     item.output_path !== undefined;
 
+  const errorMessage =
+    item.result !== null &&
+    item.result !== "cancelled" &&
+    typeof item.result === "object" &&
+    "err" in item.result
+      ? item.result.err.message
+      : null;
+
+  function copyLog() {
+    if (!errorMessage) return;
+    navigator.clipboard
+      .writeText(errorMessage)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      })
+      .catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn("clipboard.writeText failed", e);
+      });
+  }
+
   return (
     <article className={`item item-job item-job-${cls}`}>
       <header className="job-header">
@@ -80,6 +104,13 @@ export function JobCard({ item }: Props) {
           <Tooltip content="Reveal the rendered file in Finder">
             <button className="job-action" onClick={showInFinder}>
               Show in Finder
+            </button>
+          </Tooltip>
+        )}
+        {errorMessage && (
+          <Tooltip content="Copy the error message to your clipboard">
+            <button className="job-action" onClick={copyLog}>
+              {copied ? "Copied" : "Copy Log"}
             </button>
           </Tooltip>
         )}

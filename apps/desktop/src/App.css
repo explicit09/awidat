@@ -1184,6 +1184,34 @@ body,
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
+/* Arrow pointing down from the tooltip toward the dragged edge.
+ * Mirrors Radix's tooltip arrow shape (small triangle, same fill
+ * as the surface) so the live-drag affordance and hover tooltips
+ * share a visual vocabulary. Two stacked triangles: outer = amber
+ * border, inner = surface fill, offset by 1px to fake a 1px border. */
+.user-trim-tooltip::before,
+.user-trim-tooltip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+}
+
+.user-trim-tooltip::before {
+  top: 100%;
+  transform: translateX(-50%);
+  border-top: 5px solid var(--warn);
+}
+
+.user-trim-tooltip::after {
+  top: calc(100% - 1px);
+  transform: translateX(-50%);
+  border-top: 5px solid var(--bg-elev);
+}
+
 .media-pane {
   display: flex;
   flex-direction: column;
