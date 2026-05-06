@@ -254,9 +254,26 @@ function TimelineCanvas({
 
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
 
+      // Hover affordance — a faint amber outline on the edge under
+      // the pointer when the user isn't yet dragging. Tells them
+      // "yes, you can grab this" before they commit.
+      if (edgeHover && !userTrim) {
+        const item = snapshot.tracks[edgeHover.trackIndex]?.items.find(
+          (it) => it.index === edgeHover.clipIndex,
+        );
+        if (item && item.kind === "clip") {
+          const edgeX =
+            edgeHover.side === "start"
+              ? item.track_start_s * pps
+              : (item.track_start_s + item.duration_s) * pps;
+          const yTop = RULER_HEIGHT + edgeHover.trackIndex * LANE_HEIGHT + 4;
+          ctx.fillStyle = "rgba(245, 158, 11, 0.55)";
+          ctx.fillRect(edgeX - 1, yTop, 2, LANE_HEIGHT - 8);
+        }
+      }
+
       // Draw the live drag-edge phantom on top of everything else.
-      // A 2px amber line at the dragged x — minimal but unmistakable;
-      // 8.3 polishes with a tooltip showing the proposed time.
+      // 2px amber line at the dragged x.
       if (userTrim) {
         const x = userTrim.currentX;
         const yTop = RULER_HEIGHT;
@@ -273,7 +290,7 @@ function TimelineCanvas({
     const ro = new ResizeObserver(() => paint());
     ro.observe(container);
     return () => ro.disconnect();
-  }, [snapshot, currentTime, proposal, onLayout, userTrim]);
+  }, [snapshot, currentTime, proposal, onLayout, userTrim, edgeHover]);
 
   // Pointer dispatch:
   //   - On a clip edge → start user-trim drag
@@ -436,6 +453,9 @@ function TimelineCanvas({
         onPointerCancel={onPointerUp}
         onPointerLeave={onPointerLeave}
       />
+      {userTrim && (
+        <UserTrimTooltip drag={userTrim} pps={ppsRef.current} />
+      )}
     </div>
   );
 }
@@ -444,6 +464,46 @@ function TimelineCanvas({
  *  clips; otherwise fall back to the base for the empty ruler. The
  *  upper bound (8× base) prevents a 2-second project from drawing
  *  ridiculous spacing. */
+/** Floating tooltip that follows the dragged edge during a user-trim
+ *  drag, showing the proposed source-time. Positioned absolutely
+ *  inside `.timeline-canvas-wrap`, anchored via `currentX` (canvas-
+ *  local pixels). */
+function UserTrimTooltip({
+  drag,
+  pps,
+}: {
+  drag: UserTrimDrag;
+  pps: number;
+}) {
+  const dxPx = drag.currentX - drag.startX;
+  const dxS = dxPx / Math.max(0.001, pps);
+  const proposed =
+    drag.hit.side === "start"
+      ? Math.max(0, drag.hit.sourceStart + dxS)
+      : Math.max(drag.hit.sourceStart + 0.1, drag.hit.sourceEnd + dxS);
+  const label = `${drag.hit.side}: ${proposed.toFixed(2)}s`;
+  // Anchor 14px above the canvas top (so it floats over the ruler)
+  // and clamp horizontally inside the parent so it doesn't escape
+  // the right edge of the wrap.
+  const style: React.CSSProperties = {
+    position: "absolute",
+    top: 0,
+    left: drag.currentX,
+    transform: "translate(-50%, -120%)",
+    pointerEvents: "none",
+    background: "#1f2937",
+    color: "#f59e0b",
+    border: "1px solid #f59e0b",
+    borderRadius: 4,
+    padding: "2px 6px",
+    fontFamily: "var(--mono, ui-monospace, monospace)",
+    fontSize: 11,
+    whiteSpace: "nowrap",
+    zIndex: 4,
+  };
+  return <div style={style}>{label}</div>;
+}
+
 function computePps(durationS: number, cssWidth: number): number {
   const fitPps = durationS > 0 ? (cssWidth - 8) / durationS : PX_PER_SECOND_BASE;
   return Math.max(2, Math.min(fitPps, PX_PER_SECOND_BASE * 8));
