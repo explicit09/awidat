@@ -104,13 +104,15 @@ pub async fn read_transcript(
     Ok(result)
 }
 
-/// Drop a stem from the transcript cache. Called by the run-loop
-/// event listener when a whisper-indexer job completes (signal that
-/// the sidecar may have just been written or refreshed). Wired by
-/// Step 6.2's invalidation path.
-#[allow(dead_code)]
-pub async fn invalidate_transcript_cache(state: &AwidatState, stem: &str) {
-    state.transcript_cache.lock().await.remove(stem);
+/// Clear the entire transcript cache. Called from `commands::index`
+/// after a successful indexing run that wrote at least one whisper
+/// sidecar. We chose full-clear over per-stem invalidation because
+/// the indexer reports outcomes by `AssetId`, not stem, and the
+/// id→stem mapping (proxy_path_for) requires a raw/ walk per
+/// asset. Re-parsing one or two cached transcripts on the next
+/// tab toggle is cheaper than that walk.
+pub async fn clear_transcript_cache(state: &AwidatState) {
+    state.transcript_cache.lock().await.clear();
 }
 
 /// Walk `<project>/raw/` and find the asset whose proxy filename

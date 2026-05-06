@@ -166,6 +166,17 @@ pub async fn index_project_at_root(
             let summary = format!(
                 "{wrote} wrote, {skipped} skipped, {failed} failed, {dep_skipped} dep-skipped"
             );
+            // If a whisper sidecar was just written or refreshed,
+            // drop the transcript-pane's parsed-Transcript cache so
+            // the next read picks up the new shape. Cheap full-clear
+            // — the cache rebuilds lazily on the next tab toggle.
+            let whisper_wrote = report
+                .outcomes
+                .iter()
+                .any(|o| matches!(o, PairOutcome::Wrote { indexer, .. } if indexer == "whisper"));
+            if whisper_wrote {
+                crate::commands::transcript::clear_transcript_cache(&state).await;
+            }
             if report.has_failures() {
                 // Pull each PairOutcome::Failed out so the user sees
                 // *which* indexer failed on *which* asset *why*. With
