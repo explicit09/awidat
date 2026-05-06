@@ -88,12 +88,18 @@ pub async fn import_local(
     }
 }
 
-/// Spawn the post-import auto-chain (proxy transcode → indexer
-/// pipeline). Runs as a background tokio task so the originating
-/// import command returns immediately. Each step emits its own job
-/// card; the chain stops at the first hard error but the partial
-/// progress survives — a transcoded-but-not-yet-indexed asset is
-/// still scrubbable in the preview pane.
+/// Spawn the post-import auto-chain (proxy transcode → auto-insert
+/// → thumbnails → indexer). Runs as a background tokio task so the
+/// originating import command returns immediately. Each step emits
+/// its own job card; the chain stops at the first hard error but the
+/// partial progress survives — a transcoded-but-not-yet-indexed asset
+/// is still scrubbable in the preview pane.
+///
+/// Thumbnail generation is sequenced *after* auto-insert (rather than
+/// before) so the user sees the clip on the timeline as a coloured
+/// rect immediately; the filmstrip flips in once the
+/// [`JobKind::Thumbnails`] job completes via a second
+/// `timeline-changed` event.
 fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf) {
     tokio::spawn(async move {
         let state = app.state::<AwidatState>();
@@ -147,6 +153,31 @@ fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf
             }
             Err(e) => {
                 tracing::warn!(error = %e, "auto-insert: probe failed");
+            }
+        }
+
+        // Generate filmstrip thumbnails for the just-imported asset.
+        // Idempotent (mtime-checked) so re-running the chain on an
+        // already-thumbed asset is a no-op. We fire `timeline-changed`
+        // afterwards so the frontend's re-fetch picks up the now-
+        // populated `thumbnail_dir` field on the clip.
+        match crate::commands::thumbnail::generate_thumbnails_for_asset_in_project(
+            &app,
+            &state,
+            &project_root,
+            &asset,
+        )
+        .await
+        {
+            Ok(_) => {
+                crate::events::emit_timeline_changed(&app, &project_root);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    asset = %asset.display(),
+                    "auto-thumbnails failed; clip stays as coloured rect",
+                );
             }
         }
 
