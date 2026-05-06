@@ -10,15 +10,21 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProposalStore } from "./proposal";
+import { Tooltip } from "../components/ui/Tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../components/ui/Popover";
 
 export function ProposalActions() {
   const proposal = useProposalStore((s) => s.active);
-  const [showEdl, setShowEdl] = useState(false);
+  const [edlOpen, setEdlOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setShowEdl(false);
+    setEdlOpen(false);
     setBusy(false);
     setError(null);
   }, [proposal?.callId]);
@@ -91,37 +97,20 @@ export function ProposalActions() {
           </span>
         ) : null}
       </div>
-      <button
-        className="proposal-actions-secondary"
-        onClick={() => setShowEdl((v) => !v)}
-        title="Show the round-trippable EDL text"
-      >
-        {showEdl ? "Hide EDL" : "Show EDL"}
-      </button>
-      <button
-        className="proposal-actions-secondary proposal-actions-reject"
-        onClick={reject}
-        disabled={busy}
-        title="Reject (Esc)"
-      >
-        {busy ? "…" : "Reject"}
-      </button>
-      <button
-        className="proposal-actions-primary"
-        onClick={accept}
-        disabled={busy}
-        title="Accept (Enter)"
-      >
-        {busy ? "Applying…" : "Accept ⏎"}
-      </button>
-      {error && <div className="proposal-actions-error">{error}</div>}
-      {showEdl && (
-        <div className="proposal-edl-popover" role="dialog">
+      <Popover open={edlOpen} onOpenChange={setEdlOpen}>
+        <Tooltip content="Show the round-trippable EDL text">
+          <PopoverTrigger asChild>
+            <button className="proposal-actions-secondary">
+              {edlOpen ? "Hide EDL" : "Show EDL"}
+            </button>
+          </PopoverTrigger>
+        </Tooltip>
+        <PopoverContent className="proposal-edl-popover" align="end">
           <header className="proposal-edl-popover-header">
             <span>EDL preview</span>
             <button
               className="proposal-edl-popover-close"
-              onClick={() => setShowEdl(false)}
+              onClick={() => setEdlOpen(false)}
               aria-label="Close EDL preview"
             >
               ×
@@ -132,8 +121,39 @@ export function ProposalActions() {
               ? proposal.edlText
               : "(no EDL text on adjusted proposals — drag-adjusted edits are tracked as locator deltas, not as a re-emitted text envelope)"}
           </pre>
-        </div>
-      )}
+        </PopoverContent>
+      </Popover>
+      <Tooltip
+        content={
+          <>
+            Reject<kbd>Esc</kbd>
+          </>
+        }
+      >
+        <button
+          className="proposal-actions-secondary proposal-actions-reject"
+          onClick={reject}
+          disabled={busy}
+        >
+          {busy ? "…" : "Reject"}
+        </button>
+      </Tooltip>
+      <Tooltip
+        content={
+          <>
+            Accept<kbd>Enter</kbd>
+          </>
+        }
+      >
+        <button
+          className="proposal-actions-primary"
+          onClick={accept}
+          disabled={busy}
+        >
+          {busy ? "Applying…" : "Accept ⏎"}
+        </button>
+      </Tooltip>
+      {error && <div className="proposal-actions-error">{error}</div>}
     </div>
   );
 }
