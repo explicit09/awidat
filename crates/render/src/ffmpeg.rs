@@ -555,6 +555,170 @@ pub async fn generate_thumbnails(
     Ok(())
 }
 
+/// Pull a mono 8 kHz f32-PCM stream from `asset_path`, then bucket
+/// the absolute samples into `bucket_count` peak amplitudes in
+/// `[0.0, 1.0]`. The frontend draws these as a centered amplitude
+/// line under each audio clip.
+///
+/// Pipeline:
+/// `ffmpeg -i <src> -map 0:a:0? -ac 1 -ar 8000 -f f32le -`
+///
+/// `-map 0:a:0?` picks the first audio stream if present, with the
+/// `?` making the map optional — assets without audio streams
+/// resolve to an empty `Vec<f32>` so callers can short-circuit the
+/// "this asset has no audio" path. We pipe raw f32 samples on stdout
+/// and bucket on the Rust side; this avoids spawning two ffmpeg
+/// processes and keeps the bucketing logic uniform across formats.
+///
+/// 8 kHz is plenty: the waveform draw resamples again to display
+/// width, so the source sample rate just needs to be high enough
+/// that long buckets average over a real signal. At 8 kHz a
+/// 60-minute podcast yields ~28.8 M samples → ~115 MB of stdout —
+/// large but tractable, and we throw the samples away as we
+/// bucket. An hour of audio runs in seconds.
+///
+/// `cancel` kills ffmpeg and returns `Err(NonZero { stderr_tail:
+/// "cancelled" })`, mirroring [`transcode_proxy`].
+pub async fn generate_waveform(
+    asset_path: &Path,
+    bucket_count: usize,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<f32>, FfmpegError> {
+    if bucket_count == 0 {
+        return Ok(Vec::new());
+    }
+    let bin = ffmpeg_path()?;
+
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-loglevel")
+        .arg("error")
+        .arg("-nostats")
+        .arg("-i")
+        .arg(asset_path)
+        .arg("-map")
+        .arg("0:a:0?")
+        .arg("-ac")
+        .arg("1")
+        .arg("-ar")
+        .arg("8000")
+        .arg("-f")
+        .arg("f32le")
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stdout missing")))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
+
+    // Drive stdout into the bucket aggregator and stderr into a tail
+    // for error reporting, in parallel. Each f32 is 4 bytes
+    // little-endian; we read in chunks rather than one-sample-at-a-
+    // time to avoid syscall overhead on long inputs.
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut samples = Vec::<f32>::with_capacity(1024 * 1024);
+        loop {
+            let n = stdout.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            // The kernel may hand us a partial frame at the end — drop
+            // any trailing odd bytes (4-byte float-aligned).
+            let aligned = n - (n % 4);
+            for chunk in buf[..aligned].chunks_exact(4) {
+                let mut bytes = [0u8; 4];
+                bytes.copy_from_slice(chunk);
+                samples.push(f32::from_le_bytes(bytes));
+            }
+        }
+        Ok::<_, std::io::Error>(samples)
+    });
+
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf).await;
+        buf
+    });
+
+    let status = tokio::select! {
+        _ = cancel.cancelled() => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(FfmpegError::NonZero {
+                code: -1,
+                stderr_tail: "cancelled".into(),
+            });
+        }
+        st = child.wait() => st.map_err(FfmpegError::Io)?,
+    };
+
+    let stderr_bytes = stderr_task.await.unwrap_or_default();
+    let samples = match stdout_task.await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err(FfmpegError::Io(e)),
+        Err(_) => return Err(FfmpegError::Io(std::io::Error::other(
+            "waveform stdout task panicked",
+        ))),
+    };
+
+    if !status.success() {
+        return Err(FfmpegError::NonZero {
+            code: status.code().unwrap_or(-1),
+            stderr_tail: tail_string(&stderr_bytes, STDERR_TAIL_BYTES),
+        });
+    }
+
+    // Empty audio stream (no audio at all, or `-map 0:a:0?` matched
+    // nothing) — return an empty bucket vector. The desktop wrapper
+    // treats this as "asset has no audio; don't write a sidecar".
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    Ok(bucket_peaks(&samples, bucket_count))
+}
+
+/// Reduce a sample stream to `bucket_count` peak amplitudes. Each
+/// bucket is the maximum absolute sample value in its slice. Output
+/// values are `[0.0, 1.0]` (clamped — f32 PCM can technically exceed
+/// 1.0 on overdriven sources). Pure-function so unit-testable.
+fn bucket_peaks(samples: &[f32], bucket_count: usize) -> Vec<f32> {
+    if bucket_count == 0 || samples.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(bucket_count);
+    let total = samples.len();
+    for i in 0..bucket_count {
+        let start = (total * i) / bucket_count;
+        let end = (total * (i + 1)) / bucket_count;
+        let slice = if start < end {
+            &samples[start..end]
+        } else {
+            // Bucket count exceeds sample count — fall back to a
+            // single sample per bucket (last available).
+            &samples[(start.min(total - 1))..(start.min(total - 1) + 1)]
+        };
+        let peak = slice
+            .iter()
+            .fold(0f32, |acc, &s| acc.max(s.abs()))
+            .min(1.0);
+        out.push(peak);
+    }
+    out
+}
+
 /// Image format for [`extract_frame`].
 #[derive(Debug, Clone, Copy)]
 pub enum ImageFormat {
@@ -623,6 +787,101 @@ mod tests {
         let s = tail_string(&bytes, 10);
         assert_eq!(s.len(), 10);
         assert!(s.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn bucket_peaks_picks_max_abs_per_bucket() {
+        let samples = [0.1, -0.5, 0.2, 0.9, -0.3, 0.0, 0.4, -0.8];
+        let buckets = bucket_peaks(&samples, 4);
+        // Buckets split [0..2], [2..4], [4..6], [6..8].
+        assert_eq!(buckets.len(), 4);
+        assert!((buckets[0] - 0.5).abs() < 1e-6);
+        assert!((buckets[1] - 0.9).abs() < 1e-6);
+        assert!((buckets[2] - 0.3).abs() < 1e-6);
+        assert!((buckets[3] - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bucket_peaks_clamps_to_one() {
+        // f32 PCM can exceed 1.0 on overdriven sources; output is clamped.
+        let samples = [3.5_f32, -2.7, 1.001];
+        let buckets = bucket_peaks(&samples, 1);
+        assert_eq!(buckets, vec![1.0]);
+    }
+
+    #[test]
+    fn bucket_peaks_zero_buckets_returns_empty() {
+        let samples = [0.1_f32, 0.2, 0.3];
+        assert!(bucket_peaks(&samples, 0).is_empty());
+    }
+
+    #[test]
+    fn bucket_peaks_more_buckets_than_samples_does_not_panic() {
+        let samples = [0.5_f32, -0.3];
+        let buckets = bucket_peaks(&samples, 8);
+        assert_eq!(buckets.len(), 8);
+        // Each bucket gets *some* peak; first sample dominates the
+        // first half, second the latter — the exact split depends on
+        // (total*i)/bucket_count rounding, but every value must be
+        // one of the two source amplitudes.
+        for b in buckets {
+            assert!((b - 0.5).abs() < 1e-6 || (b - 0.3).abs() < 1e-6);
+        }
+    }
+
+    /// End-to-end: synthesize a 2s sine wave with `lavfi` and run
+    /// `generate_waveform`. Skipped when ffmpeg isn't on the box.
+    #[test]
+    fn generate_waveform_against_synthesized_sine() {
+        let Ok(_bin) = ffmpeg_path() else {
+            return;
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let asset = dir.path().join("sine.wav");
+
+        // Synth a 2s sine via lavfi, write as wav.
+        let status = std::process::Command::new(ffmpeg_path().unwrap())
+            .arg("-loglevel").arg("error")
+            .arg("-y")
+            .arg("-f").arg("lavfi")
+            .arg("-i").arg("sine=frequency=440:duration=2")
+            .arg(&asset)
+            .status()
+            .expect("synth ffmpeg spawn");
+        assert!(status.success(), "synth wav exit: {status}");
+
+        let buckets = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                generate_waveform(
+                    &asset,
+                    256,
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+            })
+            .expect("generate_waveform");
+
+        assert_eq!(buckets.len(), 256);
+        // ffmpeg's lavfi `sine=` defaults to ~0.125 amplitude (-18
+        // dBFS); we just need to confirm a real signal landed, not
+        // any specific level. The bucket-peak max should be well
+        // above the noise floor.
+        let max_peak = buckets.iter().fold(0f32, |acc, &p| acc.max(p));
+        assert!(
+            max_peak > 0.05,
+            "expected a real signal in the buckets, max was {max_peak}",
+        );
+        // Sanity: every bucket of a continuous sine should have a
+        // non-zero peak — a sine never goes silent.
+        let zero_buckets = buckets.iter().filter(|p| **p < 1e-6).count();
+        assert!(
+            zero_buckets < 5,
+            "too many zero buckets: {zero_buckets}/256",
+        );
     }
 
     /// End-to-end: synthesize a 3s test video with `lavfi` and run

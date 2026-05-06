@@ -172,6 +172,54 @@ pub fn thumbnails_dir_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf
         .join(format!("{stem}-{:08x}", stable_path_hash(asset_abs_path)))
 }
 
+/// Compute the absolute waveform-sidecar path for an asset path.
+/// Mirrors [`thumbnails_dir_for`]: per-asset, content-disambiguated
+/// by the FNV-1a hash of the absolute source path. The sidecar
+/// holds JSON `{ "buckets": [...] }`; see
+/// `commands::waveform::WaveformSidecar`.
+pub fn waveform_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
+    let stem = asset_abs_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("asset");
+    project_root
+        .join(".awidat")
+        .join("waveforms")
+        .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
+}
+
+/// Resolve the absolute waveform-sidecar path for a project-relative
+/// asset id (e.g. `raw/foo.mp3`). Returns `Some(path)` if the
+/// sidecar exists AND its on-disk JSON contains a non-empty
+/// `buckets` array (so the frontend only sees real waveforms, not
+/// in-progress writes or "no audio stream" placeholders). `None`
+/// otherwise.
+pub fn waveform_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<String> {
+    let abs = project_root.join(asset_id);
+    if !abs.is_file() {
+        return None;
+    }
+    let sidecar = waveform_path_for(project_root, &abs);
+    if !sidecar.is_file() {
+        return None;
+    }
+    // Cheap content sniff — same shape as `commands::waveform::has_buckets`
+    // but inlined here to avoid a circular dep. We treat any JSON
+    // matching `"buckets":[]` (whitespace-stripped) as empty.
+    let Ok(contents) = std::fs::read_to_string(&sidecar) else {
+        return None;
+    };
+    let compact: String = contents
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .take(64)
+        .collect();
+    if compact.contains("\"buckets\":[]") {
+        return None;
+    }
+    Some(sidecar.to_string_lossy().into_owned())
+}
+
 /// Resolve the absolute thumbnails-dir path for a project-relative
 /// asset id (e.g. `raw/foo.MOV`). Returns `Some(path)` if the dir
 /// exists AND has at least one `frame-*.jpg` in it (so the frontend
@@ -252,5 +300,30 @@ mod tests {
     fn proxy_path_for_asset_id_returns_none_when_asset_missing() {
         let dir = tempfile::tempdir().unwrap();
         assert!(proxy_path_for_asset_id(dir.path(), "raw/nonexistent.mp4").is_none());
+    }
+
+    #[test]
+    fn waveform_path_for_asset_id_returns_none_when_no_buckets() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("foo.wav");
+        std::fs::write(&asset, b"x").unwrap();
+
+        // No sidecar yet → None.
+        assert!(waveform_path_for_asset_id(dir.path(), "raw/foo.wav").is_none());
+
+        // Empty buckets → None (treat as "no audio in this asset").
+        let sidecar = waveform_path_for(dir.path(), &asset);
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(&sidecar, br#"{"buckets":[]}"#).unwrap();
+        assert!(waveform_path_for_asset_id(dir.path(), "raw/foo.wav").is_none());
+
+        // Non-empty buckets → Some(path).
+        std::fs::write(&sidecar, br#"{"buckets":[0.1,0.2]}"#).unwrap();
+        assert_eq!(
+            waveform_path_for_asset_id(dir.path(), "raw/foo.wav").as_deref(),
+            Some(sidecar.to_string_lossy().as_ref()),
+        );
     }
 }

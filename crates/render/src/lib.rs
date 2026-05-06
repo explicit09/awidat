@@ -13,6 +13,9 @@
 //! - [`ffmpeg::generate_thumbnails`] — extract one filmstrip JPEG per
 //!   second of source-time into a per-asset thumbnails dir. Used by
 //!   the timeline canvas to draw filmstrip strips inside clips.
+//! - [`ffmpeg::generate_waveform`] — pull mono PCM at 8 kHz and bucket
+//!   into peak amplitudes. Used by the timeline canvas to draw audio
+//!   waveforms on audio clips.
 //! - [`job::JobManager`] — long-running ffmpeg job orchestrator. Used by
 //!   `start_render` / `poll_render`.
 //! - [`progress::ProgressSnapshot`] — parsed view of ffmpeg's stderr
@@ -25,7 +28,7 @@ pub mod timeline;
 
 pub use ffmpeg::{
     FfmpegError, TranscodeProgress, TranscodeProgressCallback, extract_frame, ffmpeg_path,
-    ffprobe_path, generate_thumbnails, probe_duration_s, transcode_proxy,
+    ffprobe_path, generate_thumbnails, generate_waveform, probe_duration_s, transcode_proxy,
 };
 pub use timeline::{
     RenderTimelineError, TimelineSegment, build_timeline_argv, build_timeline_render_spec,

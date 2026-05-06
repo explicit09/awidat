@@ -14,3 +14,4 @@ pub mod transcode;
 pub mod transcript;
 pub mod turn;
 pub mod view;
+pub mod waveform;

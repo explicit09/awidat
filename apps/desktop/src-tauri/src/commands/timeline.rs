@@ -108,6 +108,17 @@ pub fn flatten_timeline_public(
                         .and_then(|aid| {
                             crate::commands::media::thumbnails_dir_for_asset_id(project_root, aid)
                         });
+                    // Resolve the waveform sidecar path once per clip
+                    // so audio tracks can draw the amplitude line.
+                    // `None` while the post-import [`JobKind::Waveform`]
+                    // job hasn't completed, AND when the asset has no
+                    // audio stream (sidecar exists but its buckets
+                    // array is empty).
+                    let waveform_path = asset_id
+                        .as_deref()
+                        .and_then(|aid| {
+                            crate::commands::media::waveform_path_for_asset_id(project_root, aid)
+                        });
                     // Anchor uuid: prefer clip.metadata.awidat.extra["clip_uuid"];
                     // fall back to display name (the EDL resolver also
                     // matches names, so the fallback round-trips).
@@ -129,7 +140,7 @@ pub fn flatten_timeline_public(
                         source_start_s,
                         proxy_path,
                         thumbnail_dir,
-                        waveform_path: None,
+                        waveform_path,
                     });
                     track_cursor_s += duration_s;
                 }
