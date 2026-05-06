@@ -1,8 +1,24 @@
-// Zustand store for the media pane: which assets have proxies on
-// disk, which one's currently selected for playback, and live
-// playback state (current time, duration, isPlaying). The next
-// commit will wire the playback state into the agent's per-turn
-// context so the agent knows what the user is looking at.
+// Zustand store for the media pane.
+//
+// There are TWO clocks here:
+//
+// 1. **Source-time** (`currentTime`, `durationS`, `seek*`): seconds
+//    *into a single proxy mp4*. Used internally by the video element
+//    when it's playing the raw asset (empty-timeline / source-preview
+//    mode) or one segment of the timeline at a time.
+//
+// 2. **Timeline-time** (`timelineTime`, `timelineDurationS`,
+//    `timelineSeek*`): seconds along the master OTIO timeline.
+//    Spans cuts between clips. This is the clock the user thinks in
+//    when they look at the scrub bar — they care about "what plays
+//    when I let the playhead run", not "what offset into raw
+//    foo.MOV." The SegmentedVideoView (Step 9.3) owns the
+//    translation between the two clocks.
+//
+// External callers (timeline canvas click, transcript click) use
+// `requestTimelineSeek` once Step 9.3 lands. Until then,
+// `requestSeek` (source-time) remains the only path so the existing
+// raw-asset preview keeps working.
 
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
@@ -18,7 +34,7 @@ type MediaState = {
   proxies: ProxyEntry[];
   /** Stem of the currently-selected asset, or null if none / no proxies. */
   selectedStem: string | null;
-  /** Live playhead position in seconds. */
+  /** Live playhead position in source-time seconds. */
   currentTime: number;
   /** Source duration in seconds (0 until the video element loads metadata). */
   durationS: number;
@@ -26,30 +42,52 @@ type MediaState = {
   isPlaying: boolean;
   /**
    * Monotonically-increasing tick that bumps when an external caller
-   * requests a seek (e.g. the timeline canvas). The MediaPane
-   * subscribes to this and imperatively sets `videoRef.currentTime`
-   * to `seekTargetS`. We can't drive seeks via `currentTime` alone
-   * because the player itself owns currentTime — the store mirrors
-   * it, doesn't command it. Bumping a separate counter lets the
-   * player distinguish "store updated because I emitted timeupdate"
-   * from "an external caller wants me to seek now."
+   * requests a source-time seek (e.g. the timeline canvas in
+   * source-preview mode). The MediaPane subscribes to this and
+   * imperatively sets `videoRef.currentTime` to `seekTargetS`. We
+   * can't drive seeks via `currentTime` alone because the player
+   * itself owns currentTime — the store mirrors it, doesn't command
+   * it. Bumping a separate counter lets the player distinguish
+   * "store updated because I emitted timeupdate" from "an external
+   * caller wants me to seek now."
    */
   seekRequestId: number;
-  /** Target seconds for the most recent seek request. */
+  /** Target seconds for the most recent source-time seek request. */
   seekTargetS: number;
+
+  /** Live playhead position in timeline-time seconds. */
+  timelineTime: number;
+  /**
+   * Total timeline duration in seconds. Mirrors
+   * `useTimelineStore().snapshot.duration_s`; updated by the
+   * MediaPane on snapshot change so the scrub bar can clamp
+   * without subscribing to the timeline store directly.
+   */
+  timelineDurationS: number;
+  /** Monotonic tick for timeline-time seek requests. */
+  timelineSeekRequestId: number;
+  /** Target seconds for the most recent timeline-time seek request. */
+  timelineSeekTargetS: number;
 
   /** Refresh from `list_proxies`. */
   refresh: () => Promise<void>;
   /** Pick which asset plays. Resets playback state. */
   select: (stem: string | null) => void;
-  /** Called by the player on `timeupdate` / scrub. */
+  /** Called by the player on `timeupdate` / scrub (source-time). */
   setTime: (t: number) => void;
-  /** Called on `loadedmetadata`. */
+  /** Called on `loadedmetadata` (source-time). */
   setDuration: (d: number) => void;
   /** Called on `play` / `pause` / `ended`. */
   setPlaying: (p: boolean) => void;
-  /** External caller asks the player to seek to `t` seconds. */
+  /** External caller asks the player to seek to `t` seconds (source-time). */
   requestSeek: (t: number) => void;
+
+  /** Called by the segmented player as it plays / scrubs (timeline-time). */
+  setTimelineTime: (t: number) => void;
+  /** Called by the MediaPane when the OTIO snapshot's duration changes. */
+  setTimelineDuration: (d: number) => void;
+  /** External caller asks the segmented player to seek (timeline-time). */
+  requestTimelineSeek: (t: number) => void;
 };
 
 export const useMediaStore = create<MediaState>((set, get) => ({
@@ -60,6 +98,10 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   isPlaying: false,
   seekRequestId: 0,
   seekTargetS: 0,
+  timelineTime: 0,
+  timelineDurationS: 0,
+  timelineSeekRequestId: 0,
+  timelineSeekTargetS: 0,
 
   refresh: async () => {
     try {
@@ -83,7 +125,12 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   },
   select: (stem) => {
     if (stem === null) {
-      set({ selectedStem: null, currentTime: 0, durationS: 0, isPlaying: false });
+      set({
+        selectedStem: null,
+        currentTime: 0,
+        durationS: 0,
+        isPlaying: false,
+      });
       return;
     }
     const proxies = get().proxies;
@@ -103,5 +150,12 @@ export const useMediaStore = create<MediaState>((set, get) => ({
     set((state) => ({
       seekRequestId: state.seekRequestId + 1,
       seekTargetS: Math.max(0, t),
+    })),
+  setTimelineTime: (t) => set({ timelineTime: t }),
+  setTimelineDuration: (d) => set({ timelineDurationS: Math.max(0, d) }),
+  requestTimelineSeek: (t) =>
+    set((state) => ({
+      timelineSeekRequestId: state.timelineSeekRequestId + 1,
+      timelineSeekTargetS: Math.max(0, t),
     })),
 }));
