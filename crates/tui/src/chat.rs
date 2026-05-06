@@ -19,6 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// One row in the chat scrollback. Each variant renders to one or more
 /// lines depending on width.
@@ -137,13 +138,18 @@ impl Chat {
     /// content — so an empty live region collapses to zero rows
     /// instead of reserving blank space.
     pub fn rendered_height(&self) -> u16 {
+        self.rendered_height_for_width(u16::MAX)
+    }
+
+    /// Total number of rendered rows after soft-wrapping to `width`.
+    pub fn rendered_height_for_width(&self, width: u16) -> u16 {
         if self.items.is_empty() {
             return 0;
         }
         let mut total = 0usize;
         let mut rendered_items = 0usize;
         for (i, item) in self.items.iter().enumerate() {
-            let item_height = render_item(item, 0).len();
+            let item_height = render_item_rows_for_width(item, 0, width).len();
             if item_height == 0 {
                 continue;
             }
@@ -510,6 +516,64 @@ fn render_item_rows(item: &ChatItem, spinner_phase: u8) -> Vec<RenderedLine> {
         .collect()
 }
 
+fn render_item_rows_for_width(item: &ChatItem, spinner_phase: u8, width: u16) -> Vec<RenderedLine> {
+    render_item_rows(item, spinner_phase)
+        .into_iter()
+        .flat_map(|line| wrap_rendered_line(line, width))
+        .collect()
+}
+
+fn wrap_rendered_line(rendered: RenderedLine, width: u16) -> Vec<RenderedLine> {
+    let width = width as usize;
+    if width == 0 || rendered.line.spans.is_empty() {
+        return vec![rendered];
+    }
+
+    let continuation = continuation_indent(&rendered.line, width);
+    let continuation_width = continuation
+        .as_deref()
+        .map(UnicodeWidthStr::width)
+        .unwrap_or(0);
+    let mut out = Vec::new();
+    let mut spans = Vec::new();
+    let mut col = 0usize;
+
+    for span in rendered.line.spans {
+        let style = span.style;
+        for ch in span.content.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if col > 0 && ch_width > 0 && col + ch_width > width {
+                out.push(RenderedLine {
+                    line: Line::from(spans),
+                    fill: rendered.fill,
+                });
+                spans = continuation
+                    .as_ref()
+                    .map(|indent| vec![Span::raw(indent.clone())])
+                    .unwrap_or_default();
+                col = continuation_width;
+            }
+            spans.push(Span::styled(ch.to_string(), style));
+            col = col.saturating_add(ch_width);
+        }
+    }
+
+    out.push(RenderedLine {
+        line: Line::from(spans),
+        fill: rendered.fill,
+    });
+    out
+}
+
+fn continuation_indent(line: &Line<'static>, width: usize) -> Option<String> {
+    let first = line.spans.first()?.content.as_ref();
+    let prefix_width = first.width();
+    if prefix_width == 0 || prefix_width > 4 || prefix_width >= width || !first.ends_with(' ') {
+        return None;
+    }
+    Some(" ".repeat(prefix_width))
+}
+
 fn user_message_lines(text: &str) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from("")];
     lines.extend(prefixed_text_lines(
@@ -699,7 +763,7 @@ impl Widget for &Chat {
         }
         let mut lines: Vec<RenderedLine> = Vec::new();
         for (i, item) in self.items.iter().enumerate() {
-            let mut item_lines = render_item_rows(item, self.spinner_phase);
+            let mut item_lines = render_item_rows_for_width(item, self.spinner_phase, area.width);
             if item_lines.is_empty() {
                 continue;
             }
@@ -891,6 +955,23 @@ mod tests {
                 .any(|s| s.content.contains("cut the intro"))
         );
         assert!(lines[2].spans.is_empty());
+    }
+
+    #[test]
+    fn user_message_wraps_to_terminal_width() {
+        let rows = render_item_rows_for_width(&ChatItem::User("abcdefghij".into()), 0, 6);
+        let text = rows
+            .iter()
+            .map(|row| {
+                row.line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(text, vec!["", "› abcd", "  efgh", "  ij", ""]);
     }
 
     #[test]

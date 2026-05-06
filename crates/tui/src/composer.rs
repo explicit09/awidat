@@ -91,6 +91,14 @@ impl Composer {
         (col as u16, row as u16)
     }
 
+    /// Cursor position inside the visible composer area after the input
+    /// has scrolled to keep the cursor in view.
+    pub fn visible_cursor_position(&self, inner_width: u16, visible_height: u16) -> (u16, u16) {
+        let (col, row) = self.cursor_position(inner_width);
+        let scroll_y = self.scroll_y(inner_width, visible_height);
+        (col, row.saturating_sub(scroll_y))
+    }
+
     /// Legacy single-row cursor column used by the old call site
     /// (see TUI #2). Computes the column AS IF the input were one line.
     /// Kept so existing tests and callers that don't know about wrap
@@ -230,6 +238,14 @@ impl Composer {
             .nth(char_idx)
             .map_or(self.text.len(), |(b, _)| b)
     }
+
+    fn scroll_y(&self, inner_width: u16, visible_height: u16) -> u16 {
+        if visible_height == 0 {
+            return 0;
+        }
+        let (_, row) = self.cursor_position(inner_width);
+        row.saturating_add(1).saturating_sub(visible_height)
+    }
 }
 
 impl Widget for &Composer {
@@ -282,6 +298,7 @@ impl Widget for &Composer {
         // text and falls back to hard-wrap for long unbroken tokens.
         Paragraph::new(line)
             .wrap(ratatui::widgets::Wrap { trim: false })
+            .scroll((self.scroll_y(area.width.saturating_sub(2), area.height), 0))
             .render(area, buf);
     }
 }
@@ -420,5 +437,16 @@ mod tests {
         let (col, row) = c.cursor_position(80);
         assert_eq!(row, 1);
         assert_eq!(col, 2);
+    }
+
+    #[test]
+    fn visible_cursor_position_scrolls_capped_composer() {
+        let mut c = Composer::new("hint");
+        c.insert_str(&"x".repeat(55));
+        let (col, row) = c.visible_cursor_position(10, 3);
+
+        assert_eq!(col, 5);
+        assert_eq!(row, 2);
+        assert_eq!(c.scroll_y(10, 3), 3);
     }
 }
