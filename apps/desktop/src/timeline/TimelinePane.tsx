@@ -5,6 +5,7 @@
 // call lands in chat (the agent just rewrote the OTIO).
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "./store";
 import { useMediaStore } from "../media/store";
@@ -14,6 +15,12 @@ import { useProposalStore } from "./proposal";
 import { ProposalActions } from "./ProposalActions";
 import { ProposalHandles } from "./ProposalHandles";
 import { TIMELINE_CHANGED_EVENT, type AppliedDiff } from "../protocol";
+import { serializeEdl } from "./edlBuilder";
+import {
+  hitTestEdge,
+  pxDeltaToSourceDelta,
+  type EdgeHit,
+} from "./hitDetect";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -144,6 +151,16 @@ function TimelineSurface({
   );
 }
 
+/** Active user-trim drag — lives in canvas state so cursor + paint
+ *  update on edge-hover and during the drag. */
+type UserTrimDrag = {
+  hit: EdgeHit;
+  /** Pointer x at drag start, in canvas-local pixels. */
+  startX: number;
+  /** Live pointer x in canvas-local pixels. */
+  currentX: number;
+};
+
 function TimelineCanvas({
   snapshot,
   currentTime,
@@ -166,6 +183,10 @@ function TimelineCanvas({
   // timeline they coincide for now (until trim shifts source_start_s).
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
   const proposal = useProposalStore((s) => s.active);
+  // Cursor hint when hovering near a clip edge (without dragging).
+  const [edgeHover, setEdgeHover] = useState<EdgeHit | null>(null);
+  // Active drag, set on pointerdown-near-edge, cleared on pointerup.
+  const [userTrim, setUserTrim] = useState<UserTrimDrag | null>(null);
 
   // Compute pixel layout. When a proposal is active, the canvas
   // paints two passes: original snapshot at α=0.45 (the "before")
@@ -232,6 +253,17 @@ function TimelineCanvas({
       }
 
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
+
+      // Draw the live drag-edge phantom on top of everything else.
+      // A 2px amber line at the dragged x — minimal but unmistakable;
+      // 8.3 polishes with a tooltip showing the proposed time.
+      if (userTrim) {
+        const x = userTrim.currentX;
+        const yTop = RULER_HEIGHT;
+        const yBot = RULER_HEIGHT + LANE_HEIGHT * snapshot.tracks.length;
+        ctx.fillStyle = "#f59e0b";
+        ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
+      }
     }
 
     paint();
@@ -241,12 +273,27 @@ function TimelineCanvas({
     const ro = new ResizeObserver(() => paint());
     ro.observe(container);
     return () => ro.disconnect();
-  }, [snapshot, currentTime, proposal, onLayout]);
+  }, [snapshot, currentTime, proposal, onLayout, userTrim]);
 
-  // Click + drag on the canvas → seek the player. We use pointer
-  // events (covers mouse + trackpad + touch) and capture the
-  // pointer on mousedown so the drag tracks even outside the
-  // canvas bounds (Premiere/Resolve behavior).
+  // Pointer dispatch:
+  //   - On a clip edge → start user-trim drag
+  //   - Elsewhere → seek-on-drag (existing behavior)
+  // We use pointer events (covers mouse + trackpad + touch) and
+  // capture the pointer on mousedown so the drag tracks even outside
+  // the canvas bounds (Premiere/Resolve behavior).
+  function canvasPos(e: React.PointerEvent<HTMLCanvasElement>): {
+    x: number;
+    y: number;
+    clientX: number;
+  } {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(rect.width, e.clientX - rect.left)),
+      y: Math.max(0, Math.min(rect.height, e.clientY - rect.top)),
+      clientX: e.clientX,
+    };
+  }
+
   function timeFromClientX(clientX: number): number {
     const canvas = canvasRef.current;
     if (!canvas) return 0;
@@ -260,21 +307,116 @@ function TimelineCanvas({
   }
 
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (snapshot.duration_s <= 0) return; // nothing to seek into
+    if (snapshot.duration_s <= 0) return; // nothing to interact with
+    // Don't start a new user-trim while a proposal is already on
+    // screen — it would be confusing to have two "ghost" overlays.
+    // The user can accept/reject the active proposal first.
+    if (proposal) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      requestTimelineSeek(timeFromClientX(e.clientX));
+      return;
+    }
+    const { x, y, clientX } = canvasPos(e);
+    const hit = hitTestEdge(x, y, snapshot, ppsRef.current);
+    if (hit) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setUserTrim({ hit, startX: x, currentX: x });
+      // Don't seek on edge-down; the user is starting a trim, not
+      // scrubbing.
+      return;
+    }
+    // Plain click → scrub.
     e.currentTarget.setPointerCapture(e.pointerId);
-    requestTimelineSeek(timeFromClientX(e.clientX));
+    requestTimelineSeek(timeFromClientX(clientX));
   }
 
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-    requestTimelineSeek(timeFromClientX(e.clientX));
+    const { x, y, clientX } = canvasPos(e);
+    if (userTrim) {
+      // Active drag — update the phantom edge x.
+      setUserTrim({ ...userTrim, currentX: x });
+      return;
+    }
+    // Hover state — update edge cursor hint.
+    const hover = hitTestEdge(x, y, snapshot, ppsRef.current);
+    setEdgeHover(hover);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      requestTimelineSeek(timeFromClientX(clientX));
+    }
   }
 
   function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+    if (userTrim) {
+      void commitUserTrim(userTrim);
+      setUserTrim(null);
+    }
   }
+
+  // Build a one-op TrimClip envelope from the drag state and submit
+  // it via propose_user_edit. The Step-5 proposal pipeline takes
+  // over: the ghost overlay shows the proposed cut, Accept commits
+  // it. Cancellation while dragging (pointercancel / pointerup with
+  // no movement) just clears userTrim — no envelope is sent.
+  async function commitUserTrim(drag: UserTrimDrag): Promise<void> {
+    const dxPx = drag.currentX - drag.startX;
+    const dxS = pxDeltaToSourceDelta(dxPx, ppsRef.current);
+    // Tiny drags are scrub mistakes, not trim intent. Don't send.
+    if (Math.abs(dxPx) < 2) return;
+    const { hit } = drag;
+    let newStart = hit.sourceStart;
+    let newEnd = hit.sourceEnd;
+    if (hit.side === "start") {
+      newStart = Math.max(0, hit.sourceStart + dxS);
+      // Don't allow start to cross end — clamp to a minimal slice.
+      if (newStart >= newEnd) newStart = newEnd - 0.1;
+    } else {
+      newEnd = Math.max(hit.sourceStart + 0.1, hit.sourceEnd + dxS);
+    }
+    // No-op if the edge didn't actually move (rounding hit zero).
+    if (
+      Math.abs(newStart - hit.sourceStart) < 0.01 &&
+      Math.abs(newEnd - hit.sourceEnd) < 0.01
+    ) {
+      return;
+    }
+    const edl = serializeEdl([
+      {
+        kind: "trim_clip",
+        anchor: { kind: "clip_uuid", uuid: hit.clipUuid },
+        start: newStart !== hit.sourceStart ? newStart : undefined,
+        end: newEnd !== hit.sourceEnd ? newEnd : undefined,
+      },
+    ]);
+    try {
+      await invoke<string>("propose_user_edit", { edlText: edl });
+    } catch (err) {
+      // Surface failures to the console; the existing
+      // build_proposal-failed Item::Error path will also fire if the
+      // backend rejects the envelope, so the user sees the reason
+      // in chat.
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit failed", err);
+    }
+  }
+
+  function onPointerLeave() {
+    setEdgeHover(null);
+  }
+
+  // CSS cursor depending on state. ew-resize over an edge or while
+  // dragging; col-resize (timeline scrub) elsewhere; default outside
+  // the canvas. The cursor shows up on the canvas style; setting it
+  // via React style on the element is enough.
+  const cursor = userTrim
+    ? "ew-resize"
+    : edgeHover
+    ? "ew-resize"
+    : snapshot.duration_s > 0
+    ? "col-resize"
+    : "default";
 
   return (
     <div className="timeline-canvas-wrap" ref={containerRef}>
@@ -287,10 +429,12 @@ function TimelineCanvas({
       <canvas
         ref={canvasRef}
         className="timeline-canvas"
+        style={{ cursor }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onPointerLeave={onPointerLeave}
       />
     </div>
   );
