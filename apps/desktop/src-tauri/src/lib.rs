@@ -84,6 +84,7 @@ pub fn run() {
             commands::transcode::transcode_project_proxies,
             commands::media::list_proxies,
             commands::media::proxy_path_for_stem,
+            commands::thumbnail::generate_thumbnails_for_asset,
             commands::view::set_view_state,
             commands::timeline::read_timeline,
             commands::render::start_timeline_render,

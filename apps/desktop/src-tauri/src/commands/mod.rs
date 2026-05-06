@@ -8,6 +8,7 @@ pub mod media;
 pub mod project;
 pub mod proposal;
 pub mod render;
+pub mod thumbnail;
 pub mod timeline;
 pub mod transcode;
 pub mod transcript;

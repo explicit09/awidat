@@ -10,6 +10,9 @@
 //! - [`ffmpeg::transcode_proxy`] — produce a 720p H.264 all-keyframe
 //!   proxy of an asset, with progress callbacks. Used by the desktop
 //!   import flow to make scrubbable previews.
+//! - [`ffmpeg::generate_thumbnails`] — extract one filmstrip JPEG per
+//!   second of source-time into a per-asset thumbnails dir. Used by
+//!   the timeline canvas to draw filmstrip strips inside clips.
 //! - [`job::JobManager`] — long-running ffmpeg job orchestrator. Used by
 //!   `start_render` / `poll_render`.
 //! - [`progress::ProgressSnapshot`] — parsed view of ffmpeg's stderr
@@ -22,7 +25,7 @@ pub mod timeline;
 
 pub use ffmpeg::{
     FfmpegError, TranscodeProgress, TranscodeProgressCallback, extract_frame, ffmpeg_path,
-    ffprobe_path, probe_duration_s, transcode_proxy,
+    ffprobe_path, generate_thumbnails, probe_duration_s, transcode_proxy,
 };
 pub use timeline::{
     RenderTimelineError, TimelineSegment, build_timeline_argv, build_timeline_render_spec,

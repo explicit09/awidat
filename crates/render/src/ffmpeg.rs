@@ -465,6 +465,96 @@ pub async fn transcode_proxy(
     Ok(())
 }
 
+/// Extract one filmstrip JPEG per second of source-time from
+/// `asset_path` into `output_dir` as `frame-0001.jpg`, `frame-0002.jpg`,
+/// … The frontend tiles these across the clip's pixel width on the
+/// timeline canvas; per the Step 10 plan we generate at the maximum
+/// density we'd ever need (1 / second) and the frontend skips frames
+/// when zoomed out.
+///
+/// Pipeline: `ffmpeg -i <src> -vf "fps=1,scale=120:-2" -vsync vfr
+/// <out_dir>/frame-%04d.jpg`. `scale=120:-2` keeps aspect ratio with
+/// the long edge clamped to 120 px (`-2` keeps the other dim
+/// even-numbered, ffmpeg's mjpeg requirement). `-vsync vfr` skips
+/// timestamp duplicates so we don't emit identical frames on
+/// variable-FPS sources.
+///
+/// Idempotency is the caller's job (mtime check, like `proxy_is_fresh`).
+/// This function unconditionally re-runs ffmpeg.
+///
+/// `cancel` kills the ffmpeg child when fired and returns
+/// `Err(NonZero { stderr_tail: "cancelled", … })`, mirroring
+/// [`transcode_proxy`].
+pub async fn generate_thumbnails(
+    asset_path: &Path,
+    output_dir: &Path,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<(), FfmpegError> {
+    let bin = ffmpeg_path()?;
+
+    tokio::fs::create_dir_all(output_dir)
+        .await
+        .map_err(FfmpegError::Io)?;
+
+    let pattern = output_dir.join("frame-%04d.jpg");
+
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-loglevel")
+        .arg("error")
+        .arg("-nostats")
+        .arg("-y")
+        .arg("-i")
+        .arg(asset_path)
+        .arg("-vf")
+        .arg("fps=1,scale=120:-2")
+        .arg("-vsync")
+        .arg("vfr")
+        .arg("-q:v")
+        .arg("4")
+        .arg(&pattern)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
+
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf).await;
+        buf
+    });
+
+    let status = tokio::select! {
+        _ = cancel.cancelled() => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(FfmpegError::NonZero {
+                code: -1,
+                stderr_tail: "cancelled".into(),
+            });
+        }
+        st = child.wait() => st.map_err(FfmpegError::Io)?,
+    };
+
+    let stderr_bytes = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
+        return Err(FfmpegError::NonZero {
+            code: status.code().unwrap_or(-1),
+            stderr_tail: tail_string(&stderr_bytes, STDERR_TAIL_BYTES),
+        });
+    }
+    Ok(())
+}
+
 /// Image format for [`extract_frame`].
 #[derive(Debug, Clone, Copy)]
 pub enum ImageFormat {
@@ -533,5 +623,64 @@ mod tests {
         let s = tail_string(&bytes, 10);
         assert_eq!(s.len(), 10);
         assert!(s.chars().all(|c| c == 'a'));
+    }
+
+    /// End-to-end: synthesize a 3s test video with `lavfi` and run
+    /// `generate_thumbnails` against it. Skipped when ffmpeg isn't on
+    /// the box (CI without media tooling).
+    #[test]
+    fn generate_thumbnails_against_synthesized_mp4() {
+        let Ok(bin) = ffmpeg_path() else {
+            return; // No ffmpeg, skip — same pattern as other tests.
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let asset = dir.path().join("synth.mp4");
+
+        // Build a 3s testsrc input directly with a blocking ffmpeg
+        // call — we don't need the full async machinery here.
+        let status = std::process::Command::new(&bin)
+            .arg("-loglevel").arg("error")
+            .arg("-y")
+            .arg("-f").arg("lavfi")
+            .arg("-i").arg("testsrc=duration=3:size=320x240:rate=30")
+            .arg("-c:v").arg("libx264")
+            .arg("-pix_fmt").arg("yuv420p")
+            .arg(&asset)
+            .status()
+            .expect("synth ffmpeg spawn");
+        assert!(status.success(), "synth ffmpeg exit: {status}");
+
+        let out_dir = dir.path().join("thumbs");
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                generate_thumbnails(
+                    &asset,
+                    &out_dir,
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+            });
+        assert!(result.is_ok(), "generate_thumbnails failed: {result:?}");
+
+        // 3s source @ fps=1 → 3 frames. Allow ±1 for vfr edge cases.
+        let entries: Vec<_> = std::fs::read_dir(&out_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("frame-")
+            })
+            .collect();
+        assert!(
+            (2..=4).contains(&entries.len()),
+            "expected 2-4 frames, got {}: {:?}",
+            entries.len(),
+            entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
     }
 }

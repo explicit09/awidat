@@ -11,22 +11,26 @@ use tokio::fs;
 use crate::state::AwidatState;
 
 /// Reconfigure Tauri's asset-protocol scope so the webview can fetch
-/// proxy mp4s out of `<project>/.awidat/proxies/` via
-/// `convertFileSrc()`. We allow only that one directory at a time —
-/// the scope is otherwise empty (set in tauri.conf.json) so the
-/// asset protocol cannot be abused to read arbitrary files. Called
-/// from `set_project_root` and `init_project`.
+/// proxy mp4s out of `<project>/.awidat/proxies/` AND filmstrip JPEGs
+/// out of `<project>/.awidat/thumbnails/<stem>-<hash>/` via
+/// `convertFileSrc()`. We allow only those two roots — the scope is
+/// otherwise empty (set in tauri.conf.json) so the asset protocol
+/// cannot be abused to read arbitrary files. Called from
+/// `set_project_root` and `init_project`.
 pub(crate) fn allow_proxies_dir(app: &AppHandle, project_root: &Path) {
-    let proxies = project_root.join(".awidat").join("proxies");
-    // The dir may not exist yet (first import will create it). Allow
-    // it preemptively — the scope check is a glob, not a stat.
     let scope = app.asset_protocol_scope();
-    if let Err(e) = scope.allow_directory(&proxies, true) {
-        tracing::warn!(
-            error = %e,
-            path = %proxies.display(),
-            "failed to allow proxies dir in asset-protocol scope",
-        );
+    for sub in [".awidat/proxies", ".awidat/thumbnails"] {
+        let dir = project_root.join(sub);
+        // The dirs may not exist yet (first import will create them).
+        // Allow them preemptively — the scope check is a glob, not a
+        // stat.
+        if let Err(e) = scope.allow_directory(&dir, true) {
+            tracing::warn!(
+                error = %e,
+                path = %dir.display(),
+                "failed to allow asset-protocol scope dir",
+            );
+        }
     }
 }
 

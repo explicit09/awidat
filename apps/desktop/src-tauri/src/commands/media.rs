@@ -154,6 +154,53 @@ pub fn proxy_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<St
     proxy.is_file().then(|| proxy.to_string_lossy().into_owned())
 }
 
+/// Compute the absolute thumbnails-directory path for an asset path.
+///
+/// Mirrors [`proxy_path_for`]: per-asset, content-disambiguated by the
+/// FNV-1a hash of the absolute source path so two `foo.mov` files in
+/// different `raw/` subdirs don't share a dir. Generation lands files
+/// named `frame-NNNN.jpg` inside this dir; the timeline canvas reads
+/// them by walking the dir at paint time.
+pub fn thumbnails_dir_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
+    let stem = asset_abs_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("asset");
+    project_root
+        .join(".awidat")
+        .join("thumbnails")
+        .join(format!("{stem}-{:08x}", stable_path_hash(asset_abs_path)))
+}
+
+/// Resolve the absolute thumbnails-dir path for a project-relative
+/// asset id (e.g. `raw/foo.MOV`). Returns `Some(path)` if the dir
+/// exists AND has at least one `frame-*.jpg` in it (so the frontend
+/// only sees fully-generated strips, not in-progress or empty dirs).
+/// `None` otherwise.
+pub fn thumbnails_dir_for_asset_id(project_root: &Path, asset_id: &str) -> Option<String> {
+    let abs = project_root.join(asset_id);
+    if !abs.is_file() {
+        return None;
+    }
+    let dir = thumbnails_dir_for(project_root, &abs);
+    if !dir.is_dir() {
+        return None;
+    }
+    // Cheap "is non-empty" check — read just the first entry. We don't
+    // need the exact count here; the frontend reads the dir itself
+    // when it draws.
+    let has_frame = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("frame-")
+        });
+    has_frame.then(|| dir.to_string_lossy().into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
