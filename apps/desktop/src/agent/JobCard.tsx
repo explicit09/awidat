@@ -27,6 +27,7 @@ export function JobCard({ item }: Props) {
     url_import: "url import",
     local_import: "local import",
     transcode: "transcode (proxy)",
+    thumbnails: "thumbnails",
     indexing: "indexing",
     render: "export",
   };

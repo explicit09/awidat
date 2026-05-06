@@ -269,6 +269,12 @@ pub enum JobKind {
     /// that the live preview pane can scrub against without choking
     /// on the original's bitrate.
     Transcode,
+    /// Filmstrip thumbnail extraction over a single asset's proxy.
+    /// Produces a sequence of small JPEGs under
+    /// `<project>/.awidat/thumbnails/<stem>-<hash>/` that the timeline
+    /// canvas tiles across each clip. Fires as a follow-up to
+    /// `Transcode` once the proxy has landed.
+    Thumbnails,
     /// `awidat_index::run` over the project.
     Indexing,
     /// `awidat_render::build_timeline_render_spec` + `JobManager::start`
@@ -373,6 +379,15 @@ pub enum TimelineItem {
         /// when the asset is missing, the proxy hasn't finished
         /// transcoding, or the proxies dir doesn't exist yet.
         proxy_path: Option<String>,
+        /// Absolute path to the directory holding this asset's
+        /// extracted filmstrip JPEGs (e.g.
+        /// `<project>/.awidat/thumbnails/<stem>-<hash>/`). The
+        /// timeline canvas reads `frame-NNNN.jpg` files from this dir
+        /// and tiles them across the clip's pixel width. `None` when
+        /// thumbnails haven't been generated yet (the
+        /// [`JobKind::Thumbnails`] job hasn't completed) or the asset
+        /// doesn't resolve to a known thumbnails dir.
+        thumbnail_dir: Option<String>,
     },
     /// Empty time on the track (silence / black frames).
     Gap {

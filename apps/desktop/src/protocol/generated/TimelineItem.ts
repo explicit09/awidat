@@ -48,7 +48,18 @@ source_start_s: number | null,
  * when the asset is missing, the proxy hasn't finished
  * transcoding, or the proxies dir doesn't exist yet.
  */
-proxy_path: string | null, } | { "kind": "gap", 
+proxy_path: string | null, 
+/**
+ * Absolute path to the directory holding this asset's
+ * extracted filmstrip JPEGs (e.g.
+ * `<project>/.awidat/thumbnails/<stem>-<hash>/`). The
+ * timeline canvas reads `frame-NNNN.jpg` files from this dir
+ * and tiles them across the clip's pixel width. `None` when
+ * thumbnails haven't been generated yet (the
+ * [`JobKind::Thumbnails`] job hasn't completed) or the asset
+ * doesn't resolve to a known thumbnails dir.
+ */
+thumbnail_dir: string | null, } | { "kind": "gap", 
 /**
  * Index of this item within its track.
  */

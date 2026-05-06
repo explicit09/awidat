@@ -4,4 +4,4 @@
  * Discriminator for [`Item::Job`]. The frontend doesn't render
  * kinds it doesn't know about — keep variants small and concrete.
  */
-export type JobKind = "url_import" | "local_import" | "transcode" | "indexing" | "render";
+export type JobKind = "url_import" | "local_import" | "transcode" | "thumbnails" | "indexing" | "render";

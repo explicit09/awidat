@@ -117,6 +117,7 @@ pub fn flatten_timeline_public(
                         asset_id,
                         source_start_s,
                         proxy_path,
+                        thumbnail_dir: None,
                     });
                     track_cursor_s += duration_s;
                 }
