@@ -168,10 +168,11 @@ fn apply_one(
             index,
             op: "Move Clip".into(),
         }),
-        EdlOp::InsertTransition { .. } => Err(ApplyError::NotImplemented {
-            index,
-            op: "Insert Transition".into(),
-        }),
+        EdlOp::InsertTransition {
+            between,
+            kind,
+            duration_s,
+        } => apply_insert_transition(working, index, between, kind, *duration_s, ctx),
     }
 }
 
@@ -683,6 +684,97 @@ fn apply_delete(
         _ => "<non-clip>".to_string(),
     };
     Ok(format!("deleted clip {name:?}"))
+}
+
+/// Insert a `Transition` node between two adjacent clips on the same
+/// track. The transition straddles the cut at `from`'s end /
+/// `to`'s start; the render pipeline interprets this as an xfade-style
+/// overlap (Step 14.5).
+///
+/// Validation:
+/// - both anchors must resolve
+/// - both must be on the *same* track
+/// - they must be at *adjacent* indices (`to.child_index ==
+///   from.child_index + 1`); we don't support transitions that cross
+///   a gap or another transition in v1
+/// - `duration_s > 0`
+fn apply_insert_transition(
+    working: &mut Timeline,
+    index: usize,
+    between: &super::op::TransitionBetween,
+    kind: &str,
+    duration_s: f64,
+    ctx: &AnchorContext,
+) -> Result<String, ApplyError> {
+    use awidat_proto::otio::Transition;
+
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("transition duration {duration_s} must be > 0"),
+        });
+    }
+
+    let from_loc = resolve(working, &between.from, ctx)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    let to_loc = resolve(working, &between.to, ctx)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+
+    if from_loc.track_index != to_loc.track_index {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "transition: anchors resolve to different tracks \
+                 ({} vs {}). Both clips must live on the same track.",
+                from_loc.track_index, to_loc.track_index,
+            ),
+        });
+    }
+    if to_loc.child_index != from_loc.child_index + 1 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "transition: anchors are not adjacent (from at \
+                 index {}, to at index {}). Transitions only insert \
+                 between consecutive clips in v1.",
+                from_loc.child_index, to_loc.child_index,
+            ),
+        });
+    }
+
+    // Pull the rate off the from-clip's source_range so the transition's
+    // RationalTime offsets share a denominator with the surrounding
+    // clips (avoids round-trip drift on save).
+    let StackChild::Track(track) = &mut working.tracks.children[from_loc.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "transition: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(from_clip) = &track.children[from_loc.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "transition: from anchor resolved to a non-clip child".into(),
+        });
+    };
+    let rate = from_clip
+        .source_range
+        .as_ref()
+        .map(|r| r.start_time.rate)
+        .unwrap_or(24.0);
+
+    let transition = Transition::symmetric(kind, duration_s, rate);
+    track
+        .children
+        .insert(from_loc.child_index + 1, TrackChild::Transition(transition));
+
+    Ok(format!(
+        "inserted transition {kind:?} ({duration_s:.3}s) between \
+         clips at indices {} and {} on track {}",
+        from_loc.child_index,
+        from_loc.child_index + 2, // shifted by the insert
+        from_loc.track_index,
+    ))
 }
 
 /// Lightweight validate hook on Timeline. We reach into the proto crate's
@@ -1466,5 +1558,161 @@ mod tests {
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
         assert!(matches!(err, ApplyError::NotImplemented { op, .. } if op == "Move Clip"));
+    }
+
+    #[test]
+    fn apply_insert_transition_lands_between_adjacent_clips() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 1.0,
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert_eq!(outcome.applied.len(), 1);
+
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        // 3 clips + 1 transition = 4 children; transition sits at index 1.
+        assert_eq!(t.children.len(), 4);
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-0"));
+        let TrackChild::Transition(tr) = &t.children[1] else {
+            panic!("expected transition at index 1, got {:?}", t.children[1])
+        };
+        assert_eq!(tr.transition_type, "SMPTE_Dissolve");
+        // symmetric: half the duration on each side.
+        assert!((tr.in_offset.to_seconds() - 0.5).abs() < 1e-9);
+        assert!((tr.out_offset.to_seconds() - 0.5).abs() < 1e-9);
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-1"));
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_non_adjacent_anchors() {
+        let tl = timeline_with_three_clips();
+        // "alpha" (idx 0) and "charlie" (idx 2) are 2 apart, not adjacent.
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "charlie snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 1.0,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("not adjacent")),
+            "expected adjacency error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_anchors_on_different_tracks() {
+        let mut tl = timeline_with_three_clips();
+        // Add a second track with one clip whose snippet "delta snippet"
+        // resolves on the new track only.
+        let mut track2 = Track::empty("V2", TrackKind::Video);
+        let mut c = Clip::empty("delta-clip".to_string());
+        c.media_reference =
+            MediaReference::External(ExternalReference::new("raw/delta.mp4".to_string()));
+        c.source_range = Some(TimeRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(5.0 * 24.0, 24.0),
+        ));
+        c.metadata = ClipMetadata {
+            awidat: Some(AwidatClipMetadata {
+                anchor: Some(AwAnchor {
+                    transcript_snippet: Some("delta snippet".to_string()),
+                    ..AwAnchor::default()
+                }),
+                ..AwidatClipMetadata::default()
+            }),
+            ..ClipMetadata::default()
+        };
+        track2.children.push(TrackChild::Clip(c));
+        tl.tracks.children.push(StackChild::Track(track2));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "delta snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 1.0,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("different tracks")),
+            "expected cross-track error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_zero_duration() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.0,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("must be > 0")),
+            "expected duration error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_insert_transition_anchor_miss_surfaces_clearly() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "no such phrase here".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 1.0,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::AnchorMiss { .. }),
+            "expected anchor miss, got something else",
+        );
     }
 }
