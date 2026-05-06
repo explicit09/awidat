@@ -492,26 +492,18 @@ function UserTrimTooltip({
       ? Math.max(0, drag.hit.sourceStart + dxS)
       : Math.max(drag.hit.sourceStart + 0.1, drag.hit.sourceEnd + dxS);
   const label = `${drag.hit.side}: ${proposed.toFixed(2)}s`;
-  // Anchor 14px above the canvas top (so it floats over the ruler)
-  // and clamp horizontally inside the parent so it doesn't escape
-  // the right edge of the wrap.
-  const style: React.CSSProperties = {
-    position: "absolute",
-    top: 0,
-    left: drag.currentX,
-    transform: "translate(-50%, -120%)",
-    pointerEvents: "none",
-    background: "#1f2937",
-    color: "#f59e0b",
-    border: "1px solid #f59e0b",
-    borderRadius: 4,
-    padding: "2px 6px",
-    fontFamily: "var(--mono, ui-monospace, monospace)",
-    fontSize: 11,
-    whiteSpace: "nowrap",
-    zIndex: 4,
-  };
-  return <div style={style}>{label}</div>;
+  // Live-drag tooltip — anchored to free coordinates (drag.currentX)
+  // so it can't ride on Radix's hover-trigger positioning, but visual
+  // language matches the awidat-tooltip surface so the affordance
+  // reads consistently with the rest of the app's hover tooltips.
+  return (
+    <div
+      className="user-trim-tooltip"
+      style={{ left: drag.currentX }}
+    >
+      {label}
+    </div>
+  );
 }
 
 function computePps(durationS: number, cssWidth: number): number {

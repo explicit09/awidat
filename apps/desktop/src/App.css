@@ -1170,6 +1170,29 @@ body,
   pointer-events: none;
 }
 
+/* Live label that follows the dragged edge during a user-trim drag.
+ * `left` is set inline (= drag.currentX); everything else lives here.
+ * Visual language matches .awidat-tooltip so the live drag affordance
+ * reads consistently with the hover tooltips elsewhere in the app —
+ * but the amber accent stays because this label needs to pop during
+ * a fast drag, not blend in like a passive hover hint. */
+.user-trim-tooltip {
+  position: absolute;
+  top: 0;
+  transform: translate(-50%, -120%);
+  pointer-events: none;
+  background: var(--bg-elev);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  z-index: 4;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
 .media-pane {
   display: flex;
   flex-direction: column;

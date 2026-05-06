@@ -15,6 +15,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { Item, JobKind, JobResult } from "../protocol";
+import { Tooltip } from "../components/ui/Tooltip";
 
 type Props = {
   /** The Job item this card represents. */
@@ -69,14 +70,18 @@ export function JobCard({ item }: Props) {
           job · <code>{labelMap[item.job_kind]}</code>
         </div>
         {isRunning && (
-          <button className="job-cancel" onClick={cancel}>
-            Cancel
-          </button>
+          <Tooltip content="Stop this job">
+            <button className="job-cancel" onClick={cancel}>
+              Cancel
+            </button>
+          </Tooltip>
         )}
         {showFinderButton && (
-          <button className="job-action" onClick={showInFinder}>
-            Show in Finder
-          </button>
+          <Tooltip content="Reveal the rendered file in Finder">
+            <button className="job-action" onClick={showInFinder}>
+              Show in Finder
+            </button>
+          </Tooltip>
         )}
       </header>
       <div className="job-status">{item.status}</div>
