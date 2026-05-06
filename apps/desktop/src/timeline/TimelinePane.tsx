@@ -4,13 +4,14 @@
 // Refreshes when the project changes or when an apply_edl tool
 // call lands in chat (the agent just rewrote the OTIO).
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "./store";
 import { useMediaStore } from "../media/store";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
 import { useProposalStore } from "./proposal";
 import { ProposalActions } from "./ProposalActions";
+import { ProposalHandles } from "./ProposalHandles";
 import type { AppliedDiff } from "../protocol";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
@@ -71,19 +72,54 @@ export function TimelinePane() {
         </span>
       </header>
       <div className="timeline-stage">
-        <TimelineCanvas snapshot={snapshot} currentTime={currentTime} />
+        <TimelineSurface snapshot={snapshot} currentTime={currentTime} />
         <ProposalActions />
       </div>
     </section>
   );
 }
 
-function TimelineCanvas({
+/** Wrapper that owns layout state (pps, width) so the canvas can
+ *  publish it on each paint and the handles can subscribe. Avoids
+ *  recomputing layout in two places. */
+function TimelineSurface({
   snapshot,
   currentTime,
 }: {
   snapshot: TimelineSnapshot;
   currentTime: number;
+}) {
+  const [layout, setLayout] = useState<{ pps: number; width: number }>({
+    pps: PX_PER_SECOND_BASE,
+    width: 0,
+  });
+  return (
+    <>
+      <TimelineCanvas
+        snapshot={snapshot}
+        currentTime={currentTime}
+        onLayout={(pps, width) => {
+          // Only update if it actually changed — paint() runs on
+          // every frame React re-renders, but layout changes only
+          // on resize / snapshot swap.
+          setLayout((prev) =>
+            prev.pps === pps && prev.width === width ? prev : { pps, width },
+          );
+        }}
+      />
+      <ProposalHandles containerWidth={layout.width} pps={layout.pps} />
+    </>
+  );
+}
+
+function TimelineCanvas({
+  snapshot,
+  currentTime,
+  onLayout,
+}: {
+  snapshot: TimelineSnapshot;
+  currentTime: number;
+  onLayout: (pps: number, widthPx: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -135,6 +171,7 @@ function TimelineCanvas({
       const totalDuration = Math.max(snapshot.duration_s, proposedDuration);
       const pps = computePps(totalDuration, cssWidth);
       ppsRef.current = pps;
+      onLayout(pps, cssWidth);
 
       drawRuler(ctx, cssWidth, totalDuration, pps);
 
@@ -166,7 +203,7 @@ function TimelineCanvas({
     const ro = new ResizeObserver(() => paint());
     ro.observe(container);
     return () => ro.disconnect();
-  }, [snapshot, currentTime, proposal]);
+  }, [snapshot, currentTime, proposal, onLayout]);
 
   // Click + drag on the canvas → seek the player. We use pointer
   // events (covers mouse + trackpad + touch) and capture the

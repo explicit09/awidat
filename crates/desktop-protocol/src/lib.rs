@@ -427,6 +427,13 @@ pub enum Side {
 /// snapshot relative to the original — the canvas doesn't compute
 /// the diff itself; the backend produced it from the `apply()`
 /// outcome and ships it alongside the post-state snapshot.
+///
+/// Every variant carries `op_index`, the position of the
+/// originating op in the proposal's `EdlEnvelope`. The frontend's
+/// drag handles use it to fire `adjust_proposal { op_index, ... }`
+/// without re-discovering which op produced which hint. A single
+/// op can produce multiple hints (e.g. `TrimClip` with both bounds
+/// set emits two `TrimEdge` entries with the same `op_index`).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -435,6 +442,8 @@ pub enum AppliedDiff {
     /// **proposed** snapshot; `delta_s` is signed (positive =
     /// trimmed inward, negative = extended outward via Untrim).
     TrimEdge {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
         /// Track index in the proposed snapshot.
         track_index: usize,
         /// Item index within that track.
@@ -447,6 +456,8 @@ pub enum AppliedDiff {
     /// A clip was removed. Indexes refer to the **original**
     /// snapshot — the proposed snapshot doesn't contain it.
     Delete {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
         /// Track index in the original snapshot.
         track_index: usize,
         /// Item index within that track.
@@ -456,6 +467,8 @@ pub enum AppliedDiff {
     /// snapshot — the left half keeps the original index, the
     /// right half is at `item_index + 1`.
     Split {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
         /// Track index in the proposed snapshot.
         track_index: usize,
         /// Index of the left half within that track.
@@ -466,6 +479,8 @@ pub enum AppliedDiff {
     /// A new clip was inserted. Indexes refer to the **proposed**
     /// snapshot.
     Insert {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
         /// Track index in the proposed snapshot.
         track_index: usize,
         /// Index of the inserted item within that track.
@@ -624,6 +639,7 @@ mod tests {
                 tracks: vec![],
             },
             diff_hints: vec![AppliedDiff::TrimEdge {
+                op_index: 0,
                 track_index: 0,
                 item_index: 1,
                 side: Side::Right,

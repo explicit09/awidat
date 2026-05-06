@@ -365,6 +365,7 @@ fn build_diff_hints(
                     if let Some(end_v) = end {
                         let delta = orig_end - end_v;
                         hints.push(AppliedDiff::TrimEdge {
+                            op_index,
                             track_index: loc.track_index,
                             item_index: loc.child_index,
                             side: Side::Right,
@@ -374,6 +375,7 @@ fn build_diff_hints(
                     if let Some(start_v) = start {
                         let delta = start_v - orig_start;
                         hints.push(AppliedDiff::TrimEdge {
+                            op_index,
                             track_index: loc.track_index,
                             item_index: loc.child_index,
                             side: Side::Left,
@@ -385,6 +387,7 @@ fn build_diff_hints(
             EdlOp::DeleteClip { .. } => {
                 if let Some(loc) = locator {
                     hints.push(AppliedDiff::Delete {
+                        op_index,
                         track_index: loc.track_index,
                         item_index: loc.child_index,
                     });
@@ -393,6 +396,7 @@ fn build_diff_hints(
             EdlOp::SplitClip { at_s, .. } => {
                 if let Some(loc) = locator {
                     hints.push(AppliedDiff::Split {
+                        op_index,
                         track_index: loc.track_index,
                         item_index: loc.child_index,
                         at_s: *at_s,
@@ -409,6 +413,7 @@ fn build_diff_hints(
                     find_inserted_position(proposed, track, original, op_index, applied)
                 {
                     hints.push(AppliedDiff::Insert {
+                        op_index,
                         track_index,
                         item_index,
                     });

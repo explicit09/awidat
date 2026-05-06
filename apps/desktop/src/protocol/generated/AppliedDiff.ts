@@ -6,8 +6,19 @@ import type { Side } from "./Side";
  * snapshot relative to the original — the canvas doesn't compute
  * the diff itself; the backend produced it from the `apply()`
  * outcome and ships it alongside the post-state snapshot.
+ *
+ * Every variant carries `op_index`, the position of the
+ * originating op in the proposal's `EdlEnvelope`. The frontend's
+ * drag handles use it to fire `adjust_proposal { op_index, ... }`
+ * without re-discovering which op produced which hint. A single
+ * op can produce multiple hints (e.g. `TrimClip` with both bounds
+ * set emits two `TrimEdge` entries with the same `op_index`).
  */
 export type AppliedDiff = { "kind": "trim_edge", 
+/**
+ * Index of the originating op in the EDL envelope.
+ */
+op_index: number, 
 /**
  * Track index in the proposed snapshot.
  */
@@ -25,6 +36,10 @@ side: Side,
  */
 delta_s: number, } | { "kind": "delete", 
 /**
+ * Index of the originating op in the EDL envelope.
+ */
+op_index: number, 
+/**
  * Track index in the original snapshot.
  */
 track_index: number, 
@@ -32,6 +47,10 @@ track_index: number,
  * Item index within that track.
  */
 item_index: number, } | { "kind": "split", 
+/**
+ * Index of the originating op in the EDL envelope.
+ */
+op_index: number, 
 /**
  * Track index in the proposed snapshot.
  */
@@ -44,6 +63,10 @@ item_index: number,
  * Cut point in source-media seconds.
  */
 at_s: number, } | { "kind": "insert", 
+/**
+ * Index of the originating op in the EDL envelope.
+ */
+op_index: number, 
 /**
  * Track index in the proposed snapshot.
  */
