@@ -1,0 +1,70 @@
+/* Tooltip surface — small, dark, amber-bordered. Matches the app's
+ * existing accent palette (var(--bg-elev), var(--warn) = amber).
+ * z-index needs to clear the proposal toolbar (which sits at z-3
+ * in App.css). */
+
+.awidat-tooltip {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  user-select: none;
+  z-index: 50;
+  /* Radix sets data-state on enter/exit — fade in/out for polish. */
+  animation-duration: 120ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.awidat-tooltip[data-state="delayed-open"],
+.awidat-tooltip[data-state="instant-open"] {
+  animation-name: awidat-tooltip-in;
+}
+
+.awidat-tooltip[data-state="closed"] {
+  animation-name: awidat-tooltip-out;
+}
+
+.awidat-tooltip-arrow {
+  fill: var(--bg-elev);
+  /* Radix's arrow is a single triangle; the border CSS doesn't
+   * apply to SVG, so we accept a tiny visual seam between content
+   * and arrow on the bordered side — same trade-off shadcn ships. */
+}
+
+/* Tooltip kbd-shortcut hint, e.g. "Reject (Esc)". */
+.awidat-tooltip kbd {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+}
+
+@keyframes awidat-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes awidat-tooltip-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}

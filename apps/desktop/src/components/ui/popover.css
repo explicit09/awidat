@@ -1,0 +1,52 @@
+/* Popover surface — same dark bedrock as the rest of the app, with
+ * a slightly heavier shadow than Tooltip because popovers carry
+ * more content and need to stand out. Radix portals into <body>,
+ * so we set z-index high enough to clear modal-like surfaces (chat
+ * is z<10; this stays below ApprovalRequest/Dialog). */
+
+.awidat-popover {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  outline: none;
+  z-index: 60;
+  /* Default size — callers can override via className. */
+  min-width: 240px;
+  max-width: min(640px, 90vw);
+  max-height: min(420px, 70vh);
+  display: flex;
+  flex-direction: column;
+  /* Same enter/exit polish as Tooltip. */
+  animation-duration: 140ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.awidat-popover[data-state="open"] {
+  animation-name: awidat-popover-in;
+}
+
+.awidat-popover[data-state="closed"] {
+  animation-name: awidat-popover-out;
+}
+
+@keyframes awidat-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes awidat-popover-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
