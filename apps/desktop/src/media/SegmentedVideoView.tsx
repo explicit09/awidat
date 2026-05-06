@@ -35,7 +35,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
-import { useTimelineStore } from "../timeline/store";
+import {
+  useTimelineStore,
+  type TimelineSnapshot,
+} from "../timeline/store";
 import {
   findActiveSegment,
   type PlaySegment,
@@ -46,6 +49,8 @@ export function SegmentedVideoView() {
   const segments = usePlaySegments();
   const setTimelineDuration = useMediaStore((s) => s.setTimelineDuration);
   const timelineDurationS = useTimelineStore((s) => s.snapshot.duration_s);
+  const timelineTime = useMediaStore((s) => s.timelineTime);
+  const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
 
   // Mirror the snapshot duration into the media store so the scrub
   // bar can clamp without subscribing to the timeline store too.
@@ -53,11 +58,37 @@ export function SegmentedVideoView() {
     setTimelineDuration(timelineDurationS);
   }, [timelineDurationS, setTimelineDuration]);
 
+  // Clamp the playhead when the timeline shrinks past it (e.g. user
+  // deletes the clip the playhead is parked in). Without this the
+  // SegmentedPlayer's findActiveSegment returns -1 and the player
+  // looks frozen at "end of timeline" when it should snap to the
+  // new end.
+  useEffect(() => {
+    if (timelineDurationS > 0 && timelineTime > timelineDurationS) {
+      requestTimelineSeek(timelineDurationS);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timelineDurationS]);
+
   if (segments.length === 0) {
-    // Empty-segments fallback handled by the MediaPane caller. We
-    // shouldn't render this view in that case, but bail safely if
-    // we somehow get here mid-update.
-    return null;
+    // Timeline has clips (the MediaPane gates on duration_s > 0)
+    // but none are playable yet — every clip's proxy is still
+    // transcoding. Show a placeholder so the user understands the
+    // delay; once the first proxy lands the SegmentedPlayer takes
+    // over without flicker.
+    return (
+      <div className="video-wrap">
+        <div className="video-stack">
+          <div className="media-empty media-empty-stacked">
+            <p className="media-empty-title">Generating preview…</p>
+            <p className="media-empty-hint">
+              The 720p proxy for this timeline is being transcoded.
+              Playback will start as soon as the first clip is ready.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
   }
   return <SegmentedPlayer segments={segments} />;
 }
@@ -70,6 +101,12 @@ type Slot = {
 };
 
 function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
+  // For diagnostics: how many clips are on the OTIO but missing a
+  // proxy (still transcoding). The user sees a "+ N transcoding…"
+  // hint so they know the timeline isn't lying about its length.
+  const transcodingCount = useTimelineStore((s) =>
+    countClipsAwaitingProxy(s.snapshot),
+  );
   const refA = useRef<HTMLVideoElement | null>(null);
   const refB = useRef<HTMLVideoElement | null>(null);
   // The currently-visible slot. The other slot is the preroll.
@@ -403,10 +440,38 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
         <span className="video-meta-label">timeline preview</span>
         <code className="video-stem">
           {segments.length} segment{segments.length === 1 ? "" : "s"}
+          {transcodingCount > 0
+            ? ` · +${transcodingCount} transcoding…`
+            : ""}
         </code>
       </div>
     </div>
   );
+}
+
+/**
+ * Count clips on any video track that reference an asset but have
+ * `proxy_path === null` — i.e. the transcoder hasn't finished
+ * generating their preview proxy yet. Surfaces as a "+ N
+ * transcoding…" hint in the meta strip so the user knows why the
+ * timeline preview is shorter than the timeline ruler.
+ */
+function countClipsAwaitingProxy(snapshot: TimelineSnapshot): number {
+  let n = 0;
+  for (const track of snapshot.tracks) {
+    if (track.kind !== "video") continue;
+    for (const item of track.items) {
+      if (
+        item.kind === "clip" &&
+        item.asset_id !== null &&
+        item.proxy_path === null &&
+        item.duration_s > 0
+      ) {
+        n += 1;
+      }
+    }
+  }
+  return n;
 }
 
 function slotStyle(visible: boolean): React.CSSProperties {

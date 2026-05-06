@@ -12,7 +12,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
-import { usePlaySegments } from "../timeline/usePlaySegments";
+import { useTimelineStore } from "../timeline/store";
 import { SegmentedVideoView } from "./SegmentedVideoView";
 
 export function MediaPane() {
@@ -25,14 +25,18 @@ export function MediaPane() {
   const items = useAgentStore((s) => s.items);
 
   // The OTIO timeline determines which preview shape we render:
-  //   - Has clips with proxies → SegmentedVideoView (timeline output)
-  //   - Empty / nothing playable → fall back to source-asset preview
-  // The timeline-shaped preview behaves like a real NLE: scrub bar
-  // is timeline duration, playback hops between clips at cuts. The
-  // source-asset preview only shows up when the project has no
-  // timeline yet (pre-import / pre-auto-insert).
-  const segments = usePlaySegments();
-  const showTimelinePreview = segments.length > 0;
+  //   - Has clips at all → SegmentedVideoView (even if some are
+  //     still transcoding — the view shows a "+ N transcoding…"
+  //     hint and plays whatever segments are ready)
+  //   - Empty timeline → source-asset preview (pre-import / pre-
+  //     auto-insert window where the user is inspecting raw assets)
+  //
+  // We key off snapshot.duration_s > 0 rather than segments.length
+  // > 0 so a fresh project whose first proxy hasn't transcoded yet
+  // doesn't briefly flash the source-preview UI before swapping
+  // back to the timeline preview when the proxy lands.
+  const timelineDurationS = useTimelineStore((s) => s.snapshot.duration_s);
+  const showTimelinePreview = timelineDurationS > 0;
 
   // Refresh proxies once at mount, and again whenever a transcode
   // job lands as Completed — that's the signal a new proxy has been

@@ -1357,6 +1357,16 @@ body,
   line-height: 1.55;
 }
 
+/* Variant of .media-empty rendered inside the .video-stack box.
+   The stack is absolutely positioned and `flex: 1` doesn't apply
+   inside it, so we fill the box with absolute positioning
+   instead. */
+.media-empty-stacked {
+  position: absolute;
+  inset: 0;
+  padding: 16px;
+}
+
 /* Job card — yt-dlp download / local import / indexing */
 .item-job {
   border-color: var(--accent);
