@@ -123,9 +123,24 @@ pub async fn build_proposal(
     Ok(())
 }
 
-/// User accepted the proposal (possibly with adjustments). Writes
-/// the post-apply timeline to disk and resolves the agent's reply
-/// oneshot per the "Deny + apply user's version" semantics.
+/// User accepted the proposal (possibly with adjustments). Three
+/// commit paths depending on origin and whether the user adjusted:
+///
+/// 1. **Agent-initiated, no adjustments (revision == 0)**: send
+///    `Allow` on the oneshot. The agent's `apply_edl` handler
+///    runs against the on-disk project, applies its own envelope,
+///    writes. Desktop does NOT write — that would double-apply
+///    (insert duplicates, fail trims that are already at bounds).
+///    The timeline preview the user accepted matches what the
+///    handler produces because the envelopes are identical and
+///    apply() is deterministic.
+/// 2. **Agent-initiated, with adjustments (revision > 0)**: send
+///    `Deny` so the agent sees its envelope didn't land verbatim.
+///    Desktop writes the adjusted timeline directly — the agent's
+///    handler doesn't have the adjusted envelope to re-derive from.
+///    The agent's next `read_timeline` sees the committed state.
+/// 3. **User-initiated (no reply oneshot)**: write directly. There's
+///    no agent path to defer to.
 #[tauri::command]
 pub async fn accept_proposal(
     app: AppHandle,
@@ -139,30 +154,40 @@ pub async fn accept_proposal(
         .remove(&call_id)
         .ok_or_else(|| format!("no pending proposal for {call_id}"))?;
 
-    // Persist the proposed timeline. Project::read+write is the
-    // canonical commit path; we read the rest of the project so
-    // edit-plan / manifest stay intact.
-    let project_root = proposal.project_root.clone();
-    let proposed_timeline = proposal.proposed_timeline.clone();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut project = Project::read(&project_root)
-            .map_err(|e| format!("project read: {e}"))?;
-        project.timeline = proposed_timeline;
-        project
-            .write(&project_root)
-            .map_err(|e| format!("project write: {e}"))
-    })
-    .await
-    .map_err(|e| format!("write join: {e}"))??;
+    let user_adjusted = proposal.revision > 0;
+    let agent_initiated = proposal.reply.is_some();
 
-    // Tell the agent its original envelope was denied — we applied
-    // our (possibly adjusted) version directly. The agent's next
-    // read_timeline will see the committed state; its tool_result
-    // for the apply_edl call will spell out "user denied (applied
-    // adjusted version)". Future commit can route a richer
-    // tool_result text; for now Deny is the honest signal.
+    // Decide whether the desktop writes to disk. Agent-initiated +
+    // unchanged means the agent's handler will do the write itself
+    // (after we send Allow); writing here would cause a double-apply.
+    let desktop_writes = !agent_initiated || user_adjusted;
+
+    if desktop_writes {
+        let project_root = proposal.project_root.clone();
+        let proposed_timeline = proposal.proposed_timeline.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), String> {
+            let mut project = Project::read(&project_root)
+                .map_err(|e| format!("project read: {e}"))?;
+            project.timeline = proposed_timeline;
+            project
+                .write(&project_root)
+                .map_err(|e| format!("project write: {e}"))
+        })
+        .await
+        .map_err(|e| format!("write join: {e}"))??;
+    }
+
+    // Tell the agent what landed:
+    //  - revision == 0 → Allow. Agent's handler runs and writes.
+    //  - revision > 0  → Deny. Agent sees its envelope didn't land
+    //    verbatim; we already wrote the adjusted version above.
     if let Some(reply) = proposal.reply {
-        let _ = reply.send(ApprovalDecision::Deny);
+        let decision = if user_adjusted {
+            ApprovalDecision::Deny
+        } else {
+            ApprovalDecision::Allow
+        };
+        let _ = reply.send(decision);
     }
 
     // Final ProposedEdit Completed so the frontend collapses the
