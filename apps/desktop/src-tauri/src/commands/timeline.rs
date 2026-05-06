@@ -129,6 +129,7 @@ pub fn flatten_timeline_public(
                         source_start_s,
                         proxy_path,
                         thumbnail_dir,
+                        waveform_path: None,
                     });
                     track_cursor_s += duration_s;
                 }

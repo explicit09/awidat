@@ -275,6 +275,13 @@ pub enum JobKind {
     /// canvas tiles across each clip. Fires as a follow-up to
     /// `Transcode` once the proxy has landed.
     Thumbnails,
+    /// Audio waveform peak extraction over a single asset. Produces a
+    /// JSON sidecar of pre-bucketed peak amplitudes under
+    /// `<project>/.awidat/waveforms/<stem>-<hash>.json` that the
+    /// timeline canvas reads to draw the per-clip waveform line on
+    /// audio tracks. Fires alongside `Thumbnails` once the proxy has
+    /// landed.
+    Waveform,
     /// `awidat_index::run` over the project.
     Indexing,
     /// `awidat_render::build_timeline_render_spec` + `JobManager::start`
@@ -388,6 +395,14 @@ pub enum TimelineItem {
         /// [`JobKind::Thumbnails`] job hasn't completed) or the asset
         /// doesn't resolve to a known thumbnails dir.
         thumbnail_dir: Option<String>,
+        /// Absolute path to this asset's waveform-peaks JSON sidecar
+        /// (e.g. `<project>/.awidat/waveforms/<stem>-<hash>.json`).
+        /// Frontend fetches the sidecar via the `read_waveform` Tauri
+        /// command and draws a centered amplitude line across the
+        /// clip's pixel width. `None` when waveform extraction
+        /// hasn't completed (the [`JobKind::Waveform`] job hasn't
+        /// landed) or the asset has no audio stream.
+        waveform_path: Option<String>,
     },
     /// Empty time on the track (silence / black frames).
     Gap {

@@ -59,7 +59,17 @@ proxy_path: string | null,
  * [`JobKind::Thumbnails`] job hasn't completed) or the asset
  * doesn't resolve to a known thumbnails dir.
  */
-thumbnail_dir: string | null, } | { "kind": "gap", 
+thumbnail_dir: string | null, 
+/**
+ * Absolute path to this asset's waveform-peaks JSON sidecar
+ * (e.g. `<project>/.awidat/waveforms/<stem>-<hash>.json`).
+ * Frontend fetches the sidecar via the `read_waveform` Tauri
+ * command and draws a centered amplitude line across the
+ * clip's pixel width. `None` when waveform extraction
+ * hasn't completed (the [`JobKind::Waveform`] job hasn't
+ * landed) or the asset has no audio stream.
+ */
+waveform_path: string | null, } | { "kind": "gap", 
 /**
  * Index of this item within its track.
  */

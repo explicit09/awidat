@@ -28,6 +28,7 @@ export function JobCard({ item }: Props) {
     local_import: "local import",
     transcode: "transcode (proxy)",
     thumbnails: "thumbnails",
+    waveform: "waveform",
     indexing: "indexing",
     render: "export",
   };
