@@ -34,7 +34,10 @@ export function TimelinePane() {
   const snapshot = useTimelineStore((s) => s.snapshot);
   const refresh = useTimelineStore((s) => s.refresh);
   const items = useAgentStore((s) => s.items);
-  const currentTime = useMediaStore((s) => s.currentTime);
+  // The canvas is a timeline-time surface; the playhead should track
+  // the timeline-time clock the SegmentedVideoView drives, not the
+  // source-time of whatever proxy happens to be loaded.
+  const currentTime = useMediaStore((s) => s.timelineTime);
 
   // Refresh on mount + on project change.
   useEffect(() => {
@@ -155,7 +158,13 @@ function TimelineCanvas({
   // Latest pps used for paint, captured into a ref so click handlers
   // can convert x → seconds without recomputing layout.
   const ppsRef = useRef<number>(PX_PER_SECOND_BASE);
-  const requestSeek = useMediaStore((s) => s.requestSeek);
+  // Canvas seek + playhead use timeline-time. Single-asset / empty-
+  // timeline mode keeps using source-time inside the MediaPane, but
+  // the canvas itself is a timeline-time surface — clicking at x=80px
+  // means "seek to ~5s of the timeline", not "5s of the source." With
+  // a multi-clip timeline these two axes diverge; with a single-clip
+  // timeline they coincide for now (until trim shifts source_start_s).
+  const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
   const proposal = useProposalStore((s) => s.active);
 
   // Compute pixel layout. When a proposal is active, the canvas
@@ -253,12 +262,12 @@ function TimelineCanvas({
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (snapshot.duration_s <= 0) return; // nothing to seek into
     e.currentTarget.setPointerCapture(e.pointerId);
-    requestSeek(timeFromClientX(e.clientX));
+    requestTimelineSeek(timeFromClientX(e.clientX));
   }
 
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-    requestSeek(timeFromClientX(e.clientX));
+    requestTimelineSeek(timeFromClientX(e.clientX));
   }
 
   function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {

@@ -12,6 +12,8 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
+import { usePlaySegments } from "../timeline/usePlaySegments";
+import { SegmentedVideoView } from "./SegmentedVideoView";
 
 export function MediaPane() {
   const proxies = useMediaStore((s) => s.proxies);
@@ -21,6 +23,16 @@ export function MediaPane() {
   const projectRoot = useProjectStore((s) => s.current);
 
   const items = useAgentStore((s) => s.items);
+
+  // The OTIO timeline determines which preview shape we render:
+  //   - Has clips with proxies → SegmentedVideoView (timeline output)
+  //   - Empty / nothing playable → fall back to source-asset preview
+  // The timeline-shaped preview behaves like a real NLE: scrub bar
+  // is timeline duration, playback hops between clips at cuts. The
+  // source-asset preview only shows up when the project has no
+  // timeline yet (pre-import / pre-auto-insert).
+  const segments = usePlaySegments();
+  const showTimelinePreview = segments.length > 0;
 
   // Refresh proxies once at mount, and again whenever a transcode
   // job lands as Completed — that's the signal a new proxy has been
@@ -57,8 +69,14 @@ export function MediaPane() {
   return (
     <aside className="media-pane">
       <header className="media-header">
-        <span className="media-label">Preview</span>
-        {proxies.length > 1 && (
+        <span className="media-label">
+          {showTimelinePreview ? "Preview · timeline" : "Preview"}
+        </span>
+        {/* Asset dropdown only appears when we're in source-preview
+            mode. Once the timeline has clips, the preview IS the
+            timeline output — there is no per-asset choice to make,
+            same as Resolve / Premiere / Final Cut. */}
+        {!showTimelinePreview && proxies.length > 1 && (
           <select
             className="media-asset-select"
             value={selectedStem ?? ""}
@@ -73,7 +91,9 @@ export function MediaPane() {
         )}
       </header>
       <div className="media-stage">
-        {src ? (
+        {showTimelinePreview ? (
+          <SegmentedVideoView />
+        ) : src ? (
           <VideoView src={src} stem={selectedStem ?? ""} />
         ) : (
           <MediaEmpty hasAnyProxies={proxies.length > 0} />
