@@ -456,11 +456,22 @@ fn take_field_string(fields: &mut Vec<(String, FieldValue)>, key: &str) -> Optio
 }
 
 /// Parse `transcript_snippet="..."` / `clip_uuid=...` / `scene_change_index=ASSET:N`.
+///
+/// Prefers `key=value`. Tolerates `key: value` (with the space) as
+/// a fallback because agents sometimes drift to the colon syntax —
+/// the space disambiguates from `scene_change_index`'s `ASSET:N`
+/// value, which never has a space after the colon.
 fn parse_anchor(rest: &str, line: usize) -> Result<Anchor, EdlParseError> {
-    let (k, v) = rest.split_once('=').ok_or_else(|| EdlParseError::BadAnchor {
-        line,
-        message: format!("expected key=value, got {rest:?}"),
-    })?;
+    let (k, v) = if let Some((k, v)) = rest.split_once('=') {
+        (k, v)
+    } else if let Some((k, v)) = rest.split_once(": ") {
+        (k, v)
+    } else {
+        return Err(EdlParseError::BadAnchor {
+            line,
+            message: format!("expected key=value, got {rest:?}"),
+        });
+    };
     let k = k.trim();
     let v = v.trim();
     match k {
@@ -542,6 +553,28 @@ mod tests {
                 assert_eq!(*end, Some(78.9));
             }
             other => panic!("want TrimClip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tolerates_colon_anchor_syntax() {
+        // Agents sometimes emit "key: value" instead of canonical
+        // "key=value". The parser accepts both. ": " (space-after-
+        // colon) disambiguates from scene_change_index's
+        // "ASSET:INDEX" value, which has no space.
+        let text = "\
+*** Begin EDL
+*** Delete Clip
+@@ anchor: clip_uuid: clip-0
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        assert_eq!(env.len(), 1);
+        match &env.ops[0] {
+            EdlOp::DeleteClip { anchor } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-0"));
+            }
+            other => panic!("want DeleteClip, got {other:?}"),
         }
     }
 
