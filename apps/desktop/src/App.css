@@ -1474,6 +1474,29 @@ body,
   font-family: var(--mono, ui-monospace, monospace);
 }
 
+/* Word-level spans inside a segment. The active class flips on/off
+   imperatively (see useActiveWord in 6.6); selection adds another
+   variant in 6.7. */
+.transcript-word {
+  cursor: pointer;
+}
+
+.transcript-word:hover {
+  background: rgba(245, 158, 11, 0.12);
+  border-radius: 2px;
+}
+
+.transcript-word.transcript-word-active {
+  background: rgba(245, 158, 11, 0.32);
+  border-radius: 2px;
+  color: var(--text);
+}
+
+.transcript-word.transcript-word-selected {
+  background: rgba(96, 165, 250, 0.28);
+  border-radius: 2px;
+}
+
 /* Job card — yt-dlp download / local import / indexing */
 .item-job {
   border-color: var(--accent);
