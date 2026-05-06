@@ -1,19 +1,34 @@
-// Right-side media pane: video preview + custom transport row.
-// Source is always the proxy mp4 (720p H.264, all-keyframes) — never
-// the original — so scrubbing is fast on any source bitrate.
+// Right-side media pane: tabbed Preview / Transcript.
 //
-// Custom controls: play/pause button, scrub bar, MM:SS / MM:SS
-// time display. Native HTML5 controls hidden because they overlay
-// platform-styled UI (AirPlay, PiP, volume) that clashes with the
-// app's flat dark theme. Volume is left to the OS for now.
+// Preview tab (default):
+//   - Timeline mode → SegmentedVideoView (plays the OTIO output)
+//   - Source-preview mode → VideoView on the selected proxy
+//
+// Transcript tab (Step 6):
+//   - Whisper transcript for the active asset, click-word-to-seek,
+//     drag-select-to-delete. Auto-selected when a sidecar exists
+//     for the active stem and the user hasn't manually picked
+//     Preview this session.
+//
+// Source for the proxy mp4 is always the 720p all-keyframes file —
+// never the original — so scrubbing stays fast on any source
+// bitrate. Custom controls: play/pause, scrub bar, MM:SS time.
+// Native HTML5 controls hidden because they overlay platform-styled
+// UI (AirPlay, PiP, volume) that clashes with the dark theme.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
 import { useTimelineStore } from "../timeline/store";
+import { usePlaySegments } from "../timeline/usePlaySegments";
+import { findActiveSegment } from "../timeline/usePlaySegments";
 import { SegmentedVideoView } from "./SegmentedVideoView";
+import { TranscriptView } from "../transcript/TranscriptView";
+import { useTranscriptStore } from "../transcript/store";
+
+type Tab = "preview" | "transcript";
 
 export function MediaPane() {
   const proxies = useMediaStore((s) => s.proxies);
@@ -30,13 +45,53 @@ export function MediaPane() {
   //     hint and plays whatever segments are ready)
   //   - Empty timeline → source-asset preview (pre-import / pre-
   //     auto-insert window where the user is inspecting raw assets)
-  //
-  // We key off snapshot.duration_s > 0 rather than segments.length
-  // > 0 so a fresh project whose first proxy hasn't transcoded yet
-  // doesn't briefly flash the source-preview UI before swapping
-  // back to the timeline preview when the proxy lands.
   const timelineDurationS = useTimelineStore((s) => s.snapshot.duration_s);
   const showTimelinePreview = timelineDurationS > 0;
+
+  // The "active stem" — what the transcript pane is keyed against.
+  // In timeline mode it's the proxy stem of the segment under the
+  // playhead; in source-preview mode it's the user-selected asset.
+  // Keeping this derivation here (not in the transcript store)
+  // means transcript-pane state stays a pure cache; the view
+  // determines what's active.
+  const segments = usePlaySegments();
+  const timelineTime = useMediaStore((s) => s.timelineTime);
+  const activeStem = useMemo(() => {
+    if (showTimelinePreview) {
+      const idx = findActiveSegment(segments, timelineTime);
+      if (idx >= 0) return stemFromProxyPath(segments[idx].proxyPath);
+      // Past end of timeline → use the last segment's stem so the
+      // transcript pane doesn't blank.
+      if (segments.length > 0) {
+        return stemFromProxyPath(segments[segments.length - 1].proxyPath);
+      }
+      return null;
+    }
+    return selectedStem;
+  }, [showTimelinePreview, segments, timelineTime, selectedStem]);
+
+  // Transcript fetch is keyed off activeStem. The store dedupes
+  // in-flight loads so this fires once per stem change.
+  const setActiveStem = useTranscriptStore((s) => s.setActiveStem);
+  const transcriptState = useTranscriptStore((s) =>
+    activeStem ? s.byStem[activeStem] : undefined,
+  );
+  const clearTranscriptCache = useTranscriptStore((s) => s.clearCache);
+  useEffect(() => {
+    setActiveStem(activeStem);
+  }, [activeStem, setActiveStem]);
+
+  // Tab state. Default to whichever tab has content: transcript if
+  // the active stem has a sidecar; preview otherwise. The user can
+  // override by clicking the other tab — once they switch, we
+  // remember their choice for the rest of this session (don't
+  // clobber on every active-stem change).
+  const [tabExplicit, setTabExplicit] = useState<Tab | null>(null);
+  const autoTab: Tab =
+    transcriptState && transcriptState.state === "loaded"
+      ? "transcript"
+      : "preview";
+  const tab = tabExplicit ?? autoTab;
 
   // Refresh proxies once at mount, and again whenever a transcode
   // job lands as Completed — that's the signal a new proxy has been
@@ -44,6 +99,31 @@ export function MediaPane() {
   useEffect(() => {
     refresh();
   }, [projectRoot, refresh]);
+
+  // Whisper-job Completed → invalidate transcript cache (the
+  // backend already cleared its parse cache; the frontend store
+  // needs to drop too so the next setActiveStem triggers a refetch).
+  useEffect(() => {
+    const completedWhisper = items.filter(
+      (it) =>
+        it.kind === "job" &&
+        it.job_kind === "indexing" &&
+        it.phase === "completed",
+    ).length;
+    if (completedWhisper > 0) {
+      clearTranscriptCache();
+      // Re-trigger the active-stem load after clearing.
+      if (activeStem) setActiveStem(activeStem);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    items.filter(
+      (it) =>
+        it.kind === "job" &&
+        it.job_kind === "indexing" &&
+        it.phase === "completed",
+    ).length,
+  ]);
 
   useEffect(() => {
     const completedTranscodes = items.filter(
@@ -70,17 +150,47 @@ export function MediaPane() {
   const selected = proxies.find((p) => p.stem === selectedStem) ?? null;
   const src = selected ? convertFileSrc(selected.proxy_path) : null;
 
+  const transcriptAvailable =
+    transcriptState !== undefined && transcriptState.state === "loaded";
+
   return (
     <aside className="media-pane">
       <header className="media-header">
-        <span className="media-label">
-          {showTimelinePreview ? "Preview · timeline" : "Preview"}
-        </span>
-        {/* Asset dropdown only appears when we're in source-preview
-            mode. Once the timeline has clips, the preview IS the
-            timeline output — there is no per-asset choice to make,
-            same as Resolve / Premiere / Final Cut. */}
-        {!showTimelinePreview && proxies.length > 1 && (
+        <div className="media-tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected={tab === "preview"}
+            className={`media-tab${tab === "preview" ? " media-tab-active" : ""}`}
+            onClick={() => setTabExplicit("preview")}
+          >
+            {showTimelinePreview ? "Preview · timeline" : "Preview"}
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === "transcript"}
+            className={`media-tab${tab === "transcript" ? " media-tab-active" : ""}`}
+            onClick={() => setTabExplicit("transcript")}
+            disabled={!activeStem}
+            title={
+              transcriptAvailable
+                ? undefined
+                : "Run whisper indexing on this asset to enable the transcript tab"
+            }
+          >
+            Transcript
+            {!transcriptAvailable && activeStem ? " ·" : ""}
+            {transcriptState?.state === "loading"
+              ? <span className="media-tab-meta"> loading…</span>
+              : transcriptState?.state === "missing"
+              ? <span className="media-tab-meta"> not indexed</span>
+              : null}
+          </button>
+        </div>
+        {/* Asset dropdown only appears in source-preview mode AND on
+            the Preview tab. Once the timeline has clips, the preview
+            IS the timeline output — there is no per-asset choice to
+            make. */}
+        {tab === "preview" && !showTimelinePreview && proxies.length > 1 && (
           <select
             className="media-asset-select"
             value={selectedStem ?? ""}
@@ -95,7 +205,9 @@ export function MediaPane() {
         )}
       </header>
       <div className="media-stage">
-        {showTimelinePreview ? (
+        {tab === "transcript" ? (
+          <TranscriptView stem={activeStem} />
+        ) : showTimelinePreview ? (
           <SegmentedVideoView />
         ) : src ? (
           <VideoView src={src} stem={selectedStem ?? ""} />
@@ -105,6 +217,13 @@ export function MediaPane() {
       </div>
     </aside>
   );
+}
+
+function stemFromProxyPath(path: string): string | null {
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const file = slash >= 0 ? path.slice(slash + 1) : path;
+  const dot = file.lastIndexOf(".");
+  return dot > 0 ? file.slice(0, dot) : file || null;
 }
 
 function VideoView({ src, stem }: { src: string; stem: string }) {

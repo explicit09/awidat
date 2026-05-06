@@ -1367,6 +1367,113 @@ body,
   padding: 16px;
 }
 
+/* Tab strip in the media-header (Step 6.3). Two tabs:
+   Preview / Transcript. Active tab is solid; inactive is muted. */
+.media-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.media-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+}
+
+.media-tab:hover:not([disabled]) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.media-tab[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.media-tab-active {
+  color: var(--text);
+  background: var(--bg-1);
+  border-color: var(--border);
+  border-bottom-color: var(--bg-1);
+}
+
+.media-tab-meta {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Transcript pane container — scrolls inside .media-stage. */
+.transcript-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.transcript-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
+.transcript-meta-lang {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.transcript-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px;
+  scrollbar-gutter: stable;
+}
+
+.transcript-segment {
+  margin: 0 0 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.transcript-segment:last-child {
+  border-bottom: none;
+}
+
+.transcript-speaker {
+  font-size: 11px;
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--accent, #f59e0b);
+  margin-bottom: 4px;
+  letter-spacing: 0.04em;
+}
+
+.transcript-text {
+  color: var(--text);
+}
+
+.transcript-time {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+
 /* Job card — yt-dlp download / local import / indexing */
 .item-job {
   border-color: var(--accent);
