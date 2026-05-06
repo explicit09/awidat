@@ -120,11 +120,124 @@ pub fn collect_timeline_segments(
     Ok(segs)
 }
 
+/// One transition between two segments in the timeline. Step 14.4
+/// introduces this type so the [`FilterPlanner`] has a slot for
+/// future transition wiring; in 14.4 callers always pass an empty
+/// `transitions` slice and the planner emits the same monolithic
+/// concat filter as before.
+///
+/// `from_segment_index` and `to_segment_index` are indices into the
+/// segments slice the planner is fed. They MUST be adjacent
+/// (`to == from + 1`); the apply layer rejects non-adjacent
+/// transitions before they reach here.
+#[derive(Debug, Clone)]
+pub struct TransitionPlan {
+    /// Index of the outgoing segment.
+    pub from_segment_index: usize,
+    /// Index of the incoming segment. Must be `from_segment_index + 1`.
+    pub to_segment_index: usize,
+    /// Transition kind (`"SMPTE_Dissolve"`, `"awidat.fade_in"`, etc).
+    /// Wired to ffmpeg's xfade transition names in 14.5.
+    pub kind: String,
+    /// Total transition duration on the timeline, in seconds.
+    pub duration_s: f64,
+}
+
+/// Plans the `-filter_complex` argument + map labels for a render.
+///
+/// Step 14.4 extracts this from the prior monolithic
+/// [`build_timeline_argv`] so future filter types (transitions in
+/// 14.5; volume / speed in Step 15; drawtext in Step 16) can compose
+/// without rewriting the same builder. Behaviour with empty
+/// `transitions` is identical to the pre-extract code.
+///
+/// The planner doesn't take ownership of the segments or care about
+/// the input source — callers feed the slice by reference.
+pub struct FilterPlanner<'a> {
+    segments: &'a [TimelineSegment],
+    transitions: &'a [TransitionPlan],
+}
+
+/// Output of [`FilterPlanner::plan`]. Carries everything the caller
+/// needs to splice into an ffmpeg argv: the filter graph string and
+/// the `[outv]` / `[outa]` map labels (the planner picks these so
+/// 14.5's xfade chain can rename them if it needs intermediate
+/// stages without breaking the caller's `-map` args).
+#[derive(Debug, Clone)]
+pub struct FilterPlan {
+    /// Value for `-filter_complex`.
+    pub filter_complex: String,
+    /// Label for `-map` on the video output (typically `[outv]`).
+    pub video_out_label: String,
+    /// Label for `-map` on the audio output (typically `[outa]`).
+    pub audio_out_label: String,
+}
+
+impl<'a> FilterPlanner<'a> {
+    /// Construct a planner over segments + transitions.
+    pub fn new(
+        segments: &'a [TimelineSegment],
+        transitions: &'a [TransitionPlan],
+    ) -> Self {
+        Self {
+            segments,
+            transitions,
+        }
+    }
+
+    /// Build the filter complex + output labels.
+    ///
+    /// 14.4 implementation: emit the same monolithic
+    /// `[0:v:0][0:a:0]…concat=n=N:v=1:a=1[outv][outa]` graph the
+    /// pre-extract code produced, regardless of whether
+    /// `transitions` is empty (panics if not — the transition path
+    /// is wired in 14.5).
+    pub fn plan(&self) -> FilterPlan {
+        // 14.4 invariant: transitions slice is unused this commit.
+        // 14.5 will branch when non-empty.
+        debug_assert!(
+            self.transitions.is_empty(),
+            "FilterPlanner: non-empty transitions handled in 14.5",
+        );
+
+        let n = self.segments.len();
+        let mut filter = String::new();
+        for i in 0..n {
+            filter.push_str(&format!("[{i}:v:0][{i}:a:0]"));
+        }
+        filter.push_str(&format!("concat=n={n}:v=1:a=1[outv][outa]"));
+        FilterPlan {
+            filter_complex: filter,
+            video_out_label: "[outv]".into(),
+            audio_out_label: "[outa]".into(),
+        }
+    }
+}
+
 /// Build the ffmpeg argv that concats `segs` into `output_path` with
 /// a single re-encode. The re-encode kills the DTS-seam scratch that
 /// stream-copy concat produces at non-keyframe-aligned cut points.
 /// libx264 medium preset / CRF 20, AAC 192k — universal compatibility.
+///
+/// Internally delegates the filter-graph construction to
+/// [`FilterPlanner`] (Step 14.4 extraction); behaviour is byte-
+/// identical to the prior monolithic builder. Callers wanting
+/// transitions should use [`build_timeline_argv_with_transitions`]
+/// (Step 14.5).
 pub fn build_timeline_argv(segs: &[TimelineSegment], output_path: &Path) -> Vec<String> {
+    build_timeline_argv_with_transitions(segs, &[], output_path)
+}
+
+/// Like [`build_timeline_argv`] but accepts a transitions slice that
+/// gets composed into the filter graph. Step 14.4 ships the
+/// pass-through path (transitions slice is asserted empty by the
+/// FilterPlanner); 14.5 wires the xfade path when transitions are
+/// non-empty.
+pub fn build_timeline_argv_with_transitions(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    output_path: &Path,
+) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     for s in segs {
         argv.extend([
@@ -136,19 +249,14 @@ pub fn build_timeline_argv(segs: &[TimelineSegment], output_path: &Path) -> Vec<
             s.asset_path.to_string_lossy().into_owned(),
         ]);
     }
-    let n = segs.len();
-    let mut filter = String::new();
-    for i in 0..n {
-        filter.push_str(&format!("[{i}:v:0][{i}:a:0]"));
-    }
-    filter.push_str(&format!("concat=n={n}:v=1:a=1[outv][outa]"));
+    let plan = FilterPlanner::new(segs, transitions).plan();
     argv.extend([
         "-filter_complex".into(),
-        filter,
+        plan.filter_complex,
         "-map".into(),
-        "[outv]".into(),
+        plan.video_out_label,
         "-map".into(),
-        "[outa]".into(),
+        plan.audio_out_label,
         "-c:v".into(),
         "libx264".into(),
         "-preset".into(),
@@ -263,5 +371,60 @@ mod tests {
         fs::remove_file(dir.path().join("raw/x.mp4")).unwrap();
         let err = build_timeline_render_spec(dir.path()).unwrap_err();
         assert!(matches!(err, RenderTimelineError::MissingAsset { .. }));
+    }
+
+    #[test]
+    fn filter_planner_with_no_transitions_emits_legacy_concat_graph() {
+        // Step 14.4 extracted FilterPlanner from build_timeline_argv;
+        // this test pins the no-transition graph shape so future
+        // commits can't drift it without noticing.
+        let segs = vec![
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/a.mp4"),
+                start_s: 0.0,
+                duration_s: 2.0,
+            },
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/b.mp4"),
+                start_s: 1.0,
+                duration_s: 3.0,
+            },
+        ];
+        let plan = FilterPlanner::new(&segs, &[]).plan();
+        assert_eq!(
+            plan.filter_complex,
+            "[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa]",
+        );
+        assert_eq!(plan.video_out_label, "[outv]");
+        assert_eq!(plan.audio_out_label, "[outa]");
+    }
+
+    #[test]
+    fn build_timeline_argv_unchanged_after_extraction() {
+        // Behaviour-preservation guard for 14.4. The argv produced
+        // for a multi-segment fixture must be exactly what the old
+        // monolithic builder produced. If 14.5 changes the
+        // no-transitions graph, this test is the canary.
+        let segs = vec![
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/a.mp4"),
+                start_s: 0.0,
+                duration_s: 2.0,
+            },
+            TimelineSegment {
+                asset_path: PathBuf::from("/tmp/b.mp4"),
+                start_s: 1.0,
+                duration_s: 3.0,
+            },
+        ];
+        let argv = build_timeline_argv(&segs, Path::new("/tmp/out.mp4"));
+        let cmd = argv.join(" ");
+        // Two -ss / -t / -i triples preceded by `-y -loglevel info`.
+        assert!(cmd.starts_with("-y -loglevel info -ss 0 -t 2 -i /tmp/a.mp4 -ss 1 -t 3 -i /tmp/b.mp4"));
+        assert!(cmd.contains(
+            "-filter_complex [0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa] \
+             -map [outv] -map [outa]",
+        ));
+        assert!(cmd.ends_with("/tmp/out.mp4"));
     }
 }
