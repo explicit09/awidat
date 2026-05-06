@@ -77,11 +77,19 @@ export function ProposalActions() {
       : "your edit";
 
   return (
-    <div className="proposal-actions">
+    // The `key={proposal.callId}` forces a fresh mount on each new
+    // proposal so the slide-in animation re-runs (CSS animations
+    // only fire on element creation, not on render).
+    <div key={proposal.callId} className="proposal-actions">
       <div className="proposal-actions-info">
         <span className="proposal-actions-label">proposal</span>
         <span className="proposal-actions-source">{sourceLabel}</span>
         <span className="proposal-actions-summary">{proposal.summary}</span>
+        {proposal.revision > 0 ? (
+          <span className="proposal-actions-revision">
+            adjusted ×{proposal.revision}
+          </span>
+        ) : null}
       </div>
       <button
         className="proposal-actions-secondary"
@@ -96,7 +104,7 @@ export function ProposalActions() {
         disabled={busy}
         title="Reject (Esc)"
       >
-        Reject
+        {busy ? "…" : "Reject"}
       </button>
       <button
         className="proposal-actions-primary"
@@ -104,12 +112,26 @@ export function ProposalActions() {
         disabled={busy}
         title="Accept (Enter)"
       >
-        Accept ⏎
+        {busy ? "Applying…" : "Accept ⏎"}
       </button>
       {error && <div className="proposal-actions-error">{error}</div>}
       {showEdl && (
-        <div className="proposal-edl-popover">
-          <pre>{proposal.edlText || "(no EDL text on adjusted proposals)"}</pre>
+        <div className="proposal-edl-popover" role="dialog">
+          <header className="proposal-edl-popover-header">
+            <span>EDL preview</span>
+            <button
+              className="proposal-edl-popover-close"
+              onClick={() => setShowEdl(false)}
+              aria-label="Close EDL preview"
+            >
+              ×
+            </button>
+          </header>
+          <pre>
+            {proposal.edlText
+              ? proposal.edlText
+              : "(no EDL text on adjusted proposals — drag-adjusted edits are tracked as locator deltas, not as a re-emitted text envelope)"}
+          </pre>
         </div>
       )}
     </div>

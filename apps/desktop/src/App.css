@@ -966,7 +966,10 @@ body,
 }
 
 /* Proposal action toolbar — floats over the timeline when a
-   proposal is active. Sits at the top so it doesn't cover clips. */
+   proposal is active. Sits at the top so it doesn't cover clips.
+   Slides in from above when a new proposal arrives (the React
+   `key={proposal.callId}` forces a remount per proposal so the
+   animation re-runs). */
 .proposal-actions {
   position: absolute;
   top: 4px;
@@ -983,6 +986,29 @@ body,
   z-index: 10;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
   flex-wrap: wrap;
+  animation: proposal-slide-in 220ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes proposal-slide-in {
+  from {
+    transform: translate(-50%, -8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%);
+    opacity: 1;
+  }
+}
+
+.proposal-actions-revision {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent, #f59e0b);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  background: rgba(245, 158, 11, 0.12);
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 
 .proposal-actions-info {
@@ -1050,22 +1076,56 @@ body,
 
 .proposal-edl-popover {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
   right: 0;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 8px 10px;
-  max-height: 240px;
-  overflow: auto;
+  max-height: 280px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.proposal-edl-popover-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+}
+
+.proposal-edl-popover-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.proposal-edl-popover-close:hover {
+  color: var(--text);
 }
 
 .proposal-edl-popover pre {
   margin: 0;
+  padding: 8px 10px;
   font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
   color: var(--text);
   white-space: pre-wrap;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 /* Drag handles on top of the canvas. The wrapping div is
