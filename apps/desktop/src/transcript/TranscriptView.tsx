@@ -18,14 +18,17 @@
 // select + delete-range lands in 6.7.
 
 import { useEffect, useMemo, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useTranscriptStore } from "./store";
+import { useTranscriptStore, type SelectionRange } from "./store";
 import { useMediaStore } from "../media/store";
+import { useTimelineStore, type TimelineSnapshot } from "../timeline/store";
 import {
   findActiveSegment,
   timelineTimeForSource,
   usePlaySegments,
 } from "../timeline/usePlaySegments";
+import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import type {
   Transcript,
   TranscriptSegment,
@@ -97,6 +100,12 @@ function LoadedTranscript({
   const segments = usePlaySegments();
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
   const requestSeek = useMediaStore((s) => s.requestSeek);
+  const selection = useTranscriptStore((s) => s.selection);
+  const setSelection = useTranscriptStore((s) => s.setSelection);
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  // Drag state — refs because we don't want a render per pointermove.
+  const dragStartRef = useRef<number | null>(null);
+  const didDragRef = useRef<boolean>(false);
 
   // Pre-compute segment rows once per transcript. Words are sorted
   // by start_s (the backend already sorts on parse) so we can walk
@@ -194,12 +203,48 @@ function LoadedTranscript({
     virtualizer,
   ]);
 
-  // Click-to-seek. Event delegation on the scroll container catches
-  // every word/segment click without registering thousands of
-  // handlers. Walks up to the nearest [data-word-start] (preferred,
-  // word-precision) or [data-segment-start] (fallback, when the
-  // segment lacked word-level alignment).
-  function onClick(e: React.MouseEvent<HTMLDivElement>) {
+  // Pointer handling — supports both click-to-seek (no drag) and
+  // drag-to-select (extends a word range). Event delegation off
+  // the scroll container catches all word + segment events without
+  // attaching thousands of handlers.
+  //
+  // Distinguishing click vs drag:
+  //   - pointerdown on a word records the start word index
+  //   - pointermove on another word marks didDrag and extends
+  //     selection
+  //   - pointerup commits: drag → selection persists; click → seek
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    const wordIdx = wordIdxFromTarget(e.target as HTMLElement);
+    if (wordIdx < 0) {
+      // Maybe a segment-level click without word alignment — let
+      // pointerup handle the seek.
+      dragStartRef.current = null;
+      return;
+    }
+    dragStartRef.current = wordIdx;
+    didDragRef.current = false;
+    setSelection({ stem, startWordIdx: wordIdx, endWordIdx: wordIdx });
+    // Don't capture pointer here — we want to allow scroll while
+    // dragging. The selection extends via the move handler firing
+    // for events that pass through other word spans.
+  }
+
+  function onPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (dragStartRef.current === null) return;
+    const wordIdx = wordIdxFromTarget(e.target as HTMLElement);
+    if (wordIdx < 0) return;
+    if (wordIdx !== dragStartRef.current) didDragRef.current = true;
+    const start = Math.min(dragStartRef.current, wordIdx);
+    const end = Math.max(dragStartRef.current, wordIdx);
+    setSelection({ stem, startWordIdx: start, endWordIdx: end });
+  }
+
+  function onPointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    const wasDrag = didDragRef.current;
+    dragStartRef.current = null;
+    didDragRef.current = false;
+    if (wasDrag) return; // selection is the result; don't seek
+    // Click — seek to the word/segment under the pointer.
     const target = (e.target as HTMLElement).closest(
       "[data-word-start], [data-segment-start]",
     ) as HTMLElement | null;
@@ -210,10 +255,8 @@ function LoadedTranscript({
     if (!sourceStr) return;
     const sourceTime = Number(sourceStr);
     if (!Number.isFinite(sourceTime)) return;
-    // Map source-time → timeline-time when the clip is on the
-    // current timeline. If not (the clip was trimmed out), fall
-    // back to a source-time seek so the source-preview pane (if
-    // active) still jumps to the right spot.
+    // A click clears any prior selection (Descript behavior).
+    setSelection(null);
     const tlTime = timelineTimeForSource(segments, stem, sourceTime);
     if (tlTime !== null) {
       requestTimelineSeek(tlTime);
@@ -221,6 +264,70 @@ function LoadedTranscript({
       requestSeek(sourceTime);
     }
   }
+
+  // Imperative selection paint: walk word spans in [start, end] and
+  // toggle `transcript-word-selected`. Cheap because the visible
+  // word set is bounded by virtualization. Re-runs whenever
+  // selection changes.
+  const selectionStart =
+    selection && selection.stem === stem ? selection.startWordIdx : -1;
+  const selectionEnd =
+    selection && selection.stem === stem ? selection.endWordIdx : -1;
+  useEffect(() => {
+    const scope = scrollRef.current;
+    if (!scope) return;
+    // Clear any spans currently flagged.
+    scope
+      .querySelectorAll(".transcript-word-selected")
+      .forEach((el) => el.classList.remove("transcript-word-selected"));
+    if (selectionStart < 0 || selectionEnd < 0) return;
+    for (let i = selectionStart; i <= selectionEnd; i++) {
+      const el = scope.querySelector(`[data-word-idx="${i}"]`);
+      if (el) el.classList.add("transcript-word-selected");
+    }
+  }, [selectionStart, selectionEnd]);
+
+  // Delete-key handler: build an EDL envelope from the selected
+  // range and fire propose_user_edit. The Step-5 ghost overlay
+  // takes over on the timeline.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.code !== "Delete" && e.code !== "Backspace") return;
+      // Don't intercept while typing in the composer.
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
+      if (tag === "textarea" || tag === "input") return;
+      // Only act on a non-empty selection bound to this transcript.
+      if (selectionStart < 0 || selectionEnd < 0) return;
+      e.preventDefault();
+      const startWord = t.words[selectionStart];
+      const endWord = t.words[selectionEnd];
+      if (!startWord || !endWord) return;
+      const ops = buildDeleteRangeOps({
+        snapshot,
+        stem,
+        sourceStart: startWord.start_s,
+        sourceEnd: endWord.end_s,
+      });
+      if (ops.length === 0) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "transcript delete: selected range doesn't intersect any clip on the timeline; nothing to do",
+        );
+        return;
+      }
+      const edl = serializeEdl(ops);
+      invoke<string>("propose_user_edit", { edlText: edl }).catch(
+        (err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn("propose_user_edit (transcript delete) failed", err);
+        },
+      );
+      setSelection(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionStart, selectionEnd, snapshot, stem, t.words]);
 
   return (
     <div className="transcript-pane">
@@ -233,7 +340,13 @@ function LoadedTranscript({
           {t.segments.length} segments · {t.words.length} words
         </span>
       </header>
-      <div ref={scrollRef} className="transcript-scroll" onClick={onClick}>
+      <div
+        ref={scrollRef}
+        className="transcript-scroll"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      >
         <div
           style={{
             height: virtualizer.getTotalSize(),
@@ -376,4 +489,124 @@ function findSegmentForWord(rows: SegmentRow[], wordIdx: number): number {
     }
   }
   return -1;
+}
+
+/** Walk up from a pointer event target to the nearest [data-word-idx]
+ *  ancestor and return the parsed word index, or -1 when no match. */
+function wordIdxFromTarget(target: HTMLElement | null): number {
+  if (!target) return -1;
+  const span = target.closest("[data-word-idx]") as HTMLElement | null;
+  if (!span) return -1;
+  const v = span.getAttribute("data-word-idx");
+  const idx = v === null ? NaN : Number(v);
+  return Number.isFinite(idx) ? idx : -1;
+}
+
+// --- Delete-range EDL builder -----------------------------------
+
+/**
+ * Build the EDL envelope to cut `[sourceStart, sourceEnd]` of asset
+ * `stem` out of the timeline.
+ *
+ * v1 scope: handle the **range fully inside one clip** case (the
+ * ~95% common case for transcript-delete). Multi-clip spans return
+ * an empty op list — the caller logs a warning. Future commits
+ * extend with the boundary-crossing cases from the Step 6 plan.
+ *
+ * The resulting envelope is `Split @ start; Split @ end; Delete
+ * (middle piece)`. Naming: after Split A, the right piece is
+ * `<original>-b`; after Split B, the right piece of *that* is
+ * `<original>-b-b`. We delete the middle piece (`<original>-b`)
+ * which now spans `[start, end]` in source-time. Step 8.1's
+ * uuid-stamping path keeps the anchors unique.
+ */
+function buildDeleteRangeOps(args: {
+  snapshot: TimelineSnapshot;
+  stem: string;
+  sourceStart: number;
+  sourceEnd: number;
+}): EdlOp[] {
+  const { snapshot, stem, sourceStart, sourceEnd } = args;
+  if (!(sourceEnd > sourceStart + 0.05)) return []; // empty / inverted
+
+  // Find every clip on a video track that references this asset and
+  // contains the range. The proxy stem maps to a clip via the clip
+  // item's proxy_path (which the backend resolves the same way the
+  // transcript pane does).
+  const candidates: {
+    clipUuid: string;
+    clipSourceStart: number;
+    clipSourceEnd: number;
+  }[] = [];
+  for (const track of snapshot.tracks) {
+    if (track.kind !== "video") continue;
+    for (const item of track.items) {
+      if (item.kind !== "clip") continue;
+      if (item.proxy_path === null) continue;
+      const itemStem = stemOf(item.proxy_path);
+      if (itemStem !== stem) continue;
+      const clipStart = item.source_start_s ?? 0;
+      const clipEnd = clipStart + item.duration_s;
+      candidates.push({
+        clipUuid: item.clip_uuid,
+        clipSourceStart: clipStart,
+        clipSourceEnd: clipEnd,
+      });
+    }
+  }
+  if (candidates.length === 0) return [];
+
+  // v1: pick the first clip that fully contains [sourceStart,
+  // sourceEnd]. Multi-clip spans are deferred (return empty so the
+  // caller surfaces a warning rather than emitting a broken EDL).
+  const fullyInside = candidates.find(
+    (c) =>
+      c.clipSourceStart <= sourceStart + 0.01 &&
+      c.clipSourceEnd >= sourceEnd - 0.01,
+  );
+  if (!fullyInside) return [];
+
+  return [
+    {
+      kind: "split_clip",
+      anchor: { kind: "clip_uuid", uuid: fullyInside.clipUuid },
+      atS: sourceStart,
+    },
+    // After the first split, the right piece carries source range
+    // [sourceStart, clipSourceEnd]. Anchor the second split against
+    // its uuid — but the right piece's uuid is freshly stamped by
+    // apply_split, so we can't know it ahead of time. The
+    // anchor-by-clip-name path the resolver uses ("name = original-
+    // b") works since the parent's name is known. The resolver
+    // also matches against awidat.clip_uuid, so giving it the
+    // synthesized name as a clip_uuid value invokes the name-
+    // match fallback branch on resolve_by_uuid. (Step 5's resolver
+    // hardening + the clip-name fallback path covers this round-
+    // trip.)
+    {
+      kind: "split_clip",
+      anchor: { kind: "clip_uuid", uuid: nameAfterSplit(fullyInside.clipUuid) },
+      atS: sourceEnd,
+    },
+    {
+      kind: "delete_clip",
+      anchor: { kind: "clip_uuid", uuid: nameAfterSplit(fullyInside.clipUuid) },
+    },
+  ];
+}
+
+/** After Split, the right piece's *name* is `<parent>-b`. The
+ *  parent's display name is what came in (Step 8.1 stamps a fresh
+ *  awidat.clip_uuid on the right piece, but the name-match
+ *  fallback in the anchor resolver matches against this synthesized
+ *  string). */
+function nameAfterSplit(parent: string): string {
+  return `${parent}-b`;
+}
+
+function stemOf(path: string): string {
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  const file = slash >= 0 ? path.slice(slash + 1) : path;
+  const dot = file.lastIndexOf(".");
+  return dot > 0 ? file.slice(0, dot) : file;
 }
