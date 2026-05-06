@@ -18,8 +18,10 @@
 //! cursor pattern but reuses one resolver path.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-use awidat_proto::otio::{StackChild, Timeline, TrackChild};
+use awidat_proto::awidat_meta::AwidatClipMetadata;
+use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild};
 use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
@@ -516,6 +518,11 @@ fn apply_insert_clip(
     let mut clip = Clip::empty(chosen_name.clone());
     clip.media_reference = MediaReference::External(ExternalReference::new(asset.to_string()));
     clip.source_range = Some(source_range);
+    // Stamp a fresh anchor uuid so Step 8's drag-to-trim can build
+    // `Anchor::ClipUuid { uuid }` against this clip without falling
+    // back to name-based matching (which works but is brittle when
+    // two inserts pick the same default name).
+    stamp_fresh_clip_uuid(&mut clip);
 
     track.children.insert(position, TrackChild::Clip(clip));
 
@@ -525,6 +532,27 @@ fn apply_insert_clip(
          ({:.3}s)",
         end - start
     ))
+}
+
+/// Stamp a fresh, process-unique clip uuid into `clip.metadata.awidat
+/// .extra["clip_uuid"]`. Used by InsertClip (new clip created) and
+/// Split (right piece needs its own uuid — clip.clone() inherited
+/// the parent's, which breaks Anchor::ClipUuid resolution because
+/// two clips would share the same uuid).
+///
+/// Uniqueness is "monotonic counter + nanosecond timestamp formatted
+/// as a 16-char hex string" — short, stable across cargo build IDs,
+/// and uniqueness-by-construction across rapid back-to-back calls.
+/// Not cryptographically random; we don't need that here.
+fn stamp_fresh_clip_uuid(clip: &mut Clip) {
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let uuid = format!("c-{:013x}{:03x}", nanos & 0xFFFF_FFFF_FFFF_F, seq & 0xFFF);
+    let awidat = clip.metadata.awidat.get_or_insert_with(AwidatClipMetadata::default);
+    awidat
+        .extra
+        .insert("clip_uuid".into(), serde_json::Value::String(uuid));
 }
 
 fn next_clip_name_in_track(track: &awidat_proto::otio::Track) -> String {
@@ -603,6 +631,11 @@ fn apply_split(
         awidat_proto::otio::RationalTime::new(at_s * rate, rate),
         awidat_proto::otio::RationalTime::new((end_s - at_s) * rate, rate),
     ));
+    // The clip.clone() above also cloned the parent's clip_uuid —
+    // which would mean two clips share the same anchor uuid after
+    // this op. Stamp a fresh one so Anchor::ClipUuid resolves
+    // unambiguously to whichever piece the agent (or user) names.
+    stamp_fresh_clip_uuid(&mut right);
 
     // Trim the left piece in place.
     let TrackChild::Clip(left) = &mut track.children[locator.child_index] else {
@@ -878,6 +911,99 @@ mod tests {
         assert!((lr.duration.to_seconds() - 2.0).abs() < 1e-9);
         assert!((rr.duration.to_seconds() - 3.0).abs() < 1e-9);
         assert!((rr.start_time.to_seconds() - 2.0).abs() < 1e-9);
+    }
+
+    fn extract_clip_uuid(clip: &Clip) -> Option<String> {
+        clip.metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.extra.get("clip_uuid"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    #[test]
+    fn apply_split_stamps_distinct_clip_uuids_on_each_piece() {
+        // The right piece is built via clip.clone() — without
+        // explicit re-stamping it would inherit the parent's
+        // clip_uuid. That breaks Anchor::ClipUuid resolution because
+        // two clips would share the same uuid. Verify the right
+        // piece has a fresh uuid distinct from the left.
+        let mut tl = timeline_with_three_clips();
+        // Pre-stamp the parent so we can confirm the right piece
+        // diverges from a known starting uuid.
+        let StackChild::Track(t) = &mut tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &mut t.children[1] else {
+            panic!()
+        };
+        c.metadata
+            .awidat
+            .get_or_insert_with(AwidatClipMetadata::default)
+            .extra
+            .insert(
+                "clip_uuid".into(),
+                serde_json::Value::String("parent-uuid".into()),
+            );
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SplitClip {
+                anchor: Anchor::ClipUuid {
+                    uuid: "parent-uuid".into(),
+                },
+                at_s: 2.0,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(left) = &t.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(right) = &t.children[2] else {
+            panic!()
+        };
+        let left_uuid = extract_clip_uuid(left).unwrap();
+        let right_uuid = extract_clip_uuid(right).unwrap();
+        assert_eq!(left_uuid, "parent-uuid");
+        assert_ne!(left_uuid, right_uuid);
+        assert!(right_uuid.starts_with("c-"));
+    }
+
+    #[test]
+    fn apply_insert_clip_stamps_fresh_clip_uuid() {
+        let mut tl = Timeline::empty("test");
+        let mut track =
+            awidat_proto::otio::Track::empty("V1", awidat_proto::otio::TrackKind::Video);
+        // No existing clip — the insert must generate its own anchor.
+        track
+            .children
+            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                0.0, 24.0,
+            )));
+        tl.tracks.children.push(StackChild::Track(track));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/x.mp4".into(),
+                track: "V1".into(),
+                at_position: None,
+                start: Some(0.0),
+                end: Some(3.0),
+                name: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(inserted) = &t.children[1] else {
+            panic!()
+        };
+        let uuid = extract_clip_uuid(inserted).expect("insert should stamp a clip_uuid");
+        assert!(uuid.starts_with("c-"), "got: {uuid}");
     }
 
     #[test]
