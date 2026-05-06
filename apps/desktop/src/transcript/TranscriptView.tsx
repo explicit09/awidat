@@ -17,11 +17,12 @@
 // classList toggle keyed off useMediaStore.timelineTime). Drag-
 // select + delete-range lands in 6.7.
 
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranscriptStore } from "./store";
 import { useMediaStore } from "../media/store";
 import {
+  findActiveSegment,
   timelineTimeForSource,
   usePlaySegments,
 } from "../timeline/usePlaySegments";
@@ -130,6 +131,68 @@ function LoadedTranscript({
     estimateSize: () => 96,
     overscan: 6,
   });
+
+  // Active-word highlight + auto-scroll. Imperative DOM toggle on
+  // [data-word-idx] spans driven by `timelineTime`; React doesn't
+  // re-render on each timeupdate (which happens ~60 Hz from the
+  // segmented player's rVFC tick).
+  const timelineTime = useMediaStore((s) => s.timelineTime);
+  const tlSegments = segments;
+  const activeWordIdxRef = useRef<number>(-1);
+  const lastScrolledSegmentRef = useRef<number>(-1);
+  // Pre-build a sorted array of word start-times for binary search.
+  const wordStarts = useMemo(
+    () => t.words.map((w) => w.start_s),
+    [t],
+  );
+
+  useEffect(() => {
+    // Translate timeline-time → (active asset stem, source-time).
+    const segIdx = findActiveSegment(tlSegments, timelineTime);
+    if (segIdx < 0) return;
+    const seg = tlSegments[segIdx];
+    if (seg.proxyStem !== stem) {
+      // The active segment's asset isn't this transcript's asset.
+      // Clear any lingering highlight; this transcript pane just
+      // isn't the one being played right now.
+      clearActive(scrollRef.current, activeWordIdxRef.current);
+      activeWordIdxRef.current = -1;
+      return;
+    }
+    const sourceTime = seg.sourceStart + (timelineTime - seg.timelineStart);
+    // Find the word whose [start_s, end_s] covers sourceTime via
+    // binary search on the pre-built starts array.
+    const wordIdx = findWordAt(wordStarts, t.words, sourceTime);
+    if (wordIdx === activeWordIdxRef.current) return;
+    clearActive(scrollRef.current, activeWordIdxRef.current);
+    setActive(scrollRef.current, wordIdx);
+    activeWordIdxRef.current = wordIdx;
+
+    // Auto-scroll: when the active word's segment changes, scroll
+    // the row into view. We don't scroll on every word change —
+    // that would cause continuous jitter. Debounce by segment.
+    if (wordIdx >= 0) {
+      const newSegmentIdx = findSegmentForWord(rows, wordIdx);
+      if (
+        newSegmentIdx >= 0 &&
+        newSegmentIdx !== lastScrolledSegmentRef.current
+      ) {
+        lastScrolledSegmentRef.current = newSegmentIdx;
+        virtualizer.scrollToIndex(newSegmentIdx, {
+          align: "center",
+          behavior: "smooth",
+        });
+      }
+    }
+  }, [
+    timelineTime,
+    tlSegments,
+    stem,
+    t.words,
+    wordStarts,
+    rows,
+    virtualizer,
+  ]);
 
   // Click-to-seek. Event delegation on the scroll container catches
   // every word/segment click without registering thousands of
@@ -253,4 +316,64 @@ function fmt(s: number): string {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+// --- Active-word helpers ----------------------------------------
+
+/** Imperative `classList.remove` on the previously-active span.
+ *  Cheap — typical case is a single querySelector + classList op. */
+function clearActive(scope: HTMLDivElement | null, idx: number): void {
+  if (!scope || idx < 0) return;
+  const el = scope.querySelector(`[data-word-idx="${idx}"]`);
+  if (el) el.classList.remove("transcript-word-active");
+}
+
+/** Imperative `classList.add` on the new active span. */
+function setActive(scope: HTMLDivElement | null, idx: number): void {
+  if (!scope || idx < 0) return;
+  const el = scope.querySelector(`[data-word-idx="${idx}"]`);
+  if (el) el.classList.add("transcript-word-active");
+}
+
+/** Binary-search words[] for the index whose [start_s, end_s]
+ *  covers `t`. Returns -1 when `t` falls in a gap (e.g. between
+ *  two whisper-segmented utterances) or before the first word. */
+function findWordAt(
+  starts: number[],
+  words: TranscriptWord[],
+  t: number,
+): number {
+  if (words.length === 0) return -1;
+  // Find the rightmost word whose start_s <= t.
+  let lo = 0;
+  let hi = words.length - 1;
+  let best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    if (starts[mid] <= t) {
+      best = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  if (best < 0) return -1;
+  // Confirm the candidate's range covers t (some sidecars have
+  // gaps between consecutive words during silence).
+  return t <= words[best].end_s + 0.05 ? best : -1;
+}
+
+/** Find which segment owns a given word index. Linear search is
+ *  fine — we only call this on segment-change, not per frame. */
+function findSegmentForWord(rows: SegmentRow[], wordIdx: number): number {
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (
+      wordIdx >= r.firstWordIdx &&
+      wordIdx < r.firstWordIdx + r.words.length
+    ) {
+      return i;
+    }
+  }
+  return -1;
 }
