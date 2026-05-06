@@ -1176,6 +1176,25 @@ body,
   outline: 1px solid var(--border);
 }
 
+/* Stacking context for the SegmentedVideoView's double-buffered
+   <video> pair. Both slots are absolutely positioned within this
+   box; the inactive slot has opacity 0 (kept rendering so the
+   decoder stays warm during preroll). */
+.video-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  outline: 1px solid var(--border);
+  background: black;
+}
+
+.video-stack > .video-el {
+  outline: none;
+  border-radius: 0;
+}
+
 .video-meta {
   display: flex;
   align-items: center;

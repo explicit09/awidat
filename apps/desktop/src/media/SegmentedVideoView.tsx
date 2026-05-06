@@ -1,28 +1,38 @@
 // Segmented video preview — plays the timeline, not the source.
 //
-// Owns one <video> element. Walks the play-segments derived from the
-// OTIO snapshot, hops between them as the timeline-time playhead
-// crosses segment boundaries. From the user's perspective the
-// preview is the cut: scrub bar shows timeline duration, current
-// time tracks timeline-time, cuts are seamless.
+// Walks the play-segments derived from the OTIO snapshot, hopping
+// between them as the timeline-time playhead crosses segment
+// boundaries. From the user's perspective the preview is the cut:
+// scrub bar shows timeline duration, current time tracks timeline-
+// time, cuts are seamless.
+//
+// **Double-buffered playback (Step 9.5):** two <video> elements
+// stacked in the same spot. One is "active" (visible, playing); the
+// other is "preroll" (hidden, src already pointing at the next
+// segment with currentTime parked at next.sourceStart). At a
+// boundary cross we just flip which is on top — no src reassignment
+// on the visible element, so no decoder warmup, no flash.
+//
+//   active   ──── playing ────→ boundary ─┐
+//   preroll  ─── ready, paused ──────────→├─→ swap roles
+//                                          ↓
+//   active'  ─── plays from sourceStart ──→ next boundary
+//   preroll' ─── load after-next ────────→ ready
+//
+// Same-asset back-to-back segments (the awidat common case) get
+// minor benefit since the proxy is already cached; cross-asset
+// crossings get the full benefit (no flash).
 //
 // Architecture:
 //
-//   timelineTime  ── store ──→  active segment ── this view ──→  video.src + video.currentTime
-//                                       ↑                              │
-//                                       └──────── timeupdate ──────────┘
+//   timelineTime  ── store ──→  active segment ── this view ──→  active video
+//                                       ↑                             │
+//                                       └──── rVFC tick ──────────────┘
 //
-// The video element's currentTime is derived from timelineTime, not
-// the other way around. timeupdate translates back so the store stays
-// the single source of truth.
-//
-// Scope of THIS commit (9.3): single-segment switching. Boundary
-// crossing during playback is detected via timeupdate (~250ms
-// granularity, jittery on the cut). 9.4 replaces that with
-// requestVideoFrameCallback for per-frame boundary checks. 9.5
-// adds a hidden second <video> for next-segment preroll.
+// Boundary detection is requestVideoFrameCallback (Step 9.4) when
+// available; timeupdate fallback otherwise.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { useTimelineStore } from "../timeline/store";
@@ -52,12 +62,24 @@ export function SegmentedVideoView() {
   return <SegmentedPlayer segments={segments} />;
 }
 
+// One slot in the double-buffer.
+type Slot = {
+  ref: React.MutableRefObject<HTMLVideoElement | null>;
+  /** Segment index this slot is loaded with, or -1 when empty. */
+  segIdx: number;
+};
+
 function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  // The segment we last set src to. Used to avoid re-setting src on
-  // every render (which would unload the video element and cause a
-  // visible flicker).
-  const activeSegRef = useRef<number>(-1);
+  const refA = useRef<HTMLVideoElement | null>(null);
+  const refB = useRef<HTMLVideoElement | null>(null);
+  // The currently-visible slot. The other slot is the preroll.
+  const [activeKey, setActiveKey] = useState<"a" | "b">("a");
+  // What each slot has loaded. Refs (not state) so the rVFC tick
+  // can advance them without triggering renders mid-frame.
+  const slotsRef = useRef<{ a: Slot; b: Slot }>({
+    a: { ref: refA, segIdx: -1 },
+    b: { ref: refB, segIdx: -1 },
+  });
 
   const timelineTime = useMediaStore((s) => s.timelineTime);
   const timelineDurationS = useMediaStore((s) => s.timelineDurationS);
@@ -76,107 +98,159 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
 
   // Latest segments captured into a ref so the rVFC tick can read
   // them without forcing the rAF-style callback to re-register on
-  // every render. The render-time effect that mounts rVFC reads
-  // this ref each frame.
+  // every render.
   const segmentsRef = useRef<PlaySegment[]>(segments);
   useEffect(() => {
     segmentsRef.current = segments;
   }, [segments]);
 
-  // Whenever timelineTime moves into a new segment, swap src and
-  // align video.currentTime. The "timelineTime moves" trigger covers
-  // playback (timeupdate-driven) AND external seeks (request-id-
-  // driven), since both ultimately mutate timelineTime.
+  // activeKey captured into a ref for the same reason.
+  const activeKeyRef = useRef(activeKey);
   useEffect(() => {
-    const v = videoRef.current;
-    if (!v) return;
+    activeKeyRef.current = activeKey;
+  }, [activeKey]);
+
+  // Whenever timelineTime moves into a new segment, make sure the
+  // active slot is loaded with that segment's proxy and aligned.
+  // Triggers cover playback, external seeks (request-id), and
+  // segment-array changes (proxy-finished, agent-edit).
+  useEffect(() => {
     const segIdx = findActiveSegment(segments, timelineTime);
+    const active = slotsRef.current[activeKeyRef.current];
+    const v = active.ref.current;
+    if (!v) return;
     if (segIdx < 0) {
       // Past end of timeline → pause + park at last frame.
       if (segments.length > 0) {
-        const last = segments[segments.length - 1];
-        if (activeSegRef.current !== segments.length - 1) {
-          activeSegRef.current = segments.length - 1;
-          v.src = convertFileSrc(last.proxyPath);
-        }
-        v.currentTime = last.sourceEnd;
+        const last = segments.length - 1;
+        ensureSlotLoaded(active, segments[last]);
+        active.segIdx = last;
+        v.currentTime = segments[last].sourceEnd;
       }
       v.pause();
       return;
     }
     const seg = segments[segIdx];
-    if (segIdx !== activeSegRef.current) {
-      activeSegRef.current = segIdx;
-      v.src = convertFileSrc(seg.proxyPath);
-      // canplay handler below will set currentTime once ready.
-      // We also seek opportunistically here in case the proxy is
-      // already cached.
-      const targetSrc = seg.sourceStart + (timelineTime - seg.timelineStart);
-      tryAssignCurrentTime(v, targetSrc);
-      return;
+    if (active.segIdx !== segIdx) {
+      ensureSlotLoaded(active, seg);
+      active.segIdx = segIdx;
     }
-    // Same segment, just sync currentTime if it drifted (e.g. an
-    // external seek inside the active segment).
     const desired = seg.sourceStart + (timelineTime - seg.timelineStart);
     if (Math.abs(v.currentTime - desired) > 0.05) {
       tryAssignCurrentTime(v, desired);
     }
+    // Preload the next segment into the inactive slot.
+    primePreroll(segIdx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segments, timelineTime, seekRequestId, seekTargetS]);
 
-  // External seek (timeline canvas click etc.) updates the target
-  // store value; the effect above already reacts to seekRequestId.
-  // No additional handler needed — kept here for future extension.
-
-  // When the segments array changes (proxy finishes, agent edits),
-  // re-evaluate the active segment from the current timelineTime and
-  // make sure the src points at the right thing.
+  // Reset both slots when the segments array identity changes (e.g.
+  // an apply_edl landed). Forces the resync effect above to re-attach
+  // src on the new active segment.
   useEffect(() => {
-    activeSegRef.current = -1; // force the resync effect above
+    slotsRef.current.a.segIdx = -1;
+    slotsRef.current.b.segIdx = -1;
   }, [segments]);
 
+  // Set src + park at sourceStart for a slot. Idempotent — if the
+  // slot already has the right src loaded, we skip the assignment
+  // (re-setting src reloads the decoder, which is exactly what
+  // double-buffering is meant to avoid).
+  function ensureSlotLoaded(slot: Slot, seg: PlaySegment) {
+    const v = slot.ref.current;
+    if (!v) return;
+    const desiredSrc = convertFileSrc(seg.proxyPath);
+    if (v.src !== desiredSrc) {
+      v.src = desiredSrc;
+    }
+    tryAssignCurrentTime(v, seg.sourceStart);
+  }
+
+  // Prime the inactive slot with the segment AFTER `currentSegIdx`
+  // so it's ready when we cross the boundary. Pauses the preroll
+  // slot — only the active slot plays.
+  function primePreroll(currentSegIdx: number) {
+    const segs = segmentsRef.current;
+    const nextIdx = currentSegIdx + 1;
+    const inactiveKey: "a" | "b" = activeKeyRef.current === "a" ? "b" : "a";
+    const inactive = slotsRef.current[inactiveKey];
+    const v = inactive.ref.current;
+    if (!v) return;
+    if (nextIdx >= segs.length) {
+      // Nothing to preroll — clear so we don't leave stale media
+      // taking up decoder slots. Setting empty src is safe.
+      if (inactive.segIdx !== -1) {
+        v.removeAttribute("src");
+        v.load();
+        inactive.segIdx = -1;
+      }
+      return;
+    }
+    const next = segs[nextIdx];
+    if (inactive.segIdx !== nextIdx) {
+      ensureSlotLoaded(inactive, next);
+      inactive.segIdx = nextIdx;
+    }
+    if (!v.paused) v.pause();
+  }
+
   // Per-frame boundary check + time translation. Called from rVFC
-  // (preferred, ~per-frame granularity) and from `timeupdate` as a
-  // fallback (~250ms granularity, used when rVFC isn't available).
-  // Pulls segments through the ref so the closure doesn't capture
-  // a stale array.
+  // (preferred) and from `timeupdate` as a fallback.
   function tickAtVideoTime(v: HTMLVideoElement, vTime: number) {
     const segs = segmentsRef.current;
-    const segIdx = activeSegRef.current;
+    const activeSlot = slotsRef.current[activeKeyRef.current];
+    const segIdx = activeSlot.segIdx;
     if (segIdx < 0 || segIdx >= segs.length) return;
     const seg = segs[segIdx];
     if (vTime >= seg.sourceEnd - 0.001) {
       const nextIdx = segIdx + 1;
       if (nextIdx >= segs.length) {
-        // End of timeline — park, pause, push the final timestamp.
+        // End of timeline.
         setTimelineTime(seg.timelineEnd);
         v.pause();
         return;
       }
+      // Boundary cross: flip to the prerolled slot.
+      const inactiveKey: "a" | "b" = activeKeyRef.current === "a" ? "b" : "a";
+      const inactive = slotsRef.current[inactiveKey];
+      const nextV = inactive.ref.current;
       const next = segs[nextIdx];
-      activeSegRef.current = nextIdx;
-      v.src = convertFileSrc(next.proxyPath);
-      tryAssignCurrentTime(v, next.sourceStart);
-      // Safari pauses on src swap — resume if the user was playing.
-      v.play().catch(() => {});
+      // Defensive: if preroll didn't get a chance to load (rapid
+      // segment churn, or the user scrubbed past the cut), force-
+      // load the inactive slot now. Same flow as the single-buffer
+      // case — visible flash, but at least it plays.
+      if (inactive.segIdx !== nextIdx && nextV) {
+        ensureSlotLoaded(inactive, next);
+        inactive.segIdx = nextIdx;
+      } else if (nextV) {
+        // Preroll was correct; still seek to sourceStart in case
+        // the user jumped back-and-forth and left it elsewhere.
+        tryAssignCurrentTime(nextV, next.sourceStart);
+      }
+      // Pause the leaving slot, play the entering slot.
+      v.pause();
+      if (nextV) nextV.play().catch(() => {});
+      // Flip the visible slot. activeKey state drives the CSS
+      // class swap; activeKeyRef updates on the next render via
+      // the sync useEffect above.
+      setActiveKey(inactiveKey);
+      activeKeyRef.current = inactiveKey;
       setTimelineTime(next.timelineStart);
+      // Kick the now-inactive slot to start prerolling segment
+      // after-next (if any).
+      primePreroll(nextIdx);
       return;
     }
     // Within segment: smooth playhead translation.
     setTimelineTime(seg.timelineStart + (vTime - seg.sourceStart));
   }
 
-  // requestVideoFrameCallback: per-frame ticks. Replaces the
-  // timeupdate-based boundary check on browsers that have it
-  // (Chromium + Safari, all current versions). Older / non-supporting
-  // browsers fall through to the onTimeUpdate handler. The flag is
-  // checked once per useEffect mount via feature-detection.
+  // Mount rVFC on the active slot. Re-mounts when activeKey flips
+  // so we always observe the playing video.
   useEffect(() => {
-    const v = videoRef.current;
+    const v = slotsRef.current[activeKey].ref.current;
     if (!v) return;
-    type RVFCMetadata = {
-      mediaTime: number;
-      // …other fields we don't use
-    };
+    type RVFCMetadata = { mediaTime: number };
     type RVFCVideo = HTMLVideoElement & {
       requestVideoFrameCallback?: (
         cb: (now: number, metadata: RVFCMetadata) => void,
@@ -185,40 +259,32 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     };
     const rvfcVideo = v as RVFCVideo;
     if (typeof rvfcVideo.requestVideoFrameCallback !== "function") {
-      // Fallback path: timeupdate handler runs unmodified.
+      // Fallback: timeupdate handler runs unmodified.
       return;
     }
-
     let cancelled = false;
     let handle = 0;
     const tick = (_now: number, metadata: RVFCMetadata) => {
       if (cancelled) return;
-      // metadata.mediaTime is the proxy-source time of the rendered
-      // frame — more accurate than v.currentTime which can lag.
       tickAtVideoTime(v, metadata.mediaTime);
       const next = rvfcVideo.requestVideoFrameCallback;
       if (next) handle = next(tick);
     };
     handle = rvfcVideo.requestVideoFrameCallback(tick);
-
     return () => {
       cancelled = true;
       rvfcVideo.cancelVideoFrameCallback?.(handle);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeKey]);
 
-  // timeupdate fallback. On rVFC-capable browsers it still fires
-  // (rVFC doesn't replace it) — we no-op when an rVFC tick has
-  // already advanced the segment, since `tickAtVideoTime` is
-  // idempotent on the within-segment translation. The boundary
-  // advance is also idempotent (segIdx check guards re-entry).
+  // timeupdate fallback. Idempotent with rVFC — boundary advance
+  // checks `activeSlot.segIdx` which only changes once per cross.
   function onTimeUpdate(e: React.SyntheticEvent<HTMLVideoElement>) {
     tickAtVideoTime(e.currentTarget, e.currentTarget.currentTime);
   }
 
-  // Push view-state (~1Hz, integer-second granularity) so the agent
-  // knows where the user is on the timeline.
+  // Push view-state (~1Hz, integer-second granularity).
   useEffect(() => {
     const segIdx = findActiveSegment(segments, timelineTime);
     if (segIdx < 0) return;
@@ -252,7 +318,7 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   }, []);
 
   function togglePlay() {
-    const v = videoRef.current;
+    const v = slotsRef.current[activeKeyRef.current].ref.current;
     if (!v) return;
     if (v.paused) {
       v.play().catch(() => {});
@@ -266,18 +332,47 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     if (Number.isFinite(t)) requestTimelineSeek(t);
   }
 
+  // The hidden slot uses opacity 0 + pointer-events: none so it
+  // doesn't intercept clicks on the visible video. Both elements
+  // are positioned absolutely in the same box; the visible slot
+  // has opacity 1 and z-index above. We avoid `display: none` and
+  // `visibility: hidden` because both can pause buffering on some
+  // browsers.
+  const styleA = useMemo(
+    () => slotStyle(activeKey === "a"),
+    [activeKey],
+  );
+  const styleB = useMemo(
+    () => slotStyle(activeKey === "b"),
+    [activeKey],
+  );
+
   return (
     <div className="video-wrap">
-      <video
-        ref={videoRef}
-        className="video-el"
-        preload="metadata"
-        onTimeUpdate={onTimeUpdate}
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
-        onClick={togglePlay}
-      />
+      <div className="video-stack">
+        <video
+          ref={refA}
+          className="video-el"
+          preload="auto"
+          style={styleA}
+          onTimeUpdate={activeKey === "a" ? onTimeUpdate : undefined}
+          onPlay={activeKey === "a" ? () => setPlaying(true) : undefined}
+          onPause={activeKey === "a" ? () => setPlaying(false) : undefined}
+          onEnded={activeKey === "a" ? () => setPlaying(false) : undefined}
+          onClick={activeKey === "a" ? togglePlay : undefined}
+        />
+        <video
+          ref={refB}
+          className="video-el"
+          preload="auto"
+          style={styleB}
+          onTimeUpdate={activeKey === "b" ? onTimeUpdate : undefined}
+          onPlay={activeKey === "b" ? () => setPlaying(true) : undefined}
+          onPause={activeKey === "b" ? () => setPlaying(false) : undefined}
+          onEnded={activeKey === "b" ? () => setPlaying(false) : undefined}
+          onClick={activeKey === "b" ? togglePlay : undefined}
+        />
+      </div>
       <div className="transport">
         <button
           className="transport-play"
@@ -312,6 +407,18 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
       </div>
     </div>
   );
+}
+
+function slotStyle(visible: boolean): React.CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    opacity: visible ? 1 : 0,
+    pointerEvents: visible ? "auto" : "none",
+    zIndex: visible ? 2 : 1,
+  };
 }
 
 // Some browsers throw when setting currentTime before the readyState
