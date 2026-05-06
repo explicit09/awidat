@@ -164,10 +164,10 @@ fn apply_one(
             index,
             op: "Insert BRoll".into(),
         }),
-        EdlOp::MoveClip { .. } => Err(ApplyError::NotImplemented {
-            index,
-            op: "Move Clip".into(),
-        }),
+        EdlOp::MoveClip {
+            anchor,
+            to_position,
+        } => apply_move_clip(working, index, anchor, *to_position, ctx, locator),
         EdlOp::InsertTransition {
             between,
             kind,
@@ -186,10 +186,10 @@ fn resolve_locator_for_op(
         EdlOp::TrimClip { anchor, .. }
         | EdlOp::DeleteClip { anchor }
         | EdlOp::SplitClip { anchor, .. }
-        | EdlOp::UntrimClip { anchor, .. } => anchor,
+        | EdlOp::UntrimClip { anchor, .. }
+        | EdlOp::MoveClip { anchor, .. } => anchor,
         EdlOp::InsertClip { .. }
         | EdlOp::InsertBRoll { .. }
-        | EdlOp::MoveClip { .. }
         | EdlOp::InsertTransition { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
@@ -774,6 +774,87 @@ fn apply_insert_transition(
         from_loc.child_index,
         from_loc.child_index + 2, // shifted by the insert
         from_loc.track_index,
+    ))
+}
+
+/// Move an anchored clip to a different position within its track.
+/// Cross-track moves aren't supported in v1 — `to_position` indexes
+/// into the *anchor's* track, clamped to the track's child count.
+///
+/// The vec-extract / vec-insert pattern means the move is conceptually
+/// a swap when `to_position == child_index + 1` (inserting just past
+/// where we extracted lands the clip back where it started); the
+/// helper below normalizes that case to a no-op rather than confusing
+/// the user with an op that "succeeded but did nothing."
+fn apply_move_clip(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    to_position: usize,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "move: anchor resolved to a non-track stack child".into(),
+        });
+    };
+
+    if locator.child_index >= track.children.len() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "move: source index {} out of bounds for track of length {}",
+                locator.child_index,
+                track.children.len()
+            ),
+        });
+    }
+
+    // The user-facing target is "the clip's index in the post-move
+    // track", clamped to a legal slot (0..=len). After extraction the
+    // track is one shorter, so when the user-target is past the
+    // extraction point we shift the insert index down by 1 to
+    // compensate for the gap that just collapsed.
+    let len_before = track.children.len();
+    let target_user = to_position.min(len_before.saturating_sub(1));
+    if target_user == locator.child_index {
+        // Same-position move — describe as a no-op rather than
+        // mutating + producing an effective-no-change OTIO.
+        let TrackChild::Clip(c) = &track.children[locator.child_index] else {
+            return Ok("move: source is not a clip; left timeline unchanged".into());
+        };
+        return Ok(format!(
+            "move: clip {:?} already at position {}; left timeline unchanged",
+            c.name, target_user,
+        ));
+    }
+
+    let removed = track.children.remove(locator.child_index);
+    // Translate user-facing target into a post-extract insertion
+    // index. When moving forward (target_user > source), the
+    // extraction shifted everyone after the source left by 1, so the
+    // user's target index now means "insert just after element
+    // target_user - 1" → insert at target_user.
+    let insert_at = if target_user >= locator.child_index {
+        target_user.min(track.children.len())
+    } else {
+        target_user
+    };
+    track.children.insert(insert_at, removed);
+
+    let TrackChild::Clip(c) = &track.children[insert_at] else {
+        return Ok(format!(
+            "move: moved a non-clip child from {} to {} on track {}",
+            locator.child_index, insert_at, locator.track_index,
+        ));
+    };
+    Ok(format!(
+        "moved clip {:?} from position {} to position {} on track {}",
+        c.name, locator.child_index, target_user, locator.track_index,
     ))
 }
 
@@ -1547,17 +1628,22 @@ mod tests {
 
     #[test]
     fn unimplemented_op_returns_clear_error() {
+        // InsertBRoll lands in 14.3; until then it surfaces a clear
+        // NotImplemented error. (MoveClip was on this list pre-14.2;
+        // InsertTransition was on this list pre-14.1.)
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
-            ops: vec![EdlOp::MoveClip {
-                anchor: Anchor::ClipUuid {
-                    uuid: "clip-0".into(),
+            ops: vec![EdlOp::InsertBRoll {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "alpha snippet".into(),
                 },
-                to_position: 2,
+                asset: "raw/broll.mp4".into(),
+                duration_s: 2.0,
+                position: super::super::op::BRollPosition::Replace,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
-        assert!(matches!(err, ApplyError::NotImplemented { op, .. } if op == "Move Clip"));
+        assert!(matches!(err, ApplyError::NotImplemented { op, .. } if op == "Insert BRoll"));
     }
 
     #[test]
@@ -1690,6 +1776,72 @@ mod tests {
             matches!(&err, ApplyError::Invalid { message, .. } if message.contains("must be > 0")),
             "expected duration error, got {err:?}",
         );
+    }
+
+    #[test]
+    fn apply_move_clip_to_start_reorders_track() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MoveClip {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "charlie snippet".into(),
+                },
+                to_position: 0,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-2"));
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-0"));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-1"));
+    }
+
+    #[test]
+    fn apply_move_clip_to_end_clamps_to_last_position() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MoveClip {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "alpha snippet".into(),
+                },
+                to_position: 99, // way past the end — clamp.
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        // alpha (was at 0) should now be at 2 (last position).
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-2"));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-0"));
+    }
+
+    #[test]
+    fn apply_move_clip_same_position_is_a_no_op() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MoveClip {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                to_position: 1, // already there.
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0].description.contains("already at position"),
+            "expected no-op description, got {:?}",
+            outcome.applied[0].description,
+        );
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-0"));
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-2"));
     }
 
     #[test]
