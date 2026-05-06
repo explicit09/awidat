@@ -48,8 +48,8 @@ fn audio_energy_server(python_dir: &Path) -> McpServer {
         env: HashMap::new(),
         cwd: Some(python_dir.to_path_buf()),
         kind: McpServerKind::Indexer,
-                        enabled: true,
-            depends_on: vec![],
+        enabled: true,
+        depends_on: vec![],
     }
 }
 
@@ -59,7 +59,10 @@ fn which_uv() -> String {
     if let Ok(path) = std::env::var("UV") {
         return path;
     }
-    let home_local = format!("{}/.local/bin/uv", std::env::var("HOME").unwrap_or_default());
+    let home_local = format!(
+        "{}/.local/bin/uv",
+        std::env::var("HOME").unwrap_or_default()
+    );
     if Path::new(&home_local).exists() {
         return home_local;
     }
@@ -89,7 +92,7 @@ async fn audio_energy_indexer_writes_sidecar() {
         version: "0.0.1".into(),
     };
 
-    let report = run(&project_root, &servers, &assets, client_info, 2)
+    let report = run(&project_root, &servers, &assets, client_info, 2, None)
         .await
         .expect("dispatcher must succeed");
 
@@ -138,10 +141,17 @@ async fn audio_energy_indexer_writes_sidecar() {
     );
 
     // Re-run is a no-op (Skipped).
-    let report2 = run(&project_root, &servers, &assets, ClientInfo {
-        name: "awidat-test".into(),
-        version: "0.0.1".into(),
-    }, 2)
+    let report2 = run(
+        &project_root,
+        &servers,
+        &assets,
+        ClientInfo {
+            name: "awidat-test".into(),
+            version: "0.0.1".into(),
+        },
+        2,
+        None,
+    )
     .await
     .expect("second run must succeed");
     assert!(
