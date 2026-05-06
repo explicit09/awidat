@@ -22,6 +22,7 @@ import {
   type EdgeHit,
 } from "./hitDetect";
 import { getStrip, onThumbnailDecoded } from "./thumbnailCache";
+import { getBuckets, onWaveformDecoded } from "./waveformCache";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -290,12 +291,14 @@ function TimelineCanvas({
     // window resize AND parent flex/grid resizes.
     const ro = new ResizeObserver(() => paint());
     ro.observe(container);
-    // Repaint when a thumbnail finishes decoding so the strip
-    // populates progressively as frames load.
-    const unsub = onThumbnailDecoded(() => paint());
+    // Repaint when a thumbnail or waveform finishes decoding so the
+    // strip / amplitude line populate as their data loads.
+    const unsubThumb = onThumbnailDecoded(() => paint());
+    const unsubWave = onWaveformDecoded(() => paint());
     return () => {
       ro.disconnect();
-      unsub();
+      unsubThumb();
+      unsubWave();
     };
   }, [snapshot, currentTime, proposal, onLayout, userTrim, edgeHover]);
 
@@ -609,11 +612,14 @@ function drawItem(
   if (item.kind === "clip") {
     ctx.fillStyle = trackKind === "audio" ? "#1f4d3f" : "#1f3d5d";
     fillRoundedRect(ctx, x, y, w, h, radius);
-    // Filmstrip: draw on top of the coloured fill, under the
-    // border. Video clips only — audio gets waveforms in Step 11.
-    let drewStrip = false;
+    // Filmstrip / waveform: drawn on top of the coloured fill, under
+    // the border. Video tracks get filmstrips, audio tracks get
+    // waveforms — same "drew" boolean for the label dark band.
+    let drewOverlay = false;
     if (trackKind !== "audio" && item.thumbnail_dir && w > 24) {
-      drewStrip = drawClipFilmstrip(ctx, item, x, y, w, h, radius);
+      drewOverlay = drawClipFilmstrip(ctx, item, x, y, w, h, radius);
+    } else if (trackKind === "audio" && item.waveform_path && w > 24) {
+      drewOverlay = drawClipWaveform(ctx, item, x, y, w, h, radius);
     }
     // Border color: red for deletes (this clip is going away),
     // amber for highlights (this clip is changing in the
@@ -631,14 +637,14 @@ function drawItem(
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
     ctx.lineWidth = 1;
     // Clip label — centered, truncated if width too small. When the
-    // filmstrip drew, paint the label on a translucent dark band so
-    // it stays legible over the frames; otherwise plain.
+    // filmstrip / waveform drew, paint the label on a translucent
+    // dark band so it stays legible over the overlay; otherwise plain.
     if (w > 24) {
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
       ctx.textBaseline = "middle";
       const label = truncateToWidth(ctx, item.name, w - 2 * CLIP_PADDING_X);
       const labelY = y + h / 2;
-      if (drewStrip) {
+      if (drewOverlay) {
         const metrics = ctx.measureText(label);
         ctx.fillStyle = "rgba(13, 17, 23, 0.7)";
         ctx.fillRect(
@@ -743,6 +749,118 @@ function drawClipFilmstrip(
   }
   ctx.restore();
   return drewAny;
+}
+
+/** Draw a waveform amplitude line across an audio clip's pixel area.
+ *
+ *  Returns true if any line drew (so the caller knows to overlay
+ *  the label on a dark band for legibility). Returns false when
+ *  the cache is still loading the sidecar or the asset has no
+ *  buckets — caller falls back to the plain coloured rect.
+ *
+ *  Bucket selection: the cached array spans the WHOLE asset's
+ *  duration, but the clip only plays `[source_start_s,
+ *  source_start_s + duration_s]` of source-time. We assume the
+ *  asset's full duration is approximated by `duration_s + source_start_s`
+ *  *for clips that haven't been split* — fine when a single clip
+ *  references the whole asset; not always exactly right after a
+ *  split. The sidecar doesn't carry an asset-duration header
+ *  (yet), so we approximate by walking only the bucket span
+ *  proportional to `duration_s / (duration_s + source_start_s)`.
+ *  v2 will pass an explicit asset duration in the protocol so we
+ *  can map source-time → bucket-index exactly. */
+function drawClipWaveform(
+  ctx: CanvasRenderingContext2D,
+  item: Extract<TimelineItem, { kind: "clip" }>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+): boolean {
+  if (!item.waveform_path) return false;
+  const buckets = getBuckets(item.waveform_path);
+  if (!buckets || buckets.length === 0) return false;
+
+  const sourceStart = item.source_start_s ?? 0;
+  // Approximate the asset duration as the source-window we know we
+  // can play from this clip. See the docblock — exact mapping needs
+  // an asset-duration field in the protocol.
+  const approxAssetEnd = sourceStart + item.duration_s;
+  const approxAssetDuration = Math.max(1e-3, approxAssetEnd);
+  const startFrac = sourceStart / approxAssetDuration;
+  const endFrac = approxAssetEnd / approxAssetDuration;
+
+  const startBucket = Math.max(
+    0,
+    Math.floor(buckets.length * startFrac),
+  );
+  const endBucket = Math.min(
+    buckets.length,
+    Math.ceil(buckets.length * endFrac),
+  );
+  if (endBucket <= startBucket) return false;
+
+  // Clip to the rounded clip rect so the waveform doesn't bleed past
+  // the borders.
+  ctx.save();
+  pathRoundedRect(ctx, x, y, w, h, radius);
+  ctx.clip();
+
+  // Draw a centered amplitude band: top half mirrored from bottom.
+  // We resample the bucket slice to display width on the fly.
+  const centerY = y + h / 2;
+  // Leave a small inner margin so the line doesn't kiss the rounded
+  // border on tall clips.
+  const ampMax = Math.max(1, h / 2 - 3);
+
+  // Stroke the upper envelope as a single path.
+  ctx.beginPath();
+  ctx.strokeStyle = "rgba(63, 185, 80, 0.85)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < w; i++) {
+    // Pick the bucket(s) that map to this pixel column.
+    const colStart = startBucket + ((endBucket - startBucket) * i) / w;
+    const colEnd = startBucket + ((endBucket - startBucket) * (i + 1)) / w;
+    const lo = Math.max(0, Math.floor(colStart));
+    const hi = Math.min(buckets.length, Math.max(lo + 1, Math.ceil(colEnd)));
+    let peak = 0;
+    for (let j = lo; j < hi; j++) {
+      if (buckets[j] > peak) peak = buckets[j];
+    }
+    const ampPx = peak * ampMax;
+    const colX = x + i + 0.5;
+    if (i === 0) {
+      ctx.moveTo(colX, centerY - ampPx);
+    } else {
+      ctx.lineTo(colX, centerY - ampPx);
+    }
+  }
+  ctx.stroke();
+
+  // Mirror the lower envelope.
+  ctx.beginPath();
+  for (let i = 0; i < w; i++) {
+    const colStart = startBucket + ((endBucket - startBucket) * i) / w;
+    const colEnd = startBucket + ((endBucket - startBucket) * (i + 1)) / w;
+    const lo = Math.max(0, Math.floor(colStart));
+    const hi = Math.min(buckets.length, Math.max(lo + 1, Math.ceil(colEnd)));
+    let peak = 0;
+    for (let j = lo; j < hi; j++) {
+      if (buckets[j] > peak) peak = buckets[j];
+    }
+    const ampPx = peak * ampMax;
+    const colX = x + i + 0.5;
+    if (i === 0) {
+      ctx.moveTo(colX, centerY + ampPx);
+    } else {
+      ctx.lineTo(colX, centerY + ampPx);
+    }
+  }
+  ctx.stroke();
+
+  ctx.restore();
+  return true;
 }
 
 /** Build the set of `${trackIdx}:${itemIdx}` keys whose items in the
