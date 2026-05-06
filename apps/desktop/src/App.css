@@ -1074,20 +1074,11 @@ body,
   flex-basis: 100%;
 }
 
-.proposal-edl-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  max-height: 280px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
-}
+/* Outer .proposal-edl-popover positioning was retired in Step 12.2
+ * — Radix's <Popover> portals + .awidat-popover provide positioning,
+ * sizing, and shadow. The inner content rules below still apply
+ * (the className stays on the PopoverContent so descendant selectors
+ * keep targeting header/close/pre). */
 
 .proposal-edl-popover-header {
   display: flex;
