@@ -11,6 +11,7 @@ pub mod broll_candidates;
 pub mod clip_search;
 pub mod delegate;
 pub mod delegate_all;
+pub mod download_yt_clip;
 pub mod find_beat;
 pub mod find_broll_opportunities;
 pub mod find_dead_air;

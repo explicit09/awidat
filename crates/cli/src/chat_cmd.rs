@@ -13,6 +13,7 @@ use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, assess_continuity::AssessContinuityTool, bash::BashTool,
     broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
+    download_yt_clip::DownloadYtClipTool,
     find_beat::FindBeatTool,
     find_broll_opportunities::FindBrollOpportunitiesTool,
     find_dead_air::FindDeadAirTool,
@@ -130,6 +131,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(FindBrollOpportunitiesTool));
     registry.register(Arc::new(SearchBrollTool));
     registry.register(Arc::new(UseBrollTool));
+    registry.register(Arc::new(DownloadYtClipTool));
     registry.register(Arc::new(ClipSearchTool));
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));
