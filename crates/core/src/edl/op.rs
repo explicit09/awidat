@@ -137,6 +137,32 @@ pub enum EdlOp {
         /// Duration in seconds.
         duration_s: f64,
     },
+    /// Set per-clip audio volume. `value` is a linear gain multiplier
+    /// where `0.0` mutes the clip, `1.0` is unity (no change), and
+    /// values above 1.0 amplify (clipping risk). The apply layer
+    /// stamps an `awidat.volume` Effect on the clip; render emits
+    /// `volume=<value>` on that segment's audio stream before concat.
+    /// Re-applying replaces the existing effect rather than stacking.
+    SetVolume {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Linear gain multiplier. Must be finite and `>= 0.0`.
+        value: f64,
+    },
+    /// Set per-clip playback speed. `factor` rescales both video and
+    /// audio: `2.0` plays at double speed (half the timeline length),
+    /// `0.5` plays at half speed (double the timeline length). `1.0`
+    /// is unity. Render emits `setpts=<1/factor>*PTS` on video and
+    /// chains `atempo=` filters on audio (atempo's per-instance
+    /// range is `[0.5, 2.0]`; factors outside that chain). The
+    /// segment's contribution to the master timeline duration is
+    /// `source_duration / factor`.
+    SetSpeed {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Speed multiplier. Must be finite and `> 0.0`.
+        factor: f64,
+    },
 }
 
 /// Where to anchor a `Trim`/`Delete`/`Move`/etc.

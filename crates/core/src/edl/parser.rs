@@ -211,6 +211,8 @@ enum OpKind {
     InsertBRoll,
     MoveClip,
     InsertTransition,
+    SetVolume,
+    SetSpeed,
 }
 
 impl OpBuilder {
@@ -224,6 +226,8 @@ impl OpBuilder {
             "Insert BRoll" => OpKind::InsertBRoll,
             "Move Clip" => OpKind::MoveClip,
             "Insert Transition" => OpKind::InsertTransition,
+            "Set Volume" => OpKind::SetVolume,
+            "Set Speed" => OpKind::SetSpeed,
             other => {
                 return Err(EdlParseError::UnknownOp {
                     line,
@@ -394,6 +398,32 @@ impl OpBuilder {
                     kind,
                     duration_s,
                 })
+            }
+            OpKind::SetVolume => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let value = take_field_f64(&mut fields, "value").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "value".into(),
+                    }
+                })?;
+                Ok(EdlOp::SetVolume { anchor, value })
+            }
+            OpKind::SetSpeed => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let factor = take_field_f64(&mut fields, "factor").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "factor".into(),
+                    }
+                })?;
+                Ok(EdlOp::SetSpeed { anchor, factor })
             }
         }
     }
@@ -662,6 +692,56 @@ mod tests {
             }
             _ => panic!("want InsertTransition"),
         }
+    }
+
+    #[test]
+    fn parses_set_volume() {
+        let text = "\
+*** Begin EDL
+*** Set Volume
+@@ anchor: clip_uuid=clip-1
++ value: 0.5
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetVolume { anchor, value } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-1"));
+                assert!((value - 0.5).abs() < 1e-9);
+            }
+            other => panic!("want SetVolume, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_set_speed() {
+        let text = "\
+*** Begin EDL
+*** Set Speed
+@@ anchor: clip_uuid=clip-2
++ factor: 2.0
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetSpeed { anchor, factor } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-2"));
+                assert!((factor - 2.0).abs() < 1e-9);
+            }
+            other => panic!("want SetSpeed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_volume_missing_value_is_error() {
+        let text = "\
+*** Begin EDL
+*** Set Volume
+@@ anchor: clip_uuid=clip-1
+*** End EDL
+";
+        let err = parse(text).unwrap_err();
+        assert!(matches!(err, EdlParseError::MissingField { ref field, .. } if field == "value"));
     }
 
     #[test]

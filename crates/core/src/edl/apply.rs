@@ -184,6 +184,14 @@ fn apply_one(
             kind,
             duration_s,
         } => apply_insert_transition(working, index, between, kind, *duration_s, ctx),
+        EdlOp::SetVolume { .. } => Err(ApplyError::NotImplemented {
+            index,
+            op: "Set Volume".into(),
+        }),
+        EdlOp::SetSpeed { .. } => Err(ApplyError::NotImplemented {
+            index,
+            op: "Set Speed".into(),
+        }),
     }
 }
 
@@ -199,7 +207,9 @@ fn resolve_locator_for_op(
         | EdlOp::SplitClip { anchor, .. }
         | EdlOp::UntrimClip { anchor, .. }
         | EdlOp::MoveClip { anchor, .. }
-        | EdlOp::InsertBRoll { anchor, .. } => anchor,
+        | EdlOp::InsertBRoll { anchor, .. }
+        | EdlOp::SetVolume { anchor, .. }
+        | EdlOp::SetSpeed { anchor, .. } => anchor,
         EdlOp::InsertClip { .. } | EdlOp::InsertTransition { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)

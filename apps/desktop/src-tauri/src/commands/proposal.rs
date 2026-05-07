@@ -492,9 +492,15 @@ fn build_diff_hints(
                     });
                 }
             }
-            // F2 ops; not rendered in v1.
-            EdlOp::InsertBRoll { .. } | EdlOp::MoveClip { .. } | EdlOp::InsertTransition { .. } => {
-            }
+            // F2 ops; not rendered in v1. SetVolume / SetSpeed
+            // mutate Clip.effects (no structural change), so the
+            // ghost overlay paints them as a re-render of the same
+            // clip rect — no diff hint needed.
+            EdlOp::InsertBRoll { .. }
+            | EdlOp::MoveClip { .. }
+            | EdlOp::InsertTransition { .. }
+            | EdlOp::SetVolume { .. }
+            | EdlOp::SetSpeed { .. } => {}
         }
     }
     hints
@@ -611,6 +617,8 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::InsertBRoll { .. } => "InsertBRoll",
         EdlOp::MoveClip { .. } => "MoveClip",
         EdlOp::InsertTransition { .. } => "InsertTransition",
+        EdlOp::SetVolume { .. } => "SetVolume",
+        EdlOp::SetSpeed { .. } => "SetSpeed",
     }
 }
 
