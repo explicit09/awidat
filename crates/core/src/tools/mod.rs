@@ -11,6 +11,7 @@ pub mod clip_search;
 pub mod delegate;
 pub mod delegate_all;
 pub mod find_beat;
+pub mod find_dead_air;
 pub mod find_eye_contact;
 pub mod find_moment;
 pub mod find_speaker_oncam;
