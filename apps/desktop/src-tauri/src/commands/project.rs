@@ -90,12 +90,20 @@ pub async fn current_project_root(state: State<'_, AwidatState>) -> Result<Optio
 /// it as the current project. Mirrors `awidat new --no-md=false
 /// --no-index` (init + starter AWIDAT.md, no asset import). Asset
 /// import is a separate step the frontend can chain after.
+///
+/// `project_type` is optional — when present, it's serialized into
+/// the timeline's `metadata.awidat.extra["awidat_project_type"]`
+/// slot so the agent can pick up the per-format defaults on session
+/// start. When absent (e.g. older clients), the project type
+/// defaults to `Other { description: "" }` which gets the neutral
+/// system-prompt baseline.
 #[tauri::command]
 pub async fn init_project(
     app: AppHandle,
     state: State<'_, AwidatState>,
     parent_dir: String,
     name: String,
+    project_type: Option<awidat_desktop_protocol::ProjectType>,
 ) -> Result<String, String> {
     ensure_project_switch_allowed(&state).await?;
     let parent = PathBuf::from(&parent_dir);
@@ -139,6 +147,16 @@ pub async fn init_project(
         .await
         .map_err(|e| format!("write AWIDAT.md: {e}"))?;
 
+    // Stamp project_type into the OTIO timeline's metadata.awidat.extra
+    // slot if the caller specified one. Done as a separate step (post-
+    // Project::init) so the typed Project schema doesn't need to grow
+    // a new field for what's essentially a forward-compat passthrough.
+    if let Some(pt) = project_type {
+        if let Err(e) = write_project_type_to_otio(&project_dir, &pt).await {
+            tracing::warn!(error = %e, "failed to stamp project_type at init; using default");
+        }
+    }
+
     *state.project_root.lock().await = Some(project_dir.clone());
     *state.session.lock().await = None;
     allow_proxies_dir(&app, &project_dir);
@@ -147,6 +165,92 @@ pub async fn init_project(
     }
 
     Ok(project_dir.to_string_lossy().into_owned())
+}
+
+/// Read the project type from the currently-loaded project, if any.
+/// Returns `Other { description: "" }` when no project is loaded or
+/// when the OTIO file's metadata.awidat.extra has no
+/// `awidat_project_type` key (old projects, or projects created
+/// before the picker landed).
+#[tauri::command]
+pub async fn get_project_type(
+    state: State<'_, AwidatState>,
+) -> Result<awidat_desktop_protocol::ProjectType, String> {
+    let project_root = match state.project_root.lock().await.clone() {
+        Some(p) => p,
+        None => {
+            return Ok(awidat_desktop_protocol::ProjectType::Other {
+                description: String::new(),
+            });
+        }
+    };
+    Ok(read_project_type_from_otio(&project_root)
+        .await
+        .unwrap_or(awidat_desktop_protocol::ProjectType::Other {
+            description: String::new(),
+        }))
+}
+
+/// Update the project type on the currently-loaded project. Persists
+/// to OTIO immediately so the next agent session-start picks it up.
+#[tauri::command]
+pub async fn set_project_type(
+    state: State<'_, AwidatState>,
+    project_type: awidat_desktop_protocol::ProjectType,
+) -> Result<(), String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    write_project_type_to_otio(&project_root, &project_type).await
+}
+
+/// Slot key inside `Timeline.metadata.awidat.extra` where the project
+/// type lives. Kept as a constant so the agent-side reader can
+/// reference the same key without copy-paste drift.
+const PROJECT_TYPE_KEY: &str = "awidat_project_type";
+
+async fn write_project_type_to_otio(
+    project_root: &Path,
+    project_type: &awidat_desktop_protocol::ProjectType,
+) -> Result<(), String> {
+    let otio_path = project_root.join(awidat_proto::project::files::OTIO);
+    let bytes = fs::read(&otio_path)
+        .await
+        .map_err(|e| format!("read otio: {e}"))?;
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("parse otio json: {e}"))?;
+    // metadata.awidat.extra is what we want — but `extra` is a
+    // `#[serde(flatten)]` HashMap, which means at the JSON layer the
+    // entries land directly inside `metadata.awidat`. Walk to that
+    // object and insert our key alongside the version field.
+    let awidat_meta = value
+        .pointer_mut("/metadata/awidat")
+        .and_then(|v| v.as_object_mut())
+        .ok_or_else(|| "otio file missing metadata.awidat".to_string())?;
+    let pt_value = serde_json::to_value(project_type)
+        .map_err(|e| format!("serialize project_type: {e}"))?;
+    awidat_meta.insert(PROJECT_TYPE_KEY.to_string(), pt_value);
+    let serialized = serde_json::to_vec_pretty(&value)
+        .map_err(|e| format!("re-serialize otio: {e}"))?;
+    fs::write(&otio_path, serialized)
+        .await
+        .map_err(|e| format!("write otio: {e}"))?;
+    Ok(())
+}
+
+async fn read_project_type_from_otio(
+    project_root: &Path,
+) -> Option<awidat_desktop_protocol::ProjectType> {
+    let otio_path = project_root.join(awidat_proto::project::files::OTIO);
+    let bytes = fs::read(&otio_path).await.ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let raw = value
+        .pointer(&format!("/metadata/awidat/{PROJECT_TYPE_KEY}"))?
+        .clone();
+    serde_json::from_value(raw).ok()
 }
 
 async fn ensure_project_switch_allowed(state: &State<'_, AwidatState>) -> Result<(), String> {

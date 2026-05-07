@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "./state";
 import { NewProjectForm } from "./NewProjectForm";
+import type { ProjectType } from "../protocol";
 
 type Props = {
   /** Called whenever the active project changes (open/new/clear). */
@@ -20,7 +21,21 @@ export function ProjectBanner({ onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [projectType, setProjectType] = useState<ProjectType | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
+
+  // Reload project type whenever the active project changes — get_
+  // project_type returns Other{description:""} when no project is
+  // loaded, which we render as no-badge.
+  useEffect(() => {
+    if (!current) {
+      setProjectType(null);
+      return;
+    }
+    invoke<ProjectType>("get_project_type")
+      .then((pt) => setProjectType(pt))
+      .catch(() => setProjectType(null));
+  }, [current]);
 
   // Initial load + close popover on outside click.
   useEffect(() => {
@@ -71,6 +86,11 @@ export function ProjectBanner({ onChange }: Props) {
       <code className="project-path">
         {current ?? "(none — open or create one to start)"}
       </code>
+      {projectType && current && (
+        <span className="project-type-badge" title={projectTypeTitle(projectType)}>
+          {projectTypeLabel(projectType)}
+        </span>
+      )}
       <button onClick={() => setOpen((v) => !v)}>
         {current ? "Change" : "Open…"}
       </button>
@@ -126,4 +146,32 @@ export function ProjectBanner({ onChange }: Props) {
 function basename(p: string): string {
   const i = p.lastIndexOf("/");
   return i === -1 ? p : p.slice(i + 1);
+}
+
+/** Short label for the banner badge. */
+function projectTypeLabel(pt: ProjectType): string {
+  switch (pt.kind) {
+    case "podcast":
+      return "podcast";
+    case "shorts":
+      return "shorts";
+    case "tutorial":
+      return "tutorial";
+    case "other":
+      return "custom";
+  }
+}
+
+/** Hover-title carrying the long form (description for "other"). */
+function projectTypeTitle(pt: ProjectType): string {
+  switch (pt.kind) {
+    case "podcast":
+      return "Podcast — long-form cleanup defaults";
+    case "shorts":
+      return "Shorts — vertical, fast-cut defaults";
+    case "tutorial":
+      return "Tutorial — hold key frames, never cut over code";
+    case "other":
+      return pt.description ? `Custom: ${pt.description}` : "Custom (no description)";
+  }
 }

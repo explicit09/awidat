@@ -78,6 +78,8 @@ pub fn run() {
             commands::project::init_project,
             commands::project::recent_projects,
             commands::project::cancel_job,
+            commands::project::get_project_type,
+            commands::project::set_project_type,
             commands::import::import_local,
             commands::import::import_url,
             commands::index::index_project,
