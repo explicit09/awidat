@@ -158,6 +158,40 @@ impl ToolHandler for ApplyEdlTool {
                 ))
             })?;
 
+            // 7. Phase B auto-commit. Snapshot the post-apply state
+            // into vedit so every accepted envelope becomes a
+            // structured commit. Best-effort: a vedit failure must
+            // not unwind the disk write that already happened —
+            // editing has higher stake than version control.
+            // Reasoning is None here because the agent's per-turn
+            // reasoning isn't on `ctx` yet (Phase B follow-up: thread
+            // it through). The commit body still carries the
+            // structured op descriptions via the auto-header — the
+            // audit trail is non-empty.
+            match crate::vc::open_or_init(&ctx.project_root) {
+                Ok(repo) => {
+                    let descriptions: Vec<String> = outcome
+                        .applied
+                        .iter()
+                        .map(|a| a.description.clone())
+                        .collect();
+                    if let Err(e) =
+                        crate::vc::auto_commit_apply(&repo, &descriptions, None)
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "vedit auto-commit failed; apply_edl write succeeded but no commit landed"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        error = %e,
+                        "vedit repo unavailable; skipping auto-commit"
+                    );
+                }
+            }
+
             // post_apply_edl hook (PLAN.md §15 Week 7). Fires
             // fire-and-forget after the disk write succeeds. Non-
             // zero exit is logged but doesn't fail the apply_edl —
@@ -585,6 +619,71 @@ mod tests {
             panic!()
         };
         assert!((c.source_range.as_ref().unwrap().duration.to_seconds() - 5.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn happy_path_auto_commits_to_vedit() {
+        // Phase B: every accepted apply_edl envelope produces a vedit
+        // commit with the auto-generated header. Best-effort, but on
+        // a normal happy-path project it always lands.
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        let _out = ApplyEdlTool
+            .handle(invoke(serde_json::json!({"edl": edl})), ctx_at(dir.path()))
+            .await
+            .unwrap();
+
+        // The repo exists, has at least one commit, and the head
+        // commit's message header matches the auto-generator (uses
+        // the AppliedOp.description text verbatim for a single op).
+        let repo = crate::vc::open_or_init(dir.path()).unwrap();
+        let entries = crate::vc::log(&repo, 5).unwrap();
+        assert!(!entries.is_empty(), "no auto-commit landed");
+        let head = &entries[0];
+        // Description for trim is something like
+        // "trimmed clip \"clip-1\" to source [0.0..3.0]". Don't pin
+        // the exact phrasing — just confirm it landed and is non-empty.
+        assert!(!head.header.is_empty(), "auto-commit header is empty: {head:?}");
+        assert!(
+            head.header.contains("clip-1") || head.header.contains("trim"),
+            "auto-commit header doesn't reflect the op: {}",
+            head.header
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_does_not_auto_commit() {
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        ApplyEdlTool
+            .handle(
+                invoke(serde_json::json!({"edl": edl, "dry_run": true})),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        // No vedit repo should exist at all (dry run never opens it).
+        // open_or_init would create one if called; we want zero
+        // commits in the freshly-created repo.
+        let repo = crate::vc::open_or_init(dir.path()).unwrap();
+        let entries = crate::vc::log(&repo, 5).unwrap();
+        assert!(
+            entries.is_empty(),
+            "dry-run produced unexpected commits: {entries:?}"
+        );
     }
 
     #[tokio::test]

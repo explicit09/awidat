@@ -29,17 +29,24 @@ Load this skill when the user asks any of:
 - "What did the agent do at <time>?"
 - "Why did we cut this clip?"
 
-## What's already happening (Phase A)
+## What's already happening (Phase A + Phase B)
 
 - A vedit repo lives at `<project>/.vedit/`. It's created
   automatically when needed.
 - Every session, awidat stamps a `session-start` branch at
   whatever HEAD is — so the question "what did you change THIS
   session?" has a stable answer: `vedit_diff` (default args).
-- Commits are user-triggered today. Phase B will auto-commit on
-  every accepted apply_edl envelope; until then, you commit when
-  the user asks (or when you've made a substantial change worth
-  saving).
+- **Every accepted `apply_edl` envelope auto-commits.** The header
+  is auto-generated from the structured op descriptions; one op
+  becomes the verbatim description, two ops join with `;`, three+
+  ops become "X; Y; …and N more" capped at 120 chars. The agent's
+  per-turn reasoning is not yet threaded into the auto-commit body
+  (Phase B follow-up); for now the commit body is the structured
+  summary alone, which is still a real audit trail.
+- `vedit_commit` remains available for **explicit save points** —
+  e.g. when the user says "snapshot this" without making a structural
+  edit, or when you want to land a commit message richer than what
+  the auto-header produces. Use it sparingly.
 
 ## The 3-tool surface
 
@@ -163,16 +170,17 @@ history."
 - [ ] Hashes are quoted in their short form (first 7 hex chars) for
       readability, unless the user asks for full.
 
-## Phase B preview (not yet active)
+## Still on the roadmap (post-Phase-B)
 
-- **Auto-commit on every accepted envelope.** Every apply_edl that
-  the user accepts becomes a commit. The reasoning body comes from
-  the turn's reasoning verbatim. You won't need to call
-  `vedit_commit` manually then — it'll just happen.
+- **Per-turn reasoning threaded into auto-commit bodies.** Today the
+  auto-commit body is the structured op summary alone; the agent's
+  free-text reasoning for the turn isn't yet on the apply context.
+  Threading it through is mechanical and lands soon.
 - **Branch + switch tools.** The agent will be able to propose
   alternatives on a branch ("let me try a tighter cut on `alt-tight`
   and show you both"). User reviews, picks, optionally merges.
 - **Diff view in the desktop UI.** No CLI roundtrip needed for the
   user; the diff renders in the timeline pane.
 
-Phase A is the substrate; Phase B is when this becomes load-bearing.
+The auto-commit substrate is load-bearing now; the rest is polish on
+top of it.

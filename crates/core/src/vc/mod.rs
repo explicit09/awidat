@@ -261,6 +261,70 @@ pub fn format_commit_message(header: &str, agent_reasoning: Option<&str>) -> Str
     }
 }
 
+/// Phase B auto-commit: snapshot the project after a successful
+/// apply_edl envelope, generating an awidat-shaped commit message
+/// from the structured op descriptions + the agent's reasoning text.
+///
+/// This is the entry point both write paths (agent-side and
+/// desktop-side) call after their disk write succeeds. Best-effort:
+/// the caller logs failures but doesn't fail the apply — vedit going
+/// down should never block editing.
+///
+/// `op_descriptions`: list of `AppliedOp.description` strings, in
+///    source order. Used to build the canonical header.
+/// `agent_reasoning`: optional turn-level reasoning that explains
+///    *why* this change was made. When `None`, only the auto-header
+///    is committed (still better than nothing).
+pub fn auto_commit_apply(
+    repo: &Repo,
+    op_descriptions: &[String],
+    agent_reasoning: Option<&str>,
+) -> Result<CommitOutcome, VcError> {
+    let header = compose_auto_header(op_descriptions);
+    commit_current_timeline(repo, &header, agent_reasoning)
+}
+
+/// Build a one-line header from a list of op descriptions.
+/// - 1 op  → use the description verbatim (capitalized).
+/// - 2 ops → "X; Y".
+/// - 3+ ops → "X; Y; …and N more" (cap header at ~120 chars).
+///
+/// The descriptions are imperative-shaped already (e.g. "Trim
+/// drone_shot_04 by 1.8s", "Insert BRoll over 'skyline reference'"),
+/// produced by the apply layer. We just concatenate.
+pub fn compose_auto_header(op_descriptions: &[String]) -> String {
+    const HEADER_CAP: usize = 120;
+    if op_descriptions.is_empty() {
+        // Still produces a meaningful commit so the user can see
+        // *something* happened — the timeline content hash will
+        // differ even if no apply ops "landed" (a no-op envelope
+        // shouldn't reach here, but defensive).
+        return "apply_edl envelope (no described ops)".to_string();
+    }
+    let trimmed: Vec<&str> = op_descriptions.iter().map(|s| s.trim()).collect();
+    let header = match trimmed.len() {
+        1 => trimmed[0].to_string(),
+        2 => format!("{}; {}", trimmed[0], trimmed[1]),
+        n => {
+            let first_two = format!("{}; {}", trimmed[0], trimmed[1]);
+            let extra = n - 2;
+            format!("{first_two}; …and {extra} more")
+        }
+    };
+    truncate_chars(&header, HEADER_CAP)
+}
+
+/// Truncate to at most `max` characters, on a char boundary, with an
+/// ellipsis suffix when cut.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 /// Author stamped on every commit awidat writes. Generic on purpose
 /// — we don't want vedit telling users this is "their" commit when
 /// it's actually the agent acting on their behalf. The user-attribution
@@ -663,6 +727,72 @@ mod tests {
         }
         let entries = log(&repo, 3).unwrap();
         assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn compose_header_for_one_op_is_verbatim() {
+        let h = compose_auto_header(&["Trim drone_shot -1.8s".into()]);
+        assert_eq!(h, "Trim drone_shot -1.8s");
+    }
+
+    #[test]
+    fn compose_header_for_two_ops_joins_with_semicolon() {
+        let h = compose_auto_header(&[
+            "Trim drone_shot -1.8s".into(),
+            "Insert BRoll over skyline reference".into(),
+        ]);
+        assert_eq!(h, "Trim drone_shot -1.8s; Insert BRoll over skyline reference");
+    }
+
+    #[test]
+    fn compose_header_for_three_plus_ops_summarizes_tail() {
+        let h = compose_auto_header(&[
+            "Trim A".into(),
+            "Trim B".into(),
+            "Trim C".into(),
+            "Trim D".into(),
+            "Trim E".into(),
+        ]);
+        assert_eq!(h, "Trim A; Trim B; …and 3 more");
+    }
+
+    #[test]
+    fn compose_header_truncates_at_120_chars() {
+        let long = "x".repeat(200);
+        let h = compose_auto_header(&[long.clone()]);
+        // 120 chars including the ellipsis.
+        assert_eq!(h.chars().count(), 120);
+        assert!(h.ends_with('…'));
+    }
+
+    #[test]
+    fn compose_header_handles_empty_list() {
+        let h = compose_auto_header(&[]);
+        assert!(!h.is_empty());
+        assert!(h.contains("envelope"));
+    }
+
+    #[test]
+    fn auto_commit_apply_writes_commit_with_generated_header() {
+        let dir = tempfile::tempdir().unwrap();
+        write_minimal_otio(&dir.path().join("project.otio.json"), "v1");
+        let repo = open_or_init(dir.path()).unwrap();
+
+        // Simulate a 3-op envelope landing.
+        let ops = vec![
+            "Trim clip-0 by 1.8s".to_string(),
+            "Insert BRoll over c-skyline".to_string(),
+            "Set Volume on clip-2 to 0.5".to_string(),
+        ];
+        let outcome = auto_commit_apply(
+            &repo,
+            &ops,
+            Some("User asked for tighter pacing; bundled b-roll over the dirty cut."),
+        )
+        .unwrap();
+        assert!(outcome.commit_hash.starts_with("sha256:"));
+        assert!(outcome.message.starts_with("Trim clip-0 by 1.8s; Insert BRoll over c-skyline"));
+        assert!(outcome.message.contains("Agent reasoning: User asked for tighter pacing"));
     }
 
     #[test]

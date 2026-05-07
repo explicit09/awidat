@@ -191,13 +191,43 @@ pub async fn accept_proposal(
     if desktop_writes {
         let project_root = proposal.project_root.clone();
         let proposed_timeline = proposal.proposed_timeline.clone();
+        let applied_descriptions: Vec<String> = proposal
+            .applied
+            .iter()
+            .map(|a| a.description.clone())
+            .collect();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let mut project =
                 Project::read(&project_root).map_err(|e| format!("project read: {e}"))?;
             project.timeline = proposed_timeline;
             project
                 .write(&project_root)
-                .map_err(|e| format!("project write: {e}"))
+                .map_err(|e| format!("project write: {e}"))?;
+
+            // Phase B auto-commit (desktop-writes path). Mirrors the
+            // agent-side hook in `apply_edl.rs`. Best-effort: failures
+            // are logged but never unwind the disk write.
+            match awidat_core::vc::open_or_init(&project_root) {
+                Ok(repo) => {
+                    if let Err(e) = awidat_core::vc::auto_commit_apply(
+                        &repo,
+                        &applied_descriptions,
+                        None,
+                    ) {
+                        tracing::warn!(
+                            error = %e,
+                            "vedit auto-commit failed (desktop-writes path)"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        error = %e,
+                        "vedit repo unavailable; skipping auto-commit"
+                    );
+                }
+            }
+            Ok(())
         })
         .await
         .map_err(|e| format!("write join: {e}"))??;
