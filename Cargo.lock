@@ -365,6 +365,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "vedit-core",
 ]
 
 [[package]]
@@ -5556,6 +5557,20 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "vedit-core"
+version = "0.0.1"
+source = "git+https://github.com/explicit09/vedit.git?rev=23a2bbc9cd2ac11e68988bf27d6c0094ac29975e#23a2bbc9cd2ac11e68988bf27d6c0094ac29975e"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "flate2",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

@@ -26,6 +26,7 @@ use awidat_core::tools::{
     shot_summary::ShotSummaryTool,
     start_indexing::StartIndexingTool, start_render::StartRenderTool, update_plan::UpdatePlanTool,
     use_broll::UseBrollTool,
+    vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
     view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
@@ -132,6 +133,9 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(SearchBrollTool));
     registry.register(Arc::new(UseBrollTool));
     registry.register(Arc::new(DownloadYtClipTool));
+    registry.register(Arc::new(VeditCommitTool));
+    registry.register(Arc::new(VeditDiffTool));
+    registry.register(Arc::new(VeditLogTool));
     registry.register(Arc::new(ClipSearchTool));
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));

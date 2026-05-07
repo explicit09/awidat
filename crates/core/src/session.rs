@@ -285,6 +285,27 @@ impl Session {
         // launches it. If config load fails (malformed TOML, etc.) we
         // fall back to an empty host: vision tools that need a server
         // will return UnknownServer, and pure-Rust tools keep working.
+        // Best-effort vedit session-start tag. Stamps a `session-start`
+        // ref at the current HEAD so `vedit_diff` defaults to
+        // session-start..HEAD without needing args from the agent.
+        // Failures here are non-fatal — a fresh-init project may not
+        // have `project.otio.json` yet, in which case the first
+        // `vedit_commit` will create the repo on demand instead.
+        match crate::vc::open_or_init(&project_root) {
+            Ok(repo) => {
+                if let Err(e) = crate::vc::ensure_session_tag(&repo) {
+                    tracing::warn!(error = %e, "vedit: ensure_session_tag failed (non-fatal)");
+                }
+            }
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "vedit: open_or_init at session start failed (non-fatal — \
+                     deferred until first vedit_commit)"
+                );
+            }
+        }
+
         let mcp_host = match awidat_config::Config::load(Some(&project_root)) {
             Ok(cfg) => crate::mcp_host::McpHost::from_servers(
                 &cfg.mcp.servers,

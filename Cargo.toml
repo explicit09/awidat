@@ -89,6 +89,13 @@ awidat-secrets = { path = "crates/secrets" }
 awidat-index = { path = "crates/index" }
 awidat-desktop-protocol = { path = "crates/desktop-protocol" }
 
+# vedit-core: content-addressed object store + structured diff/merge for
+# OTIO timelines. Pinned to a specific commit because vedit is under
+# active development and we don't want surprise API churn. Bump
+# deliberately, with a probe-test, the way we'd bump any external dep.
+# See VEDIT_INTEGRATION.md (TODO) for the integration design memo.
+vedit-core = { git = "https://github.com/explicit09/vedit.git", rev = "23a2bbc9cd2ac11e68988bf27d6c0094ac29975e" }
+
 # External (locked per Week 1 prompt).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

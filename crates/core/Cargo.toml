@@ -17,6 +17,7 @@ awidat-render = { workspace = true }
 awidat-config = { workspace = true }
 awidat-mcp = { workspace = true }
 awidat-sandboxing = { workspace = true }
+vedit-core = { workspace = true }
 dirs = { workspace = true }
 base64 = "0.22"
 sha2 = { workspace = true }

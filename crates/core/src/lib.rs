@@ -28,6 +28,7 @@ pub mod skills;
 pub mod system_prompt;
 pub mod tool;
 pub mod tools;
+pub mod vc;
 pub mod verify;
 
 pub use error::FunctionCallError;
