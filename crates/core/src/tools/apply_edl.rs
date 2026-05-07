@@ -397,6 +397,23 @@ a higher video track (a fresh `V<N+1>` is created if no other \
 video track exists), at the anchor clip's track-time start, with \
 a leading Gap on the overlay track so it lines up under the \
 anchor.\
+\n  - **Set Volume**: `+ value: <gain>` (required). Linear gain \
+multiplier on the clip's audio: `0.0` mutes, `1.0` is unity (no \
+change — the default for clips with no Set Volume), values above \
+`1.0` amplify (clipping risk). Stamps an `awidat.volume` Effect \
+on the clip; re-applying replaces the existing effect rather than \
+stacking. Render emits `volume=<value>` on this segment's audio \
+stream before concat / xfade.\
+\n  - **Set Speed**: `+ factor: <multiplier>` (required). Playback \
+rate multiplier: `1.0` is unity (no change), `2.0` plays at double \
+speed (half timeline length), `0.5` plays at half speed (double \
+length). Stamps an `awidat.speed` Effect; replaces any existing \
+one. The clip's contribution to the master timeline duration \
+becomes `source_duration / factor`. Render uses \
+`setpts=<1/factor>*PTS` on video and chained `atempo=` filters on \
+audio (atempo's per-instance range is `[0.5, 2.0]`; factors \
+outside chain — extreme values produce audible artifacts, so \
+keep within `[0.25, 4.0]` unless the clip is silent).\
 \n\n\
 **Anchors.** Each op identifies its target by content anchor — \
 `transcript_snippet`, `clip_uuid`, `scene_change_index` — not \
