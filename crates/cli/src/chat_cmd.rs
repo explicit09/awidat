@@ -21,8 +21,10 @@ use awidat_core::tools::{
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
     poll_render::PollRenderTool, read_index::ReadIndexTool,
-    request_user_input::RequestUserInputTool, shot_summary::ShotSummaryTool,
+    request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
+    shot_summary::ShotSummaryTool,
     start_indexing::StartIndexingTool, start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    use_broll::UseBrollTool,
     view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
@@ -126,6 +128,8 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(ViewTimelineTool));
     registry.register(Arc::new(BrollCandidatesTool));
     registry.register(Arc::new(FindBrollOpportunitiesTool));
+    registry.register(Arc::new(SearchBrollTool));
+    registry.register(Arc::new(UseBrollTool));
     registry.register(Arc::new(ClipSearchTool));
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));
