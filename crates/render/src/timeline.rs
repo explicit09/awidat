@@ -62,7 +62,7 @@ pub enum RenderTimelineError {
 /// One source-media segment to feed into the timeline-render concat.
 /// Public so callers can sum durations or otherwise inspect the plan
 /// before kicking off ffmpeg.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TimelineSegment {
     /// Absolute path to the source media.
     pub asset_path: PathBuf,
@@ -70,6 +70,35 @@ pub struct TimelineSegment {
     pub start_s: f64,
     /// Seconds of duration to take from the source.
     pub duration_s: f64,
+    /// Linear gain multiplier for this segment's audio. `None` means
+    /// no `awidat.volume` effect is on the underlying clip — the
+    /// FilterPlanner skips emitting a `volume=` filter and the audio
+    /// passes through unchanged. `Some(1.0)` is unity (functionally
+    /// identical to `None` but the planner still emits the filter
+    /// for explicitness).
+    pub volume: Option<f64>,
+    /// Playback rate multiplier. `None` means no `awidat.speed`
+    /// effect — the segment plays at 1×. The segment's contribution
+    /// to the master timeline duration is `duration_s / factor` when
+    /// `factor` is `Some`. (Step 15.4 wires the setpts/atempo path;
+    /// 15.3 only plumbs the field.)
+    pub speed: Option<f64>,
+}
+
+/// Pull a numeric metadata field off the first effect on `clip` whose
+/// `effect_name` matches. Returns `None` when no such effect exists
+/// or the metadata field is missing / non-numeric. Used to surface
+/// awidat.volume / awidat.speed values into the render pipeline.
+fn read_effect_number(
+    clip: &awidat_proto::otio::Clip,
+    effect_name: &str,
+    field: &str,
+) -> Option<f64> {
+    clip.effects
+        .iter()
+        .find(|e| e.effect_name == effect_name)
+        .and_then(|e| e.metadata.get(field))
+        .and_then(|v| v.as_f64())
 }
 
 /// Walk `<project_root>/project.otio.json` and collect every
@@ -139,11 +168,15 @@ pub fn collect_timeline_plan(
                             missing: asset_path,
                         });
                     }
+                    let volume = read_effect_number(clip, "awidat.volume", "value");
+                    let speed = read_effect_number(clip, "awidat.speed", "factor");
                     let new_index = segs.len();
                     segs.push(TimelineSegment {
                         asset_path,
                         start_s: range.start_time.to_seconds(),
                         duration_s: range.duration.to_seconds(),
+                        volume,
+                        speed,
                     });
                     if let Some((kind, duration_s)) = pending_transition.take()
                         && new_index > 0
@@ -263,8 +296,15 @@ impl<'a> FilterPlanner<'a> {
     fn plan_no_transitions(&self) -> FilterPlan {
         let n = self.segments.len();
         let mut filter = String::new();
-        for i in 0..n {
-            filter.push_str(&format!("[{i}:v:0][{i}:a:0]"));
+        // Pre-stage so per-segment effects (volume in 15.3, speed in
+        // 15.4) prepend their filter chain before the concat. Each
+        // call returns the (video, audio) labels to feed into concat.
+        let inputs: Vec<(String, String)> = (0..n)
+            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i]))
+            .collect();
+        for (v, a) in &inputs {
+            filter.push_str(v);
+            filter.push_str(a);
         }
         filter.push_str(&format!("concat=n={n}:v=1:a=1[outv][outa]"));
         FilterPlan {
@@ -304,6 +344,18 @@ impl<'a> FilterPlanner<'a> {
         }
 
         let mut filter = String::new();
+
+        // Pre-stage each segment's video / audio inputs. Step 15.3
+        // adds the per-segment volume filter here: when a segment
+        // carries an awidat.volume effect, its audio stream goes
+        // through `volume=<v>` first, producing a [av<i>] label that
+        // downstream graph nodes use in place of [i:a:0]. Speed
+        // lands in 15.4 with a parallel pass on video + atempo on
+        // audio.
+        let inputs: Vec<(String, String)> = (0..n)
+            .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i]))
+            .collect();
+
         // Track the order of concat input pairs (each entry is a
         // pre-built (video_label, audio_label) ready to drop in).
         let mut concat_inputs: Vec<(String, String)> = Vec::with_capacity(n);
@@ -322,14 +374,18 @@ impl<'a> FilterPlanner<'a> {
                 let from_dur = self.segments[i].duration_s;
                 let offset = (from_dur - t.duration_s).max(0.0);
                 filter.push_str(&format!(
-                    "[{i}:v:0][{j}:v:0]xfade=transition={kind}:duration={dur}:offset={off}{out};",
+                    "{from_v}{to_v}xfade=transition={kind}:duration={dur}:offset={off}{out};",
+                    from_v = inputs[i].0,
+                    to_v = inputs[j].0,
                     kind = xfade_kind,
                     dur = t.duration_s,
                     off = offset,
                     out = v_label,
                 ));
                 filter.push_str(&format!(
-                    "[{i}:a:0][{j}:a:0]acrossfade=d={dur}{out};",
+                    "{from_a}{to_a}acrossfade=d={dur}{out};",
+                    from_a = inputs[i].1,
+                    to_a = inputs[j].1,
                     dur = t.duration_s,
                     out = a_label,
                 ));
@@ -337,7 +393,7 @@ impl<'a> FilterPlanner<'a> {
                 chunk_id += 1;
                 i += 2;
             } else {
-                concat_inputs.push((format!("[{i}:v:0]"), format!("[{i}:a:0]")));
+                concat_inputs.push((inputs[i].0.clone(), inputs[i].1.clone()));
                 i += 1;
             }
         }
@@ -361,6 +417,32 @@ impl<'a> FilterPlanner<'a> {
             audio_out_label: "[outa]".into(),
         }
     }
+}
+
+/// Build the per-segment video / audio entry labels into `filter`.
+/// When the segment has no awidat.volume effect (or it's exactly
+/// 1.0), the labels are the raw `[i:v:0]` / `[i:a:0]` from ffmpeg's
+/// input streams. When awidat.volume is set to a non-unity value, a
+/// `[i:a:0]volume=<v>[av<i>]` filter chain prepends and the audio
+/// label becomes `[av<i>]`.
+///
+/// Step 15.4 will extend this to also handle awidat.speed via
+/// `setpts` on video + chained `atempo` on audio.
+fn stage_segment_inputs(
+    filter: &mut String,
+    i: usize,
+    seg: &TimelineSegment,
+) -> (String, String) {
+    let video_label = format!("[{i}:v:0]");
+    let mut audio_label = format!("[{i}:a:0]");
+    if let Some(v) = seg.volume
+        && (v - 1.0).abs() > 1e-9
+    {
+        let av = format!("[av{i}]");
+        filter.push_str(&format!("[{i}:a:0]volume={v}{av};"));
+        audio_label = av;
+    }
+    (video_label, audio_label)
 }
 
 /// Map an OTIO transition kind to an ffmpeg `xfade=transition=` name.
@@ -540,22 +622,25 @@ mod tests {
         assert!(matches!(err, RenderTimelineError::MissingAsset { .. }));
     }
 
+    /// Build a basic TimelineSegment for tests — no volume / speed
+    /// effects. Saves repeating `..Default::default()` 12 times.
+    fn seg(path: &str, start: f64, dur: f64) -> TimelineSegment {
+        TimelineSegment {
+            asset_path: PathBuf::from(path),
+            start_s: start,
+            duration_s: dur,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn filter_planner_with_no_transitions_emits_legacy_concat_graph() {
         // Step 14.4 extracted FilterPlanner from build_timeline_argv;
         // this test pins the no-transition graph shape so future
         // commits can't drift it without noticing.
         let segs = vec![
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/a.mp4"),
-                start_s: 0.0,
-                duration_s: 2.0,
-            },
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/b.mp4"),
-                start_s: 1.0,
-                duration_s: 3.0,
-            },
+            seg("/tmp/a.mp4", 0.0, 2.0),
+            seg("/tmp/b.mp4", 1.0, 3.0),
         ];
         let plan = FilterPlanner::new(&segs, &[]).plan();
         assert_eq!(
@@ -568,18 +653,7 @@ mod tests {
 
     #[test]
     fn filter_planner_with_one_transition_emits_xfade_pair() {
-        let segs = vec![
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/a.mp4"),
-                start_s: 0.0,
-                duration_s: 5.0,
-            },
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/b.mp4"),
-                start_s: 0.0,
-                duration_s: 4.0,
-            },
-        ];
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 5.0), seg("/tmp/b.mp4", 0.0, 4.0)];
         let trans = vec![TransitionPlan {
             from_segment_index: 0,
             to_segment_index: 1,
@@ -615,21 +689,9 @@ mod tests {
         // [A, B, C] with a transition between A and B → concat n=2:
         // input 1 = xfade(A, B), input 2 = C alone.
         let segs = vec![
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/a.mp4"),
-                start_s: 0.0,
-                duration_s: 3.0,
-            },
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/b.mp4"),
-                start_s: 0.0,
-                duration_s: 4.0,
-            },
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/c.mp4"),
-                start_s: 0.0,
-                duration_s: 2.0,
-            },
+            seg("/tmp/a.mp4", 0.0, 3.0),
+            seg("/tmp/b.mp4", 0.0, 4.0),
+            seg("/tmp/c.mp4", 0.0, 2.0),
         ];
         let trans = vec![TransitionPlan {
             from_segment_index: 0,
@@ -652,21 +714,9 @@ mod tests {
         // is dropped (with a debug-trace log we can't easily assert
         // here). Resulting concat: xfade(A,B) + raw C.
         let segs = vec![
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/a.mp4"),
-                start_s: 0.0,
-                duration_s: 3.0,
-            },
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/b.mp4"),
-                start_s: 0.0,
-                duration_s: 4.0,
-            },
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/c.mp4"),
-                start_s: 0.0,
-                duration_s: 2.0,
-            },
+            seg("/tmp/a.mp4", 0.0, 3.0),
+            seg("/tmp/b.mp4", 0.0, 4.0),
+            seg("/tmp/c.mp4", 0.0, 2.0),
         ];
         let trans = vec![
             TransitionPlan {
@@ -691,23 +741,80 @@ mod tests {
     }
 
     #[test]
+    fn filter_planner_emits_volume_filter_when_segment_carries_value() {
+        // Step 15.3: a segment with volume=0.5 prepends a volume=
+        // filter that produces [av0], then the concat consumes
+        // [av0] in place of the raw [0:a:0].
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 2.0);
+        s0.volume = Some(0.5);
+        let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
+        let plan = FilterPlanner::new(&[s0, s1], &[]).plan();
+        assert!(
+            plan.filter_complex.contains("[0:a:0]volume=0.5[av0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // Concat input pair for seg 0 uses [av0] for audio, raw for video.
+        assert!(
+            plan.filter_complex.contains("[0:v:0][av0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // Seg 1 has no volume effect — raw labels.
+        assert!(
+            plan.filter_complex.contains("[1:v:0][1:a:0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_skips_volume_filter_at_unity() {
+        // volume = 1.0 is the no-op default; no filter should land.
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 2.0);
+        s0.volume = Some(1.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            !plan.filter_complex.contains("volume="),
+            "filter graph should skip unity volume: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_volume_threads_through_xfade_pair() {
+        // Volume on the to-segment of an xfade pair must feed the
+        // [av<i>] label into acrossfade, not the raw [i:a:0].
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut s1 = seg("/tmp/b.mp4", 0.0, 4.0);
+        s1.volume = Some(0.3);
+        let trans = vec![TransitionPlan {
+            from_segment_index: 0,
+            to_segment_index: 1,
+            kind: "SMPTE_Dissolve".into(),
+            duration_s: 1.0,
+        }];
+        let plan = FilterPlanner::new(&[s0, s1], &trans).plan();
+        assert!(
+            plan.filter_complex.contains("[1:a:0]volume=0.3[av1]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // acrossfade reads [0:a:0] (no volume on s0) and [av1] (volume on s1).
+        assert!(
+            plan.filter_complex.contains("[0:a:0][av1]acrossfade"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
     fn build_timeline_argv_unchanged_after_extraction() {
         // Behaviour-preservation guard for 14.4. The argv produced
         // for a multi-segment fixture must be exactly what the old
         // monolithic builder produced. If 14.5 changes the
         // no-transitions graph, this test is the canary.
-        let segs = vec![
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/a.mp4"),
-                start_s: 0.0,
-                duration_s: 2.0,
-            },
-            TimelineSegment {
-                asset_path: PathBuf::from("/tmp/b.mp4"),
-                start_s: 1.0,
-                duration_s: 3.0,
-            },
-        ];
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 1.0, 3.0)];
         let argv = build_timeline_argv(&segs, Path::new("/tmp/out.mp4"));
         let cmd = argv.join(" ");
         // Two -ss / -t / -i triples preceded by `-y -loglevel info`.
