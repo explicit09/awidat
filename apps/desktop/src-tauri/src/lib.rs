@@ -88,6 +88,8 @@ pub fn run() {
             commands::notes::set_note_status,
             commands::notes::delete_note,
             commands::notes::dismissals_path,
+            commands::permission::get_permission_mode,
+            commands::permission::set_permission_mode,
             commands::import::import_local,
             commands::import::import_url,
             commands::index::index_project,

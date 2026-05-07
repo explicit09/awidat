@@ -874,6 +874,42 @@ body,
   margin: 0 4px;
 }
 
+/* Step 1.8 — permission mode dropdown sits right-aligned via the
+ * spacer; pushes the dropdown to the far right while leaving room
+ * for an error message between it and the export button. */
+.action-bar-spacer {
+  flex: 1;
+}
+
+.permission-mode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: help;
+}
+
+.permission-mode-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.permission-mode select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.permission-mode select:hover {
+  border-color: var(--warn);
+}
+
 .action-bar-error {
   margin-left: auto;
   color: var(--err);

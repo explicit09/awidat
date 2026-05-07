@@ -7,6 +7,7 @@ pub mod import;
 pub mod index;
 pub mod media;
 pub mod notes;
+pub mod permission;
 pub mod project;
 pub mod proposal;
 pub mod render;

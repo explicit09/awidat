@@ -7,20 +7,41 @@
 // busy-disabled while a same-kind job is running (we don't want
 // double-fires of long jobs).
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAgentStore } from "../agent/store";
 import { useTimelineStore } from "../timeline/store";
+import { useProjectStore } from "./state";
 import { useExportJob } from "./useExportJob";
+import type { PermissionMode } from "../protocol";
 
 export function ActionBar() {
   const items = useAgentStore((s) => s.items);
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
+  const projectRoot = useProjectStore((s) => s.current);
   const { start: startExport } = useExportJob();
   const [showUrl, setShowUrl] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<PermissionMode>("manual");
+
+  // Load persisted permission mode on project change.
+  useEffect(() => {
+    if (!projectRoot) return;
+    invoke<PermissionMode>("get_permission_mode")
+      .then((m) => setMode(m))
+      .catch(() => setMode("manual"));
+  }, [projectRoot]);
+
+  async function changeMode(next: PermissionMode) {
+    setMode(next);
+    try {
+      await invoke("set_permission_mode", { mode: next });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
 
   // Disable per-kind buttons while a same-kind job is in flight.
   // The auto-chain produces sequential jobs, not concurrent — so
@@ -115,6 +136,22 @@ export function ActionBar() {
         >
           Export…
         </button>
+        <span className="action-bar-spacer" aria-hidden="true" />
+        <label
+          className="permission-mode"
+          title={permissionModeTitle(mode)}
+        >
+          <span className="permission-mode-label">Mode</span>
+          <select
+            value={mode}
+            onChange={(e) => changeMode(e.target.value as PermissionMode)}
+            aria-label="Agent permission mode"
+          >
+            <option value="manual">Manual</option>
+            <option value="copilot">Copilot</option>
+            <option value="autopilot">Autopilot</option>
+          </select>
+        </label>
         {error && <span className="action-bar-error">{error}</span>}
       </div>
       {showUrl && (
@@ -162,4 +199,18 @@ export function ActionBar() {
       )}
     </>
   );
+}
+
+/** Hover-title text for the permission dropdown. Explains what
+ *  each mode actually changes about agent behavior — short enough
+ *  to fit a tooltip, specific enough to make the choice obvious. */
+function permissionModeTitle(mode: PermissionMode): string {
+  switch (mode) {
+    case "manual":
+      return "Manual: every proposal needs explicit Accept; agent doesn't surface notes proactively.";
+    case "copilot":
+      return "Copilot: agent surfaces editorial notes; you ask it to act on them.";
+    case "autopilot":
+      return "Autopilot: agent bundles all findings into one proposal you accept or reject.";
+  }
 }
