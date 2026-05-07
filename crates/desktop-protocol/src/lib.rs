@@ -329,6 +329,12 @@ pub enum JobKind {
     /// `find_dead_air` tool reads. Fires alongside `Waveform` once
     /// the proxy has landed.
     Silences,
+    /// Per-second motion-magnitude sampling over a single asset's
+    /// proxy. Produces a JSON sidecar of `Vec<f32>` scene-change
+    /// scores under `<project>/.awidat/motion/<stem>-<hash>.json`
+    /// that the Phase 2 continuity engine reads to detect
+    /// mid-motion cuts. Fires alongside `Silences`.
+    Motion,
     /// `awidat_index::run` over the project.
     Indexing,
     /// `awidat_render::build_timeline_render_spec` + `JobManager::start`

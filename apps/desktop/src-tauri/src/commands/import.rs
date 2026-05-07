@@ -228,6 +228,26 @@ fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf
             );
         }
 
+        // Motion signal: per-second scene-change scores for the
+        // continuity engine (Phase 2). Sidecar consumed by the
+        // assess_continuity tool when it evaluates the no-mid-motion
+        // rule. Failure is non-fatal — assess_continuity treats a
+        // missing sidecar as "abstain" rather than blocking the cut.
+        if let Err(e) = crate::commands::motion::generate_motion_for_asset_in_project(
+            &app,
+            &state,
+            &project_root,
+            &asset,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                asset = %asset.display(),
+                "auto-motion failed; assess_continuity's motion rule will abstain on this asset",
+            );
+        }
+
         // Index the whole project. The indexer is sha-keyed so this
         // is idempotent for already-indexed assets — only the new
         // asset's pairs do real work.

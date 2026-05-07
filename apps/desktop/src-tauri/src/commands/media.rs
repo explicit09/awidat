@@ -205,6 +205,34 @@ pub fn silences_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf 
         .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
 }
 
+/// Compute the absolute motion-sidecar path. Sidecar holds JSON
+/// `{ "samples_per_second": 1, "magnitudes": [f32; ...] }`; see
+/// `commands::motion::MotionSidecar`. Phase 2's continuity engine
+/// reads it to detect mid-motion cuts.
+pub fn motion_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
+    let stem = asset_abs_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("asset");
+    project_root
+        .join(".awidat")
+        .join("motion")
+        .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
+}
+
+/// Resolve the motion-sidecar path for a project-relative asset id.
+/// Returns `Some(path)` when the sidecar exists on disk; `None`
+/// otherwise. The continuity tool tolerates absence — a missing
+/// sidecar means the motion rule abstains rather than blocks.
+pub fn motion_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<String> {
+    let abs = project_root.join(asset_id);
+    if !abs.is_file() {
+        return None;
+    }
+    let sidecar = motion_path_for(project_root, &abs);
+    sidecar.is_file().then(|| sidecar.to_string_lossy().into_owned())
+}
+
 /// Resolve the absolute silence-sidecar path for a project-relative
 /// asset id (e.g. `raw/foo.mp3`). Returns `Some(path)` if the
 /// sidecar exists on disk; `None` otherwise. Unlike the waveform

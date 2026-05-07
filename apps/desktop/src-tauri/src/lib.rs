@@ -90,6 +90,7 @@ pub fn run() {
             commands::notes::dismissals_path,
             commands::permission::get_permission_mode,
             commands::permission::set_permission_mode,
+            commands::motion::read_motion,
             commands::import::import_local,
             commands::import::import_url,
             commands::index::index_project,

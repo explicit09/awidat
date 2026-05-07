@@ -19,6 +19,9 @@
 //! - [`ffmpeg::generate_silences`] — detect silence ranges via
 //!   ffmpeg's silencedetect filter. Used by the `find_dead_air`
 //!   editorial tool to surface silence-trim Notes.
+//! - [`ffmpeg::generate_motion_signal`] — sample per-second motion
+//!   magnitude via ffmpeg's scene-change score. Used by the
+//!   continuity engine (Phase 2) to detect mid-motion cuts.
 //! - [`job::JobManager`] — long-running ffmpeg job orchestrator. Used by
 //!   `start_render` / `poll_render`.
 //! - [`progress::ProgressSnapshot`] — parsed view of ffmpeg's stderr
@@ -30,9 +33,9 @@ pub mod progress;
 pub mod timeline;
 
 pub use ffmpeg::{
-    FfmpegError, SilenceRange, TranscodeProgress, TranscodeProgressCallback, extract_frame,
-    ffmpeg_path, ffprobe_path, generate_silences, generate_thumbnails, generate_waveform,
-    probe_duration_s, transcode_proxy,
+    FfmpegError, MotionSignal, SilenceRange, TranscodeProgress, TranscodeProgressCallback,
+    extract_frame, ffmpeg_path, ffprobe_path, generate_motion_signal, generate_silences,
+    generate_thumbnails, generate_waveform, probe_duration_s, transcode_proxy,
 };
 pub use timeline::{
     FilterPlan, FilterPlanner, RenderTimelineError, TimelineSegment, TitleAnimation, TitlePlan,

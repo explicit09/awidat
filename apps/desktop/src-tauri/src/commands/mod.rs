@@ -6,6 +6,7 @@ pub mod dismissal;
 pub mod import;
 pub mod index;
 pub mod media;
+pub mod motion;
 pub mod notes;
 pub mod permission;
 pub mod project;

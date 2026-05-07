@@ -33,6 +33,7 @@ export function JobCard({ item }: Props) {
     thumbnails: "thumbnails",
     waveform: "waveform",
     silences: "silences",
+    motion: "motion signal",
     indexing: "indexing",
     render: "export",
   };
