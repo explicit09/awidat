@@ -33,7 +33,9 @@ export type EdlOp =
       end?: number;
     }
   | { kind: "delete_clip"; anchor: EdlAnchor }
-  | { kind: "split_clip"; anchor: EdlAnchor; atS: number };
+  | { kind: "split_clip"; anchor: EdlAnchor; atS: number }
+  | { kind: "set_volume"; anchor: EdlAnchor; value: number }
+  | { kind: "set_speed"; anchor: EdlAnchor; factor: number };
 
 /**
  * Build the canonical `*** Begin EDL` / `*** End EDL` text for one
@@ -66,6 +68,16 @@ function appendOp(lines: string[], op: EdlOp): void {
       lines.push("*** Split Clip");
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       lines.push(`+ at_s: ${formatTime(op.atS)}`);
+      break;
+    case "set_volume":
+      lines.push("*** Set Volume");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      lines.push(`+ value: ${op.value.toFixed(3)}`);
+      break;
+    case "set_speed":
+      lines.push("*** Set Speed");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      lines.push(`+ factor: ${op.factor.toFixed(3)}`);
       break;
   }
 }

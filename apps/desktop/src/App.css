@@ -1822,3 +1822,26 @@ body,
   word-break: break-all;
   white-space: normal;
 }
+
+/* Step 15.5 — Volume / Speed sliders. The row pairs a native range
+ * input with a numeric value display so the user sees what value the
+ * commit will use without watching the proposal banner. */
+.properties-control-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.properties-slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--warn);
+}
+
+.properties-control-value {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--text);
+  min-width: 48px;
+  text-align: right;
+}

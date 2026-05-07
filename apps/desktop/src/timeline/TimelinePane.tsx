@@ -701,6 +701,11 @@ function drawItem(
       ctx.fillStyle = "#e6edf3";
       ctx.fillText(label, x + CLIP_PADDING_X, labelY);
     }
+    // Volume / speed badges — painted in the top-right corner so they
+    // don't fight the label for space. Only render when non-default.
+    if (w > 36) {
+      drawClipBadges(ctx, item, x, y, w);
+    }
     if (flag === "deleted") {
       // Strike-through line so the "before" is visually marked
       // for deletion even at low contrast.
@@ -917,6 +922,61 @@ function drawClipWaveform(
 
   ctx.restore();
   return true;
+}
+
+/** Paint small `🔉 0.5×` / `⚡ 2×` badges in the top-right corner of
+ *  a clip rect when its volume / speed differ from unity. Skipped for
+ *  thin clips (the caller gates on `w > 36`). */
+function drawClipBadges(
+  ctx: CanvasRenderingContext2D,
+  item: Extract<TimelineItem, { kind: "clip" }>,
+  x: number,
+  y: number,
+  w: number,
+) {
+  const badges: string[] = [];
+  if (
+    item.volume !== null &&
+    item.volume !== undefined &&
+    Math.abs(item.volume - 1.0) > 1e-6
+  ) {
+    badges.push(`🔉 ${formatBadgeNumber(item.volume)}×`);
+  }
+  if (
+    item.speed !== null &&
+    item.speed !== undefined &&
+    Math.abs(item.speed - 1.0) > 1e-6
+  ) {
+    badges.push(`⚡ ${formatBadgeNumber(item.speed)}×`);
+  }
+  if (badges.length === 0) return;
+  ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+  ctx.textBaseline = "top";
+  // Right-align: walk badges right-to-left from the clip's right edge.
+  let cursorX = x + w - 4;
+  for (let i = badges.length - 1; i >= 0; i--) {
+    const text = badges[i];
+    const metrics = ctx.measureText(text);
+    const padX = 4;
+    const padY = 1;
+    const boxW = metrics.width + padX * 2;
+    const boxH = 14;
+    const boxX = cursorX - boxW;
+    const boxY = y + 3;
+    if (boxX < x + 4) break; // Out of room — drop later badges.
+    ctx.fillStyle = "rgba(13, 17, 23, 0.78)";
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.fillStyle = "#f59e0b";
+    ctx.fillText(text, boxX + padX, boxY + padY);
+    cursorX = boxX - 4;
+  }
+}
+
+/** Format a multiplier for badges: trailing-zero-trim, max 2 decimals.
+ *  `0.5 → "0.5"`, `2 → "2"`, `1.25 → "1.25"`. */
+function formatBadgeNumber(n: number): string {
+  const fixed = n.toFixed(2);
+  return fixed.replace(/\.?0+$/, "");
 }
 
 /** Build the set of `${trackIdx}:${itemIdx}` keys whose items in the

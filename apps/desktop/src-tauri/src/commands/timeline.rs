@@ -130,6 +130,23 @@ pub fn flatten_timeline_public(
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| clip.name.clone());
+                    // Pull per-clip volume / speed off the OTIO Effect
+                    // nodes the apply layer stamps. The PropertiesPane
+                    // reads these to populate its sliders; the canvas
+                    // paints a small badge on clips with non-default
+                    // values.
+                    let volume = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "awidat.volume")
+                        .and_then(|e| e.metadata.get("value"))
+                        .and_then(|v| v.as_f64());
+                    let speed = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "awidat.speed")
+                        .and_then(|e| e.metadata.get("factor"))
+                        .and_then(|v| v.as_f64());
                     items.push(TimelineItem::Clip {
                         index: i,
                         name: clip.name.clone(),
@@ -141,6 +158,8 @@ pub fn flatten_timeline_public(
                         proxy_path,
                         thumbnail_dir,
                         waveform_path,
+                        volume,
+                        speed,
                     });
                     track_cursor_s += duration_s;
                 }

@@ -69,7 +69,24 @@ thumbnail_dir: string | null,
  * hasn't completed (the [`JobKind::Waveform`] job hasn't
  * landed) or the asset has no audio stream.
  */
-waveform_path: string | null, } | { "kind": "gap", 
+waveform_path: string | null, 
+/**
+ * Per-clip linear gain multiplier (`awidat.volume` Effect).
+ * `None` when the clip has no volume effect; `1.0` is unity
+ * (no gain change). Frontend reads this to populate the
+ * PropertiesPane volume slider and to paint a `🔉 0.5×` badge
+ * on clips with non-default values.
+ */
+volume: number | null, 
+/**
+ * Per-clip playback rate multiplier (`awidat.speed` Effect).
+ * `None` when the clip has no speed effect; `1.0` is unity.
+ * `2.0` plays at double speed (half timeline length).
+ * Frontend reads this to populate the PropertiesPane speed
+ * input and to paint a `⚡ 2×` badge on clips with non-default
+ * values.
+ */
+speed: number | null, } | { "kind": "gap", 
 /**
  * Index of this item within its track.
  */
