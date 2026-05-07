@@ -139,21 +139,33 @@ pub struct SilenceRange {
     pub end_s: f64,
 }
 
-/// Top-level entry point. Evaluates all five rules at `at_s` and
-/// returns the aggregate. Pure function — no I/O. The agent tool
-/// (`assess_continuity`) is responsible for building
-/// [`ContinuityInputs`] from the project's sidecars.
+/// Top-level entry point. Evaluates all five rules and returns the
+/// aggregate. Pure function — no I/O.
+///
+/// **Two coordinate spaces matter here.** Whisper/motion/silence
+/// sidecars are keyed by source-media seconds (the asset's own
+/// timeline). The rhythm-preservation rule cares about cuts on the
+/// master timeline (the project's playback time). When a cut sits
+/// on clip C, source-time and track-time differ by
+/// `clip.source_range.start - clip.track_start`. The agent tool
+/// resolves both before calling.
+///
+/// `source_at_s`: source-media time for whisper/motion/silence/
+/// speaker rules.
+/// `track_at_s`: master-timeline time for the rhythm rule. The
+/// caller pre-fills `inputs.nearby_cuts_s` in the same coord space.
 pub fn assess_continuity(
-    at_s: f64,
+    source_at_s: f64,
+    track_at_s: f64,
     kind: CutKind,
     inputs: &ContinuityInputs,
 ) -> ContinuityVerdict {
     let mut rules = Vec::with_capacity(5);
-    rules.push(rule_mid_sentence(at_s, inputs));
-    rules.push(rule_breath_beat(at_s, kind, inputs));
-    rules.push(rule_mid_motion(at_s, inputs));
-    rules.push(rule_speaker_turn(at_s, inputs));
-    rules.push(rule_rhythm(at_s, kind, inputs));
+    rules.push(rule_mid_sentence(source_at_s, inputs));
+    rules.push(rule_breath_beat(source_at_s, kind, inputs));
+    rules.push(rule_mid_motion(source_at_s, inputs));
+    rules.push(rule_speaker_turn(source_at_s, inputs));
+    rules.push(rule_rhythm(track_at_s, kind, inputs));
 
     let verdict = aggregate_verdicts(&rules);
     ContinuityVerdict { verdict, rules }
@@ -879,7 +891,7 @@ mod tests {
             scene_changes_s: Some(vec![1.4]),
             ..Default::default()
         };
-        let v = assess_continuity(1.3, CutKind::TrimIn, &inputs);
+        let v = assess_continuity(1.3, 1.3, CutKind::TrimIn, &inputs);
         assert_eq!(v.verdict, Verdict::Dirty);
         assert_eq!(v.rules.len(), 5);
         assert_eq!(v.rules[0].id, "mid_sentence");

@@ -127,16 +127,21 @@ impl ToolHandler for AssessContinuityTool {
             )));
         };
 
+        // build_inputs collects nearby_cuts_s in track-time (the
+        // rhythm rule's coord space), so pass the timeline at_s
+        // here — NOT source_at_s.
         let inputs = build_inputs(
             &ctx.project_root,
             &project.timeline,
             &asset_id,
-            source_at_s,
+            args.at_s,
         );
 
-        // Engine works in source-time for whisper/silence/motion
-        // (those sidecars are source-time keyed). Pass source_at_s.
-        let verdict = run_assess(source_at_s, kind, &inputs);
+        // Engine takes both coords: source-time for whisper /
+        // silence / motion / speaker rules; track-time for the
+        // rhythm rule (which compares against nearby_cuts_s,
+        // populated in track-time by build_inputs).
+        let verdict = run_assess(source_at_s, args.at_s, kind, &inputs);
 
         let body = serde_json::json!({
             "at_s": args.at_s,
