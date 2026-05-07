@@ -4,6 +4,7 @@
 //! §6.
 
 pub mod apply_edl;
+pub mod assess_continuity;
 pub mod attempt_completion;
 pub mod bash;
 pub mod broll_candidates;

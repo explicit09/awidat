@@ -8,8 +8,9 @@ use std::sync::Arc;
 use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tool::{ApprovalRequest, UserInputRequest};
 use awidat_core::tools::{
-    apply_edl::ApplyEdlTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
-    clip_search::ClipSearchTool, find_beat::FindBeatTool, find_dead_air::FindDeadAirTool,
+    apply_edl::ApplyEdlTool, assess_continuity::AssessContinuityTool, bash::BashTool,
+    broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
+    find_beat::FindBeatTool, find_dead_air::FindDeadAirTool,
     find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
@@ -38,6 +39,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(FindDeadAirTool));
     registry.register(Arc::new(FindFillerWordsTool));
     registry.register(Arc::new(FindFalseStartsTool));
+    registry.register(Arc::new(AssessContinuityTool));
     registry.register(Arc::new(InspectClipTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(PollRenderTool));
