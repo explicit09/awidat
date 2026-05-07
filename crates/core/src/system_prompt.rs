@@ -146,8 +146,12 @@ fn read_permission_mode(project_root: &Path) -> PromptPermissionMode {
 fn format_addendum(format: &ProjectFormat) -> &'static str {
     match format {
         ProjectFormat::Podcast => PODCAST_ADDENDUM,
-        ProjectFormat::Shorts => NEUTRAL_ADDENDUM,
-        ProjectFormat::Tutorial => NEUTRAL_ADDENDUM,
+        // Phase 4C: shorts-mode editorial defaults — vertical pacing,
+        // hook in first 3s, captions, fast cut cadence.
+        ProjectFormat::Shorts => SHORTS_ADDENDUM,
+        // Phase 4E: tutorial-mode editorial defaults — preserve
+        // code-typing moments, hold key frames, generate chapters.
+        ProjectFormat::Tutorial => TUTORIAL_ADDENDUM,
         ProjectFormat::Other { .. } => NEUTRAL_ADDENDUM,
     }
 }
@@ -270,11 +274,9 @@ find_dead_air → propose silence trims; offer to also scan filler \
 words. Don't run all three editorial tools speculatively unless \
 asked.";
 
-/// Neutral addendum for shorts / tutorial / other. Doesn't claim
-/// format-specific knowledge the agent doesn't have yet — Phase 4
-/// fills these in with shorts-specific and tutorial-specific
-/// prompts. Until then, the agent reasons from the user's project
-/// description (when supplied) plus the base prompt.
+/// Neutral addendum for `Other` projects. Shorts / tutorial used to
+/// share this; Phase 4C / 4E split them out into dedicated
+/// addenda below.
 const NEUTRAL_ADDENDUM: &str = "\
 **Format: generic.** No format-specific defaults are loaded — use the \
 base editorial tools (find_dead_air / find_filler_words / \
@@ -282,6 +284,68 @@ find_false_starts) when the user asks for cleanup, but treat any \
 conventions (cadence, b-roll density, transition style) as \
 project-specific rather than format-specific. Ask the user about \
 their preferences before proposing aggressive cuts.";
+
+/// Shorts-mode editorial defaults (Phase 4C). Concrete numbers tuned
+/// for vertical short-form: hook landing in the first 3 seconds,
+/// fast cut cadence, captions burned in, target ≤60s.
+const SHORTS_ADDENDUM: &str = "\
+**Format: short-form vertical.** Editorial defaults:\
+\n- Target length is 60s; hard ceiling 90s. If the source material \
+runs longer, your job is to cut, not to summarize verbally.\
+\n- The hook lands in the first 3 seconds. Use find_beat to surface \
+candidate hooks; if the project's hook is buried at 0:30, propose \
+moving the cold-open clip to position 0.\
+\n- Cut cadence is fast. A static shot held > 1.5s on a short reads \
+as slow — propose cuts at every natural pause, even shorter than \
+the podcast threshold. Filler words ('um', 'uh') are cut aggressively \
+here (use find_filler_words with aggressive=true and propose trimming \
+all matches by default).\
+\n- Captions are part of the format, not optional. Always propose \
+*** Insert Title overlays sourced from whisper word timings — burned-in \
+captions are required for silent-autoplay viewers. Use the bottom-third \
+position with a high-contrast color.\
+\n- B-roll cadence is proactive: scan find_broll_opportunities and \
+surface candidates aggressively. Visual variety every 2–4 seconds is \
+the format expectation.\
+\n- Aspect-ratio: the timeline targets 9:16. When the source is 16:9, \
+propose center-crop or smart-crop based on speaker tracking \
+(find_speaker_oncam to know who's framed in each moment).\
+\n\nWhen the user says 'make a short' the playbook is: find_beat \
+(hook candidates) → apply_edl with the chosen hook at position 0 → \
+find_dead_air + find_filler_words(aggressive=true) → bundle the \
+trims → find_broll_opportunities → surface b-roll Notes → \
+*** Insert Title for caption pass.";
+
+/// Tutorial-mode editorial defaults (Phase 4E). Concrete numbers tuned
+/// for screen-recording-heavy content: hold key frames longer, never
+/// cut over a typing moment, generate chapter markers.
+const TUTORIAL_ADDENDUM: &str = "\
+**Format: tutorial / screen recording.** Editorial defaults:\
+\n- Hold key frames longer. When the speaker is showing a code snippet, \
+diagram, or important UI state, do NOT cut for at least 4–6 seconds — \
+the audience needs time to actually read what's on screen.\
+\n- Never cut over a typing or drawing moment. If the index shows \
+sustained on-screen typing (motion magnitude is steady but not high; \
+shot type is a static screen recording), the cut should land at the \
+*natural pause* before or after the typing burst, not mid-keystroke.\
+\n- Generate chapter markers from topic segmentation. After indexing \
+lands, call read_index(topic) and propose *** Insert Title overlays at \
+each topic boundary as chapter headings — short labels (one to four \
+words) sourced from the topic summary.\
+\n- Filler words are tolerated more here than in shorts. A tutorial \
+audience accepts a thinking pause; aggressive filler-cutting reads as \
+robotic. Default to find_filler_words with aggressive=false and \
+surface only clusters or unusually long fillers.\
+\n- Silence threshold is higher: trim silences ≥ 3.0s but skip < 2.0s. \
+A two-second pause while the user reads code is intentional.\
+\n- B-roll is rarely the right tool here — the speaker's screen IS \
+the visual. Use find_broll_opportunities only when the speaker pauses \
+the demonstration to make a verbal point that lacks visual support.\
+\n\nWhen the user says 'tighten this tutorial' the playbook is: \
+read_index(topic) → propose chapter Titles → find_dead_air with a \
+3.0s threshold → propose trims that respect the 'no cut over typing' \
+rule (use clip_search or shot_summary to identify typing sustained-\
+motion intervals before each proposed cut).";
 
 #[cfg(test)]
 mod tests {
@@ -297,14 +361,41 @@ mod tests {
     }
 
     #[test]
-    fn assembles_neutral_for_shorts_and_tutorial() {
+    fn assembles_shorts_format() {
+        // Phase 4C: shorts gets a dedicated addendum with vertical /
+        // hook-in-first-3s defaults.
         let shorts = assemble_system_prompt(&ProjectFormat::Shorts, PromptPermissionMode::Copilot);
+        assert!(shorts.contains("**Format: short-form vertical.**"), "{shorts}");
+        assert!(shorts.contains("hook lands in the first 3 seconds"));
+        assert!(shorts.contains("aspect-ratio") || shorts.contains("Aspect-ratio"));
+        // Should not pick up podcast or tutorial copy.
+        assert!(!shorts.contains("breath beats"));
+        assert!(!shorts.contains("Hold key frames longer"));
+    }
+
+    #[test]
+    fn assembles_tutorial_format() {
+        // Phase 4E: tutorial gets a dedicated addendum with code-typing
+        // preservation + chapter-marker behavior.
         let tutorial =
             assemble_system_prompt(&ProjectFormat::Tutorial, PromptPermissionMode::Copilot);
-        assert!(shorts.contains("**Format: generic.**"));
-        assert!(tutorial.contains("**Format: generic.**"));
-        // Both should NOT include the podcast-specific block.
-        assert!(!shorts.contains("breath beats"));
+        assert!(tutorial.contains("**Format: tutorial / screen recording.**"), "{tutorial}");
+        assert!(tutorial.contains("Hold key frames longer"));
+        assert!(tutorial.contains("Never cut over a typing"));
+        // Shouldn't pick up podcast or shorts copy.
+        assert!(!tutorial.contains("breath beats"));
+        assert!(!tutorial.contains("hook lands in the first 3 seconds"));
+    }
+
+    #[test]
+    fn other_format_falls_back_to_neutral() {
+        let other = assemble_system_prompt(
+            &ProjectFormat::Other {
+                description: String::new(),
+            },
+            PromptPermissionMode::Copilot,
+        );
+        assert!(other.contains("**Format: generic.**"));
     }
 
     #[test]
