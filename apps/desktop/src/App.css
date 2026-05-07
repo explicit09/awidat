@@ -1898,3 +1898,233 @@ body,
   padding: 1px;
   cursor: pointer;
 }
+
+/* Step 1.7 — Editorial notes panel. Sits inside .workspace-chat at
+ * the bottom (above the composer at app-shell level). Collapsible
+ * header lets the user hide the panel without losing their place
+ * in the chat stream above. */
+
+.notes-panel {
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  max-height: 40vh;
+}
+
+.notes-panel-busy {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.notes-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-elev);
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.notes-header:hover {
+  background: var(--bg-elev2);
+}
+
+.notes-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.notes-counts {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+}
+
+.notes-count-open {
+  color: var(--warn);
+}
+
+.notes-count-resolved {
+  color: var(--ok);
+}
+
+.notes-count-dismissed {
+  color: var(--text-muted);
+}
+
+.notes-chevron {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.notes-panel-collapsed .notes-body {
+  display: none;
+}
+
+.notes-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow-y: auto;
+}
+
+.notes-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 8px;
+  font-style: italic;
+}
+
+.note-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  font-size: 12px;
+}
+
+.note-card-open {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.note-card-resolved {
+  border-style: dashed;
+}
+
+.note-card-dismissed {
+  opacity: 0.45;
+}
+
+.note-card-faded {
+  opacity: 0.55;
+}
+
+.note-card-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.note-card-body:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--text-muted);
+  text-underline-offset: 2px;
+}
+
+.note-icon {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--warn);
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+}
+
+.note-icon-silence_trim {
+  color: var(--accent);
+}
+
+.note-icon-filler_word {
+  color: var(--warn);
+}
+
+.note-icon-false_start {
+  color: var(--err);
+}
+
+.note-icon-continuity_warning {
+  color: var(--warn);
+}
+
+.note-icon-broll_suggestion {
+  color: var(--ok);
+}
+
+.note-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.note-summary {
+  color: var(--text);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.note-anchor {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+}
+
+.note-actions {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.note-actions button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.note-actions button:hover:not(:disabled) {
+  border-color: var(--warn);
+  color: var(--text);
+}
+
+.note-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.notes-show-all {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--text-muted);
+  border-radius: 3px;
+  padding: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.notes-show-all:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.notes-archive {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

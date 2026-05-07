@@ -20,6 +20,7 @@ import { JobCard } from "./JobCard";
 import { EmptyState } from "../app/EmptyState";
 import { useProjectStore } from "../app/state";
 import { useProposalStore, isProposedEditItem } from "../timeline/proposal";
+import { useNotesStore } from "../notes/store";
 
 export function ChatStream() {
   const items = useAgentStore((s) => s.items);
@@ -29,6 +30,7 @@ export function ChatStream() {
   const setRunning = useAgentStore((s) => s.setRunning);
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const ingestProposal = useProposalStore((s) => s.ingest);
+  const ingestNote = useNotesStore((s) => s.ingest);
 
   // Subscribe to backend events for the lifetime of the component.
   useEffect(() => {
@@ -39,6 +41,12 @@ export function ChatStream() {
       // timeline canvas can render the ghost overlay).
       if (isProposedEditItem(item)) {
         ingestProposal(item);
+      }
+      // Editorial notes feed two stores: the chat (so the agent's
+      // emission shows in the conversation timeline) and the
+      // notes store (which persists + drives the NotesPanel).
+      if (item.kind === "editorial_note") {
+        void ingestNote(item);
       }
       upsert(item);
     });
@@ -52,7 +60,7 @@ export function ChatStream() {
       itemsUnlisten.then((u) => u());
       endUnlisten.then((u) => u());
     };
-  }, [upsert, setRunning, setTurnError, ingestProposal]);
+  }, [upsert, setRunning, setTurnError, ingestProposal, ingestNote]);
 
   const projectReady = useProjectStore((s) => s.current !== null);
 

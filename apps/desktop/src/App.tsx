@@ -19,6 +19,8 @@ import { useProposalStore } from "./timeline/proposal";
 import { useTimelineStore } from "./timeline/store";
 import { PropertiesPane } from "./properties/PropertiesPane";
 import { useTimelineSelectionStore } from "./properties/store";
+import { NotesPanel } from "./notes/NotesPanel";
+import { useNotesStore } from "./notes/store";
 import "./App.css";
 
 function App() {
@@ -30,6 +32,7 @@ function App() {
   const clearMediaSelection = useMediaStore((s) => s.select);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
   const clearSelection = useTimelineSelectionStore((s) => s.clear);
+  const clearNotes = useNotesStore((s) => s.clear);
 
   // Keep the banner's local-state callback wired to the store so any
   // path change (open / new / future close) propagates to Composer's
@@ -43,6 +46,7 @@ function App() {
     clearProposal();
     clearMediaSelection(null);
     clearSelection();
+    clearNotes();
     if (current !== null) {
       refreshTimeline().catch(() => {});
     }
@@ -52,6 +56,7 @@ function App() {
     clearProposal,
     clearMediaSelection,
     clearSelection,
+    clearNotes,
     refreshTimeline,
   ]);
 
@@ -69,6 +74,7 @@ function App() {
           <div className="workspace-top">
             <div className="workspace-chat">
               <ChatStream />
+              <NotesPanel />
             </div>
             <div className="workspace-media">
               <MediaPane />
