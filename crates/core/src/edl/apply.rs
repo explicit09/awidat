@@ -190,14 +190,52 @@ fn apply_one(
         EdlOp::SetSpeed { anchor, factor } => {
             apply_set_speed(working, index, anchor, *factor, ctx, locator)
         }
-        EdlOp::InsertTitle { .. } => Err(ApplyError::NotImplemented {
+        EdlOp::InsertTitle {
+            start_s,
+            end_s,
+            text,
+            position,
+            font_size,
+            color,
+            font_weight,
+            animation,
+        } => apply_insert_title(
+            working,
             index,
-            op: "Insert Title".into(),
-        }),
-        EdlOp::SetTitle { .. } => Err(ApplyError::NotImplemented {
+            *start_s,
+            *end_s,
+            text,
+            *position,
+            *font_size,
+            color,
+            *font_weight,
+            *animation,
+        ),
+        EdlOp::SetTitle {
+            anchor,
+            start_s,
+            end_s,
+            text,
+            position,
+            font_size,
+            color,
+            font_weight,
+            animation,
+        } => apply_set_title(
+            working,
             index,
-            op: "Set Title".into(),
-        }),
+            anchor,
+            *start_s,
+            *end_s,
+            text.as_deref(),
+            *position,
+            *font_size,
+            color.as_deref(),
+            *font_weight,
+            *animation,
+            ctx,
+            locator,
+        ),
     }
 }
 
@@ -1089,6 +1127,24 @@ const VOLUME_EFFECT_NAME: &str = "awidat.volume";
 /// on audio (chained when factor is outside `[0.5, 2.0]`).
 const SPEED_EFFECT_NAME: &str = "awidat.speed";
 
+/// Effect name stamped on title-clip synthesized clips. The metadata
+/// holds text/position/font_size/color/font_weight/animation; render
+/// walks the Titles track and emits drawtext filters per title.
+const TITLE_EFFECT_NAME: &str = "awidat.title";
+
+/// Track name used for the auto-created Titles track. Render walks
+/// any video track whose `metadata["awidat_track_role"]` is "titles"
+/// (not just by name) so the user can rename it.
+const TITLES_TRACK_NAME: &str = "Titles";
+
+/// Track-metadata key flagging this track as the project's title
+/// overlay track. `apply_insert_title` stamps it on track creation;
+/// the render pipeline pattern-matches on it.
+const TITLES_TRACK_ROLE_KEY: &str = "awidat_track_role";
+
+/// Track-metadata value for the titles track.
+const TITLES_TRACK_ROLE_VALUE: &str = "titles";
+
 /// Stamp an awidat.volume Effect on the anchored clip with `value`
 /// (linear gain multiplier). Idempotent: any existing
 /// awidat.volume effect on the clip is removed first, so two
@@ -1174,6 +1230,324 @@ fn apply_set_speed(
     Ok(format!(
         "set speed on clip {clip_name:?} to {factor:.3}× (timeline duration scales by 1/factor)"
     ))
+}
+
+/// Insert a title overlay onto the project's Titles track. The
+/// titles track auto-creates on first call (Video kind, flagged via
+/// track metadata). The overlay is structurally a Clip with a
+/// MissingReference media_reference (no real media — drawtext
+/// renders the title from the awidat.title Effect's metadata) and
+/// a source_range whose duration matches `end_s - start_s`.
+///
+/// Stamps a fresh clip_uuid on the synthesized clip so subsequent
+/// `Set Title` ops can resolve via `Anchor::ClipUuid`.
+#[allow(clippy::too_many_arguments)]
+fn apply_insert_title(
+    working: &mut Timeline,
+    index: usize,
+    start_s: f64,
+    end_s: f64,
+    text: &str,
+    position: super::op::TitlePosition,
+    font_size: u32,
+    color: &str,
+    font_weight: super::op::TitleWeight,
+    animation: super::op::TitleAnimation,
+) -> Result<String, ApplyError> {
+    use awidat_proto::otio::{Clip, RationalTime, TimeRange};
+
+    if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "insert_title: invalid window [{start_s}..{end_s}]; end_s must be finite and > start_s"
+            ),
+        });
+    }
+    if text.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "insert_title: text must be non-empty".into(),
+        });
+    }
+
+    // Find or create the Titles track. Match by metadata flag first
+    // (the user may have renamed it), then by the canonical name as
+    // a fallback.
+    let titles_idx = find_or_create_titles_track(working);
+    let StackChild::Track(track) = &mut working.tracks.children[titles_idx] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "insert_title: titles track resolved to a non-track stack child".into(),
+        });
+    };
+
+    // The title's source_range is interpreted in *timeline-time*
+    // here — the Titles track is treated as a top-level container,
+    // not a media-bearing track. Render walks `track_role: titles`
+    // tracks and reads start_s/end_s from each clip's source_range
+    // for the drawtext `enable=between(t,...)` window.
+    let rate = 24.0_f64;
+    let duration_s = end_s - start_s;
+    let mut clip = Clip::empty(format!("title-{:.3}-{:.3}", start_s, end_s));
+    clip.source_range = Some(TimeRange::new(
+        RationalTime::new(start_s * rate, rate),
+        RationalTime::new(duration_s * rate, rate),
+    ));
+    stamp_fresh_clip_uuid(&mut clip);
+
+    // Build the awidat.title effect with all the styling.
+    let mut effect = awidat_proto::otio::Effect::new(TITLE_EFFECT_NAME);
+    effect
+        .metadata
+        .insert("text".to_string(), serde_json::json!(text));
+    effect
+        .metadata
+        .insert("start_s".to_string(), serde_json::json!(start_s));
+    effect
+        .metadata
+        .insert("end_s".to_string(), serde_json::json!(end_s));
+    effect
+        .metadata
+        .insert("position".to_string(), serde_json::json!(title_position_str(position)));
+    effect
+        .metadata
+        .insert("font_size".to_string(), serde_json::json!(font_size));
+    effect
+        .metadata
+        .insert("color".to_string(), serde_json::json!(color));
+    effect
+        .metadata
+        .insert("font_weight".to_string(), serde_json::json!(title_weight_str(font_weight)));
+    effect
+        .metadata
+        .insert("animation".to_string(), serde_json::json!(title_animation_str(animation)));
+    clip.effects.push(effect);
+
+    // Insert the title in playback order so the Titles track stays
+    // sorted by start_s. This makes render's left-to-right walk
+    // produce drawtext filters in time order — a small nicety for
+    // anyone reading the generated argv.
+    let position_idx = title_insertion_index(track, start_s);
+    track.children.insert(position_idx, TrackChild::Clip(clip));
+
+    Ok(format!(
+        "inserted title {text:?} on Titles track at [{start_s:.3}s..{end_s:.3}s] \
+         (position={position:?}, animation={animation:?})"
+    ))
+}
+
+/// Update the awidat.title effect on an anchored title clip.
+/// All styling fields are optional — None leaves the existing value
+/// alone. start_s / end_s adjust both the effect metadata AND the
+/// underlying clip's source_range so the timeline window stays in
+/// sync with the drawtext enable window.
+#[allow(clippy::too_many_arguments)]
+fn apply_set_title(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    start_s: Option<f64>,
+    end_s: Option<f64>,
+    text: Option<&str>,
+    position: Option<super::op::TitlePosition>,
+    font_size: Option<u32>,
+    color: Option<&str>,
+    font_weight: Option<super::op::TitleWeight>,
+    animation: Option<super::op::TitleAnimation>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_title: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_title: anchor resolved to a non-clip child".into(),
+        });
+    };
+    let effect = clip
+        .effects
+        .iter_mut()
+        .find(|e| e.effect_name == TITLE_EFFECT_NAME)
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_title: anchored clip {:?} carries no awidat.title effect — \
+                 SetTitle only updates existing titles, use InsertTitle to create one",
+                clip.name,
+            ),
+        })?;
+
+    if let Some(t) = text {
+        if t.is_empty() {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "set_title: text must be non-empty".into(),
+            });
+        }
+        effect
+            .metadata
+            .insert("text".to_string(), serde_json::json!(t));
+    }
+    if let Some(p) = position {
+        effect.metadata.insert(
+            "position".to_string(),
+            serde_json::json!(title_position_str(p)),
+        );
+    }
+    if let Some(f) = font_size {
+        effect
+            .metadata
+            .insert("font_size".to_string(), serde_json::json!(f));
+    }
+    if let Some(c) = color {
+        effect
+            .metadata
+            .insert("color".to_string(), serde_json::json!(c));
+    }
+    if let Some(w) = font_weight {
+        effect.metadata.insert(
+            "font_weight".to_string(),
+            serde_json::json!(title_weight_str(w)),
+        );
+    }
+    if let Some(a) = animation {
+        effect.metadata.insert(
+            "animation".to_string(),
+            serde_json::json!(title_animation_str(a)),
+        );
+    }
+
+    // start_s / end_s require both the effect metadata AND the
+    // clip's source_range to update so the timeline view + the
+    // render's enable window agree.
+    if start_s.is_some() || end_s.is_some() {
+        let prior = clip
+            .source_range
+            .as_ref()
+            .ok_or_else(|| ApplyError::Invalid {
+                index,
+                message: "set_title: title clip has no source_range to mutate".into(),
+            })?;
+        let rate = prior.start_time.rate;
+        let prior_start = prior.start_time.to_seconds();
+        let prior_end = prior_start + prior.duration.to_seconds();
+        let new_start = start_s.unwrap_or(prior_start);
+        let new_end = end_s.unwrap_or(prior_end);
+        if !new_start.is_finite() || !new_end.is_finite() || new_end <= new_start {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "set_title: invalid window [{new_start}..{new_end}]; end_s must be > start_s"
+                ),
+            });
+        }
+        clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+            awidat_proto::otio::RationalTime::new(new_start * rate, rate),
+            awidat_proto::otio::RationalTime::new((new_end - new_start) * rate, rate),
+        ));
+        effect
+            .metadata
+            .insert("start_s".to_string(), serde_json::json!(new_start));
+        effect
+            .metadata
+            .insert("end_s".to_string(), serde_json::json!(new_end));
+    }
+
+    Ok(format!("updated title clip {:?}", clip.name))
+}
+
+/// Find the existing Titles track or push a new one onto the
+/// timeline. Returns the track's index in `tracks.children`. The
+/// new track is flagged via `metadata["awidat_track_role"] = "titles"`
+/// so the render pipeline can route its clips into drawtext filters.
+fn find_or_create_titles_track(working: &mut Timeline) -> usize {
+    if let Some(idx) = working
+        .tracks
+        .children
+        .iter()
+        .position(|sc| matches!(sc, StackChild::Track(t) if is_titles_track(t)))
+    {
+        return idx;
+    }
+    let mut track = awidat_proto::otio::Track::empty(
+        TITLES_TRACK_NAME.to_string(),
+        awidat_proto::otio::TrackKind::Video,
+    );
+    track.metadata.insert(
+        TITLES_TRACK_ROLE_KEY.to_string(),
+        serde_json::json!(TITLES_TRACK_ROLE_VALUE),
+    );
+    working.tracks.children.push(StackChild::Track(track));
+    working.tracks.children.len() - 1
+}
+
+/// True iff `track` is the project's Titles track. Matches the
+/// metadata flag first; falls back to the canonical name so a
+/// hand-edited OTIO from before the metadata flag landed is still
+/// recognized.
+fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
+    if track
+        .metadata
+        .get(TITLES_TRACK_ROLE_KEY)
+        .and_then(|v| v.as_str())
+        == Some(TITLES_TRACK_ROLE_VALUE)
+    {
+        return true;
+    }
+    track.name == TITLES_TRACK_NAME
+}
+
+/// Find the insertion index for a new title at `start_s` on the
+/// Titles track. Walks children left-to-right and returns the first
+/// position whose existing source_range start is >= start_s. Keeps
+/// the track sorted by start_s for readable render output.
+fn title_insertion_index(track: &awidat_proto::otio::Track, start_s: f64) -> usize {
+    for (i, child) in track.children.iter().enumerate() {
+        let TrackChild::Clip(c) = child else { continue };
+        let existing_start = c
+            .source_range
+            .as_ref()
+            .map(|r| r.start_time.to_seconds())
+            .unwrap_or(0.0);
+        if existing_start >= start_s {
+            return i;
+        }
+    }
+    track.children.len()
+}
+
+fn title_position_str(p: super::op::TitlePosition) -> &'static str {
+    match p {
+        super::op::TitlePosition::Top => "top",
+        super::op::TitlePosition::Center => "center",
+        super::op::TitlePosition::Bottom => "bottom",
+    }
+}
+
+fn title_weight_str(w: super::op::TitleWeight) -> &'static str {
+    match w {
+        super::op::TitleWeight::Normal => "normal",
+        super::op::TitleWeight::Bold => "bold",
+    }
+}
+
+fn title_animation_str(a: super::op::TitleAnimation) -> &'static str {
+    match a {
+        super::op::TitleAnimation::None => "none",
+        super::op::TitleAnimation::FadeIn => "fade_in",
+        super::op::TitleAnimation::FadeOut => "fade_out",
+        super::op::TitleAnimation::FadeInOut => "fade_in_out",
+        super::op::TitleAnimation::SlideIn => "slide_in",
+        super::op::TitleAnimation::SlideOut => "slide_out",
+    }
 }
 
 /// Sum the durations of children before `child_index` on the given
@@ -2476,6 +2850,252 @@ mod tests {
             matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("> 0.0")),
             "expected validation error, got {err:?}",
         );
+    }
+
+    #[test]
+    fn apply_insert_title_creates_titles_track_and_stamps_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTitle {
+                start_s: 0.0,
+                end_s: 3.0,
+                text: "Welcome".into(),
+                position: super::super::op::TitlePosition::Top,
+                font_size: 72,
+                color: "#FFAA00".into(),
+                font_weight: super::super::op::TitleWeight::Bold,
+                animation: super::super::op::TitleAnimation::FadeInOut,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        // V1 (3 clips) + Titles track.
+        assert_eq!(new_tl.tracks.children.len(), 2);
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!("expected titles track at index 1")
+        };
+        assert_eq!(titles.name, "Titles");
+        assert_eq!(
+            titles
+                .metadata
+                .get("awidat_track_role")
+                .and_then(|v| v.as_str()),
+            Some("titles"),
+        );
+        assert_eq!(titles.children.len(), 1);
+        let TrackChild::Clip(title_clip) = &titles.children[0] else {
+            panic!("expected title clip on titles track")
+        };
+        assert_eq!(title_clip.effects.len(), 1);
+        let effect = &title_clip.effects[0];
+        assert_eq!(effect.effect_name, "awidat.title");
+        assert_eq!(
+            effect.metadata.get("text").and_then(|v| v.as_str()),
+            Some("Welcome"),
+        );
+        assert_eq!(
+            effect.metadata.get("position").and_then(|v| v.as_str()),
+            Some("top"),
+        );
+        assert_eq!(
+            effect.metadata.get("font_weight").and_then(|v| v.as_str()),
+            Some("bold"),
+        );
+        assert_eq!(
+            effect.metadata.get("animation").and_then(|v| v.as_str()),
+            Some("fade_in_out"),
+        );
+        assert_eq!(
+            effect.metadata.get("font_size").and_then(|v| v.as_u64()),
+            Some(72),
+        );
+    }
+
+    #[test]
+    fn apply_insert_title_reuses_existing_titles_track() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::InsertTitle {
+                    start_s: 0.0,
+                    end_s: 3.0,
+                    text: "First".into(),
+                    position: super::super::op::TitlePosition::Top,
+                    font_size: 64,
+                    color: "#FFFFFF".into(),
+                    font_weight: super::super::op::TitleWeight::Normal,
+                    animation: super::super::op::TitleAnimation::None,
+                },
+                EdlOp::InsertTitle {
+                    start_s: 5.0,
+                    end_s: 8.0,
+                    text: "Second".into(),
+                    position: super::super::op::TitlePosition::Bottom,
+                    font_size: 48,
+                    color: "#FFFFFF".into(),
+                    font_weight: super::super::op::TitleWeight::Normal,
+                    animation: super::super::op::TitleAnimation::None,
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        // Still only 2 tracks (V1 + Titles), with two titles on the
+        // Titles track in start_s order.
+        assert_eq!(new_tl.tracks.children.len(), 2);
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        assert_eq!(titles.children.len(), 2);
+        let TrackChild::Clip(first) = &titles.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(second) = &titles.children[1] else {
+            panic!()
+        };
+        assert_eq!(
+            first.effects[0].metadata.get("text").and_then(|v| v.as_str()),
+            Some("First"),
+        );
+        assert_eq!(
+            second.effects[0].metadata.get("text").and_then(|v| v.as_str()),
+            Some("Second"),
+        );
+    }
+
+    #[test]
+    fn apply_insert_title_rejects_invalid_window() {
+        let tl = timeline_with_three_clips();
+        // end_s <= start_s.
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTitle {
+                start_s: 5.0,
+                end_s: 3.0,
+                text: "x".into(),
+                position: super::super::op::TitlePosition::Center,
+                font_size: 64,
+                color: "#FFFFFF".into(),
+                font_weight: super::super::op::TitleWeight::Normal,
+                animation: super::super::op::TitleAnimation::None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(matches!(&err, ApplyError::Invalid { message, .. } if message.contains("end_s must be")));
+    }
+
+    #[test]
+    fn apply_insert_title_rejects_empty_text() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTitle {
+                start_s: 0.0,
+                end_s: 3.0,
+                text: "".into(),
+                position: super::super::op::TitlePosition::Center,
+                font_size: 64,
+                color: "#FFFFFF".into(),
+                font_weight: super::super::op::TitleWeight::Normal,
+                animation: super::super::op::TitleAnimation::None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(matches!(&err, ApplyError::Invalid { message, .. } if message.contains("non-empty")));
+    }
+
+    #[test]
+    fn apply_set_title_updates_only_specified_fields() {
+        // Create a title, capture its uuid, then mutate its text.
+        let tl = timeline_with_three_clips();
+        let insert_env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTitle {
+                start_s: 0.0,
+                end_s: 3.0,
+                text: "Original".into(),
+                position: super::super::op::TitlePosition::Center,
+                font_size: 64,
+                color: "#FFFFFF".into(),
+                font_weight: super::super::op::TitleWeight::Normal,
+                animation: super::super::op::TitleAnimation::None,
+            }],
+        };
+        let (after_insert, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &after_insert.tracks.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(title_clip) = &titles.children[0] else {
+            panic!()
+        };
+        let title_uuid = title_clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.extra.get("clip_uuid"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .expect("title clip should have a stamped clip_uuid");
+
+        let set_env = EdlEnvelope {
+            ops: vec![EdlOp::SetTitle {
+                anchor: Anchor::ClipUuid {
+                    uuid: title_uuid.clone(),
+                },
+                start_s: None,
+                end_s: None,
+                text: Some("Updated".into()),
+                position: None,
+                font_size: None,
+                color: None,
+                font_weight: Some(super::super::op::TitleWeight::Bold),
+                animation: None,
+            }],
+        };
+        let (after_set, _) = apply(&after_insert, &set_env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles2) = &after_set.tracks.children[1] else {
+            panic!()
+        };
+        let TrackChild::Clip(updated) = &titles2.children[0] else {
+            panic!()
+        };
+        let effect = &updated.effects[0];
+        // Updated fields.
+        assert_eq!(
+            effect.metadata.get("text").and_then(|v| v.as_str()),
+            Some("Updated"),
+        );
+        assert_eq!(
+            effect.metadata.get("font_weight").and_then(|v| v.as_str()),
+            Some("bold"),
+        );
+        // Untouched fields preserve their original values.
+        assert_eq!(
+            effect.metadata.get("position").and_then(|v| v.as_str()),
+            Some("center"),
+        );
+        assert_eq!(
+            effect.metadata.get("font_size").and_then(|v| v.as_u64()),
+            Some(64),
+        );
+    }
+
+    #[test]
+    fn apply_set_title_rejects_clip_without_title_effect() {
+        // Anchor a clip-on-V1 (no awidat.title effect) → error.
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetTitle {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                start_s: None,
+                end_s: None,
+                text: Some("nope".into()),
+                position: None,
+                font_size: None,
+                color: None,
+                font_weight: None,
+                animation: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(matches!(&err, ApplyError::Invalid { message, .. } if message.contains("awidat.title")));
     }
 
     #[test]
