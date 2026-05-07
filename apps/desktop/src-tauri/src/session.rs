@@ -10,7 +10,8 @@ use awidat_core::tool::{ApprovalRequest, UserInputRequest};
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
     clip_search::ClipSearchTool, find_beat::FindBeatTool, find_dead_air::FindDeadAirTool,
-    find_eye_contact::FindEyeContactTool, find_moment::FindMomentTool,
+    find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
+    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
     poll_render::PollRenderTool, read_index::ReadIndexTool,
@@ -69,6 +70,8 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(FindMomentTool));
     registry.register(Arc::new(FindDeadAirTool));
+    registry.register(Arc::new(FindFillerWordsTool));
+    registry.register(Arc::new(FindFalseStartsTool));
     registry.register(Arc::new(InspectClipTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(PollRenderTool));
