@@ -105,12 +105,12 @@ fn read_effect_number(
 /// video-track clip's `(asset, source_range)` in playback order.
 /// Skips Gap, Transition, and nested Stack children for v1.
 ///
-/// Wraps [`collect_timeline_plan`] and drops the transitions —
-/// preserved for callers that don't need transition awareness.
+/// Wraps [`collect_timeline_plan`] and drops the transitions +
+/// titles — preserved for callers that don't need either.
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _) = collect_timeline_plan(project_root)?;
+    let (segs, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -122,9 +122,27 @@ pub fn collect_timeline_segments(
 /// Step 14.5: the render pipeline uses this to splice xfade filters
 /// between the segments that have a [`TrackChild::Transition`]
 /// between them on the OTIO track.
+///
+/// Wraps [`collect_timeline_full_plan`] and drops the titles —
+/// preserved for callers that don't need title awareness.
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
+    let (segs, transitions, _) = collect_timeline_full_plan(project_root)?;
+    Ok((segs, transitions))
+}
+
+/// Walk `<project_root>/project.otio.json` and collect segments +
+/// transitions + titles. The Titles track (flagged via
+/// `track.metadata["awidat_track_role"] = "titles"` or matched by
+/// name `"Titles"` for backwards-compat) is excluded from segment
+/// production — its clips are virtual, not media-bearing.
+pub fn collect_timeline_full_plan(
+    project_root: &Path,
+) -> Result<
+    (Vec<TimelineSegment>, Vec<TransitionPlan>, Vec<TitlePlan>),
+    RenderTimelineError,
+> {
     let otio_path = project_root.join(files::OTIO);
     if !otio_path.exists() {
         return Err(RenderTimelineError::NoOtio(otio_path));
@@ -138,9 +156,19 @@ pub fn collect_timeline_plan(
 
     let mut segs = Vec::new();
     let mut transitions = Vec::new();
+    let mut titles = Vec::new();
     for child in &timeline.tracks.children {
         let StackChild::Track(track) = child else { continue };
         if !matches!(track.kind, TrackKind::Video) {
+            continue;
+        }
+        if is_titles_track(track) {
+            // Walk titles separately; don't try to read media off it.
+            for tc in &track.children {
+                let TrackChild::Clip(clip) = tc else { continue };
+                let Some(plan) = parse_title_plan(clip) else { continue };
+                titles.push(plan);
+            }
             continue;
         }
         // Walk the track's children. Clips become segments; a
@@ -199,7 +227,149 @@ pub fn collect_timeline_plan(
             }
         }
     }
-    Ok((segs, transitions))
+    Ok((segs, transitions, titles))
+}
+
+/// True iff the track is the project's Titles track. Mirrors the
+/// apply-side check in `crates/core/src/edl/apply.rs` —
+/// `track.metadata["awidat_track_role"] = "titles"` flag with a
+/// fallback to the canonical name.
+fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
+    if track
+        .metadata
+        .get("awidat_track_role")
+        .and_then(|v| v.as_str())
+        == Some("titles")
+    {
+        return true;
+    }
+    track.name == "Titles"
+}
+
+/// Parse one synthesized title-clip into a [`TitlePlan`]. Returns
+/// `None` if the clip carries no awidat.title effect or required
+/// metadata is missing — the render walk just skips invalid titles
+/// rather than aborting.
+fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.title")?;
+    let m = &effect.metadata;
+    let text = m.get("text").and_then(|v| v.as_str())?.to_string();
+    let start_s = m.get("start_s").and_then(|v| v.as_f64())?;
+    let end_s = m.get("end_s").and_then(|v| v.as_f64())?;
+    if end_s <= start_s {
+        return None;
+    }
+    let position = match m.get("position").and_then(|v| v.as_str()).unwrap_or("center") {
+        "top" => TitlePosition::Top,
+        "bottom" => TitlePosition::Bottom,
+        _ => TitlePosition::Center,
+    };
+    let font_size = m
+        .get("font_size")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u32)
+        .unwrap_or(64);
+    let color = m
+        .get("color")
+        .and_then(|v| v.as_str())
+        .unwrap_or("#FFFFFF")
+        .to_string();
+    let font_weight = match m
+        .get("font_weight")
+        .and_then(|v| v.as_str())
+        .unwrap_or("normal")
+    {
+        "bold" => TitleWeight::Bold,
+        _ => TitleWeight::Normal,
+    };
+    let animation = match m
+        .get("animation")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none")
+    {
+        "fade_in" => TitleAnimation::FadeIn,
+        "fade_out" => TitleAnimation::FadeOut,
+        "fade_in_out" => TitleAnimation::FadeInOut,
+        "slide_in" => TitleAnimation::SlideIn,
+        "slide_out" => TitleAnimation::SlideOut,
+        _ => TitleAnimation::None,
+    };
+    Some(TitlePlan {
+        text,
+        start_s,
+        end_s,
+        position,
+        font_size,
+        color,
+        font_weight,
+        animation,
+    })
+}
+
+/// One title overlay parsed from the project's Titles track. The
+/// FilterPlanner emits one `drawtext=` per title at the end of the
+/// filter graph, chained off the master concat output.
+#[derive(Debug, Clone)]
+pub struct TitlePlan {
+    /// Text to render.
+    pub text: String,
+    /// When the title appears, in master-timeline seconds.
+    pub start_s: f64,
+    /// When the title disappears, in master-timeline seconds.
+    pub end_s: f64,
+    /// Vertical band on the frame.
+    pub position: TitlePosition,
+    /// Font size in pixels (rendered against a 1080p reference frame;
+    /// ffmpeg scales proportionally).
+    pub font_size: u32,
+    /// Hex colour string like `"#FFFFFF"`.
+    pub color: String,
+    /// Bold vs normal weight.
+    pub font_weight: TitleWeight,
+    /// Entry / exit animation.
+    pub animation: TitleAnimation,
+}
+
+/// Mirrors `awidat_core::edl::op::TitlePosition` to avoid a render
+/// → core dep. Render only needs the variants for emitting drawtext
+/// y= expressions; the parsing happens in core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitlePosition {
+    /// Near the top edge.
+    Top,
+    /// Vertically centered.
+    Center,
+    /// Near the bottom edge.
+    Bottom,
+}
+
+/// Mirrors `awidat_core::edl::op::TitleWeight`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleWeight {
+    /// Regular weight.
+    Normal,
+    /// Bold weight.
+    Bold,
+}
+
+/// Mirrors `awidat_core::edl::op::TitleAnimation`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TitleAnimation {
+    /// No animation.
+    None,
+    /// Fade in over the leading 500ms.
+    FadeIn,
+    /// Fade out over the trailing 500ms.
+    FadeOut,
+    /// Fade in at start_s, fade out at end_s.
+    FadeInOut,
+    /// Slide in from off-screen.
+    SlideIn,
+    /// Slide out off-screen.
+    SlideOut,
 }
 
 /// One transition between two segments in the timeline. Step 14.4
@@ -231,13 +401,15 @@ pub struct TransitionPlan {
 /// [`build_timeline_argv`] so future filter types (transitions in
 /// 14.5; volume / speed in Step 15; drawtext in Step 16) can compose
 /// without rewriting the same builder. Behaviour with empty
-/// `transitions` is identical to the pre-extract code.
+/// `transitions` AND empty `titles` is identical to the pre-extract
+/// code.
 ///
 /// The planner doesn't take ownership of the segments or care about
-/// the input source — callers feed the slice by reference.
+/// the input source — callers feed the slices by reference.
 pub struct FilterPlanner<'a> {
     segments: &'a [TimelineSegment],
     transitions: &'a [TransitionPlan],
+    titles: &'a [TitlePlan],
 }
 
 /// Output of [`FilterPlanner::plan`]. Carries everything the caller
@@ -256,14 +428,27 @@ pub struct FilterPlan {
 }
 
 impl<'a> FilterPlanner<'a> {
-    /// Construct a planner over segments + transitions.
+    /// Construct a planner over segments + transitions, with no
+    /// titles. Equivalent to [`Self::with_titles`] passing `&[]`.
     pub fn new(
         segments: &'a [TimelineSegment],
         transitions: &'a [TransitionPlan],
     ) -> Self {
+        Self::with_titles(segments, transitions, &[])
+    }
+
+    /// Construct a planner over segments + transitions + titles.
+    /// Title overlays land as `drawtext=` filters appended to the
+    /// master video output of the segment + transition graph.
+    pub fn with_titles(
+        segments: &'a [TimelineSegment],
+        transitions: &'a [TransitionPlan],
+        titles: &'a [TitlePlan],
+    ) -> Self {
         Self {
             segments,
             transitions,
+            titles,
         }
     }
 
@@ -287,10 +472,55 @@ impl<'a> FilterPlanner<'a> {
     /// output, just without that overlap. Multi-transition chains
     /// land in a future commit.
     pub fn plan(&self) -> FilterPlan {
-        if self.transitions.is_empty() {
-            return self.plan_no_transitions();
+        let base = if self.transitions.is_empty() {
+            self.plan_no_transitions()
+        } else {
+            self.plan_with_transitions()
+        };
+        if self.titles.is_empty() {
+            return base;
         }
-        self.plan_with_transitions()
+        self.append_titles(base)
+    }
+
+    /// Splice a `drawtext=` chain onto `base.video_out_label` and
+    /// rename the master video output to `[outv]` afterwards. Audio
+    /// passes through untouched. The `enable='between(t,start,end)'`
+    /// expression on each drawtext bounds the title to its window so
+    /// concurrent titles all live in the same chain without
+    /// interfering.
+    fn append_titles(&self, base: FilterPlan) -> FilterPlan {
+        // Pick a stable intermediate label. The base already produced
+        // [outv] / [outa]; we rename [outv] → [base_v] inside the
+        // filter_complex by appending a drawtext chain that consumes
+        // [base_v] and produces a fresh [titled_v]. We then expose
+        // [titled_v] as the new video_out_label.
+        //
+        // Strategy: don't try to rename the existing label (we'd have
+        // to rewrite the filter graph); instead, take the base's
+        // video_out_label as our INPUT and produce a new output.
+        let in_label = base.video_out_label.clone();
+        let out_label = "[titled_v]".to_string();
+
+        let mut filter = base.filter_complex.clone();
+        filter.push(';');
+        filter.push_str(&in_label);
+        // Comma-separate the drawtext filters so they all run on the
+        // same input → single output. drawtext's `enable=` keeps each
+        // bounded to its window without cross-contamination.
+        let parts: Vec<String> = self
+            .titles
+            .iter()
+            .map(format_drawtext_filter)
+            .collect();
+        filter.push_str(&parts.join(","));
+        filter.push_str(&out_label);
+
+        FilterPlan {
+            filter_complex: filter,
+            video_out_label: out_label,
+            audio_out_label: base.audio_out_label,
+        }
     }
 
     fn plan_no_transitions(&self) -> FilterPlan {
@@ -471,6 +701,89 @@ fn stage_segment_inputs(
     (video_label, audio_label)
 }
 
+/// Build one ffmpeg `drawtext=...` filter from a title plan.
+/// Step 16.3 emits the basic shape (text + position + size + color +
+/// weight + enable window); animations land in 16.4.
+///
+/// Position uses proportional y= expressions so titles survive
+/// resolution changes:
+///   - top    → `y=h*0.05`
+///   - center → `y=(h-text_h)/2`
+///   - bottom → `y=h*0.85`
+///
+/// `text_h` and `text_w` are drawtext-evaluated dimensions of the
+/// rendered text; `h` and `w` are the frame dimensions.
+fn format_drawtext_filter(t: &TitlePlan) -> String {
+    let escaped_text = drawtext_escape(&t.text);
+    let y_expr = match t.position {
+        TitlePosition::Top => "h*0.05".to_string(),
+        TitlePosition::Center => "(h-text_h)/2".to_string(),
+        TitlePosition::Bottom => "h*0.85".to_string(),
+    };
+    let weight_attr = match t.font_weight {
+        TitleWeight::Normal => "",
+        // ffmpeg drawtext doesn't have a `font_weight=` flag — bold
+        // is communicated via the fontfile itself. Without a custom
+        // bold font bundle, we approximate bold by stroking the
+        // text with the same color (`borderw` adds a thicker outline,
+        // which visually thickens the strokes).
+        TitleWeight::Bold => ":borderw=2",
+    };
+    let fontfile = pick_fontfile_attr();
+    format!(
+        "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{weight}\
+         :x=(w-text_w)/2:y={y}:enable='between(t\\,{start}\\,{end})'",
+        text = escaped_text,
+        font = fontfile,
+        size = t.font_size,
+        color = t.color,
+        weight = weight_attr,
+        y = y_expr,
+        start = t.start_s,
+        end = t.end_s,
+    )
+}
+
+/// Escape characters drawtext treats as special inside `text='...'`.
+/// drawtext uses `\` to escape `:`, `'`, `\`, and `,` — we don't
+/// support newlines (single-line titles in v1).
+fn drawtext_escape(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\\' => "\\\\".to_string(),
+            '\'' => "\\'".to_string(),
+            ':' => "\\:".to_string(),
+            ',' => "\\,".to_string(),
+            other => other.to_string(),
+        })
+        .collect()
+}
+
+/// Best-effort font lookup. Returns either an empty string (let
+/// ffmpeg's drawtext fall back to its default font search) or a
+/// `:fontfile=<path>` segment ready to splice into the filter args.
+///
+/// We probe a small list of well-known system fonts in priority
+/// order: macOS Helvetica, Linux DejaVu, Linux Liberation. If none
+/// resolve, we omit `fontfile=` and rely on ffmpeg's default —
+/// recent ffmpeg builds (5+) handle this gracefully on macOS; older
+/// builds may fail at render time with a clear "no fontfile" error.
+fn pick_fontfile_attr() -> String {
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    ];
+    for path in CANDIDATES {
+        if std::path::Path::new(path).is_file() {
+            return format!(":fontfile={path}");
+        }
+    }
+    String::new()
+}
+
 /// Effective on-timeline duration of a segment, accounting for any
 /// awidat.speed effect: `duration_s / factor` when factor is set,
 /// raw `duration_s` otherwise. A 4s clip at 2× plays in 2s; at 0.5×
@@ -546,13 +859,26 @@ pub fn build_timeline_argv(segs: &[TimelineSegment], output_path: &Path) -> Vec<
 }
 
 /// Like [`build_timeline_argv`] but accepts a transitions slice that
-/// gets composed into the filter graph. Step 14.4 ships the
-/// pass-through path (transitions slice is asserted empty by the
-/// FilterPlanner); 14.5 wires the xfade path when transitions are
-/// non-empty.
+/// gets composed into the filter graph. Wraps
+/// [`build_timeline_argv_full`] with no titles — preserved for
+/// callers that don't need title awareness.
 pub fn build_timeline_argv_with_transitions(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
+    output_path: &Path,
+) -> Vec<String> {
+    build_timeline_argv_full(segs, transitions, &[], output_path)
+}
+
+/// Like [`build_timeline_argv_with_transitions`] but also takes a
+/// titles slice. Each [`TitlePlan`] becomes a `drawtext=` filter
+/// chained off the master video output of the segment + transition
+/// graph. Step 16.3 ships the basic shape (no animation);
+/// 16.4 wires alpha / x / y expressions for animations.
+pub fn build_timeline_argv_full(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    titles: &[TitlePlan],
     output_path: &Path,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
@@ -566,7 +892,7 @@ pub fn build_timeline_argv_with_transitions(
             s.asset_path.to_string_lossy().into_owned(),
         ]);
     }
-    let plan = FilterPlanner::new(segs, transitions).plan();
+    let plan = FilterPlanner::with_titles(segs, transitions, titles).plan();
     argv.extend([
         "-filter_complex".into(),
         plan.filter_complex,
@@ -596,21 +922,22 @@ pub fn build_timeline_argv_with_transitions(
 pub fn build_timeline_render_spec(
     project_root: &Path,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
-    let (segs, transitions) = collect_timeline_plan(project_root)?;
+    let (segs, transitions, titles) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
     }
     // Total duration is the sum of each segment's *effective*
     // duration (post-speed) minus the cumulative transition
     // overlap. A 4s clip at 2× contributes 2s; a 0.5s transition
-    // overlaps two effective durations by 0.5s.
+    // overlaps two effective durations by 0.5s. Titles are
+    // overlays — they don't add to the master timeline length.
     let raw_total: f64 = segs.iter().map(effective_duration).sum();
     let trans_total: f64 = transitions.iter().map(|t| t.duration_s).sum();
     let total_duration_s = (raw_total - trans_total).max(0.0);
     let renders_dir = project_root.join("renders");
     let timestamp = Utc::now().format("%H%M%S");
     let output_path = renders_dir.join(format!("timeline-{}.mp4", timestamp));
-    let argv = build_timeline_argv_with_transitions(&segs, &transitions, &output_path);
+    let argv = build_timeline_argv_full(&segs, &transitions, &titles, &output_path);
     Ok(RenderJobSpec {
         args: argv,
         total_duration_s: Some(total_duration_s),
@@ -978,6 +1305,96 @@ mod tests {
             "filter graph: {}",
             plan.filter_complex,
         );
+    }
+
+    #[test]
+    fn filter_planner_appends_drawtext_for_title_overlay() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let title = TitlePlan {
+            text: "Hello".into(),
+            start_s: 0.0,
+            end_s: 3.0,
+            position: TitlePosition::Top,
+            font_size: 64,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Normal,
+            animation: TitleAnimation::None,
+        };
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+        assert!(
+            plan.filter_complex.contains("drawtext=text='Hello'"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("fontsize=64"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("fontcolor=#FFFFFF"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("y=h*0.05"),
+            "filter graph (top position): {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("enable='between(t\\,0\\,3)'"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // The video output label is now [titled_v]; audio still
+        // [outa].
+        assert_eq!(plan.video_out_label, "[titled_v]");
+        assert_eq!(plan.audio_out_label, "[outa]");
+    }
+
+    #[test]
+    fn filter_planner_chains_multiple_titles_with_commas() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
+        let titles = vec![
+            TitlePlan {
+                text: "One".into(),
+                start_s: 0.0,
+                end_s: 3.0,
+                position: TitlePosition::Top,
+                font_size: 64,
+                color: "#FFFFFF".into(),
+                font_weight: TitleWeight::Normal,
+                animation: TitleAnimation::None,
+            },
+            TitlePlan {
+                text: "Two".into(),
+                start_s: 5.0,
+                end_s: 8.0,
+                position: TitlePosition::Bottom,
+                font_size: 48,
+                color: "#FFAA00".into(),
+                font_weight: TitleWeight::Bold,
+                animation: TitleAnimation::None,
+            },
+        ];
+        let plan = FilterPlanner::with_titles(&[s0], &[], &titles).plan();
+        // Both titles land in the chain.
+        assert!(plan.filter_complex.contains("text='One'"));
+        assert!(plan.filter_complex.contains("text='Two'"));
+        // Bold position uses borderw fallback (no bold-fontfile bundle).
+        assert!(plan.filter_complex.contains("borderw=2"));
+        // Bottom position uses h*0.85.
+        assert!(plan.filter_complex.contains("y=h*0.85"));
+    }
+
+    #[test]
+    fn drawtext_escape_handles_special_chars() {
+        let s = drawtext_escape("text: with 'quote', backslash\\");
+        assert!(s.contains("\\:"));
+        assert!(s.contains("\\'"));
+        assert!(s.contains("\\\\"));
+        assert!(s.contains("\\,"));
     }
 
     #[test]
