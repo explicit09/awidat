@@ -310,6 +310,24 @@ pub enum Item {
         /// non-continuity kinds.
         #[serde(default)]
         continuity_reasons: Option<Vec<String>>,
+        /// For `broll_suggestion` notes: the Pexels search query the
+        /// agent generated when surfacing the note. Used by the UI's
+        /// "Search Pexels" button (which dispatches a chat directive
+        /// asking the agent to call `search_broll(query)` on the
+        /// user's behalf). `None` for non-broll kinds.
+        ///
+        /// Step 3.4 added this so the BrollNoteCard knows what to
+        /// search for without asking the agent to re-derive the
+        /// query mid-flow.
+        #[serde(default)]
+        broll_query: Option<String>,
+        /// For `broll_suggestion` notes: pre-fetched preview thumbnails
+        /// (when the agent has already called `search_broll`). When
+        /// present, the BrollNoteCard renders a thumbnail row with
+        /// click-to-place. When absent, the card shows the query
+        /// alongside a "Search Pexels" affordance.
+        #[serde(default)]
+        broll_previews: Option<Vec<BrollPreview>>,
     },
 }
 
@@ -403,6 +421,30 @@ pub enum ContinuityVerdictTag {
     /// the agent surfaces these to tell the user the project may
     /// need indexing.
     Abstain,
+}
+
+/// One Pexels preview attached to a [`Item::EditorialNote`] of kind
+/// `broll_suggestion`. The agent populates this when it has already
+/// called `search_broll` and wants to surface the top hits inline.
+/// The UI renders a thumbnail row with click-to-place; clicking
+/// triggers a chat directive that calls `use_broll(pexels_id, ...)`.
+///
+/// Step 3.4 added this for the BrollNoteCard.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct BrollPreview {
+    /// Pexels video id — pass to `use_broll` to download.
+    pub pexels_id: u64,
+    /// JPEG thumbnail URL the UI shows in the preview row.
+    pub thumbnail_url: String,
+    /// Native length of the source clip in seconds. Informational —
+    /// the actual cutaway in the timeline is `duration_s` from the
+    /// note (or whatever the user picks).
+    pub duration_s: u32,
+    /// Attribution string ready to display ("by Alice").
+    pub attribution: String,
+    /// Pexels page URL — link target for the attribution string.
+    pub pexels_page: String,
 }
 
 /// What kind of editorial finding an [`Item::EditorialNote`] holds.

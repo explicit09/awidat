@@ -2232,3 +2232,97 @@ body,
   flex-direction: column;
   gap: 4px;
 }
+
+/* Phase 3.4 — b-roll note card. Adds a thumbnail row + Pexels
+ * metadata under the summary. The card itself reuses .note-card. */
+.note-card-broll {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.note-broll-query {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.note-broll-query code {
+  background: var(--bg-elev2);
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 11px;
+}
+
+.note-broll-previews {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  overflow-x: auto;
+}
+
+.note-broll-thumb {
+  flex: 0 0 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.note-broll-thumb img {
+  width: 120px;
+  height: 68px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.note-broll-thumb img:hover {
+  border-color: var(--accent);
+}
+
+.note-broll-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-muted);
+  gap: 4px;
+}
+
+.note-broll-meta a {
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.note-broll-meta a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.note-broll-duration {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.note-broll-use {
+  background: var(--accent);
+  color: var(--bg);
+  border: 0;
+  border-radius: 3px;
+  padding: 2px 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.note-broll-use:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.note-broll-use:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

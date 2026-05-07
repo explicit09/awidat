@@ -20,6 +20,7 @@ import { useNotesStore, type DismissalBucket, type Note } from "./store";
 import { useProjectStore } from "../app/state";
 import { useMediaStore } from "../media/store";
 import type { EditorialNoteKind } from "../protocol";
+import { BrollNoteCard } from "./BrollNoteCard";
 
 /** Cap on visible open notes before the panel collapses tail
  *  entries behind a "show all" affordance. Long podcasts can
@@ -101,7 +102,7 @@ export function NotesPanel() {
             <div className="notes-empty">No open notes — the agent hasn't flagged anything yet.</div>
           )}
           {visibleOpen.map((n) => (
-            <NoteCard key={n.id} note={n} onStatus={setStatus} />
+            <NoteCardDispatch key={n.id} note={n} onStatus={setStatus} />
           ))}
           {hiddenOpenCount > 0 && (
             <button
@@ -115,10 +116,10 @@ export function NotesPanel() {
           {resolved.length > 0 || dismissed.length > 0 ? (
             <div className="notes-archive">
               {resolved.slice(0, 5).map((n) => (
-                <NoteCard key={n.id} note={n} onStatus={setStatus} faded />
+                <NoteCardDispatch key={n.id} note={n} onStatus={setStatus} faded />
               ))}
               {dismissed.slice(0, 3).map((n) => (
-                <NoteCard key={n.id} note={n} onStatus={setStatus} faded />
+                <NoteCardDispatch key={n.id} note={n} onStatus={setStatus} faded />
               ))}
             </div>
           ) : null}
@@ -126,6 +127,24 @@ export function NotesPanel() {
       )}
     </section>
   );
+}
+
+/** Dispatcher that routes b-roll notes to the BrollNoteCard variant
+ *  and everything else to the default NoteCard. Keeps the panel's
+ *  iteration site simple. */
+function NoteCardDispatch(props: {
+  note: Note;
+  onStatus: (
+    id: string,
+    status: "open" | "resolved" | "dismissed",
+    bucket?: DismissalBucket,
+  ) => Promise<void>;
+  faded?: boolean;
+}) {
+  if (props.note.kind === "broll_suggestion") {
+    return <BrollNoteCard {...props} />;
+  }
+  return <NoteCard {...props} />;
 }
 
 function NoteCard({

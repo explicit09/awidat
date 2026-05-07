@@ -15,6 +15,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  BrollPreview,
   ContinuityVerdictTag,
   EditorialNoteKind,
   EditorialNoteStatus,
@@ -38,6 +39,14 @@ export type Note = {
   /** Per-rule reasons for `continuity_warning` notes (rendered as
    *  bullets under the summary). `undefined` for other kinds. */
   continuityReasons?: string[];
+  /** For `broll_suggestion` notes only — Pexels query the agent
+   *  generated. `undefined` for other kinds. */
+  brollQuery?: string;
+  /** For `broll_suggestion` notes only — pre-fetched Pexels preview
+   *  thumbnails. When present, the BrollNoteCard renders a
+   *  thumbnail row with click-to-place. `undefined` when the agent
+   *  hasn't searched yet. */
+  brollPreviews?: BrollPreview[];
 };
 
 /** Disk shape — must match crates/core/src/notes.rs::NotesFile. */
@@ -52,6 +61,8 @@ type NotesFile = {
     suggested_proposal?: string;
     continuity_verdict?: string;
     continuity_reasons?: string[];
+    broll_query?: string;
+    broll_previews?: BrollPreview[];
   }>;
 };
 
@@ -63,7 +74,8 @@ export type DismissalBucket =
   | { kind: "silence_over_5s" }
   | { kind: "filler_basic" }
   | { kind: "filler_aggressive" }
-  | { kind: "false_start" };
+  | { kind: "false_start" }
+  | { kind: "broll_opportunity" };
 
 type State = {
   notes: Note[];
@@ -95,6 +107,8 @@ function deserialize(file: NotesFile): Note[] {
     suggestedProposal: n.suggested_proposal,
     continuityVerdict: n.continuity_verdict as ContinuityVerdictTag | undefined,
     continuityReasons: n.continuity_reasons,
+    brollQuery: n.broll_query,
+    brollPreviews: n.broll_previews,
   }));
 }
 
@@ -127,6 +141,8 @@ export const useNotesStore = create<State>((set, get) => ({
           suggested_proposal: item.suggested_proposal ?? null,
           continuity_verdict: item.continuity_verdict ?? null,
           continuity_reasons: item.continuity_reasons ?? null,
+          broll_query: item.broll_query ?? null,
+          broll_previews: item.broll_previews ?? null,
         },
       });
       await get().refresh();

@@ -55,6 +55,18 @@ pub struct PersistedNote {
     /// for non-continuity kinds. Phase 2.5.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub continuity_reasons: Option<Vec<String>>,
+    /// For `broll_suggestion` notes: the Pexels search query the
+    /// agent generated. Used by the BrollNoteCard's "Search Pexels"
+    /// affordance. `None` for non-broll kinds. Phase 3.4.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub broll_query: Option<String>,
+    /// For `broll_suggestion` notes: pre-fetched preview thumbnails
+    /// (when the agent has already called `search_broll`). Each
+    /// preview is `{ pexels_id, thumbnail_url, duration_s,
+    /// attribution, pexels_page }`. `None` for non-broll kinds.
+    /// Phase 3.4.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub broll_previews: Option<Vec<serde_json::Value>>,
 }
 
 /// On-disk shape: versioned wrapper so future schema growth
@@ -160,6 +172,8 @@ mod tests {
             suggested_proposal: None,
             continuity_verdict: None,
             continuity_reasons: None,
+            broll_query: None,
+            broll_previews: None,
         }
     }
 
