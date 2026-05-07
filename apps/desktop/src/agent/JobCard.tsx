@@ -32,6 +32,7 @@ export function JobCard({ item }: Props) {
     transcode: "transcode (proxy)",
     thumbnails: "thumbnails",
     waveform: "waveform",
+    silences: "silences",
     indexing: "indexing",
     render: "export",
   };

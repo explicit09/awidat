@@ -252,6 +252,47 @@ pub enum Item {
         /// "Show in Finder" button on Render's Completed-Ok phase.
         output_path: Option<String>,
     },
+    /// An editorial finding the agent surfaced — "I noticed this,
+    /// you decide." Distinct from [`Self::ProposedEdit`]: a Note is
+    /// passive (no pending mutation), and lives in its own UI panel
+    /// rather than the timeline canvas. Notes have a stable identity
+    /// (the `id` field), persist across sessions via
+    /// `<project>/.awidat/notes.json`, and have a three-state
+    /// lifecycle: `open` → `resolved` (user took action) or
+    /// `dismissed` (user explicitly rejected this finding).
+    ///
+    /// Step 1.1 wires the protocol surface; Steps 1.4–1.7 land the
+    /// tools that emit Notes + the panel UI that renders them.
+    EditorialNote {
+        /// Stable id (matches the underlying Note record so dismiss /
+        /// resolve commands can find it).
+        id: Id,
+        /// Lifecycle phase — `Started` on first emission, `Delta`
+        /// when the lifecycle status changes, `Completed` when the
+        /// note is fully resolved or dismissed (UI may then fade it).
+        phase: ItemLifecycle,
+        /// What kind of finding this is. The UI renders an icon
+        /// per kind and the dismissal pattern matcher buckets by it.
+        ///
+        /// Named `note_kind` (not `kind`) to avoid colliding with the
+        /// outer `Item` enum's `#[serde(tag = "kind")]` discriminator —
+        /// same shape as `EdlOp`'s `op` tag-rename pattern.
+        note_kind: EditorialNoteKind,
+        /// Open / resolved / dismissed.
+        status: EditorialNoteStatus,
+        /// Master-timeline seconds where the finding centers. UI
+        /// uses this for click-to-seek.
+        anchor_at_s: f64,
+        /// One-line human summary the panel renders ("dead air at
+        /// 2:14 — 2.4s of silence").
+        summary: String,
+        /// Optional EDL text the user can apply directly via "Generate
+        /// Proposal." `None` when the agent hasn't pre-built a fix
+        /// (the user might still ask the agent to act on the note in
+        /// chat). When `Some`, the panel's "Generate Proposal" button
+        /// pipes this through `propose_user_edit`.
+        suggested_proposal: Option<String>,
+    },
 }
 
 /// Discriminator for [`Item::Job`]. The frontend doesn't render
@@ -282,6 +323,12 @@ pub enum JobKind {
     /// audio tracks. Fires alongside `Thumbnails` once the proxy has
     /// landed.
     Waveform,
+    /// Silence range detection over a single asset. Produces a JSON
+    /// sidecar of `(start_s, end_s, db_floor)` ranges under
+    /// `<project>/.awidat/silences/<stem>-<hash>.json` that the
+    /// `find_dead_air` tool reads. Fires alongside `Waveform` once
+    /// the proxy has landed.
+    Silences,
     /// `awidat_index::run` over the project.
     Indexing,
     /// `awidat_render::build_timeline_render_spec` + `JobManager::start`
@@ -308,6 +355,93 @@ pub enum JobResult {
     },
     /// User cancelled the job.
     Cancelled,
+}
+
+/// What kind of editorial finding an [`Item::EditorialNote`] holds.
+/// The dismissal-pattern matcher buckets by this so the user can
+/// dismiss (e.g.) "all silence_trim notes" without having to dismiss
+/// each one individually.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum EditorialNoteKind {
+    /// Dead-air range the agent suggests trimming (silence > N seconds
+    /// at the kind's threshold bucket).
+    SilenceTrim,
+    /// A filler word ("um", "uh", etc) that could be cut.
+    FillerWord,
+    /// A false-start — speaker began a thought, abandoned it, restarted.
+    FalseStart,
+    /// A continuity warning — a pending or proposed cut that risks
+    /// jarring (mid-sentence, mid-motion, etc). Surfaced by Phase 2.
+    ContinuityWarning,
+    /// A b-roll opportunity — a moment that would land better with
+    /// a visual. Surfaced by Phase 3.
+    BrollSuggestion,
+    /// Anything else the agent wants to surface. UI renders with a
+    /// generic icon. Avoid leaning on this for things that ought to
+    /// have a typed kind — adding a variant is cheap.
+    Generic,
+}
+
+/// Lifecycle of an [`Item::EditorialNote`]. Persists across sessions
+/// via `<project>/.awidat/notes.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum EditorialNoteStatus {
+    /// Surfaced by the agent; user hasn't acted.
+    Open,
+    /// User accepted a generated proposal, or hand-edited the
+    /// relevant section. Renders dimmed in the panel.
+    Resolved,
+    /// User explicitly rejected this finding. The dismissal pattern
+    /// is also persisted in `dismissed_patterns.json` so the agent
+    /// won't re-surface the same kind/threshold bucket later.
+    Dismissed,
+}
+
+/// What "shape" of project this is. Drives per-format system-prompt
+/// defaults and editorial heuristics. `Other` carries a free-text
+/// description the agent appends to its system prompt verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProjectType {
+    /// Long-form podcast cleanup — the v1 specialized mode.
+    Podcast,
+    /// Short-form vertical (60s, hook in first 3s, fast cuts).
+    /// Gets specialized prompts in Phase 4.
+    Shorts,
+    /// Tutorial / demo / screencast — hold key frames longer, never
+    /// cut over a code-typing moment. Specialized in Phase 4.
+    Tutorial,
+    /// Anything else. The free-text `description` is appended to
+    /// the agent's system prompt so it has *something* to anchor on.
+    Other {
+        /// User-provided one-paragraph project description.
+        description: String,
+    },
+}
+
+/// User's permission level for the agent's autonomous editing. Maps
+/// to Claude Code's permission modes (manual / accept-edits /
+/// bypass). The dropdown lives in the action bar; selection persists
+/// per project at `<project>/.awidat/permission_mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    /// Default. Every proposal needs explicit Accept; agent doesn't
+    /// surface editorial Notes proactively unless asked.
+    Manual,
+    /// Agent surfaces Notes for everything it finds; doesn't propose
+    /// edits unless the user (or the Note's "Generate Proposal"
+    /// button) asks.
+    Copilot,
+    /// Agent bundles all findings into one proposal at session end.
+    /// User accepts or rejects the bundle.
+    Autopilot,
 }
 
 /// One row in a Plan item — mirrors `awidat_core::tool::PlanItem` but

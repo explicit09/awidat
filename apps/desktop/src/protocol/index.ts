@@ -30,6 +30,11 @@ export type { Transcript } from "./generated/Transcript";
 export type { TranscriptSegment } from "./generated/TranscriptSegment";
 export type { TranscriptWord } from "./generated/TranscriptWord";
 export type { TranscriptSpeaker } from "./generated/TranscriptSpeaker";
+// Editorial perception (Phase 1).
+export type { EditorialNoteKind } from "./generated/EditorialNoteKind";
+export type { EditorialNoteStatus } from "./generated/EditorialNoteStatus";
+export type { ProjectType } from "./generated/ProjectType";
+export type { PermissionMode } from "./generated/PermissionMode";
 
 // Tauri event channel names. Mirror the constants in
 // `apps/desktop/src-tauri/src/lib.rs` — there is no runtime check.
