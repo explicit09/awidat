@@ -160,16 +160,22 @@ fn permission_line(mode: PromptPermissionMode) -> &'static str {
     match mode {
         PromptPermissionMode::Manual =>
             "**Permission mode: manual.** Every proposal needs explicit user approval. \
-             Surface findings via Editorial Notes when asked; don't propose edits unprompted.",
+             Surface findings via Editorial Notes when asked; don't propose edits unprompted. \
+             For dirty continuity verdicts, surface a continuity_warning Note quoting the \
+             rule reasons rather than auto-bundling a transition — the user decides.",
         PromptPermissionMode::Copilot =>
             "**Permission mode: copilot.** Surface editorial findings as Notes proactively. \
              Don't issue apply_edl proposals unless the user explicitly asks (or clicks 'Fix' \
-             on a Note); your role is to flag, the user's role is to act.",
+             on a Note); your role is to flag, the user's role is to act. For dirty continuity \
+             verdicts, the Note's reasons array is the user's primary signal — they decide \
+             whether to accept the bundled fix you suggested or cut anyway.",
         PromptPermissionMode::Autopilot =>
             "**Permission mode: autopilot.** When the user asks for cleanup, scan for findings \
              and bundle them into a single apply_edl envelope rather than emitting them \
-             one-by-one. The user reviews the bundle in the ghost overlay and accepts or \
-             rejects as a whole.",
+             one-by-one. For dirty continuity verdicts, silently bundle a 0.3s SMPTE_Dissolve \
+             via the bundle_with_dissolve pattern — don't ask, just include the transition \
+             in the envelope. The user reviews the bundle in the ghost overlay and accepts \
+             or rejects as a whole.",
     }
 }
 
