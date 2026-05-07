@@ -368,10 +368,12 @@ impl<'a> FilterPlanner<'a> {
                 let v_label = format!("[xv{chunk_id}]");
                 let a_label = format!("[xa{chunk_id}]");
                 let xfade_kind = map_transition_kind(&t.kind);
-                // xfade offset = the from-segment's duration minus
-                // the transition duration. Both inputs must be at
-                // the cut point at offset `from.duration - duration`.
-                let from_dur = self.segments[i].duration_s;
+                // xfade offset = the from-segment's *post-speed*
+                // duration minus the transition duration. Both inputs
+                // must be at the cut point at offset
+                // `effective_duration - transition.duration`. A
+                // 4s clip at 2x speed has effective duration 2s.
+                let from_dur = effective_duration(&self.segments[i]);
                 let offset = (from_dur - t.duration_s).max(0.0);
                 filter.push_str(&format!(
                     "{from_v}{to_v}xfade=transition={kind}:duration={dur}:offset={off}{out};",
@@ -420,29 +422,100 @@ impl<'a> FilterPlanner<'a> {
 }
 
 /// Build the per-segment video / audio entry labels into `filter`.
-/// When the segment has no awidat.volume effect (or it's exactly
-/// 1.0), the labels are the raw `[i:v:0]` / `[i:a:0]` from ffmpeg's
-/// input streams. When awidat.volume is set to a non-unity value, a
-/// `[i:a:0]volume=<v>[av<i>]` filter chain prepends and the audio
-/// label becomes `[av<i>]`.
+/// Threads awidat.volume / awidat.speed effects in front of the raw
+/// stream so downstream filter graph nodes (concat, xfade) read the
+/// post-effect labels.
 ///
-/// Step 15.4 will extend this to also handle awidat.speed via
-/// `setpts` on video + chained `atempo` on audio.
+/// Order matters: for audio, `atempo` runs before `volume` so the
+/// volume gain applies to the time-stretched signal (avoiding any
+/// rate-dependent gain artifacts from atempo). For video, `setpts`
+/// is the only stage we touch in v1.
+///
+/// Returns the `(video_label, audio_label)` pair to feed into the
+/// next filter graph node.
 fn stage_segment_inputs(
     filter: &mut String,
     i: usize,
     seg: &TimelineSegment,
 ) -> (String, String) {
-    let video_label = format!("[{i}:v:0]");
+    let mut video_label = format!("[{i}:v:0]");
     let mut audio_label = format!("[{i}:a:0]");
+
+    // Speed first: setpts on video, atempo (possibly chained) on audio.
+    if let Some(factor) = seg.speed
+        && (factor - 1.0).abs() > 1e-9
+        && factor > 0.0
+    {
+        let sv = format!("[sv{i}]");
+        filter.push_str(&format!(
+            "{video_label}setpts={inv}*PTS{sv};",
+            inv = 1.0 / factor,
+        ));
+        video_label = sv;
+
+        let sa = format!("[sa{i}]");
+        let chain = atempo_chain(factor);
+        filter.push_str(&format!("{audio_label}{chain}{sa};"));
+        audio_label = sa;
+    }
+
+    // Volume next: applies to whatever the audio_label currently
+    // points at (raw input or speed-stretched stream).
     if let Some(v) = seg.volume
         && (v - 1.0).abs() > 1e-9
     {
         let av = format!("[av{i}]");
-        filter.push_str(&format!("[{i}:a:0]volume={v}{av};"));
+        filter.push_str(&format!("{audio_label}volume={v}{av};"));
         audio_label = av;
     }
     (video_label, audio_label)
+}
+
+/// Effective on-timeline duration of a segment, accounting for any
+/// awidat.speed effect: `duration_s / factor` when factor is set,
+/// raw `duration_s` otherwise. A 4s clip at 2× plays in 2s; at 0.5×
+/// it plays in 8s.
+fn effective_duration(seg: &TimelineSegment) -> f64 {
+    match seg.speed {
+        Some(f) if f > 0.0 => seg.duration_s / f,
+        _ => seg.duration_s,
+    }
+}
+
+/// Decompose a speed factor into a chain of `atempo=` calls, each
+/// in atempo's per-instance legal range `[0.5, 2.0]`. Returns a
+/// string like `atempo=2.0,atempo=2.0` for factor=4, or `atempo=0.5,
+/// atempo=0.6` for factor=0.3. Caller is responsible for prepending
+/// the input label and appending the output label.
+fn atempo_chain(factor: f64) -> String {
+    // atempo's legal range is [0.5, 2.0] per filter instance.
+    // - factor >= 0.5 && factor <= 2.0 → single atempo=<factor>.
+    // - factor > 2.0 → chain atempo=2.0 stages until product >= factor,
+    //   then a remainder.
+    // - factor < 0.5 → chain atempo=0.5 stages until product <= factor,
+    //   then a remainder.
+    if (0.5..=2.0).contains(&factor) {
+        return format!("atempo={factor}");
+    }
+    let mut stages = Vec::<f64>::new();
+    let mut remaining = factor;
+    if factor > 2.0 {
+        while remaining > 2.0 {
+            stages.push(2.0);
+            remaining /= 2.0;
+        }
+    } else {
+        while remaining < 0.5 {
+            stages.push(0.5);
+            remaining /= 0.5;
+        }
+    }
+    stages.push(remaining);
+    stages
+        .into_iter()
+        .map(|s| format!("atempo={s}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Map an OTIO transition kind to an ffmpeg `xfade=transition=` name.
@@ -527,10 +600,11 @@ pub fn build_timeline_render_spec(
     if segs.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
     }
-    // Total duration accounts for each transition's overlap — the
-    // visual timeline is shorter than the sum of segment durations
-    // by the cumulative transition durations.
-    let raw_total: f64 = segs.iter().map(|s| s.duration_s).sum();
+    // Total duration is the sum of each segment's *effective*
+    // duration (post-speed) minus the cumulative transition
+    // overlap. A 4s clip at 2× contributes 2s; a 0.5s transition
+    // overlaps two effective durations by 0.5s.
+    let raw_total: f64 = segs.iter().map(effective_duration).sum();
     let trans_total: f64 = transitions.iter().map(|t| t.duration_s).sum();
     let total_duration_s = (raw_total - trans_total).max(0.0);
     let renders_dir = project_root.join("renders");
@@ -803,6 +877,104 @@ mod tests {
         // acrossfade reads [0:a:0] (no volume on s0) and [av1] (volume on s1).
         assert!(
             plan.filter_complex.contains("[0:a:0][av1]acrossfade"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_setpts_and_atempo_for_speed_segment() {
+        // Step 15.4: a segment with speed=2.0 prepends setpts on
+        // video and atempo on audio, threads the [sv<i>]/[sa<i>]
+        // labels into the concat.
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.speed = Some(2.0);
+        let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
+        let plan = FilterPlanner::new(&[s0, s1], &[]).plan();
+        // setpts on video with 1/factor.
+        assert!(
+            plan.filter_complex.contains("[0:v:0]setpts=0.5*PTS[sv0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // atempo single-stage (factor 2.0 sits inside [0.5, 2.0]).
+        assert!(
+            plan.filter_complex.contains("[0:a:0]atempo=2[sa0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // Concat for seg 0 reads [sv0][sa0].
+        assert!(
+            plan.filter_complex.contains("[sv0][sa0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_chains_atempo_for_extreme_speed() {
+        // factor=4.0 → atempo=2.0 twice (2.0 × 2.0 = 4.0).
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.speed = Some(4.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex.contains("atempo=2,atempo=2"),
+            "expected chained atempo for factor=4, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_chains_atempo_for_slow_speed() {
+        // factor=0.25 → atempo=0.5 twice (0.5 × 0.5 = 0.25).
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.speed = Some(0.25);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex.contains("atempo=0.5,atempo=0.5"),
+            "expected chained atempo for factor=0.25, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_speed_uses_effective_duration_for_xfade_offset() {
+        // 4s @ 2× = 2s effective. xfade duration 0.5 → offset 1.5
+        // (effective − transition.duration).
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.speed = Some(2.0);
+        let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
+        let trans = vec![TransitionPlan {
+            from_segment_index: 0,
+            to_segment_index: 1,
+            kind: "SMPTE_Dissolve".into(),
+            duration_s: 0.5,
+        }];
+        let plan = FilterPlanner::new(&[s0, s1], &trans).plan();
+        assert!(
+            plan.filter_complex.contains("offset=1.5"),
+            "expected offset=1.5 (post-speed), got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_speed_and_volume_compose_in_order() {
+        // Both effects on the same segment: setpts/atempo run first,
+        // then volume runs on the time-stretched audio.
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.speed = Some(2.0);
+        s0.volume = Some(0.5);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        // atempo runs first (input [0:a:0] → [sa0]).
+        assert!(
+            plan.filter_complex.contains("[0:a:0]atempo=2[sa0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        // volume runs next on [sa0] → [av0].
+        assert!(
+            plan.filter_complex.contains("[sa0]volume=0.5[av0]"),
             "filter graph: {}",
             plan.filter_complex,
         );
