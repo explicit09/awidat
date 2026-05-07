@@ -89,11 +89,224 @@ export function PropertiesPane() {
             {item.clip_uuid}
           </code>
         </Field>
-        <VolumeControl clipUuid={item.clip_uuid} value={item.volume} />
-        <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
+        {item.title ? (
+          <TitleEditor
+            clipUuid={item.clip_uuid}
+            title={item.title}
+            startS={trackStart}
+            endS={trackEnd}
+          />
+        ) : (
+          <>
+            <VolumeControl clipUuid={item.clip_uuid} value={item.volume} />
+            <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
+          </>
+        )}
       </div>
     </section>
   );
+}
+
+type TitlePosition = "top" | "center" | "bottom";
+type TitleWeight = "normal" | "bold";
+type TitleAnimation =
+  | "none"
+  | "fade_in"
+  | "fade_out"
+  | "fade_in_out"
+  | "slide_in"
+  | "slide_out";
+
+function TitleEditor({
+  clipUuid,
+  title,
+  startS,
+  endS,
+}: {
+  clipUuid: string;
+  title: import("../protocol").TitleStyling;
+  startS: number;
+  endS: number;
+}) {
+  const [text, setText] = useState(title.text);
+  const [position, setPosition] = useState<TitlePosition>(
+    (title.position as TitlePosition) ?? "center",
+  );
+  const [fontSize, setFontSize] = useState<number>(title.font_size);
+  const [color, setColor] = useState<string>(title.color);
+  const [fontWeight, setFontWeight] = useState<TitleWeight>(
+    (title.font_weight as TitleWeight) ?? "normal",
+  );
+  const [animation, setAnimation] = useState<TitleAnimation>(
+    (title.animation as TitleAnimation) ?? "none",
+  );
+
+  // Reset local state when the user selects a different title clip
+  // or the persisted styling changes from outside.
+  useEffect(() => {
+    setText(title.text);
+    setPosition((title.position as TitlePosition) ?? "center");
+    setFontSize(title.font_size);
+    setColor(title.color);
+    setFontWeight((title.font_weight as TitleWeight) ?? "normal");
+    setAnimation((title.animation as TitleAnimation) ?? "none");
+    // Track last-committed snapshot so debounce can no-op when the
+    // local state matches what we last sent.
+    lastCommittedRef.current = signature(
+      title.text,
+      (title.position as TitlePosition) ?? "center",
+      title.font_size,
+      title.color,
+      (title.font_weight as TitleWeight) ?? "normal",
+      (title.animation as TitleAnimation) ?? "none",
+    );
+  }, [
+    clipUuid,
+    title.text,
+    title.position,
+    title.font_size,
+    title.color,
+    title.font_weight,
+    title.animation,
+  ]);
+
+  const lastCommittedRef = useRef<string>(
+    signature(
+      title.text,
+      (title.position as TitlePosition) ?? "center",
+      title.font_size,
+      title.color,
+      (title.font_weight as TitleWeight) ?? "normal",
+      (title.animation as TitleAnimation) ?? "none",
+    ),
+  );
+
+  // Debounced commit: only when the local snapshot diverges from
+  // the last-sent one. Each commit goes through propose_user_edit
+  // with a *** Set Title envelope listing every styling field
+  // (the apply layer treats unchanged fields as no-ops, so it's
+  // safe to over-send).
+  useEffect(() => {
+    const currentSig = signature(
+      text,
+      position,
+      fontSize,
+      color,
+      fontWeight,
+      animation,
+    );
+    if (currentSig === lastCommittedRef.current) return;
+    if (text.length === 0) return; // never commit empty text
+    const handle = setTimeout(() => {
+      lastCommittedRef.current = currentSig;
+      const op: EdlOp = {
+        kind: "set_title",
+        anchor: { kind: "clip_uuid", uuid: clipUuid },
+        text,
+        position,
+        fontSize,
+        color,
+        fontWeight,
+        animation,
+      };
+      invoke<string>("propose_user_edit", {
+        edlText: serializeEdl([op]),
+      }).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("propose_user_edit (set_title) failed", err);
+      });
+    }, COMMIT_DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [clipUuid, text, position, fontSize, color, fontWeight, animation]);
+
+  return (
+    <>
+      <Field label="Window">
+        <span className="properties-value">
+          {startS.toFixed(2)}s → {endS.toFixed(2)}s
+        </span>
+      </Field>
+      <Field label="Text">
+        <input
+          type="text"
+          className="properties-text-input"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+      </Field>
+      <Field label="Position">
+        <select
+          className="properties-select"
+          value={position}
+          onChange={(e) => setPosition(e.target.value as TitlePosition)}
+        >
+          <option value="top">Top</option>
+          <option value="center">Center</option>
+          <option value="bottom">Bottom</option>
+        </select>
+      </Field>
+      <Field label="Font size">
+        <div className="properties-control-row">
+          <input
+            type="range"
+            min={16}
+            max={128}
+            step={1}
+            value={fontSize}
+            onChange={(e) => setFontSize(parseInt(e.target.value, 10))}
+            className="properties-slider"
+          />
+          <span className="properties-control-value">{fontSize}px</span>
+        </div>
+      </Field>
+      <Field label="Color">
+        <input
+          type="color"
+          className="properties-color-input"
+          value={color}
+          onChange={(e) => setColor(e.target.value.toUpperCase())}
+        />
+      </Field>
+      <Field label="Weight">
+        <select
+          className="properties-select"
+          value={fontWeight}
+          onChange={(e) => setFontWeight(e.target.value as TitleWeight)}
+        >
+          <option value="normal">Normal</option>
+          <option value="bold">Bold</option>
+        </select>
+      </Field>
+      <Field label="Animation">
+        <select
+          className="properties-select"
+          value={animation}
+          onChange={(e) => setAnimation(e.target.value as TitleAnimation)}
+        >
+          <option value="none">None</option>
+          <option value="fade_in">Fade in</option>
+          <option value="fade_out">Fade out</option>
+          <option value="fade_in_out">Fade in & out</option>
+          <option value="slide_in">Slide in</option>
+          <option value="slide_out">Slide out</option>
+        </select>
+      </Field>
+    </>
+  );
+}
+
+/** Build a stable signature string for the title styling so the
+ *  debounce effect can compare current vs last-committed without
+ *  shallow-comparing six independent state values. */
+function signature(
+  text: string,
+  position: TitlePosition,
+  fontSize: number,
+  color: string,
+  fontWeight: TitleWeight,
+  animation: TitleAnimation,
+): string {
+  return `${text}|${position}|${fontSize}|${color}|${fontWeight}|${animation}`;
 }
 
 function VolumeControl({

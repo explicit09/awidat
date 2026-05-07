@@ -346,6 +346,12 @@ pub struct TimelineTrack {
     pub name: String,
     /// Track kind: `"video"` or `"audio"`.
     pub kind: String,
+    /// Optional awidat-specific role tag from `track.metadata`.
+    /// Today's only value is `"titles"` (set by InsertTitle's
+    /// auto-create); the frontend renders title-role tracks as a
+    /// special amber-on-black band rather than a regular video lane.
+    /// `None` for ordinary V1 / V2 / audio tracks.
+    pub role: Option<String>,
     /// Items in this track in playback order.
     pub items: Vec<TimelineItem>,
 }
@@ -416,6 +422,12 @@ pub enum TimelineItem {
         /// input and to paint a `⚡ 2×` badge on clips with non-default
         /// values.
         speed: Option<f64>,
+        /// Title-overlay styling, populated when the clip carries an
+        /// `awidat.title` Effect (i.e. it's on the Titles track).
+        /// `None` for ordinary media clips. The frontend renders the
+        /// title editor in PropertiesPane when this is `Some` and
+        /// paints the title text inline on the timeline band.
+        title: Option<TitleStyling>,
     },
     /// Empty time on the track (silence / black frames).
     Gap {
@@ -438,6 +450,29 @@ pub enum TimelineItem {
         /// `"SMPTE_Dissolve"`).
         effect_name: String,
     },
+}
+
+/// Styling fields for a title overlay, lifted off the
+/// `awidat.title` Effect's metadata. Mirror of the EDL grammar
+/// values — strings rather than enums on the wire so the frontend
+/// can pass them straight back through `*** Set Title` without
+/// having to know the typed enum names.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TitleStyling {
+    /// Text the overlay renders.
+    pub text: String,
+    /// Vertical band: `"top"`, `"center"`, or `"bottom"`.
+    pub position: String,
+    /// Font size in pixels.
+    pub font_size: u32,
+    /// Hex colour like `"#FFFFFF"`.
+    pub color: String,
+    /// Font weight: `"normal"` or `"bold"`.
+    pub font_weight: String,
+    /// Animation: `"none"`, `"fade_in"`, `"fade_out"`, `"fade_in_out"`,
+    /// `"slide_in"`, or `"slide_out"`.
+    pub animation: String,
 }
 
 /// One paragraph-sized segment from a whisper transcript sidecar.

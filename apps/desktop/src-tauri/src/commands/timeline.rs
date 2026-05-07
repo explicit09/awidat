@@ -65,6 +65,14 @@ pub fn flatten_timeline_public(
             TrackKind::Video => "video",
             TrackKind::Audio => "audio",
         };
+        // Pull the awidat track-role tag if present. Today's only
+        // value is "titles" (set by InsertTitle's auto-create).
+        let role = track
+            .metadata
+            .get("awidat_track_role")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let is_titles_track = role.as_deref() == Some("titles");
         let mut items = Vec::with_capacity(track.children.len());
         let mut track_cursor_s = 0.0_f64;
 
@@ -147,11 +155,63 @@ pub fn flatten_timeline_public(
                         .find(|e| e.effect_name == "awidat.speed")
                         .and_then(|e| e.metadata.get("factor"))
                         .and_then(|v| v.as_f64());
+                    // Titles track special handling: clips use their
+                    // source_range.start_time as the timeline-time
+                    // anchor (rather than the cumulative cursor), and
+                    // don't advance the cursor — titles are sparse
+                    // overlays, not a contiguous strip.
+                    let title = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "awidat.title")
+                        .map(|e| awidat_desktop_protocol::TitleStyling {
+                            text: e
+                                .metadata
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            position: e
+                                .metadata
+                                .get("position")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("center")
+                                .to_string(),
+                            font_size: e
+                                .metadata
+                                .get("font_size")
+                                .and_then(|v| v.as_u64())
+                                .map(|n| n as u32)
+                                .unwrap_or(64),
+                            color: e
+                                .metadata
+                                .get("color")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("#FFFFFF")
+                                .to_string(),
+                            font_weight: e
+                                .metadata
+                                .get("font_weight")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("normal")
+                                .to_string(),
+                            animation: e
+                                .metadata
+                                .get("animation")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("none")
+                                .to_string(),
+                        });
+                    let item_track_start_s = if is_titles_track {
+                        source_start_s.unwrap_or(track_cursor_s)
+                    } else {
+                        track_cursor_s
+                    };
                     items.push(TimelineItem::Clip {
                         index: i,
                         name: clip.name.clone(),
                         clip_uuid,
-                        track_start_s: track_cursor_s,
+                        track_start_s: item_track_start_s,
                         duration_s,
                         asset_id,
                         source_start_s,
@@ -160,8 +220,11 @@ pub fn flatten_timeline_public(
                         waveform_path,
                         volume,
                         speed,
+                        title,
                     });
-                    track_cursor_s += duration_s;
+                    if !is_titles_track {
+                        track_cursor_s += duration_s;
+                    }
                 }
                 TrackChild::Gap(gap) => {
                     let duration_s = gap.source_range.duration.to_seconds();
@@ -199,6 +262,7 @@ pub fn flatten_timeline_public(
         tracks.push(TimelineTrack {
             name: track.name.clone(),
             kind: kind_str.into(),
+            role: role.clone(),
             items,
         });
     }

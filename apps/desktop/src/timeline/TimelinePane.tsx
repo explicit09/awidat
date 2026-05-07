@@ -592,7 +592,7 @@ function drawRuler(
 function drawTracks(
   ctx: CanvasRenderingContext2D,
   width: number,
-  tracks: { kind: string; items: TimelineItem[] }[],
+  tracks: { kind: string; role: string | null; items: TimelineItem[] }[],
   pps: number,
   opts: {
     deletedKeys?: Set<string>;
@@ -603,9 +603,18 @@ function drawTracks(
   for (let row = 0; row < tracks.length; row++) {
     const track = tracks[row];
     const y = RULER_HEIGHT + row * LANE_HEIGHT;
+    const isTitlesRow = track.role === "titles";
 
-    // Lane background — subtle alternating tint for video vs audio.
-    ctx.fillStyle = track.kind === "audio" ? "#0d1117" : "#0f141b";
+    // Lane background. Titles row gets a darker amber-tinted band
+    // so it reads as a different kind of layer; audio is the
+    // existing dark-green ish; video lanes keep their default tint.
+    if (isTitlesRow) {
+      ctx.fillStyle = "#0a0a0a";
+    } else if (track.kind === "audio") {
+      ctx.fillStyle = "#0d1117";
+    } else {
+      ctx.fillStyle = "#0f141b";
+    }
     ctx.fillRect(0, y, width, LANE_HEIGHT);
     ctx.strokeStyle = "#30363d";
     ctx.beginPath();
@@ -634,6 +643,7 @@ function drawTracks(
         track.kind,
         flag,
         selected,
+        isTitlesRow,
       );
     }
   }
@@ -651,28 +661,44 @@ function drawItem(
   trackKind: string,
   flag: ItemFlag,
   selected: boolean,
+  isTitlesRow: boolean,
 ) {
   const radius = 4;
   if (item.kind === "clip") {
-    ctx.fillStyle = trackKind === "audio" ? "#1f4d3f" : "#1f3d5d";
+    // Title clips on the Titles track get an amber-on-black band
+    // with inline text rather than the regular media-clip styling.
+    const isTitleClip = isTitlesRow && item.title !== null && item.title !== undefined;
+    if (isTitleClip) {
+      ctx.fillStyle = "#1a1207"; // dark amber-tinted background
+    } else {
+      ctx.fillStyle = trackKind === "audio" ? "#1f4d3f" : "#1f3d5d";
+    }
     fillRoundedRect(ctx, x, y, w, h, radius);
     // Filmstrip / waveform: drawn on top of the coloured fill, under
     // the border. Video tracks get filmstrips, audio tracks get
     // waveforms — same "drew" boolean for the label dark band.
+    // Titles skip both — the title text overlay takes the role of
+    // the inline content.
     let drewOverlay = false;
-    if (trackKind !== "audio" && item.thumbnail_dir && w > 24) {
+    if (isTitleClip) {
+      drawClipTitleText(ctx, item.title!, x, y, w, h);
+      drewOverlay = true;
+    } else if (trackKind !== "audio" && item.thumbnail_dir && w > 24) {
       drewOverlay = drawClipFilmstrip(ctx, item, x, y, w, h, radius);
     } else if (trackKind === "audio" && item.waveform_path && w > 24) {
       drewOverlay = drawClipWaveform(ctx, item, x, y, w, h, radius);
     }
     // Border color: red for deletes (this clip is going away),
     // amber for highlights (this clip is changing in the
-    // proposal), normal accent otherwise.
+    // proposal), normal accent otherwise. Title clips get an amber
+    // border to match their warm fill.
     const stroke =
       flag === "deleted"
         ? "#f85149"
         : flag === "highlight"
         ? "#d29922"
+        : isTitleClip
+        ? "#f59e0b"
         : trackKind === "audio"
         ? "#3fb950"
         : "#58a6ff";
@@ -683,7 +709,9 @@ function drawItem(
     // Clip label — centered, truncated if width too small. When the
     // filmstrip / waveform drew, paint the label on a translucent
     // dark band so it stays legible over the overlay; otherwise plain.
-    if (w > 24) {
+    // Title clips skip this — drawClipTitleText already painted the
+    // title text inline.
+    if (w > 24 && !isTitleClip) {
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
       ctx.textBaseline = "middle";
       const label = truncateToWidth(ctx, item.name, w - 2 * CLIP_PADDING_X);
@@ -703,7 +731,8 @@ function drawItem(
     }
     // Volume / speed badges — painted in the top-right corner so they
     // don't fight the label for space. Only render when non-default.
-    if (w > 36) {
+    // Title clips skip badges (no volume/speed on titles).
+    if (w > 36 && !isTitleClip) {
       drawClipBadges(ctx, item, x, y, w);
     }
     if (flag === "deleted") {
@@ -922,6 +951,25 @@ function drawClipWaveform(
 
   ctx.restore();
   return true;
+}
+
+/** Paint a title clip's text inline on its rect — the timeline-side
+ *  preview of what `drawtext` will render at export time. Amber on
+ *  the dark amber-tinted band; truncated if too wide. */
+function drawClipTitleText(
+  ctx: CanvasRenderingContext2D,
+  styling: import("../protocol").TitleStyling,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  if (w < 8) return;
+  ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  const label = truncateToWidth(ctx, styling.text, w - 2 * CLIP_PADDING_X);
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillText(label, x + CLIP_PADDING_X, y + h / 2);
 }
 
 /** Paint small `🔉 0.5×` / `⚡ 2×` badges in the top-right corner of

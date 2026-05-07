@@ -35,7 +35,42 @@ export type EdlOp =
   | { kind: "delete_clip"; anchor: EdlAnchor }
   | { kind: "split_clip"; anchor: EdlAnchor; atS: number }
   | { kind: "set_volume"; anchor: EdlAnchor; value: number }
-  | { kind: "set_speed"; anchor: EdlAnchor; factor: number };
+  | { kind: "set_speed"; anchor: EdlAnchor; factor: number }
+  | {
+      kind: "insert_title";
+      startS: number;
+      endS: number;
+      text: string;
+      position?: "top" | "center" | "bottom";
+      fontSize?: number;
+      color?: string;
+      fontWeight?: "normal" | "bold";
+      animation?:
+        | "none"
+        | "fade_in"
+        | "fade_out"
+        | "fade_in_out"
+        | "slide_in"
+        | "slide_out";
+    }
+  | {
+      kind: "set_title";
+      anchor: EdlAnchor;
+      startS?: number;
+      endS?: number;
+      text?: string;
+      position?: "top" | "center" | "bottom";
+      fontSize?: number;
+      color?: string;
+      fontWeight?: "normal" | "bold";
+      animation?:
+        | "none"
+        | "fade_in"
+        | "fade_out"
+        | "fade_in_out"
+        | "slide_in"
+        | "slide_out";
+    };
 
 /**
  * Build the canonical `*** Begin EDL` / `*** End EDL` text for one
@@ -79,7 +114,43 @@ function appendOp(lines: string[], op: EdlOp): void {
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       lines.push(`+ factor: ${op.factor.toFixed(3)}`);
       break;
+    case "insert_title":
+      lines.push("*** Insert Title");
+      lines.push(`+ start_s: ${formatTime(op.startS)}`);
+      lines.push(`+ end_s: ${formatTime(op.endS)}`);
+      lines.push(`+ text: "${escapeTitleText(op.text)}"`);
+      if (op.position !== undefined) lines.push(`+ position: ${op.position}`);
+      if (op.fontSize !== undefined) lines.push(`+ font_size: ${op.fontSize}`);
+      if (op.color !== undefined) lines.push(`+ color: ${op.color}`);
+      if (op.fontWeight !== undefined)
+        lines.push(`+ font_weight: ${op.fontWeight}`);
+      if (op.animation !== undefined)
+        lines.push(`+ animation: ${op.animation}`);
+      break;
+    case "set_title":
+      lines.push("*** Set Title");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      if (op.startS !== undefined) lines.push(`+ start_s: ${formatTime(op.startS)}`);
+      if (op.endS !== undefined) lines.push(`+ end_s: ${formatTime(op.endS)}`);
+      if (op.text !== undefined)
+        lines.push(`+ text: "${escapeTitleText(op.text)}"`);
+      if (op.position !== undefined) lines.push(`+ position: ${op.position}`);
+      if (op.fontSize !== undefined) lines.push(`+ font_size: ${op.fontSize}`);
+      if (op.color !== undefined) lines.push(`+ color: ${op.color}`);
+      if (op.fontWeight !== undefined)
+        lines.push(`+ font_weight: ${op.fontWeight}`);
+      if (op.animation !== undefined)
+        lines.push(`+ animation: ${op.animation}`);
+      break;
   }
+}
+
+/** Strip embedded double-quotes from title text so the parser's
+ *  bare quoted-string grammar doesn't trip. The parser doesn't
+ *  define an escape sequence; v1 just disallows quotes inside
+ *  titles. */
+function escapeTitleText(s: string): string {
+  return s.replace(/"/g, "");
 }
 
 function formatAnchor(anchor: EdlAnchor): string {

@@ -14,6 +14,14 @@ name: string,
  */
 kind: string, 
 /**
+ * Optional awidat-specific role tag from `track.metadata`.
+ * Today's only value is `"titles"` (set by InsertTitle's
+ * auto-create); the frontend renders title-role tracks as a
+ * special amber-on-black band rather than a regular video lane.
+ * `None` for ordinary V1 / V2 / audio tracks.
+ */
+role: string | null, 
+/**
  * Items in this track in playback order.
  */
 items: Array<TimelineItem>, };

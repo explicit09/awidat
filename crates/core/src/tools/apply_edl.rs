@@ -414,6 +414,23 @@ becomes `source_duration / factor`. Render uses \
 audio (atempo's per-instance range is `[0.5, 2.0]`; factors \
 outside chain — extreme values produce audible artifacts, so \
 keep within `[0.25, 4.0]` unless the clip is silent).\
+\n  - **Insert Title**: `+ start_s: <seconds>`, `+ end_s: <seconds>`, \
+`+ text: \"<string>\"` (required). Optional `+ position: <top|center\
+|bottom>` (default `center`), `+ font_size: <px>` (default 64), \
+`+ color: <#RRGGBB>` (default `#FFFFFF`), `+ font_weight: <normal|\
+bold>` (default `normal`), `+ animation: <none|fade_in|fade_out|\
+fade_in_out|slide_in|slide_out>` (default `none`). DOES NOT take \
+an `@@ anchor:` line — it builds a new title overlay rather than \
+locating one. The Titles track auto-creates on first call. Render \
+emits an ffmpeg `drawtext=` filter per title with proportional \
+y= positions (top: `h*0.05`, center: `(h-text_h)/2`, bottom: \
+`h*0.85`); fade animations modulate `alpha=`, slides modulate \
+`x=` or `y=`. start_s / end_s are master-timeline seconds.\
+\n  - **Set Title**: anchored update of an existing title by its \
+clip_uuid. ALL styling fields are optional — only non-None ones \
+update. Same field set as `Insert Title` plus `start_s` / `end_s` \
+to retime the overlay window. Errors when the anchored clip has \
+no `awidat.title` effect.\
 \n\n\
 **Anchors.** Each op identifies its target by content anchor — \
 `transcript_snippet`, `clip_uuid`, `scene_change_index` — not \

@@ -1845,3 +1845,41 @@ body,
   min-width: 48px;
   text-align: right;
 }
+
+/* Step 16.5 — title editor inputs. Text + select + color. */
+.properties-text-input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.properties-text-input:focus {
+  outline: none;
+  border-color: var(--warn);
+}
+
+.properties-select {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.properties-color-input {
+  width: 48px;
+  height: 24px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px;
+  cursor: pointer;
+}
