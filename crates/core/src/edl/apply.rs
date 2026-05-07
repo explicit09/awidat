@@ -184,14 +184,12 @@ fn apply_one(
             kind,
             duration_s,
         } => apply_insert_transition(working, index, between, kind, *duration_s, ctx),
-        EdlOp::SetVolume { .. } => Err(ApplyError::NotImplemented {
-            index,
-            op: "Set Volume".into(),
-        }),
-        EdlOp::SetSpeed { .. } => Err(ApplyError::NotImplemented {
-            index,
-            op: "Set Speed".into(),
-        }),
+        EdlOp::SetVolume { anchor, value } => {
+            apply_set_volume(working, index, anchor, *value, ctx, locator)
+        }
+        EdlOp::SetSpeed { anchor, factor } => {
+            apply_set_speed(working, index, anchor, *factor, ctx, locator)
+        }
     }
 }
 
@@ -1068,6 +1066,103 @@ fn apply_insert_broll(
             ))
         }
     }
+}
+
+/// Effect name used for per-clip volume changes. Render reads this
+/// in [`crates/render/src/timeline.rs`]'s FilterPlanner and emits
+/// `volume=<value>` on the segment's audio stream.
+const VOLUME_EFFECT_NAME: &str = "awidat.volume";
+
+/// Effect name used for per-clip speed changes. Render reads this
+/// and emits `setpts=<1/factor>*PTS` on video + `atempo=<factor>`
+/// on audio (chained when factor is outside `[0.5, 2.0]`).
+const SPEED_EFFECT_NAME: &str = "awidat.speed";
+
+/// Stamp an awidat.volume Effect on the anchored clip with `value`
+/// (linear gain multiplier). Idempotent: any existing
+/// awidat.volume effect on the clip is removed first, so two
+/// SetVolume ops in one envelope leave only the second's value.
+fn apply_set_volume(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    value: f64,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    if !value.is_finite() || value < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_volume: value {value} must be finite and >= 0.0"),
+        });
+    }
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_volume: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_volume: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    clip.effects.retain(|e| e.effect_name != VOLUME_EFFECT_NAME);
+    let mut effect = awidat_proto::otio::Effect::new(VOLUME_EFFECT_NAME);
+    effect
+        .metadata
+        .insert("value".to_string(), serde_json::json!(value));
+    let clip_name = clip.name.clone();
+    clip.effects.push(effect);
+    Ok(format!(
+        "set volume on clip {clip_name:?} to {value:.3} (linear gain)"
+    ))
+}
+
+/// Stamp an awidat.speed Effect on the anchored clip with `factor`
+/// (playback rate multiplier). Idempotent: any existing
+/// awidat.speed effect on the clip is removed first.
+fn apply_set_speed(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    factor: f64,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    if !factor.is_finite() || factor <= 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_speed: factor {factor} must be finite and > 0.0"),
+        });
+    }
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_speed: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_speed: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    clip.effects.retain(|e| e.effect_name != SPEED_EFFECT_NAME);
+    let mut effect = awidat_proto::otio::Effect::new(SPEED_EFFECT_NAME);
+    effect
+        .metadata
+        .insert("factor".to_string(), serde_json::json!(factor));
+    let clip_name = clip.name.clone();
+    clip.effects.push(effect);
+    Ok(format!(
+        "set speed on clip {clip_name:?} to {factor:.3}× (timeline duration scales by 1/factor)"
+    ))
 }
 
 /// Sum the durations of children before `child_index` on the given
@@ -2243,5 +2338,165 @@ mod tests {
             matches!(err, ApplyError::AnchorMiss { .. }),
             "expected anchor miss, got something else",
         );
+    }
+
+    #[test]
+    fn apply_set_volume_stamps_effect_with_value() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetVolume {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                value: 0.5,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.volume");
+        let v = clip.effects[0]
+            .metadata
+            .get("value")
+            .and_then(|v| v.as_f64())
+            .unwrap();
+        assert!((v - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_set_volume_replaces_existing_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetVolume {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    value: 0.5,
+                },
+                EdlOp::SetVolume {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    value: 0.8,
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        let v = clip.effects[0]
+            .metadata
+            .get("value")
+            .and_then(|v| v.as_f64())
+            .unwrap();
+        assert!((v - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_set_volume_rejects_negative_value() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetVolume {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                value: -0.1,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains(">= 0.0")),
+            "expected validation error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_set_speed_stamps_effect_with_factor() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetSpeed {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                factor: 2.0,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.speed");
+        let f = clip.effects[0]
+            .metadata
+            .get("factor")
+            .and_then(|v| v.as_f64())
+            .unwrap();
+        assert!((f - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_set_speed_rejects_zero_factor() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetSpeed {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                factor: 0.0,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("> 0.0")),
+            "expected validation error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_set_volume_then_set_speed_coexist_on_same_clip() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetVolume {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    value: 0.5,
+                },
+                EdlOp::SetSpeed {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    factor: 1.5,
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        // Different effect names → both effects survive.
+        assert_eq!(clip.effects.len(), 2);
+        let names: Vec<&str> = clip.effects.iter().map(|e| e.effect_name.as_str()).collect();
+        assert!(names.contains(&"awidat.volume"));
+        assert!(names.contains(&"awidat.speed"));
     }
 }
