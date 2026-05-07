@@ -193,6 +193,20 @@ and makes everything after it correct.\
 \n- find_beat / find_moment / inspect_moment: editorial moment lookup.\
 \n- find_dead_air / find_filler_words / find_false_starts: editorial \
 findings the user can review as Notes.\
+\n- assess_continuity(at_s, kind): BEFORE proposing any \
+*** Trim Clip / *** Split Clip via apply_edl, call this with the \
+proposed cut point. It returns `{ verdict, rules: [...] }` where \
+verdict is `clean` / `risky` / `dirty` / `abstain`. Behavior:\
+\n  • `clean`: propose the raw cut.\
+\n  • `risky`: surface the rules array as a Note (kind: \
+continuity_warning) describing the risk; let the user decide.\
+\n  • `dirty`: do NOT propose the raw cut. Bundle a 0.3s \
+*** Insert Transition (SMPTE_Dissolve) at the cut point, OR \
+surface a continuity_warning Note quoting the rule reasons. Never \
+silently emit a dirty cut.\
+\n  • `abstain`: tell the user which sidecars are missing (the \
+rules array shows `verdict: abstain` per missing input) and ask \
+whether to proceed without the check.\
 \n- apply_edl: cut/trim/delete/split/insert clips on the timeline. \
 For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
 view_timeline, usually the clip name like `clip-0`; never use the \
@@ -311,6 +325,19 @@ mod tests {
             PromptPermissionMode::Autopilot,
         );
         assert!(!prompt.contains("Project description (user-supplied):"));
+    }
+
+    #[test]
+    fn base_prompt_documents_assess_continuity_workflow() {
+        // The agent must know to call assess_continuity before
+        // trims/splits, and must know what each verdict implies.
+        // This test pins those instructions so future prompt
+        // edits don't accidentally drop them.
+        let prompt = assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Manual);
+        assert!(prompt.contains("assess_continuity"));
+        assert!(prompt.contains("dirty"));
+        assert!(prompt.contains("Insert Transition"));
+        assert!(prompt.contains("continuity_warning"));
     }
 
     #[test]
