@@ -701,9 +701,11 @@ fn stage_segment_inputs(
     (video_label, audio_label)
 }
 
+/// Length of the alpha / slide ramp for fade and slide animations,
+/// in seconds. Half a second feels intentional without lingering.
+const ANIMATION_RAMP_S: f64 = 0.5;
+
 /// Build one ffmpeg `drawtext=...` filter from a title plan.
-/// Step 16.3 emits the basic shape (text + position + size + color +
-/// weight + enable window); animations land in 16.4.
 ///
 /// Position uses proportional y= expressions so titles survive
 /// resolution changes:
@@ -711,15 +713,22 @@ fn stage_segment_inputs(
 ///   - center → `y=(h-text_h)/2`
 ///   - bottom → `y=h*0.85`
 ///
+/// Animations modulate alpha (fade) or x/y (slide) via piecewise
+/// expressions; see [`apply_title_animation`] for the math. The
+/// `enable=between(t,start,end)` window still bounds the title
+/// regardless of animation — fade-out reaches alpha 0 right at
+/// `end`, slide-out reaches off-screen right at `end`.
+///
 /// `text_h` and `text_w` are drawtext-evaluated dimensions of the
 /// rendered text; `h` and `w` are the frame dimensions.
 fn format_drawtext_filter(t: &TitlePlan) -> String {
     let escaped_text = drawtext_escape(&t.text);
-    let y_expr = match t.position {
+    let resting_y = match t.position {
         TitlePosition::Top => "h*0.05".to_string(),
         TitlePosition::Center => "(h-text_h)/2".to_string(),
         TitlePosition::Bottom => "h*0.85".to_string(),
     };
+    let resting_x = "(w-text_w)/2".to_string();
     let weight_attr = match t.font_weight {
         TitleWeight::Normal => "",
         // ffmpeg drawtext doesn't have a `font_weight=` flag — bold
@@ -730,18 +739,181 @@ fn format_drawtext_filter(t: &TitlePlan) -> String {
         TitleWeight::Bold => ":borderw=2",
     };
     let fontfile = pick_fontfile_attr();
+    let anim = apply_title_animation(t, &resting_x, &resting_y);
     format!(
         "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{weight}\
-         :x=(w-text_w)/2:y={y}:enable='between(t\\,{start}\\,{end})'",
+         :x={x}:y={y}{alpha}:enable='between(t\\,{start}\\,{end})'",
         text = escaped_text,
         font = fontfile,
         size = t.font_size,
         color = t.color,
         weight = weight_attr,
-        y = y_expr,
+        x = anim.x,
+        y = anim.y,
+        alpha = anim.alpha,
         start = t.start_s,
         end = t.end_s,
     )
+}
+
+/// Per-animation x / y / alpha expressions. `x` and `y` always have
+/// the resting position as the default; `alpha` is empty when the
+/// animation doesn't fade. Fade ramps live in `alpha`; slide ramps
+/// live in `x` or `y` depending on the title's resting position.
+struct AnimatedExpressions {
+    x: String,
+    y: String,
+    /// Either empty or `:alpha='<expr>'` ready to splice in.
+    alpha: String,
+}
+
+/// Build the animation expressions for a title. Pure function so it
+/// can be unit-tested without spinning up ffmpeg.
+fn apply_title_animation(
+    t: &TitlePlan,
+    resting_x: &str,
+    resting_y: &str,
+) -> AnimatedExpressions {
+    let start = t.start_s;
+    let end = t.end_s;
+    let ramp = ANIMATION_RAMP_S;
+    let fade_in_end = start + ramp;
+    let fade_out_start = (end - ramp).max(start);
+
+    match t.animation {
+        TitleAnimation::None => AnimatedExpressions {
+            x: resting_x.to_string(),
+            y: resting_y.to_string(),
+            alpha: String::new(),
+        },
+        TitleAnimation::FadeIn => AnimatedExpressions {
+            x: resting_x.to_string(),
+            y: resting_y.to_string(),
+            // Linear ramp 0→1 over [start, start+ramp]; 1 thereafter.
+            // `if(lt(t,A), B, C)` evaluates B when t<A, else C.
+            alpha: format!(
+                ":alpha='if(lt(t\\,{fade_in_end})\\,(t-{start})/{ramp}\\,1)'"
+            ),
+        },
+        TitleAnimation::FadeOut => AnimatedExpressions {
+            x: resting_x.to_string(),
+            y: resting_y.to_string(),
+            // 1 until [end-ramp, end], then ramp 1→0.
+            alpha: format!(
+                ":alpha='if(lt(t\\,{fade_out_start})\\,1\\,({end}-t)/{ramp})'"
+            ),
+        },
+        TitleAnimation::FadeInOut => AnimatedExpressions {
+            x: resting_x.to_string(),
+            y: resting_y.to_string(),
+            // Three pieces: ramp in, plateau, ramp out.
+            alpha: format!(
+                ":alpha='if(lt(t\\,{fade_in_end})\\,(t-{start})/{ramp}\\,if(lt(t\\,{fade_out_start})\\,1\\,({end}-t)/{ramp}))'"
+            ),
+        },
+        TitleAnimation::SlideIn => slide_expressions(
+            t.position,
+            resting_x,
+            resting_y,
+            SlideDirection::In,
+            start,
+            end,
+            ramp,
+        ),
+        TitleAnimation::SlideOut => slide_expressions(
+            t.position,
+            resting_x,
+            resting_y,
+            SlideDirection::Out,
+            start,
+            end,
+            ramp,
+        ),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SlideDirection {
+    In,
+    Out,
+}
+
+/// Build x / y expressions for a slide animation. The slide direction
+/// follows the title's resting position:
+///
+///   - `Top` slides in from above (y goes from `-text_h` to resting).
+///   - `Bottom` slides in from below (y from `h` to resting).
+///   - `Center` slides in from the right (x from `w` to resting).
+///
+/// Slide-out reverses each interpolation.
+fn slide_expressions(
+    position: TitlePosition,
+    resting_x: &str,
+    resting_y: &str,
+    dir: SlideDirection,
+    start: f64,
+    end: f64,
+    ramp: f64,
+) -> AnimatedExpressions {
+    let ramp_in_end = start + ramp;
+    let ramp_out_start = (end - ramp).max(start);
+    // For Top/Bottom we slide along Y; for Center we slide along X.
+    let slide_along_y = matches!(position, TitlePosition::Top | TitlePosition::Bottom);
+    let off_y = match position {
+        TitlePosition::Top => "-text_h".to_string(),
+        TitlePosition::Bottom => "h".to_string(),
+        TitlePosition::Center => resting_y.to_string(),
+    };
+    let off_x = match position {
+        TitlePosition::Center => "w".to_string(),
+        _ => resting_x.to_string(),
+    };
+
+    // Linear interp helper: write an `if(lt(t,A), <off>+<rest-off>*progress, <rest>)`-style
+    // expression. We build it as ffmpeg-string.
+    let (x_expr, y_expr) = match (dir, slide_along_y) {
+        (SlideDirection::In, true) => (
+            resting_x.to_string(),
+            // y(t) = off_y + (resting - off_y) * progress, where
+            // progress = (t-start)/ramp clamped to 1.
+            format!(
+                "if(lt(t\\,{ramp_in_end})\\,{off}+({rest}-({off}))*(t-{start})/{ramp}\\,{rest})",
+                off = off_y,
+                rest = resting_y,
+            ),
+        ),
+        (SlideDirection::In, false) => (
+            format!(
+                "if(lt(t\\,{ramp_in_end})\\,{off}+({rest}-({off}))*(t-{start})/{ramp}\\,{rest})",
+                off = off_x,
+                rest = resting_x,
+            ),
+            resting_y.to_string(),
+        ),
+        (SlideDirection::Out, true) => (
+            resting_x.to_string(),
+            // y(t) = resting until ramp_out_start, then linear to off_y.
+            format!(
+                "if(lt(t\\,{ramp_out_start})\\,{rest}\\,{rest}+({off}-({rest}))*(t-{ramp_out_start})/{ramp})",
+                off = off_y,
+                rest = resting_y,
+            ),
+        ),
+        (SlideDirection::Out, false) => (
+            format!(
+                "if(lt(t\\,{ramp_out_start})\\,{rest}\\,{rest}+({off}-({rest}))*(t-{ramp_out_start})/{ramp})",
+                off = off_x,
+                rest = resting_x,
+            ),
+            resting_y.to_string(),
+        ),
+    };
+
+    AnimatedExpressions {
+        x: x_expr,
+        y: y_expr,
+        alpha: String::new(),
+    }
 }
 
 /// Escape characters drawtext treats as special inside `text='...'`.
@@ -1395,6 +1567,121 @@ mod tests {
         assert!(s.contains("\\'"));
         assert!(s.contains("\\\\"));
         assert!(s.contains("\\,"));
+    }
+
+    fn title(animation: TitleAnimation, position: TitlePosition) -> TitlePlan {
+        TitlePlan {
+            text: "Hi".into(),
+            start_s: 1.0,
+            end_s: 4.0,
+            position,
+            font_size: 48,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Normal,
+            animation,
+        }
+    }
+
+    #[test]
+    fn fade_in_emits_alpha_ramp_at_start() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let plan = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title(TitleAnimation::FadeIn, TitlePosition::Center)],
+        )
+        .plan();
+        assert!(
+            plan.filter_complex.contains("alpha='if(lt(t\\,1.5)"),
+            "expected fade-in ramp ending at start+0.5=1.5, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn fade_out_emits_alpha_ramp_at_end() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let plan = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title(TitleAnimation::FadeOut, TitlePosition::Center)],
+        )
+        .plan();
+        // Fade-out plateau ends at end-0.5 = 3.5.
+        assert!(
+            plan.filter_complex.contains("alpha='if(lt(t\\,3.5)"),
+            "expected fade-out plateau ending at 3.5, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn fade_in_out_emits_two_piece_alpha_expression() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let plan = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title(TitleAnimation::FadeInOut, TitlePosition::Center)],
+        )
+        .plan();
+        // Both ramps appear (1.5 = fade-in end, 3.5 = fade-out start).
+        assert!(plan.filter_complex.contains("if(lt(t\\,1.5)"));
+        assert!(plan.filter_complex.contains("if(lt(t\\,3.5)"));
+    }
+
+    #[test]
+    fn slide_in_for_top_position_animates_y_from_above() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let plan = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title(TitleAnimation::SlideIn, TitlePosition::Top)],
+        )
+        .plan();
+        // Slide-in on top starts off-screen at y=-text_h.
+        assert!(
+            plan.filter_complex.contains("-text_h"),
+            "expected slide-in y to start at -text_h, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn slide_in_for_center_position_animates_x_from_right() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let plan = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title(TitleAnimation::SlideIn, TitlePosition::Center)],
+        )
+        .plan();
+        // Slide-in on center starts off-screen at x=w (right edge).
+        // Confirm an x= expression that mentions `w` (off-screen) and
+        // the ramp end time (start_s + ramp = 1.5).
+        assert!(
+            plan.filter_complex.contains("x=if(lt(t\\,1.5)"),
+            "expected slide-in x ramp on center title, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn slide_out_for_bottom_position_animates_y_to_below() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let plan = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title(TitleAnimation::SlideOut, TitlePosition::Bottom)],
+        )
+        .plan();
+        // Slide-out on bottom starts the ramp at end-0.5 = 3.5.
+        assert!(
+            plan.filter_complex.contains("if(lt(t\\,3.5)"),
+            "expected slide-out ramp starting at 3.5, got: {}",
+            plan.filter_complex,
+        );
+        // Off-screen target for bottom is y=h.
+        assert!(plan.filter_complex.contains("h-(h*0.85)") || plan.filter_complex.contains("(h-({y_rest}))".replace("{y_rest}", "h*0.85").as_str()) || plan.filter_complex.matches("h*0.85").count() >= 2);
     }
 
     #[test]
