@@ -146,12 +146,13 @@ fn read_permission_mode(project_root: &Path) -> PromptPermissionMode {
 fn format_addendum(format: &ProjectFormat) -> &'static str {
     match format {
         ProjectFormat::Podcast => PODCAST_ADDENDUM,
-        // Phase 4C: shorts-mode editorial defaults — vertical pacing,
-        // hook in first 3s, captions, fast cut cadence.
-        ProjectFormat::Shorts => SHORTS_ADDENDUM,
-        // Phase 4E: tutorial-mode editorial defaults — preserve
-        // code-typing moments, hold key frames, generate chapters.
-        ProjectFormat::Tutorial => TUTORIAL_ADDENDUM,
+        // Phase 4C/4E refactor: format-specific playbooks live in
+        // skills (`short-form`, `tutorial`) so the ~600-token bodies
+        // only load when the agent calls `load_skill(...)` for that
+        // format. Always-on prompt carries only the L1 stub via the
+        // skills catalog injected per turn.
+        ProjectFormat::Shorts => SHORTS_STUB,
+        ProjectFormat::Tutorial => TUTORIAL_STUB,
         ProjectFormat::Other { .. } => NEUTRAL_ADDENDUM,
     }
 }
@@ -285,67 +286,26 @@ conventions (cadence, b-roll density, transition style) as \
 project-specific rather than format-specific. Ask the user about \
 their preferences before proposing aggressive cuts.";
 
-/// Shorts-mode editorial defaults (Phase 4C). Concrete numbers tuned
-/// for vertical short-form: hook landing in the first 3 seconds,
-/// fast cut cadence, captions burned in, target ≤60s.
-const SHORTS_ADDENDUM: &str = "\
-**Format: short-form vertical.** Editorial defaults:\
-\n- Target length is 60s; hard ceiling 90s. If the source material \
-runs longer, your job is to cut, not to summarize verbally.\
-\n- The hook lands in the first 3 seconds. Use find_beat to surface \
-candidate hooks; if the project's hook is buried at 0:30, propose \
-moving the cold-open clip to position 0.\
-\n- Cut cadence is fast. A static shot held > 1.5s on a short reads \
-as slow — propose cuts at every natural pause, even shorter than \
-the podcast threshold. Filler words ('um', 'uh') are cut aggressively \
-here (use find_filler_words with aggressive=true and propose trimming \
-all matches by default).\
-\n- Captions are part of the format, not optional. Always propose \
-*** Insert Title overlays sourced from whisper word timings — burned-in \
-captions are required for silent-autoplay viewers. Use the bottom-third \
-position with a high-contrast color.\
-\n- B-roll cadence is proactive: scan find_broll_opportunities and \
-surface candidates aggressively. Visual variety every 2–4 seconds is \
-the format expectation.\
-\n- Aspect-ratio: the timeline targets 9:16. When the source is 16:9, \
-propose center-crop or smart-crop based on speaker tracking \
-(find_speaker_oncam to know who's framed in each moment).\
-\n\nWhen the user says 'make a short' the playbook is: find_beat \
-(hook candidates) → apply_edl with the chosen hook at position 0 → \
-find_dead_air + find_filler_words(aggressive=true) → bundle the \
-trims → find_broll_opportunities → surface b-roll Notes → \
-*** Insert Title for caption pass.";
+/// Stub line stamped into the always-on prompt when project type is
+/// shorts. The full ~600-token playbook lives in
+/// `skills/short-form/SKILL.md` — agent calls `load_skill('short-form')`
+/// when the user asks for short-form work. Phase 4C-skills refactor.
+const SHORTS_STUB: &str = "\
+**Format: short-form vertical.** When the user asks for cleanup or \
+short-form output, call `load_skill(name='short-form')` for the full \
+editorial playbook (hook timing, cut cadence, caption pass, aspect \
+ratio). The skill carries the concrete defaults so they don't burn \
+context on sessions that aren't doing short-form work.";
 
-/// Tutorial-mode editorial defaults (Phase 4E). Concrete numbers tuned
-/// for screen-recording-heavy content: hold key frames longer, never
-/// cut over a typing moment, generate chapter markers.
-const TUTORIAL_ADDENDUM: &str = "\
-**Format: tutorial / screen recording.** Editorial defaults:\
-\n- Hold key frames longer. When the speaker is showing a code snippet, \
-diagram, or important UI state, do NOT cut for at least 4–6 seconds — \
-the audience needs time to actually read what's on screen.\
-\n- Never cut over a typing or drawing moment. If the index shows \
-sustained on-screen typing (motion magnitude is steady but not high; \
-shot type is a static screen recording), the cut should land at the \
-*natural pause* before or after the typing burst, not mid-keystroke.\
-\n- Generate chapter markers from topic segmentation. After indexing \
-lands, call read_index(topic) and propose *** Insert Title overlays at \
-each topic boundary as chapter headings — short labels (one to four \
-words) sourced from the topic summary.\
-\n- Filler words are tolerated more here than in shorts. A tutorial \
-audience accepts a thinking pause; aggressive filler-cutting reads as \
-robotic. Default to find_filler_words with aggressive=false and \
-surface only clusters or unusually long fillers.\
-\n- Silence threshold is higher: trim silences ≥ 3.0s but skip < 2.0s. \
-A two-second pause while the user reads code is intentional.\
-\n- B-roll is rarely the right tool here — the speaker's screen IS \
-the visual. Use find_broll_opportunities only when the speaker pauses \
-the demonstration to make a verbal point that lacks visual support.\
-\n\nWhen the user says 'tighten this tutorial' the playbook is: \
-read_index(topic) → propose chapter Titles → find_dead_air with a \
-3.0s threshold → propose trims that respect the 'no cut over typing' \
-rule (use clip_search or shot_summary to identify typing sustained-\
-motion intervals before each proposed cut).";
+/// Stub line for tutorial-format projects. The full playbook lives
+/// in `skills/tutorial/SKILL.md`. Phase 4E-skills refactor.
+const TUTORIAL_STUB: &str = "\
+**Format: tutorial / screen recording.** When the user asks for \
+cleanup or chaptering, call `load_skill(name='tutorial')` for the \
+full editorial playbook (key-frame holds, no-cut-over-typing rule, \
+chapter generation from topics). The skill carries the concrete \
+defaults so they don't burn context on sessions that aren't doing \
+tutorial work.";
 
 #[cfg(test)]
 mod tests {
@@ -361,29 +321,30 @@ mod tests {
     }
 
     #[test]
-    fn assembles_shorts_format() {
-        // Phase 4C: shorts gets a dedicated addendum with vertical /
-        // hook-in-first-3s defaults.
+    fn shorts_format_emits_skill_stub() {
+        // Phase 4C-skills refactor: the always-on prompt carries
+        // only the stub pointing at `load_skill('short-form')`. The
+        // full playbook lives in the SKILL.md and is loaded on
+        // demand — keeps token cost low for sessions that aren't
+        // doing short-form work.
         let shorts = assemble_system_prompt(&ProjectFormat::Shorts, PromptPermissionMode::Copilot);
         assert!(shorts.contains("**Format: short-form vertical.**"), "{shorts}");
-        assert!(shorts.contains("hook lands in the first 3 seconds"));
-        assert!(shorts.contains("aspect-ratio") || shorts.contains("Aspect-ratio"));
-        // Should not pick up podcast or tutorial copy.
+        assert!(shorts.contains("load_skill(name='short-form')"), "{shorts}");
+        // Concrete defaults must NOT appear in the stub — they live
+        // in the SKILL.md body.
+        assert!(!shorts.contains("hook lands in the first 3 seconds"));
         assert!(!shorts.contains("breath beats"));
-        assert!(!shorts.contains("Hold key frames longer"));
     }
 
     #[test]
-    fn assembles_tutorial_format() {
-        // Phase 4E: tutorial gets a dedicated addendum with code-typing
-        // preservation + chapter-marker behavior.
+    fn tutorial_format_emits_skill_stub() {
+        // Phase 4E-skills refactor: same shape as shorts.
         let tutorial =
             assemble_system_prompt(&ProjectFormat::Tutorial, PromptPermissionMode::Copilot);
         assert!(tutorial.contains("**Format: tutorial / screen recording.**"), "{tutorial}");
-        assert!(tutorial.contains("Hold key frames longer"));
-        assert!(tutorial.contains("Never cut over a typing"));
-        // Shouldn't pick up podcast or shorts copy.
-        assert!(!tutorial.contains("breath beats"));
+        assert!(tutorial.contains("load_skill(name='tutorial')"), "{tutorial}");
+        // Concrete defaults must NOT appear in the stub.
+        assert!(!tutorial.contains("Hold key frames longer"));
         assert!(!tutorial.contains("hook lands in the first 3 seconds"));
     }
 
