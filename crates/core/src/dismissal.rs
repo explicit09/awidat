@@ -58,6 +58,11 @@ pub enum DismissalBucket {
     FillerAggressive,
     /// Restart-marker / false-start findings.
     FalseStart,
+    /// Stock-broll opportunity findings from `find_broll_opportunities`
+    /// (Phase 3). Dismissing this means the user doesn't want b-roll
+    /// suggestions on this project — usually because the project is
+    /// face-only (the cutaway aesthetic doesn't fit).
+    BrollOpportunity,
 }
 
 impl DismissalBucket {

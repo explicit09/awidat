@@ -17,7 +17,9 @@ use awidat_core::tools::{
     apply_edl::ApplyEdlTool, assess_continuity::AssessContinuityTool, bash::BashTool,
     broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
     delegate::DelegateTool, delegate_all::DelegateAllTool,
-    find_beat::FindBeatTool, find_dead_air::FindDeadAirTool,
+    find_beat::FindBeatTool,
+    find_broll_opportunities::FindBrollOpportunitiesTool,
+    find_dead_air::FindDeadAirTool,
     find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
@@ -175,6 +177,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(ViewFrameTool));
     registry.register(Arc::new(ViewTimelineTool));
     registry.register(Arc::new(BrollCandidatesTool));
+    registry.register(Arc::new(FindBrollOpportunitiesTool));
     registry.register(Arc::new(ClipSearchTool));
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));
