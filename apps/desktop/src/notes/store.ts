@@ -15,6 +15,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  ContinuityVerdictTag,
   EditorialNoteKind,
   EditorialNoteStatus,
   Item,
@@ -31,6 +32,12 @@ export type Note = {
   anchorAtS: number;
   summary: string;
   suggestedProposal?: string;
+  /** For `continuity_warning` notes only — drives card color in
+   *  the panel. `undefined` for other kinds. */
+  continuityVerdict?: ContinuityVerdictTag;
+  /** Per-rule reasons for `continuity_warning` notes (rendered as
+   *  bullets under the summary). `undefined` for other kinds. */
+  continuityReasons?: string[];
 };
 
 /** Disk shape — must match crates/core/src/notes.rs::NotesFile. */
@@ -43,6 +50,8 @@ type NotesFile = {
     anchor_at_s: number;
     summary: string;
     suggested_proposal?: string;
+    continuity_verdict?: string;
+    continuity_reasons?: string[];
   }>;
 };
 
@@ -84,6 +93,8 @@ function deserialize(file: NotesFile): Note[] {
     anchorAtS: n.anchor_at_s,
     summary: n.summary,
     suggestedProposal: n.suggested_proposal,
+    continuityVerdict: n.continuity_verdict as ContinuityVerdictTag | undefined,
+    continuityReasons: n.continuity_reasons,
   }));
 }
 
@@ -114,6 +125,8 @@ export const useNotesStore = create<State>((set, get) => ({
           anchor_at_s: item.anchor_at_s,
           summary: item.summary,
           suggested_proposal: item.suggested_proposal ?? null,
+          continuity_verdict: item.continuity_verdict ?? null,
+          continuity_reasons: item.continuity_reasons ?? null,
         },
       });
       await get().refresh();

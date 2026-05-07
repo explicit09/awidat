@@ -180,16 +180,41 @@ function NoteCard({
     setBusy(false);
   }
 
+  // continuity_warning notes carry a verdict and per-rule reasons.
+  // The card gets a verdict-colored class so the user sees urgency
+  // at a glance; reasons render as a bullet list under the summary.
+  const verdictClass = note.continuityVerdict
+    ? `note-card-verdict-${note.continuityVerdict}`
+    : "";
+
   return (
     <article
-      className={`note-card note-card-${note.status} ${faded ? "note-card-faded" : ""}`}
+      className={`note-card note-card-${note.status} ${verdictClass} ${
+        faded ? "note-card-faded" : ""
+      }`}
     >
       <div className="note-card-body" onClick={seek} title="Seek timeline">
         <span className={`note-icon note-icon-${note.kind}`} aria-hidden>
           {iconFor(note.kind)}
         </span>
         <div className="note-text">
-          <div className="note-summary">{note.summary}</div>
+          <div className="note-summary">
+            {note.continuityVerdict && (
+              <span
+                className={`note-verdict-pill note-verdict-${note.continuityVerdict}`}
+              >
+                {note.continuityVerdict}
+              </span>
+            )}
+            {note.summary}
+          </div>
+          {note.continuityReasons && note.continuityReasons.length > 0 && (
+            <ul className="note-reasons">
+              {note.continuityReasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          )}
           <div className="note-anchor">
             at {formatTime(note.anchorAtS)}
           </div>

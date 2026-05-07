@@ -292,6 +292,24 @@ pub enum Item {
         /// chat). When `Some`, the panel's "Generate Proposal" button
         /// pipes this through `propose_user_edit`.
         suggested_proposal: Option<String>,
+        /// For `continuity_warning` notes: the rule engine's verdict
+        /// (`clean` / `risky` / `dirty` / `abstain`) so the panel
+        /// can color-code the card. `None` for non-continuity kinds
+        /// (silence, filler, etc).
+        ///
+        /// Step 2.5 added this so continuity notes show urgency at
+        /// a glance — dirty cuts get a red border, risky get amber,
+        /// abstain reads as muted.
+        #[serde(default)]
+        continuity_verdict: Option<ContinuityVerdictTag>,
+        /// For `continuity_warning` notes: the per-rule reasons the
+        /// engine produced (only rules whose verdict ≠ `clean` are
+        /// surfaced — clean rules are silent). The panel renders
+        /// these as a bullet list under the summary so the user
+        /// sees exactly *why* the cut was flagged. `None` for
+        /// non-continuity kinds.
+        #[serde(default)]
+        continuity_reasons: Option<Vec<String>>,
     },
 }
 
@@ -361,6 +379,30 @@ pub enum JobResult {
     },
     /// User cancelled the job.
     Cancelled,
+}
+
+/// Wire-side mirror of `awidat_core::continuity::Verdict`. Lives
+/// here in the protocol crate so the frontend can render it via
+/// ts-rs without depending on `awidat-core`. Phase 2.5 added this
+/// for `continuity_warning` Notes; the panel maps each variant to
+/// a color (clean → green, risky → amber, dirty → red, abstain →
+/// muted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuityVerdictTag {
+    /// No rule flagged the cut. Renders dimmed; the user usually
+    /// won't see a Note for clean cuts (the agent skips emitting
+    /// them) but the variant exists for completeness.
+    Clean,
+    /// At least one rule flagged the cut as questionable. Amber.
+    Risky,
+    /// At least one rule is confident the cut would jar. Red.
+    Dirty,
+    /// Some rules had no input data (sidecars missing). Muted —
+    /// the agent surfaces these to tell the user the project may
+    /// need indexing.
+    Abstain,
 }
 
 /// What kind of editorial finding an [`Item::EditorialNote`] holds.

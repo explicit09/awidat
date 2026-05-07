@@ -2045,6 +2045,74 @@ body,
   opacity: 0.45;
 }
 
+/* Step 2.5 — continuity-warning verdict colors. The verdict
+ * border overrides the kind-default open-card amber so dirty
+ * stands out; risky stays amber-ish; abstain reads muted. */
+.note-card-verdict-dirty {
+  border-color: rgba(248, 81, 73, 0.7);
+}
+
+.note-card-verdict-risky {
+  border-color: rgba(245, 158, 11, 0.7);
+}
+
+.note-card-verdict-clean {
+  border-color: rgba(63, 185, 80, 0.5);
+}
+
+.note-card-verdict-abstain {
+  border-color: var(--border);
+  opacity: 0.7;
+}
+
+/* Verdict pill prepended to the summary text. Tiny uppercase
+ * label that mirrors the card's border color. */
+.note-verdict-pill {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.note-verdict-dirty {
+  background: rgba(248, 81, 73, 0.18);
+  color: var(--err);
+}
+
+.note-verdict-risky {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--warn);
+}
+
+.note-verdict-clean {
+  background: rgba(63, 185, 80, 0.18);
+  color: var(--ok);
+}
+
+.note-verdict-abstain {
+  background: var(--bg-elev2);
+  color: var(--text-muted);
+}
+
+/* Continuity reasons — bulleted list under the summary. */
+.note-reasons {
+  margin: 4px 0 0 18px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  list-style: disc;
+}
+
+.note-reasons li {
+  margin: 1px 0;
+  line-height: 1.4;
+}
+
 .note-card-faded {
   opacity: 0.55;
 }

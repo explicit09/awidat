@@ -35,6 +35,8 @@ export type { EditorialNoteKind } from "./generated/EditorialNoteKind";
 export type { EditorialNoteStatus } from "./generated/EditorialNoteStatus";
 export type { ProjectType } from "./generated/ProjectType";
 export type { PermissionMode } from "./generated/PermissionMode";
+// Continuity engine (Phase 2).
+export type { ContinuityVerdictTag } from "./generated/ContinuityVerdictTag";
 
 // Tauri event channel names. Mirror the constants in
 // `apps/desktop/src-tauri/src/lib.rs` — there is no runtime check.

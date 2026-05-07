@@ -46,6 +46,15 @@ pub struct PersistedNote {
     /// Optional EDL text for the note's "Generate Proposal" button.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub suggested_proposal: Option<String>,
+    /// Continuity verdict for `continuity_warning` notes. One of
+    /// `"clean"` / `"risky"` / `"dirty"` / `"abstain"`. `None` for
+    /// other kinds. Phase 2.5.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub continuity_verdict: Option<String>,
+    /// Per-rule reasons (only non-clean rules surface here). `None`
+    /// for non-continuity kinds. Phase 2.5.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub continuity_reasons: Option<Vec<String>>,
 }
 
 /// On-disk shape: versioned wrapper so future schema growth
@@ -149,6 +158,8 @@ mod tests {
             anchor_at_s: 1.0,
             summary: "test".into(),
             suggested_proposal: None,
+            continuity_verdict: None,
+            continuity_reasons: None,
         }
     }
 
