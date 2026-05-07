@@ -163,6 +163,106 @@ pub enum EdlOp {
         /// Speed multiplier. Must be finite and `> 0.0`.
         factor: f64,
     },
+    /// Insert a title overlay on the project's "Titles" track. The
+    /// titles track auto-creates on first insert (Video kind, flagged
+    /// via metadata.awidat.extra["track_role"] = "titles") so the
+    /// render pipeline can route these clips into `drawtext` filters
+    /// instead of trying to decode them as media.
+    ///
+    /// `start_s` / `end_s` are absolute timeline-time seconds — when
+    /// the overlay should appear and disappear over the underlying
+    /// composition. The synthesized title clip carries an
+    /// `awidat.title` Effect whose metadata holds all the styling
+    /// fields below.
+    InsertTitle {
+        /// Title appears at this timeline-time, in seconds.
+        start_s: f64,
+        /// Title disappears at this timeline-time, in seconds.
+        /// Must be `> start_s`.
+        end_s: f64,
+        /// Text to display.
+        text: String,
+        /// Vertical band on the frame.
+        position: TitlePosition,
+        /// Font size in pixels (rendered against a 1080p reference
+        /// frame; ffmpeg scales proportionally).
+        font_size: u32,
+        /// Hex colour string like `"#FFFFFF"`. Validation deferred
+        /// to ffmpeg's `drawtext` filter at render time.
+        color: String,
+        /// Bold vs normal weight.
+        font_weight: TitleWeight,
+        /// Entry / exit animation.
+        animation: TitleAnimation,
+    },
+    /// Update an existing title overlay's styling. Anchored by the
+    /// title clip's uuid (every InsertTitle stamps one). All fields
+    /// are optional — only non-None fields update.
+    SetTitle {
+        /// Anchor identifying the title clip.
+        anchor: Anchor,
+        /// New start timestamp, if changing.
+        start_s: Option<f64>,
+        /// New end timestamp, if changing.
+        end_s: Option<f64>,
+        /// New text, if changing.
+        text: Option<String>,
+        /// New position, if changing.
+        position: Option<TitlePosition>,
+        /// New font size, if changing.
+        font_size: Option<u32>,
+        /// New colour, if changing.
+        color: Option<String>,
+        /// New weight, if changing.
+        font_weight: Option<TitleWeight>,
+        /// New animation, if changing.
+        animation: Option<TitleAnimation>,
+    },
+}
+
+/// Where on the frame a title sits. Render maps these to proportional
+/// `y=` expressions (`h*0.05` for top, etc) so they survive resolution
+/// changes without hard-coded pixel positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitlePosition {
+    /// Near the top edge.
+    Top,
+    /// Vertically centered.
+    Center,
+    /// Near the bottom edge.
+    Bottom,
+}
+
+/// Font weight for title rendering. v1 ships only normal + bold;
+/// custom weights would need a richer font bundling story.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleWeight {
+    /// Regular weight.
+    Normal,
+    /// Bold weight.
+    Bold,
+}
+
+/// Entry / exit animation for a title. v1 lands fade variants;
+/// slide variants are wired in 16.4 if time permits and gated behind
+/// careful x/y expression construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleAnimation {
+    /// No animation — title pops on at start_s and off at end_s.
+    None,
+    /// Fade in over the leading 500ms; full alpha thereafter.
+    FadeIn,
+    /// Full alpha until the trailing 500ms; fade to zero.
+    FadeOut,
+    /// Fade in at start_s, fade out at end_s.
+    FadeInOut,
+    /// Slide in from off-screen on the side matching the position.
+    SlideIn,
+    /// Slide out off-screen on the side matching the position.
+    SlideOut,
 }
 
 /// Where to anchor a `Trim`/`Delete`/`Move`/etc.

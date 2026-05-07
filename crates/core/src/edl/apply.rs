@@ -190,6 +190,14 @@ fn apply_one(
         EdlOp::SetSpeed { anchor, factor } => {
             apply_set_speed(working, index, anchor, *factor, ctx, locator)
         }
+        EdlOp::InsertTitle { .. } => Err(ApplyError::NotImplemented {
+            index,
+            op: "Insert Title".into(),
+        }),
+        EdlOp::SetTitle { .. } => Err(ApplyError::NotImplemented {
+            index,
+            op: "Set Title".into(),
+        }),
     }
 }
 
@@ -207,8 +215,11 @@ fn resolve_locator_for_op(
         | EdlOp::MoveClip { anchor, .. }
         | EdlOp::InsertBRoll { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
-        | EdlOp::SetSpeed { anchor, .. } => anchor,
-        EdlOp::InsertClip { .. } | EdlOp::InsertTransition { .. } => return Ok(None),
+        | EdlOp::SetSpeed { anchor, .. }
+        | EdlOp::SetTitle { anchor, .. } => anchor,
+        EdlOp::InsertClip { .. }
+        | EdlOp::InsertTransition { .. }
+        | EdlOp::InsertTitle { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
         .map(Some)

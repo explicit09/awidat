@@ -492,15 +492,19 @@ fn build_diff_hints(
                     });
                 }
             }
-            // F2 ops; not rendered in v1. SetVolume / SetSpeed
-            // mutate Clip.effects (no structural change), so the
-            // ghost overlay paints them as a re-render of the same
-            // clip rect — no diff hint needed.
+            // F2 ops; not rendered in v1. SetVolume / SetSpeed /
+            // SetTitle mutate effect metadata (no structural change),
+            // so the ghost overlay paints them as a re-render of the
+            // same clip rect — no diff hint needed. InsertTitle adds
+            // a synthesized clip on the Titles track; v1 doesn't
+            // emit a hint there either.
             EdlOp::InsertBRoll { .. }
             | EdlOp::MoveClip { .. }
             | EdlOp::InsertTransition { .. }
             | EdlOp::SetVolume { .. }
-            | EdlOp::SetSpeed { .. } => {}
+            | EdlOp::SetSpeed { .. }
+            | EdlOp::InsertTitle { .. }
+            | EdlOp::SetTitle { .. } => {}
         }
     }
     hints
@@ -619,6 +623,8 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::SetVolume { .. } => "SetVolume",
         EdlOp::SetSpeed { .. } => "SetSpeed",
+        EdlOp::InsertTitle { .. } => "InsertTitle",
+        EdlOp::SetTitle { .. } => "SetTitle",
     }
 }
 

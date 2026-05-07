@@ -26,7 +26,10 @@
 
 use thiserror::Error;
 
-use super::op::{Anchor, BRollPosition, EdlEnvelope, EdlOp, TransitionBetween};
+use super::op::{
+    Anchor, BRollPosition, EdlEnvelope, EdlOp, TitleAnimation, TitlePosition, TitleWeight,
+    TransitionBetween,
+};
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
 /// string and re-emits a corrected envelope. Line numbers are 1-based.
@@ -213,6 +216,8 @@ enum OpKind {
     InsertTransition,
     SetVolume,
     SetSpeed,
+    InsertTitle,
+    SetTitle,
 }
 
 impl OpBuilder {
@@ -228,6 +233,8 @@ impl OpBuilder {
             "Insert Transition" => OpKind::InsertTransition,
             "Set Volume" => OpKind::SetVolume,
             "Set Speed" => OpKind::SetSpeed,
+            "Insert Title" => OpKind::InsertTitle,
+            "Set Title" => OpKind::SetTitle,
             other => {
                 return Err(EdlParseError::UnknownOp {
                     line,
@@ -425,7 +432,145 @@ impl OpBuilder {
                 })?;
                 Ok(EdlOp::SetSpeed { anchor, factor })
             }
+            OpKind::InsertTitle => {
+                let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "start_s".into(),
+                    }
+                })?;
+                let end_s = take_field_f64(&mut fields, "end_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "end_s".into(),
+                    }
+                })?;
+                let text = take_field_string(&mut fields, "text").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "text".into(),
+                    }
+                })?;
+                let position = parse_title_position(
+                    take_field_string(&mut fields, "position").as_deref(),
+                    head,
+                )?
+                .unwrap_or(TitlePosition::Center);
+                let font_size = take_field_usize(&mut fields, "font_size")
+                    .map(|n| n as u32)
+                    .unwrap_or(64);
+                let color = take_field_string(&mut fields, "color")
+                    .unwrap_or_else(|| "#FFFFFF".to_string());
+                let font_weight = parse_title_weight(
+                    take_field_string(&mut fields, "font_weight").as_deref(),
+                    head,
+                )?
+                .unwrap_or(TitleWeight::Normal);
+                let animation = parse_title_animation(
+                    take_field_string(&mut fields, "animation").as_deref(),
+                    head,
+                )?
+                .unwrap_or(TitleAnimation::None);
+                Ok(EdlOp::InsertTitle {
+                    start_s,
+                    end_s,
+                    text,
+                    position,
+                    font_size,
+                    color,
+                    font_weight,
+                    animation,
+                })
+            }
+            OpKind::SetTitle => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let start_s = take_field_f64(&mut fields, "start_s");
+                let end_s = take_field_f64(&mut fields, "end_s");
+                let text = take_field_string(&mut fields, "text");
+                let position = parse_title_position(
+                    take_field_string(&mut fields, "position").as_deref(),
+                    head,
+                )?;
+                let font_size = take_field_usize(&mut fields, "font_size").map(|n| n as u32);
+                let color = take_field_string(&mut fields, "color");
+                let font_weight = parse_title_weight(
+                    take_field_string(&mut fields, "font_weight").as_deref(),
+                    head,
+                )?;
+                let animation = parse_title_animation(
+                    take_field_string(&mut fields, "animation").as_deref(),
+                    head,
+                )?;
+                Ok(EdlOp::SetTitle {
+                    anchor,
+                    start_s,
+                    end_s,
+                    text,
+                    position,
+                    font_size,
+                    color,
+                    font_weight,
+                    animation,
+                })
+            }
         }
+    }
+}
+
+fn parse_title_position(
+    raw: Option<&str>,
+    line: usize,
+) -> Result<Option<TitlePosition>, EdlParseError> {
+    match raw {
+        None => Ok(None),
+        Some("top") => Ok(Some(TitlePosition::Top)),
+        Some("center") => Ok(Some(TitlePosition::Center)),
+        Some("bottom") => Ok(Some(TitlePosition::Bottom)),
+        Some(other) => Err(EdlParseError::BadField {
+            line,
+            raw: format!("position: {other}"),
+            message: "must be 'top', 'center', or 'bottom'".into(),
+        }),
+    }
+}
+
+fn parse_title_weight(
+    raw: Option<&str>,
+    line: usize,
+) -> Result<Option<TitleWeight>, EdlParseError> {
+    match raw {
+        None => Ok(None),
+        Some("normal") => Ok(Some(TitleWeight::Normal)),
+        Some("bold") => Ok(Some(TitleWeight::Bold)),
+        Some(other) => Err(EdlParseError::BadField {
+            line,
+            raw: format!("font_weight: {other}"),
+            message: "must be 'normal' or 'bold'".into(),
+        }),
+    }
+}
+
+fn parse_title_animation(
+    raw: Option<&str>,
+    line: usize,
+) -> Result<Option<TitleAnimation>, EdlParseError> {
+    match raw {
+        None => Ok(None),
+        Some("none") => Ok(Some(TitleAnimation::None)),
+        Some("fade_in") => Ok(Some(TitleAnimation::FadeIn)),
+        Some("fade_out") => Ok(Some(TitleAnimation::FadeOut)),
+        Some("fade_in_out") => Ok(Some(TitleAnimation::FadeInOut)),
+        Some("slide_in") => Ok(Some(TitleAnimation::SlideIn)),
+        Some("slide_out") => Ok(Some(TitleAnimation::SlideOut)),
+        Some(other) => Err(EdlParseError::BadField {
+            line,
+            raw: format!("animation: {other}"),
+            message: "must be 'none', 'fade_in', 'fade_out', 'fade_in_out', 'slide_in', or 'slide_out'"
+                .into(),
+        }),
     }
 }
 
@@ -730,6 +875,131 @@ mod tests {
             }
             other => panic!("want SetSpeed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_insert_title_with_full_styling() {
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 0.0
++ end_s: 3.0
++ text: \"Welcome\"
++ position: top
++ font_size: 72
++ color: #FFAA00
++ font_weight: bold
++ animation: fade_in_out
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTitle {
+                start_s,
+                end_s,
+                text,
+                position,
+                font_size,
+                color,
+                font_weight,
+                animation,
+            } => {
+                assert!((start_s - 0.0).abs() < 1e-9);
+                assert!((end_s - 3.0).abs() < 1e-9);
+                assert_eq!(text, "Welcome");
+                assert_eq!(*position, TitlePosition::Top);
+                assert_eq!(*font_size, 72);
+                assert_eq!(color, "#FFAA00");
+                assert_eq!(*font_weight, TitleWeight::Bold);
+                assert_eq!(*animation, TitleAnimation::FadeInOut);
+            }
+            other => panic!("want InsertTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_title_with_defaults() {
+        // Only required fields present — position / font_size /
+        // color / weight / animation should default.
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 1.0
++ end_s: 2.5
++ text: hello
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTitle {
+                position,
+                font_size,
+                color,
+                font_weight,
+                animation,
+                ..
+            } => {
+                assert_eq!(*position, TitlePosition::Center);
+                assert_eq!(*font_size, 64);
+                assert_eq!(color, "#FFFFFF");
+                assert_eq!(*font_weight, TitleWeight::Normal);
+                assert_eq!(*animation, TitleAnimation::None);
+            }
+            other => panic!("want InsertTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_set_title_with_partial_fields() {
+        let text = "\
+*** Begin EDL
+*** Set Title
+@@ anchor: clip_uuid=title-uuid
++ text: \"Updated\"
++ animation: slide_in
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetTitle {
+                anchor,
+                text,
+                animation,
+                start_s,
+                end_s,
+                position,
+                font_size,
+                color,
+                font_weight,
+            } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "title-uuid"));
+                assert_eq!(text.as_deref(), Some("Updated"));
+                assert_eq!(*animation, Some(TitleAnimation::SlideIn));
+                // Untouched fields stay None.
+                assert!(start_s.is_none());
+                assert!(end_s.is_none());
+                assert!(position.is_none());
+                assert!(font_size.is_none());
+                assert!(color.is_none());
+                assert!(font_weight.is_none());
+            }
+            other => panic!("want SetTitle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn insert_title_rejects_bad_position() {
+        let text = "\
+*** Begin EDL
+*** Insert Title
++ start_s: 0.0
++ end_s: 3.0
++ text: hi
++ position: weird
+*** End EDL
+";
+        let err = parse(text).unwrap_err();
+        assert!(matches!(err, EdlParseError::BadField { ref message, .. } if message.contains("'top'")));
     }
 
     #[test]
