@@ -39,10 +39,14 @@ Load this skill when the user asks any of:
 - **Every accepted `apply_edl` envelope auto-commits.** The header
   is auto-generated from the structured op descriptions; one op
   becomes the verbatim description, two ops join with `;`, three+
-  ops become "X; Y; …and N more" capped at 120 chars. The agent's
-  per-turn reasoning is not yet threaded into the auto-commit body
-  (Phase B follow-up); for now the commit body is the structured
-  summary alone, which is still a real audit trail.
+  ops become "X; Y; …and N more" capped at 120 chars.
+- **Pass `reasoning: "..."` to `apply_edl` whenever you have context.**
+  It lands in the auto-commit body as `Agent reasoning: <text>`. One
+  short sentence is enough — reference rules ("per rhythm-preservation
+  rule"), user requests ("user asked for tighter pacing"), or trigger
+  findings ("matched find_broll_opportunities at 12.4s"). The header
+  is the *what*; the reasoning is the *why*. Together they're the
+  audit trail for "why did we cut this?" reads on the commit log.
 - `vedit_commit` remains available for **explicit save points** —
   e.g. when the user says "snapshot this" without making a structural
   edit, or when you want to land a commit message richer than what
@@ -170,12 +174,8 @@ history."
 - [ ] Hashes are quoted in their short form (first 7 hex chars) for
       readability, unless the user asks for full.
 
-## Still on the roadmap (post-Phase-B)
+## Still on the roadmap
 
-- **Per-turn reasoning threaded into auto-commit bodies.** Today the
-  auto-commit body is the structured op summary alone; the agent's
-  free-text reasoning for the turn isn't yet on the apply context.
-  Threading it through is mechanical and lands soon.
 - **Branch + switch tools.** The agent will be able to propose
   alternatives on a branch ("let me try a tighter cut on `alt-tight`
   and show you both"). User reviews, picks, optionally merges.

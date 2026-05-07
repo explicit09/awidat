@@ -41,6 +41,16 @@ struct ApplyEdlArgs {
     /// disk. The applied-op log is still returned. Default: false.
     #[serde(default)]
     dry_run: bool,
+    /// Optional editorial reasoning for this envelope. Free text;
+    /// captures *why* the agent made these specific edits. Lands in
+    /// the auto-commit body as the `Agent reasoning: …` block, so
+    /// future "why did we cut this?" reads on the commit log have
+    /// real context. Strongly encouraged for any non-trivial edit.
+    /// `None` is permitted (the auto-header alone is still a valid
+    /// audit entry) but the agent should pass something whenever it
+    /// has any context — even one short sentence.
+    #[serde(default)]
+    reasoning: Option<String>,
 }
 
 #[async_trait]
@@ -63,6 +73,10 @@ impl ToolHandler for ApplyEdlTool {
                     "dry_run": {
                         "type": "boolean",
                         "description": "If true, validate without committing. Returns the same applied-op log; the timeline file isn't touched."
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Optional: WHY you made these edits. Lands in the auto-commit body so 'why did we cut this?' reads on the commit log have real context. One short sentence is enough. Reference rules ('per rhythm-preservation rule'), user requests ('user asked for tighter pacing'), or trigger findings ('matched find_broll_opportunities at 12.4s')."
                     }
                 },
                 "required": ["edl"]
@@ -163,11 +177,12 @@ impl ToolHandler for ApplyEdlTool {
             // structured commit. Best-effort: a vedit failure must
             // not unwind the disk write that already happened —
             // editing has higher stake than version control.
-            // Reasoning is None here because the agent's per-turn
-            // reasoning isn't on `ctx` yet (Phase B follow-up: thread
-            // it through). The commit body still carries the
-            // structured op descriptions via the auto-header — the
-            // audit trail is non-empty.
+            //
+            // The `reasoning` arg from the agent's apply_edl call
+            // becomes the commit body — that's the audit trail's
+            // *why*. The auto-header (built from AppliedOp
+            // descriptions) is the *what*. Together they answer
+            // "why did we cut this?" reads on the commit log.
             match crate::vc::open_or_init(&ctx.project_root) {
                 Ok(repo) => {
                     let descriptions: Vec<String> = outcome
@@ -175,9 +190,11 @@ impl ToolHandler for ApplyEdlTool {
                         .iter()
                         .map(|a| a.description.clone())
                         .collect();
-                    if let Err(e) =
-                        crate::vc::auto_commit_apply(&repo, &descriptions, None)
-                    {
+                    if let Err(e) = crate::vc::auto_commit_apply(
+                        &repo,
+                        &descriptions,
+                        args.reasoning.as_deref(),
+                    ) {
                         tracing::warn!(
                             error = %e,
                             "vedit auto-commit failed; apply_edl write succeeded but no commit landed"
@@ -487,6 +504,15 @@ By default this commits. Set dry_run=true ONLY if you want to \
 validate the parse without writing — in that case the response \
 leads with the banner `DRY RUN — no disk write`. Don't pass \
 dry_run if you intend to edit.\
+\n\n\
+**Reasoning.** Pass `reasoning: \"<one short sentence>\"` whenever \
+you have any context for the edit. It lands in the auto-commit \
+body so future reads on the commit log have a real audit trail — \
+e.g. \"User asked for tighter pacing\", \"Per rhythm-preservation \
+rule (rule #5)\", \"Bundled with cross-dissolve because \
+assess_continuity returned dirty\". One sentence is enough. \
+Skipping it produces a commit with the structured op summary alone, \
+which is still better than nothing but loses the *why*.\
 ";
 
 #[cfg(test)]
@@ -654,6 +680,73 @@ mod tests {
             head.header.contains("clip-1") || head.header.contains("trim"),
             "auto-commit header doesn't reflect the op: {}",
             head.header
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_arg_lands_in_auto_commit_body() {
+        // Phase B follow-up: the agent passes a `reasoning` string,
+        // which becomes the commit body so the audit trail captures
+        // *why* the edit happened, not just *what*.
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        ApplyEdlTool
+            .handle(
+                invoke(serde_json::json!({
+                    "edl": edl,
+                    "reasoning": "User asked for tighter pacing on the bravo segment."
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        let repo = crate::vc::open_or_init(dir.path()).unwrap();
+        let entries = crate::vc::log(&repo, 5).unwrap();
+        assert!(!entries.is_empty());
+        let head_msg = &entries[0].full_message;
+        assert!(
+            head_msg.contains("Agent reasoning: User asked for tighter pacing"),
+            "auto-commit body missing reasoning: {head_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_reasoning_does_not_emit_a_blank_body() {
+        // Whitespace-only reasoning shouldn't produce a `Agent
+        // reasoning:` line with nothing after it. format_commit_message
+        // already handles this; we sanity-check the integration.
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        ApplyEdlTool
+            .handle(
+                invoke(serde_json::json!({
+                    "edl": edl,
+                    "reasoning": "   \n  "
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        let repo = crate::vc::open_or_init(dir.path()).unwrap();
+        let entries = crate::vc::log(&repo, 5).unwrap();
+        let head_msg = &entries[0].full_message;
+        assert!(
+            !head_msg.contains("Agent reasoning:"),
+            "blank reasoning produced an empty body block: {head_msg}"
         );
     }
 
