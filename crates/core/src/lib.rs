@@ -20,6 +20,7 @@ pub mod error;
 pub mod lessons;
 pub mod mcp_host;
 pub mod notes;
+pub mod pexels;
 pub mod rollout;
 pub mod session;
 pub mod subagent;

@@ -104,6 +104,8 @@ pub mod accounts {
     /// Anthropic API key — used by `topic-mcp` premium labeling and the
     /// Week 3 agent loop.
     pub const ANTHROPIC_API_KEY: &str = "anthropic_api_key";
+    /// Pexels API key — used by the b-roll search/use tools (Phase 3).
+    pub const PEXELS_API_KEY: &str = "pexels_api_key";
 }
 
 /// Env-var names corresponding to [`accounts`]. Kept in lockstep.
@@ -112,6 +114,8 @@ pub mod env_vars {
     pub const HF_TOKEN: &str = "HF_TOKEN";
     /// Override for [`super::accounts::ANTHROPIC_API_KEY`].
     pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
+    /// Override for [`super::accounts::PEXELS_API_KEY`].
+    pub const PEXELS_API_KEY: &str = "PEXELS_API_KEY";
 }
 
 #[cfg(test)]
@@ -126,6 +130,7 @@ mod tests {
     fn account_constants_are_distinct_from_env_var_names() {
         assert_ne!(accounts::HF_TOKEN, env_vars::HF_TOKEN);
         assert_ne!(accounts::ANTHROPIC_API_KEY, env_vars::ANTHROPIC_API_KEY);
+        assert_ne!(accounts::PEXELS_API_KEY, env_vars::PEXELS_API_KEY);
     }
 
     #[test]
