@@ -175,7 +175,10 @@ fn permission_line(mode: PromptPermissionMode) -> &'static str {
              one-by-one. For dirty continuity verdicts, silently bundle a 0.3s SMPTE_Dissolve \
              via the bundle_with_dissolve pattern — don't ask, just include the transition \
              in the envelope. The user reviews the bundle in the ghost overlay and accepts \
-             or rejects as a whole.",
+             or rejects as a whole. For dirty cuts that read as visual jar (mid-motion, \
+             speaker-switch mid-utterance), prefer bundling a `*** Insert BRoll` cover when \
+             find_broll_opportunities surfaced a strong candidate at the same anchor — the \
+             cutaway hides the jar without changing the audio at all.",
     }
 }
 
@@ -206,9 +209,15 @@ verdict is `clean` / `risky` / `dirty` / `abstain`. Behavior:\
 \n  • `clean`: propose the raw cut.\
 \n  • `risky`: surface the rules array as a Note (kind: \
 continuity_warning) describing the risk; let the user decide.\
-\n  • `dirty`: do NOT propose the raw cut. Bundle a 0.3s \
-*** Insert Transition (SMPTE_Dissolve) at the cut point, OR \
-surface a continuity_warning Note quoting the rule reasons. Never \
+\n  • `dirty`: do NOT propose the raw cut. You have THREE options, \
+in order of preference: (a) bundle a 0.3s *** Insert Transition \
+(SMPTE_Dissolve) at the cut point — works for most dirty cuts; \
+(b) for visually-driven moments (mid-motion or speaker-switch \
+mid-utterance), call `find_broll_opportunities` for the affected \
+range and surface a `broll_suggestion` Note offering a b-roll \
+cover instead — this is the right move when the cut would jar \
+visually but the audio reads fine; (c) surface a continuity_warning \
+Note quoting the rule reasons and let the user decide. Never \
 silently emit a dirty cut.\
 \n  • `abstain`: tell the user which sidecars are missing (the \
 rules array shows `verdict: abstain` per missing input) and ask \
