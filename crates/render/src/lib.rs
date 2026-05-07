@@ -16,6 +16,9 @@
 //! - [`ffmpeg::generate_waveform`] — pull mono PCM at 8 kHz and bucket
 //!   into peak amplitudes. Used by the timeline canvas to draw audio
 //!   waveforms on audio clips.
+//! - [`ffmpeg::generate_silences`] — detect silence ranges via
+//!   ffmpeg's silencedetect filter. Used by the `find_dead_air`
+//!   editorial tool to surface silence-trim Notes.
 //! - [`job::JobManager`] — long-running ffmpeg job orchestrator. Used by
 //!   `start_render` / `poll_render`.
 //! - [`progress::ProgressSnapshot`] — parsed view of ffmpeg's stderr
@@ -27,8 +30,9 @@ pub mod progress;
 pub mod timeline;
 
 pub use ffmpeg::{
-    FfmpegError, TranscodeProgress, TranscodeProgressCallback, extract_frame, ffmpeg_path,
-    ffprobe_path, generate_thumbnails, generate_waveform, probe_duration_s, transcode_proxy,
+    FfmpegError, SilenceRange, TranscodeProgress, TranscodeProgressCallback, extract_frame,
+    ffmpeg_path, ffprobe_path, generate_silences, generate_thumbnails, generate_waveform,
+    probe_duration_s, transcode_proxy,
 };
 pub use timeline::{
     FilterPlan, FilterPlanner, RenderTimelineError, TimelineSegment, TitleAnimation, TitlePlan,

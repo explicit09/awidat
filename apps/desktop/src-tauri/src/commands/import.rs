@@ -208,6 +208,26 @@ fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf
             }
         }
 
+        // Silence detection: produces a per-asset sidecar the
+        // find_dead_air editorial tool reads. No timeline-changed
+        // event — the result feeds Notes (Phase 1.7), not the
+        // canvas. Failure is non-fatal; the tool just sees an
+        // absent sidecar and skips the asset.
+        if let Err(e) = crate::commands::silence::generate_silences_for_asset_in_project(
+            &app,
+            &state,
+            &project_root,
+            &asset,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                asset = %asset.display(),
+                "auto-silences failed; find_dead_air will skip this asset",
+            );
+        }
+
         // Index the whole project. The indexer is sha-keyed so this
         // is idempotent for already-indexed assets — only the new
         // asset's pairs do real work.

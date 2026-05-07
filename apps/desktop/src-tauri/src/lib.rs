@@ -87,6 +87,7 @@ pub fn run() {
             commands::thumbnail::generate_thumbnails_for_asset,
             commands::thumbnail::list_thumbnail_frames,
             commands::waveform::read_waveform,
+            commands::silence::read_silences,
             commands::view::set_view_state,
             commands::timeline::read_timeline,
             commands::render::start_timeline_render,

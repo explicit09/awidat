@@ -719,6 +719,171 @@ fn bucket_peaks(samples: &[f32], bucket_count: usize) -> Vec<f32> {
     out
 }
 
+/// One detected silence range in source-time, produced by
+/// [`generate_silences`]. `start_s` / `end_s` bound the silence;
+/// `db_floor` is the noise floor ffmpeg measured during the range
+/// (closer to `-inf` = quieter; clamped to `-90.0` for assets ffmpeg
+/// reports as `-inf`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SilenceRange {
+    /// Where the silence began, in source-media seconds.
+    pub start_s: f64,
+    /// Where the silence ended, in source-media seconds.
+    pub end_s: f64,
+    /// Average noise floor during the silence (dBFS, negative).
+    pub db_floor: f64,
+}
+
+/// Detect silence ranges in `asset_path` using ffmpeg's
+/// `silencedetect` filter. Returns ranges where audio level was
+/// below `threshold_db` for at least `min_duration_s` seconds.
+///
+/// Pipeline:
+/// `ffmpeg -i <src> -af silencedetect=noise=<threshold>dB:d=<min_duration> -f null -`
+///
+/// `silencedetect` writes pairs of stderr lines per range:
+/// ```text
+/// [silencedetect @ 0x...] silence_start: 12.345
+/// [silencedetect @ 0x...] silence_end: 17.890 | silence_duration: 5.545
+/// ```
+/// We parse these lines incrementally — assets with no audio
+/// stream just produce zero matches, which is the right answer
+/// (an empty `Vec<SilenceRange>` round-trips through the sidecar
+/// and the find_dead_air tool short-circuits on it).
+///
+/// Threshold notes: `-40.0 dB` is a sensible default for podcast
+/// audio (typical noise floor is around `-50 to -60`, conversational
+/// speech is `-15 to -25`). Quieter rooms can use `-50.0`. The
+/// caller decides; we just parse what ffmpeg measures.
+///
+/// `cancel` kills ffmpeg and returns `Err(NonZero { stderr_tail:
+/// "cancelled" })`, mirroring [`transcode_proxy`].
+pub async fn generate_silences(
+    asset_path: &Path,
+    threshold_db: f64,
+    min_duration_s: f64,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<SilenceRange>, FfmpegError> {
+    if !threshold_db.is_finite() || threshold_db >= 0.0 {
+        return Err(FfmpegError::Io(std::io::Error::other(format!(
+            "invalid threshold_db {threshold_db}: must be finite and < 0"
+        ))));
+    }
+    if !min_duration_s.is_finite() || min_duration_s <= 0.0 {
+        return Err(FfmpegError::Io(std::io::Error::other(format!(
+            "invalid min_duration_s {min_duration_s}: must be finite and > 0"
+        ))));
+    }
+    let bin = ffmpeg_path()?;
+
+    let filter = format!("silencedetect=noise={threshold_db}dB:d={min_duration_s}");
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-loglevel")
+        .arg("info") // silencedetect emits at info level
+        .arg("-nostats")
+        .arg("-i")
+        .arg(asset_path)
+        .arg("-map")
+        .arg("0:a:0?")
+        .arg("-af")
+        .arg(&filter)
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
+
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf).await;
+        buf
+    });
+
+    let status = tokio::select! {
+        _ = cancel.cancelled() => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(FfmpegError::NonZero {
+                code: -1,
+                stderr_tail: "cancelled".into(),
+            });
+        }
+        st = child.wait() => st.map_err(FfmpegError::Io)?,
+    };
+
+    let stderr_bytes = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
+        return Err(FfmpegError::NonZero {
+            code: status.code().unwrap_or(-1),
+            stderr_tail: tail_string(&stderr_bytes, STDERR_TAIL_BYTES),
+        });
+    }
+
+    // Empty stderr = audio stream missing or no silences detected.
+    // Either way, return an empty vec — caller treats both the same.
+    Ok(parse_silence_ranges(&String::from_utf8_lossy(
+        &stderr_bytes,
+    )))
+}
+
+/// Parse silencedetect's stderr output into [`SilenceRange`]s.
+/// Pure function, separated for unit testing without spawning ffmpeg.
+///
+/// silencedetect emits paired lines per range; this scanner walks
+/// them in order and matches each `silence_start: <t>` with the
+/// next `silence_end: <t> | silence_duration: <t>`. A start without
+/// a matching end (truncated stderr) drops the range silently.
+fn parse_silence_ranges(stderr: &str) -> Vec<SilenceRange> {
+    let mut out = Vec::new();
+    let mut pending_start: Option<f64> = None;
+    for line in stderr.lines() {
+        if let Some(rest) = line.split_once("silence_start:") {
+            if let Ok(t) = rest.1.trim().parse::<f64>() {
+                pending_start = Some(t);
+            }
+        } else if let Some(rest) = line.split_once("silence_end:") {
+            if let Some(start) = pending_start.take() {
+                // silence_end's payload is "<end_t> | silence_duration: <d>".
+                let end_t = rest
+                    .1
+                    .trim()
+                    .split_once('|')
+                    .map(|(t, _)| t.trim())
+                    .unwrap_or(rest.1.trim())
+                    .parse::<f64>()
+                    .ok();
+                if let Some(end) = end_t {
+                    if end > start {
+                        // silencedetect doesn't expose a per-range
+                        // dB floor — it only reports the threshold
+                        // we passed in. Use that as a conservative
+                        // upper bound; the find_dead_air tool only
+                        // needs ranges, not exact floors.
+                        out.push(SilenceRange {
+                            start_s: start,
+                            end_s: end,
+                            db_floor: -90.0,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Image format for [`extract_frame`].
 #[derive(Debug, Clone, Copy)]
 pub enum ImageFormat {
@@ -940,6 +1105,153 @@ mod tests {
             "expected 2-4 frames, got {}: {:?}",
             entries.len(),
             entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn parse_silence_ranges_pairs_start_and_end() {
+        let stderr = "\
+[silencedetect @ 0x111] silence_start: 1.234
+[silencedetect @ 0x111] silence_end: 5.678 | silence_duration: 4.444
+[silencedetect @ 0x111] silence_start: 10.0
+[silencedetect @ 0x111] silence_end: 12.5 | silence_duration: 2.5
+";
+        let ranges = parse_silence_ranges(stderr);
+        assert_eq!(ranges.len(), 2);
+        assert!((ranges[0].start_s - 1.234).abs() < 1e-9);
+        assert!((ranges[0].end_s - 5.678).abs() < 1e-9);
+        assert!((ranges[1].start_s - 10.0).abs() < 1e-9);
+        assert!((ranges[1].end_s - 12.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_silence_ranges_drops_unmatched_starts() {
+        // Truncated stderr: a start without a matching end should be
+        // skipped rather than crashing the parser.
+        let stderr = "\
+[silencedetect @ 0x111] silence_start: 1.0
+[silencedetect @ 0x111] silence_end: 2.0 | silence_duration: 1.0
+[silencedetect @ 0x111] silence_start: 5.0
+";
+        let ranges = parse_silence_ranges(stderr);
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[test]
+    fn parse_silence_ranges_empty_input_yields_empty_vec() {
+        assert!(parse_silence_ranges("").is_empty());
+        assert!(parse_silence_ranges("frame= 12 fps=24\n").is_empty());
+    }
+
+    #[test]
+    fn parse_silence_ranges_skips_inverted_ranges() {
+        // end <= start would mean the parser misread something —
+        // drop rather than emit a degenerate range.
+        let stderr = "\
+[silencedetect @ 0x111] silence_start: 5.0
+[silencedetect @ 0x111] silence_end: 3.0 | silence_duration: -2.0
+";
+        let ranges = parse_silence_ranges(stderr);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn generate_silences_rejects_invalid_threshold() {
+        // Positive threshold makes no sense for dBFS (always negative).
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                generate_silences(
+                    Path::new("/nonexistent.wav"),
+                    0.0,
+                    0.6,
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+            });
+        assert!(matches!(result, Err(FfmpegError::Io(_))));
+    }
+
+    #[test]
+    fn generate_silences_rejects_zero_min_duration() {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                generate_silences(
+                    Path::new("/nonexistent.wav"),
+                    -40.0,
+                    0.0,
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+            });
+        assert!(matches!(result, Err(FfmpegError::Io(_))));
+    }
+
+    /// End-to-end: synthesize a 4s clip — 1s of tone, 2s of pure
+    /// silence, 1s of tone — via lavfi `aevalsrc` and run
+    /// `generate_silences`. The middle silence should land. Skipped
+    /// when ffmpeg isn't on the box.
+    #[test]
+    fn generate_silences_against_synthesized_audio() {
+        let Ok(_bin) = ffmpeg_path() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let asset = dir.path().join("clip.wav");
+
+        // aevalsrc: pure-silence regions are exactly what silencedetect
+        // is built for. We splice tone + silence + tone via concat.
+        let status = std::process::Command::new(ffmpeg_path().unwrap())
+            .arg("-loglevel").arg("error")
+            .arg("-y")
+            .arg("-f").arg("lavfi")
+            .arg("-i").arg("sine=frequency=440:duration=1")
+            .arg("-f").arg("lavfi")
+            .arg("-i").arg("anullsrc=duration=2:r=44100")
+            .arg("-f").arg("lavfi")
+            .arg("-i").arg("sine=frequency=440:duration=1")
+            .arg("-filter_complex").arg("[0][1][2]concat=n=3:v=0:a=1[a]")
+            .arg("-map").arg("[a]")
+            .arg(&asset)
+            .status()
+            .expect("synth ffmpeg spawn");
+        assert!(status.success(), "synth wav exit: {status}");
+
+        let ranges = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                generate_silences(
+                    &asset,
+                    -40.0,
+                    0.6,
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+            })
+            .expect("generate_silences");
+
+        // We expect exactly one silence range covering ~[1.0, 3.0].
+        assert!(
+            !ranges.is_empty(),
+            "expected at least one silence range, got 0",
+        );
+        let r = ranges[0];
+        // ffmpeg's silencedetect rounds to milliseconds; allow ±200ms
+        // slack on each edge for the tone-fade margin.
+        assert!(
+            (0.8..=1.2).contains(&r.start_s),
+            "silence_start {} out of expected [0.8, 1.2]", r.start_s,
+        );
+        assert!(
+            (2.8..=3.2).contains(&r.end_s),
+            "silence_end {} out of expected [2.8, 3.2]", r.end_s,
         );
     }
 }

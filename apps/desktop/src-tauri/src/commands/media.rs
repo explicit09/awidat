@@ -188,6 +188,38 @@ pub fn waveform_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf 
         .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
 }
 
+/// Compute the absolute silence-sidecar path for an asset path.
+/// Mirrors [`waveform_path_for`]: per-asset, content-disambiguated
+/// by the FNV-1a hash of the absolute source path. The sidecar
+/// holds JSON `{ "ranges": [{ start_s, end_s, db_floor }, ...],
+/// threshold_db, min_duration_s }`; see
+/// `commands::silence::SilenceSidecar`.
+pub fn silences_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
+    let stem = asset_abs_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("asset");
+    project_root
+        .join(".awidat")
+        .join("silences")
+        .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
+}
+
+/// Resolve the absolute silence-sidecar path for a project-relative
+/// asset id (e.g. `raw/foo.mp3`). Returns `Some(path)` if the
+/// sidecar exists on disk; `None` otherwise. Unlike the waveform
+/// helper, an empty `ranges: []` is a valid result (the asset has
+/// no detected silence, or has no audio stream — both are useful
+/// to the find_dead_air tool, which short-circuits on either).
+pub fn silences_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<String> {
+    let abs = project_root.join(asset_id);
+    if !abs.is_file() {
+        return None;
+    }
+    let sidecar = silences_path_for(project_root, &abs);
+    sidecar.is_file().then(|| sidecar.to_string_lossy().into_owned())
+}
+
 /// Resolve the absolute waveform-sidecar path for a project-relative
 /// asset id (e.g. `raw/foo.mp3`). Returns `Some(path)` if the
 /// sidecar exists AND its on-disk JSON contains a non-empty
