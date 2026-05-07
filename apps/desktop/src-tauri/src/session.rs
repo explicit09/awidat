@@ -22,45 +22,11 @@ use awidat_core::tools::{
 use awidat_core::{Session, ToolRegistry};
 use tokio::sync::mpsc;
 
-const SYSTEM_PROMPT: &str = "\
-You are awidat, a desktop agent for editing long-form spoken video. \
-You operate inside a GUI: the user sees the chat, the timeline, and \
-the video preview live. Be concise. Commit edits via apply_edl \
-directly when you're confident.\
-\n\n**Discover before acting.** Never guess asset paths or filenames. \
-On the first turn of any session that touches assets, call \
-view_episode (or list_assets) to learn the actual filenames. \
-Asset paths in this project may be UUID-style (copy_F65206FA-…MOV), \
-not human-readable like 'cast.mp4'. Guessing wastes tool calls and \
-shows the user red error cards. The single discovery call is cheap \
-and makes everything after it correct.\
-\n\nKey tools:\
-\n- view_episode: map of the project (assets + which indexers ran).\
-\n- find_beat / find_moment / inspect_moment: editorial moment lookup.\
-\n- apply_edl: cut/trim/delete/split/insert clips on the timeline. \
-For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
-view_timeline, usually the clip name like `clip-0`; never use the \
-asset filename, proxy stem, or raw media basename as clip_uuid. \
-Times are source-media seconds. view_timeline shows current \
-`source=[start..end]`; to trim the first N seconds of the visible \
-clip, set `start` to source start + N, and to trim the last N \
-seconds, set `end` to source end - N.\
-\n- start_render (scope='timeline'): render the edited timeline to mp4.\
-\n- start_indexing: (re)run the configured indexers on raw/. Use when \
-view_episode shows missing sidecars and the user asked for an \
-operation that needs them. Imports auto-chain through indexing in \
-the GUI's import flow, so this is the rare-case tool — don't \
-proactively re-index already-indexed projects.\
-\nMutating tools (apply_edl, start_render, start_indexing, bash) \
-require user approval — you'll see the result come back as a \
-tool_result, not a direct yes/no.\
-\n\nThe user's input may be prefixed with a metadata line like \
-`[user is watching <stem> at MM:SS]`. That's the desktop's \
-preview pane reporting where the user has the playhead. When \
-the user says \"here\", \"this\", \"now\", or asks about the \
-current moment, that timestamp is the answer to \"where.\" Use \
-inspect_clip / view_frame / find_moment scoped to that time \
-rather than guessing.";
+// Step 1.9: the system prompt is no longer a static const — it's
+// assembled per-project by `awidat_core::system_prompt::assemble_for
+// _project`, which folds in the project type's editorial defaults
+// (podcast / shorts / tutorial / other) plus the active permission
+// mode. See crates/core/src/system_prompt.rs.
 
 /// Build the full editorial-tool registry. Mirrors the TUI's set; the
 /// desktop is the buyer surface and gets every tool the agent has.
@@ -94,7 +60,13 @@ pub fn build_registry() -> ToolRegistry {
     registry
 }
 
-/// Build a fresh `Session` rooted at `project_root`.
+/// Build a fresh `Session` rooted at `project_root`. Step 1.9
+/// replaced the static `SYSTEM_PROMPT` constant with a per-project
+/// builder: the prompt now includes format-specific defaults
+/// (podcast / shorts / tutorial / other) read from the OTIO
+/// metadata, plus the active permission mode read from
+/// `.awidat/permission_mode`. Both reads tolerate missing/corrupt
+/// state and fall back to Other + Manual.
 pub async fn build_session(
     project_root: PathBuf,
     approval_tx: mpsc::Sender<ApprovalRequest>,
@@ -107,11 +79,13 @@ pub async fn build_session(
         )
     })?;
 
+    let prompt = awidat_core::system_prompt::assemble_for_project(&project_root);
+
     let session = Session::new(
         client,
         build_registry(),
         models::SONNET.to_string(),
-        Some(SYSTEM_PROMPT.into()),
+        Some(prompt),
         project_root,
     )
     .with_approval_channel(approval_tx)

@@ -23,6 +23,7 @@ pub mod rollout;
 pub mod session;
 pub mod subagent;
 pub mod skills;
+pub mod system_prompt;
 pub mod tool;
 pub mod tools;
 pub mod verify;
