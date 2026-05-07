@@ -103,6 +103,18 @@ impl ToolHandler for FindFalseStartsTool {
             ))
         })?;
 
+        // Honor per-project dismissal: if the user dismissed
+        // false-start findings in a prior session, return empty.
+        let dismissals = crate::dismissal::load_dismissals(&ctx.project_root);
+        if dismissals.is_dismissed(crate::dismissal::DismissalBucket::FalseStart) {
+            let body = serde_json::json!({
+                "findings": Vec::<FalseStartFinding>::new(),
+                "more_available": false,
+                "dismissed": true,
+            });
+            return Ok(ToolOutput::text(body.to_string()));
+        }
+
         let findings =
             scan_false_starts(&ctx.project_root, &project.timeline, max_results);
         let body = serde_json::json!({

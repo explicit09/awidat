@@ -2,6 +2,7 @@
 //! them all via `generate_handler!`.
 
 pub mod auto_insert;
+pub mod dismissal;
 pub mod import;
 pub mod index;
 pub mod media;

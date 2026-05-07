@@ -123,6 +123,22 @@ impl ToolHandler for FindFillerWordsTool {
             ))
         })?;
 
+        // Honor dismissal memory at the bucket level: dismissing
+        // "filler basic" silences all default-list fillers;
+        // dismissing "filler aggressive" silences just the
+        // discourse-marker findings (the basic ones still surface).
+        let dismissals = crate::dismissal::load_dismissals(&ctx.project_root);
+        let bucket = crate::dismissal::DismissalBucket::for_filler(args.aggressive);
+        if dismissals.is_dismissed(bucket) {
+            let body = serde_json::json!({
+                "fillers": fillers,
+                "findings": Vec::<FillerFinding>::new(),
+                "more_available": false,
+                "dismissed": true,
+            });
+            return Ok(ToolOutput::text(body.to_string()));
+        }
+
         let findings =
             scan_filler_words(&ctx.project_root, &project.timeline, &fillers, max_results);
         let body = serde_json::json!({

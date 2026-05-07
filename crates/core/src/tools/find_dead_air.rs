@@ -119,12 +119,25 @@ impl ToolHandler for FindDeadAirTool {
             ))
         })?;
 
-        let findings = scan_dead_air(
+        let mut findings = scan_dead_air(
             &ctx.project_root,
             &project.timeline,
             min_duration_s,
-            max_results,
+            // Generate up to 2× the cap so dismissal-filtering still
+            // returns up to `max_results` findings even when half
+            // would have been filtered out.
+            max_results.saturating_mul(2).max(max_results),
         );
+
+        // Filter by per-project dismissal memory. The user dismissed
+        // a duration bucket → all findings of that bucket get
+        // dropped from this session's output.
+        let dismissals = crate::dismissal::load_dismissals(&ctx.project_root);
+        findings.retain(|f| {
+            let bucket = crate::dismissal::DismissalBucket::for_silence(f.duration_s);
+            !dismissals.is_dismissed(bucket)
+        });
+        findings.truncate(max_results);
 
         let body = serde_json::json!({
             "min_duration_s": min_duration_s,

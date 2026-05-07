@@ -11,6 +11,7 @@
 pub mod anthropic;
 pub mod awidat_md;
 pub mod compact;
+pub mod dismissal;
 pub mod edl;
 pub mod context;
 pub mod episode_map;
