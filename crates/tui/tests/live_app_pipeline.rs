@@ -67,10 +67,18 @@ fn seed_project() -> tempfile::TempDir {
         };
         track.children.push(TrackChild::Clip(clip));
     }
-    project.timeline.tracks.children.push(StackChild::Track(track));
+    project
+        .timeline
+        .tracks
+        .children
+        .push(StackChild::Track(track));
     project.write(dir.path()).expect("project write");
 
-    let whisper_dir = dir.path().join(files::INDEX_DIR).join("whisper").join("raw");
+    let whisper_dir = dir
+        .path()
+        .join(files::INDEX_DIR)
+        .join("whisper")
+        .join("raw");
     std::fs::create_dir_all(&whisper_dir).unwrap();
     for (i, snip) in snippets.iter().enumerate() {
         let body = serde_json::json!({
@@ -102,7 +110,9 @@ fn seed_project() -> tempfile::TempDir {
         }],
     };
     std::fs::write(
-        dir.path().join(files::INDEX_DIR).join(files::INDEX_MANIFEST),
+        dir.path()
+            .join(files::INDEX_DIR)
+            .join(files::INDEX_MANIFEST),
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
@@ -124,8 +134,8 @@ async fn live_app_pipeline_with_auto_approve() {
     let dir = seed_project();
     let project_root = dir.path().to_path_buf();
 
-    let client = Client::from_env_or_keychain(ClientConfig::default())
-        .expect("ANTHROPIC_API_KEY missing");
+    let client =
+        Client::from_env_or_keychain(ClientConfig::default()).expect("ANTHROPIC_API_KEY missing");
 
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ApplyEdlTool));
@@ -161,7 +171,8 @@ async fn live_app_pipeline_with_auto_approve() {
     let cancel = CancellationToken::new();
     let session_clone = session.clone();
     let cancel_clone = cancel.clone();
-    let prompt = "Delete the bravo clip (the kitchen one). Use a transcript_snippet anchor.".to_string();
+    let prompt =
+        "Delete the bravo clip (the kitchen one). Use a transcript_snippet anchor.".to_string();
     let turn = tokio::spawn(async move { session_clone.run_turn(prompt, cancel_clone).await });
 
     // Drain SessionEvents into AppEvent::Session and verify the chat

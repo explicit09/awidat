@@ -6,6 +6,7 @@ tier: editorial
 tools_allowlist:
   - download_yt_clip
   - apply_edl
+  - view_timeline
   - inspect_moment
   - update_plan
 ---

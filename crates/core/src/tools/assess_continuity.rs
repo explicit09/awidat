@@ -22,11 +22,10 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::continuity::{
-    self, ContinuityInputs, CutKind, assess_continuity as run_assess,
-};
+use crate::continuity::{self, ContinuityInputs, CutKind, assess_continuity as run_assess};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
+/// Tool that scores whether a proposed cut risks visual/audio continuity.
 pub struct AssessContinuityTool;
 
 #[derive(Debug, Deserialize)]
@@ -130,12 +129,7 @@ impl ToolHandler for AssessContinuityTool {
         // build_inputs collects nearby_cuts_s in track-time (the
         // rhythm rule's coord space), so pass the timeline at_s
         // here — NOT source_at_s.
-        let inputs = build_inputs(
-            &ctx.project_root,
-            &project.timeline,
-            &asset_id,
-            args.at_s,
-        );
+        let inputs = build_inputs(&ctx.project_root, &project.timeline, &asset_id, args.at_s);
 
         // Engine takes both coords: source-time for whisper /
         // silence / motion / speaker rules; track-time for the
@@ -165,7 +159,9 @@ fn resolve_asset_at(
     at_s: f64,
 ) -> Option<(String, f64, f64)> {
     for stack_child in &timeline.tracks.children {
-        let StackChild::Track(track) = stack_child else { continue };
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
         let mut cursor_s = 0.0_f64;
         for tc in &track.children {
             match tc {
@@ -176,7 +172,9 @@ fn resolve_asset_at(
                         }
                         continue;
                     };
-                    let Some(range) = clip.source_range.as_ref() else { continue };
+                    let Some(range) = clip.source_range.as_ref() else {
+                        continue;
+                    };
                     let dur = range.duration.to_seconds();
                     let track_end = cursor_s + dur;
                     if at_s >= cursor_s && at_s <= track_end {
@@ -223,7 +221,9 @@ fn build_inputs(
 fn collect_nearby_cuts(timeline: &awidat_proto::otio::Timeline, at_s: f64) -> Vec<f64> {
     let mut out = Vec::new();
     for stack_child in &timeline.tracks.children {
-        let StackChild::Track(track) = stack_child else { continue };
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
         let mut cursor_s = 0.0_f64;
         for tc in &track.children {
             match tc {
@@ -271,13 +271,15 @@ of kind continuity_warning.\
 mod tests {
     use super::*;
     use awidat_proto::otio::{
-        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
-        Track, TrackChild, TrackKind,
+        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
+        TrackChild, TrackKind,
     };
 
-    fn timeline_with_clip(asset_id: &str, source_start_s: f64, duration_s: f64)
-        -> awidat_proto::otio::Timeline
-    {
+    fn timeline_with_clip(
+        asset_id: &str,
+        source_start_s: f64,
+        duration_s: f64,
+    ) -> awidat_proto::otio::Timeline {
         let mut clip = Clip::empty("c1");
         clip.media_reference = MediaReference::External(ExternalReference::new(asset_id));
         clip.source_range = Some(TimeRange::new(

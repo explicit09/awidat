@@ -58,7 +58,11 @@ export function hitTestEdge(
   for (const item of track.items) {
     if (item.kind !== "clip") continue;
     const startX = item.track_start_s * pps;
-    const endX = (item.track_start_s + item.duration_s) * pps;
+    const endX = Math.max(
+      startX + 2,
+      (item.track_start_s + item.duration_s) * pps,
+    );
+    if (endX - startX <= EDGE_HIT_PX * 2) continue;
     const dStart = Math.abs(canvasX - startX);
     const dEnd = Math.abs(canvasX - endX);
     const sourceStart = item.source_start_s ?? 0;
@@ -137,7 +141,10 @@ export function hitTestClipBody(
   for (const item of track.items) {
     if (item.kind !== "clip") continue;
     const startX = item.track_start_s * pps;
-    const endX = (item.track_start_s + item.duration_s) * pps;
+    const endX = Math.max(
+      startX + 2,
+      (item.track_start_s + item.duration_s) * pps,
+    );
     if (canvasX >= startX && canvasX <= endX) {
       return { trackIndex, clipIndex: item.index };
     }

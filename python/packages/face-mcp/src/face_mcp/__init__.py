@@ -27,6 +27,7 @@ import base64
 import json
 import logging
 import subprocess
+from collections.abc import Iterator
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -116,11 +117,11 @@ def _probe_duration_s(asset_path: str) -> float:
     return float(out.stdout.strip())
 
 
-def _extract_frames(
+def _iter_frames(
     asset_path: str, fps: float, target_w: int
-) -> tuple[list[np.ndarray], int, int]:
+) -> tuple[Iterator[np.ndarray], int, int]:
     """Stream rgb24 frames out of ffmpeg at `fps`, scaled so width is
-    `target_w`. Returns (list_of_HxWx3_arrays, width, height)."""
+    `target_w`. Returns (frame_iterator, width, height)."""
     src_w, src_h = _probe_video_dims(asset_path)
     target_h = int(round(src_h * target_w / src_w))
     # Force even height — H.264 / yuv420p requires it; ffmpeg sometimes
@@ -128,6 +129,7 @@ def _extract_frames(
     target_h += target_h % 2
     cmd = [
         "ffmpeg",
+        "-nostdin",
         "-v",
         "error",
         "-i",
@@ -140,16 +142,33 @@ def _extract_frames(
         "rawvideo",
         "-",
     ]
-    proc = subprocess.run(cmd, check=True, capture_output=True)
-    raw = proc.stdout
     frame_size = target_w * target_h * 3
-    n = len(raw) // frame_size
-    frames: list[np.ndarray] = []
-    for i in range(n):
-        chunk = raw[i * frame_size : (i + 1) * frame_size]
-        arr = np.frombuffer(chunk, dtype=np.uint8).reshape(target_h, target_w, 3).copy()
-        frames.append(arr)
-    return frames, target_w, target_h
+
+    def frames() -> Iterator[np.ndarray]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert proc.stdout is not None
+        try:
+            while True:
+                chunk = proc.stdout.read(frame_size)
+                if not chunk:
+                    break
+                if len(chunk) != frame_size:
+                    raise RuntimeError(
+                        f"ffmpeg produced a partial frame ({len(chunk)} of {frame_size} bytes)"
+                    )
+                yield np.frombuffer(chunk, dtype=np.uint8).reshape(target_h, target_w, 3)
+            stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+            rc = proc.wait()
+            if rc != 0:
+                raise RuntimeError(
+                    f"ffmpeg frame extraction failed (exit {rc}): {stderr.strip()}"
+                )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    return frames(), target_w, target_h
 
 
 def _detect_and_embed(
@@ -254,19 +273,20 @@ def _map_speakers_to_faces(
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     duration_s = _probe_duration_s(req.asset_path)
-    frames, w, h = _extract_frames(req.asset_path, SAMPLE_FPS, DETECT_WIDTH)
+    frames, w, h = _iter_frames(req.asset_path, SAMPLE_FPS, DETECT_WIDTH)
     _log.info(
-        "face-mcp: asset=%s duration=%.2fs frames=%d at %dx%d",
+        "face-mcp: asset=%s duration=%.2fs streaming frames at %dx%d",
         req.asset_id,
         duration_s,
-        len(frames),
         w,
         h,
     )
 
-    # Pass 1: detect + embed across all frames.
+    # Pass 1: detect + embed across streamed frames. Keep only compact
+    # detection metadata and embeddings, not the decoded frame list.
     pool: list[np.ndarray] = []  # all embeddings, in detection order
     per_frame_raw: list[list[dict[str, Any]]] = []  # boxes only, paired with pool
+    frame_count = 0
     for frame in frames:
         dets = _detect_and_embed(frame)
         per_frame_raw.append(
@@ -274,6 +294,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         )
         for _box, emb in dets:
             pool.append(emb)
+        frame_count += 1
 
     # Pass 2: cluster.
     pool_arr = np.array(pool) if pool else np.zeros((0, 128), dtype=np.float64)
@@ -326,7 +347,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         "duration_s": duration_s,
         "detect_width": w,
         "detect_height": h,
-        "frame_count": len(frames),
+        "frame_count": frame_count,
         "faces": faces_summary,
         "speaker_to_face": speaker_to_face,
         "per_frame": per_frame,

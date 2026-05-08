@@ -133,8 +133,7 @@ impl ToolHandler for BrollCandidatesTool {
                  Run `awidat index --indexer frame-quality <project>` and retry."
             ))
         })?;
-        let fq_by_asset: std::collections::HashMap<String, serde_json::Value> =
-            fq_walker.collect();
+        let fq_by_asset: std::collections::HashMap<String, serde_json::Value> = fq_walker.collect();
 
         let walker = walk_indexer(&ctx.project_root, "shot").map_err(|e| {
             FunctionCallError::RespondToModel(format!(
@@ -170,10 +169,7 @@ impl ToolHandler for BrollCandidatesTool {
                 .unwrap_or_default();
 
             for shot in shots {
-                let start_s = shot
-                    .get("start_s")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
+                let start_s = shot.get("start_s").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 let end_s = shot.get("end_s").and_then(|v| v.as_f64()).unwrap_or(0.0);
                 if end_s - start_s < min_duration_s {
                     continue;
@@ -239,17 +235,19 @@ impl ToolHandler for BrollCandidatesTool {
         results.sort_by(|a, b| {
             let da = a.get("duration_s").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let db = b.get("duration_s").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal).then_with(|| {
-                let sa = a
-                    .get("sharp_fraction")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                let sb = b
-                    .get("sharp_fraction")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
-                sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
-            })
+            db.partial_cmp(&da)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    let sa = a
+                        .get("sharp_fraction")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    let sb = b
+                        .get("sharp_fraction")
+                        .and_then(|v| v.as_f64())
+                        .unwrap_or(0.0);
+                    sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+                })
         });
         let more = results.len() > limit;
         results.truncate(limit);
@@ -298,7 +296,10 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -312,11 +313,7 @@ mod tests {
         }
     }
 
-    fn write_shot(
-        root: &std::path::Path,
-        asset: &str,
-        shots: Vec<serde_json::Value>,
-    ) {
+    fn write_shot(root: &std::path::Path, asset: &str, shots: Vec<serde_json::Value>) {
         let p = root.join("index/shot").join(format!("{asset}.json"));
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(

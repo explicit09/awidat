@@ -4,19 +4,28 @@ description: End-to-end production of a published podcast episode from raw recor
 version: 0.1.0
 tier: editorial
 tools_allowlist:
+  - list_assets
   - view_episode
+  - read_index
+  - find_episode_start
   - shot_summary
   - find_beat
   - inspect_moment
   - find_moment
+  - find_dead_air
+  - find_filler_words
+  - find_false_starts
   - find_speaker_oncam
+  - find_broll_opportunities
   - inspect_clip
   - view_timeline
   - view_frame
   - apply_edl
+  - vedit_diff
   - start_render
   - poll_render
   - update_plan
+  - bash
 ---
 
 # Podcast episode producer
@@ -27,25 +36,55 @@ own the whole flow end-to-end; ask the user for input only on
 genuinely-ambiguous editorial calls (e.g. "do you want to keep this
 tangent at 22:14?"), not on mechanics.
 
-## The 5-step playbook
+## The editor-order playbook
 
 Run these in order. After each step, summarize what you did in 1-2
-short sentences before moving on. After step 3 (timeline draft),
+short sentences before moving on. After the timeline draft,
 present the cut list to the user and pause for confirmation before
 rendering.
 
-### 1. Read the episode shape
+### 1. Preflight the project
+
+- Call `list_assets` if available, then `view_episode`.
+- Confirm raw video, clean audio, music, graphics, b-roll, and any
+  sponsor/media assets are present. If separate audio exists but the
+  timeline has no synced/paired graph representation, report a sync
+  blocker instead of pretending the edit is ready.
+- Use `bash`/`ffprobe` only for sanity checks such as duration, frame
+  rate, audio streams, corrupt files, and sample rate. Do not mutate
+  media or `project.otio.json` through `bash`.
+- Target long-form delivery is usually 1080p or 4K, source frame rate,
+  48 kHz audio, and timeline render via `start_render(scope="timeline")`.
+
+### 2. Read the episode shape
 
 - Call `view_episode` to see the full episode map (speakers, topics,
   duration, indexed channels).
+- Call `find_episode_start` to identify the publishable start. Raw
+  podcast recordings often begin with real transcript text that is
+  still pre-roll, off-camera setup, or a rehearsed intro; do not infer
+  the start from `read_index(offset=0)` or from the first dead-air gap.
 - Call `shot_summary` if vision indexers ran — it tells you whether
   this is a heavy-B-roll edit (62%+ no-face shots = lots of cutaways)
   or a clean talking-head (>70% medium/close-up = minimal cutaways).
 - If `view_episode` shows zero topics and zero moments, stop and tell
   the user the project hasn't been indexed yet. Don't try to edit raw
   footage without the brain.
+- Use awidat's richer index set when present: topic for chapter
+  structure, editorial-moments for hooks/payoffs, shot for visual
+  texture, face/gaze for direct-address moments, frame-quality for
+  usable thumbnails, and CLIP/shot tools for cutaways.
 
-### 2. Identify the editorial spine
+### 3. Find the real start, ending, and cold open
+
+Find the real start before cleanup. Also find the real ending: remove
+tail chatter, "are we done?", standing up, technical talk, and dead air
+after the useful close. If a stronger mid-episode moment exists, build a
+cold open: hook first, then intro/title, then the chronological start.
+Represent this as `Insert Clip`/`Move Clip`/`Trim Clip` graph edits, not
+as render-time slicing.
+
+### 4. Identify the editorial spine
 
 Pull the strongest 3-5 editorial beats. Use them to structure the
 episode:
@@ -62,15 +101,36 @@ the surrounding transcript window + any dependencies. Dependencies are
 **load-bearing**: if a punchline depends on a setup 2 minutes earlier,
 keep both.
 
-### 3. Draft the timeline
+### 5. Radio edit the conversation
+
+This is an audio/story pass before visual polish. Listen through the
+full episode context via transcript, moments, and timeline ranges; do
+not edit isolated snippets without understanding callbacks.
+
+Use:
+
+```
+find_dead_air(max_silence_s=1.5)
+find_filler_words(aggressive=false)
+find_false_starts()
+```
+
+Cut dead air, egregious fillers, false starts, self-corrections,
+repeated content, technical glitches, and tangents that do not land.
+Preserve natural cadence. A perfectly de-fillered guest sounds robotic.
+For every meaningful removal, check continuity: question still matches
+answer, setup still exists for payoff, emotional tone does not jump, and
+references like "as I said earlier" still point to something visible.
+
+### 6. Draft the timeline
 
 Build a 3-act structure on top of the editorial spine:
 
-- **Act I (cold open + intro)**: pick the strongest hook (highest
-  score, ideally with `cut_in_suggestion` populated). Place it at
-  position 0. Then either insert a clean intro from the host
-  (15-30s talking-head) or let the hook flow directly into the
-  body if the cold-open is self-contained.
+- **Act I (cold open + intro)**: use `find_episode_start` as the clean
+  intro anchor. If a stronger cold-open hook exists, place the hook at
+  position 0 and then return to the intro anchor; otherwise start at the
+  intro anchor. Never use a rejected setup/rehearsal candidate as the
+  published start.
 - **Act II (body)**: order the remaining beats by topic-arc, not
   by time-in-recording. If the speaker rambled and you have setup
   + payoff in reverse order, you can re-order on the timeline —
@@ -86,7 +146,44 @@ call `view_timeline` to see what you built. Trim each clip with
 `Trim Clip` (anchor by `clip_uuid`, NOT by transcript_snippet on
 fresh inserts — that fails on round-boundary anchoring).
 
-### 4. Confirm with user
+### 7. Visual polish and graph overlays
+
+Once the conversation flow is locked, make visual decisions:
+
+- Use `find_speaker_oncam` and `shot_summary` to choose speaker angles,
+  wide/two-shots, reactions, and resets. Avoid frantic cuts on every
+  word swap; hold angles long enough to breathe.
+- Hide jump cuts with angle changes, b-roll, title overlays, or
+  chapter cards. Prefer motivated visual changes: speaker switch,
+  motion, laughter, topic shift, or a concrete referenced object.
+- Use `find_broll_opportunities` and the b-roll skills for products,
+  locations, websites, screenshots, charts, logos, photos, and demos.
+  B-roll should support the sentence; random b-roll is worse than none.
+- Add lower thirds, chapter cards, sponsor cards, intro/outro cards,
+  and text callouts with `Insert Title`. Keep them short and readable.
+- Use frame-quality/shot/gaze data for thumbnail candidates and camera
+  matching notes. If color correction/grading is needed but no color
+  primitive exists yet, report it as a required finishing pass instead
+  of claiming it happened.
+
+### 8. Audio mix and delivery metadata
+
+Use the graph for what the graph can express:
+
+- Use `Set Volume` for obvious speaker/music balance fixes.
+- Use `Set Loudness Target` for publishable output, typically
+  `integrated_lufs: -16` to `-14` and `true_peak_db: -1`.
+- Keep intro/outro music and stingers below dialogue; do not let music
+  fight speech.
+- If noise reduction, EQ, compression, de-essing, room tone fill, or
+  detailed color grading is required and no graph primitive exists for
+  that exact operation yet, put it in the final finishing report as a
+  remaining post step. Do not fake it with FFmpeg-only side effects.
+
+Use `Set Package Metadata` before final render when title/description/
+tags/platform are known.
+
+### 9. Confirm with user
 
 Present the timeline as a numbered list:
 
@@ -102,11 +199,50 @@ Confirm or tell me to swap/trim/extend. I'll render once you confirm.
 
 Wait for the user to respond before rendering.
 
-### 5. Render
+### 10. Review, render, and package
+
+Before rendering, call `vedit_diff` and confirm the diff matches the
+approved structure, metadata, thumbnail, and cleanup plan.
 
 Run `start_render(scope="timeline")`. Poll with `poll_render` until
 done. Tell the user the output path and approximate duration once
 it lands.
+
+After render, verify the file:
+
+```bash
+python3 <skill-root>/scripts/render_verify.py \
+  --file renders/<output>.mp4 \
+  --min-duration-s 1800
+```
+
+Then generate the publishing package:
+
+```bash
+python3 <skill-root>/scripts/metadata_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --topic index/topic/raw/<asset>.json \
+  --moments index/editorial-moments/raw/<asset>.json \
+  --frame-quality index/frame-quality/raw/<asset>.json
+```
+
+Use the returned title, description, chapters, thumbnail frame
+candidates, and tags as the handoff package.
+
+Watch/review the exported artifact when possible, not just the graph.
+Check audio spikes, black frames, awkward cuts, missing graphics,
+caption/title timing, names, and whether the episode drags. If the user
+needs derivatives, create or report the needed exports: long-form
+YouTube, audio-only podcast file, vertical shorts, square/social clips,
+thumbnail image, trailer, and transcript/chapters.
+
+### 11. Archive/handoff
+
+Final handoff should name the render path, approximate duration,
+publishing metadata, derivative needs, and any manual finishing gaps
+such as unresolved sync, denoise/EQ, color match, or platform upload.
+Archive intent belongs in the report for now unless a project archive
+tool exists.
 
 ## Editorial conventions
 
@@ -123,14 +259,27 @@ or the source material genuinely demands it.
   > 0.5, keep it (high-scoring tangents are usually the funny ones).
   Below 0.5, cut.
 - **Dead air**: anything > 1.0s outside a deliberate dramatic pause.
+- **False starts**: remove the bad attempt and keep the corrected
+  version when breath/tonality still sounds natural.
+- **J/L-cut intent**: if a hard cut would be visible, hide it with a
+  motivated angle change, b-roll cover, title/card, or short transition.
 - **Render scope**: ALWAYS `scope="timeline"`. Never `scope="preview"`
   for the final cut — preview gives you the raw asset, not the edit.
+- **Lower thirds and chapters**: use `Insert Title` graph overlays.
+- **Loudness/package**: use `Set Loudness Target` and
+  `Set Package Metadata`, not prose-only promises.
+- **Publishing package**: a finished episode includes metadata and
+  thumbnail candidates, not just an mp4 path.
 
 ## Common failure modes (and recovery)
 
 - **find_beat returns 0 moments**: the editorial-moments indexer
   hasn't run. Tell the user to run `awidat index --indexer
   editorial-moments` and pause.
+- **find_episode_start returns no recommendation**: the whisper index
+  is missing or the intro is ambiguous. Use `find_moment` to search for
+  welcome/intro phrases, inspect the surrounding transcript, and ask the
+  user only if the evidence still conflicts.
 - **Trim Clip fails with "anchor not found"**: a fresh `Insert Clip`
   doesn't have transcript metadata yet. Switch the anchor to
   `clip_uuid` (look it up with `view_timeline`).
@@ -145,8 +294,11 @@ or the source material genuinely demands it.
   it's the edit. It isn't. The edit is `scope="timeline"`.
 - Don't trim aggressively without inspecting the dependency graph.
   A punchline without its setup is a lie.
+- Don't say sync, denoise, EQ, color correction, or platform upload is
+  complete unless there is an actual graph/tool step or verified
+  artifact behind it.
 - Don't ask the user to confirm every clip. Confirm the OVERALL
-  structure (step 4), then commit + render.
+  structure, then commit + render.
 
 ## You are done when...
 
@@ -156,16 +308,33 @@ finish themselves — that's worse than not starting.
 
 - [ ] `view_episode` was called at least once and you understood the
       shape (speakers, topics, indexed channels) before drafting.
+- [ ] `find_episode_start` was called before deciding where the
+      published episode begins.
+- [ ] The real ending was checked and tail chatter/dead air was removed
+      or explicitly kept.
+- [ ] False starts, repeated content, dead air, and tangents were
+      reviewed with continuity preserved.
 - [ ] Every clip on the timeline has been verified by either
       `view_timeline` or `inspect_clip` — no clip you've never seen.
-- [ ] The user explicitly confirmed the **overall structure** (step
-      4 cut list). If the user said "looks good" or equivalent, that
+- [ ] Visual polish was handled or reported: speaker angle choices,
+      jump-cut covers, b-roll opportunities, lower thirds/chapter cards,
+      and thumbnail candidates.
+- [ ] `Set Loudness Target` and `Set Package Metadata` were applied when
+      producing publishable output, or the blocker was stated.
+- [ ] The user explicitly confirmed the **overall structure**. If the
+      user said "looks good" or equivalent, that
       counts. If they're silent, ask once and wait.
+- [ ] `vedit_diff` was reviewed before final render/report.
 - [ ] `start_render(scope="timeline")` was called (NOT `preview`,
       NOT `segment`, NOT `full`).
 - [ ] `poll_render` returned `status="completed"` — not `running`,
       not `failed`. If it failed, you investigated the cause before
       handing back.
+- [ ] Render verification ran or the exact blocker was reported.
+- [ ] A title, description, chapters, tags, and thumbnail candidate
+      list were generated when transcript/topic indexes exist.
+- [ ] Derivative needs were handled or listed: audio-only, shorts,
+      square/social clips, thumbnail, trailer, transcript, archive.
 - [ ] You reported the output path AND approximate duration to the
       user in your final message.
 

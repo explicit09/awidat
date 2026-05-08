@@ -51,8 +51,11 @@ pub enum ProjectFormat {
 /// Permission mode, mirroring the protocol enum.
 #[derive(Debug, Clone, Copy)]
 pub enum PromptPermissionMode {
+    /// Manual approval mode.
     Manual,
+    /// Copilot approval mode.
     Copilot,
+    /// Autopilot approval mode.
     Autopilot,
 }
 
@@ -98,15 +101,27 @@ fn read_project_format(project_root: &Path) -> ProjectFormat {
     let otio_path = project_root.join("project.otio.json");
     let bytes = match std::fs::read(&otio_path) {
         Ok(b) => b,
-        Err(_) => return ProjectFormat::Other { description: String::new() },
+        Err(_) => {
+            return ProjectFormat::Other {
+                description: String::new(),
+            };
+        }
     };
     let value: serde_json::Value = match serde_json::from_slice(&bytes) {
         Ok(v) => v,
-        Err(_) => return ProjectFormat::Other { description: String::new() },
+        Err(_) => {
+            return ProjectFormat::Other {
+                description: String::new(),
+            };
+        }
     };
     let raw = match value.pointer("/metadata/awidat/awidat_project_type") {
         Some(v) => v,
-        None => return ProjectFormat::Other { description: String::new() },
+        None => {
+            return ProjectFormat::Other {
+                description: String::new(),
+            };
+        }
     };
     match raw.get("kind").and_then(|v| v.as_str()) {
         Some("podcast") => ProjectFormat::Podcast,
@@ -119,7 +134,9 @@ fn read_project_format(project_root: &Path) -> ProjectFormat {
                 .unwrap_or("")
                 .to_string(),
         },
-        _ => ProjectFormat::Other { description: String::new() },
+        _ => ProjectFormat::Other {
+            description: String::new(),
+        },
     }
 }
 
@@ -163,18 +180,20 @@ fn format_addendum(format: &ProjectFormat) -> &'static str {
 /// effect right now.
 fn permission_line(mode: PromptPermissionMode) -> &'static str {
     match mode {
-        PromptPermissionMode::Manual =>
+        PromptPermissionMode::Manual => {
             "**Permission mode: manual.** Every proposal needs explicit user approval. \
              Surface findings via Editorial Notes when asked; don't propose edits unprompted. \
              For dirty continuity verdicts, surface a continuity_warning Note quoting the \
-             rule reasons rather than auto-bundling a transition — the user decides.",
-        PromptPermissionMode::Copilot =>
+             rule reasons rather than auto-bundling a transition — the user decides."
+        }
+        PromptPermissionMode::Copilot => {
             "**Permission mode: copilot.** Surface editorial findings as Notes proactively. \
              Don't issue apply_edl proposals unless the user explicitly asks (or clicks 'Fix' \
              on a Note); your role is to flag, the user's role is to act. For dirty continuity \
              verdicts, the Note's reasons array is the user's primary signal — they decide \
-             whether to accept the bundled fix you suggested or cut anyway.",
-        PromptPermissionMode::Autopilot =>
+             whether to accept the bundled fix you suggested or cut anyway."
+        }
+        PromptPermissionMode::Autopilot => {
             "**Permission mode: autopilot.** When the user asks for cleanup, scan for findings \
              and bundle them into a single apply_edl envelope rather than emitting them \
              one-by-one. For dirty continuity verdicts, silently bundle a 0.3s SMPTE_Dissolve \
@@ -183,7 +202,8 @@ fn permission_line(mode: PromptPermissionMode) -> &'static str {
              or rejects as a whole. For dirty cuts that read as visual jar (mid-motion, \
              speaker-switch mid-utterance), prefer bundling a `*** Insert BRoll` cover when \
              find_broll_opportunities surfaced a strong candidate at the same anchor — the \
-             cutaway hides the jar without changing the audio at all.",
+             cutaway hides the jar without changing the audio at all."
+        }
     }
 }
 
@@ -205,6 +225,9 @@ and makes everything after it correct.\
 \n\nKey tools:\
 \n- view_episode: map of the project (assets + which indexers ran).\
 \n- find_beat / find_moment / inspect_moment: editorial moment lookup.\
+\n- find_episode_start: determine the publishable episode start; use \
+this for podcast/interview top trims instead of guessing from the \
+first transcript page.\
 \n- find_dead_air / find_filler_words / find_false_starts: editorial \
 findings the user can review as Notes.\
 \n- assess_continuity(at_s, kind): BEFORE proposing any \
@@ -241,9 +264,19 @@ view_episode shows missing sidecars and the user asked for an \
 operation that needs them. Imports auto-chain through indexing in \
 the GUI's import flow, so this is the rare-case tool — don't \
 proactively re-index already-indexed projects.\
-\nMutating tools (apply_edl, start_render, start_indexing, bash) \
-require user approval — you'll see the result come back as a \
-tool_result, not a direct yes/no.\
+\n\n**Edit graph is source of truth.** The agent must understand and \
+mutate the OTIO timeline graph, not treat awidat as a chat wrapper \
+around FFmpeg. Use scripts, indexers, and shell commands for analysis \
+or verification only. Do not use bash/FFmpeg to cut, concatenate, \
+caption, overlay, or produce the final edited artifact. Express \
+editorial intent as EDL, apply it with `apply_edl`, inspect the \
+resulting graph with `view_timeline`/`vedit_diff`, and export with \
+`start_render(scope='timeline')`.\
+\nMutating tools may be approval-gated depending on permission mode. \
+Manual and Copilot are conservative; Autopilot lets routine \
+editing/index/render tool calls proceed without approval cards. Bash \
+can still be gated because it is arbitrary shell access. You'll see \
+the result come back as a tool_result, not a direct yes/no.\
 \n\nThe user's input may be prefixed with a metadata line like \
 `[user is watching <stem> at MM:SS]`. That's the desktop's \
 preview pane reporting where the user has the playhead. When \
@@ -315,6 +348,7 @@ mod tests {
     fn assembles_podcast_with_manual_mode() {
         let prompt = assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Manual);
         assert!(prompt.contains("Discover before acting"));
+        assert!(prompt.contains("Edit graph is source of truth"));
         assert!(prompt.contains("long-form podcast cleanup"));
         assert!(prompt.contains("breath beats"));
         assert!(prompt.contains("Permission mode: manual"));
@@ -328,8 +362,13 @@ mod tests {
         // demand — keeps token cost low for sessions that aren't
         // doing short-form work.
         let shorts = assemble_system_prompt(&ProjectFormat::Shorts, PromptPermissionMode::Copilot);
-        assert!(shorts.contains("**Format: short-form vertical.**"), "{shorts}");
+        assert!(
+            shorts.contains("**Format: short-form vertical.**"),
+            "{shorts}"
+        );
         assert!(shorts.contains("load_skill(name='short-form')"), "{shorts}");
+        assert!(!shorts.contains("<skills_instructions>"));
+        assert!(!shorts.contains("scripts/caption_plan.py"));
         // Concrete defaults must NOT appear in the stub — they live
         // in the SKILL.md body.
         assert!(!shorts.contains("hook lands in the first 3 seconds"));
@@ -341,8 +380,16 @@ mod tests {
         // Phase 4E-skills refactor: same shape as shorts.
         let tutorial =
             assemble_system_prompt(&ProjectFormat::Tutorial, PromptPermissionMode::Copilot);
-        assert!(tutorial.contains("**Format: tutorial / screen recording.**"), "{tutorial}");
-        assert!(tutorial.contains("load_skill(name='tutorial')"), "{tutorial}");
+        assert!(
+            tutorial.contains("**Format: tutorial / screen recording.**"),
+            "{tutorial}"
+        );
+        assert!(
+            tutorial.contains("load_skill(name='tutorial')"),
+            "{tutorial}"
+        );
+        assert!(!tutorial.contains("<skills_instructions>"));
+        assert!(!tutorial.contains("scripts/"));
         // Concrete defaults must NOT appear in the stub.
         assert!(!tutorial.contains("Hold key frames longer"));
         assert!(!tutorial.contains("hook lands in the first 3 seconds"));
@@ -409,8 +456,7 @@ mod tests {
 
     #[test]
     fn permission_line_varies_per_mode() {
-        let manual =
-            assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Manual);
+        let manual = assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Manual);
         let copilot =
             assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Copilot);
         let autopilot =

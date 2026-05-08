@@ -92,7 +92,10 @@ fn walk_up_for_python(start: &Path) -> Option<PathBuf> {
     let mut cur: Option<&Path> = Some(start);
     while let Some(dir) = cur {
         let candidate = dir.join("python");
-        if candidate.join("packages/awidat-mcp/pyproject.toml").exists() {
+        if candidate
+            .join("packages/awidat-mcp/pyproject.toml")
+            .exists()
+        {
             return Some(candidate);
         }
         cur = dir.parent();

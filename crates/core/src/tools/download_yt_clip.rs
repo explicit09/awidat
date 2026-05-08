@@ -116,12 +116,8 @@ struct Args {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 enum AnchorArg {
-    Transcript {
-        transcript_snippet: String,
-    },
-    Uuid {
-        clip_uuid: String,
-    },
+    Transcript { transcript_snippet: String },
+    Uuid { clip_uuid: String },
 }
 
 #[async_trait]
@@ -240,12 +236,7 @@ impl ToolHandler for DownloadYtClipTool {
                 })?;
             }
 
-            let argv = build_yt_dlp_argv(
-                &args.url,
-                &dest,
-                args.source_start_s,
-                args.source_end_s,
-            );
+            let argv = build_yt_dlp_argv(&args.url, &dest, args.source_start_s, args.source_end_s);
             let result = timeout(
                 Duration::from_secs(DOWNLOAD_TIMEOUT_SECS),
                 Command::new(&argv[0]).args(&argv[1..]).output(),
@@ -432,10 +423,7 @@ fn parse_host(url: &str) -> Option<String> {
     // scheme://host[:port]/path
     let after_scheme = url.split_once("://")?.1;
     let host_with_path = after_scheme;
-    let host = host_with_path
-        .split('/')
-        .next()
-        .unwrap_or(host_with_path);
+    let host = host_with_path.split('/').next().unwrap_or(host_with_path);
     let host_no_port = host.split(':').next().unwrap_or(host);
     if host_no_port.is_empty() {
         None
@@ -537,7 +525,10 @@ mod tests {
         assert_eq!(argv[0], "yt-dlp");
         assert!(argv.contains(&"-o".to_string()));
         assert!(argv.iter().any(|s| s == "/tmp/foo.mp4"));
-        assert_eq!(argv.last().map(String::as_str), Some("https://youtu.be/abc"));
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some("https://youtu.be/abc")
+        );
         // No sub-window flags when not provided.
         assert!(!argv.iter().any(|s| s == "--download-sections"));
     }
@@ -545,8 +536,7 @@ mod tests {
     #[test]
     fn build_argv_appends_sub_window_when_provided() {
         let dest = std::path::Path::new("/tmp/foo.mp4");
-        let argv =
-            build_yt_dlp_argv("https://youtu.be/abc", dest, Some(10.0), Some(13.5));
+        let argv = build_yt_dlp_argv("https://youtu.be/abc", dest, Some(10.0), Some(13.5));
         assert!(argv.iter().any(|s| s == "--download-sections"));
         assert!(argv.iter().any(|s| s == "*10.00-13.50"));
         assert!(argv.iter().any(|s| s == "--force-keyframes-at-cuts"));
@@ -587,7 +577,10 @@ mod tests {
             2.0,
             "overlay",
         );
-        assert!(frag.contains(r#"transcript_snippet="he said \"yes\"""#), "{frag}");
+        assert!(
+            frag.contains(r#"transcript_snippet="he said \"yes\"""#),
+            "{frag}"
+        );
     }
 
     #[test]
@@ -614,8 +607,7 @@ mod tests {
         // Second call reads + appends; result should have both.
         persist_caveat(dir.path(), "https://vimeo.com/2").unwrap();
         let file: CaveatFile =
-            serde_json::from_slice(&std::fs::read(caveat_file_path(dir.path())).unwrap())
-                .unwrap();
+            serde_json::from_slice(&std::fs::read(caveat_file_path(dir.path())).unwrap()).unwrap();
         assert_eq!(file.acknowledged.len(), 2);
     }
 

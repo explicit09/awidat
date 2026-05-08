@@ -23,7 +23,9 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -62,6 +64,7 @@ server = IndexerServer(
 class _LoadedAudio:
     samples: np.ndarray  # mono float32 in [-1, 1]
     sample_rate: int
+    temp_path: Path | None = None
 
 
 def _ffmpeg_path() -> str:
@@ -106,19 +109,29 @@ def _load_mono(path: str) -> _LoadedAudio:
         "-f", "f32le",          # raw 32-bit float little-endian
         "-",                    # to stdout
     ]
-    proc = subprocess.run(
-        cmd,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    if proc.returncode != 0:
-        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(
-            f"ffmpeg decode failed (exit {proc.returncode}) for {path}: {stderr}"
-        )
-    samples = np.frombuffer(proc.stdout, dtype=np.float32)
-    if samples.size == 0:
+    tmp = tempfile.NamedTemporaryFile(prefix="awidat-audio-", suffix=".f32", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        with tmp_path.open("wb") as stdout:
+            proc = subprocess.run(
+                cmd,
+                check=False,
+                stdout=stdout,
+                stderr=subprocess.PIPE,
+            )
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(
+                f"ffmpeg decode failed (exit {proc.returncode}) for {path}: {stderr}"
+            )
+        sample_count = tmp_path.stat().st_size // np.dtype(np.float32).itemsize
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+    if sample_count == 0:
+        tmp_path.unlink(missing_ok=True)
         # No audio stream — emit a quiet silent buffer so downstream
         # math doesn't divide by zero.
         print(
@@ -126,7 +139,10 @@ def _load_mono(path: str) -> _LoadedAudio:
             file=sys.stderr,
         )
         samples = np.zeros(_TARGET_SR, dtype=np.float32)
-    return _LoadedAudio(samples=samples, sample_rate=_TARGET_SR)
+        return _LoadedAudio(samples=samples, sample_rate=_TARGET_SR)
+
+    samples = np.memmap(tmp_path, dtype=np.float32, mode="r", shape=(sample_count,))
+    return _LoadedAudio(samples=samples, sample_rate=_TARGET_SR, temp_path=tmp_path)
 
 
 def _windowed_rms_db(audio: _LoadedAudio) -> list[dict[str, float]]:
@@ -134,15 +150,21 @@ def _windowed_rms_db(audio: _LoadedAudio) -> list[dict[str, float]]:
     n_full = len(audio.samples) // win
     if n_full == 0:
         return []
-    trimmed = audio.samples[: n_full * win].reshape(n_full, win)
-    rms = np.sqrt(np.mean(trimmed.astype(np.float64) ** 2, axis=1))
-    # Map zeros to a very-quiet floor so the agent doesn't see -inf.
-    floor = 1e-7
-    rms_db = 20.0 * np.log10(np.maximum(rms, floor))
     out = []
-    for i, db in enumerate(rms_db):
-        start_s = i * WINDOW_MS / 1000.0
-        out.append({"start_s": float(start_s), "rms_db": float(db)})
+    # Keep the working block bounded. The previous full-array
+    # float64 square doubled RAM for long recordings.
+    chunk_windows = 4096
+    floor = 1e-7
+    for start_win in range(0, n_full, chunk_windows):
+        end_win = min(start_win + chunk_windows, n_full)
+        start_sample = start_win * win
+        end_sample = end_win * win
+        block = audio.samples[start_sample:end_sample].reshape(end_win - start_win, win)
+        rms = np.sqrt(np.mean(np.square(block, dtype=np.float32), axis=1))
+        rms_db = 20.0 * np.log10(np.maximum(rms, floor))
+        for offset, db in enumerate(rms_db):
+            start_s = (start_win + offset) * WINDOW_MS / 1000.0
+            out.append({"start_s": float(start_s), "rms_db": float(db)})
     return out
 
 
@@ -205,19 +227,23 @@ def _silences(loudness: dict[str, Any]) -> list[dict[str, float]]:
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     audio = _load_mono(req.asset_path)
-    windows = _windowed_rms_db(audio)
-    loudness = _loudness(audio)
-    silences = _silences(loudness)
-    return {
-        "sample_rate": audio.sample_rate,
-        "duration_s": float(len(audio.samples) / audio.sample_rate),
-        "window_ms": WINDOW_MS,
-        "windows": windows,
-        "loudness_integrated_lufs": loudness.get("integrated_lufs"),
-        "loudness_short_term": loudness.get("short_term", []),
-        "silences": silences,
-        "silence_relative_lu": SILENCE_RELATIVE_LU,
-    }
+    try:
+        windows = _windowed_rms_db(audio)
+        loudness = _loudness(audio)
+        silences = _silences(loudness)
+        return {
+            "sample_rate": audio.sample_rate,
+            "duration_s": float(len(audio.samples) / audio.sample_rate),
+            "window_ms": WINDOW_MS,
+            "windows": windows,
+            "loudness_integrated_lufs": loudness.get("integrated_lufs"),
+            "loudness_short_term": loudness.get("short_term", []),
+            "silences": silences,
+            "silence_relative_lu": SILENCE_RELATIVE_LU,
+        }
+    finally:
+        if audio.temp_path is not None:
+            audio.temp_path.unlink(missing_ok=True)
 
 
 def main() -> None:

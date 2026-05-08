@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::bridges::{spawn_approval_bridge, spawn_user_input_bridge};
 use crate::events::{ItemEvent, TURN_END_EVENT, TurnEndEvent, emit_item};
-use crate::session::build_session;
+use crate::session::{build_session, resume_session};
 use crate::state::{AwidatState, TurnHandle};
 
 /// Drive one turn end-to-end. Builds the `Session` if needed,
@@ -48,7 +48,13 @@ pub async fn start_turn(
                 let (approval_tx, approval_rx) = mpsc::channel::<ApprovalRequest>(16);
                 let (input_tx, input_rx) = mpsc::channel::<UserInputRequest>(16);
 
-                let session = build_session(project_root, approval_tx, input_tx).await?;
+                let resume_log_path = state.resume_log_path.lock().await.clone();
+                let session = match resume_log_path {
+                    Some(path) if path.is_file() => {
+                        resume_session(path, approval_tx, input_tx).await?
+                    }
+                    _ => build_session(project_root, approval_tx, input_tx).await?,
+                };
                 *slot = Some(session.clone());
 
                 spawn_approval_bridge(app.clone(), approval_rx);

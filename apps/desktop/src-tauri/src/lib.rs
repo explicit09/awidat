@@ -83,6 +83,10 @@ pub fn run() {
             commands::dismissal::list_dismissals,
             commands::dismissal::dismiss_pattern,
             commands::dismissal::undismiss_pattern,
+            commands::history::list_chat_sessions,
+            commands::history::load_chat_history,
+            commands::history::load_chat_session,
+            commands::history::start_new_chat_session,
             commands::notes::list_notes,
             commands::notes::upsert_note,
             commands::notes::set_note_status,
@@ -96,6 +100,7 @@ pub fn run() {
             commands::index::index_project,
             commands::transcode::transcode_project_proxies,
             commands::media::list_proxies,
+            commands::media::media_url_for_path,
             commands::media::proxy_path_for_stem,
             commands::thumbnail::generate_thumbnails_for_asset,
             commands::thumbnail::list_thumbnail_frames,
@@ -111,6 +116,7 @@ pub fn run() {
             commands::proposal::adjust_proposal,
             commands::proposal::propose_user_edit,
             commands::transcript::read_transcript,
+            commands::vedit::list_vedit_commits,
         ])
         .run(tauri::generate_context!());
 

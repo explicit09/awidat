@@ -54,31 +54,92 @@ const TRIGGER_PHRASES: &[&[&str]] = &[
 /// excluded because the resulting Pexels searches return junk.
 const CONCRETE_NOUNS: &[&str] = &[
     // Architecture / cityscape
-    "skyline", "city", "street", "building", "office", "kitchen", "bedroom",
-    "bathroom", "window", "door", "stairs", "garage", "warehouse", "factory",
+    "skyline",
+    "city",
+    "street",
+    "building",
+    "office",
+    "kitchen",
+    "bedroom",
+    "bathroom",
+    "window",
+    "door",
+    "stairs",
+    "garage",
+    "warehouse",
+    "factory",
     // Nature / landscape
-    "ocean", "sea", "mountain", "forest", "river", "lake", "beach", "sunset",
-    "sunrise", "tree", "flower", "garden", "field", "desert", "snow", "rain",
-    "storm", "cloud", "sky",
+    "ocean",
+    "sea",
+    "mountain",
+    "forest",
+    "river",
+    "lake",
+    "beach",
+    "sunset",
+    "sunrise",
+    "tree",
+    "flower",
+    "garden",
+    "field",
+    "desert",
+    "snow",
+    "rain",
+    "storm",
+    "cloud",
+    "sky",
     // Tech / objects
-    "phone", "laptop", "screen", "computer", "keyboard", "monitor", "code",
-    "graph", "chart", "map", "diagram", "whiteboard", "notebook", "book",
-    "camera", "microphone", "robot", "car", "bike", "plane", "train",
+    "phone",
+    "laptop",
+    "screen",
+    "computer",
+    "keyboard",
+    "monitor",
+    "code",
+    "graph",
+    "chart",
+    "map",
+    "diagram",
+    "whiteboard",
+    "notebook",
+    "book",
+    "camera",
+    "microphone",
+    "robot",
+    "car",
+    "bike",
+    "plane",
+    "train",
     // People-doing-things (Pexels indexes these as scene tags)
-    "crowd", "audience", "meeting", "handshake", "running", "cooking", "writing",
-    "typing", "walking", "driving",
+    "crowd",
+    "audience",
+    "meeting",
+    "handshake",
+    "running",
+    "cooking",
+    "writing",
+    "typing",
+    "walking",
+    "driving",
     // Food / lifestyle
-    "coffee", "kitchen", "food", "restaurant", "cafe",
+    "coffee",
+    "kitchen",
+    "food",
+    "restaurant",
+    "cafe",
     // Workplace
-    "boardroom", "conference", "presentation", "interview",
+    "boardroom",
+    "conference",
+    "presentation",
+    "interview",
 ];
 
 /// Stop-words pruned out of the generated Pexels query — fillers and
 /// articles that don't help search relevance.
 const QUERY_STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "this", "that", "these", "those", "is", "are", "was",
-    "were", "of", "to", "in", "on", "at", "for", "with", "by", "and", "or",
-    "but", "so", "um", "uh", "you", "i", "we", "they", "it",
+    "a", "an", "the", "this", "that", "these", "those", "is", "are", "was", "were", "of", "to",
+    "in", "on", "at", "for", "with", "by", "and", "or", "but", "so", "um", "uh", "you", "i", "we",
+    "they", "it",
 ];
 
 /// How many words after the trigger to scan for a concrete noun + use
@@ -218,7 +279,9 @@ pub fn scan_broll_opportunities(
     let timeline_cursor_s = 0.0_f64;
 
     for stack_child in &timeline.tracks.children {
-        let StackChild::Track(track) = stack_child else { continue };
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
         let mut track_cursor_s = 0.0_f64;
         for tc in &track.children {
             match tc {
@@ -284,10 +347,7 @@ fn scan_words(
     duration_s: f64,
 ) -> Vec<BrollFinding> {
     let mut out = Vec::new();
-    let lowered: Vec<String> = words
-        .iter()
-        .map(|w| normalize_word(&w.text))
-        .collect();
+    let lowered: Vec<String> = words.iter().map(|w| normalize_word(&w.text)).collect();
 
     // Track the last-emitted source-time so we don't dump 5 findings
     // within 4 seconds of each other when the speaker rambles. Min
@@ -304,8 +364,7 @@ fn scan_words(
         // a concrete noun.
         let look_start = i + phrase_len;
         let look_end = (look_start + QUERY_WINDOW_WORDS).min(lowered.len());
-        let Some(noun_idx) = (look_start..look_end).find(|&j| is_concrete_noun(&lowered[j]))
-        else {
+        let Some(noun_idx) = (look_start..look_end).find(|&j| is_concrete_noun(&lowered[j])) else {
             // Trigger without a concrete noun — common in podcasts
             // ("imagine that…"). Skip; we'd rather miss than send the
             // agent on a junk Pexels query.
@@ -449,7 +508,6 @@ pub struct BrollFinding {
 struct WhisperWord {
     text: String,
     start_s: f64,
-    end_s: f64,
 }
 
 fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<WhisperWord>> {
@@ -462,7 +520,11 @@ fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<Whisper
         .and_then(|v| v.as_array())?;
     let mut out = Vec::with_capacity(arr.len());
     for item in arr {
-        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let text = item
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         if text.is_empty() {
             continue;
         }
@@ -480,7 +542,6 @@ fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<Whisper
             out.push(WhisperWord {
                 text: text.to_string(),
                 start_s: s,
-                end_s: e,
             });
         }
     }
@@ -519,15 +580,11 @@ the agent isn't flooded.\
 mod tests {
     use super::*;
     use awidat_proto::otio::{
-        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
-        Track, TrackChild, TrackKind,
+        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
+        TrackChild, TrackKind,
     };
 
-    fn write_whisper_words(
-        project_root: &Path,
-        asset_id: &str,
-        words: Vec<(&str, f64, f64)>,
-    ) {
+    fn write_whisper_words(project_root: &Path, asset_id: &str, words: Vec<(&str, f64, f64)>) {
         let path = whisper_sidecar_path(project_root, asset_id);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let payload = serde_json::json!({
@@ -699,7 +756,10 @@ mod tests {
         assert_eq!(findings.len(), 1);
         let q = &findings[0].pexels_query;
         assert!(q.contains("skyline"), "{q}");
-        assert!(!q.split_whitespace().any(|w| w == "the" || w == "of"), "{q}");
+        assert!(
+            !q.split_whitespace().any(|w| w == "the" || w == "of"),
+            "{q}"
+        );
     }
 
     #[test]

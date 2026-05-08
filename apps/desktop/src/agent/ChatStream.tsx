@@ -1,74 +1,43 @@
-// The chat pane: subscribes to `awidat://item` and `awidat://turn-end`,
-// renders every protocol Item variant, and houses the inline approval /
-// input cards.
+// The chat pane renders every protocol Item variant and houses the
+// inline approval / input cards. App-level event subscriptions live in
+// App.tsx so toolbar-triggered jobs are heard even when this pane
+// remounts during project changes.
 
-import { useEffect } from "react";
-import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  ITEM_EVENT,
-  TURN_END_EVENT,
-  type ItemEvent,
-  type TurnEndEvent,
-  type Item,
-} from "../protocol";
+import type { Item } from "../protocol";
 import { useAgentStore } from "./store";
 import { ApprovalCard } from "./ApprovalCard";
 import { UserInputCard } from "./UserInputCard";
 import { JobCard } from "./JobCard";
-import { EmptyState } from "../app/EmptyState";
 import { useProjectStore } from "../app/state";
-import { useProposalStore, isProposedEditItem } from "../timeline/proposal";
-import { useNotesStore } from "../notes/store";
+import { useTimelineStore } from "../timeline/store";
 
 export function ChatStream() {
   const items = useAgentStore((s) => s.items);
   const running = useAgentStore((s) => s.running);
   const turnError = useAgentStore((s) => s.turnError);
-  const upsert = useAgentStore((s) => s.upsert);
-  const setRunning = useAgentStore((s) => s.setRunning);
-  const setTurnError = useAgentStore((s) => s.setTurnError);
-  const ingestProposal = useProposalStore((s) => s.ingest);
-  const ingestNote = useNotesStore((s) => s.ingest);
-
-  // Subscribe to backend events for the lifetime of the component.
-  useEffect(() => {
-    const itemsUnlisten = listen<ItemEvent>(ITEM_EVENT, (e) => {
-      const item = e.payload.item;
-      // Proposed edits feed two stores: the chat (so the user sees
-      // a compact reference card) and the proposal store (so the
-      // timeline canvas can render the ghost overlay).
-      if (isProposedEditItem(item)) {
-        ingestProposal(item);
-      }
-      // Editorial notes feed two stores: the chat (so the agent's
-      // emission shows in the conversation timeline) and the
-      // notes store (which persists + drives the NotesPanel).
-      if (item.kind === "editorial_note") {
-        void ingestNote(item);
-      }
-      upsert(item);
-    });
-    const endUnlisten = listen<TurnEndEvent>(TURN_END_EVENT, (e) => {
-      if (e.payload.error) {
-        setTurnError(e.payload.error);
-      }
-      setRunning(false);
-    });
-    return () => {
-      itemsUnlisten.then((u) => u());
-      endUnlisten.then((u) => u());
-    };
-  }, [upsert, setRunning, setTurnError, ingestProposal, ingestNote]);
 
   const projectReady = useProjectStore((s) => s.current !== null);
+  const hasTimelineClips = useTimelineStore((s) =>
+    s.snapshot.tracks.some((track) => track.items.length > 0),
+  );
+  const timelineRefreshing = useTimelineStore((s) => s.refreshing);
 
   return (
     <div className="chat-items" aria-live="polite">
-      {items.length === 0 && !running && !turnError && projectReady && (
-        <EmptyState />
-      )}
+      {items.length === 0 &&
+        !running &&
+        !turnError &&
+        projectReady && (
+          <p className="chat-empty chat-empty-loaded">
+            {timelineRefreshing
+              ? "Loading project..."
+              : hasTimelineClips
+                ? "Timeline loaded. Ask Awidat for an edit, or select a clip below to inspect it."
+                : "No chat history yet. Import media or ask Awidat to get started."}
+          </p>
+        )}
       {items.length === 0 && !running && !turnError && !projectReady && (
         <p className="chat-empty">
           Open or create a project to get started.
@@ -109,24 +78,7 @@ function ItemView({ item }: { item: Item }) {
         </article>
       );
     case "tool_call":
-      return (
-        <article className={`item item-tool item-phase-${item.phase}`}>
-          <div className="item-meta">
-            tool · <code>{item.name}</code>
-            {item.phase !== "completed" && <span className="phase-tag"> · {item.phase}</span>}
-          </div>
-          <pre className="item-args">{JSON.stringify(item.args ?? {}, null, 2)}</pre>
-          {item.result !== null && (
-            <div className="item-result">
-              {"Ok" in item.result ? (
-                <pre className="result-ok">{item.result.Ok}</pre>
-              ) : (
-                <pre className="result-err">{item.result.Err}</pre>
-              )}
-            </div>
-          )}
-        </article>
-      );
+      return <ToolCallItem item={item} />;
     case "plan":
       return (
         <article className="item item-plan">
@@ -184,4 +136,96 @@ function ItemView({ item }: { item: Item }) {
         </article>
       );
   }
+}
+
+function ToolCallItem({
+  item,
+}: {
+  item: Extract<Item, { kind: "tool_call" }>;
+}) {
+  const hasError = item.result !== null && "Err" in item.result;
+  const isRunning = item.phase !== "completed";
+  const status = hasError ? "error" : isRunning ? item.phase : "done";
+  const resultSummary =
+    item.result === null
+      ? ""
+      : "Ok" in item.result
+        ? summarizeText(item.result.Ok)
+        : summarizeText(item.result.Err);
+
+  return (
+    <article
+      className={`item item-tool item-phase-${item.phase}${
+        hasError ? " item-tool-error" : ""
+      }`}
+    >
+      <details className="tool-details" open={isRunning || hasError}>
+        <summary className="tool-summary-row">
+          <span className="tool-kind">tool</span>
+          <code>{item.name}</code>
+          <span className={`tool-status tool-status-${status}`}>{status}</span>
+          <span className="tool-summary-text">
+            {summarizeToolCall(item)}
+            {resultSummary && <span> · {resultSummary}</span>}
+          </span>
+        </summary>
+        <div className="tool-detail-body">
+          <pre className="item-args">{JSON.stringify(item.args ?? {}, null, 2)}</pre>
+          {item.result !== null && (
+            <div className="item-result">
+              {"Ok" in item.result ? (
+                <pre className="result-ok">{item.result.Ok}</pre>
+              ) : (
+                <pre className="result-err">{item.result.Err}</pre>
+              )}
+            </div>
+          )}
+        </div>
+      </details>
+    </article>
+  );
+}
+
+function summarizeToolCall(item: Extract<Item, { kind: "tool_call" }>): string {
+  const args = item.args;
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return "Running tool";
+  }
+  const record = args as Record<string, unknown>;
+  switch (item.name) {
+    case "apply_edl":
+      return typeof record.reasoning === "string"
+        ? summarizeText(record.reasoning, 96)
+        : "Proposed timeline edit";
+    case "view_timeline":
+      return "Read current timeline";
+    case "view_episode":
+      return "Read episode map";
+    case "find_episode_start":
+      return "Found publishable episode start";
+    case "find_beat":
+      return typeof record.kind === "string"
+        ? `Found ${record.kind} beats`
+        : "Found editorial beats";
+    case "inspect_moment":
+      return typeof record.moment_id === "string"
+        ? `Inspected ${record.moment_id}`
+        : "Inspected moment context";
+    case "read_index":
+      return typeof record.channel === "string"
+        ? `Read ${record.channel} index`
+        : "Read index";
+    case "start_indexing":
+      return "Started indexing";
+    case "start_render":
+      return "Started render";
+    default:
+      return "Tool call";
+  }
+}
+
+function summarizeText(text: string, max = 120): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (!oneLine) return "";
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
 }

@@ -233,9 +233,12 @@ fn probe_stream_durations(path: &Path) -> Result<StreamDurations, String> {
     use std::process::Command;
     let output = Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-show_entries", "stream=codec_type,duration",
-            "-of", "default=noprint_wrappers=1:nokey=0",
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=0",
         ])
         .arg(path)
         .output()
@@ -346,9 +349,7 @@ fn check_transcript_cut_alignment(project_root: &Path) -> CheckVerdict {
             anchored += 1;
 
             let asset_id = match &clip.media_reference {
-                awidat_proto::otio::MediaReference::External(ext) => {
-                    ext.target_url.clone()
-                }
+                awidat_proto::otio::MediaReference::External(ext) => ext.target_url.clone(),
                 _ => {
                     skipped += 1;
                     continue;
@@ -387,7 +388,9 @@ fn check_transcript_cut_alignment(project_root: &Path) -> CheckVerdict {
             let Some(seg) = hit else {
                 failures.push(format!(
                     "clip {:?} anchored on snippet {:?} not found in {} transcript",
-                    clip.name, snippet_preview(snippet), asset_id
+                    clip.name,
+                    snippet_preview(snippet),
+                    asset_id
                 ));
                 continue;
             };
@@ -506,7 +509,13 @@ mod tests {
             VerifyResult::Pass { checks } => {
                 // 3 checks: timeline_renders + av_sync_40ms + transcript_cut_alignment
                 assert_eq!(checks.len(), 3);
-                assert!(checks.iter().find(|c| c.id == "timeline_renders").unwrap().pass);
+                assert!(
+                    checks
+                        .iter()
+                        .find(|c| c.id == "timeline_renders")
+                        .unwrap()
+                        .pass
+                );
                 let av = checks.iter().find(|c| c.id == "av_sync_40ms").unwrap();
                 assert!(av.pass);
                 assert!(av.message.contains("no rendered"));
@@ -590,9 +599,12 @@ mod tests {
         let ok = std::process::Command::new("ffmpeg")
             .args([
                 "-y",
-                "-f", "lavfi", "-i",
+                "-f",
+                "lavfi",
+                "-i",
                 &format!("testsrc=size=64x36:rate=10:duration={video_s}"),
-                "-c:v", "libx264",
+                "-c:v",
+                "libx264",
             ])
             .arg(&vid)
             .args(["-hide_banner", "-loglevel", "error"])
@@ -603,9 +615,12 @@ mod tests {
         let ok = std::process::Command::new("ffmpeg")
             .args([
                 "-y",
-                "-f", "lavfi", "-i",
+                "-f",
+                "lavfi",
+                "-i",
                 &format!("sine=frequency=440:duration={audio_s}"),
-                "-c:a", "aac",
+                "-c:a",
+                "aac",
             ])
             .arg(&aud)
             .args(["-hide_banner", "-loglevel", "error"])
@@ -760,7 +775,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut project = awidat_proto::project::Project::init(dir.path()).unwrap();
         let mut clip = Clip::empty("c0");
-        clip.media_reference = MediaReference::External(ExternalReference::new("raw/x.mp4".to_string()));
+        clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/x.mp4".to_string()));
         clip.source_range = Some(TimeRange::new(
             RationalTime::new(0.0, 24.0),
             RationalTime::new(120.0, 24.0),
@@ -777,7 +793,11 @@ mod tests {
         };
         let mut track = Track::empty("V1", TrackKind::Video);
         track.children.push(TrackChild::Clip(clip));
-        project.timeline.tracks.children.push(StackChild::Track(track));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
         project.write(dir.path()).unwrap();
 
         let v = check_transcript_cut_alignment(dir.path());

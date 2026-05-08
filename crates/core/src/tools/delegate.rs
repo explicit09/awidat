@@ -163,7 +163,9 @@ impl ToolHandler for DelegateTool {
 
         // Build the restricted registry + auto-mount attempt_completion.
         let mut sub_registry = self.parent_registry.restrict_to(spec.allowed_tools);
-        sub_registry.register(Arc::new(crate::tools::attempt_completion::AttemptCompletionTool));
+        sub_registry.register(Arc::new(
+            crate::tools::attempt_completion::AttemptCompletionTool,
+        ));
 
         // Sub-session uses the parent's client. Reading from env or
         // keychain works as long as the parent's session was built the
@@ -181,9 +183,7 @@ impl ToolHandler for DelegateTool {
         // to return.
         let sys = format!(
             "You are sub-agent `{}`.\n\n{}{}",
-            spec.name,
-            spec.description,
-            spec.system_suffix,
+            spec.name, spec.description, spec.system_suffix,
         );
 
         let return_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -213,7 +213,9 @@ impl ToolHandler for DelegateTool {
 
         // The sub-session loops on its own; we just feed it the task
         // as one user turn and let `attempt_completion` end it.
-        let run_result = sub_session.run_turn_capped(args.task, cancel, max_iter).await;
+        let run_result = sub_session
+            .run_turn_capped(args.task, cancel, max_iter)
+            .await;
 
         let _ = run_result; // turn errors are handled below via the slot check
 

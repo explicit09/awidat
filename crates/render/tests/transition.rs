@@ -95,10 +95,7 @@ fn render_argv_is_well_formed_for_ffmpeg() {
         let a = &spec.args[i];
         if a == "-i" || a == "-filter_complex" || a == "-map" {
             assert!(i + 1 < spec.args.len(), "{a} has no value at end of argv");
-            assert!(
-                !spec.args[i + 1].is_empty(),
-                "{a} has empty value",
-            );
+            assert!(!spec.args[i + 1].is_empty(), "{a} has empty value",);
             i += 2;
         } else {
             i += 1;

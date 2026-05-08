@@ -10,7 +10,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTimelineStore } from "../timeline/store";
+import type { TimelineItem, TimelineTrack } from "../timeline/store";
 import { useTimelineSelectionStore } from "./store";
+import { useMediaStore } from "../media/store";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 
 /** Default values when a clip carries no awidat.volume / awidat.speed effect.
@@ -26,20 +28,28 @@ const COMMIT_DEBOUNCE_MS = 300;
 export function PropertiesPane() {
   const snapshot = useTimelineStore((s) => s.snapshot);
   const key = useTimelineSelectionStore((s) => s.selectedClipKey);
+  const timelineTime = useMediaStore((s) => s.timelineTime);
 
+  const followsSelection = key !== null;
+  const activeKey = key ?? findClipKeyAtTime(snapshot.tracks, timelineTime);
+  const track =
+    activeKey === null ? null : snapshot.tracks[activeKey.trackIndex] ?? null;
   const item =
-    key === null
+    activeKey === null || track === null
       ? null
-      : snapshot.tracks[key.trackIndex]?.items[key.clipIndex] ?? null;
+      : track.items.find((candidate) => candidate.index === activeKey.clipIndex) ??
+        track.items[activeKey.clipIndex] ??
+        null;
 
   if (!item || item.kind !== "clip") {
     return (
       <section className="properties-pane">
         <header className="properties-header">
-          <span className="properties-label">Properties</span>
+          <span className="properties-label">Inspector</span>
+          <span className="properties-header-meta">No active clip</span>
         </header>
         <div className="properties-empty">
-          Click a clip on the timeline to inspect it.
+          Scrub over a clip or select one on the timeline to inspect it.
         </div>
       </section>
     );
@@ -49,13 +59,16 @@ export function PropertiesPane() {
   const sourceEnd = sourceStart + item.duration_s;
   const trackStart = item.track_start_s;
   const trackEnd = trackStart + item.duration_s;
-  const trackName = snapshot.tracks[key!.trackIndex]?.name ?? "?";
-  const trackKind = snapshot.tracks[key!.trackIndex]?.kind ?? "?";
+  const trackName = track?.name ?? "?";
+  const trackKind = track?.kind ?? "?";
 
   return (
     <section className="properties-pane">
       <header className="properties-header">
-        <span className="properties-label">Properties</span>
+        <span className="properties-label">Inspector</span>
+        <span className="properties-header-meta">
+          {followsSelection ? "Selected clip" : "At playhead"}
+        </span>
       </header>
       <div className="properties-body">
         <Field label="Name">
@@ -98,6 +111,11 @@ export function PropertiesPane() {
           />
         ) : (
           <>
+            {(item.volume ?? DEFAULT_VOLUME) <= 0.001 && (
+              <div className="properties-alert">
+                This clip is muted. Preview audio will be silent here.
+              </div>
+            )}
             <VolumeControl clipUuid={item.clip_uuid} value={item.volume} />
             <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
           </>
@@ -105,6 +123,29 @@ export function PropertiesPane() {
       </div>
     </section>
   );
+}
+
+function findClipKeyAtTime(
+  tracks: TimelineTrack[],
+  timelineTime: number,
+): { trackIndex: number; clipIndex: number } | null {
+  if (!Number.isFinite(timelineTime)) return null;
+  for (let trackIndex = 0; trackIndex < tracks.length; trackIndex += 1) {
+    const track = tracks[trackIndex];
+    for (const item of track.items) {
+      if (!isInspectableClip(item)) continue;
+      const start = item.track_start_s;
+      const end = start + item.duration_s;
+      if (timelineTime >= start && timelineTime < end) {
+        return { trackIndex, clipIndex: item.index };
+      }
+    }
+  }
+  return null;
+}
+
+function isInspectableClip(item: TimelineItem): item is Extract<TimelineItem, { kind: "clip" }> {
+  return item.kind === "clip";
 }
 
 type TitlePosition = "top" | "center" | "bottom";
@@ -327,28 +368,22 @@ function VolumeControl({
     lastCommittedRef.current = initial;
   }, [clipUuid, initial]);
 
-  // Debounced commit: only fire propose_user_edit if the value is
-  // actually different from what we last sent (and from the
-  // unity default — no point spamming a Set Volume: 1.0 envelope
-  // when the user just nudged the slider back to the middle).
-  useEffect(() => {
-    if (Math.abs(local - lastCommittedRef.current) < 1e-6) return;
-    const handle = setTimeout(() => {
-      lastCommittedRef.current = local;
-      const op: EdlOp = {
-        kind: "set_volume",
-        anchor: { kind: "clip_uuid", uuid: clipUuid },
-        value: local,
-      };
-      invoke<string>("propose_user_edit", {
-        edlText: serializeEdl([op]),
-      }).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn("propose_user_edit (set_volume) failed", err);
-      });
-    }, COMMIT_DEBOUNCE_MS);
-    return () => clearTimeout(handle);
-  }, [clipUuid, local]);
+  const dirty = Math.abs(local - lastCommittedRef.current) >= 1e-6;
+
+  function apply() {
+    lastCommittedRef.current = local;
+    const op: EdlOp = {
+      kind: "set_volume",
+      anchor: { kind: "clip_uuid", uuid: clipUuid },
+      value: local,
+    };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (set_volume) failed", err);
+    });
+  }
 
   return (
     <Field label="Volume">
@@ -363,6 +398,11 @@ function VolumeControl({
           className="properties-slider"
         />
         <span className="properties-control-value">{local.toFixed(2)}×</span>
+        {dirty && (
+          <button className="properties-apply" type="button" onClick={apply}>
+            Apply
+          </button>
+        )}
       </div>
     </Field>
   );
@@ -384,25 +424,23 @@ function SpeedControl({
     lastCommittedRef.current = initial;
   }, [clipUuid, initial]);
 
-  useEffect(() => {
-    if (Math.abs(local - lastCommittedRef.current) < 1e-6) return;
+  const dirty = Math.abs(local - lastCommittedRef.current) >= 1e-6;
+
+  function apply() {
     if (!isFinite(local) || local <= 0) return;
-    const handle = setTimeout(() => {
-      lastCommittedRef.current = local;
-      const op: EdlOp = {
-        kind: "set_speed",
-        anchor: { kind: "clip_uuid", uuid: clipUuid },
-        factor: local,
-      };
-      invoke<string>("propose_user_edit", {
-        edlText: serializeEdl([op]),
-      }).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn("propose_user_edit (set_speed) failed", err);
-      });
-    }, COMMIT_DEBOUNCE_MS);
-    return () => clearTimeout(handle);
-  }, [clipUuid, local]);
+    lastCommittedRef.current = local;
+    const op: EdlOp = {
+      kind: "set_speed",
+      anchor: { kind: "clip_uuid", uuid: clipUuid },
+      factor: local,
+    };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (set_speed) failed", err);
+    });
+  }
 
   return (
     <Field label="Speed">
@@ -417,6 +455,11 @@ function SpeedControl({
           className="properties-slider"
         />
         <span className="properties-control-value">{local.toFixed(2)}×</span>
+        {dirty && (
+          <button className="properties-apply" type="button" onClick={apply}>
+            Apply
+          </button>
+        )}
       </div>
     </Field>
   );

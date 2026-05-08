@@ -99,10 +99,7 @@ pub fn run(
     }
 }
 
-fn collect_assets(
-    project_root: &Path,
-    explicit: &[PathBuf],
-) -> Result<Vec<AssetInput>> {
+fn collect_assets(project_root: &Path, explicit: &[PathBuf]) -> Result<Vec<AssetInput>> {
     let mut out = Vec::new();
     if !explicit.is_empty() {
         for p in explicit {
@@ -128,11 +125,7 @@ fn collect_assets(
     Ok(out)
 }
 
-fn walk_assets(
-    project_root: &Path,
-    dir: &Path,
-    out: &mut Vec<AssetInput>,
-) -> Result<()> {
+fn walk_assets(project_root: &Path, dir: &Path, out: &mut Vec<AssetInput>) -> Result<()> {
     for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
@@ -168,7 +161,11 @@ fn print_report(report: &IndexReport) {
     }
     for outcome in &report.outcomes {
         match outcome {
-            PairOutcome::Wrote { indexer, asset, path } => {
+            PairOutcome::Wrote {
+                indexer,
+                asset,
+                path,
+            } => {
                 println!("  ✓ {indexer:>14}  {asset}  →  {}", path.display());
             }
             PairOutcome::Skipped { indexer, asset } => {

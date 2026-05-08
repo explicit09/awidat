@@ -73,12 +73,10 @@ pub fn set(account: &str, value: &str) -> Result<(), SecretError> {
         account: account.into(),
         source: e,
     })?;
-    entry
-        .set_password(value)
-        .map_err(|e| SecretError::Backend {
-            account: account.into(),
-            source: e,
-        })
+    entry.set_password(value).map_err(|e| SecretError::Backend {
+        account: account.into(),
+        source: e,
+    })
 }
 
 /// Delete a secret from the keychain. No-op if it doesn't exist.

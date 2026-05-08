@@ -423,7 +423,10 @@ mod tests {
             is_error: None,
         };
         let s = serde_json::to_string(&ok).unwrap();
-        assert!(!s.contains("is_error"), "is_error must be omitted when None: {s}");
+        assert!(
+            !s.contains("is_error"),
+            "is_error must be omitted when None: {s}"
+        );
 
         let err = ContentBlock::ToolResult {
             tool_use_id: "abc".into(),

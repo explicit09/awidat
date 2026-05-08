@@ -114,9 +114,7 @@ impl ToolHandler for FindDeadAirTool {
             .min(HARD_MAX_RESULTS);
 
         let project = Project::read(&ctx.project_root).map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "find_dead_air: failed to read project: {e}"
-            ))
+            FunctionCallError::RespondToModel(format!("find_dead_air: failed to read project: {e}"))
         })?;
 
         let mut findings = scan_dead_air(
@@ -159,10 +157,12 @@ pub fn scan_dead_air(
     max_results: usize,
 ) -> Vec<DeadAirFinding> {
     let mut out: Vec<DeadAirFinding> = Vec::new();
-    let mut timeline_cursor_s = 0.0_f64;
+    let timeline_cursor_s = 0.0_f64;
 
     for stack_child in &timeline.tracks.children {
-        let StackChild::Track(track) = stack_child else { continue };
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
         // Reset cursor per track — different tracks have different
         // timelines. The per-track cursor still matters for mapping
         // each clip's source-time silences onto track-time.
@@ -184,13 +184,10 @@ pub fn scan_dead_air(
                     };
                     let asset_id = ext.target_url.clone();
                     let clip_source_start = range.start_time.to_seconds();
-                    let clip_source_end =
-                        clip_source_start + range.duration.to_seconds();
+                    let clip_source_end = clip_source_start + range.duration.to_seconds();
                     let clip_track_start = track_cursor_s;
 
-                    if let Some(sidecar) =
-                        load_sidecar(project_root, &asset_id)
-                    {
+                    if let Some(sidecar) = load_sidecar(project_root, &asset_id) {
                         for r in sidecar.ranges {
                             // Intersect [r.start_s, r.end_s] with
                             // [clip_source_start, clip_source_end]. If
@@ -310,10 +307,10 @@ fn silences_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    project_root
-        .join(".awidat")
-        .join("silences")
-        .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
+    project_root.join(".awidat").join("silences").join(format!(
+        "{stem}-{:08x}.json",
+        stable_path_hash(asset_abs_path)
+    ))
 }
 
 fn load_sidecar(project_root: &Path, asset_id: &str) -> Option<SilenceSidecar> {
@@ -347,10 +344,7 @@ fn read_transcript_context(
     let mut before_words: Vec<&str> = Vec::new();
     let mut after_words: Vec<&str> = Vec::new();
 
-    if let Some(words) = value
-        .pointer("/data/words")
-        .and_then(|v| v.as_array())
-    {
+    if let Some(words) = value.pointer("/data/words").and_then(|v| v.as_array()) {
         for w in words {
             let end = word_end_s(w);
             let start = word_start_s(w);
@@ -359,21 +353,14 @@ fn read_transcript_context(
                 continue;
             }
             // Word ends within `TRANSCRIPT_CONTEXT_S` before the silence.
-            if end <= silence_start_s
-                && silence_start_s - end <= TRANSCRIPT_CONTEXT_S
-            {
+            if end <= silence_start_s && silence_start_s - end <= TRANSCRIPT_CONTEXT_S {
                 before_words.push(text);
             // Word starts within `TRANSCRIPT_CONTEXT_S` after the silence.
-            } else if start >= silence_end_s
-                && start - silence_end_s <= TRANSCRIPT_CONTEXT_S
-            {
+            } else if start >= silence_end_s && start - silence_end_s <= TRANSCRIPT_CONTEXT_S {
                 after_words.push(text);
             }
         }
-    } else if let Some(segments) = value
-        .pointer("/data/segments")
-        .and_then(|v| v.as_array())
-    {
+    } else if let Some(segments) = value.pointer("/data/segments").and_then(|v| v.as_array()) {
         for s in segments {
             let end = word_end_s(s);
             let start = word_start_s(s);
@@ -381,13 +368,9 @@ fn read_transcript_context(
             if text.is_empty() {
                 continue;
             }
-            if end <= silence_start_s
-                && silence_start_s - end <= TRANSCRIPT_CONTEXT_S
-            {
+            if end <= silence_start_s && silence_start_s - end <= TRANSCRIPT_CONTEXT_S {
                 before_words.push(text);
-            } else if start >= silence_end_s
-                && start - silence_end_s <= TRANSCRIPT_CONTEXT_S
-            {
+            } else if start >= silence_end_s && start - silence_end_s <= TRANSCRIPT_CONTEXT_S {
                 after_words.push(text);
             }
         }
@@ -444,15 +427,11 @@ clean.\
 mod tests {
     use super::*;
     use awidat_proto::otio::{
-        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
-        Track, TrackChild, TrackKind,
+        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
+        TrackChild, TrackKind,
     };
 
-    fn write_silences_sidecar(
-        project_root: &Path,
-        asset_id: &str,
-        ranges: Vec<(f64, f64)>,
-    ) {
+    fn write_silences_sidecar(project_root: &Path, asset_id: &str, ranges: Vec<(f64, f64)>) {
         let abs = project_root.join(asset_id);
         std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
         std::fs::write(&abs, b"stub").unwrap();
@@ -510,11 +489,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let asset = "raw/ep.mp4";
         // Three silences: 0.5s (under), 2s (over), 0.8s (under).
-        write_silences_sidecar(
-            dir.path(),
-            asset,
-            vec![(1.0, 1.5), (3.0, 5.0), (7.0, 7.8)],
-        );
+        write_silences_sidecar(dir.path(), asset, vec![(1.0, 1.5), (3.0, 5.0), (7.0, 7.8)]);
         let tl = timeline_with_clip(asset, 0.0, 10.0);
         let findings = scan_dead_air(dir.path(), &tl, 1.0, 10);
         assert_eq!(findings.len(), 1, "only the 2s silence should surface");

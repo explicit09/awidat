@@ -86,16 +86,10 @@ impl ToolHandler for VeditCommitTool {
         }
 
         let repo = vc::open_or_init(&ctx.project_root).map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "vedit_commit: opening repo failed: {e}"
-            ))
+            FunctionCallError::RespondToModel(format!("vedit_commit: opening repo failed: {e}"))
         })?;
         let outcome = vc::commit_current_timeline(&repo, header, args.reasoning.as_deref())
-            .map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "vedit_commit: {e}"
-                ))
-            })?;
+            .map_err(|e| FunctionCallError::RespondToModel(format!("vedit_commit: {e}")))?;
 
         let body = serde_json::json!({
             "commit_hash": outcome.commit_hash,
@@ -192,9 +186,24 @@ mod tests {
             .await
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&out.content).unwrap();
-        assert!(parsed["commit_hash"].as_str().unwrap().starts_with("sha256:"));
-        assert!(parsed["timeline_hash"].as_str().unwrap().starts_with("sha256:"));
-        assert!(parsed["message"].as_str().unwrap().contains("Initial commit"));
+        assert!(
+            parsed["commit_hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(
+            parsed["timeline_hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+        assert!(
+            parsed["message"]
+                .as_str()
+                .unwrap()
+                .contains("Initial commit")
+        );
         assert!(
             parsed["message"]
                 .as_str()

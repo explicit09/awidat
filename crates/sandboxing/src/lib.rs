@@ -162,11 +162,7 @@ impl Sandbox {
     }
 
     #[cfg(target_os = "macos")]
-    fn run_macos(
-        &self,
-        argv: &[&str],
-        policy: &Policy,
-    ) -> Result<SandboxedOutput, SandboxErr> {
+    fn run_macos(&self, argv: &[&str], policy: &Policy) -> Result<SandboxedOutput, SandboxErr> {
         let profile = render_seatbelt_profile(policy);
         let mut cmd = Command::new(MACOS_SEATBELT);
         cmd.arg("-p").arg(&profile);
@@ -204,7 +200,9 @@ impl Sandbox {
 ///   - Network: forbidden unless `policy.allow_network`
 #[cfg(target_os = "macos")]
 fn render_seatbelt_profile(policy: &Policy) -> String {
-    let project_root = policy.project_root.canonicalize()
+    let project_root = policy
+        .project_root
+        .canonicalize()
         .unwrap_or_else(|_| policy.project_root.clone());
     let mut s = String::from("(version 1)\n");
     s.push_str("(deny default)\n");
@@ -376,7 +374,11 @@ mod tests {
         // Both prove the sandbox blocked the write.
         match result {
             Ok(out) => {
-                assert!(!out.status.success(), "expected non-zero exit, got {:?}", out.status);
+                assert!(
+                    !out.status.success(),
+                    "expected non-zero exit, got {:?}",
+                    out.status
+                );
                 assert!(
                     !std::path::Path::new("/etc/awidat-sandbox-test").exists(),
                     "sandbox didn't actually block the write"

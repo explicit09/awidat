@@ -90,7 +90,8 @@ impl ToolHandler for RequestUserInputTool {
             return Err(FunctionCallError::RespondToModel(
                 "request_user_input: interactive input not available in this runtime. \
                  You're running under a non-interactive session (no TTY); proceed \
-                 without asking, or surface the question in your final reply.".into(),
+                 without asking, or surface the question in your final reply."
+                    .into(),
             ));
         };
 
@@ -113,7 +114,8 @@ impl ToolHandler for RequestUserInputTool {
         if tx.send(request).await.is_err() {
             return Err(FunctionCallError::RespondToModel(
                 "request_user_input: runtime input channel closed; \
-                 cannot route the question.".into(),
+                 cannot route the question."
+                    .into(),
             ));
         }
 
@@ -154,9 +156,12 @@ mod tests {
                 job_manager: awidat_render::JobManager::new(),
 
                 approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
-            skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
-            subagent_return: None,
+                mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                    name: "test".into(),
+                    version: "0.0.0".into(),
+                }),
+                skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
+                subagent_return: None,
             },
             events_rx,
             input_rx,
@@ -172,7 +177,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -272,7 +280,9 @@ mod tests {
         // Event arrives even before the runtime accepts the channel send.
         let ev = events_rx.recv().await.expect("event");
         match ev {
-            SessionEvent::AwaitingUserInput { question, options, .. } => {
+            SessionEvent::AwaitingUserInput {
+                question, options, ..
+            } => {
                 assert_eq!(question, "hard cut?");
                 assert_eq!(options, Some(vec!["yes".into(), "no".into()]));
             }

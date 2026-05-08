@@ -147,7 +147,10 @@ mod tests {
             "fancy_new_field": { "nested": true }
         });
         let m: AwidatTimelineMetadata = serde_json::from_value(json).unwrap();
-        assert_eq!(m.extra.get("taste_profile_id").and_then(|v| v.as_str()), Some("tp-001"));
+        assert_eq!(
+            m.extra.get("taste_profile_id").and_then(|v| v.as_str()),
+            Some("tp-001")
+        );
         // Round-trips intact.
         let out = serde_json::to_value(&m).unwrap();
         assert_eq!(out["taste_profile_id"], "tp-001");

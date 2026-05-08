@@ -33,9 +33,7 @@
 
 use std::path::Path;
 
-use awidat_desktop_protocol::{
-    Transcript, TranscriptSegment, TranscriptSpeaker, TranscriptWord,
-};
+use awidat_desktop_protocol::{Transcript, TranscriptSegment, TranscriptSpeaker, TranscriptWord};
 use awidat_proto::index::AssetId;
 use serde::Deserialize;
 use tauri::State;
@@ -230,8 +228,16 @@ fn parse_transcript(asset_stem: String, sidecar: serde_json::Value) -> Result<Tr
     // Sort defensively — the indexer should produce sorted output
     // but a future schema migration shouldn't silently break the
     // virtualized transcript pane (which assumes ordered segments).
-    segments.sort_by(|a, b| a.start_s.partial_cmp(&b.start_s).unwrap_or(std::cmp::Ordering::Equal));
-    words.sort_by(|a, b| a.start_s.partial_cmp(&b.start_s).unwrap_or(std::cmp::Ordering::Equal));
+    segments.sort_by(|a, b| {
+        a.start_s
+            .partial_cmp(&b.start_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    words.sort_by(|a, b| {
+        a.start_s
+            .partial_cmp(&b.start_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let speakers = body
         .speakers
         .into_iter()

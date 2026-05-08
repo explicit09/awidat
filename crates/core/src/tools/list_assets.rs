@@ -173,7 +173,9 @@ fn walk(root: &Path, here: &Path, scope_label: &str, out: &mut Vec<AssetEntry>) 
         if !meta.is_file() {
             continue;
         }
-        let Ok(rel) = p.strip_prefix(root) else { continue };
+        let Ok(rel) = p.strip_prefix(root) else {
+            continue;
+        };
         out.push(AssetEntry {
             scope: scope_label.to_string(),
             rel_path: rel.to_string_lossy().replace('\\', "/"),
@@ -234,7 +236,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -307,7 +312,10 @@ mod tests {
         assert!(out.content.contains("More than 2 entries found"));
         // entries 1 and 4 should be absent.
         let lines: Vec<&str> = out.content.lines().collect();
-        let numbered: Vec<&&str> = lines.iter().filter(|l| l.trim_start().starts_with(|c: char| c.is_ascii_digit())).collect();
+        let numbered: Vec<&&str> = lines
+            .iter()
+            .filter(|l| l.trim_start().starts_with(|c: char| c.is_ascii_digit()))
+            .collect();
         assert_eq!(numbered.len(), 2);
     }
 
@@ -315,10 +323,7 @@ mod tests {
     async fn offset_zero_is_respond_to_model() {
         let dir = project_with_assets();
         let err = ListAssetsTool
-            .handle(
-                invoke(serde_json::json!({"offset": 0})),
-                ctx_at(dir.path()),
-            )
+            .handle(invoke(serde_json::json!({"offset": 0})), ctx_at(dir.path()))
             .await
             .unwrap_err();
         assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("1-indexed")));

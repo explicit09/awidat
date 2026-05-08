@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use awidat_core::Session;
 use awidat_core::edl::{AppliedOp, EdlEnvelope};
@@ -28,6 +28,10 @@ pub struct AwidatState {
     /// Defaulted from `AWIDAT_DESKTOP_PROJECT` env var on startup so
     /// dev runs work without configuring.
     pub project_root: Mutex<Option<PathBuf>>,
+    /// Rollout log the next lazily-built `Session` should resume from.
+    /// Set by chat-history commands when the user opens a previous
+    /// conversation; cleared by "new chat" and project changes.
+    pub resume_log_path: Mutex<Option<PathBuf>>,
     /// Pending approval requests awaiting the user's decision, keyed
     /// by the `call_id` the frontend received in the matching
     /// `ApprovalRequest` Item.
@@ -68,6 +72,27 @@ pub struct AwidatState {
     /// tab toggles — a 4 MB sidecar parses in single-digit ms but
     /// re-parsing on every tab click adds up.
     pub transcript_cache: Mutex<HashMap<String, Transcript>>,
+    /// Tiny localhost range server for preview media. WKWebView's
+    /// `asset:` protocol is silent for some mp4 audio tracks, while
+    /// blob URLs load multi-GB proxies into RAM. This streams files
+    /// over `http://127.0.0.1` with Range support instead.
+    pub media_server: MediaServerState,
+}
+
+/// Shared state for the localhost media streamer.
+#[derive(Default)]
+pub struct MediaServerState {
+    /// Lazily initialized server and file-token map. Uses a std mutex
+    /// because the serving thread is not async.
+    pub inner: StdMutex<Option<MediaServerInner>>,
+}
+
+/// Running media server state.
+pub struct MediaServerInner {
+    /// Bound localhost port.
+    pub port: u16,
+    /// Random-ish token to canonical file path.
+    pub files: Arc<StdMutex<HashMap<String, PathBuf>>>,
 }
 
 /// One in-flight EDL proposal. Created by the bridge when an agent

@@ -246,7 +246,9 @@ impl JobManager {
     /// most recent watch-channel value.
     pub async fn status(&self, id: &JobId) -> Result<JobStatus, JobError> {
         let jobs = self.inner.jobs.read().await;
-        let h = jobs.get(id).ok_or_else(|| JobError::UnknownJob(id.clone()))?;
+        let h = jobs
+            .get(id)
+            .ok_or_else(|| JobError::UnknownJob(id.clone()))?;
         Ok(h.rx.borrow().clone())
     }
 
@@ -255,9 +257,14 @@ impl JobManager {
     /// already done/failed.
     pub async fn cancel(&self, id: &JobId) -> Result<(), JobError> {
         let jobs = self.inner.jobs.read().await;
-        let h = jobs.get(id).ok_or_else(|| JobError::UnknownJob(id.clone()))?;
+        let h = jobs
+            .get(id)
+            .ok_or_else(|| JobError::UnknownJob(id.clone()))?;
         let state = h.rx.borrow().state;
-        if matches!(state, JobState::Done | JobState::Failed | JobState::Cancelled) {
+        if matches!(
+            state,
+            JobState::Done | JobState::Failed | JobState::Cancelled
+        ) {
             return Err(JobError::AlreadyTerminal(id.clone(), state));
         }
         h.cancel.cancel();
@@ -472,7 +479,10 @@ mod tests {
     #[test]
     fn job_state_serializes_snake_case() {
         assert_eq!(serde_json::to_string(&JobState::Done).unwrap(), "\"done\"");
-        assert_eq!(serde_json::to_string(&JobState::Cancelled).unwrap(), "\"cancelled\"");
+        assert_eq!(
+            serde_json::to_string(&JobState::Cancelled).unwrap(),
+            "\"cancelled\""
+        );
     }
 
     #[tokio::test]
@@ -493,10 +503,14 @@ mod tests {
         let spec = RenderJobSpec {
             args: vec![
                 "-y".into(),
-                "-f".into(), "lavfi".into(),
-                "-i".into(), "color=c=red:s=160x120:d=1".into(),
-                "-c:v".into(), "libx264".into(),
-                "-pix_fmt".into(), "yuv420p".into(),
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "color=c=red:s=160x120:d=1".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
                 out_path.to_string_lossy().into_owned(),
             ],
             total_duration_s: Some(1.0),
@@ -509,12 +523,20 @@ mod tests {
         for _ in 0..150 {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let s = m.status(&id).await.unwrap();
-            if matches!(s.state, JobState::Done | JobState::Failed | JobState::Cancelled) {
+            if matches!(
+                s.state,
+                JobState::Done | JobState::Failed | JobState::Cancelled
+            ) {
                 final_state = s.state;
                 break;
             }
         }
-        assert_eq!(final_state, JobState::Done, "job should complete; status={:?}", m.status(&id).await.unwrap());
+        assert_eq!(
+            final_state,
+            JobState::Done,
+            "job should complete; status={:?}",
+            m.status(&id).await.unwrap()
+        );
         assert!(out_path.exists(), "output file must exist");
     }
 }

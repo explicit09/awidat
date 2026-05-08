@@ -72,8 +72,12 @@ impl ToolHandler for InspectClipTool {
 
         if let Some(scene) = try_read(&ctx.project_root, "scenedetect", &asset)? {
             let data = scene.get("data").cloned().unwrap_or_default();
-            if let Some(v) = data.get("frame_rate") { overview.insert("frame_rate".into(), v.clone()); }
-            if let Some(v) = data.get("duration_s") { overview.insert("duration_s".into(), v.clone()); }
+            if let Some(v) = data.get("frame_rate") {
+                overview.insert("frame_rate".into(), v.clone());
+            }
+            if let Some(v) = data.get("duration_s") {
+                overview.insert("duration_s".into(), v.clone());
+            }
             if let Some(shots) = data.get("shots").and_then(|v| v.as_array()) {
                 overview.insert("shot_count".into(), serde_json::json!(shots.len()));
             }
@@ -84,10 +88,16 @@ impl ToolHandler for InspectClipTool {
             let data = audio.get("data").cloned().unwrap_or_default();
             // audio-energy may have duration too — prefer it if scenedetect didn't fire.
             if !overview.contains_key("duration_s") {
-                if let Some(v) = data.get("duration_s") { overview.insert("duration_s".into(), v.clone()); }
+                if let Some(v) = data.get("duration_s") {
+                    overview.insert("duration_s".into(), v.clone());
+                }
             }
-            if let Some(v) = data.get("sample_rate") { overview.insert("audio_sample_rate".into(), v.clone()); }
-            if let Some(v) = data.get("loudness_integrated_lufs") { overview.insert("loudness_integrated_lufs".into(), v.clone()); }
+            if let Some(v) = data.get("sample_rate") {
+                overview.insert("audio_sample_rate".into(), v.clone());
+            }
+            if let Some(v) = data.get("loudness_integrated_lufs") {
+                overview.insert("loudness_integrated_lufs".into(), v.clone());
+            }
             if let Some(silences) = data.get("silences").and_then(|v| v.as_array()) {
                 overview.insert("silence_count".into(), serde_json::json!(silences.len()));
             }
@@ -96,9 +106,15 @@ impl ToolHandler for InspectClipTool {
 
         if let Some(whisper) = try_read(&ctx.project_root, "whisper", &asset)? {
             let data = whisper.get("data").cloned().unwrap_or_default();
-            if let Some(v) = data.get("language") { overview.insert("language".into(), v.clone()); }
-            if let Some(v) = data.get("speakers") { overview.insert("speakers".into(), v.clone()); }
-            if let Some(v) = data.get("model") { overview.insert("whisper_model".into(), v.clone()); }
+            if let Some(v) = data.get("language") {
+                overview.insert("language".into(), v.clone());
+            }
+            if let Some(v) = data.get("speakers") {
+                overview.insert("speakers".into(), v.clone());
+            }
+            if let Some(v) = data.get("model") {
+                overview.insert("whisper_model".into(), v.clone());
+            }
             if let Some(segments) = data.get("segments").and_then(|v| v.as_array()) {
                 overview.insert("segment_count".into(), serde_json::json!(segments.len()));
             }
@@ -152,7 +168,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -167,7 +186,10 @@ mod tests {
     }
 
     fn write_sidecar(root: &std::path::Path, indexer: &str, asset: &str, body: serde_json::Value) {
-        let p = root.join("index").join(indexer).join(format!("{asset}.json"));
+        let p = root
+            .join("index")
+            .join(indexer)
+            .join(format!("{asset}.json"));
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
     }
@@ -175,16 +197,32 @@ mod tests {
     #[tokio::test]
     async fn aggregates_across_indexers() {
         let dir = tempfile::tempdir().unwrap();
-        write_sidecar(dir.path(), "scenedetect", "raw/x.mp4",
-            serde_json::json!({"data": {"frame_rate": 24.0, "duration_s": 120.0, "shots": [1,2,3,4]}}));
-        write_sidecar(dir.path(), "audio-energy", "raw/x.mp4",
-            serde_json::json!({"data": {"sample_rate": 48000, "loudness_integrated_lufs": -16.5, "silences": [{}]}}));
-        write_sidecar(dir.path(), "whisper", "raw/x.mp4",
-            serde_json::json!({"data": {"language": "en", "speakers": ["A","B"], "segments": [{},{},{}]}}));
+        write_sidecar(
+            dir.path(),
+            "scenedetect",
+            "raw/x.mp4",
+            serde_json::json!({"data": {"frame_rate": 24.0, "duration_s": 120.0, "shots": [1,2,3,4]}}),
+        );
+        write_sidecar(
+            dir.path(),
+            "audio-energy",
+            "raw/x.mp4",
+            serde_json::json!({"data": {"sample_rate": 48000, "loudness_integrated_lufs": -16.5, "silences": [{}]}}),
+        );
+        write_sidecar(
+            dir.path(),
+            "whisper",
+            "raw/x.mp4",
+            serde_json::json!({"data": {"language": "en", "speakers": ["A","B"], "segments": [{},{},{}]}}),
+        );
 
         let out = InspectClipTool
-            .handle(invoke(serde_json::json!({"asset_id": "raw/x.mp4"})), ctx_at(dir.path()))
-            .await.unwrap();
+            .handle(
+                invoke(serde_json::json!({"asset_id": "raw/x.mp4"})),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
         let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
         assert_eq!(v["frame_rate"], 24.0);
         assert_eq!(v["duration_s"], 120.0);
@@ -198,8 +236,12 @@ mod tests {
     async fn no_sidecars_is_respond_to_model() {
         let dir = tempfile::tempdir().unwrap();
         let err = InspectClipTool
-            .handle(invoke(serde_json::json!({"asset_id": "raw/missing.mp4"})), ctx_at(dir.path()))
-            .await.unwrap_err();
+            .handle(
+                invoke(serde_json::json!({"asset_id": "raw/missing.mp4"})),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap_err();
         match err {
             FunctionCallError::RespondToModel(msg) => assert!(msg.contains("no indexer sidecars")),
             other => panic!("want RespondToModel, got {other:?}"),

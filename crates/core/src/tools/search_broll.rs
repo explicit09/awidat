@@ -186,9 +186,9 @@ fn map_pexels_err(err: pexels::PexelsError) -> FunctionCallError {
              Pause and try a narrower query later."
                 .into(),
         ),
-        other => FunctionCallError::RespondToModel(format!(
-            "search_broll: Pexels call failed: {other}"
-        )),
+        other => {
+            FunctionCallError::RespondToModel(format!("search_broll: Pexels call failed: {other}"))
+        }
     }
 }
 

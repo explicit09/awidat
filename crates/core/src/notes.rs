@@ -83,6 +83,7 @@ pub struct NotesFile {
 }
 
 impl NotesFile {
+    /// Create an empty notes file with the current notes schema version.
     pub fn empty() -> Self {
         Self {
             version: 1,

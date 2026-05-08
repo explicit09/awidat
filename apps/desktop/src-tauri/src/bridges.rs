@@ -3,7 +3,7 @@
 //! the frontend consumes.
 
 use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
-use awidat_desktop_protocol::{Id, Item, ItemLifecycle, ProposalSource};
+use awidat_desktop_protocol::{Id, Item, ItemLifecycle, PermissionMode, ProposalSource};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -42,6 +42,18 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
     tokio::spawn(async move {
         while let Some(req) = rx.recv().await {
             let state = app.state::<AwidatState>();
+            let mode = current_permission_mode(&state).await;
+
+            if auto_allows_tool(mode, &req.tool_name) {
+                debug!(
+                    call_id = %req.call_id,
+                    tool = %req.tool_name,
+                    mode = ?mode,
+                    "auto-allowing approval request for permission mode",
+                );
+                let _ = req.reply.send(ApprovalDecision::Allow);
+                continue;
+            }
 
             if proposal_overlay_enabled() && req.tool_name == "apply_edl" {
                 // Route to the proposal pipeline. Pull the EDL text out
@@ -148,6 +160,20 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
     });
 }
 
+async fn current_permission_mode(state: &AwidatState) -> PermissionMode {
+    let Some(project_root) = state.project_root.lock().await.clone() else {
+        return PermissionMode::Manual;
+    };
+    crate::commands::permission::read_mode_pub(&project_root)
+}
+
+fn auto_allows_tool(mode: PermissionMode, tool_name: &str) -> bool {
+    match mode {
+        PermissionMode::Manual | PermissionMode::Copilot => false,
+        PermissionMode::Autopilot => tool_name != "bash",
+    }
+}
+
 /// Forward `UserInputRequest`s the same way. Records the oneshot in
 /// `state.pending_inputs`; the matching `Item::AwaitingUserInput`
 /// is emitted by the run-loop's event subscriber, not here.
@@ -160,4 +186,26 @@ pub fn spawn_user_input_bridge(app: AppHandle, mut rx: mpsc::Receiver<UserInputR
         }
         debug!("user-input bridge closed");
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autopilot_auto_allows_editing_tools_but_not_bash() {
+        assert!(auto_allows_tool(PermissionMode::Autopilot, "apply_edl"));
+        assert!(auto_allows_tool(
+            PermissionMode::Autopilot,
+            "start_indexing"
+        ));
+        assert!(auto_allows_tool(PermissionMode::Autopilot, "start_render"));
+        assert!(!auto_allows_tool(PermissionMode::Autopilot, "bash"));
+    }
+
+    #[test]
+    fn manual_and_copilot_keep_approval_gate() {
+        assert!(!auto_allows_tool(PermissionMode::Manual, "apply_edl"));
+        assert!(!auto_allows_tool(PermissionMode::Copilot, "apply_edl"));
+    }
 }

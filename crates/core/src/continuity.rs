@@ -119,23 +119,31 @@ pub struct ContinuityInputs {
 /// `index/whisper/<asset>.json` files use.
 #[derive(Debug, Clone)]
 pub struct WhisperWord {
+    /// Word start in source seconds.
     pub start_s: f64,
+    /// Word end in source seconds.
     pub end_s: f64,
+    /// Word text as emitted by the transcript sidecar.
     pub text: String,
 }
 
 /// One whisper segment with optional speaker label.
 #[derive(Debug, Clone)]
 pub struct WhisperSegment {
+    /// Segment start in source seconds.
     pub start_s: f64,
+    /// Segment end in source seconds.
     pub end_s: f64,
+    /// Optional speaker label from diarization.
     pub speaker_id: Option<String>,
 }
 
 /// One silence range. Mirrors the silence sidecar shape.
 #[derive(Debug, Clone, Copy)]
 pub struct SilenceRange {
+    /// Silence start in source seconds.
     pub start_s: f64,
+    /// Silence end in source seconds.
     pub end_s: f64,
 }
 
@@ -243,11 +251,7 @@ pub fn rule_mid_sentence(at_s: f64, inputs: &ContinuityInputs) -> RuleVerdict {
 ///
 /// `Cut` (split) doesn't trigger this rule — splits are
 /// non-destructive at the cut point.
-pub fn rule_breath_beat(
-    at_s: f64,
-    kind: CutKind,
-    inputs: &ContinuityInputs,
-) -> RuleVerdict {
+pub fn rule_breath_beat(at_s: f64, kind: CutKind, inputs: &ContinuityInputs) -> RuleVerdict {
     if matches!(kind, CutKind::Cut) {
         return RuleVerdict {
             id: "breath_beat".into(),
@@ -408,11 +412,7 @@ pub fn rule_speaker_turn(at_s: f64, inputs: &ContinuityInputs) -> RuleVerdict {
 /// two or more existing cuts (3+ cuts in a 5s window looks
 /// frantic in podcast format). `Cut` (split) ignores this rule —
 /// splits are structural, not visible cuts.
-pub fn rule_rhythm(
-    at_s: f64,
-    kind: CutKind,
-    inputs: &ContinuityInputs,
-) -> RuleVerdict {
+pub fn rule_rhythm(at_s: f64, kind: CutKind, inputs: &ContinuityInputs) -> RuleVerdict {
     if matches!(kind, CutKind::Cut) {
         return RuleVerdict {
             id: "rhythm".into(),
@@ -505,13 +505,11 @@ pub fn load_motion_magnitudes(project_root: &Path, asset_id: &str) -> Option<Vec
     let path = motion_sidecar_path(project_root, asset_id);
     let bytes = std::fs::read(&path).ok()?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    v.get("magnitudes")
-        .and_then(|m| m.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_f64().map(|f| f as f32))
-                .collect()
-        })
+    v.get("magnitudes").and_then(|m| m.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|x| x.as_f64().map(|f| f as f32))
+            .collect()
+    })
 }
 
 /// Load silence ranges from the silence sidecar.
@@ -542,10 +540,7 @@ pub fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<Whi
     Some(
         arr.iter()
             .filter_map(|w| {
-                let start = w
-                    .get("start_s")
-                    .or_else(|| w.get("start"))?
-                    .as_f64()?;
+                let start = w.get("start_s").or_else(|| w.get("start"))?.as_f64()?;
                 let end = w.get("end_s").or_else(|| w.get("end"))?.as_f64()?;
                 let text = w.get("text")?.as_str()?.to_string();
                 Some(WhisperWord {
@@ -569,7 +564,10 @@ pub fn load_whisper_segments(project_root: &Path, asset_id: &str) -> Option<Vec<
             .filter_map(|s| {
                 let start = s.get("start_s").or_else(|| s.get("start"))?.as_f64()?;
                 let end = s.get("end_s").or_else(|| s.get("end"))?.as_f64()?;
-                let speaker_id = s.get("speaker_id").and_then(|x| x.as_str()).map(String::from);
+                let speaker_id = s
+                    .get("speaker_id")
+                    .and_then(|x| x.as_str())
+                    .map(String::from);
                 Some(WhisperSegment {
                     start_s: start,
                     end_s: end,
@@ -594,7 +592,11 @@ pub fn load_scene_changes(project_root: &Path, asset_id: &str) -> Option<Vec<f64
         if i == 0 {
             continue;
         }
-        if let Some(t) = s.get("start_s").or_else(|| s.get("start")).and_then(|x| x.as_f64()) {
+        if let Some(t) = s
+            .get("start_s")
+            .or_else(|| s.get("start"))
+            .and_then(|x| x.as_f64())
+        {
             out.push(t);
         }
     }
@@ -642,9 +644,21 @@ mod tests {
     #[test]
     fn aggregate_dirty_wins() {
         let rules = vec![
-            RuleVerdict { id: "a".into(), verdict: Verdict::Clean, reason: String::new() },
-            RuleVerdict { id: "b".into(), verdict: Verdict::Risky, reason: String::new() },
-            RuleVerdict { id: "c".into(), verdict: Verdict::Dirty, reason: String::new() },
+            RuleVerdict {
+                id: "a".into(),
+                verdict: Verdict::Clean,
+                reason: String::new(),
+            },
+            RuleVerdict {
+                id: "b".into(),
+                verdict: Verdict::Risky,
+                reason: String::new(),
+            },
+            RuleVerdict {
+                id: "c".into(),
+                verdict: Verdict::Dirty,
+                reason: String::new(),
+            },
         ];
         assert_eq!(aggregate_verdicts(&rules), Verdict::Dirty);
     }
@@ -652,9 +666,21 @@ mod tests {
     #[test]
     fn aggregate_risky_when_no_dirty() {
         let rules = vec![
-            RuleVerdict { id: "a".into(), verdict: Verdict::Clean, reason: String::new() },
-            RuleVerdict { id: "b".into(), verdict: Verdict::Risky, reason: String::new() },
-            RuleVerdict { id: "c".into(), verdict: Verdict::Abstain, reason: String::new() },
+            RuleVerdict {
+                id: "a".into(),
+                verdict: Verdict::Clean,
+                reason: String::new(),
+            },
+            RuleVerdict {
+                id: "b".into(),
+                verdict: Verdict::Risky,
+                reason: String::new(),
+            },
+            RuleVerdict {
+                id: "c".into(),
+                verdict: Verdict::Abstain,
+                reason: String::new(),
+            },
         ];
         assert_eq!(aggregate_verdicts(&rules), Verdict::Risky);
     }
@@ -662,8 +688,16 @@ mod tests {
     #[test]
     fn aggregate_abstain_when_all_abstain() {
         let rules = vec![
-            RuleVerdict { id: "a".into(), verdict: Verdict::Abstain, reason: String::new() },
-            RuleVerdict { id: "b".into(), verdict: Verdict::Abstain, reason: String::new() },
+            RuleVerdict {
+                id: "a".into(),
+                verdict: Verdict::Abstain,
+                reason: String::new(),
+            },
+            RuleVerdict {
+                id: "b".into(),
+                verdict: Verdict::Abstain,
+                reason: String::new(),
+            },
         ];
         assert_eq!(aggregate_verdicts(&rules), Verdict::Abstain);
     }
@@ -876,7 +910,10 @@ mod tests {
             nearby_cuts_s: vec![10.0, 11.0, 11.5],
             ..Default::default()
         };
-        assert_eq!(rule_rhythm(12.0, CutKind::Cut, &inputs).verdict, Verdict::Clean);
+        assert_eq!(
+            rule_rhythm(12.0, CutKind::Cut, &inputs).verdict,
+            Verdict::Clean
+        );
     }
 
     // --- multi-rule integration ---

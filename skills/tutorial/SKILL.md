@@ -11,6 +11,7 @@ tools_allowlist:
   - shot_summary
   - clip_search
   - apply_edl
+  - view_timeline
   - inspect_moment
   - inspect_clip
   - update_plan
@@ -56,6 +57,10 @@ shot_summary                  # how much of the asset is screen recording vs. ta
 If `shot_summary` shows < 50% screen-recording shots, this isn't a
 tutorial — it's a talking-head explainer. Tell the user and offer
 to switch playbooks (likely `interview-tightener`).
+
+If frame-quality and CLIP sidecars exist, use them to protect readable
+screen states: blurry frames are poor chapter anchors, while sharp
+frames that semantically match the topic are preferred hold points.
 
 ### 2. Generate chapter markers
 

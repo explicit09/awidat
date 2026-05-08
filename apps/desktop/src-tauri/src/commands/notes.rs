@@ -110,10 +110,7 @@ pub struct SetNoteStatusArgs {
 /// has no UI for this beyond the Tauri command — wired for future
 /// use.
 #[tauri::command]
-pub async fn delete_note(
-    state: State<'_, AwidatState>,
-    id: String,
-) -> Result<NotesFile, String> {
+pub async fn delete_note(state: State<'_, AwidatState>, id: String) -> Result<NotesFile, String> {
     let project_root = state
         .project_root
         .lock()
@@ -130,9 +127,7 @@ pub async fn delete_note(
 /// by the desktop's "show in finder" affordance (not wired to UI
 /// in Phase 1, but cheap to expose now).
 #[tauri::command]
-pub async fn dismissals_path(
-    state: State<'_, AwidatState>,
-) -> Result<Option<String>, String> {
+pub async fn dismissals_path(state: State<'_, AwidatState>) -> Result<Option<String>, String> {
     Ok(state
         .project_root
         .lock()

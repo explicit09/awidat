@@ -1,9 +1,9 @@
 //! `load_skill` — L2 progressive-disclosure tool.
 //!
-//! The agent sees the L1 catalog of skills (one line per skill) in
-//! the system prompt at session start. When the user's request maps
-//! to a skill (e.g. "tighten this interview" → `interview-tightener`),
-//! the agent calls `load_skill(name)` to receive the skill's full
+//! The agent sees the L1 catalog of skills (one line per skill) as a
+//! per-turn contextual fragment. When the user's request maps to a
+//! skill (e.g. "tighten this interview" → `interview-tightener`), the
+//! agent calls `load_skill(name)` to receive the skill's full
 //! `SKILL.md` body — the editorial style, step-by-step playbook, and
 //! any references to bundled scripts under `scripts/`.
 //!
@@ -70,13 +70,13 @@ impl ToolHandler for LoadSkillTool {
         })?;
         let Some(skill) = ctx.skills.get(&args.name) else {
             // Build a "did you mean?" hint with the available list.
-            let mut available: Vec<&str> =
-                ctx.skills.all().map(|s| s.meta.name.as_str()).collect();
+            let mut available: Vec<&str> = ctx.skills.all().map(|s| s.meta.name.as_str()).collect();
             available.sort();
             let suggestions = if available.is_empty() {
                 "no skills are installed; drop a skill folder under \
                  ~/.config/awidat/skills/<name>/SKILL.md or check the \
-                 bundled skills location".to_string()
+                 bundled skills location"
+                    .to_string()
             } else {
                 format!("available skills: {}", available.join(", "))
             };
@@ -118,7 +118,7 @@ impl ToolHandler for LoadSkillTool {
 const DESCRIPTION: &str = "\
 Load the full L2 body of a named editorial skill into the current \
 turn's context. Use this when the user's request maps to one of the \
-skills listed in the L1 catalog (top of the system prompt). The \
+skills listed in the L1 catalog. The \
 returned text contains the skill's editorial style, step-by-step \
 playbook, and references to bundled scripts you can run via `bash`.\
 \n\n\
@@ -219,7 +219,10 @@ mod tests {
         match err {
             FunctionCallError::RespondToModel(msg) => {
                 assert!(msg.contains("no skill named"));
-                assert!(msg.contains("real-skill"), "should suggest known skills: {msg}");
+                assert!(
+                    msg.contains("real-skill"),
+                    "should suggest known skills: {msg}"
+                );
             }
             other => panic!("unexpected error variant: {other:?}"),
         }

@@ -106,7 +106,8 @@ impl ToolHandler for ViewFrameTool {
 
         if !args.t_s.is_finite() || args.t_s < 0.0 {
             return Err(FunctionCallError::RespondToModel(format!(
-                "view_frame: t_s ({}) must be finite and ≥ 0", args.t_s
+                "view_frame: t_s ({}) must be finite and ≥ 0",
+                args.t_s
             )));
         }
 
@@ -149,22 +150,25 @@ impl ToolHandler for ViewFrameTool {
 
         // Cache lookup. Key on (asset_path, t_s, format, max_dim).
         let cache_path = cache_path_for(&ctx.project_root, &asset_path, args.t_s, format, max_dim)
-            .map_err(|e| FunctionCallError::RespondToModel(format!(
-                "view_frame: cache path build failed: {e}"
-            )))?;
+            .map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "view_frame: cache path build failed: {e}"
+                ))
+            })?;
 
         let bytes = if cache_path.exists() {
             tokio::fs::read(&cache_path).await.map_err(|e| {
                 FunctionCallError::RespondToModel(format!(
-                    "view_frame: cache read failed at {}: {e}", cache_path.display()
+                    "view_frame: cache read failed at {}: {e}",
+                    cache_path.display()
                 ))
             })?
         } else {
             let bytes = extract_frame(&asset_path, args.t_s, format, max_dim)
                 .await
-                .map_err(|e| FunctionCallError::RespondToModel(format!(
-                    "view_frame: ffmpeg failed: {e}"
-                )))?;
+                .map_err(|e| {
+                    FunctionCallError::RespondToModel(format!("view_frame: ffmpeg failed: {e}"))
+                })?;
             // Best-effort cache write; failure here doesn't fail the call.
             if let Some(parent) = cache_path.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
@@ -181,8 +185,7 @@ impl ToolHandler for ViewFrameTool {
             format.media_type(),
             bytes.len(),
         );
-        Ok(ToolOutput::text(summary)
-            .with_images(vec![(format.media_type().to_string(), b64)]))
+        Ok(ToolOutput::text(summary).with_images(vec![(format.media_type().to_string(), b64)]))
     }
 }
 
@@ -201,7 +204,9 @@ fn resolve_asset_path(project_root: &Path, asset: &str) -> Result<PathBuf, Funct
     }
     if p.is_absolute() {
         // Must live under the project root.
-        let canonical_root = project_root.canonicalize().unwrap_or(project_root.to_path_buf());
+        let canonical_root = project_root
+            .canonicalize()
+            .unwrap_or(project_root.to_path_buf());
         let canonical_asset = p.canonicalize().unwrap_or(p.to_path_buf());
         if !canonical_asset.starts_with(&canonical_root) {
             return Err(FunctionCallError::RespondToModel(format!(
@@ -267,7 +272,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -307,7 +315,9 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("must be finite and ≥ 0")));
+        assert!(
+            matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("must be finite and ≥ 0"))
+        );
     }
 
     #[tokio::test]

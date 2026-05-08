@@ -89,13 +89,20 @@ fn seed_render_project() -> Option<tempfile::TempDir> {
     let status = std::process::Command::new(&bin)
         .args([
             "-y",
-            "-f", "lavfi",
-            "-i", "color=c=red:s=320x240:d=2",
-            "-f", "lavfi",
-            "-i", "sine=f=440:d=2",
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=320x240:d=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=f=440:d=2",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
         ])
         .arg(&asset)
         .stderr(std::process::Stdio::null())
@@ -115,8 +122,8 @@ async fn live_render_chain_via_start_then_poll() {
     };
     let project_root = dir.path().to_path_buf();
 
-    let client = Client::from_env_or_keychain(ClientConfig::default())
-        .expect("ANTHROPIC_API_KEY missing");
+    let client =
+        Client::from_env_or_keychain(ClientConfig::default()).expect("ANTHROPIC_API_KEY missing");
     let session = Arc::new(Session::new(
         client,
         registry_with_all_tools(),
@@ -137,7 +144,9 @@ done. Report the final state and the output path.\
     let session_clone = session.clone();
     let cancel_clone = cancel.clone();
     let task = tokio::spawn(async move {
-        session_clone.run_turn(prompt.to_string(), cancel_clone).await
+        session_clone
+            .run_turn(prompt.to_string(), cancel_clone)
+            .await
     });
 
     let mut called: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -179,19 +188,29 @@ done. Report the final state and the output path.\
     println!("\n--- agent reply ---\n{text_seen}\n---");
     println!("tools called: {called:?}");
 
-    assert!(called.contains("start_render"), "agent must call start_render; called: {called:?}");
-    assert!(called.contains("poll_render"), "agent must call poll_render; called: {called:?}");
+    assert!(
+        called.contains("start_render"),
+        "agent must call start_render; called: {called:?}"
+    );
+    assert!(
+        called.contains("poll_render"),
+        "agent must call poll_render; called: {called:?}"
+    );
 
     // The start_render result should have an output_path.
     let sr_body: serde_json::Value = serde_json::from_str(
-        start_render_payload.as_deref().expect("start_render output captured"),
+        start_render_payload
+            .as_deref()
+            .expect("start_render output captured"),
     )
     .unwrap();
     let output_path = sr_body["output_path"].as_str().expect("output_path string");
 
     // The last poll should be terminal (done or failed).
     let poll_body: serde_json::Value = serde_json::from_str(
-        last_poll_payload.as_deref().expect("poll_render output captured"),
+        last_poll_payload
+            .as_deref()
+            .expect("poll_render output captured"),
     )
     .unwrap();
     let final_state = poll_body["state"].as_str().expect("state string");
@@ -199,7 +218,10 @@ done. Report the final state and the output path.\
         matches!(final_state, "done" | "failed" | "cancelled"),
         "final poll state must be terminal; got {final_state}"
     );
-    assert_eq!(final_state, "done", "render should succeed; got {final_state}");
+    assert_eq!(
+        final_state, "done",
+        "render should succeed; got {final_state}"
+    );
 
     // Output file landed on disk.
     assert!(
@@ -244,10 +266,18 @@ fn seed_four_clip_project() -> tempfile::TempDir {
         };
         track.children.push(TrackChild::Clip(clip));
     }
-    project.timeline.tracks.children.push(StackChild::Track(track));
+    project
+        .timeline
+        .tracks
+        .children
+        .push(StackChild::Track(track));
     project.write(dir.path()).expect("project write");
 
-    let whisper_dir = dir.path().join(files::INDEX_DIR).join("whisper").join("raw");
+    let whisper_dir = dir
+        .path()
+        .join(files::INDEX_DIR)
+        .join("whisper")
+        .join("raw");
     std::fs::create_dir_all(&whisper_dir).unwrap();
     for (i, snip) in snippets.iter().enumerate() {
         let body = serde_json::json!({
@@ -280,7 +310,9 @@ fn seed_four_clip_project() -> tempfile::TempDir {
         }],
     };
     std::fs::write(
-        dir.path().join(files::INDEX_DIR).join(files::INDEX_MANIFEST),
+        dir.path()
+            .join(files::INDEX_DIR)
+            .join(files::INDEX_MANIFEST),
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
@@ -294,8 +326,8 @@ async fn live_multi_op_edl_envelope() {
     let dir = seed_four_clip_project();
     let project_root = dir.path().to_path_buf();
 
-    let client = Client::from_env_or_keychain(ClientConfig::default())
-        .expect("ANTHROPIC_API_KEY missing");
+    let client =
+        Client::from_env_or_keychain(ClientConfig::default()).expect("ANTHROPIC_API_KEY missing");
     let session = Arc::new(Session::new(
         client,
         registry_with_all_tools(),
@@ -321,7 +353,9 @@ Make TWO edits in ONE apply_edl call (a single envelope with two ops):\
     let session_clone = session.clone();
     let cancel_clone = cancel.clone();
     let task = tokio::spawn(async move {
-        session_clone.run_turn(prompt.to_string(), cancel_clone).await
+        session_clone
+            .run_turn(prompt.to_string(), cancel_clone)
+            .await
     });
 
     let mut called: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -387,10 +421,20 @@ Make TWO edits in ONE apply_edl call (a single envelope with two ops):\
     let StackChild::Track(t) = &after.timeline.tracks.children[0] else {
         panic!("expected V1 track")
     };
-    assert_eq!(t.children.len(), 3, "expected 3 clips after the multi-op edit");
-    let TrackChild::Clip(c0) = &t.children[0] else { panic!() };
-    let TrackChild::Clip(c1) = &t.children[1] else { panic!() };
-    let TrackChild::Clip(c2) = &t.children[2] else { panic!() };
+    assert_eq!(
+        t.children.len(),
+        3,
+        "expected 3 clips after the multi-op edit"
+    );
+    let TrackChild::Clip(c0) = &t.children[0] else {
+        panic!()
+    };
+    let TrackChild::Clip(c1) = &t.children[1] else {
+        panic!()
+    };
+    let TrackChild::Clip(c2) = &t.children[2] else {
+        panic!()
+    };
     assert_eq!(c0.name, "clip-0", "alpha should still be first");
     assert_eq!(c1.name, "clip-2", "after delete, charlie shifts to index 1");
     assert_eq!(c2.name, "clip-3", "delta still at the end");

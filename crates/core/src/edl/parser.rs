@@ -42,8 +42,10 @@ pub enum EdlParseError {
     #[error("EDL missing `*** End EDL` closer")]
     MissingEnd,
     /// Heading line that doesn't match a known op.
-    #[error("line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition")]
+    #[error(
+        "line {line}: unknown op heading {heading:?}; expected one of: \
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Speed, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata"
+    )]
     UnknownOp {
         /// Line number.
         line: usize,
@@ -218,6 +220,10 @@ enum OpKind {
     SetSpeed,
     InsertTitle,
     SetTitle,
+    InsertCaption,
+    SetOutputFormat,
+    SetLoudnessTarget,
+    SetPackageMetadata,
 }
 
 impl OpBuilder {
@@ -235,6 +241,10 @@ impl OpBuilder {
             "Set Speed" => OpKind::SetSpeed,
             "Insert Title" => OpKind::InsertTitle,
             "Set Title" => OpKind::SetTitle,
+            "Insert Caption" => OpKind::InsertCaption,
+            "Set Output Format" => OpKind::SetOutputFormat,
+            "Set Loudness Target" => OpKind::SetLoudnessTarget,
+            "Set Package Metadata" => OpKind::SetPackageMetadata,
             other => {
                 return Err(EdlParseError::UnknownOp {
                     line,
@@ -370,24 +380,23 @@ impl OpBuilder {
                     line: head,
                     field: "anchor".into(),
                 })?;
-                let to_position = take_field_usize(&mut fields, "to_position").ok_or_else(
-                    || EdlParseError::MissingField {
-                        line: head,
-                        field: "to_position".into(),
-                    },
-                )?;
+                let to_position =
+                    take_field_usize(&mut fields, "to_position").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "to_position".into(),
+                        }
+                    })?;
                 Ok(EdlOp::MoveClip {
                     anchor,
                     to_position,
                 })
             }
             OpKind::InsertTransition => {
-                let between = self
-                    .between
-                    .ok_or_else(|| EdlParseError::MissingField {
-                        line: head,
-                        field: "between".into(),
-                    })?;
+                let between = self.between.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "between".into(),
+                })?;
                 let kind = take_field_string(&mut fields, "kind").ok_or_else(|| {
                     EdlParseError::MissingField {
                         line: head,
@@ -516,6 +525,80 @@ impl OpBuilder {
                     animation,
                 })
             }
+            OpKind::InsertCaption => {
+                let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "start_s".into(),
+                    }
+                })?;
+                let end_s = take_field_f64(&mut fields, "end_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "end_s".into(),
+                    }
+                })?;
+                let text = take_field_string(&mut fields, "text").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "text".into(),
+                    }
+                })?;
+                let position = parse_title_position(
+                    take_field_string(&mut fields, "position").as_deref(),
+                    head,
+                )?
+                .unwrap_or(TitlePosition::Bottom);
+                let font_size = take_field_usize(&mut fields, "font_size")
+                    .map(|n| n as u32)
+                    .unwrap_or(52);
+                let color = take_field_string(&mut fields, "color")
+                    .unwrap_or_else(|| "#FFFFFF".to_string());
+                let safe_area =
+                    take_field_string(&mut fields, "safe_area").unwrap_or_else(|| "mobile".into());
+                Ok(EdlOp::InsertCaption {
+                    start_s,
+                    end_s,
+                    text,
+                    position,
+                    font_size,
+                    color,
+                    safe_area,
+                })
+            }
+            OpKind::SetOutputFormat => {
+                let aspect_ratio =
+                    take_field_string(&mut fields, "aspect_ratio").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "aspect_ratio".into(),
+                        }
+                    })?;
+                Ok(EdlOp::SetOutputFormat {
+                    aspect_ratio,
+                    platform: take_field_string(&mut fields, "platform"),
+                    safe_area: take_field_string(&mut fields, "safe_area"),
+                })
+            }
+            OpKind::SetLoudnessTarget => {
+                let integrated_lufs =
+                    take_field_f64(&mut fields, "integrated_lufs").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "integrated_lufs".into(),
+                        }
+                    })?;
+                Ok(EdlOp::SetLoudnessTarget {
+                    integrated_lufs,
+                    true_peak_db: take_field_f64(&mut fields, "true_peak_db"),
+                })
+            }
+            OpKind::SetPackageMetadata => Ok(EdlOp::SetPackageMetadata {
+                platform: take_field_string(&mut fields, "platform"),
+                title: take_field_string(&mut fields, "title"),
+                description: take_field_string(&mut fields, "description"),
+                tags: take_field_string(&mut fields, "tags"),
+            }),
         }
     }
 }
@@ -568,8 +651,9 @@ fn parse_title_animation(
         Some(other) => Err(EdlParseError::BadField {
             line,
             raw: format!("animation: {other}"),
-            message: "must be 'none', 'fade_in', 'fade_out', 'fade_in_out', 'slide_in', or 'slide_out'"
-                .into(),
+            message:
+                "must be 'none', 'fade_in', 'fade_out', 'fade_in_out', 'slide_in', or 'slide_out'"
+                    .into(),
         }),
     }
 }
@@ -587,18 +671,23 @@ fn parse_field(
     line: usize,
     full_line: &str,
 ) -> Result<(String, FieldValue), EdlParseError> {
-    let (key, raw_value) = rest.split_once(':').ok_or_else(|| EdlParseError::BadField {
-        line,
-        raw: full_line.to_string(),
-        message: "expected `key: value`".into(),
-    })?;
+    let (key, raw_value) = rest
+        .split_once(':')
+        .ok_or_else(|| EdlParseError::BadField {
+            line,
+            raw: full_line.to_string(),
+            message: "expected `key: value`".into(),
+        })?;
     let key = key.trim().to_string();
     let raw = raw_value.trim();
     if let Ok(n) = raw.parse::<f64>() {
         return Ok((key, FieldValue::Number(n)));
     }
     // Strip optional surrounding quotes for string values.
-    let s = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(raw);
+    let s = raw
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(raw);
     Ok((key, FieldValue::String(s.to_string())))
 }
 
@@ -695,10 +784,12 @@ fn parse_anchor(rest: &str, line: usize) -> Result<Anchor, EdlParseError> {
 
 /// Parse a `between: ANCHOR_A and ANCHOR_B` for InsertTransition.
 fn parse_between(rest: &str, line: usize) -> Result<TransitionBetween, EdlParseError> {
-    let (a, b) = rest.split_once(" and ").ok_or_else(|| EdlParseError::BadAnchor {
-        line,
-        message: "between: expects two anchors separated by ' and '".into(),
-    })?;
+    let (a, b) = rest
+        .split_once(" and ")
+        .ok_or_else(|| EdlParseError::BadAnchor {
+            line,
+            message: "between: expects two anchors separated by ' and '".into(),
+        })?;
     Ok(TransitionBetween {
         from: parse_anchor(a.trim(), line)?,
         to: parse_anchor(b.trim(), line)?,
@@ -723,7 +814,9 @@ mod tests {
         assert_eq!(env.len(), 1);
         match &env.ops[0] {
             EdlOp::TrimClip { anchor, start, end } => {
-                assert!(matches!(anchor, Anchor::TranscriptSnippet { text } if text == "hello world"));
+                assert!(
+                    matches!(anchor, Anchor::TranscriptSnippet { text } if text == "hello world")
+                );
                 assert_eq!(*start, None);
                 assert_eq!(*end, Some(78.9));
             }
@@ -763,7 +856,9 @@ mod tests {
 ";
         let env = parse(text).unwrap();
         assert_eq!(env.len(), 1);
-        assert!(matches!(&env.ops[0], EdlOp::DeleteClip { anchor: Anchor::ClipUuid { uuid } } if uuid == "c-123"));
+        assert!(
+            matches!(&env.ops[0], EdlOp::DeleteClip { anchor: Anchor::ClipUuid { uuid } } if uuid == "c-123")
+        );
     }
 
     #[test]
@@ -795,7 +890,12 @@ mod tests {
 ";
         let env = parse(text).unwrap();
         match &env.ops[0] {
-            EdlOp::InsertBRoll { asset, duration_s, position, .. } => {
+            EdlOp::InsertBRoll {
+                asset,
+                duration_s,
+                position,
+                ..
+            } => {
                 assert_eq!(asset, "broll/skyline.mp4");
                 assert_eq!(*duration_s, 2.4);
                 assert_eq!(*position, BRollPosition::Overlay);
@@ -829,11 +929,19 @@ mod tests {
 ";
         let env = parse(text).unwrap();
         match &env.ops[0] {
-            EdlOp::InsertTransition { between, kind, duration_s } => {
+            EdlOp::InsertTransition {
+                between,
+                kind,
+                duration_s,
+            } => {
                 assert_eq!(kind, "SMPTE_Dissolve");
                 assert_eq!(*duration_s, 0.3);
-                assert!(matches!(&between.from, Anchor::TranscriptSnippet { text } if text == "I realized"));
-                assert!(matches!(&between.to, Anchor::TranscriptSnippet { text } if text == "the truth was"));
+                assert!(
+                    matches!(&between.from, Anchor::TranscriptSnippet { text } if text == "I realized")
+                );
+                assert!(
+                    matches!(&between.to, Anchor::TranscriptSnippet { text } if text == "the truth was")
+                );
             }
             _ => panic!("want InsertTransition"),
         }
@@ -988,6 +1096,83 @@ mod tests {
     }
 
     #[test]
+    fn parses_insert_caption_with_defaults() {
+        let text = "\
+*** Begin EDL
+*** Insert Caption
++ start_s: 1.0
++ end_s: 2.4
++ text: \"This changed everything\"
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertCaption {
+                start_s,
+                end_s,
+                text,
+                position,
+                font_size,
+                color,
+                safe_area,
+            } => {
+                assert!((start_s - 1.0).abs() < 1e-9);
+                assert!((end_s - 2.4).abs() < 1e-9);
+                assert_eq!(text, "This changed everything");
+                assert_eq!(*position, TitlePosition::Bottom);
+                assert_eq!(*font_size, 52);
+                assert_eq!(color, "#FFFFFF");
+                assert_eq!(safe_area, "mobile");
+            }
+            other => panic!("want InsertCaption, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_graph_output_metadata_ops() {
+        let text = "\
+*** Begin EDL
+*** Set Output Format
++ aspect_ratio: 9:16
++ platform: youtube_shorts
++ safe_area: mobile
+*** Set Loudness Target
++ integrated_lufs: -16
++ true_peak_db: -1
+*** Set Package Metadata
++ platform: youtube_shorts
++ title: \"Launch Risk\"
++ description: \"A short clip about launch risk\"
++ tags: launch,risk,clip
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        assert!(matches!(
+            &env.ops[0],
+            EdlOp::SetOutputFormat {
+                aspect_ratio,
+                platform: Some(platform),
+                safe_area: Some(safe_area)
+            } if aspect_ratio == "9:16" && platform == "youtube_shorts" && safe_area == "mobile"
+        ));
+        assert!(matches!(
+            &env.ops[1],
+            EdlOp::SetLoudnessTarget {
+                integrated_lufs,
+                true_peak_db: Some(true_peak_db)
+            } if (*integrated_lufs + 16.0).abs() < 1e-9 && (*true_peak_db + 1.0).abs() < 1e-9
+        ));
+        assert!(matches!(
+            &env.ops[2],
+            EdlOp::SetPackageMetadata {
+                platform: Some(platform),
+                title: Some(title),
+                ..
+            } if platform == "youtube_shorts" && title == "Launch Risk"
+        ));
+    }
+
+    #[test]
     fn insert_title_rejects_bad_position() {
         let text = "\
 *** Begin EDL
@@ -999,7 +1184,9 @@ mod tests {
 *** End EDL
 ";
         let err = parse(text).unwrap_err();
-        assert!(matches!(err, EdlParseError::BadField { ref message, .. } if message.contains("'top'")));
+        assert!(
+            matches!(err, EdlParseError::BadField { ref message, .. } if message.contains("'top'"))
+        );
     }
 
     #[test]
@@ -1042,7 +1229,9 @@ mod tests {
 *** End EDL
 ";
         let err = parse(text).unwrap_err();
-        assert!(matches!(err, EdlParseError::UnknownOp { heading, .. } if heading == "Reverse Polarity"));
+        assert!(
+            matches!(err, EdlParseError::UnknownOp { heading, .. } if heading == "Reverse Polarity")
+        );
     }
 
     #[test]
@@ -1102,7 +1291,9 @@ mod tests {
 *** End EDL
 ";
         let err = parse(text).unwrap_err();
-        assert!(matches!(err, EdlParseError::BadAnchor { message, .. } if message.contains("hand_wave")));
+        assert!(
+            matches!(err, EdlParseError::BadAnchor { message, .. } if message.contains("hand_wave"))
+        );
     }
 
     #[test]
@@ -1152,7 +1343,9 @@ mod tests {
 ";
         let env = parse(text).unwrap();
         match &env.ops[0] {
-            EdlOp::DeleteClip { anchor: Anchor::SceneChangeIndex { asset_id, index } } => {
+            EdlOp::DeleteClip {
+                anchor: Anchor::SceneChangeIndex { asset_id, index },
+            } => {
                 assert_eq!(asset_id, "raw/x.mp4");
                 assert_eq!(*index, 7);
             }

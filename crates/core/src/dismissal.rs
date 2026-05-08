@@ -194,18 +194,42 @@ mod tests {
 
     #[test]
     fn silence_buckets_split_at_thresholds() {
-        assert_eq!(DismissalBucket::for_silence(0.5), DismissalBucket::SilenceUnder2s);
-        assert_eq!(DismissalBucket::for_silence(1.99), DismissalBucket::SilenceUnder2s);
-        assert_eq!(DismissalBucket::for_silence(2.0), DismissalBucket::Silence2sTo5s);
-        assert_eq!(DismissalBucket::for_silence(4.99), DismissalBucket::Silence2sTo5s);
-        assert_eq!(DismissalBucket::for_silence(5.0), DismissalBucket::SilenceOver5s);
-        assert_eq!(DismissalBucket::for_silence(60.0), DismissalBucket::SilenceOver5s);
+        assert_eq!(
+            DismissalBucket::for_silence(0.5),
+            DismissalBucket::SilenceUnder2s
+        );
+        assert_eq!(
+            DismissalBucket::for_silence(1.99),
+            DismissalBucket::SilenceUnder2s
+        );
+        assert_eq!(
+            DismissalBucket::for_silence(2.0),
+            DismissalBucket::Silence2sTo5s
+        );
+        assert_eq!(
+            DismissalBucket::for_silence(4.99),
+            DismissalBucket::Silence2sTo5s
+        );
+        assert_eq!(
+            DismissalBucket::for_silence(5.0),
+            DismissalBucket::SilenceOver5s
+        );
+        assert_eq!(
+            DismissalBucket::for_silence(60.0),
+            DismissalBucket::SilenceOver5s
+        );
     }
 
     #[test]
     fn filler_buckets_split_by_aggressive_flag() {
-        assert_eq!(DismissalBucket::for_filler(false), DismissalBucket::FillerBasic);
-        assert_eq!(DismissalBucket::for_filler(true), DismissalBucket::FillerAggressive);
+        assert_eq!(
+            DismissalBucket::for_filler(false),
+            DismissalBucket::FillerBasic
+        );
+        assert_eq!(
+            DismissalBucket::for_filler(true),
+            DismissalBucket::FillerAggressive
+        );
     }
 
     #[test]

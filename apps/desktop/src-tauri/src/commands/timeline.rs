@@ -100,33 +100,27 @@ pub fn flatten_timeline_public(
                     // the frontend treats it as "still transcoding"
                     // and falls back to its empty-state placeholder
                     // for that clip's window.
-                    let proxy_path = asset_id
-                        .as_deref()
-                        .and_then(|aid| {
-                            crate::commands::media::proxy_path_for_asset_id(project_root, aid)
-                        });
+                    let proxy_path = asset_id.as_deref().and_then(|aid| {
+                        crate::commands::media::proxy_path_for_asset_id(project_root, aid)
+                    });
                     // Resolve the thumbnails dir once per clip so the
                     // canvas can tile filmstrip frames inside the
                     // clip body. `None` while the post-import
                     // [`JobKind::Thumbnails`] job hasn't completed —
                     // the canvas falls back to the same coloured-rect
                     // it drew before Step 10.
-                    let thumbnail_dir = asset_id
-                        .as_deref()
-                        .and_then(|aid| {
-                            crate::commands::media::thumbnails_dir_for_asset_id(project_root, aid)
-                        });
+                    let thumbnail_dir = asset_id.as_deref().and_then(|aid| {
+                        crate::commands::media::thumbnails_dir_for_asset_id(project_root, aid)
+                    });
                     // Resolve the waveform sidecar path once per clip
                     // so audio tracks can draw the amplitude line.
                     // `None` while the post-import [`JobKind::Waveform`]
                     // job hasn't completed, AND when the asset has no
                     // audio stream (sidecar exists but its buckets
                     // array is empty).
-                    let waveform_path = asset_id
-                        .as_deref()
-                        .and_then(|aid| {
-                            crate::commands::media::waveform_path_for_asset_id(project_root, aid)
-                        });
+                    let waveform_path = asset_id.as_deref().and_then(|aid| {
+                        crate::commands::media::waveform_path_for_asset_id(project_root, aid)
+                    });
                     // Anchor uuid: prefer clip.metadata.awidat.extra["clip_uuid"];
                     // fall back to display name (the EDL resolver also
                     // matches names, so the fallback round-trips).

@@ -236,9 +236,7 @@ impl ToolHandler for DelegateAllTool {
                     out.push_str(&format!("## {name}\n\n{body}\n\n"));
                 }
                 Ok(Err(reason)) => {
-                    out.push_str(&format!(
-                        "## {name}\n\n(no review returned: {reason})\n\n"
-                    ));
+                    out.push_str(&format!("## {name}\n\n(no review returned: {reason})\n\n"));
                 }
                 Err(join_err) => {
                     out.push_str(&format!(
@@ -261,7 +259,9 @@ async fn run_one_persona(
     model: String,
 ) -> Result<String, String> {
     let mut sub_registry = parent_registry.restrict_to(spec.allowed_tools);
-    sub_registry.register(Arc::new(crate::tools::attempt_completion::AttemptCompletionTool));
+    sub_registry.register(Arc::new(
+        crate::tools::attempt_completion::AttemptCompletionTool,
+    ));
 
     let sys = format!(
         "You are persona `{}`.\n\n{}{}",
@@ -269,14 +269,8 @@ async fn run_one_persona(
     );
 
     let return_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let session = crate::Session::new(
-        client,
-        sub_registry,
-        model,
-        Some(sys),
-        project_root,
-    )
-    .with_subagent_return(return_slot.clone());
+    let session = crate::Session::new(client, sub_registry, model, Some(sys), project_root)
+        .with_subagent_return(return_slot.clone());
 
     let cancel = CancellationToken::new();
     let _ = session

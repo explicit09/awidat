@@ -238,12 +238,12 @@ pub async fn run(
         return Err(IndexError::BadRoot(project_root.display().to_string()));
     }
     let index_dir = project_root.join(files::INDEX_DIR);
-    tokio::fs::create_dir_all(&index_dir).await.map_err(|e| {
-        IndexError::SidecarIo {
+    tokio::fs::create_dir_all(&index_dir)
+        .await
+        .map_err(|e| IndexError::SidecarIo {
             path: index_dir.display().to_string(),
             source: e,
-        }
-    })?;
+        })?;
 
     // Hash all assets up front, in parallel. SHA-256 of a 1h video on
     // M-series silicon: a few seconds. We do this synchronously per asset
@@ -267,8 +267,7 @@ pub async fn run(
 
     // Read existing manifest (if any) so idempotency works across runs.
     let manifest_path = index_dir.join(files::INDEX_MANIFEST);
-    let manifest = manifest_io::read_manifest(&manifest_path)?
-        .unwrap_or_else(Manifest::empty);
+    let manifest = manifest_io::read_manifest(&manifest_path)?.unwrap_or_else(Manifest::empty);
     let manifest = Arc::new(Mutex::new(manifest));
 
     let report = Arc::new(Mutex::new(IndexReport::default()));
@@ -291,8 +290,7 @@ pub async fn run(
         let completed = completed.clone();
         move |outcome: PairOutcome| {
             if let Some(cb) = progress.as_ref() {
-                let n =
-                    completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let n = completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 cb(IndexProgress::PairCompleted {
                     outcome,
                     completed: n,
@@ -346,9 +344,8 @@ pub async fn run(
     // Loop: pick `Pending` items whose deps are all `Done`, launch
     // up to the inflight cap, await one, repeat. Items whose deps
     // contain a `Failed` flip to `SkippedDep` synchronously.
-    let mut inflight: FuturesUnordered<
-        tokio::task::JoinHandle<(ItemKey, ItemState)>,
-    > = FuturesUnordered::new();
+    let mut inflight: FuturesUnordered<tokio::task::JoinHandle<(ItemKey, ItemState)>> =
+        FuturesUnordered::new();
 
     // Per-asset hash lookup (path + sha) so we can build WorkItems
     // on the fly.
@@ -454,9 +451,13 @@ pub async fn run(
             let key_for_task = key.clone();
             let emit_completed = emit_completed.clone();
             inflight.push(tokio::spawn(async move {
-                let outcome =
-                    run_pair(&project_root_owned, &index_dir_owned, &item, client_info_clone)
-                        .await;
+                let outcome = run_pair(
+                    &project_root_owned,
+                    &index_dir_owned,
+                    &item,
+                    client_info_clone,
+                )
+                .await;
                 let result_state = match &outcome {
                     PairOutcome::Wrote { .. } | PairOutcome::Skipped { .. } => ItemState::Done,
                     PairOutcome::Failed { .. } | PairOutcome::SkippedDep { .. } => {
@@ -534,7 +535,8 @@ async fn run_pair(
     client_info: ClientInfo,
 ) -> PairOutcome {
     // Idempotency: if a sidecar already exists with a matching sha, skip.
-    let sidecar_path = match sidecar_path_in_index_dir(index_dir, &item.server.name, &item.asset_id) {
+    let sidecar_path = match sidecar_path_in_index_dir(index_dir, &item.server.name, &item.asset_id)
+    {
         Ok(p) => p,
         Err(e) => {
             return PairOutcome::Failed {
@@ -629,17 +631,17 @@ async fn run_pair(
     };
 
     // Validate header shape.
-    let parsed: IndexSidecar<serde_json::Value> = match serde_json::from_value(sidecar_value.clone())
-    {
-        Ok(p) => p,
-        Err(e) => {
-            return PairOutcome::Failed {
-                indexer: item.server.name.clone(),
-                asset: item.asset_id.clone(),
-                message: format!("indexer returned malformed sidecar: {e}"),
-            };
-        }
-    };
+    let parsed: IndexSidecar<serde_json::Value> =
+        match serde_json::from_value(sidecar_value.clone()) {
+            Ok(p) => p,
+            Err(e) => {
+                return PairOutcome::Failed {
+                    indexer: item.server.name.clone(),
+                    asset: item.asset_id.clone(),
+                    message: format!("indexer returned malformed sidecar: {e}"),
+                };
+            }
+        };
     if parsed.header.indexer != item.server.name {
         warn!(
             indexer = %item.server.name,
@@ -710,7 +712,12 @@ fn read_existing_sha(path: &Path) -> std::io::Result<String> {
     v.get("asset_sha256")
         .and_then(|v| v.as_str())
         .map(str::to_string)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "no asset_sha256 in sidecar"))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "no asset_sha256 in sidecar",
+            )
+        })
 }
 
 async fn write_sidecar(path: &Path, value: &serde_json::Value) -> Result<(), IndexError> {
@@ -734,12 +741,7 @@ async fn write_sidecar(path: &Path, value: &serde_json::Value) -> Result<(), Ind
         })
 }
 
-fn update_manifest(
-    manifest: &mut Manifest,
-    indexer: &str,
-    asset: &AssetId,
-    server: &McpServer,
-) {
+fn update_manifest(manifest: &mut Manifest, indexer: &str, asset: &AssetId, server: &McpServer) {
     let now = Utc::now();
     if let Some(entry) = manifest.indexers.iter_mut().find(|e| e.name == indexer) {
         if !entry.assets.contains(asset) {

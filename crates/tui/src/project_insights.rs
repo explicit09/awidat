@@ -42,11 +42,10 @@ impl ProjectInsights {
             .into_iter()
             .filter(|n| exists(n))
             .collect();
-        let editorial_indexers: Vec<&'static str> =
-            ["whisper", "topic", "editorial-moments"]
-                .into_iter()
-                .filter(|n| exists(n))
-                .collect();
+        let editorial_indexers: Vec<&'static str> = ["whisper", "topic", "editorial-moments"]
+            .into_iter()
+            .filter(|n| exists(n))
+            .collect();
 
         // Editorial-moments roll-up. Walk every sidecar under
         // index/editorial-moments/ and tally moments + kinds.
@@ -164,9 +163,15 @@ fn count_moments(dir: &Path) -> (Option<usize>, Vec<(String, usize)>) {
     let mut total = 0usize;
     let mut by_kind: std::collections::HashMap<String, usize> = Default::default();
     walk(dir, &mut |path| {
-        let Ok(bytes) = std::fs::read(path) else { return };
-        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return };
-        let Some(arr) = v.pointer("/data/moments").and_then(|x| x.as_array()) else { return };
+        let Ok(bytes) = std::fs::read(path) else {
+            return;
+        };
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return;
+        };
+        let Some(arr) = v.pointer("/data/moments").and_then(|x| x.as_array()) else {
+            return;
+        };
         total += arr.len();
         for m in arr {
             if let Some(kind) = m.get("kind").and_then(|x| x.as_str()) {
@@ -180,7 +185,9 @@ fn count_moments(dir: &Path) -> (Option<usize>, Vec<(String, usize)>) {
 }
 
 fn walk(dir: &Path, visit: &mut impl FnMut(&Path)) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -220,7 +227,10 @@ mod tests {
             std::fs::create_dir_all(dir.path().join("index").join(name)).unwrap();
         }
         let i = ProjectInsights::gather(dir.path());
-        assert_eq!(i.vision_indexers, vec!["clip", "face", "shot", "gaze", "frame-quality"]);
+        assert_eq!(
+            i.vision_indexers,
+            vec!["clip", "face", "shot", "gaze", "frame-quality"]
+        );
     }
 
     #[test]
@@ -249,7 +259,10 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("index/editorial-moments/raw")).unwrap();
         let i = ProjectInsights::gather(dir.path());
         assert_eq!(i.moment_count, Some(0));
-        assert!(i.welcome_moments_line().is_none(), "empty dir should hide the line");
+        assert!(
+            i.welcome_moments_line().is_none(),
+            "empty dir should hide the line"
+        );
     }
 
     #[test]
@@ -273,7 +286,11 @@ mod tests {
         // Sorted by count desc, then alpha-asc on ties.
         assert_eq!(
             i.moment_kinds,
-            vec![("hook".into(), 2), ("punchline".into(), 2), ("cta".into(), 1)]
+            vec![
+                ("hook".into(), 2),
+                ("punchline".into(), 2),
+                ("cta".into(), 1)
+            ]
         );
         let line = i.welcome_moments_line().unwrap();
         assert!(line.starts_with("5 moments"));
@@ -321,10 +338,17 @@ mod tests {
         let em = dir.path().join("index/editorial-moments/raw");
         // Build distribution mimicking the real session.
         let counts = [
-            ("explanation", 41), ("hook", 29), ("setup", 22),
-            ("punchline", 21), ("story", 19), ("answer", 14),
-            ("cta", 4), ("question", 4), ("emotional_peak", 2),
-            ("tangent", 2), ("dead_air", 1),
+            ("explanation", 41),
+            ("hook", 29),
+            ("setup", 22),
+            ("punchline", 21),
+            ("story", 19),
+            ("answer", 14),
+            ("cta", 4),
+            ("question", 4),
+            ("emotional_peak", 2),
+            ("tangent", 2),
+            ("dead_air", 1),
         ];
         let moments: Vec<serde_json::Value> = counts
             .iter()
@@ -353,7 +377,10 @@ mod tests {
         let medium_width = (big.chars().count() - 5) as u16;
         let medium = i.welcome_moments_line_for_width(medium_width).unwrap();
         assert!(medium.contains("41 explanations"));
-        assert!(!medium.contains("other"), "should drop the 'N other' suffix first");
+        assert!(
+            !medium.contains("other"),
+            "should drop the 'N other' suffix first"
+        );
 
         // Tight width: should drop kinds rightmost-first, replace
         // with "+N more".

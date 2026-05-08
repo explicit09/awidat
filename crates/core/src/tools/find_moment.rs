@@ -98,9 +98,8 @@ impl ToolHandler for FindMomentTool {
         // change often during a session and a stale cache would surface
         // out-of-date hits. Codex `tool_search.rs:28-37` mirrors this
         // build-per-call pattern.
-        let walker = walk_indexer(&ctx.project_root, "whisper").map_err(|e| {
-            FunctionCallError::RespondToModel(e.to_string())
-        })?;
+        let walker = walk_indexer(&ctx.project_root, "whisper")
+            .map_err(|e| FunctionCallError::RespondToModel(e.to_string()))?;
 
         let mut docs: Vec<SegmentDoc> = Vec::new();
         for (asset_id, sidecar) in walker {
@@ -143,8 +142,8 @@ impl ToolHandler for FindMomentTool {
             .enumerate()
             .map(|(idx, d)| Document::new(idx, d.text.clone()))
             .collect();
-        let engine = SearchEngineBuilder::<usize>::with_documents(Language::English, bm25_docs)
-            .build();
+        let engine =
+            SearchEngineBuilder::<usize>::with_documents(Language::English, bm25_docs).build();
 
         // Ask BM25 for `limit + 1` so we can detect more_available.
         let raw = engine.search(query, limit + 1);
@@ -257,7 +256,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -297,7 +299,10 @@ mod tests {
             ],
         );
         let out = FindMomentTool
-            .handle(invoke(serde_json::json!({"query": "stripe"})), ctx_at(dir.path()))
+            .handle(
+                invoke(serde_json::json!({"query": "stripe"})),
+                ctx_at(dir.path()),
+            )
             .await
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
@@ -312,7 +317,10 @@ mod tests {
     async fn empty_query_is_respond_to_model() {
         let dir = tempfile::tempdir().unwrap();
         let err = FindMomentTool
-            .handle(invoke(serde_json::json!({"query": "  "})), ctx_at(dir.path()))
+            .handle(
+                invoke(serde_json::json!({"query": "  "})),
+                ctx_at(dir.path()),
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("empty")));
@@ -340,8 +348,16 @@ mod tests {
     #[tokio::test]
     async fn asset_id_filter_restricts() {
         let dir = tempfile::tempdir().unwrap();
-        write_sidecar(dir.path(), "raw/a.mp4", vec![serde_json::json!({"text":"hello","start_s":0,"end_s":1})]);
-        write_sidecar(dir.path(), "raw/b.mp4", vec![serde_json::json!({"text":"hello","start_s":0,"end_s":1})]);
+        write_sidecar(
+            dir.path(),
+            "raw/a.mp4",
+            vec![serde_json::json!({"text":"hello","start_s":0,"end_s":1})],
+        );
+        write_sidecar(
+            dir.path(),
+            "raw/b.mp4",
+            vec![serde_json::json!({"text":"hello","start_s":0,"end_s":1})],
+        );
         let out = FindMomentTool
             .handle(
                 invoke(serde_json::json!({"query":"hello","asset_id":"raw/a.mp4"})),
@@ -359,7 +375,10 @@ mod tests {
     async fn no_whisper_index_returns_empty_results() {
         let dir = tempfile::tempdir().unwrap();
         let out = FindMomentTool
-            .handle(invoke(serde_json::json!({"query": "anything"})), ctx_at(dir.path()))
+            .handle(
+                invoke(serde_json::json!({"query": "anything"})),
+                ctx_at(dir.path()),
+            )
             .await
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();

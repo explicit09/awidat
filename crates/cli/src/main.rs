@@ -88,7 +88,7 @@ enum Command {
         #[arg(long = "indexer")]
         indexers: Vec<String>,
         /// Maximum concurrent (server × asset) pairs. 0 = unbounded.
-        #[arg(long, default_value_t = 4)]
+        #[arg(long, default_value_t = 1)]
         concurrency: usize,
     },
     /// Open a text-only REPL with the agent. Type a prompt; the agent
@@ -247,7 +247,9 @@ fn main() -> ExitCode {
             LessonsAction::Learn => lessons_cmd::learn(),
             LessonsAction::Show => lessons_cmd::show(),
         },
-        Command::Resume { selector, model } => resume_cmd::run(selector.as_deref(), model.as_deref()),
+        Command::Resume { selector, model } => {
+            resume_cmd::run(selector.as_deref(), model.as_deref())
+        }
         Command::Upgrade {
             from,
             check,
@@ -341,9 +343,7 @@ fn cmd_init(path: &std::path::Path) -> Result<()> {
         "       {}/.awidat/config.toml      (per-project)",
         path.display()
     );
-    println!(
-        "     Example overlay (turn off whisper for music-only assets):"
-    );
+    println!("     Example overlay (turn off whisper for music-only assets):");
     println!("       [[mcp.servers]]");
     println!("       name = \"whisper\"");
     println!("       enabled = false");

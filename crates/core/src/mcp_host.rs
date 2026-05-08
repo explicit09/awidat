@@ -178,13 +178,12 @@ impl McpHost {
                     server: server.to_string(),
                 })?;
             if slot.client.is_none() {
-                let mut client =
-                    Client::launch(slot.config.clone()).map_err(|e: McpError| {
-                        McpHostError::InitFailed {
-                            server: server.to_string(),
-                            message: e.to_string(),
-                        }
-                    })?;
+                let mut client = Client::launch(slot.config.clone()).map_err(|e: McpError| {
+                    McpHostError::InitFailed {
+                        server: server.to_string(),
+                        message: e.to_string(),
+                    }
+                })?;
                 client
                     .initialize_with_timeout(self.client_info.clone(), Duration::from_secs(60))
                     .await
@@ -217,14 +216,15 @@ impl McpHost {
             .as_mut()
             .expect("client guaranteed launched after phase 1");
 
-        let result = client
-            .call_tool(tool, args)
-            .await
-            .map_err(|e: McpError| McpHostError::CallFailed {
-                server: server.to_string(),
-                tool: tool.to_string(),
-                message: e.to_string(),
-            })?;
+        let result =
+            client
+                .call_tool(tool, args)
+                .await
+                .map_err(|e: McpError| McpHostError::CallFailed {
+                    server: server.to_string(),
+                    tool: tool.to_string(),
+                    message: e.to_string(),
+                })?;
 
         // Prefer structured_content when the server returned it
         // (clip-mcp's query_text returns a typed dict); fall back to
@@ -232,10 +232,7 @@ impl McpHost {
         if let Some(structured) = result.structured_content {
             return Ok(structured);
         }
-        let text = result
-            .single_text()
-            .map(str::to_string)
-            .unwrap_or_default();
+        let text = result.single_text().map(str::to_string).unwrap_or_default();
         Ok(serde_json::Value::String(text))
     }
 }

@@ -541,8 +541,9 @@ function UserTrimTooltip({
 }
 
 function computePps(durationS: number, cssWidth: number): number {
-  const fitPps = durationS > 0 ? (cssWidth - 8) / durationS : PX_PER_SECOND_BASE;
-  return Math.max(2, Math.min(fitPps, PX_PER_SECOND_BASE * 8));
+  const fitPps =
+    durationS > 0 ? Math.max(0.05, (cssWidth - 8) / durationS) : PX_PER_SECOND_BASE;
+  return Math.min(fitPps, PX_PER_SECOND_BASE * 8);
 }
 
 /** Draw the time ruler with tick marks every 1, 5, or 10 seconds

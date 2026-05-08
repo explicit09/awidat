@@ -43,6 +43,10 @@ export type PlaySegment = {
   timelineStart: number;
   /** Where this segment ends on the master timeline, in seconds. */
   timelineEnd: number;
+  /** Effective clip volume from the timeline, clamped by the player. */
+  volume: number;
+  /** Effective clip speed from the timeline, clamped by the player. */
+  speed: number;
   /** Clip index inside its track. Useful for diagnostics + diff hints. */
   clipIndex: number;
 };
@@ -82,6 +86,8 @@ export function usePlaySegments(): PlaySegment[] {
         sourceEnd: sourceStart + item.duration_s,
         timelineStart: item.track_start_s,
         timelineEnd: item.track_start_s + item.duration_s,
+        volume: item.volume ?? 1,
+        speed: item.speed ?? 1,
         clipIndex: item.index,
       });
     }

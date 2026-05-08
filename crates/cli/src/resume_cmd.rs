@@ -11,9 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
+use awidat_core::Session;
 use awidat_core::anthropic::{Client, ClientConfig};
 use awidat_core::rollout::{Recorder, SessionMeta};
-use awidat_core::Session;
 use tokio::sync::mpsc;
 
 pub fn run(selector: Option<&str>, model_override: Option<&str>) -> Result<()> {
@@ -54,13 +54,7 @@ fn print_listing(entries: &[(PathBuf, SessionMeta)]) {
     for (i, (path, meta)) in entries.iter().take(20).enumerate() {
         let when = meta.started_at.format("%Y-%m-%d %H:%M:%S");
         let proj = meta.project_root.display();
-        println!(
-            "  [{:>2}] {}  id={}  proj={}",
-            i + 1,
-            when,
-            &meta.id,
-            proj
-        );
+        println!("  [{:>2}] {}  id={}  proj={}", i + 1, when, &meta.id, proj);
         println!("       {}", path.display());
     }
     println!("\nResume:  awidat resume <list-index|id|path>");

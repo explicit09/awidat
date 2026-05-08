@@ -30,7 +30,8 @@ use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 /// agent can override via the `fillers` arg — useful for languages
 /// or speakers where a specific filler dominates.
 const DEFAULT_FILLERS: &[&str] = &[
-    "um", "uh", "uhh", "umm", "ah", "ahh", "er", "err",
+    "um", "uh", "uhh", "umm", "ah", "ahh", "er",
+    "err",
     // Discourse-marker fillers — these are more aggressive cuts;
     // not all of them are noise. Off by default; opt-in via the
     // `aggressive` arg.
@@ -46,6 +47,7 @@ const AGGRESSIVE_EXTRAS: &[&str] = &["like", "you know", "i mean", "basically"];
 const DEFAULT_MAX_RESULTS: usize = 30;
 const HARD_MAX_RESULTS: usize = 200;
 
+/// Tool that finds filler words in transcript regions visible on the timeline.
 pub struct FindFillerWordsTool;
 
 #[derive(Debug, Deserialize)]
@@ -105,12 +107,11 @@ impl ToolHandler for FindFillerWordsTool {
         invocation: ToolInvocation,
         ctx: ToolContext,
     ) -> Result<ToolOutput, FunctionCallError> {
-        let args: FindFillerWordsArgs =
-            serde_json::from_value(invocation.args).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "find_filler_words: invalid args ({e}). All fields optional."
-                ))
-            })?;
+        let args: FindFillerWordsArgs = serde_json::from_value(invocation.args).map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "find_filler_words: invalid args ({e}). All fields optional."
+            ))
+        })?;
         let fillers = build_filler_set(args.fillers, args.aggressive);
         let max_results = args
             .max_results
@@ -173,7 +174,9 @@ pub fn scan_filler_words(
     let timeline_cursor_s = 0.0_f64;
 
     for stack_child in &timeline.tracks.children {
-        let StackChild::Track(track) = stack_child else { continue };
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
         let mut track_cursor_s = 0.0_f64;
         for tc in &track.children {
             match tc {
@@ -189,16 +192,19 @@ pub fn scan_filler_words(
                     };
                     let asset_id = ext.target_url.clone();
                     let clip_source_start = range.start_time.to_seconds();
-                    let clip_source_end =
-                        clip_source_start + range.duration.to_seconds();
+                    let clip_source_end = clip_source_start + range.duration.to_seconds();
                     let clip_track_start = track_cursor_s;
 
                     if let Some(words) = load_whisper_words(project_root, &asset_id) {
                         for w in &words {
                             // Filler match (case-insensitive).
-                            let normalized = w.text.trim().trim_matches(|c: char| {
-                                c == '.' || c == ',' || c == '?' || c == '!'
-                            }).to_lowercase();
+                            let normalized = w
+                                .text
+                                .trim()
+                                .trim_matches(|c: char| {
+                                    c == '.' || c == ',' || c == '?' || c == '!'
+                                })
+                                .to_lowercase();
                             if !fillers.iter().any(|f| f == &normalized) {
                                 continue;
                             }
@@ -278,7 +284,11 @@ fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<Whisper
         .and_then(|v| v.as_array())?;
     let mut out = Vec::with_capacity(arr.len());
     for item in arr {
-        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let text = item
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         if text.is_empty() {
             continue;
         }
@@ -334,15 +344,11 @@ rather than \"no fillers in this episode.\"\
 mod tests {
     use super::*;
     use awidat_proto::otio::{
-        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
-        Track, TrackChild, TrackKind,
+        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Track,
+        TrackChild, TrackKind,
     };
 
-    fn write_whisper_words(
-        project_root: &Path,
-        asset_id: &str,
-        words: Vec<(&str, f64, f64)>,
-    ) {
+    fn write_whisper_words(project_root: &Path, asset_id: &str, words: Vec<(&str, f64, f64)>) {
         let path = whisper_sidecar_path(project_root, asset_id);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let payload = serde_json::json!({
@@ -407,11 +413,7 @@ mod tests {
     fn case_insensitive_match() {
         let dir = tempfile::tempdir().unwrap();
         let asset = "raw/ep.mp4";
-        write_whisper_words(
-            dir.path(),
-            asset,
-            vec![("Um,", 0.0, 0.3), ("UH", 0.3, 0.6)],
-        );
+        write_whisper_words(dir.path(), asset, vec![("Um,", 0.0, 0.3), ("UH", 0.3, 0.6)]);
         let tl = timeline_with_clip(asset, 0.0, 1.0);
         let fillers = build_filler_set(None, false);
         let findings = scan_filler_words(dir.path(), &tl, &fillers, 100);

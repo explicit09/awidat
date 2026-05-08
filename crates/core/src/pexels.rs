@@ -183,10 +183,12 @@ impl Client {
                     source: e,
                 })?;
         }
-        let mut file = tokio::fs::File::create(dest).await.map_err(|e| PexelsError::Io {
-            path: dest.display().to_string(),
-            source: e,
-        })?;
+        let mut file = tokio::fs::File::create(dest)
+            .await
+            .map_err(|e| PexelsError::Io {
+                path: dest.display().to_string(),
+                source: e,
+            })?;
 
         let mut total: u64 = 0;
         let mut stream = resp.bytes_stream();
@@ -310,7 +312,9 @@ impl Video {
         {
             return Some(fit);
         }
-        mp4s.iter().min_by_key(|f| f.width.unwrap_or(u32::MAX)).copied()
+        mp4s.iter()
+            .min_by_key(|f| f.width.unwrap_or(u32::MAX))
+            .copied()
     }
 }
 

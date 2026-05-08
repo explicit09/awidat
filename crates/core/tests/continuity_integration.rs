@@ -79,7 +79,11 @@ fn seed_project_with_whisper(asset_id: &str, words: &[(&str, f64, f64)]) -> temp
     ));
     let mut track = Track::empty("V1", TrackKind::Video);
     track.children.push(TrackChild::Clip(clip));
-    project.timeline.tracks.children.push(StackChild::Track(track));
+    project
+        .timeline
+        .tracks
+        .children
+        .push(StackChild::Track(track));
     let otio_path = dir.path().join(files::OTIO);
     std::fs::write(
         &otio_path,
@@ -88,7 +92,11 @@ fn seed_project_with_whisper(asset_id: &str, words: &[(&str, f64, f64)]) -> temp
     .unwrap();
 
     // Whisper sidecar at index/whisper/<asset>.json.
-    let whisper_path = dir.path().join("index").join("whisper").join(format!("{asset_id}.json"));
+    let whisper_path = dir
+        .path()
+        .join("index")
+        .join("whisper")
+        .join(format!("{asset_id}.json"));
     std::fs::create_dir_all(whisper_path.parent().unwrap()).unwrap();
     let payload = serde_json::json!({
         "indexer": "whisper",
@@ -114,15 +122,18 @@ fn replace_timeline_with_three_clips(dir: &Path, asset_id: &str) {
     let mut track = Track::empty("V1", TrackKind::Video);
     for (i, dur) in [(0, 4.0), (1, 4.0), (2, 4.0)].iter() {
         let mut c = Clip::empty(format!("clip-{i}"));
-        c.media_reference =
-            MediaReference::External(ExternalReference::new(asset_id.to_string()));
+        c.media_reference = MediaReference::External(ExternalReference::new(asset_id.to_string()));
         c.source_range = Some(TimeRange::new(
             RationalTime::new(0.0, 24.0),
             RationalTime::new(dur * 24.0, 24.0),
         ));
         track.children.push(TrackChild::Clip(c));
     }
-    project.timeline.tracks.children.push(StackChild::Track(track));
+    project
+        .timeline
+        .tracks
+        .children
+        .push(StackChild::Track(track));
     let otio_path = dir.join(files::OTIO);
     std::fs::write(
         &otio_path,
@@ -152,10 +163,7 @@ fn write_motion(dir: &Path, asset_id: &str, magnitudes: &[f32]) {
 #[tokio::test]
 async fn dirty_when_cut_lands_mid_word() {
     // Word "hello" spans 1.0..1.5; cut at 1.2 lands inside it.
-    let dir = seed_project_with_whisper(
-        "raw/ep.mp4",
-        &[("hello", 1.0, 1.5), ("world", 1.6, 2.1)],
-    );
+    let dir = seed_project_with_whisper("raw/ep.mp4", &[("hello", 1.0, 1.5), ("world", 1.6, 2.1)]);
     let out = AssessContinuityTool
         .handle(
             invoke(serde_json::json!({"at_s": 1.2, "kind": "trim_in"})),
@@ -177,10 +185,7 @@ async fn dirty_when_cut_lands_mid_word() {
 #[tokio::test]
 async fn clean_when_cut_at_word_boundary() {
     // Cut at 1.5 (end of "hello") is clean.
-    let dir = seed_project_with_whisper(
-        "raw/ep.mp4",
-        &[("hello", 1.0, 1.5), ("world", 1.6, 2.1)],
-    );
+    let dir = seed_project_with_whisper("raw/ep.mp4", &[("hello", 1.0, 1.5), ("world", 1.6, 2.1)]);
     let out = AssessContinuityTool
         .handle(
             invoke(serde_json::json!({"at_s": 1.55, "kind": "trim_in"})),
@@ -268,7 +273,11 @@ async fn abstain_when_no_sidecars() {
     ));
     let mut track = Track::empty("V1", TrackKind::Video);
     track.children.push(TrackChild::Clip(clip));
-    project.timeline.tracks.children.push(StackChild::Track(track));
+    project
+        .timeline
+        .tracks
+        .children
+        .push(StackChild::Track(track));
     std::fs::write(
         dir.path().join(files::OTIO),
         serde_json::to_vec_pretty(&project.timeline).unwrap(),
@@ -288,10 +297,7 @@ async fn abstain_when_no_sidecars() {
     // Clean). So aggregate is Clean. The interesting assertion is
     // that the abstain rules surface so the user sees what's missing.
     let rules = v["rules"].as_array().unwrap();
-    let abstain_count = rules
-        .iter()
-        .filter(|r| r["verdict"] == "abstain")
-        .count();
+    let abstain_count = rules.iter().filter(|r| r["verdict"] == "abstain").count();
     assert!(
         abstain_count >= 3,
         "expected 3+ abstain rules without sidecars, got {abstain_count}",

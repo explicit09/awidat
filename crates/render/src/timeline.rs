@@ -139,10 +139,7 @@ pub fn collect_timeline_plan(
 /// production — its clips are virtual, not media-bearing.
 pub fn collect_timeline_full_plan(
     project_root: &Path,
-) -> Result<
-    (Vec<TimelineSegment>, Vec<TransitionPlan>, Vec<TitlePlan>),
-    RenderTimelineError,
-> {
+) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>, Vec<TitlePlan>), RenderTimelineError> {
     let otio_path = project_root.join(files::OTIO);
     if !otio_path.exists() {
         return Err(RenderTimelineError::NoOtio(otio_path));
@@ -158,7 +155,9 @@ pub fn collect_timeline_full_plan(
     let mut transitions = Vec::new();
     let mut titles = Vec::new();
     for child in &timeline.tracks.children {
-        let StackChild::Track(track) = child else { continue };
+        let StackChild::Track(track) = child else {
+            continue;
+        };
         if !matches!(track.kind, TrackKind::Video) {
             continue;
         }
@@ -166,7 +165,9 @@ pub fn collect_timeline_full_plan(
             // Walk titles separately; don't try to read media off it.
             for tc in &track.children {
                 let TrackChild::Clip(clip) = tc else { continue };
-                let Some(plan) = parse_title_plan(clip) else { continue };
+                let Some(plan) = parse_title_plan(clip) else {
+                    continue;
+                };
                 titles.push(plan);
             }
             continue;
@@ -262,7 +263,11 @@ fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
     if end_s <= start_s {
         return None;
     }
-    let position = match m.get("position").and_then(|v| v.as_str()).unwrap_or("center") {
+    let position = match m
+        .get("position")
+        .and_then(|v| v.as_str())
+        .unwrap_or("center")
+    {
         "top" => TitlePosition::Top,
         "bottom" => TitlePosition::Bottom,
         _ => TitlePosition::Center,
@@ -297,6 +302,15 @@ fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
         "slide_out" => TitleAnimation::SlideOut,
         _ => TitleAnimation::None,
     };
+    let role = m
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("title")
+        .to_string();
+    let safe_area = m
+        .get("safe_area")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
     Some(TitlePlan {
         text,
         start_s,
@@ -306,6 +320,8 @@ fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
         color,
         font_weight,
         animation,
+        role,
+        safe_area,
     })
 }
 
@@ -331,6 +347,10 @@ pub struct TitlePlan {
     pub font_weight: TitleWeight,
     /// Entry / exit animation.
     pub animation: TitleAnimation,
+    /// Overlay role, usually `"title"` or `"caption"`.
+    pub role: String,
+    /// Optional safe-area profile carried by caption nodes.
+    pub safe_area: Option<String>,
 }
 
 /// Mirrors `awidat_core::edl::op::TitlePosition` to avoid a render
@@ -430,10 +450,7 @@ pub struct FilterPlan {
 impl<'a> FilterPlanner<'a> {
     /// Construct a planner over segments + transitions, with no
     /// titles. Equivalent to [`Self::with_titles`] passing `&[]`.
-    pub fn new(
-        segments: &'a [TimelineSegment],
-        transitions: &'a [TransitionPlan],
-    ) -> Self {
+    pub fn new(segments: &'a [TimelineSegment], transitions: &'a [TransitionPlan]) -> Self {
         Self::with_titles(segments, transitions, &[])
     }
 
@@ -508,11 +525,7 @@ impl<'a> FilterPlanner<'a> {
         // Comma-separate the drawtext filters so they all run on the
         // same input → single output. drawtext's `enable=` keeps each
         // bounded to its window without cross-contamination.
-        let parts: Vec<String> = self
-            .titles
-            .iter()
-            .map(format_drawtext_filter)
-            .collect();
+        let parts: Vec<String> = self.titles.iter().map(format_drawtext_filter).collect();
         filter.push_str(&parts.join(","));
         filter.push_str(&out_label);
 
@@ -663,11 +676,7 @@ impl<'a> FilterPlanner<'a> {
 ///
 /// Returns the `(video_label, audio_label)` pair to feed into the
 /// next filter graph node.
-fn stage_segment_inputs(
-    filter: &mut String,
-    i: usize,
-    seg: &TimelineSegment,
-) -> (String, String) {
+fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) -> (String, String) {
     let mut video_label = format!("[{i}:v:0]");
     let mut audio_label = format!("[{i}:a:0]");
 
@@ -769,11 +778,7 @@ struct AnimatedExpressions {
 
 /// Build the animation expressions for a title. Pure function so it
 /// can be unit-tested without spinning up ffmpeg.
-fn apply_title_animation(
-    t: &TitlePlan,
-    resting_x: &str,
-    resting_y: &str,
-) -> AnimatedExpressions {
+fn apply_title_animation(t: &TitlePlan, resting_x: &str, resting_y: &str) -> AnimatedExpressions {
     let start = t.start_s;
     let end = t.end_s;
     let ramp = ANIMATION_RAMP_S;
@@ -791,17 +796,13 @@ fn apply_title_animation(
             y: resting_y.to_string(),
             // Linear ramp 0→1 over [start, start+ramp]; 1 thereafter.
             // `if(lt(t,A), B, C)` evaluates B when t<A, else C.
-            alpha: format!(
-                ":alpha='if(lt(t\\,{fade_in_end})\\,(t-{start})/{ramp}\\,1)'"
-            ),
+            alpha: format!(":alpha='if(lt(t\\,{fade_in_end})\\,(t-{start})/{ramp}\\,1)'"),
         },
         TitleAnimation::FadeOut => AnimatedExpressions {
             x: resting_x.to_string(),
             y: resting_y.to_string(),
             // 1 until [end-ramp, end], then ramp 1→0.
-            alpha: format!(
-                ":alpha='if(lt(t\\,{fade_out_start})\\,1\\,({end}-t)/{ramp})'"
-            ),
+            alpha: format!(":alpha='if(lt(t\\,{fade_out_start})\\,1\\,({end}-t)/{ramp})'"),
         },
         TitleAnimation::FadeInOut => AnimatedExpressions {
             x: resting_x.to_string(),
@@ -1177,12 +1178,13 @@ mod tests {
         assert!(!cmd.contains(" copy "));
         // Output under renders/ with timeline-<HHMMSS>.mp4 naming.
         assert!(spec.output_path.starts_with(dir.path().join("renders")));
-        assert!(spec
-            .output_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("timeline-"));
+        assert!(
+            spec.output_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("timeline-")
+        );
     }
 
     #[test]
@@ -1211,10 +1213,7 @@ mod tests {
         // Step 14.4 extracted FilterPlanner from build_timeline_argv;
         // this test pins the no-transition graph shape so future
         // commits can't drift it without noticing.
-        let segs = vec![
-            seg("/tmp/a.mp4", 0.0, 2.0),
-            seg("/tmp/b.mp4", 1.0, 3.0),
-        ];
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 1.0, 3.0)];
         let plan = FilterPlanner::new(&segs, &[]).plan();
         assert_eq!(
             plan.filter_complex,
@@ -1251,7 +1250,8 @@ mod tests {
         // The chunk pair feeds into a 1-input concat (the merged xfade
         // counts as one input pair).
         assert!(
-            plan.filter_complex.contains("concat=n=1:v=1:a=1[outv][outa]"),
+            plan.filter_complex
+                .contains("concat=n=1:v=1:a=1[outv][outa]"),
             "filter graph: {}",
             plan.filter_complex,
         );
@@ -1275,7 +1275,10 @@ mod tests {
         let plan = FilterPlanner::new(&segs, &trans).plan();
         assert!(plan.filter_complex.contains("xfade="));
         // Concat takes 2 inputs: chunk(A,B) + raw C.
-        assert!(plan.filter_complex.contains("concat=n=2:v=1:a=1[outv][outa]"));
+        assert!(
+            plan.filter_complex
+                .contains("concat=n=2:v=1:a=1[outv][outa]")
+        );
         // C's raw streams must appear in the concat input list.
         assert!(plan.filter_complex.contains("[2:v:0][2:a:0]"));
     }
@@ -1491,6 +1494,8 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation: TitleAnimation::None,
+            role: "title".into(),
+            safe_area: None,
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
         assert!(
@@ -1514,8 +1519,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex
-                .contains("enable='between(t\\,0\\,3)'"),
+            plan.filter_complex.contains("enable='between(t\\,0\\,3)'"),
             "filter graph: {}",
             plan.filter_complex,
         );
@@ -1538,6 +1542,8 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: TitleWeight::Normal,
                 animation: TitleAnimation::None,
+                role: "title".into(),
+                safe_area: None,
             },
             TitlePlan {
                 text: "Two".into(),
@@ -1548,6 +1554,8 @@ mod tests {
                 color: "#FFAA00".into(),
                 font_weight: TitleWeight::Bold,
                 animation: TitleAnimation::None,
+                role: "caption".into(),
+                safe_area: Some("mobile".into()),
             },
         ];
         let plan = FilterPlanner::with_titles(&[s0], &[], &titles).plan();
@@ -1579,6 +1587,8 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation,
+            role: "title".into(),
+            safe_area: None,
         }
     }
 
@@ -1681,7 +1691,13 @@ mod tests {
             plan.filter_complex,
         );
         // Off-screen target for bottom is y=h.
-        assert!(plan.filter_complex.contains("h-(h*0.85)") || plan.filter_complex.contains("(h-({y_rest}))".replace("{y_rest}", "h*0.85").as_str()) || plan.filter_complex.matches("h*0.85").count() >= 2);
+        assert!(
+            plan.filter_complex.contains("h-(h*0.85)")
+                || plan
+                    .filter_complex
+                    .contains("(h-({y_rest}))".replace("{y_rest}", "h*0.85").as_str())
+                || plan.filter_complex.matches("h*0.85").count() >= 2
+        );
     }
 
     #[test]
@@ -1694,7 +1710,9 @@ mod tests {
         let argv = build_timeline_argv(&segs, Path::new("/tmp/out.mp4"));
         let cmd = argv.join(" ");
         // Two -ss / -t / -i triples preceded by `-y -loglevel info`.
-        assert!(cmd.starts_with("-y -loglevel info -ss 0 -t 2 -i /tmp/a.mp4 -ss 1 -t 3 -i /tmp/b.mp4"));
+        assert!(
+            cmd.starts_with("-y -loglevel info -ss 0 -t 2 -i /tmp/a.mp4 -ss 1 -t 3 -i /tmp/b.mp4")
+        );
         assert!(cmd.contains(
             "-filter_complex [0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa] \
              -map [outv] -map [outa]",

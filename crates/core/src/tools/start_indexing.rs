@@ -82,9 +82,7 @@ impl ToolHandler for StartIndexingTool {
 
         let project_root = ctx.project_root.clone();
         let config = Config::load(Some(&project_root)).map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "start_indexing: load config: {e}"
-            ))
+            FunctionCallError::RespondToModel(format!("start_indexing: load config: {e}"))
         })?;
         let mut servers: Vec<_> = config.indexers().cloned().collect();
         if servers.is_empty() {
@@ -130,12 +128,17 @@ impl ToolHandler for StartIndexingTool {
             version: env!("CARGO_PKG_VERSION").into(),
         };
 
+        let concurrency = std::env::var("AWIDAT_INDEX_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1);
+
         let report = awidat_index::run(
             &project_root,
             &servers,
             &assets,
             client_info,
-            4,
+            concurrency,
             // We pass `None` for progress — the report at the end
             // is what the model sees. The desktop's separate
             // index_project command emits per-pair progress to its
@@ -145,9 +148,7 @@ impl ToolHandler for StartIndexingTool {
         )
         .await
         .map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "start_indexing: dispatcher: {e}"
-            ))
+            FunctionCallError::RespondToModel(format!("start_indexing: dispatcher: {e}"))
         })?;
 
         Ok(ToolOutput::text(format_report(&report, &servers, &assets)))
@@ -173,7 +174,12 @@ fn format_report(
     if report.has_failures() {
         out.push_str("\nfailures:\n");
         for o in &report.outcomes {
-            if let PairOutcome::Failed { indexer, asset, message } = o {
+            if let PairOutcome::Failed {
+                indexer,
+                asset,
+                message,
+            } = o
+            {
                 out.push_str(&format!("  ✗ {indexer} · {asset}: {message}\n"));
             }
         }

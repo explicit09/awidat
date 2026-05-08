@@ -287,13 +287,14 @@ impl Client {
             })?
             .map_err(|e| map_init_error(&self.server_name, e))?;
 
-        let peer_info = service
-            .peer_info()
-            .cloned()
-            .ok_or_else(|| McpError::ProtocolViolation {
-                server: self.server_name.clone(),
-                message: "server did not return peer_info after initialize".into(),
-            })?;
+        let peer_info =
+            service
+                .peer_info()
+                .cloned()
+                .ok_or_else(|| McpError::ProtocolViolation {
+                    server: self.server_name.clone(),
+                    message: "server did not return peer_info after initialize".into(),
+                })?;
 
         let capabilities: ServerCapabilities = peer_info.capabilities.into();
         let server_info = ServerInfo {

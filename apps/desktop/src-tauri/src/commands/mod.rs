@@ -3,6 +3,7 @@
 
 pub mod auto_insert;
 pub mod dismissal;
+pub mod history;
 pub mod import;
 pub mod index;
 pub mod media;
@@ -18,5 +19,6 @@ pub mod timeline;
 pub mod transcode;
 pub mod transcript;
 pub mod turn;
+pub mod vedit;
 pub mod view;
 pub mod waveform;

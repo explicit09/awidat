@@ -63,12 +63,11 @@ impl ToolHandler for AttemptCompletionTool {
         invocation: ToolInvocation,
         ctx: ToolContext,
     ) -> Result<ToolOutput, FunctionCallError> {
-        let args: AttemptCompletionArgs =
-            serde_json::from_value(invocation.args).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "attempt_completion: invalid args ({e}). Required: {{ \"result\": <str> }}."
-                ))
-            })?;
+        let args: AttemptCompletionArgs = serde_json::from_value(invocation.args).map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "attempt_completion: invalid args ({e}). Required: {{ \"result\": <str> }}."
+            ))
+        })?;
 
         let Some(slot) = ctx.subagent_return.as_ref() else {
             return Err(FunctionCallError::RespondToModel(

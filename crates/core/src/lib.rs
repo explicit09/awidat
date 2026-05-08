@@ -11,10 +11,10 @@
 pub mod anthropic;
 pub mod awidat_md;
 pub mod compact;
+pub mod context;
 pub mod continuity;
 pub mod dismissal;
 pub mod edl;
-pub mod context;
 pub mod episode_map;
 pub mod error;
 pub mod lessons;
@@ -23,8 +23,8 @@ pub mod notes;
 pub mod pexels;
 pub mod rollout;
 pub mod session;
-pub mod subagent;
 pub mod skills;
+pub mod subagent;
 pub mod system_prompt;
 pub mod tool;
 pub mod tools;
@@ -33,7 +33,9 @@ pub mod verify;
 
 pub use error::FunctionCallError;
 pub use session::{Session, SessionError, SessionEvent};
-pub use tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry, UserInputRequest};
+pub use tool::{
+    ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry, UserInputRequest,
+};
 
 /// Returns the version of the agent core.
 pub fn version() -> &'static str {

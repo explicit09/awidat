@@ -5,12 +5,9 @@
 //! mirrors the protocol's `PermissionMode` enum (snake_case
 //! serialization).
 //!
-//! v1 wiring: the agent's session-build path reads this file and
-//! injects a single line into the system prompt — "Permission
-//! mode: <mode>; behave accordingly." The actual gating logic per
-//! mode lands incrementally as Phase 1 tools start producing
-//! Notes; for now, the dropdown sets the agent's behavioral
-//! intent and the agent self-regulates.
+//! The agent session-build path reads this file for prompt behavior,
+//! and the approval bridge reads it at each approval request so runtime
+//! gating matches the dropdown.
 
 use std::path::Path;
 
@@ -28,9 +25,7 @@ const PERMISSION_FILE: &str = "permission_mode";
 /// users with old projects don't get upgraded into autopilot
 /// without choosing it.
 #[tauri::command]
-pub async fn get_permission_mode(
-    state: State<'_, AwidatState>,
-) -> Result<PermissionMode, String> {
+pub async fn get_permission_mode(state: State<'_, AwidatState>) -> Result<PermissionMode, String> {
     let project_root = match state.project_root.lock().await.clone() {
         Some(p) => p,
         None => return Ok(PermissionMode::Manual),
@@ -50,7 +45,12 @@ pub async fn set_permission_mode(
         .await
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
-    write_mode(&project_root, mode)
+    write_mode(&project_root, mode)?;
+
+    // The system prompt includes the permission mode. Drop the cached
+    // session so the next turn rebuilds with the newly selected mode.
+    *state.session.lock().await = None;
+    Ok(())
 }
 
 /// Pure helper: parse the string in the file → `PermissionMode`.

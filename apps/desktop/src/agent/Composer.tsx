@@ -77,12 +77,11 @@ export function Composer({ projectReady }: Props) {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
+        title="Command-Enter sends. Esc cancels a running turn."
         placeholder={
-          projectReady
-            ? "Message awidat — ⌘⏎ to send, Esc to cancel a running turn"
-            : "Set a project root first…"
+          projectReady ? "Message Awidat" : "Open a project to start chatting"
         }
-        rows={2}
+        rows={1}
         disabled={running || !projectReady}
       />
       {running ? (

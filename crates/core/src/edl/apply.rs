@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use awidat_proto::awidat_meta::AwidatClipMetadata;
+use awidat_proto::awidat_meta::{AwidatClipMetadata, AwidatTimelineMetadata};
 use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild};
 use thiserror::Error;
 
@@ -236,6 +236,45 @@ fn apply_one(
             ctx,
             locator,
         ),
+        EdlOp::InsertCaption {
+            start_s,
+            end_s,
+            text,
+            position,
+            font_size,
+            color,
+            safe_area,
+        } => apply_insert_caption(
+            working, index, *start_s, *end_s, text, *position, *font_size, color, safe_area,
+        ),
+        EdlOp::SetOutputFormat {
+            aspect_ratio,
+            platform,
+            safe_area,
+        } => apply_set_output_format(
+            working,
+            index,
+            aspect_ratio,
+            platform.as_deref(),
+            safe_area.as_deref(),
+        ),
+        EdlOp::SetLoudnessTarget {
+            integrated_lufs,
+            true_peak_db,
+        } => apply_set_loudness_target(working, index, *integrated_lufs, *true_peak_db),
+        EdlOp::SetPackageMetadata {
+            platform,
+            title,
+            description,
+            tags,
+        } => apply_set_package_metadata(
+            working,
+            index,
+            platform.as_deref(),
+            title.as_deref(),
+            description.as_deref(),
+            tags.as_deref(),
+        ),
     }
 }
 
@@ -257,7 +296,11 @@ fn resolve_locator_for_op(
         | EdlOp::SetTitle { anchor, .. } => anchor,
         EdlOp::InsertClip { .. }
         | EdlOp::InsertTransition { .. }
-        | EdlOp::InsertTitle { .. } => return Ok(None),
+        | EdlOp::InsertTitle { .. }
+        | EdlOp::InsertCaption { .. }
+        | EdlOp::SetOutputFormat { .. }
+        | EdlOp::SetLoudnessTarget { .. }
+        | EdlOp::SetPackageMetadata { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
         .map(Some)
@@ -617,7 +660,10 @@ fn stamp_fresh_clip_uuid(clip: &mut Clip) {
     let nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let uuid = format!("c-{:013x}{:03x}", nanos & 0xFFFF_FFFF_FFFF_F, seq & 0xFFF);
-    let awidat = clip.metadata.awidat.get_or_insert_with(AwidatClipMetadata::default);
+    let awidat = clip
+        .metadata
+        .awidat
+        .get_or_insert_with(AwidatClipMetadata::default);
     awidat
         .extra
         .insert("clip_uuid".into(), serde_json::Value::String(uuid));
@@ -983,10 +1029,13 @@ fn apply_insert_broll(
                 message: "broll: anchor resolved to a non-clip track child".into(),
             });
         };
-        let range = clip.source_range.as_ref().ok_or_else(|| ApplyError::Invalid {
-            index,
-            message: "broll: anchor clip has no source_range".into(),
-        })?;
+        let range = clip
+            .source_range
+            .as_ref()
+            .ok_or_else(|| ApplyError::Invalid {
+                index,
+                message: "broll: anchor clip has no source_range".into(),
+            })?;
         (
             clip.name.clone(),
             range.start_time.rate,
@@ -998,8 +1047,7 @@ fn apply_insert_broll(
     // Build the broll clip — same shape as apply_insert_clip's clip
     // construction.
     let mut broll = Clip::empty(format!("broll-from-{anchor_name}"));
-    broll.media_reference =
-        MediaReference::External(ExternalReference::new(asset.to_string()));
+    broll.media_reference = MediaReference::External(ExternalReference::new(asset.to_string()));
     broll.source_range = Some(TimeRange::new(
         RationalTime::new(0.0, rate),
         RationalTime::new(duration_s * rate, rate),
@@ -1011,8 +1059,7 @@ fn apply_insert_broll(
             // Compute the residual tail BEFORE we touch the track —
             // we'll only insert it if the broll doesn't fully consume
             // the anchor clip.
-            let StackChild::Track(track) = &mut working.tracks.children[locator.track_index]
-            else {
+            let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
                 return Err(ApplyError::Invalid {
                     index,
                     message: "broll: anchor resolved to a non-track stack child".into(),
@@ -1057,20 +1104,20 @@ fn apply_insert_broll(
             // that isn't the anchor's track. If none, create a fresh
             // one named V<N+1> where N is the highest existing
             // V-prefixed track number (or fall back to "V2").
-            let target_idx = working
-                .tracks
-                .children
-                .iter()
-                .enumerate()
-                .find_map(|(i, sc)| match sc {
-                    StackChild::Track(t)
-                        if matches!(t.kind, TrackKind::Video)
-                            && i != locator.track_index =>
-                    {
-                        Some(i)
-                    }
-                    _ => None,
-                });
+            let target_idx =
+                working
+                    .tracks
+                    .children
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, sc)| match sc {
+                        StackChild::Track(t)
+                            if matches!(t.kind, TrackKind::Video) && i != locator.track_index =>
+                        {
+                            Some(i)
+                        }
+                        _ => None,
+                    });
 
             let target_idx = match target_idx {
                 Some(i) => i,
@@ -1254,20 +1301,89 @@ fn apply_insert_title(
     font_weight: super::op::TitleWeight,
     animation: super::op::TitleAnimation,
 ) -> Result<String, ApplyError> {
+    apply_insert_text_overlay(
+        working,
+        index,
+        "title",
+        None,
+        start_s,
+        end_s,
+        text,
+        position,
+        font_size,
+        color,
+        font_weight,
+        animation,
+    )
+}
+
+/// Insert a caption overlay as a graph node. Captions intentionally
+/// reuse the title render effect so the graph has one overlay track
+/// while still preserving `role = "caption"` for downstream format
+/// and audit tooling.
+#[allow(clippy::too_many_arguments)]
+fn apply_insert_caption(
+    working: &mut Timeline,
+    index: usize,
+    start_s: f64,
+    end_s: f64,
+    text: &str,
+    position: super::op::TitlePosition,
+    font_size: u32,
+    color: &str,
+    safe_area: &str,
+) -> Result<String, ApplyError> {
+    if safe_area.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "insert_caption: safe_area must be non-empty".into(),
+        });
+    }
+    apply_insert_text_overlay(
+        working,
+        index,
+        "caption",
+        Some(safe_area),
+        start_s,
+        end_s,
+        text,
+        position,
+        font_size,
+        color,
+        super::op::TitleWeight::Bold,
+        super::op::TitleAnimation::None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_insert_text_overlay(
+    working: &mut Timeline,
+    index: usize,
+    role: &str,
+    safe_area: Option<&str>,
+    start_s: f64,
+    end_s: f64,
+    text: &str,
+    position: super::op::TitlePosition,
+    font_size: u32,
+    color: &str,
+    font_weight: super::op::TitleWeight,
+    animation: super::op::TitleAnimation,
+) -> Result<String, ApplyError> {
     use awidat_proto::otio::{Clip, RationalTime, TimeRange};
 
     if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
         return Err(ApplyError::Invalid {
             index,
             message: format!(
-                "insert_title: invalid window [{start_s}..{end_s}]; end_s must be finite and > start_s"
+                "insert_{role}: invalid window [{start_s}..{end_s}]; end_s must be finite and > start_s"
             ),
         });
     }
     if text.is_empty() {
         return Err(ApplyError::Invalid {
             index,
-            message: "insert_title: text must be non-empty".into(),
+            message: format!("insert_{role}: text must be non-empty"),
         });
     }
 
@@ -1278,7 +1394,7 @@ fn apply_insert_title(
     let StackChild::Track(track) = &mut working.tracks.children[titles_idx] else {
         return Err(ApplyError::Invalid {
             index,
-            message: "insert_title: titles track resolved to a non-track stack child".into(),
+            message: format!("insert_{role}: titles track resolved to a non-track stack child"),
         });
     };
 
@@ -1289,7 +1405,7 @@ fn apply_insert_title(
     // for the drawtext `enable=between(t,...)` window.
     let rate = 24.0_f64;
     let duration_s = end_s - start_s;
-    let mut clip = Clip::empty(format!("title-{:.3}-{:.3}", start_s, end_s));
+    let mut clip = Clip::empty(format!("{role}-{:.3}-{:.3}", start_s, end_s));
     clip.source_range = Some(TimeRange::new(
         RationalTime::new(start_s * rate, rate),
         RationalTime::new(duration_s * rate, rate),
@@ -1300,6 +1416,9 @@ fn apply_insert_title(
     let mut effect = awidat_proto::otio::Effect::new(TITLE_EFFECT_NAME);
     effect
         .metadata
+        .insert("role".to_string(), serde_json::json!(role));
+    effect
+        .metadata
         .insert("text".to_string(), serde_json::json!(text));
     effect
         .metadata
@@ -1307,21 +1426,29 @@ fn apply_insert_title(
     effect
         .metadata
         .insert("end_s".to_string(), serde_json::json!(end_s));
-    effect
-        .metadata
-        .insert("position".to_string(), serde_json::json!(title_position_str(position)));
+    effect.metadata.insert(
+        "position".to_string(),
+        serde_json::json!(title_position_str(position)),
+    );
     effect
         .metadata
         .insert("font_size".to_string(), serde_json::json!(font_size));
     effect
         .metadata
         .insert("color".to_string(), serde_json::json!(color));
-    effect
-        .metadata
-        .insert("font_weight".to_string(), serde_json::json!(title_weight_str(font_weight)));
-    effect
-        .metadata
-        .insert("animation".to_string(), serde_json::json!(title_animation_str(animation)));
+    effect.metadata.insert(
+        "font_weight".to_string(),
+        serde_json::json!(title_weight_str(font_weight)),
+    );
+    effect.metadata.insert(
+        "animation".to_string(),
+        serde_json::json!(title_animation_str(animation)),
+    );
+    if let Some(profile) = safe_area {
+        effect
+            .metadata
+            .insert("safe_area".to_string(), serde_json::json!(profile));
+    }
     clip.effects.push(effect);
 
     // Insert the title in playback order so the Titles track stays
@@ -1332,8 +1459,115 @@ fn apply_insert_title(
     track.children.insert(position_idx, TrackChild::Clip(clip));
 
     Ok(format!(
-        "inserted title {text:?} on Titles track at [{start_s:.3}s..{end_s:.3}s] \
+        "inserted {role} {text:?} on Titles track at [{start_s:.3}s..{end_s:.3}s] \
          (position={position:?}, animation={animation:?})"
+    ))
+}
+
+fn timeline_awidat_metadata(working: &mut Timeline) -> &mut AwidatTimelineMetadata {
+    let meta = working
+        .metadata
+        .awidat
+        .get_or_insert_with(AwidatTimelineMetadata::default);
+    if meta.version.is_empty() {
+        meta.version = awidat_proto::AWIDAT_PROJECT_VERSION.to_string();
+    }
+    meta
+}
+
+fn apply_set_output_format(
+    working: &mut Timeline,
+    index: usize,
+    aspect_ratio: &str,
+    platform: Option<&str>,
+    safe_area: Option<&str>,
+) -> Result<String, ApplyError> {
+    const SUPPORTED: &[&str] = &["16:9", "9:16", "1:1", "4:5"];
+    if !SUPPORTED.contains(&aspect_ratio) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_output_format: aspect_ratio {aspect_ratio:?} must be one of {SUPPORTED:?}"
+            ),
+        });
+    }
+    let meta = timeline_awidat_metadata(working);
+    meta.extra.insert(
+        "output_format".into(),
+        serde_json::json!({
+            "aspect_ratio": aspect_ratio,
+            "platform": platform,
+            "safe_area": safe_area,
+        }),
+    );
+    Ok(format!(
+        "set output format to aspect_ratio={aspect_ratio:?}, platform={:?}, safe_area={:?}",
+        platform, safe_area
+    ))
+}
+
+fn apply_set_loudness_target(
+    working: &mut Timeline,
+    index: usize,
+    integrated_lufs: f64,
+    true_peak_db: Option<f64>,
+) -> Result<String, ApplyError> {
+    if !integrated_lufs.is_finite() || integrated_lufs >= 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_loudness_target: integrated_lufs {integrated_lufs} must be finite and below 0"
+            ),
+        });
+    }
+    if let Some(peak) = true_peak_db
+        && (!peak.is_finite() || peak > 0.0)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_loudness_target: true_peak_db {peak} must be finite and <= 0"),
+        });
+    }
+    let meta = timeline_awidat_metadata(working);
+    meta.extra.insert(
+        "loudness_target".into(),
+        serde_json::json!({
+            "integrated_lufs": integrated_lufs,
+            "true_peak_db": true_peak_db,
+        }),
+    );
+    Ok(format!(
+        "set loudness target to {integrated_lufs:.1} LUFS, true_peak_db={true_peak_db:?}"
+    ))
+}
+
+fn apply_set_package_metadata(
+    working: &mut Timeline,
+    index: usize,
+    platform: Option<&str>,
+    title: Option<&str>,
+    description: Option<&str>,
+    tags: Option<&str>,
+) -> Result<String, ApplyError> {
+    if platform.is_none() && title.is_none() && description.is_none() && tags.is_none() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_package_metadata: at least one field is required".into(),
+        });
+    }
+    let meta = timeline_awidat_metadata(working);
+    meta.extra.insert(
+        "package_metadata".into(),
+        serde_json::json!({
+            "platform": platform,
+            "title": title,
+            "description": description,
+            "tags": tags,
+        }),
+    );
+    Ok(format!(
+        "set package metadata platform={:?}, title={:?}",
+        platform, title
     ))
 }
 
@@ -2689,7 +2923,9 @@ mod tests {
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert!(
-            outcome.applied[0].description.contains("already at position"),
+            outcome.applied[0]
+                .description
+                .contains("already at position"),
             "expected no-op description, got {:?}",
             outcome.applied[0].description,
         );
@@ -2911,6 +3147,96 @@ mod tests {
     }
 
     #[test]
+    fn apply_insert_caption_creates_caption_overlay_node() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertCaption {
+                start_s: 1.0,
+                end_s: 2.5,
+                text: "This changed everything".into(),
+                position: super::super::op::TitlePosition::Bottom,
+                font_size: 52,
+                color: "#FFFFFF".into(),
+                safe_area: "mobile".into(),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!("expected titles track")
+        };
+        let TrackChild::Clip(caption_clip) = &titles.children[0] else {
+            panic!("expected caption clip")
+        };
+        assert!(caption_clip.name.starts_with("caption-"));
+        let effect = &caption_clip.effects[0];
+        assert_eq!(effect.effect_name, "awidat.title");
+        assert_eq!(
+            effect.metadata.get("role").and_then(|v| v.as_str()),
+            Some("caption"),
+        );
+        assert_eq!(
+            effect.metadata.get("safe_area").and_then(|v| v.as_str()),
+            Some("mobile"),
+        );
+        assert_eq!(
+            effect.metadata.get("position").and_then(|v| v.as_str()),
+            Some("bottom"),
+        );
+    }
+
+    #[test]
+    fn apply_output_loudness_and_package_metadata_live_on_timeline_graph() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetOutputFormat {
+                    aspect_ratio: "9:16".into(),
+                    platform: Some("youtube_shorts".into()),
+                    safe_area: Some("mobile".into()),
+                },
+                EdlOp::SetLoudnessTarget {
+                    integrated_lufs: -16.0,
+                    true_peak_db: Some(-1.0),
+                },
+                EdlOp::SetPackageMetadata {
+                    platform: Some("youtube_shorts".into()),
+                    title: Some("Launch Risk".into()),
+                    description: Some("A short clip about launch risk".into()),
+                    tags: Some("launch,risk,clip".into()),
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let extra = &new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .expect("awidat metadata")
+            .extra;
+        assert_eq!(
+            extra
+                .get("output_format")
+                .and_then(|v| v.get("aspect_ratio"))
+                .and_then(|v| v.as_str()),
+            Some("9:16"),
+        );
+        assert_eq!(
+            extra
+                .get("loudness_target")
+                .and_then(|v| v.get("integrated_lufs"))
+                .and_then(|v| v.as_f64()),
+            Some(-16.0),
+        );
+        assert_eq!(
+            extra
+                .get("package_metadata")
+                .and_then(|v| v.get("title"))
+                .and_then(|v| v.as_str()),
+            Some("Launch Risk"),
+        );
+    }
+
+    #[test]
     fn apply_insert_title_reuses_existing_titles_track() {
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
@@ -2952,11 +3278,17 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            first.effects[0].metadata.get("text").and_then(|v| v.as_str()),
+            first.effects[0]
+                .metadata
+                .get("text")
+                .and_then(|v| v.as_str()),
             Some("First"),
         );
         assert_eq!(
-            second.effects[0].metadata.get("text").and_then(|v| v.as_str()),
+            second.effects[0]
+                .metadata
+                .get("text")
+                .and_then(|v| v.as_str()),
             Some("Second"),
         );
     }
@@ -2978,7 +3310,9 @@ mod tests {
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
-        assert!(matches!(&err, ApplyError::Invalid { message, .. } if message.contains("end_s must be")));
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("end_s must be"))
+        );
     }
 
     #[test]
@@ -2997,7 +3331,9 @@ mod tests {
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
-        assert!(matches!(&err, ApplyError::Invalid { message, .. } if message.contains("non-empty")));
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("non-empty"))
+        );
     }
 
     #[test]
@@ -3095,7 +3431,9 @@ mod tests {
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
-        assert!(matches!(&err, ApplyError::Invalid { message, .. } if message.contains("awidat.title")));
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("awidat.title"))
+        );
     }
 
     #[test]
@@ -3126,7 +3464,11 @@ mod tests {
         };
         // Different effect names → both effects survive.
         assert_eq!(clip.effects.len(), 2);
-        let names: Vec<&str> = clip.effects.iter().map(|e| e.effect_name.as_str()).collect();
+        let names: Vec<&str> = clip
+            .effects
+            .iter()
+            .map(|e| e.effect_name.as_str())
+            .collect();
         assert!(names.contains(&"awidat.volume"));
         assert!(names.contains(&"awidat.speed"));
     }

@@ -63,12 +63,20 @@ fn seed_project() -> tempfile::TempDir {
         };
         track.children.push(TrackChild::Clip(clip));
     }
-    project.timeline.tracks.children.push(StackChild::Track(track));
+    project
+        .timeline
+        .tracks
+        .children
+        .push(StackChild::Track(track));
     project.write(dir.path()).expect("project write");
 
     // Seed a whisper sidecar matching the snippets so find_moment finds
     // them. The path follows INDEX_SCHEMA: index/whisper/<asset>.json.
-    let whisper_dir = dir.path().join(files::INDEX_DIR).join("whisper").join("raw");
+    let whisper_dir = dir
+        .path()
+        .join(files::INDEX_DIR)
+        .join("whisper")
+        .join("raw");
     std::fs::create_dir_all(&whisper_dir).unwrap();
     for (i, snip) in snippets.iter().enumerate() {
         let body = serde_json::json!({
@@ -109,7 +117,9 @@ fn seed_project() -> tempfile::TempDir {
         }],
     };
     std::fs::write(
-        dir.path().join(files::INDEX_DIR).join(files::INDEX_MANIFEST),
+        dir.path()
+            .join(files::INDEX_DIR)
+            .join(files::INDEX_MANIFEST),
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
@@ -250,8 +260,12 @@ async fn editorial_workflow_find_view_inspect_read_apply() {
         panic!("expected track at index 0");
     };
     assert_eq!(t.children.len(), 2, "kitchen clip removed");
-    let TrackChild::Clip(c0) = &t.children[0] else { panic!() };
-    let TrackChild::Clip(c1) = &t.children[1] else { panic!() };
+    let TrackChild::Clip(c0) = &t.children[0] else {
+        panic!()
+    };
+    let TrackChild::Clip(c1) = &t.children[1] else {
+        panic!()
+    };
     assert_eq!(c0.name, "clip-0");
     assert_eq!(c1.name, "clip-2", "clip-1 (kitchen) was deleted");
 
@@ -330,7 +344,9 @@ async fn apply_edl_anchor_miss_doesnt_corrupt_project() {
 
     // Project unchanged.
     let after = Project::read(dir.path()).unwrap();
-    let StackChild::Track(t) = &after.timeline.tracks.children[0] else { panic!() };
+    let StackChild::Track(t) = &after.timeline.tracks.children[0] else {
+        panic!()
+    };
     assert_eq!(t.children.len(), 3, "no clip removed on anchor miss");
 }
 

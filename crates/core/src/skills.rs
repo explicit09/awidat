@@ -3,13 +3,13 @@
 //! Per `PLAN.md` §11. The Anthropic Skills shape with three-level
 //! progressive disclosure:
 //!
-//! - **L1**: name + description always in the system prompt. The
-//!   agent sees a one-line catalog of available skills at session
-//!   start ("here's what kinds of editorial flows are possible").
+//! - **L1**: name + description in a per-turn contextual fragment.
+//!   The agent sees a one-line catalog of available skills without
+//!   loading full playbooks into the system prompt.
 //! - **L2**: full `SKILL.md` body loaded only when relevant — the
-//!   agent self-selects via a `load_skill(name)` tool, OR the user
-//!   eagerly invokes `awidat skills run <name>` and the body lands
-//!   in the system prompt up front.
+//!   agent self-selects via a `load_skill(name)` tool. Even
+//!   `awidat skills run <name>` only stages a first-turn prompt that
+//!   tells the agent to call `load_skill`.
 //! - **L3**: bundled scripts under `<skill>/scripts/`, run via the
 //!   existing `bash` tool. The agent doesn't try to do embedding
 //!   match in its head — it calls scripts/embedding_search.py.
@@ -35,7 +35,7 @@ pub struct Skill {
     /// Frontmatter — what the loader reads to build the L1 catalog.
     pub meta: SkillMeta,
     /// Full body text from SKILL.md, frontmatter stripped. This is
-    /// what gets injected into the system prompt at L2.
+    /// what gets returned by `load_skill` at L2.
     pub body: String,
     /// Directory holding this skill's `SKILL.md` + `scripts/` +
     /// `templates/`. Skills can reference these via relative paths
@@ -244,16 +244,14 @@ fn load_skill_dir(dir: &Path) -> Result<Skill, SkillError> {
 
 /// Parse SKILL.md = YAML frontmatter + body. Frontmatter is fenced
 /// by `---` at the start and end. Returns (meta, body_text).
-fn parse_skill_md<'a>(
-    raw: &'a str,
-    dir_name: &str,
-) -> Result<(SkillMeta, &'a str), SkillError> {
+fn parse_skill_md<'a>(raw: &'a str, dir_name: &str) -> Result<(SkillMeta, &'a str), SkillError> {
     let s = raw.trim_start_matches('\u{feff}'); // strip BOM if present
-    let s = s.strip_prefix("---\n").or_else(|| s.strip_prefix("---\r\n")).ok_or_else(
-        || SkillError::NoFrontmatter {
+    let s = s
+        .strip_prefix("---\n")
+        .or_else(|| s.strip_prefix("---\r\n"))
+        .ok_or_else(|| SkillError::NoFrontmatter {
             name: dir_name.to_string(),
-        },
-    )?;
+        })?;
     // Find the closing `---` line.
     let mut end_offset: Option<usize> = None;
     let mut cursor = 0;
@@ -272,12 +270,11 @@ fn parse_skill_md<'a>(
     };
     let frontmatter_text = &s[..cursor]; // before the closing ---
     let body = &s[end..];
-    let meta: SkillMeta = serde_yaml::from_str(frontmatter_text).map_err(|e| {
-        SkillError::Frontmatter {
+    let meta: SkillMeta =
+        serde_yaml::from_str(frontmatter_text).map_err(|e| SkillError::Frontmatter {
             name: dir_name.to_string(),
             message: e.to_string(),
-        }
-    })?;
+        })?;
     Ok((meta, body.trim_start_matches('\n')))
 }
 

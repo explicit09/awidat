@@ -294,7 +294,10 @@ WHISPER_MODEL = "small.en"
         assert_eq!(s.name, "whisper");
         assert_eq!(s.command, "uv");
         assert_eq!(s.args.len(), 4);
-        assert_eq!(s.env.get("WHISPER_MODEL").map(String::as_str), Some("small.en"));
+        assert_eq!(
+            s.env.get("WHISPER_MODEL").map(String::as_str),
+            Some("small.en")
+        );
         assert_eq!(s.kind, McpServerKind::Indexer);
     }
 
@@ -311,7 +314,7 @@ WHISPER_MODEL = "small.en"
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
-            depends_on: vec![],
+                        depends_on: vec![],
                     },
                     McpServer {
                         name: "scenedetect".into(),
@@ -321,7 +324,7 @@ WHISPER_MODEL = "small.en"
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
-            depends_on: vec![],
+                        depends_on: vec![],
                     },
                 ],
             },
@@ -341,7 +344,7 @@ WHISPER_MODEL = "small.en"
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
-            depends_on: vec![],
+                        depends_on: vec![],
                     },
                     // New entry, appended.
                     McpServer {
@@ -352,7 +355,7 @@ WHISPER_MODEL = "small.en"
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
-            depends_on: vec![],
+                        depends_on: vec![],
                     },
                 ],
             },
@@ -467,7 +470,7 @@ enabled = false
                         cwd: None,
                         kind: McpServerKind::Indexer,
                         enabled: true,
-            depends_on: vec![],
+                        depends_on: vec![],
                     },
                     McpServer {
                         name: "bash".into(),
@@ -477,7 +480,7 @@ enabled = false
                         cwd: None,
                         kind: McpServerKind::Tool,
                         enabled: true,
-            depends_on: vec![],
+                        depends_on: vec![],
                     },
                 ],
             },

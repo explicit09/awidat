@@ -22,10 +22,7 @@ fn main() {
 
     // Tell rustc to set TS_RS_EXPORT_DIR for the test binaries that
     // run the auto-generated `export_bindings_*` tests.
-    println!(
-        "cargo:rustc-env=TS_RS_EXPORT_DIR={}",
-        export_dir.display()
-    );
+    println!("cargo:rustc-env=TS_RS_EXPORT_DIR={}", export_dir.display());
 
     // Re-run if either the manifest or this script changes (path
     // assumptions are baked in here).

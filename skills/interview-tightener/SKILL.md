@@ -50,6 +50,12 @@ It returns a JSON list of `{start_s, end_s, duration_s, reason}`
 trim candidates. Reasons: `dead_air`, `filler_cluster`. Sort by
 duration desc — the longest cuts give the most return-per-edit.
 
+If topic, gaze, shot, or frame-quality sidecars exist, use them as veto
+signals before cutting: preserve topic-boundary pauses, direct-address
+moments, sharp close-ups, and motion-heavy shots unless the transcript
+confirms they are dead time. Awidat's wider index corpus is useful here
+because pacing is not just silence math.
+
 ### 2. Add tangent candidates
 
 ```

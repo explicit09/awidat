@@ -218,7 +218,10 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -322,6 +325,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&out.content).unwrap();
         let results = v["results"].as_array().unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0]["moment_id"], "high", "highest score must come first");
+        assert_eq!(
+            results[0]["moment_id"], "high",
+            "highest score must come first"
+        );
     }
 }

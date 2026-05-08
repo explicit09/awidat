@@ -11,9 +11,14 @@ tools_allowlist:
   - find_broll_opportunities
   - find_speaker_oncam
   - apply_edl
+  - view_timeline
+  - vedit_diff
+  - start_render
+  - poll_render
   - inspect_moment
   - read_index
   - update_plan
+  - bash
 ---
 
 # Short-form vertical (TikTok / Reels / Shorts)
@@ -49,6 +54,13 @@ view_episode                       # confirm indexers ran
 find_beat(kinds=["hook","punchline","emotional_beat"], limit=10)
 ```
 
+When the full index set exists, score more than text. Use
+`viral-clip-extractor/scripts/score_moments.py` with audio-energy,
+editorial-moments, shot, gaze, frame-quality, and topic sidecars. Prefer
+moments that are energetic, sharp, direct-address, and close to a topic
+boundary. This is where awidat's larger index corpus should beat a
+transcript-only workflow.
+
 The single beat with the highest `intensity` × concreteness is your
 opening. If `find_beat` returns < 3 candidates, the source doesn't
 have a strong short — tell the user honestly: "the strongest moments
@@ -67,6 +79,9 @@ Pick 3–5 beats total (including the hook). Order:
 Use `apply_edl` `*** Move Clip` and `*** Insert Clip` to assemble
 the spine BEFORE doing any cleanup. Cuts within an unfinished spine
 waste effort.
+
+Emit `*** Set Output Format` with `aspect_ratio: 9:16`, the target
+platform when known, and `safe_area: mobile` before the caption pass.
 
 ### 3. Tighten
 
@@ -97,7 +112,17 @@ user wants Pexels-fetched cutaways.
 read_index(channel="transcript", asset_id=<the trimmed timeline output>)
 ```
 
-For each whisper word, emit `*** Insert Title` ops with:
+Generate phrase groups with the helper:
+
+```bash
+python3 <skill-root>/scripts/caption_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --max-words 4 \
+  --hot-start-s <highest-intensity-start> \
+  --hot-end-s <highest-intensity-end>
+```
+
+For each returned phrase, emit `*** Insert Caption` ops with:
 
 - `text`: 2–4 words per title (one phrase per breath group, not the
   full sentence)
@@ -105,10 +130,28 @@ For each whisper word, emit `*** Insert Title` ops with:
 - `font_size`: 48–64 (large enough on a phone)
 - `color`: white with 80%-alpha background OR black-on-yellow for
   the highest-energy beats
+- `safe_area`: mobile
 - `start_s` / `end_s`: tight to the word group, not the sentence
 
 This pass is mechanical but high-volume. Use `update_plan` to track
 which segments are captioned vs. pending.
+
+### 6. Render verification
+
+Render, then verify:
+
+```bash
+python3 <skill-root>/scripts/render_verify.py \
+  --file renders/<output>.mp4 \
+  --expected-duration-s 60 \
+  --max-duration-s 90
+```
+
+If verification fails, fix the timeline or report the blocker. Do not
+claim a finished short without a render path or verification result.
+Before the final report, call `vedit_diff` and verify it contains the
+hook-first spine, `Set Output Format`, caption nodes, and intended
+cleanup edits.
 
 ## Editorial conventions
 
@@ -144,9 +187,11 @@ which segments are captioned vs. pending.
       cold-open.
 - [ ] Every silence ≥ 1.0s in the trimmed timeline is gone.
 - [ ] Every word from the trimmed transcript has a corresponding
-      `*** Insert Title` overlay.
+      `*** Insert Caption` overlay.
+- [ ] `vedit_diff` was reviewed before final render/report.
 - [ ] At least 3 b-roll Notes were surfaced (the user may have culled
       to fewer; that's fine — the surfacing is your contract).
 - [ ] `view_timeline` confirms the final structure.
+- [ ] Render verification was run or the exact blocker was reported.
 - [ ] The user hasn't asked you to "make it shorter" — the format's
       whole game is preempting that ask.

@@ -73,16 +73,11 @@ impl ToolHandler for VeditLogTool {
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).min(HARD_LIMIT);
 
         let repo = vc::open_or_init(&ctx.project_root).map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "vedit_log: opening repo failed: {e}"
-            ))
+            FunctionCallError::RespondToModel(format!("vedit_log: opening repo failed: {e}"))
         })?;
 
-        let entries = vc::log(&repo, limit).map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "vedit_log: {e}"
-            ))
-        })?;
+        let entries = vc::log(&repo, limit)
+            .map_err(|e| FunctionCallError::RespondToModel(format!("vedit_log: {e}")))?;
 
         // Project to the wire shape — the agent gets header + hashes
         // (no full body by default; that's a separate "show this commit"
@@ -216,7 +211,12 @@ mod tests {
         assert_eq!(entries[0]["header"].as_str(), Some("Third"));
         assert_eq!(entries[1]["header"].as_str(), Some("Second"));
         assert_eq!(entries[2]["header"].as_str(), Some("First"));
-        assert!(entries[2]["full_message"].as_str().unwrap().contains("body 1"));
+        assert!(
+            entries[2]["full_message"]
+                .as_str()
+                .unwrap()
+                .contains("body 1")
+        );
     }
 
     #[tokio::test]

@@ -85,7 +85,11 @@ fn seed_project() -> tempfile::TempDir {
         .push(StackChild::Track(track));
     project.write(dir.path()).expect("project write");
 
-    let whisper_dir = dir.path().join(files::INDEX_DIR).join("whisper").join("raw");
+    let whisper_dir = dir
+        .path()
+        .join(files::INDEX_DIR)
+        .join("whisper")
+        .join("raw");
     std::fs::create_dir_all(&whisper_dir).unwrap();
     for (i, snip) in snippets.iter().enumerate() {
         let body = serde_json::json!({
@@ -118,7 +122,9 @@ fn seed_project() -> tempfile::TempDir {
         }],
     };
     std::fs::write(
-        dir.path().join(files::INDEX_DIR).join(files::INDEX_MANIFEST),
+        dir.path()
+            .join(files::INDEX_DIR)
+            .join(files::INDEX_MANIFEST),
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
@@ -146,8 +152,8 @@ fn registry_with_all_tools() -> ToolRegistry {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live API; requires ANTHROPIC_API_KEY; ~$0.01/run on Sonnet"]
 async fn live_agent_deletes_kitchen_clip_via_apply_edl() {
-    let client = Client::from_env_or_keychain(ClientConfig::default())
-        .expect("ANTHROPIC_API_KEY missing");
+    let client =
+        Client::from_env_or_keychain(ClientConfig::default()).expect("ANTHROPIC_API_KEY missing");
     let dir = seed_project();
     let project_root = dir.path().to_path_buf();
 
@@ -172,7 +178,9 @@ transcript_snippet anchor.\
     let session_clone = session.clone();
     let cancel_clone = cancel.clone();
     let task = tokio::spawn(async move {
-        session_clone.run_turn(prompt.to_string(), cancel_clone).await
+        session_clone
+            .run_turn(prompt.to_string(), cancel_clone)
+            .await
     });
 
     // Track which tools were called.
@@ -235,9 +243,18 @@ transcript_snippet anchor.\
     let names: Vec<&str> = t
         .children
         .iter()
-        .filter_map(|c| if let TrackChild::Clip(cc) = c { Some(cc.name.as_str()) } else { None })
+        .filter_map(|c| {
+            if let TrackChild::Clip(cc) = c {
+                Some(cc.name.as_str())
+            } else {
+                None
+            }
+        })
         .collect();
-    assert!(!names.contains(&"clip-1"), "clip-1 (kitchen) should be gone; got {names:?}");
+    assert!(
+        !names.contains(&"clip-1"),
+        "clip-1 (kitchen) should be gone; got {names:?}"
+    );
     assert!(names.contains(&"clip-0"));
     assert!(names.contains(&"clip-2"));
 

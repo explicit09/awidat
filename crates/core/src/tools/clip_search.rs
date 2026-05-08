@@ -166,14 +166,22 @@ impl ToolHandler for ClipSearchTool {
             {
                 continue;
             }
-            let Some(data) = sidecar.get("data") else { continue };
+            let Some(data) = sidecar.get("data") else {
+                continue;
+            };
             let timestamps = data
                 .get("timestamps_s")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            let frame_count = data.get("frame_count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-            let dim = data.get("embedding_dim").and_then(|v| v.as_u64()).unwrap_or(512) as usize;
+            let frame_count = data
+                .get("frame_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let dim = data
+                .get("embedding_dim")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(512) as usize;
             if dim != q_dim {
                 tracing::warn!(
                     asset = %asset_id,
@@ -241,9 +249,7 @@ impl ToolHandler for ClipSearchTool {
 fn decode_b64_f16(b64: &str, dim: usize) -> Result<Vec<f32>, FunctionCallError> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64.as_bytes())
-        .map_err(|e| {
-            FunctionCallError::RespondToModel(format!("clip_search: bad base64: {e}"))
-        })?;
+        .map_err(|e| FunctionCallError::RespondToModel(format!("clip_search: bad base64: {e}")))?;
     if bytes.len() != dim * 2 {
         return Err(FunctionCallError::RespondToModel(format!(
             "clip_search: query embedding length mismatch (got {} bytes, expected {} for dim={})",

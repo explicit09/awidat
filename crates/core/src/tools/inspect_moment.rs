@@ -18,6 +18,7 @@ use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
+/// Tool that inspects an indexed editorial moment with transcript context.
 pub struct InspectMomentTool;
 
 #[derive(Debug, Deserialize)]
@@ -87,10 +88,9 @@ impl ToolHandler for InspectMomentTool {
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            if let Some(found) = moments
-                .iter()
-                .find(|m| m.get("moment_id").and_then(|x| x.as_str()) == Some(args.moment_id.as_str()))
-            {
+            if let Some(found) = moments.iter().find(|m| {
+                m.get("moment_id").and_then(|x| x.as_str()) == Some(args.moment_id.as_str())
+            }) {
                 hit = Some((asset_id, found.clone(), moments));
                 break;
             }
@@ -103,7 +103,10 @@ impl ToolHandler for InspectMomentTool {
             )));
         };
 
-        let start_s = moment.get("start_s").and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let start_s = moment
+            .get("start_s")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0);
         let end_s = moment.get("end_s").and_then(|x| x.as_f64()).unwrap_or(0.0);
 
         // Pull surrounding transcript from the whisper sidecar for
@@ -123,11 +126,14 @@ impl ToolHandler for InspectMomentTool {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|dep_id| {
-                dep_id.as_str().and_then(|did| {
-                    all_moments.iter().find(|m| {
-                        m.get("moment_id").and_then(|x| x.as_str()) == Some(did)
+                dep_id
+                    .as_str()
+                    .and_then(|did| {
+                        all_moments
+                            .iter()
+                            .find(|m| m.get("moment_id").and_then(|x| x.as_str()) == Some(did))
                     })
-                }).cloned()
+                    .cloned()
             })
             .collect();
 
@@ -200,7 +206,10 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -231,7 +240,11 @@ mod tests {
         .unwrap();
     }
 
-    fn write_whisper_sidecar(root: &std::path::Path, asset: &str, segments: Vec<serde_json::Value>) {
+    fn write_whisper_sidecar(
+        root: &std::path::Path,
+        asset: &str,
+        segments: Vec<serde_json::Value>,
+    ) {
         let p = root.join("index/whisper").join(format!("{asset}.json"));
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(

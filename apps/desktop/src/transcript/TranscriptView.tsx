@@ -20,7 +20,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useTranscriptStore, type SelectionRange } from "./store";
+import { useTranscriptStore } from "./store";
 import { useMediaStore } from "../media/store";
 import { useTimelineStore, type TimelineSnapshot } from "../timeline/store";
 import {
@@ -172,14 +172,16 @@ function LoadedTranscript({
     // Find the word whose [start_s, end_s] covers sourceTime via
     // binary search on the pre-built starts array.
     const wordIdx = findWordAt(wordStarts, t.words, sourceTime);
-    if (wordIdx === activeWordIdxRef.current) return;
+    if (wordIdx === activeWordIdxRef.current && wordIdx >= 0) return;
     clearActive(scrollRef.current, activeWordIdxRef.current);
     setActive(scrollRef.current, wordIdx);
     activeWordIdxRef.current = wordIdx;
 
     // Auto-scroll: when the active word's segment changes, scroll
-    // the row into view. We don't scroll on every word change —
-    // that would cause continuous jitter. Debounce by segment.
+    // the row into view. If the playhead lands in pre-roll silence
+    // before a word, scroll to the nearest segment instead so the
+    // transcript rail opens near the actual timeline context rather
+    // than raw-source 0:00.
     if (wordIdx >= 0) {
       const newSegmentIdx = findSegmentForWord(rows, wordIdx);
       if (
@@ -188,6 +190,18 @@ function LoadedTranscript({
       ) {
         lastScrolledSegmentRef.current = newSegmentIdx;
         virtualizer.scrollToIndex(newSegmentIdx, {
+          align: "center",
+          behavior: "smooth",
+        });
+      }
+    } else {
+      const nearestSegmentIdx = findSegmentAtOrAfter(rows, sourceTime);
+      if (
+        nearestSegmentIdx >= 0 &&
+        nearestSegmentIdx !== lastScrolledSegmentRef.current
+      ) {
+        lastScrolledSegmentRef.current = nearestSegmentIdx;
+        virtualizer.scrollToIndex(nearestSegmentIdx, {
           align: "center",
           behavior: "smooth",
         });
@@ -489,6 +503,24 @@ function findSegmentForWord(rows: SegmentRow[], wordIdx: number): number {
     }
   }
   return -1;
+}
+
+function findSegmentAtOrAfter(rows: SegmentRow[], sourceTime: number): number {
+  if (rows.length === 0 || !Number.isFinite(sourceTime)) return -1;
+  let lo = 0;
+  let hi = rows.length - 1;
+  let best = rows.length - 1;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const segment = rows[mid].segment;
+    if (sourceTime <= segment.end_s) {
+      best = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return best;
 }
 
 /** Walk up from a pointer event target to the nearest [data-word-idx]

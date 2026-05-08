@@ -147,8 +147,7 @@ fn sidecar_is_fresh(asset: &Path, sidecar: &Path) -> bool {
         Ok(m) => m,
         Err(_) => return false,
     };
-    let (Ok(sidecar_mtime), Ok(asset_mtime)) =
-        (sidecar_meta.modified(), asset_meta.modified())
+    let (Ok(sidecar_mtime), Ok(asset_mtime)) = (sidecar_meta.modified(), asset_meta.modified())
     else {
         return false;
     };
@@ -179,8 +178,8 @@ pub async fn read_waveform(path: String) -> Result<Vec<f32>, String> {
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("read waveform sidecar: {e}"))?;
-    let parsed: WaveformSidecar = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("parse waveform sidecar: {e}"))?;
+    let parsed: WaveformSidecar =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse waveform sidecar: {e}"))?;
     Ok(parsed.buckets)
 }
 

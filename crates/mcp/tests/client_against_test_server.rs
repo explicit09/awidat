@@ -172,9 +172,7 @@ async fn progress_notifications_are_routed_to_subscriber() {
     assert!(!result.is_error);
 
     let mut events = Vec::new();
-    while let Ok(Some(ev)) =
-        tokio::time::timeout(Duration::from_millis(100), rx.recv()).await
-    {
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(100), rx.recv()).await {
         events.push(ev);
     }
     assert_eq!(

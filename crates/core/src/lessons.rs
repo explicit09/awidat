@@ -83,6 +83,7 @@ pub struct Pattern {
     pub snippet: Option<String>,
     /// Counts.
     pub allow_count: usize,
+    /// Number of denied tool calls matching this pattern.
     pub deny_count: usize,
     /// Human-readable rule the bullet renders.
     pub rule: String,
@@ -334,7 +335,9 @@ mod tests {
         }
         let patterns = extract_from_decisions(&decisions);
         assert!(
-            patterns.iter().any(|p| p.tool == "bash" && p.snippet.is_none()),
+            patterns
+                .iter()
+                .any(|p| p.tool == "bash" && p.snippet.is_none()),
             "expected per-tool deny pattern for bash; got {patterns:#?}"
         );
     }

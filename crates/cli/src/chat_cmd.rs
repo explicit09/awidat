@@ -13,21 +13,19 @@ use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, assess_continuity::AssessContinuityTool, bash::BashTool,
     broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    download_yt_clip::DownloadYtClipTool,
-    find_beat::FindBeatTool,
-    find_broll_opportunities::FindBrollOpportunitiesTool,
-    find_dead_air::FindDeadAirTool,
-    find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
-    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
-    poll_render::PollRenderTool, read_index::ReadIndexTool,
+    download_yt_clip::DownloadYtClipTool, find_beat::FindBeatTool,
+    find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
+    find_episode_start::FindEpisodeStartTool, find_eye_contact::FindEyeContactTool,
+    find_false_starts::FindFalseStartsTool, find_filler_words::FindFillerWordsTool,
+    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
+    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
+    load_skill::LoadSkillTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
-    shot_summary::ShotSummaryTool,
-    start_indexing::StartIndexingTool, start_render::StartRenderTool, update_plan::UpdatePlanTool,
-    use_broll::UseBrollTool,
+    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
+    start_render::StartRenderTool, update_plan::UpdatePlanTool, use_broll::UseBrollTool,
     vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
-    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    vedit_revert::VeditRevertTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
+    view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -43,9 +41,11 @@ Asset paths in this project may be UUID-style (copy_F65206FA-…MOV), \
 not human-readable like 'cast.mp4'. Guessing wastes tool calls and \
 surfaces avoidable errors to the user. The single discovery call is \
 cheap and makes everything after it correct.\
-\n\nYou have 21 tools, organized by purpose:\
+\n\nYou have the full editorial toolset, organized by purpose:\
 \n  - **Discovery / map**: view_episode (compact map of the project — \
-includes which vision indexers have run), view_timeline, list_assets.\
+includes which vision indexers have run), view_timeline, list_assets, \
+find_episode_start (publishable podcast/interview start; rejects \
+pre-roll and rehearsed intros).\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
 hooks, punchlines, CTAs, etc.), inspect_moment (drill into one beat \
 with surrounding transcript + dependencies). Prefer these over \
@@ -74,7 +74,7 @@ render the edited timeline; scope='preview' renders the raw asset.\
 \n  - **Plan / collab**: update_plan, request_user_input, bash.\
 \n  - **Skills**: load_skill — load a named editorial workflow's \
 full playbook (style + step-by-step). When the user's request maps \
-to a skill in the catalog below the system prompt, call \
+to a skill in the per-turn skills catalog, call \
 load_skill(name=...) BEFORE the work.\
 \n\n\
 Be concise. Commit edits via apply_edl directly when you're confident.\
@@ -105,13 +105,14 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     })?;
 
     let mut registry = ToolRegistry::new();
-    // Same 20-tool registry as `awidat tui`. Chat is the
+    // Same full editorial registry as `awidat tui`. Chat is the
     // text-only fallback; both surfaces should expose the same
     // editorial powers.
     registry.register(Arc::new(ApplyEdlTool));
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(FindMomentTool));
     registry.register(Arc::new(FindDeadAirTool));
+    registry.register(Arc::new(FindEpisodeStartTool));
     registry.register(Arc::new(FindFillerWordsTool));
     registry.register(Arc::new(FindFalseStartsTool));
     registry.register(Arc::new(AssessContinuityTool));
@@ -136,6 +137,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(VeditCommitTool));
     registry.register(Arc::new(VeditDiffTool));
     registry.register(Arc::new(VeditLogTool));
+    registry.register(Arc::new(VeditRevertTool));
     registry.register(Arc::new(ClipSearchTool));
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));

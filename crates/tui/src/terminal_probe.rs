@@ -134,7 +134,9 @@ mod imp {
                     .as_millis()
                     .min(libc::c_int::MAX as u128) as libc::c_int;
                 // SAFETY: fd is a stack-local pollfd with a valid FD.
-                let result = unsafe { libc::poll(&mut fd, /*nfds*/ 1, timeout_ms) };
+                let result = unsafe {
+                    libc::poll(&mut fd, /*nfds*/ 1, timeout_ms)
+                };
                 if result > 0 {
                     return Ok((fd.revents & libc::POLLIN) != 0);
                 }
@@ -154,9 +156,8 @@ mod imp {
             // Best-effort restore of the original O_NONBLOCK setting.
             // SAFETY: reader.as_raw_fd() is still live at drop time;
             // restoring fcntl flags can't make the program unsafe.
-            let _ = unsafe {
-                libc::fcntl(self.reader.as_raw_fd(), libc::F_SETFL, self.original_flags)
-            };
+            let _ =
+                unsafe { libc::fcntl(self.reader.as_raw_fd(), libc::F_SETFL, self.original_flags) };
         }
     }
 

@@ -64,6 +64,7 @@ pub async fn set_project_root(
 
     *state.project_root.lock().await = Some(buf.clone());
     *state.session.lock().await = None;
+    *state.resume_log_path.lock().await = None;
     allow_proxies_dir(&app, &buf);
 
     // Best-effort: ignore failures so a corrupted recents file
@@ -159,6 +160,7 @@ pub async fn init_project(
 
     *state.project_root.lock().await = Some(project_dir.clone());
     *state.session.lock().await = None;
+    *state.resume_log_path.lock().await = None;
     allow_proxies_dir(&app, &project_dir);
     if let Err(e) = update_recents(&project_dir).await {
         tracing::warn!(error = %e, "failed to update recents file");
@@ -184,11 +186,11 @@ pub async fn get_project_type(
             });
         }
     };
-    Ok(read_project_type_from_otio(&project_root)
-        .await
-        .unwrap_or(awidat_desktop_protocol::ProjectType::Other {
+    Ok(read_project_type_from_otio(&project_root).await.unwrap_or(
+        awidat_desktop_protocol::ProjectType::Other {
             description: String::new(),
-        }))
+        },
+    ))
 }
 
 /// Update the project type on the currently-loaded project. Persists
@@ -220,8 +222,8 @@ async fn write_project_type_to_otio(
     let bytes = fs::read(&otio_path)
         .await
         .map_err(|e| format!("read otio: {e}"))?;
-    let mut value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("parse otio json: {e}"))?;
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse otio json: {e}"))?;
     // metadata.awidat.extra is what we want — but `extra` is a
     // `#[serde(flatten)]` HashMap, which means at the JSON layer the
     // entries land directly inside `metadata.awidat`. Walk to that
@@ -230,11 +232,11 @@ async fn write_project_type_to_otio(
         .pointer_mut("/metadata/awidat")
         .and_then(|v| v.as_object_mut())
         .ok_or_else(|| "otio file missing metadata.awidat".to_string())?;
-    let pt_value = serde_json::to_value(project_type)
-        .map_err(|e| format!("serialize project_type: {e}"))?;
+    let pt_value =
+        serde_json::to_value(project_type).map_err(|e| format!("serialize project_type: {e}"))?;
     awidat_meta.insert(PROJECT_TYPE_KEY.to_string(), pt_value);
-    let serialized = serde_json::to_vec_pretty(&value)
-        .map_err(|e| format!("re-serialize otio: {e}"))?;
+    let serialized =
+        serde_json::to_vec_pretty(&value).map_err(|e| format!("re-serialize otio: {e}"))?;
     fs::write(&otio_path, serialized)
         .await
         .map_err(|e| format!("write otio: {e}"))?;

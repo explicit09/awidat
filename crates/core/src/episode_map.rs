@@ -108,8 +108,7 @@ fn speakers_summary(project_root: &Path) -> Option<(usize, Option<String>)> {
     if !dir.exists() {
         return None;
     }
-    let mut speakers: std::collections::HashMap<String, f64> =
-        std::collections::HashMap::new();
+    let mut speakers: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     let walker = walkdir(&dir);
     for entry in walker {
         let Ok(bytes) = std::fs::read(&entry) else {
@@ -177,7 +176,11 @@ fn topics_summary(project_root: &Path) -> Vec<TopicRow> {
             }
         }
     }
-    rows.sort_by(|a, b| a.start_s.partial_cmp(&b.start_s).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        a.start_s
+            .partial_cmp(&b.start_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     rows
 }
 
@@ -191,7 +194,9 @@ fn timeline_summary(project: &Project) -> (usize, f64, usize) {
     let mut total_dur = 0.0f64;
     let mut trimmed = 0usize;
     for sc in &project.timeline.tracks.children {
-        let StackChild::Track(track) = sc else { continue };
+        let StackChild::Track(track) = sc else {
+            continue;
+        };
         for tc in &track.children {
             if let TrackChild::Clip(clip) = tc {
                 clip_count += 1;
@@ -244,8 +249,7 @@ mod tests {
         let mut tl = Timeline::empty("smoke-test");
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("clip-0".to_string());
-        clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/clip-1.MOV"));
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/clip-1.MOV"));
         clip.source_range = Some(TimeRange::new(
             RationalTime::zero(24.0),
             RationalTime::new(clip_dur_s * 24.0, 24.0),

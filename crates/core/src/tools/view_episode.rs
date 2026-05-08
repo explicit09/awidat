@@ -87,7 +87,10 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -107,15 +110,18 @@ mod tests {
         let mut project = Project::init(dir.path()).unwrap();
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("clip-0".to_string());
-        clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/x.mp4"));
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/x.mp4"));
         clip.source_range = Some(TimeRange::new(
             RationalTime::zero(24.0),
             RationalTime::new(10.0 * 24.0, 24.0),
         ));
         clip.metadata = ClipMetadata::default();
         track.children.push(TrackChild::Clip(clip));
-        project.timeline.tracks.children.push(StackChild::Track(track));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
         project.write(dir.path()).unwrap();
 
         let out = ViewEpisodeTool

@@ -146,7 +146,18 @@ pub async fn index_project_at_root(
         version: env!("CARGO_PKG_VERSION").into(),
     };
 
-    let dispatch = awidat_index::run(&project_root, &servers, &assets, client_info, 4, Some(cb));
+    let concurrency = std::env::var("AWIDAT_INDEX_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(1);
+    let dispatch = awidat_index::run(
+        &project_root,
+        &servers,
+        &assets,
+        client_info,
+        concurrency,
+        Some(cb),
+    );
 
     let result = tokio::select! {
         _ = cancel.cancelled() => Err("cancelled".into()),

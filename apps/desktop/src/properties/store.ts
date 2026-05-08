@@ -3,19 +3,16 @@
 // the TimelinePane writes on click and PropertiesPane reads to
 // resolve which clip's metadata to show.
 //
-// Stored as indices (not as the clip's uuid) because the timeline
-// snapshot is the source of truth; resolving uuid → snapshot would
-// require an O(N) scan on every paint. Indices are stable for the
-// lifetime of one snapshot, and we clear the selection on every
-// snapshot refresh in App.tsx so a structural change can't leave a
-// dangling selection pointing at a now-deleted clip.
+// Stored as timeline item indices (not as the clip's uuid) so the
+// canvas can use the same key for hit testing and selection paint.
+// The properties pane resolves the key against the current snapshot.
 
 import { create } from "zustand";
 
 export type SelectedClipKey = {
   /** Index into TimelineSnapshot.tracks. */
   trackIndex: number;
-  /** Index into the chosen track's items array. */
+  /** TimelineItem.index inside the chosen track. */
   clipIndex: number;
 };
 

@@ -162,7 +162,10 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -184,8 +187,10 @@ mod tests {
             serde_json::to_vec_pretty(&serde_json::json!({
                 "indexer": "shot", "asset_id": asset,
                 "data": {"shots": shots}
-            })).unwrap(),
-        ).unwrap();
+            }))
+            .unwrap(),
+        )
+        .unwrap();
     }
 
     #[tokio::test]
@@ -208,7 +213,7 @@ mod tests {
         let s = &v["summaries"][0];
         assert_eq!(s["shot_count"], 3);
         assert_eq!(s["total_shot_seconds"], 20.0);
-        assert!((s["mean_shot_seconds"].as_f64().unwrap() - 20.0/3.0).abs() < 1e-9);
+        assert!((s["mean_shot_seconds"].as_f64().unwrap() - 20.0 / 3.0).abs() < 1e-9);
         assert_eq!(s["by_type"]["close-up"], 2);
         assert_eq!(s["by_type"]["wide"], 1);
         assert_eq!(s["by_motion"]["static"], 2);

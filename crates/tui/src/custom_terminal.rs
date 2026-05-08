@@ -35,12 +35,12 @@ use std::io::Write;
 
 use crossterm::cursor::{MoveTo, SetCursorStyle};
 use crossterm::queue;
-use derive_more::IsVariant;
 use crossterm::style::{
     Attribute as CAttribute, Colors, Print, SetAttribute, SetBackgroundColor, SetColors,
     SetForegroundColor,
 };
 use crossterm::terminal::{Clear, ClearType as CtClearType};
+use derive_more::IsVariant;
 use ratatui::backend::{Backend, ClearType};
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Position, Rect, Size};
@@ -137,10 +137,7 @@ where
     /// Build a Terminal seeded with a known cursor position. Use this
     /// after a bounded probe — passing the fallback you want first
     /// render to honor (e.g. `Position::ORIGIN` if the probe timed out).
-    pub fn with_options_and_cursor_position(
-        backend: B,
-        cursor_pos: Position,
-    ) -> io::Result<Self> {
+    pub fn with_options_and_cursor_position(backend: B, cursor_pos: Position) -> io::Result<Self> {
         let screen_size = backend.size()?;
         Ok(Self::with_screen_size_and_cursor_position(
             backend,
@@ -159,7 +156,12 @@ where
             buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
             current: 0,
             hidden_cursor: false,
-            viewport_area: Rect::new(/*x*/ 0, cursor_pos.y, /*width*/ 0, /*height*/ 0),
+            viewport_area: Rect::new(
+                /*x*/ 0,
+                cursor_pos.y,
+                /*width*/ 0,
+                /*height*/ 0,
+            ),
             last_known_screen_size: screen_size,
             last_known_cursor_pos: cursor_pos,
             visible_history_rows: 0,
@@ -663,7 +665,8 @@ mod tests {
         next.set_string(0, 0, "hi", Style::default());
         let cmds = diff_buffers(&prev, &next);
         assert!(
-            cmds.iter().any(|c| matches!(c, DrawCommand::Put { x: 0, .. })),
+            cmds.iter()
+                .any(|c| matches!(c, DrawCommand::Put { x: 0, .. })),
             "expected a Put for the new cell at x=0; got {cmds:?}"
         );
     }

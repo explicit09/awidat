@@ -93,7 +93,10 @@ impl Scenario for FreshProjectViewEpisode {
         let dir = tempfile::tempdir()?;
         Project::init(dir.path())?;
         let out = ViewEpisodeTool
-            .handle(make_call("view_episode", serde_json::json!({})), ctx_at(dir.path()))
+            .handle(
+                make_call("view_episode", serde_json::json!({})),
+                ctx_at(dir.path()),
+            )
             .await;
         let elapsed = started.elapsed();
         let outcome = match out {
@@ -138,7 +141,10 @@ impl Scenario for EmptyProjectListAssets {
         let dir = tempfile::tempdir()?;
         Project::init(dir.path())?;
         let out = ListAssetsTool
-            .handle(make_call("list_assets", serde_json::json!({})), ctx_at(dir.path()))
+            .handle(
+                make_call("list_assets", serde_json::json!({})),
+                ctx_at(dir.path()),
+            )
             .await;
         let elapsed = started.elapsed();
         let outcome = match out {
@@ -258,7 +264,10 @@ impl Scenario for RealProjectViewEpisode {
             return Ok(skip_no_real_project(self.id(), started));
         };
         let out = ViewEpisodeTool
-            .handle(make_call("view_episode", serde_json::json!({})), ctx_at(&root))
+            .handle(
+                make_call("view_episode", serde_json::json!({})),
+                ctx_at(&root),
+            )
             .await;
         let elapsed = started.elapsed();
         Ok(match out {
@@ -317,10 +326,7 @@ impl Scenario for RealProjectFindMoment {
         for q in ["video", "people", "thing", "really", "one"] {
             let out = FindMomentTool
                 .handle(
-                    make_call(
-                        "find_moment",
-                        serde_json::json!({"query": q, "limit": 5}),
-                    ),
+                    make_call("find_moment", serde_json::json!({"query": q, "limit": 5})),
                     ctx_at(&root),
                 )
                 .await;
@@ -429,9 +435,11 @@ impl Scenario for RealProjectReadIndexTranscript {
         // Find an asset id from the project's manifest by scanning raw/.
         let raw_dir = root.join("raw");
         let asset_id = match std::fs::read_dir(&raw_dir) {
-            Ok(entries) => entries
-                .filter_map(|e| e.ok())
-                .find_map(|e| e.path().file_name().map(|n| format!("raw/{}", n.to_string_lossy()))),
+            Ok(entries) => entries.filter_map(|e| e.ok()).find_map(|e| {
+                e.path()
+                    .file_name()
+                    .map(|n| format!("raw/{}", n.to_string_lossy()))
+            }),
             Err(_) => None,
         };
         let Some(asset_id) = asset_id else {

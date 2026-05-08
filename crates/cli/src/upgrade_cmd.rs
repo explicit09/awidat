@@ -43,8 +43,7 @@ pub struct UpgradeArgs {
 /// Once Phase 3 lands a real CI pipeline this URL will resolve to
 /// platform tarballs; until then `awidat upgrade` without --from
 /// fails with a clear "no release URL" message.
-const DEFAULT_RELEASE_BASE: &str =
-    "https://github.com/explicit09/awidat/releases/latest/download";
+const DEFAULT_RELEASE_BASE: &str = "https://github.com/explicit09/awidat/releases/latest/download";
 
 /// Entry point.
 pub fn run(args: UpgradeArgs) -> Result<()> {
@@ -52,8 +51,8 @@ pub fn run(args: UpgradeArgs) -> Result<()> {
     // tree (~/.local/share/awidat/current/) to contain the install
     // script under share/awidat/install.sh — that's where package.sh
     // bundles it.
-    let installed_root = find_installed_root()
-        .context("failed to locate the awidat install tree")?;
+    let installed_root =
+        find_installed_root().context("failed to locate the awidat install tree")?;
     let install_script = installed_root.join("share/awidat/install.sh");
     if !install_script.exists() {
         bail!(
@@ -105,7 +104,9 @@ pub fn run(args: UpgradeArgs) -> Result<()> {
     }
     println!();
     println!("Upgrade complete. New version is active for any new shells.");
-    println!("(Your current shell may still hold the old binary in memory until you re-run awidat.)");
+    println!(
+        "(Your current shell may still hold the old binary in memory until you re-run awidat.)"
+    );
     Ok(())
 }
 
@@ -114,8 +115,7 @@ pub fn run(args: UpgradeArgs) -> Result<()> {
 /// bin/awidat) and walking up looking for the `share/awidat/
 /// install.sh` marker the bundler ships.
 fn find_installed_root() -> Result<PathBuf> {
-    let raw_exe = std::env::current_exe()
-        .context("std::env::current_exe failed")?;
+    let raw_exe = std::env::current_exe().context("std::env::current_exe failed")?;
     // current_exe() on macOS does NOT auto-resolve symlinks (it
     // returns the path used to invoke the binary). canonicalize()
     // walks the chain. Without this, the installed binary at
@@ -141,10 +141,7 @@ fn find_installed_root() -> Result<PathBuf> {
 /// URLs are passed through unchanged. Also expands `~`.
 fn normalize_release_base(raw: &str) -> String {
     let s = raw.trim();
-    if s.starts_with("http://")
-        || s.starts_with("https://")
-        || s.starts_with("file://")
-    {
+    if s.starts_with("http://") || s.starts_with("https://") || s.starts_with("file://") {
         return s.to_string();
     }
     // Bare path: `~/foo` or `./bar` or `/abs/path` or `relative/path`.

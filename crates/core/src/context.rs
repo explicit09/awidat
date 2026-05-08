@@ -17,8 +17,8 @@
 //!
 //!   - System prompt lives in tier-1 cache. Mutating it on every turn
 //!     blows the cache. Fragments live per-turn — cheap.
-//!   - User-installed skills should appear without restarting the
-//!     session. System-prompt-only forced restart.
+//!   - Skill catalogs can change without mutating the static system
+//!     prompt. System-prompt-only loading would force prompt rebuilds.
 //!   - Compaction needs to identify-and-strip injected context to
 //!     produce a clean handoff summary. Markers are how it tells.
 
@@ -84,8 +84,9 @@ pub trait ContextualUserFragment {
 
 /// L1 catalog fragment — the list of available skills with one-line
 /// descriptions. Emitted as a fresh user-role message at the start of
-/// every turn (NOT a static system-prompt section), so user-installed
-/// skills appear without a session restart and tier-1 cache survives.
+/// every turn (NOT a static system-prompt section), so the tier-1
+/// cache survives and the catalog stays separate from persisted
+/// conversation history.
 ///
 /// Format (matches codex's shape):
 ///
@@ -159,7 +160,11 @@ the `bash` tool against paths the L2 body references.\n  - Multiple \
 skills: if the request spans domains (tighten THEN suggest b-roll), \
 load both, in order, and announce which you're using.\n  - Skip \
 gracefully: if no skill applies, just do the work with the regular \
-tools. Skills are a shortcut, not a gate.";
+tools. Skills are a shortcut, not a gate.\n  - Edit graph first: \
+skills may use scripts to score/analyze, but all editorial changes \
+must become graph edits through `apply_edl`, then be inspected with \
+`view_timeline`/`vedit_diff` and rendered with `start_render(scope=\"timeline\")`. \
+Do not use `bash`, FFmpeg, or sidecar scripts as an alternate editor.";
 
 #[cfg(test)]
 mod tests {
@@ -179,6 +184,8 @@ mod tests {
         assert!(rendered.contains("interview-tightener"));
         assert!(rendered.contains("b-roll-suggester"));
         assert!(rendered.contains("How to use skills"));
+        assert!(rendered.contains("Edit graph first"));
+        assert!(rendered.contains("Do not use `bash`, FFmpeg"));
     }
 
     #[test]
@@ -189,7 +196,9 @@ mod tests {
         let rendered = frag.render();
         assert!(AvailableSkillsFragment::matches_text(&rendered));
         // Negative: arbitrary text doesn't match.
-        assert!(!AvailableSkillsFragment::matches_text("just a normal message"));
+        assert!(!AvailableSkillsFragment::matches_text(
+            "just a normal message"
+        ));
         assert!(!AvailableSkillsFragment::matches_text(
             "<skill>different marker</skill>"
         ));

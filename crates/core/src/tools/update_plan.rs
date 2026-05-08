@@ -19,8 +19,8 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::tool::{PlanItem, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::session::SessionEvent;
+use crate::tool::{PlanItem, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `update_plan` tool.
 pub struct UpdatePlanTool;
@@ -92,7 +92,10 @@ impl ToolHandler for UpdatePlanTool {
         // Validate status values up front so the model gets a clean error
         // rather than the event consumer panicking later.
         for (i, item) in args.items.iter().enumerate() {
-            if !matches!(item.status.as_str(), "pending" | "in_progress" | "completed") {
+            if !matches!(
+                item.status.as_str(),
+                "pending" | "in_progress" | "completed"
+            ) {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "update_plan: items[{i}].status = {:?} — must be one of \
                      pending | in_progress | completed",
@@ -122,8 +125,7 @@ impl ToolHandler for UpdatePlanTool {
                         // worse than the silence; the agent can move on.
                     }
                     crate::verify::VerifyResult::Fail { reason, .. } => {
-                        verify_summary
-                            .push_str(&format!("\n  ✗ {:?}: {reason}", item.step));
+                        verify_summary.push_str(&format!("\n  ✗ {:?}: {reason}", item.step));
                     }
                 }
             }
@@ -159,10 +161,9 @@ mod tests {
     use super::*;
     use tokio::sync::broadcast;
 
-    fn ctx_at(project_root: std::path::PathBuf) -> (
-        ToolContext,
-        broadcast::Receiver<SessionEvent>,
-    ) {
+    fn ctx_at(
+        project_root: std::path::PathBuf,
+    ) -> (ToolContext, broadcast::Receiver<SessionEvent>) {
         let (tx, rx) = broadcast::channel(8);
         let c = ToolContext {
             project_root,
@@ -171,7 +172,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         };

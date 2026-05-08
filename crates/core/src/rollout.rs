@@ -319,7 +319,9 @@ impl Recorder {
     /// Mark a compaction event in the log. Caller follows with a
     /// `record_message` for the summary.
     pub fn record_compaction(&self, replaced_messages: usize) {
-        self.send(WriterCmd::Append(RolloutItem::Compaction { replaced_messages }));
+        self.send(WriterCmd::Append(RolloutItem::Compaction {
+            replaced_messages,
+        }));
     }
 
     /// Append an editorial decision (#149). Called by `Session` after
@@ -465,12 +467,7 @@ mod tests {
     #[tokio::test]
     async fn record_message_appends_line() {
         let dir = tempfile::tempdir().unwrap();
-        let rec = Recorder::create(
-            dir.path(),
-            PathBuf::from("/tmp/proj"),
-            "m".into(),
-        )
-        .unwrap();
+        let rec = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
         rec.record_message(Message::user_text("hello"));
         rec.record_message(Message::user_text("world"));
         rec.flush().await.unwrap();
@@ -486,12 +483,7 @@ mod tests {
     async fn resume_reconstructs_history() {
         let dir = tempfile::tempdir().unwrap();
         let path = {
-            let rec = Recorder::create(
-                dir.path(),
-                PathBuf::from("/tmp/proj"),
-                "m".into(),
-            )
-            .unwrap();
+            let rec = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
             rec.record_message(Message::user_text("first"));
             rec.record_message(Message::user_text("second"));
             rec.flush().await.unwrap();
@@ -507,12 +499,7 @@ mod tests {
     async fn resume_drops_pre_compaction_history() {
         let dir = tempfile::tempdir().unwrap();
         let path = {
-            let rec = Recorder::create(
-                dir.path(),
-                PathBuf::from("/tmp/proj"),
-                "m".into(),
-            )
-            .unwrap();
+            let rec = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
             rec.record_message(Message::user_text("old-1"));
             rec.record_message(Message::user_text("old-2"));
             rec.record_compaction(2);
@@ -543,12 +530,7 @@ mod tests {
     #[tokio::test]
     async fn record_decision_appends_typed_line() {
         let dir = tempfile::tempdir().unwrap();
-        let rec = Recorder::create(
-            dir.path(),
-            PathBuf::from("/proj"),
-            "m".into(),
-        )
-        .unwrap();
+        let rec = Recorder::create(dir.path(), PathBuf::from("/proj"), "m".into()).unwrap();
         rec.record_decision(
             "apply_edl".into(),
             "3 ops, kind=hook".into(),
@@ -579,12 +561,7 @@ mod tests {
     #[tokio::test]
     async fn writes_are_lossless_under_burst() {
         let dir = tempfile::tempdir().unwrap();
-        let rec = Recorder::create(
-            dir.path(),
-            PathBuf::from("/p"),
-            "m".into(),
-        )
-        .unwrap();
+        let rec = Recorder::create(dir.path(), PathBuf::from("/p"), "m".into()).unwrap();
         const N: usize = 2_000;
         for i in 0..N {
             rec.record_message(crate::anthropic::Message::user_text(format!("msg-{i}")));
@@ -616,12 +593,7 @@ mod tests {
     #[tokio::test]
     async fn resume_skips_unparseable_lines() {
         let dir = tempfile::tempdir().unwrap();
-        let rec = Recorder::create(
-            dir.path(),
-            PathBuf::from("/tmp"),
-            "m".into(),
-        )
-        .unwrap();
+        let rec = Recorder::create(dir.path(), PathBuf::from("/tmp"), "m".into()).unwrap();
         rec.record_message(Message::user_text("ok"));
         rec.flush().await.unwrap();
         // Append a garbage line.

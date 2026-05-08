@@ -118,11 +118,7 @@ pub fn discover(project_root: &Path, home: Option<&Path>) -> AwidatDocs {
         }
         // Add the separator before subsequent layers (not before the
         // first one).
-        let prefix_len = if docs.text.is_empty() {
-            0
-        } else {
-            SEP.len()
-        };
+        let prefix_len = if docs.text.is_empty() { 0 } else { SEP.len() };
         if docs.bytes + prefix_len + trimmed.len() > MAX_BYTES {
             docs.truncated = true;
             break;

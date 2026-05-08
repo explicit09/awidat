@@ -15,23 +15,20 @@ use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::subagent::SubAgentRegistry;
 use awidat_core::tools::{
     apply_edl::ApplyEdlTool, assess_continuity::AssessContinuityTool, bash::BashTool,
-    broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    delegate::DelegateTool, delegate_all::DelegateAllTool,
-    download_yt_clip::DownloadYtClipTool,
-    find_beat::FindBeatTool,
-    find_broll_opportunities::FindBrollOpportunitiesTool,
-    find_dead_air::FindDeadAirTool,
-    find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
-    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
-    poll_render::PollRenderTool, read_index::ReadIndexTool,
+    broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool, delegate::DelegateTool,
+    delegate_all::DelegateAllTool, download_yt_clip::DownloadYtClipTool, find_beat::FindBeatTool,
+    find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
+    find_episode_start::FindEpisodeStartTool, find_eye_contact::FindEyeContactTool,
+    find_false_starts::FindFalseStartsTool, find_filler_words::FindFillerWordsTool,
+    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
+    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
+    load_skill::LoadSkillTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
-    shot_summary::ShotSummaryTool,
-    start_indexing::StartIndexingTool, start_render::StartRenderTool, update_plan::UpdatePlanTool,
-    use_broll::UseBrollTool,
+    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
+    start_render::StartRenderTool, update_plan::UpdatePlanTool, use_broll::UseBrollTool,
     vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
-    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    vedit_revert::VeditRevertTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
+    view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use awidat_tui::{App, AppConfig};
@@ -47,9 +44,11 @@ Asset paths in this project may be UUID-style (copy_F65206FA-…MOV), \
 not human-readable like 'cast.mp4'. Guessing wastes tool calls and \
 surfaces avoidable errors to the user. The single discovery call is \
 cheap and makes everything after it correct.\
-\n\nYou have 23 tools, organized by purpose:\
+\n\nYou have the full editorial toolset, organized by purpose:\
 \n  - **Discovery / map**: view_episode (compact map of the project — \
-includes which vision indexers have run), view_timeline, list_assets.\
+includes which vision indexers have run), view_timeline, list_assets, \
+find_episode_start (publishable podcast/interview start; rejects \
+pre-roll and rehearsed intros).\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
 hooks, punchlines, CTAs, etc.), inspect_moment (drill into one beat \
 with surrounding transcript + dependencies). Prefer these over \
@@ -87,9 +86,9 @@ re-encode at boundaries. Use scope='preview'/'segment'/'full' only \
 when the user wants a raw asset dumped, not the edit.\
 \n  - **Plan / collab**: update_plan, request_user_input, bash. \
 \n  - **Skills**: load_skill — load a named editorial workflow's full \
-playbook into the current turn. Check the 'Editorial skills' section \
-below the system prompt for the catalog of skill names + one-line \
-descriptions; if the user's request maps to one (e.g. \"tighten this \
+playbook into the current turn. Check the per-turn skills catalog for \
+skill names + one-line descriptions; if the user's request maps to one \
+(e.g. \"tighten this \
 interview\" → interview-tightener), call load_skill(name=...) BEFORE \
 starting the work. The skill body has the editorial style + \
 step-by-step playbook; following it produces better cuts than \
@@ -103,10 +102,9 @@ a draft cut to get cross-cutting feedback in one pass; use delegate \
 for single-lens research. Sub-agents and personas are read-only — \
 for edits, do the work yourself.\
 \n\n\
-Mutating tools (apply_edl, start_render, start_indexing, bash) require user approval — \
-the UI shows a modal and the user picks Allow / Allow-for-Session / \
-Deny. If the user denies, you'll see is_error=true; route around it \
-rather than retrying the same call.\
+Mutating tools may be approval-gated depending on the active runtime. \
+If the UI asks for approval and the user denies, you'll see \
+is_error=true; route around it rather than retrying the same call.\
 \n\n\
 EDL format (freeform, NOT JSON-escaped):\n\
 *** Begin EDL\n\
@@ -164,6 +162,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(FindMomentTool));
     registry.register(Arc::new(FindDeadAirTool));
+    registry.register(Arc::new(FindEpisodeStartTool));
     registry.register(Arc::new(FindFillerWordsTool));
     registry.register(Arc::new(FindFalseStartsTool));
     registry.register(Arc::new(AssessContinuityTool));
@@ -188,6 +187,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(VeditCommitTool));
     registry.register(Arc::new(VeditDiffTool));
     registry.register(Arc::new(VeditLogTool));
+    registry.register(Arc::new(VeditRevertTool));
     registry.register(Arc::new(ClipSearchTool));
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));

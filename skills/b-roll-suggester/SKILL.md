@@ -40,6 +40,11 @@ view_episode      # confirm vision indexers ran
 shot_summary       # what's the visual texture of this asset?
 ```
 
+Use the full visual index set when it exists: `shot` for shot type and
+motion, `frame-quality` for sharpness/readability, `gaze` for moments
+that should stay on the speaker, `clip` for semantic frame search, and
+`face` for speaker continuity.
+
 If `shot_summary` shows < 20% no-face shots, this video doesn't
 have meaningful b-roll. Tell the user honestly: "this video is
 mostly talking-head; the b-roll library is too thin for cutaways.

@@ -29,11 +29,7 @@ pub struct ApprovalModal {
 
 const CHOICES: &[(ApprovalDecision, &str, &str)] = &[
     (ApprovalDecision::Allow, "Allow", "1"),
-    (
-        ApprovalDecision::AllowForSession,
-        "Allow for Session",
-        "2",
-    ),
+    (ApprovalDecision::AllowForSession, "Allow for Session", "2"),
     (ApprovalDecision::Deny, "Deny", "3"),
 ];
 

@@ -134,7 +134,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -158,7 +161,9 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("unknown job_id")));
+        assert!(
+            matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("unknown job_id"))
+        );
     }
 
     #[tokio::test]
@@ -190,10 +195,14 @@ mod tests {
         let spec = RenderJobSpec {
             args: vec![
                 "-y".into(),
-                "-f".into(), "lavfi".into(),
-                "-i".into(), "color=c=blue:s=160x120:d=1".into(),
-                "-c:v".into(), "libx264".into(),
-                "-pix_fmt".into(), "yuv420p".into(),
+                "-f".into(),
+                "lavfi".into(),
+                "-i".into(),
+                "color=c=blue:s=160x120:d=1".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-pix_fmt".into(),
+                "yuv420p".into(),
                 out_path.to_string_lossy().into_owned(),
             ],
             total_duration_s: Some(1.0),
@@ -210,7 +219,10 @@ mod tests {
             user_input_tx: None,
             job_manager: manager,
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         };

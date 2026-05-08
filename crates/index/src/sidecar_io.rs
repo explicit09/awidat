@@ -110,13 +110,17 @@ fn walk_inner(root: &Path, here: &Path, out: &mut Vec<(String, serde_json::Value
         if p.is_dir() {
             walk_inner(root, &p, out);
         } else if p.extension().and_then(|s| s.to_str()) == Some("json") {
-            let Ok(bytes) = std::fs::read(&p) else { continue };
+            let Ok(bytes) = std::fs::read(&p) else {
+                continue;
+            };
             let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
                 tracing::warn!(path = %p.display(), "sidecar malformed; skipping");
                 continue;
             };
             // Asset id = path relative to indexer dir, minus the .json.
-            let Ok(rel) = p.strip_prefix(root) else { continue };
+            let Ok(rel) = p.strip_prefix(root) else {
+                continue;
+            };
             let s = rel.to_string_lossy();
             let asset = s.strip_suffix(".json").unwrap_or(&s).to_string();
             out.push((asset, v));
@@ -143,10 +147,7 @@ mod tests {
             &AssetId::new("raw/foo.wav"),
         )
         .unwrap();
-        assert_eq!(
-            p,
-            PathBuf::from("/tmp/proj/index/whisper/raw/foo.wav.json")
-        );
+        assert_eq!(p, PathBuf::from("/tmp/proj/index/whisper/raw/foo.wav.json"));
     }
 
     #[test]
@@ -163,8 +164,8 @@ mod tests {
     #[test]
     fn read_missing_returns_notfound() {
         let dir = tempfile::tempdir().unwrap();
-        let err = read_sidecar(dir.path(), "whisper", &AssetId::new("raw/missing.wav"))
-            .unwrap_err();
+        let err =
+            read_sidecar(dir.path(), "whisper", &AssetId::new("raw/missing.wav")).unwrap_err();
         match err {
             SidecarError::NotFound { indexer, .. } => assert_eq!(indexer, "whisper"),
             other => panic!("want NotFound, got {other:?}"),

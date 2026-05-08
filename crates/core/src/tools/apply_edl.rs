@@ -401,6 +401,10 @@ WRITES project.otio.json. The EDL is a freeform envelope (NOT \
 JSON-escaped multi-line content — pass the raw text). Begins with \
 `*** Begin EDL` and ends with `*** End EDL`. \
 \n\n\
+This is the graph-native editing path. Use it for timeline changes \
+instead of rewriting project.otio.json by hand or producing edited \
+media directly with bash/FFmpeg. \
+\n\n\
 Operations and their required `+ key: value` fields:\
 \n  - **Trim Clip**: `+ start: <source_s>` and/or `+ end: <source_s>` \
 (at least one). Times are seconds into the clip's source media. \
@@ -482,6 +486,21 @@ clip_uuid. ALL styling fields are optional — only non-None ones \
 update. Same field set as `Insert Title` plus `start_s` / `end_s` \
 to retime the overlay window. Errors when the anchored clip has \
 no `awidat.title` effect.\
+\n  - **Insert Caption**: `+ start_s: <seconds>`, `+ end_s: <seconds>`, \
+`+ text: \"<string>\"` (required). Optional `+ position: <top|center|bottom>` \
+(default `bottom`), `+ font_size: <px>` (default 52), `+ color: <#RRGGBB>` \
+(default `#FFFFFF`), `+ safe_area: <profile>` (default `mobile`). Captions \
+are graph nodes on the Titles track with `role=\"caption\"`; do not burn \
+captions by writing a separate render script.\
+\n  - **Set Output Format**: `+ aspect_ratio: <16:9|9:16|1:1|4:5>` \
+(required). Optional `+ platform: <name>` and `+ safe_area: <profile>`. \
+Stores delivery format intent on `timeline.metadata.awidat.extra.output_format`.\
+\n  - **Set Loudness Target**: `+ integrated_lufs: <negative number>` \
+(required). Optional `+ true_peak_db: <negative ceiling>`. Stores audio \
+delivery intent on the timeline graph.\
+\n  - **Set Package Metadata**: optional `+ platform`, `+ title`, \
+`+ description`, `+ tags` (comma-separated). Stores publishing-package \
+intent on the timeline graph; at least one field is required.\
 \n\n\
 **Anchors.** Each op identifies its target by content anchor — \
 `transcript_snippet`, `clip_uuid`, `scene_change_index` — not \
@@ -588,6 +607,13 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn description_declares_graph_native_edit_path() {
+        assert!(DESCRIPTION.contains("graph-native editing path"));
+        assert!(DESCRIPTION.contains("project.otio.json by hand"));
+        assert!(DESCRIPTION.contains("bash/FFmpeg"));
+    }
+
     #[tokio::test]
     async fn happy_path_trim_commits_to_disk() {
         let dir = project_with_three_clips();
@@ -675,7 +701,10 @@ mod tests {
         // Description for trim is something like
         // "trimmed clip \"clip-1\" to source [0.0..3.0]". Don't pin
         // the exact phrasing — just confirm it landed and is non-empty.
-        assert!(!head.header.is_empty(), "auto-commit header is empty: {head:?}");
+        assert!(
+            !head.header.is_empty(),
+            "auto-commit header is empty: {head:?}"
+        );
         assert!(
             head.header.contains("clip-1") || head.header.contains("trim"),
             "auto-commit header doesn't reflect the op: {}",

@@ -109,10 +109,7 @@ impl Repo {
     /// Project root the repo is rooted at (`<root>/.vedit/`).
     pub fn workdir(&self) -> &Path {
         // VeditRepo.root is `<workdir>/.vedit`; we want the parent.
-        self.inner
-            .root
-            .parent()
-            .unwrap_or_else(|| Path::new("/"))
+        self.inner.root.parent().unwrap_or_else(|| Path::new("/"))
     }
 
     /// Path to `project.otio.json`.
@@ -153,7 +150,11 @@ pub fn open_or_init(project_root: &Path) -> Result<Repo, VcError> {
 pub fn ensure_session_tag(repo: &Repo) -> Result<(), VcError> {
     // If HEAD has no commits yet, there's nothing to tag. The first
     // commit's branch (main) IS the session start.
-    let head_target = match repo.inner.branch_target(DEFAULT_BRANCH).map_err(vedit_err)? {
+    let head_target = match repo
+        .inner
+        .branch_target(DEFAULT_BRANCH)
+        .map_err(vedit_err)?
+    {
         Some(h) => h,
         None => return Ok(()),
     };
@@ -193,18 +194,10 @@ pub fn commit_current_timeline(
     header: &str,
     agent_reasoning: Option<&str>,
 ) -> Result<CommitOutcome, VcError> {
-    let bytes = std::fs::read(&repo.project_otio).map_err(|e| {
-        VcError::Project(format!(
-            "reading {}: {e}",
-            repo.project_otio.display()
-        ))
-    })?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-        VcError::Project(format!(
-            "parsing {}: {e}",
-            repo.project_otio.display()
-        ))
-    })?;
+    let bytes = std::fs::read(&repo.project_otio)
+        .map_err(|e| VcError::Project(format!("reading {}: {e}", repo.project_otio.display())))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| VcError::Project(format!("parsing {}: {e}", repo.project_otio.display())))?;
 
     let timeline_hash = repo.inner.write_timeline(&value).map_err(vedit_err)?;
     let message = format_commit_message(header, agent_reasoning);
@@ -402,9 +395,15 @@ fn resolve_default(
     }
 }
 
-fn read_timeline_at_commit(repo: &Repo, commit_hash: &str) -> Result<vedit_core::model::Timeline, VcError> {
+fn read_timeline_at_commit(
+    repo: &Repo,
+    commit_hash: &str,
+) -> Result<vedit_core::model::Timeline, VcError> {
     let commit: Commit = repo.inner.read_commit(commit_hash).map_err(vedit_err)?;
-    let timeline_value = repo.inner.read_timeline(&commit.timeline).map_err(vedit_err)?;
+    let timeline_value = repo
+        .inner
+        .read_timeline(&commit.timeline)
+        .map_err(vedit_err)?;
     let timeline = otio::parse_timeline(&timeline_value).map_err(vedit_err)?;
     Ok(timeline)
 }
@@ -440,6 +439,43 @@ impl CommittedDiff {
     pub fn is_empty(&self) -> bool {
         self.changes.is_empty()
     }
+}
+
+/// Restore the project's working `project.otio.json` to the timeline
+/// stored at `refstr`. This does not move HEAD by itself; callers that
+/// want an auditable revert should call [`commit_current_timeline`]
+/// after the restore succeeds.
+pub fn restore_working_timeline(repo: &Repo, refstr: &str) -> Result<RestoreOutcome, VcError> {
+    let commit_hash = repo
+        .inner
+        .resolve(refstr)
+        .map_err(|_| VcError::UnknownRef(refstr.to_string()))?;
+    let commit: Commit = repo.inner.read_commit(&commit_hash).map_err(vedit_err)?;
+    let timeline_value = repo
+        .inner
+        .read_timeline(&commit.timeline)
+        .map_err(vedit_err)?;
+    let pretty = serde_json::to_vec_pretty(&timeline_value)
+        .map_err(|e| VcError::Project(format!("serializing restored timeline: {e}")))?;
+    std::fs::write(&repo.project_otio, pretty)
+        .map_err(|e| VcError::Project(format!("writing {}: {e}", repo.project_otio.display())))?;
+
+    Ok(RestoreOutcome {
+        requested_ref: refstr.to_string(),
+        commit_hash,
+        timeline_hash: commit.timeline,
+    })
+}
+
+/// Result of restoring the working timeline to a committed snapshot.
+#[derive(Debug, Clone)]
+pub struct RestoreOutcome {
+    /// Ref string requested by the caller.
+    pub requested_ref: String,
+    /// Resolved commit hash.
+    pub commit_hash: String,
+    /// Timeline object hash restored into `project.otio.json`.
+    pub timeline_hash: String,
 }
 
 /// Last N commits, newest-first. Returns lightweight entries (hash,
@@ -586,16 +622,16 @@ mod tests {
         write_minimal_otio(&dir.path().join("project.otio.json"), "v1");
 
         let repo = open_or_init(dir.path()).unwrap();
-        let outcome = commit_current_timeline(
-            &repo,
-            "Initial commit",
-            Some("Brand-new project."),
-        )
-        .unwrap();
+        let outcome =
+            commit_current_timeline(&repo, "Initial commit", Some("Brand-new project.")).unwrap();
         assert!(outcome.commit_hash.starts_with("sha256:"));
         assert!(outcome.timeline_hash.starts_with("sha256:"));
         assert!(outcome.message.contains("Initial commit"));
-        assert!(outcome.message.contains("Agent reasoning: Brand-new project."));
+        assert!(
+            outcome
+                .message
+                .contains("Agent reasoning: Brand-new project.")
+        );
     }
 
     #[test]
@@ -612,10 +648,7 @@ mod tests {
 
     #[test]
     fn format_commit_message_with_body_uses_canonical_shape() {
-        let m = format_commit_message(
-            "Trim X by 1.8s",
-            Some("User asked for tighter pacing."),
-        );
+        let m = format_commit_message("Trim X by 1.8s", Some("User asked for tighter pacing."));
         // Header on line 1, blank line, body line.
         let lines: Vec<&str> = m.lines().collect();
         assert_eq!(lines[0], "Trim X by 1.8s");
@@ -632,8 +665,12 @@ mod tests {
         let repo = open_or_init(dir.path()).unwrap();
         // No commits yet — should silently do nothing.
         ensure_session_tag(&repo).unwrap();
-        let session_ref =
-            dir.path().join(".vedit").join("refs").join("heads").join(SESSION_START_BRANCH);
+        let session_ref = dir
+            .path()
+            .join(".vedit")
+            .join("refs")
+            .join("heads")
+            .join(SESSION_START_BRANCH);
         assert!(!session_ref.exists());
     }
 
@@ -645,8 +682,12 @@ mod tests {
         let outcome = commit_current_timeline(&repo, "Initial", None).unwrap();
         ensure_session_tag(&repo).unwrap();
 
-        let session_ref =
-            dir.path().join(".vedit").join("refs").join("heads").join(SESSION_START_BRANCH);
+        let session_ref = dir
+            .path()
+            .join(".vedit")
+            .join("refs")
+            .join("heads")
+            .join(SESSION_START_BRANCH);
         let contents = std::fs::read_to_string(&session_ref).unwrap();
         assert!(contents.trim() == outcome.commit_hash, "{contents:?}");
     }
@@ -674,7 +715,9 @@ mod tests {
         // ideally the new clip too. We assert the track add (the
         // certainty); the clip add is implied.
         assert!(
-            diff.changes.iter().any(|c| matches!(c, diff::Change::TrackAdded { .. })),
+            diff.changes
+                .iter()
+                .any(|c| matches!(c, diff::Change::TrackAdded { .. })),
             "expected at least one TrackAdded, got: {:?}",
             diff.changes
         );
@@ -730,6 +773,27 @@ mod tests {
     }
 
     #[test]
+    fn restore_working_timeline_writes_committed_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_minimal_otio(&otio, "v1");
+
+        let repo = open_or_init(dir.path()).unwrap();
+        let first = commit_current_timeline(&repo, "v1", None).unwrap();
+        write_minimal_otio(&otio, "v2");
+        commit_current_timeline(&repo, "v2", None).unwrap();
+
+        let restored = restore_working_timeline(&repo, &first.commit_hash).unwrap();
+        assert_eq!(restored.requested_ref, first.commit_hash);
+        assert_eq!(restored.commit_hash, first.commit_hash);
+        assert_eq!(restored.timeline_hash, first.timeline_hash);
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&otio).unwrap()).unwrap();
+        assert_eq!(value["name"].as_str(), Some("v1"));
+    }
+
+    #[test]
     fn compose_header_for_one_op_is_verbatim() {
         let h = compose_auto_header(&["Trim drone_shot -1.8s".into()]);
         assert_eq!(h, "Trim drone_shot -1.8s");
@@ -741,7 +805,10 @@ mod tests {
             "Trim drone_shot -1.8s".into(),
             "Insert BRoll over skyline reference".into(),
         ]);
-        assert_eq!(h, "Trim drone_shot -1.8s; Insert BRoll over skyline reference");
+        assert_eq!(
+            h,
+            "Trim drone_shot -1.8s; Insert BRoll over skyline reference"
+        );
     }
 
     #[test]
@@ -791,8 +858,16 @@ mod tests {
         )
         .unwrap();
         assert!(outcome.commit_hash.starts_with("sha256:"));
-        assert!(outcome.message.starts_with("Trim clip-0 by 1.8s; Insert BRoll over c-skyline"));
-        assert!(outcome.message.contains("Agent reasoning: User asked for tighter pacing"));
+        assert!(
+            outcome
+                .message
+                .starts_with("Trim clip-0 by 1.8s; Insert BRoll over c-skyline")
+        );
+        assert!(
+            outcome
+                .message
+                .contains("Agent reasoning: User asked for tighter pacing")
+        );
     }
 
     #[test]

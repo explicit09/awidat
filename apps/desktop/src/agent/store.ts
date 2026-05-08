@@ -18,6 +18,8 @@ type AgentState = {
   turnError: string | null;
   /** Upsert an Item: replace if `id` already present, append otherwise. */
   upsert: (item: Item) => void;
+  /** Replace the visible stream with persisted history for a session. */
+  replace: (items: Item[]) => void;
   /** Clear all items + error (used between turns or on project change). */
   clear: () => void;
   /** Set the running flag explicitly. */
@@ -47,6 +49,7 @@ export const useAgentStore = create<AgentState>((set) => ({
       next[idx] = item;
       return { items: next };
     }),
+  replace: (items) => set({ items, turnError: null, running: false }),
   clear: () => set({ items: [], turnError: null }),
   setRunning: (running) => set({ running }),
   setTurnError: (err) => set({ turnError: err }),

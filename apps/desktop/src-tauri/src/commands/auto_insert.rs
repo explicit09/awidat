@@ -94,8 +94,13 @@ pub async fn auto_insert_if_empty(
         };
 
         let ctx = AnchorContext::with_project_root(&project_root);
-        let (new_timeline, _outcome) = apply(&project.timeline, &envelope, &ctx)
+        let (new_timeline, outcome) = apply(&project.timeline, &envelope, &ctx)
             .map_err(|e| format!("auto-insert: edl apply: {e}"))?;
+        let applied_descriptions: Vec<String> = outcome
+            .applied
+            .iter()
+            .map(|a| a.description.clone())
+            .collect();
 
         // Persist. Project::write writes the OTIO + edit-plan +
         // manifest atomically; we only mutated the timeline.
@@ -104,6 +109,29 @@ pub async fn auto_insert_if_empty(
         updated
             .write(&project_root)
             .map_err(|e| format!("auto-insert: write project: {e}"))?;
+
+        // Keep the implicit import -> timeline graph mutation in the
+        // same audit trail as explicit apply_edl/proposal writes.
+        match awidat_core::vc::open_or_init(&project_root) {
+            Ok(repo) => {
+                if let Err(e) = awidat_core::vc::auto_commit_apply(
+                    &repo,
+                    &applied_descriptions,
+                    Some("Auto-inserted the first imported asset onto the empty timeline."),
+                ) {
+                    tracing::warn!(
+                        error = %e,
+                        "vedit auto-commit failed (auto-insert path)"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "vedit repo unavailable; skipping auto-insert commit"
+                );
+            }
+        }
         Ok(true)
     })
     .await

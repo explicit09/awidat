@@ -71,17 +71,11 @@ impl ToolHandler for VeditDiffTool {
         })?;
 
         let repo = vc::open_or_init(&ctx.project_root).map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "vedit_diff: opening repo failed: {e}"
-            ))
+            FunctionCallError::RespondToModel(format!("vedit_diff: opening repo failed: {e}"))
         })?;
 
         let diff = vc::diff_refs(&repo, args.from.as_deref(), args.to.as_deref())
-            .map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "vedit_diff: {e}"
-                ))
-            })?;
+            .map_err(|e| FunctionCallError::RespondToModel(format!("vedit_diff: {e}")))?;
 
         let body = serde_json::json!({
             "from": diff.from_ref,

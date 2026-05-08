@@ -50,20 +50,62 @@ const OUTPUT_CAP_BYTES: usize = 64 * 1024;
 /// catch `which curl && curl ...` — that's what week 7's sandbox is for.
 const BANNED_COMMANDS: &[&str] = &[
     // Network / download
-    "curl", "wget", "scp", "ssh", "telnet", "nc", "ncat", "axel", "aria2c",
-    "httpie", "http", "xh",
+    "curl",
+    "wget",
+    "scp",
+    "ssh",
+    "telnet",
+    "nc",
+    "ncat",
+    "axel",
+    "aria2c",
+    "httpie",
+    "http",
+    "xh",
     // Browsers
-    "chrome", "firefox", "safari", "lynx", "w3m", "links",
+    "chrome",
+    "firefox",
+    "safari",
+    "lynx",
+    "w3m",
+    "links",
     // Privilege escalation
-    "sudo", "doas", "su",
+    "sudo",
+    "doas",
+    "su",
     // Shell aliasing — fragile across runs
-    "alias", "unalias",
+    "alias",
+    "unalias",
     // Package managers (system-wide mutation)
-    "apt", "apt-get", "apt-cache", "dpkg", "yum", "dnf", "rpm", "pacman",
-    "yay", "paru", "apk", "zypper", "emerge", "portage", "pkg", "pkg_add",
-    "pkg_delete", "opkg", "home-manager", "makepkg",
+    "apt",
+    "apt-get",
+    "apt-cache",
+    "dpkg",
+    "yum",
+    "dnf",
+    "rpm",
+    "pacman",
+    "yay",
+    "paru",
+    "apk",
+    "zypper",
+    "emerge",
+    "portage",
+    "pkg",
+    "pkg_add",
+    "pkg_delete",
+    "opkg",
+    "home-manager",
+    "makepkg",
     // System / disk modification
-    "fdisk", "parted", "mkfs", "mount", "umount", "crontab", "at", "batch",
+    "fdisk",
+    "parted",
+    "mkfs",
+    "mount",
+    "umount",
+    "crontab",
+    "at",
+    "batch",
     "chkconfig",
 ];
 
@@ -142,11 +184,17 @@ impl ToolHandler for BashTool {
                  outside the agent loop."
             )));
         }
+        if looks_like_project_otio_write_bypass(&args.command) {
+            warn!("bash: rejecting direct project.otio.json write");
+            return Err(FunctionCallError::RespondToModel(
+                "bash: refusing a command that appears to write project.otio.json directly. \
+                 The edit graph must be mutated through apply_edl so OTIO validation, vedit \
+                 audit history, proposal overlays, and timeline render planning stay coherent."
+                    .into(),
+            ));
+        }
 
-        let timeout_ms = args
-            .timeout_ms
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .min(300_000);
+        let timeout_ms = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS).min(300_000);
         let to = Duration::from_millis(timeout_ms);
 
         // Sandboxed execution path. The sandbox is on by default;
@@ -160,8 +208,7 @@ impl ToolHandler for BashTool {
             .as_deref()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| ctx.project_root.clone());
-        if std::env::var_os("AWIDAT_BASH_NO_SANDBOX").is_none()
-            && awidat_sandboxing::is_available()
+        if std::env::var_os("AWIDAT_BASH_NO_SANDBOX").is_none() && awidat_sandboxing::is_available()
         {
             return run_sandboxed(&args.command, &workdir, &ctx.project_root, to).await;
         }
@@ -246,16 +293,14 @@ async fn run_sandboxed(
             let formatted = format_output(exit_code, &stdout, &stderr);
             Ok(ToolOutput::text(formatted))
         }
-        Err(SandboxErr::Denied { reason }) => {
-            Err(FunctionCallError::RespondToModel(format!(
-                "bash: sandbox denied the command ({reason}). The sandbox \
+        Err(SandboxErr::Denied { reason }) => Err(FunctionCallError::RespondToModel(format!(
+            "bash: sandbox denied the command ({reason}). The sandbox \
                  only permits writes inside the project root + system \
                  tempdirs, and denies network egress by default. Either \
                  rewrite the command to stay within those bounds, or tell \
                  the user this needs unsandboxed execution and let them \
                  run it outside the agent loop."
-            )))
-        }
+        ))),
         Err(SandboxErr::LinuxNotImplemented) => {
             // Should never reach here — `is_available()` returns
             // false on Linux, so the caller picked the unsandboxed
@@ -297,9 +342,11 @@ fn shell_quote(s: &str) -> String {
 const BASH_DESCRIPTION: &str = "\
 Run a shell command. Returns combined stdout + stderr + exit code, capped at 64KB \
 (middle-elided beyond that). Default timeout: 10s. Use this to inspect the project, \
-run quick scripts, query system info. Some commands are statically rejected for \
-safety (network tools, package managers, sudo, alias). Sandboxing lands in week 7; \
-until then, prefer narrow read-only operations.\
+run quick analysis/verification scripts, and query system info. Do NOT use bash or \
+FFmpeg as an alternate editor: never cut/concat/overlay/caption final artifacts, \
+rewrite project.otio.json, or bypass `apply_edl` / `start_render(scope=\"timeline\")` \
+for editorial changes. Some commands are statically rejected for safety (network \
+tools, package managers, sudo, alias). Prefer narrow read-only operations.\
 ";
 
 /// Return the first banned token if `command`'s first word matches one,
@@ -308,6 +355,24 @@ fn first_banned_token(command: &str) -> Option<&'static str> {
     let trimmed = command.trim_start();
     let first = trimmed.split_whitespace().next()?;
     BANNED_COMMANDS.iter().find(|b| **b == first).copied()
+}
+
+fn looks_like_project_otio_write_bypass(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    if !lower.contains("project.otio.json") {
+        return false;
+    }
+    let compact: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains(">project.otio.json")
+        || lower.contains("tee ")
+        || lower.contains("mv ")
+        || lower.contains("cp ")
+        || lower.contains("rm ")
+        || lower.contains("truncate ")
+        || lower.contains("sed -i")
+        || lower.contains("perl -pi")
+        || lower.contains(".write(")
+        || lower.contains("write_text(")
 }
 
 /// Format an output blob the model will see. Truncates middle when over
@@ -348,11 +413,8 @@ fn truncate_middle(s: &str, cap: usize) -> String {
     let head = &s[..head_end];
     let tail = &s[tail_start..];
     let elided_bytes = total_bytes - head.len() - tail.len();
-    let elided_lines =
-        total_lines.saturating_sub(head.lines().count() + tail.lines().count());
-    format!(
-        "{head}\n... [TRUNCATED ~{elided_lines} lines, ~{elided_bytes} bytes] ...\n{tail}"
-    )
+    let elided_lines = total_lines.saturating_sub(head.lines().count() + tail.lines().count());
+    format!("{head}\n... [TRUNCATED ~{elided_lines} lines, ~{elided_bytes} bytes] ...\n{tail}")
 }
 
 fn clamp_to_char_boundary(s: &str, mut i: usize) -> usize {
@@ -386,7 +448,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -396,7 +461,10 @@ mod tests {
     async fn happy_path_runs_and_returns_stdout() {
         let tool = BashTool;
         let out = tool
-            .handle(invoke(serde_json::json!({"command": "echo hello-bash"})), ctx())
+            .handle(
+                invoke(serde_json::json!({"command": "echo hello-bash"})),
+                ctx(),
+            )
             .await
             .unwrap();
         assert!(out.content.contains("exit code: 0"));
@@ -408,7 +476,10 @@ mod tests {
     async fn stderr_is_captured_separately() {
         let tool = BashTool;
         let out = tool
-            .handle(invoke(serde_json::json!({"command": "echo to-err 1>&2"})), ctx())
+            .handle(
+                invoke(serde_json::json!({"command": "echo to-err 1>&2"})),
+                ctx(),
+            )
             .await
             .unwrap();
         assert!(out.content.contains("--- stderr ---"));
@@ -428,7 +499,10 @@ mod tests {
     #[tokio::test]
     async fn missing_command_arg_is_respond_to_model() {
         let tool = BashTool;
-        let err = tool.handle(invoke(serde_json::json!({})), ctx()).await.unwrap_err();
+        let err = tool
+            .handle(invoke(serde_json::json!({})), ctx())
+            .await
+            .unwrap_err();
         match err {
             FunctionCallError::RespondToModel(msg) => {
                 assert!(msg.contains("invalid args"));
@@ -446,10 +520,13 @@ mod tests {
         // format. The exact-format checks live in the sandboxing
         // crate's tests, which exercise both paths directly.
         let err = tool
-            .handle(invoke(serde_json::json!({
-                "command": "sleep 5",
-                "timeout_ms": 200,
-            })), ctx())
+            .handle(
+                invoke(serde_json::json!({
+                    "command": "sleep 5",
+                    "timeout_ms": 200,
+                })),
+                ctx(),
+            )
             .await
             .unwrap_err();
         match err {
@@ -467,7 +544,10 @@ mod tests {
     async fn banned_command_is_rejected_with_helpful_message() {
         let tool = BashTool;
         let err = tool
-            .handle(invoke(serde_json::json!({"command": "curl https://example.com"})), ctx())
+            .handle(
+                invoke(serde_json::json!({"command": "curl https://example.com"})),
+                ctx(),
+            )
             .await
             .unwrap_err();
         match err {
@@ -477,6 +557,42 @@ mod tests {
             }
             other => panic!("want RespondToModel, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn direct_otio_write_bypass_is_rejected() {
+        let tool = BashTool;
+        let err = tool
+            .handle(
+                invoke(serde_json::json!({"command": "printf '{}' > project.otio.json"})),
+                ctx(),
+            )
+            .await
+            .unwrap_err();
+        match err {
+            FunctionCallError::RespondToModel(msg) => {
+                assert!(msg.contains("project.otio.json"));
+                assert!(msg.contains("apply_edl"));
+            }
+            other => panic!("want RespondToModel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn otio_read_commands_are_not_rejected_as_bypasses() {
+        assert!(!looks_like_project_otio_write_bypass(
+            "cat project.otio.json"
+        ));
+        assert!(!looks_like_project_otio_write_bypass(
+            "jq '.tracks' project.otio.json"
+        ));
+    }
+
+    #[test]
+    fn description_keeps_bash_out_of_the_editing_path() {
+        assert!(BASH_DESCRIPTION.contains("alternate editor"));
+        assert!(BASH_DESCRIPTION.contains("apply_edl"));
+        assert!(BASH_DESCRIPTION.contains("start_render(scope=\"timeline\")"));
     }
 
     #[tokio::test]
@@ -495,10 +611,13 @@ mod tests {
         let tool = BashTool;
         let dir = tempfile::tempdir().unwrap();
         let out = tool
-            .handle(invoke(serde_json::json!({
-                "command": "pwd",
-                "workdir": dir.path().to_string_lossy(),
-            })), ctx())
+            .handle(
+                invoke(serde_json::json!({
+                    "command": "pwd",
+                    "workdir": dir.path().to_string_lossy(),
+                })),
+                ctx(),
+            )
             .await
             .unwrap();
         assert!(out.content.contains(&*dir.path().to_string_lossy()));

@@ -158,7 +158,7 @@ pub struct Session {
     /// launched on first use, and lives for the rest of the session.
     mcp_host: crate::mcp_host::McpHost,
     /// Skills discovered at session start. The L1 catalog (one
-    /// line per skill) is already in `system_prompt`; this Arc is
+    /// line per skill) is emitted as per-turn context; this Arc is
     /// surfaced through `ToolContext` so the `load_skill` tool can
     /// retrieve a skill's full L2 body on demand.
     skills: Arc<crate::skills::SkillRegistry>,
@@ -233,9 +233,8 @@ impl Session {
         // The L1 catalog is NOT in the static system prompt — it's
         // emitted per-turn as a `<skills_instructions>`-tagged
         // fragment via `crate::context::AvailableSkillsFragment`,
-        // which keeps tier-1 cache stable when users install new
-        // skills mid-session and lets the compaction pass identify
-        // injected catalog blocks via the marker tags.
+        // which keeps tier-1 cache stable and lets the compaction
+        // pass identify injected catalog blocks via the marker tags.
         let bundled_skills = awidat_config::defaults::skills_root();
         let user_skills = awidat_config::defaults::user_skills_root();
         let (skill_registry, skill_errors) = crate::skills::SkillRegistry::discover(
@@ -271,7 +270,10 @@ impl Session {
             sections.push(format!("## Learned style\n\n{style}"));
         }
         if !docs.text.is_empty() {
-            sections.push(format!("## Project conventions (AWIDAT.md)\n\n{}", docs.text));
+            sections.push(format!(
+                "## Project conventions (AWIDAT.md)\n\n{}",
+                docs.text
+            ));
         }
         let final_system_prompt = if sections.is_empty() {
             None
@@ -349,10 +351,7 @@ impl Session {
     /// Calling this on a non-sub-session is a no-op semantically (the
     /// `attempt_completion` tool isn't mounted) but harmless.
     #[must_use]
-    pub fn with_subagent_return(
-        mut self,
-        slot: Arc<Mutex<Option<String>>>,
-    ) -> Self {
+    pub fn with_subagent_return(mut self, slot: Arc<Mutex<Option<String>>>) -> Self {
         self.subagent_return = Some(slot);
         self
     }
@@ -392,11 +391,12 @@ impl Session {
     ) -> Result<Self, SessionError> {
         let (meta, history) = crate::rollout::Recorder::resume(log_path)
             .map_err(|e| SessionError::Other(format!("rollout resume failed: {e}")))?;
+        let prompt = crate::system_prompt::assemble_for_project(&meta.project_root);
         let mut session = Self::new(
             client,
             registry,
             meta.model.clone(),
-            None,
+            Some(prompt),
             meta.project_root.clone(),
         );
         // Replay history.
@@ -423,10 +423,7 @@ impl Session {
     /// [`ApprovalDecision::Allow`] — appropriate for tests, batch CLI,
     /// and the MCP server which run unattended.
     #[must_use]
-    pub fn with_approval_channel(
-        mut self,
-        tx: mpsc::Sender<ApprovalRequest>,
-    ) -> Self {
+    pub fn with_approval_channel(mut self, tx: mpsc::Sender<ApprovalRequest>) -> Self {
         self.approval_tx = Some(tx);
         self
     }
@@ -436,10 +433,7 @@ impl Session {
     /// via the embedded `oneshot`. Without this, that tool returns
     /// `RespondToModel("interactive input not available in this runtime")`.
     #[must_use]
-    pub fn with_user_input_channel(
-        mut self,
-        tx: mpsc::Sender<UserInputRequest>,
-    ) -> Self {
+    pub fn with_user_input_channel(mut self, tx: mpsc::Sender<UserInputRequest>) -> Self {
         self.user_input_tx = Some(tx);
         self
     }
@@ -549,10 +543,7 @@ impl Session {
             // doesn't accumulate; lives in the per-turn cache tier so
             // tier-1 (system + tools) survives skill installs. Empty
             // registry → no fragment emitted.
-            let history_with_context = inject_per_turn_fragments(
-                &self.skills,
-                history_snapshot,
-            );
+            let history_with_context = inject_per_turn_fragments(&self.skills, history_snapshot);
             let mut req = MessagesRequest::new(self.model.clone(), history_with_context)
                 .with_max_tokens(4096);
             if let Some(sys) = &self.system_prompt {
@@ -576,12 +567,8 @@ impl Session {
             if !compacted && iter >= compact_at_iteration {
                 compacted = true;
                 let history_for_summary = self.history.lock().await.clone();
-                match crate::compact::compact_history(
-                    &self.client,
-                    &history_for_summary,
-                    &cancel,
-                )
-                .await
+                match crate::compact::compact_history(&self.client, &history_for_summary, &cancel)
+                    .await
                 {
                     Ok(summary) if !summary.is_empty() => {
                         let mut h = self.history.lock().await;
@@ -612,10 +599,7 @@ impl Session {
                         // turn, not part of history).
                         let mut new_history = snapshot;
                         apply_moving_cache_breakpoint(&mut new_history);
-                        let new_history = inject_per_turn_fragments(
-                            &self.skills,
-                            new_history,
-                        );
+                        let new_history = inject_per_turn_fragments(&self.skills, new_history);
                         req = MessagesRequest::new(self.model.clone(), new_history)
                             .with_max_tokens(4096);
                         if let Some(sys) = &self.system_prompt {
@@ -822,10 +806,7 @@ impl Session {
         // otherwise the TUI's Running tool-call state stays stuck on
         // the spinner forever (caught by Week-8 demo bringup).
         if let Some(err) = call.args_err {
-            let msg = format!(
-                "tool '{}' arguments failed to parse: {err}",
-                call.name
-            );
+            let msg = format!("tool '{}' arguments failed to parse: {err}", call.name);
             let _ = self.events_tx.send(SessionEvent::ToolResult {
                 id: call.id.clone(),
                 name: call.name.clone(),
@@ -866,15 +847,10 @@ impl Session {
         // No channel ⇒ allow (tests, batch CLI, MCP).
         let mutating = handler.is_mutating(&invocation);
         if mutating && let Some(tx) = self.approval_tx.clone() {
-            let already_session_allowed = self
-                .approved_for_session
-                .lock()
-                .await
-                .contains(&call.name);
+            let already_session_allowed =
+                self.approved_for_session.lock().await.contains(&call.name);
             if !already_session_allowed {
-                let decision = self
-                    .request_approval(&tx, &invocation, cancel)
-                    .await?;
+                let decision = self.request_approval(&tx, &invocation, cancel).await?;
                 // #149 — capture the decision in the rollout for
                 // offline pattern extraction. Best-effort: a missing
                 // recorder (tests, MCP server) just skips this.
@@ -944,9 +920,7 @@ impl Session {
                 let wire_content = if out.images.is_empty() {
                     crate::anthropic::tool_result::text(&out.content)
                 } else {
-                    crate::anthropic::tool_result::text_and_images(
-                        &out.content, &out.images,
-                    )
+                    crate::anthropic::tool_result::text_and_images(&out.content, &out.images)
                 };
                 // The event broadcast carries just the text part; the TUI
                 // renders images via the file-cache path (week 5+).
@@ -970,9 +944,9 @@ impl Session {
                     name: call.name.clone(),
                     result: Err(format!("fatal: {msg}")),
                 });
-                let _ = self.events_tx.send(SessionEvent::Error(format!(
-                    "fatal: {msg}"
-                )));
+                let _ = self
+                    .events_tx
+                    .send(SessionEvent::Error(format!("fatal: {msg}")));
                 Err(SessionError::Fatal(msg))
             }
             Err(other) => {
@@ -1125,11 +1099,8 @@ mod tests {
     #[test]
     fn empty_session_construction() {
         // Use a bogus client (no network calls happen at construction).
-        let client = Client::new(
-            "test-key",
-            crate::anthropic::ClientConfig::default(),
-        )
-        .expect("client construction without network");
+        let client = Client::new("test-key", crate::anthropic::ClientConfig::default())
+            .expect("client construction without network");
         let s = Session::new(
             client,
             ToolRegistry::new(),
@@ -1145,11 +1116,8 @@ mod tests {
     /// that needs a live API; this just exercises the constructor path.
     #[tokio::test]
     async fn with_recorder_creates_log_under_state_root() {
-        let client = Client::new(
-            "test-key",
-            crate::anthropic::ClientConfig::default(),
-        )
-        .expect("client");
+        let client =
+            Client::new("test-key", crate::anthropic::ClientConfig::default()).expect("client");
         let dir = tempfile::tempdir().unwrap();
         let s = Session::new(
             client,
@@ -1169,11 +1137,8 @@ mod tests {
     /// full approval round-trip is exercised by the TUI bringup test.
     #[test]
     fn with_approval_channel_wires_the_field() {
-        let client = Client::new(
-            "test-key",
-            crate::anthropic::ClientConfig::default(),
-        )
-        .expect("client");
+        let client =
+            Client::new("test-key", crate::anthropic::ClientConfig::default()).expect("client");
         let (tx, _rx) = mpsc::channel(8);
         let s = Session::new(
             client,
@@ -1192,7 +1157,11 @@ mod tests {
         let s = summarize_args(&v);
         // 200 chars of ASCII + a multi-byte '…' (3 bytes UTF-8). Use
         // chars() not bytes for the cap.
-        assert!(s.chars().count() <= 201, "200 chars + ellipsis: {}", s.chars().count());
+        assert!(
+            s.chars().count() <= 201,
+            "200 chars + ellipsis: {}",
+            s.chars().count()
+        );
         assert!(s.ends_with('…'));
     }
 
@@ -1236,6 +1205,42 @@ mod tests {
     }
 
     #[test]
+    fn per_turn_skill_catalog_is_metadata_only_and_not_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill_dir = dir.path().join("skills").join("sample-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: sample-skill\ndescription: short routing hint\n---\n\
+             # Secret Body\n\nRun scripts/private_helper.py when needed.",
+        )
+        .unwrap();
+        let (registry, errors) =
+            crate::skills::SkillRegistry::discover(Some(&dir.path().join("skills")), None);
+        assert!(errors.is_empty(), "{errors:?}");
+
+        let history = vec![Message::user_text("please do regular editing")];
+        let injected = inject_per_turn_fragments(&registry, history);
+        assert_eq!(injected.len(), 2);
+
+        let catalog = text_of_first_block(&injected[0]);
+        assert!(catalog.contains("<skills_instructions>"));
+        assert!(catalog.contains("sample-skill"));
+        assert!(catalog.contains("short routing hint"));
+        assert!(
+            !catalog.contains("Secret Body"),
+            "L1 must not include SKILL.md body text"
+        );
+        assert!(
+            !catalog.contains("scripts/private_helper.py"),
+            "L1 must not include L3 script paths"
+        );
+
+        let original_user = text_of_first_block(&injected[1]);
+        assert_eq!(original_user, "please do regular editing");
+    }
+
+    #[test]
     fn moving_cache_breakpoint_clears_old_marks_before_remarking() {
         // Simulate a stale breakpoint left from a prior turn on an
         // earlier user message.
@@ -1266,5 +1271,12 @@ mod tests {
             }
         );
         assert!(new_marked, "new breakpoint must be set");
+    }
+
+    fn text_of_first_block(message: &Message) -> &str {
+        match &message.content[0] {
+            crate::anthropic::ContentBlock::Text { text, .. } => text,
+            other => panic!("expected text block; got {other:?}"),
+        }
     }
 }

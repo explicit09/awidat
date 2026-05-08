@@ -26,11 +26,8 @@ pub(crate) type SseItem = Result<String, ClientError>;
 /// `idle_timeout` triggers if no event arrives within the window — the
 /// model is hung. Anthropic's typical inter-event gap is well under 1s
 /// during streaming; a 90-second timeout is safe and matches Codex.
-pub(crate) fn forward_sse<S, E>(
-    byte_stream: S,
-    idle_timeout: Duration,
-    tx: mpsc::Sender<SseItem>,
-) where
+pub(crate) fn forward_sse<S, E>(byte_stream: S, idle_timeout: Duration, tx: mpsc::Sender<SseItem>)
+where
     S: Stream<Item = Result<bytes::Bytes, E>> + Send + Unpin + 'static,
     E: std::error::Error + Send + Sync + 'static,
 {
@@ -59,9 +56,7 @@ pub(crate) fn forward_sse<S, E>(
                     return;
                 }
                 Err(_) => {
-                    let _ = tx
-                        .send(Err(ClientError::Timeout(idle_timeout)))
-                        .await;
+                    let _ = tx.send(Err(ClientError::Timeout(idle_timeout))).await;
                     return;
                 }
             }

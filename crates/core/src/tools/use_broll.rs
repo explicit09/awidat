@@ -85,13 +85,9 @@ struct Args {
 #[serde(untagged)]
 enum AnchorArg {
     /// `{"transcript_snippet": "the city skyline reminded me"}`
-    Transcript {
-        transcript_snippet: String,
-    },
+    Transcript { transcript_snippet: String },
     /// `{"clip_uuid": "clip-3"}`
-    Uuid {
-        clip_uuid: String,
-    },
+    Uuid { clip_uuid: String },
 }
 
 #[async_trait]
@@ -258,9 +254,7 @@ async fn fetch_video_by_id(
         awidat_secrets::accounts::PEXELS_API_KEY,
     )
     .map_err(|e| {
-        FunctionCallError::RespondToModel(format!(
-            "use_broll: keychain access failed: {e}"
-        ))
+        FunctionCallError::RespondToModel(format!("use_broll: keychain access failed: {e}"))
     })?
     .ok_or_else(|| {
         FunctionCallError::RespondToModel(
@@ -297,9 +291,7 @@ async fn fetch_video_by_id(
         )));
     }
     resp.json::<pexels::Video>().await.map_err(|e| {
-        FunctionCallError::RespondToModel(format!(
-            "use_broll: malformed Pexels response: {e}"
-        ))
+        FunctionCallError::RespondToModel(format!("use_broll: malformed Pexels response: {e}"))
     })
 }
 
@@ -396,9 +388,7 @@ mod tests {
         };
         let frag = build_edl_fragment("raw/broll/pexels-1234.mp4", &anchor, 2.4, "overlay");
         assert!(frag.contains("Insert BRoll"));
-        assert!(frag.contains(
-            "@@ anchor: transcript_snippet=\"the city skyline reminded me\""
-        ));
+        assert!(frag.contains("@@ anchor: transcript_snippet=\"the city skyline reminded me\""));
         assert!(frag.contains("+ asset: raw/broll/pexels-1234.mp4"));
         assert!(frag.contains("+ duration_s: 2.4"));
         assert!(frag.contains("+ position: overlay"));

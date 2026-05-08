@@ -96,8 +96,8 @@ pub struct ToolContext {
     pub mcp_host: crate::mcp_host::McpHost,
     /// Skills discovered at session start. Read by the `load_skill`
     /// tool to return a full L2 body on demand. The L1 catalog
-    /// (one line per skill) is already in the system prompt; this
-    /// Arc holds the bodies + metadata for L2 disclosure.
+    /// (one line per skill) is emitted as per-turn context; this Arc
+    /// holds the bodies + metadata for L2 disclosure.
     pub skills: std::sync::Arc<crate::skills::SkillRegistry>,
     /// Sub-agent return slot — `Some` only when this `ToolContext` is
     /// running inside a `delegate`-spawned sub-session. The
@@ -410,7 +410,10 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -510,6 +513,9 @@ mod tests {
         // should match schemas() because Fake doesn't override.
         let mut r = ToolRegistry::new();
         r.register(Arc::new(Fake));
-        assert_eq!(r.schemas().len(), r.schemas_for_family(ModelFamily::Haiku).len());
+        assert_eq!(
+            r.schemas().len(),
+            r.schemas_for_family(ModelFamily::Haiku).len()
+        );
     }
 }

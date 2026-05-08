@@ -209,11 +209,9 @@ pub async fn accept_proposal(
             // are logged but never unwind the disk write.
             match awidat_core::vc::open_or_init(&project_root) {
                 Ok(repo) => {
-                    if let Err(e) = awidat_core::vc::auto_commit_apply(
-                        &repo,
-                        &applied_descriptions,
-                        None,
-                    ) {
+                    if let Err(e) =
+                        awidat_core::vc::auto_commit_apply(&repo, &applied_descriptions, None)
+                    {
                         tracing::warn!(
                             error = %e,
                             "vedit auto-commit failed (desktop-writes path)"
@@ -534,7 +532,11 @@ fn build_diff_hints(
             | EdlOp::SetVolume { .. }
             | EdlOp::SetSpeed { .. }
             | EdlOp::InsertTitle { .. }
-            | EdlOp::SetTitle { .. } => {}
+            | EdlOp::SetTitle { .. }
+            | EdlOp::InsertCaption { .. }
+            | EdlOp::SetOutputFormat { .. }
+            | EdlOp::SetLoudnessTarget { .. }
+            | EdlOp::SetPackageMetadata { .. } => {}
         }
     }
     hints
@@ -655,6 +657,10 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetSpeed { .. } => "SetSpeed",
         EdlOp::InsertTitle { .. } => "InsertTitle",
         EdlOp::SetTitle { .. } => "SetTitle",
+        EdlOp::InsertCaption { .. } => "InsertCaption",
+        EdlOp::SetOutputFormat { .. } => "SetOutputFormat",
+        EdlOp::SetLoudnessTarget { .. } => "SetLoudnessTarget",
+        EdlOp::SetPackageMetadata { .. } => "SetPackageMetadata",
     }
 }
 

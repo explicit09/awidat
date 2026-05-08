@@ -117,37 +117,38 @@ impl ToolHandler for StartRenderTool {
         // produce identical specs. The asset-based scopes keep their
         // original path-validation flow.
         let (argv, total_duration_s, asset_label, output_path) = if args.scope == "timeline" {
-            let spec = awidat_render::build_timeline_render_spec(&ctx.project_root).map_err(|e| {
-                use awidat_render::RenderTimelineError;
-                let msg = match e {
-                    RenderTimelineError::EmptyTimeline => {
-                        "start_render: timeline has no clips to render. \
+            let spec =
+                awidat_render::build_timeline_render_spec(&ctx.project_root).map_err(|e| {
+                    use awidat_render::RenderTimelineError;
+                    let msg = match e {
+                        RenderTimelineError::EmptyTimeline => {
+                            "start_render: timeline has no clips to render. \
                          Add clips via apply_edl first, or use scope=preview to render \
                          the raw asset."
-                            .to_string()
-                    }
-                    RenderTimelineError::NoOtio(p) => format!(
-                        "start_render: no project.otio.json found at {} — \
+                                .to_string()
+                        }
+                        RenderTimelineError::NoOtio(p) => format!(
+                            "start_render: no project.otio.json found at {} — \
                          this isn't an awidat project root.",
-                        p.display()
-                    ),
-                    RenderTimelineError::OtioParse { message } => format!(
-                        "start_render: timeline parse failed ({message}). \
+                            p.display()
+                        ),
+                        RenderTimelineError::OtioParse { message } => format!(
+                            "start_render: timeline parse failed ({message}). \
                          Run `awidat validate <project>` for the detailed diagnostic, \
                          then revert the most recent apply_edl that broke the OTIO."
-                    ),
-                    RenderTimelineError::MissingAsset { clip_name, missing } => format!(
-                        "start_render: timeline references missing asset {} \
+                        ),
+                        RenderTimelineError::MissingAsset { clip_name, missing } => format!(
+                            "start_render: timeline references missing asset {} \
                          (clip '{clip_name}'). Re-import the source file.",
-                        missing.display()
-                    ),
-                    RenderTimelineError::ClipMissingRange { clip_name } => format!(
-                        "start_render: clip '{clip_name}' has no source_range — \
+                            missing.display()
+                        ),
+                        RenderTimelineError::ClipMissingRange { clip_name } => format!(
+                            "start_render: clip '{clip_name}' has no source_range — \
                          can't extract a renderable segment."
-                    ),
-                };
-                FunctionCallError::RespondToModel(msg)
-            })?;
+                        ),
+                    };
+                    FunctionCallError::RespondToModel(msg)
+                })?;
             (
                 spec.args,
                 spec.total_duration_s,
@@ -175,11 +176,15 @@ impl ToolHandler for StartRenderTool {
                 )));
             }
             let stem = asset_stem(asset);
-            let output_path = renders_dir.join(format!(
-                "{}-{}-{}.mp4", args.scope, stem, timestamp
-            ));
+            let output_path =
+                renders_dir.join(format!("{}-{}-{}.mp4", args.scope, stem, timestamp));
             let argv = build_ffmpeg_argv(&args, asset, &asset_path, &output_path)?;
-            (argv, range_duration(&args.range), asset.to_string(), output_path)
+            (
+                argv,
+                range_duration(&args.range),
+                asset.to_string(),
+                output_path,
+            )
         };
 
         let spec = RenderJobSpec {
@@ -189,18 +194,21 @@ impl ToolHandler for StartRenderTool {
             output_path: output_path.clone(),
         };
         let job_id = ctx.job_manager.start(spec).await.map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "start_render: failed to start ffmpeg: {e}"
-            ))
+            FunctionCallError::RespondToModel(format!("start_render: failed to start ffmpeg: {e}"))
         })?;
 
         let body = serde_json::json!({
             "job_id": job_id.to_string(),
             "scope": args.scope,
+            "render_kind": if args.scope == "timeline" { "final_timeline_export" } else { "diagnostic_asset_render" },
             "asset": asset_label,
             "output_path": output_path.display().to_string(),
             "started_at": chrono::Utc::now().to_rfc3339(),
-            "next_step": format!("Call poll_render(job_id=\"{job_id}\") to track progress."),
+            "next_step": if args.scope == "timeline" {
+                format!("Call poll_render(job_id=\"{job_id}\") to track the final timeline export.")
+            } else {
+                format!("Call poll_render(job_id=\"{job_id}\") to track this diagnostic asset render; use scope=\"timeline\" for final editorial output.")
+            },
         });
         Ok(ToolOutput::text(body.to_string()))
     }
@@ -228,13 +236,20 @@ fn build_ffmpeg_argv(
     match args.scope.as_str() {
         "preview" => {
             argv.extend([
-                "-i".into(), asset_path.to_string_lossy().into_owned(),
-                "-vf".into(), "scale=-2:480".into(),
-                "-c:v".into(), "libx264".into(),
-                "-preset".into(), "veryfast".into(),
-                "-crf".into(), "28".into(),
-                "-c:a".into(), "aac".into(),
-                "-b:a".into(), "96k".into(),
+                "-i".into(),
+                asset_path.to_string_lossy().into_owned(),
+                "-vf".into(),
+                "scale=-2:480".into(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-preset".into(),
+                "veryfast".into(),
+                "-crf".into(),
+                "28".into(),
+                "-c:a".into(),
+                "aac".into(),
+                "-b:a".into(),
+                "96k".into(),
                 output_path.to_string_lossy().into_owned(),
             ]);
         }
@@ -251,21 +266,31 @@ fn build_ffmpeg_argv(
                 )));
             }
             argv.extend([
-                "-ss".into(), format!("{}", r.start_s),
-                "-i".into(), asset_path.to_string_lossy().into_owned(),
-                "-t".into(), format!("{}", r.end_s - r.start_s),
-                "-c".into(), "copy".into(),
+                "-ss".into(),
+                format!("{}", r.start_s),
+                "-i".into(),
+                asset_path.to_string_lossy().into_owned(),
+                "-t".into(),
+                format!("{}", r.end_s - r.start_s),
+                "-c".into(),
+                "copy".into(),
                 output_path.to_string_lossy().into_owned(),
             ]);
         }
         "full" => {
             argv.extend([
-                "-i".into(), asset_path.to_string_lossy().into_owned(),
-                "-c:v".into(), "libx264".into(),
-                "-preset".into(), "medium".into(),
-                "-crf".into(), "20".into(),
-                "-c:a".into(), "aac".into(),
-                "-b:a".into(), "192k".into(),
+                "-i".into(),
+                asset_path.to_string_lossy().into_owned(),
+                "-c:v".into(),
+                "libx264".into(),
+                "-preset".into(),
+                "medium".into(),
+                "-crf".into(),
+                "20".into(),
+                "-c:a".into(),
+                "aac".into(),
+                "-b:a".into(),
+                "192k".into(),
                 output_path.to_string_lossy().into_owned(),
             ]);
         }
@@ -287,7 +312,9 @@ re-encode); 'full' = high-bitrate H.264 of an asset (slow); 'timeline' \
 = render the *edited timeline* (walks project.otio.json, concats every \
 video clip's source_range with re-encode at boundaries). Use 'timeline' \
 when the user wants 'render the edit' or 'export what's in the \
-timeline' — it captures Trim/Untrim/Delete/Split decisions. Output \
+timeline' — it captures Trim/Untrim/Delete/Split decisions. Preview, \
+segment, and full are source-asset diagnostics, not substitutes for \
+graph edits or final editorial export. Output \
 lands under <project>/renders/. Don't await this tool — it always \
 returns within a second.\
 ";
@@ -306,7 +333,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -349,7 +379,9 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("segment requires")));
+        assert!(
+            matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("segment requires"))
+        );
     }
 
     #[tokio::test]
@@ -386,12 +418,22 @@ mod tests {
         let args = StartRenderArgs {
             scope: "segment".into(),
             asset: Some("raw/x.mp4".into()),
-            range: Some(TimeRange { start_s: 1.0, end_s: 3.5 }),
+            range: Some(TimeRange {
+                start_s: 1.0,
+                end_s: 3.5,
+            }),
         };
         let argv = build_ffmpeg_argv(&args, "raw/x.mp4", asset, out).unwrap();
         assert!(argv.iter().any(|a| a == "copy"));
         assert!(argv.iter().any(|a| a == "1"));
         assert!(argv.iter().any(|a| a == "2.5"));
+    }
+
+    #[test]
+    fn description_requires_timeline_scope_for_edits() {
+        assert!(DESCRIPTION.contains("render the *edited timeline*"));
+        assert!(DESCRIPTION.contains("not substitutes for graph edits"));
+        assert!(DESCRIPTION.contains("final editorial export"));
     }
 
     // Pure-function tests for the timeline-render planner moved to
@@ -408,7 +450,9 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("project.otio.json")));
+        assert!(
+            matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("project.otio.json"))
+        );
     }
 
     #[tokio::test]
@@ -425,5 +469,4 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("no clips")));
     }
-
 }

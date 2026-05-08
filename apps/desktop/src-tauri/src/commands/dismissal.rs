@@ -6,9 +6,7 @@
 //! Storage lives at `<project>/.awidat/dismissed_patterns.json`,
 //! shape defined in `awidat_core::dismissal::DismissalFile`.
 
-use awidat_core::dismissal::{
-    DismissalBucket, DismissalFile, load_dismissals, save_dismissals,
-};
+use awidat_core::dismissal::{DismissalBucket, DismissalFile, load_dismissals, save_dismissals};
 use tauri::State;
 
 use crate::state::AwidatState;

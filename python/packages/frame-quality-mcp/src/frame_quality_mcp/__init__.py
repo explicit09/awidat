@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Iterator
 from typing import Any
 
 import cv2
@@ -70,13 +71,14 @@ def _probe_dims(asset_path: str) -> tuple[int, int]:
 
 def _extract_frames_bgr(
     asset_path: str, fps: float
-) -> tuple[list[np.ndarray], int, int]:
+) -> tuple[Iterator[np.ndarray], int, int]:
     src_w, src_h = _probe_dims(asset_path)
     target_w = PROBE_W
     target_h = int(round(src_h * target_w / src_w))
     target_h += target_h % 2
     cmd = [
         "ffmpeg",
+        "-nostdin",
         "-v",
         "error",
         "-i",
@@ -89,16 +91,33 @@ def _extract_frames_bgr(
         "rawvideo",
         "-",
     ]
-    proc = subprocess.run(cmd, check=True, capture_output=True)
-    raw = proc.stdout
     fsize = target_w * target_h * 3
-    frames = []
-    for i in range(len(raw) // fsize):
-        chunk = raw[i * fsize : (i + 1) * fsize]
-        frames.append(
-            np.frombuffer(chunk, dtype=np.uint8).reshape(target_h, target_w, 3).copy()
-        )
-    return frames, target_w, target_h
+
+    def frames() -> Iterator[np.ndarray]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert proc.stdout is not None
+        try:
+            while True:
+                chunk = proc.stdout.read(fsize)
+                if not chunk:
+                    break
+                if len(chunk) != fsize:
+                    raise RuntimeError(
+                        f"ffmpeg produced a partial frame ({len(chunk)} of {fsize} bytes)"
+                    )
+                yield np.frombuffer(chunk, dtype=np.uint8).reshape(target_h, target_w, 3)
+            stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+            rc = proc.wait()
+            if rc != 0:
+                raise RuntimeError(
+                    f"ffmpeg frame extraction failed (exit {rc}): {stderr.strip()}"
+                )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    return frames(), target_w, target_h
 
 
 def _score_frame(frame_bgr: np.ndarray) -> dict[str, float]:
@@ -118,9 +137,8 @@ def _score_frame(frame_bgr: np.ndarray) -> dict[str, float]:
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     frames, w, h = _extract_frames_bgr(req.asset_path, SAMPLE_FPS)
     _log.info(
-        "frame-quality-mcp: asset=%s frames=%d at %dx%d",
+        "frame-quality-mcp: asset=%s streaming frames at %dx%d",
         req.asset_id,
-        len(frames),
         w,
         h,
     )
@@ -147,7 +165,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         "frame_rate_sampled": SAMPLE_FPS,
         "detect_width": w,
         "detect_height": h,
-        "frame_count": len(frames),
+        "frame_count": len(per_frame),
         "blur_sharp_threshold": BLUR_SHARP_THRESHOLD,
         "summary": summary,
         "per_frame": per_frame,

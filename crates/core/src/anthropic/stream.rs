@@ -171,8 +171,12 @@ enum WireContentBlock {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WireDelta {
-    TextDelta { text: String },
-    InputJsonDelta { partial_json: String },
+    TextDelta {
+        text: String,
+    },
+    InputJsonDelta {
+        partial_json: String,
+    },
     /// Thinking deltas (extended thinking) — we'll consume later.
     #[serde(other)]
     Other,
@@ -218,9 +222,8 @@ impl StreamParser {
         if trimmed.is_empty() {
             return Ok(Vec::new());
         }
-        let event: WireEvent = serde_json::from_str(trimmed).map_err(|e| {
-            StreamParseError::MalformedFrame(format!("frame={trimmed} err={e}"))
-        })?;
+        let event: WireEvent = serde_json::from_str(trimmed)
+            .map_err(|e| StreamParseError::MalformedFrame(format!("frame={trimmed} err={e}")))?;
 
         let mut out = Vec::new();
         match event {
@@ -243,7 +246,8 @@ impl StreamParser {
                     }
                 }
                 WireContentBlock::ToolUse { id, name, .. } => {
-                    self.tool_calls.insert(id.clone(), (name.clone(), String::new()));
+                    self.tool_calls
+                        .insert(id.clone(), (name.clone(), String::new()));
                     if let Some(idx) = index {
                         self.open_blocks
                             .insert(idx, OpenBlock::ToolUse { id: id.clone() });
@@ -405,7 +409,10 @@ mod tests {
         }
         assert!(matches!(
             &evs[3],
-            StreamEvent::Done { stop_reason: Some(StopReason::ToolUse), .. }
+            StreamEvent::Done {
+                stop_reason: Some(StopReason::ToolUse),
+                ..
+            }
         ));
     }
 

@@ -59,11 +59,7 @@ fn iou(a: &[i64; 4], b: &[i64; 4]) -> f64 {
     let area_a = ((ar - al) * (ab - at)) as f64;
     let area_b = ((br - bl) * (bb - bt)) as f64;
     let union = area_a + area_b - inter;
-    if union <= 0.0 {
-        0.0
-    } else {
-        inter / union
-    }
+    if union <= 0.0 { 0.0 } else { inter / union }
 }
 
 fn parse_box(v: &serde_json::Value) -> Option<[i64; 4]> {
@@ -160,7 +156,9 @@ impl ToolHandler for FindEyeContactTool {
             {
                 continue;
             }
-            let Some(data) = sidecar.get("data") else { continue };
+            let Some(data) = sidecar.get("data") else {
+                continue;
+            };
             let period_s = data
                 .get("frame_rate_sampled")
                 .and_then(|v| v.as_f64())
@@ -178,37 +176,35 @@ impl ToolHandler for FindEyeContactTool {
             // asset (face data missing).
             let speaker_box_per_t: Option<std::collections::HashMap<i64, [i64; 4]>> =
                 if let Some(speaker) = args.speaker.as_deref() {
-                    face_by_asset
-                        .get(&asset_id)
-                        .and_then(|face_doc| {
-                            let face_data = face_doc.get("data")?;
-                            let face_id = face_data
-                                .pointer("/speaker_to_face")
-                                .and_then(|m| m.as_object())
-                                .and_then(|m| m.get(speaker))
-                                .and_then(|v| v.as_str())?;
-                            let face_frames =
-                                face_data.pointer("/per_frame").and_then(|v| v.as_array())?;
-                            let mut out = std::collections::HashMap::new();
-                            for fr in face_frames {
-                                let t = fr.get("t_s").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                // Quantize to milliseconds-as-i64 so the
-                                // hashmap key is stable across float
-                                // round-tripping between sidecars.
-                                let key = (t * 1000.0).round() as i64;
-                                let faces = fr.get("faces").and_then(|v| v.as_array());
-                                let Some(faces) = faces else { continue };
-                                for f in faces {
-                                    if f.get("face_id").and_then(|v| v.as_str()) == Some(face_id) {
-                                        if let Some(b) = f.get("box").and_then(parse_box) {
-                                            out.insert(key, b);
-                                        }
-                                        break;
+                    face_by_asset.get(&asset_id).and_then(|face_doc| {
+                        let face_data = face_doc.get("data")?;
+                        let face_id = face_data
+                            .pointer("/speaker_to_face")
+                            .and_then(|m| m.as_object())
+                            .and_then(|m| m.get(speaker))
+                            .and_then(|v| v.as_str())?;
+                        let face_frames =
+                            face_data.pointer("/per_frame").and_then(|v| v.as_array())?;
+                        let mut out = std::collections::HashMap::new();
+                        for fr in face_frames {
+                            let t = fr.get("t_s").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            // Quantize to milliseconds-as-i64 so the
+                            // hashmap key is stable across float
+                            // round-tripping between sidecars.
+                            let key = (t * 1000.0).round() as i64;
+                            let faces = fr.get("faces").and_then(|v| v.as_array());
+                            let Some(faces) = faces else { continue };
+                            for f in faces {
+                                if f.get("face_id").and_then(|v| v.as_str()) == Some(face_id) {
+                                    if let Some(b) = f.get("box").and_then(parse_box) {
+                                        out.insert(key, b);
                                     }
+                                    break;
                                 }
                             }
-                            Some(out)
-                        })
+                        }
+                        Some(out)
+                    })
                 } else {
                     None
                 };
@@ -225,7 +221,9 @@ impl ToolHandler for FindEyeContactTool {
 
                 // Decide whether THIS frame counts as "eye contact."
                 let mut at_camera = faces.iter().any(|f| {
-                    f.get("at_camera").and_then(|v| v.as_bool()).unwrap_or(false)
+                    f.get("at_camera")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
                 });
                 if at_camera && let Some(map) = &speaker_box_per_t {
                     // Project the speaker's box onto the at-camera face;
@@ -339,7 +337,10 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -353,11 +354,7 @@ mod tests {
         }
     }
 
-    fn write_gaze(
-        root: &std::path::Path,
-        asset: &str,
-        per_frame: Vec<serde_json::Value>,
-    ) {
+    fn write_gaze(root: &std::path::Path, asset: &str, per_frame: Vec<serde_json::Value>) {
         let p = root.join("index/gaze").join(format!("{asset}.json"));
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(

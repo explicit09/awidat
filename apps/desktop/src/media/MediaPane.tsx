@@ -16,19 +16,15 @@
 // Native HTML5 controls hidden because they overlay platform-styled
 // UI (AirPlay, PiP, volume) that clashes with the dark theme.
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
+import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
 import { useAgentStore } from "../agent/store";
 import { useProjectStore } from "../app/state";
 import { useTimelineStore } from "../timeline/store";
-import { usePlaySegments } from "../timeline/usePlaySegments";
-import { findActiveSegment } from "../timeline/usePlaySegments";
 import { SegmentedVideoView } from "./SegmentedVideoView";
-import { TranscriptView } from "../transcript/TranscriptView";
 import { useTranscriptStore } from "../transcript/store";
-
-type Tab = "preview" | "transcript";
 
 export function MediaPane() {
   const proxies = useMediaStore((s) => s.proxies);
@@ -48,50 +44,7 @@ export function MediaPane() {
   const timelineDurationS = useTimelineStore((s) => s.snapshot.duration_s);
   const showTimelinePreview = timelineDurationS > 0;
 
-  // The "active stem" — what the transcript pane is keyed against.
-  // In timeline mode it's the proxy stem of the segment under the
-  // playhead; in source-preview mode it's the user-selected asset.
-  // Keeping this derivation here (not in the transcript store)
-  // means transcript-pane state stays a pure cache; the view
-  // determines what's active.
-  const segments = usePlaySegments();
-  const timelineTime = useMediaStore((s) => s.timelineTime);
-  const activeStem = useMemo(() => {
-    if (showTimelinePreview) {
-      const idx = findActiveSegment(segments, timelineTime);
-      if (idx >= 0) return stemFromProxyPath(segments[idx].proxyPath);
-      // Past end of timeline → use the last segment's stem so the
-      // transcript pane doesn't blank.
-      if (segments.length > 0) {
-        return stemFromProxyPath(segments[segments.length - 1].proxyPath);
-      }
-      return null;
-    }
-    return selectedStem;
-  }, [showTimelinePreview, segments, timelineTime, selectedStem]);
-
-  // Transcript fetch is keyed off activeStem. The store dedupes
-  // in-flight loads so this fires once per stem change.
-  const setActiveStem = useTranscriptStore((s) => s.setActiveStem);
-  const transcriptState = useTranscriptStore((s) =>
-    activeStem ? s.byStem[activeStem] : undefined,
-  );
   const clearTranscriptCache = useTranscriptStore((s) => s.clearCache);
-  useEffect(() => {
-    setActiveStem(activeStem);
-  }, [activeStem, setActiveStem]);
-
-  // Tab state. Default to whichever tab has content: transcript if
-  // the active stem has a sidecar; preview otherwise. The user can
-  // override by clicking the other tab — once they switch, we
-  // remember their choice for the rest of this session (don't
-  // clobber on every active-stem change).
-  const [tabExplicit, setTabExplicit] = useState<Tab | null>(null);
-  const autoTab: Tab =
-    transcriptState && transcriptState.state === "loaded"
-      ? "transcript"
-      : "preview";
-  const tab = tabExplicit ?? autoTab;
 
   // Refresh proxies once at mount, and again whenever a transcode
   // job lands as Completed — that's the signal a new proxy has been
@@ -112,8 +65,6 @@ export function MediaPane() {
     ).length;
     if (completedWhisper > 0) {
       clearTranscriptCache();
-      // Re-trigger the active-stem load after clearing.
-      if (activeStem) setActiveStem(activeStem);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -148,49 +99,47 @@ export function MediaPane() {
   ]);
 
   const selected = proxies.find((p) => p.stem === selectedStem) ?? null;
-  const src = selected ? convertFileSrc(selected.proxy_path) : null;
 
-  const transcriptAvailable =
-    transcriptState !== undefined && transcriptState.state === "loaded";
+  const [src, setSrc] = useState<string | null>(() =>
+    selected ? cachedMediaStreamUrl(selected.proxy_path) ?? null : null,
+  );
+  useEffect(() => {
+    if (!selected) {
+      setSrc(null);
+      return;
+    }
+    const cached = cachedMediaStreamUrl(selected.proxy_path);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
+    let cancelled = false;
+    mediaStreamUrl(selected.proxy_path)
+      .then((url) => {
+        if (!cancelled) setSrc(url);
+      })
+      .catch((e) => console.warn("media stream url failed", e));
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.proxy_path]);
 
   return (
     <aside className="media-pane">
       <header className="media-header">
-        <div className="media-tabs" role="tablist">
-          <button
-            role="tab"
-            aria-selected={tab === "preview"}
-            className={`media-tab${tab === "preview" ? " media-tab-active" : ""}`}
-            onClick={() => setTabExplicit("preview")}
-          >
-            {showTimelinePreview ? "Preview · timeline" : "Preview"}
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === "transcript"}
-            className={`media-tab${tab === "transcript" ? " media-tab-active" : ""}`}
-            onClick={() => setTabExplicit("transcript")}
-            disabled={!activeStem}
-            title={
-              transcriptAvailable
-                ? undefined
-                : "Run whisper indexing on this asset to enable the transcript tab"
-            }
-          >
-            Transcript
-            {!transcriptAvailable && activeStem ? " ·" : ""}
-            {transcriptState?.state === "loading"
-              ? <span className="media-tab-meta"> loading…</span>
-              : transcriptState?.state === "missing"
-              ? <span className="media-tab-meta"> not indexed</span>
-              : null}
-          </button>
+        <div className="media-titleblock">
+          <span className="media-kicker">Viewer</span>
+          <strong>{showTimelinePreview ? "Timeline preview" : "Source preview"}</strong>
+        </div>
+        <div className="media-status-strip">
+          <span>{showTimelinePreview ? "Cut output" : "Proxy"}</span>
+          {showTimelinePreview && <code>{formatTime(timelineDurationS)}</code>}
         </div>
         {/* Asset dropdown only appears in source-preview mode AND on
             the Preview tab. Once the timeline has clips, the preview
             IS the timeline output — there is no per-asset choice to
             make. */}
-        {tab === "preview" && !showTimelinePreview && proxies.length > 1 && (
+        {!showTimelinePreview && proxies.length > 1 && (
           <select
             className="media-asset-select"
             value={selectedStem ?? ""}
@@ -205,9 +154,7 @@ export function MediaPane() {
         )}
       </header>
       <div className="media-stage">
-        {tab === "transcript" ? (
-          <TranscriptView stem={activeStem} />
-        ) : showTimelinePreview ? (
+        {showTimelinePreview ? (
           <SegmentedVideoView />
         ) : src ? (
           <VideoView src={src} stem={selectedStem ?? ""} />
@@ -219,18 +166,13 @@ export function MediaPane() {
   );
 }
 
-function stemFromProxyPath(path: string): string | null {
-  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  const file = slash >= 0 ? path.slice(slash + 1) : path;
-  const dot = file.lastIndexOf(".");
-  return dot > 0 ? file.slice(0, dot) : file || null;
-}
-
 function VideoView({ src, stem }: { src: string; stem: string }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const setTime = useMediaStore((s) => s.setTime);
   const setDuration = useMediaStore((s) => s.setDuration);
   const setPlaying = useMediaStore((s) => s.setPlaying);
+  const mediaError = useMediaStore((s) => s.mediaError);
+  const setMediaError = useMediaStore((s) => s.setMediaError);
   const currentTime = useMediaStore((s) => s.currentTime);
   const durationS = useMediaStore((s) => s.durationS);
   const isPlaying = useMediaStore((s) => s.isPlaying);
@@ -298,10 +240,18 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) {
-      v.play().catch(() => {});
+      v.play().catch((err) => {
+        setMediaError(`Playback failed: ${String(err)}`);
+      });
     } else {
       v.pause();
     }
+  }
+
+  function onVideoError(e: React.SyntheticEvent<HTMLVideoElement>) {
+    const err = e.currentTarget.error;
+    const code = err ? `code ${err.code}` : "unknown error";
+    setMediaError(`Source preview failed to load (${code}).`);
   }
 
   function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
@@ -313,20 +263,64 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
     }
   }
 
+  function onScrubInput(e: React.FormEvent<HTMLInputElement>) {
+    const v = videoRef.current;
+    const t = Number(e.currentTarget.value);
+    if (v && Number.isFinite(t)) {
+      v.currentTime = t;
+      setTime(t);
+    }
+  }
+
+  function seekFromScrubPointer(
+    el: HTMLInputElement,
+    clientX: number,
+  ) {
+    const v = videoRef.current;
+    if (!v || durationS <= 0) return;
+    const rect = el.getBoundingClientRect();
+    const ratio =
+      rect.width > 0
+        ? Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+        : 0;
+    const t = ratio * durationS;
+    v.currentTime = t;
+    setTime(t);
+  }
+
+  function onScrubPointerDown(e: React.PointerEvent<HTMLInputElement>) {
+    if (durationS <= 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    seekFromScrubPointer(e.currentTarget, e.clientX);
+  }
+
+  function onScrubPointerMove(e: React.PointerEvent<HTMLInputElement>) {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    seekFromScrubPointer(e.currentTarget, e.clientX);
+  }
+
   return (
     <div className="video-wrap">
-      <video
-        ref={videoRef}
-        className="video-el"
-        preload="metadata"
-        src={src}
-        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
-        onClick={togglePlay}
-      />
+      <div className="video-stack">
+        {mediaError && <MediaErrorOverlay message={mediaError} />}
+        <video
+          ref={videoRef}
+          className="video-el"
+          preload="metadata"
+          src={src}
+          onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => {
+            setMediaError(null);
+            setDuration(e.currentTarget.duration);
+          }}
+          onCanPlay={() => setMediaError(null)}
+          onError={onVideoError}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => setPlaying(false)}
+          onClick={togglePlay}
+        />
+      </div>
       <div className="transport">
         <button
           className="transport-play"
@@ -343,6 +337,9 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
           step={0.01}
           value={currentTime}
           onChange={onScrub}
+          onInput={onScrubInput}
+          onPointerDown={onScrubPointerDown}
+          onPointerMove={onScrubPointerMove}
           disabled={durationS === 0}
         />
         <div className="transport-time">
@@ -355,6 +352,15 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
         <span className="video-meta-label">proxy</span>
         <code className="video-stem">{stem}</code>
       </div>
+    </div>
+  );
+}
+
+function MediaErrorOverlay({ message }: { message: string }) {
+  return (
+    <div className="media-error-overlay">
+      <p className="media-error-title">Preview unavailable</p>
+      <p className="media-error-message">{message}</p>
     </div>
   );
 }

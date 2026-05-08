@@ -160,10 +160,7 @@ pub async fn compact_history(
 /// We avoid keeping the latest assistant or tool_result; the summary
 /// is supposed to capture what those said, and keeping them risks
 /// the model re-running tools in the resumed turn.
-pub fn replace_history_with_summary(
-    history: Vec<Message>,
-    summary: String,
-) -> Vec<Message> {
+pub fn replace_history_with_summary(history: Vec<Message>, summary: String) -> Vec<Message> {
     let original_user = history
         .into_iter()
         .find(|m| m.role == Role::User)

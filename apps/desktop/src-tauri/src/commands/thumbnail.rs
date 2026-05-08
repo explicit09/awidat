@@ -102,11 +102,7 @@ fn thumbnails_are_fresh(asset: &Path, dir: &Path) -> bool {
         Err(_) => return false,
     };
     for entry in entries.flatten() {
-        if !entry
-            .file_name()
-            .to_string_lossy()
-            .starts_with("frame-")
-        {
+        if !entry.file_name().to_string_lossy().starts_with("frame-") {
             continue;
         }
         let Ok(meta) = entry.metadata() else {
@@ -179,8 +175,7 @@ pub async fn generate_thumbnails_for_asset(
     if !abs.is_file() {
         return Ok(None);
     }
-    let dir =
-        generate_thumbnails_for_asset_in_project(&app, &state, &project_root, &abs).await?;
+    let dir = generate_thumbnails_for_asset_in_project(&app, &state, &project_root, &abs).await?;
     Ok(Some(dir.to_string_lossy().into_owned()))
 }
 

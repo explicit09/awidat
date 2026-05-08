@@ -218,6 +218,58 @@ pub enum EdlOp {
         /// New animation, if changing.
         animation: Option<TitleAnimation>,
     },
+    /// Insert a burned-in caption overlay on the project's Titles
+    /// track. Captions are represented as graph nodes, not a render
+    /// sidecar: the apply layer creates a clip with an `awidat.title`
+    /// effect whose metadata carries `role = "caption"` plus caption
+    /// styling. Render currently maps this through the same drawtext
+    /// path as titles.
+    InsertCaption {
+        /// Caption appears at this master-timeline time, in seconds.
+        start_s: f64,
+        /// Caption disappears at this master-timeline time, in seconds.
+        /// Must be `> start_s`.
+        end_s: f64,
+        /// Caption phrase to display.
+        text: String,
+        /// Vertical band on the frame. Defaults to bottom in the parser.
+        position: TitlePosition,
+        /// Font size in pixels.
+        font_size: u32,
+        /// Hex colour string like `"#FFFFFF"`.
+        color: String,
+        /// Safe-area profile such as `"mobile"` or `"standard"`.
+        safe_area: String,
+    },
+    /// Store the intended output format on the timeline graph. This is
+    /// where vertical/short-form intent lives before rendering.
+    SetOutputFormat {
+        /// Aspect ratio string, e.g. `"16:9"`, `"9:16"`, `"1:1"`, or
+        /// `"4:5"`.
+        aspect_ratio: String,
+        /// Optional platform package target, e.g. `"youtube_shorts"`.
+        platform: Option<String>,
+        /// Optional safe-area profile, e.g. `"mobile"`.
+        safe_area: Option<String>,
+    },
+    /// Store project-level loudness intent on the timeline graph.
+    SetLoudnessTarget {
+        /// Integrated loudness target in LUFS, e.g. `-16.0`.
+        integrated_lufs: f64,
+        /// Optional true-peak ceiling in dBTP, e.g. `-1.0`.
+        true_peak_db: Option<f64>,
+    },
+    /// Store delivery/package metadata on the timeline graph.
+    SetPackageMetadata {
+        /// Optional target platform.
+        platform: Option<String>,
+        /// Optional package title.
+        title: Option<String>,
+        /// Optional package description.
+        description: Option<String>,
+        /// Optional comma-separated tags.
+        tags: Option<String>,
+    },
 }
 
 /// Where on the frame a title sits. Render maps these to proportional

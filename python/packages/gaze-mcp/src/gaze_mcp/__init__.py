@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Iterator
 from typing import Any
 
 import face_recognition
@@ -73,13 +74,14 @@ def _probe_dims(asset_path: str) -> tuple[int, int]:
     return w, h
 
 
-def _extract_frames(asset_path: str, fps: float) -> tuple[list[np.ndarray], int, int]:
+def _iter_frames(asset_path: str, fps: float) -> tuple[Iterator[np.ndarray], int, int]:
     src_w, src_h = _probe_dims(asset_path)
     target_w = DETECT_WIDTH
     target_h = int(round(src_h * target_w / src_w))
     target_h += target_h % 2
     cmd = [
         "ffmpeg",
+        "-nostdin",
         "-v",
         "error",
         "-i",
@@ -92,16 +94,33 @@ def _extract_frames(asset_path: str, fps: float) -> tuple[list[np.ndarray], int,
         "rawvideo",
         "-",
     ]
-    proc = subprocess.run(cmd, check=True, capture_output=True)
-    raw = proc.stdout
     fsize = target_w * target_h * 3
-    frames = []
-    for i in range(len(raw) // fsize):
-        chunk = raw[i * fsize : (i + 1) * fsize]
-        frames.append(
-            np.frombuffer(chunk, dtype=np.uint8).reshape(target_h, target_w, 3).copy()
-        )
-    return frames, target_w, target_h
+
+    def frames() -> Iterator[np.ndarray]:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert proc.stdout is not None
+        try:
+            while True:
+                chunk = proc.stdout.read(fsize)
+                if not chunk:
+                    break
+                if len(chunk) != fsize:
+                    raise RuntimeError(
+                        f"ffmpeg produced a partial frame ({len(chunk)} of {fsize} bytes)"
+                    )
+                yield np.frombuffer(chunk, dtype=np.uint8).reshape(target_h, target_w, 3)
+            stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+            rc = proc.wait()
+            if rc != 0:
+                raise RuntimeError(
+                    f"ffmpeg frame extraction failed (exit {rc}): {stderr.strip()}"
+                )
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+
+    return frames(), target_w, target_h
 
 
 def _gaze_score(landmarks: dict[str, list[tuple[int, int]]]) -> float:
@@ -132,16 +151,18 @@ def _gaze_score(landmarks: dict[str, list[tuple[int, int]]]) -> float:
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
-    frames, w, h = _extract_frames(req.asset_path, SAMPLE_FPS)
+    frames, w, h = _iter_frames(req.asset_path, SAMPLE_FPS)
     _log.info(
-        "gaze-mcp: asset=%s frames=%d at %dx%d", req.asset_id, len(frames), w, h
+        "gaze-mcp: asset=%s streaming frames at %dx%d", req.asset_id, w, h
     )
 
     per_frame: list[dict[str, Any]] = []
+    frame_count = 0
     for i, frame in enumerate(frames):
         boxes = face_recognition.face_locations(frame, model="hog")
         if not boxes:
             per_frame.append({"t_s": i / SAMPLE_FPS, "faces": []})
+            frame_count += 1
             continue
         landmark_sets = face_recognition.face_landmarks(frame, face_locations=boxes)
         faces_out = []
@@ -155,12 +176,13 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
                 }
             )
         per_frame.append({"t_s": i / SAMPLE_FPS, "faces": faces_out})
+        frame_count += 1
 
     return {
         "frame_rate_sampled": SAMPLE_FPS,
         "detect_width": w,
         "detect_height": h,
-        "frame_count": len(frames),
+        "frame_count": frame_count,
         "at_camera_threshold": AT_CAMERA_THRESHOLD,
         "per_frame": per_frame,
     }

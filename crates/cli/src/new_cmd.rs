@@ -63,9 +63,7 @@ pub fn run(args: NewArgs) -> Result<()> {
     println!("Creating awidat project at {}", project_dir.display());
     let project = Project::init(&project_dir)
         .with_context(|| format!("failed to init project at {}", project_dir.display()))?;
-    println!(
-        "  ✓ Initialized OTIO timeline, edit-plan, manifest, raw/, renders/, .awidat/"
-    );
+    println!("  ✓ Initialized OTIO timeline, edit-plan, manifest, raw/, renders/, .awidat/");
 
     // Optional starter AWIDAT.md.
     if !args.no_md {
@@ -103,14 +101,20 @@ pub fn run(args: NewArgs) -> Result<()> {
             "  • awidat index {} — runs the bundled 10 indexers",
             project_dir.display()
         );
-        println!("  • awidat tui {}      — chat with the editor", project_dir.display());
+        println!(
+            "  • awidat tui {}      — chat with the editor",
+            project_dir.display()
+        );
         return Ok(());
     }
 
     // Index synchronously. Honest wall time; the user sees the cost.
     println!();
     println!("Running indexers (this can take 20+ minutes for hour-long video)...");
-    println!("Press Ctrl-C to stop and resume later with `awidat index {}`.", project_dir.display());
+    println!(
+        "Press Ctrl-C to stop and resume later with `awidat index {}`.",
+        project_dir.display()
+    );
     println!();
     let assets = vec![
         imported_asset
@@ -118,8 +122,7 @@ pub fn run(args: NewArgs) -> Result<()> {
             .expect("import path is some when we reach here")
             .clone(),
     ];
-    crate::index_cmd::run(&project_dir, assets, Vec::new(), 4)
-        .context("indexing failed")?;
+    crate::index_cmd::run(&project_dir, assets, Vec::new(), 4).context("indexing failed")?;
 
     println!();
     println!("All done. Open the editor:");
@@ -199,7 +202,10 @@ fn import_local(src: &Path, project_dir: &Path, link: bool) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("source path has no filename: {}", src.display()))?;
     let dst = raw_dir.join(filename);
     if dst.exists() {
-        bail!("a file named {} already exists in raw/", filename.to_string_lossy());
+        bail!(
+            "a file named {} already exists in raw/",
+            filename.to_string_lossy()
+        );
     }
     if link {
         // Use absolute path for the symlink so it survives moving
@@ -209,18 +215,19 @@ fn import_local(src: &Path, project_dir: &Path, link: bool) -> Result<PathBuf> {
             .canonicalize()
             .with_context(|| format!("failed to resolve absolute path of {}", src.display()))?;
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&abs, &dst).with_context(|| {
-            format!("symlink {} -> {} failed", dst.display(), abs.display())
-        })?;
+        std::os::unix::fs::symlink(&abs, &dst)
+            .with_context(|| format!("symlink {} -> {} failed", dst.display(), abs.display()))?;
         #[cfg(not(unix))]
         std::fs::copy(&abs, &dst).with_context(|| {
-            format!("copy {} -> {} failed (symlinks unsupported on this platform)",
-                    abs.display(), dst.display())
+            format!(
+                "copy {} -> {} failed (symlinks unsupported on this platform)",
+                abs.display(),
+                dst.display()
+            )
         })?;
     } else {
-        std::fs::copy(src, &dst).with_context(|| {
-            format!("copy {} -> {} failed", src.display(), dst.display())
-        })?;
+        std::fs::copy(src, &dst)
+            .with_context(|| format!("copy {} -> {} failed", src.display(), dst.display()))?;
     }
     Ok(dst)
 }

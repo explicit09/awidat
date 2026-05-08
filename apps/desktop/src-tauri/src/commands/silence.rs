@@ -137,7 +137,11 @@ async fn run_one(
                 }
             }
             let payload = SilenceSidecar {
-                ranges: ranges.iter().copied().map(SilenceRangeRecord::from).collect(),
+                ranges: ranges
+                    .iter()
+                    .copied()
+                    .map(SilenceRangeRecord::from)
+                    .collect(),
                 threshold_db: DEFAULT_THRESHOLD_DB,
                 min_duration_s: DEFAULT_MIN_DURATION_S,
             };
@@ -184,8 +188,7 @@ fn sidecar_is_fresh(asset: &Path, sidecar: &Path) -> bool {
         Ok(m) => m,
         Err(_) => return false,
     };
-    let (Ok(sidecar_mtime), Ok(asset_mtime)) =
-        (sidecar_meta.modified(), asset_meta.modified())
+    let (Ok(sidecar_mtime), Ok(asset_mtime)) = (sidecar_meta.modified(), asset_meta.modified())
     else {
         return false;
     };
@@ -199,8 +202,8 @@ pub async fn read_silences(path: String) -> Result<SilenceSidecar, String> {
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|e| format!("read silences sidecar: {e}"))?;
-    let parsed: SilenceSidecar = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("parse silences sidecar: {e}"))?;
+    let parsed: SilenceSidecar =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse silences sidecar: {e}"))?;
     Ok(parsed)
 }
 

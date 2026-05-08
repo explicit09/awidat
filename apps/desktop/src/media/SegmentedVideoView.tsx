@@ -33,8 +33,9 @@
 // available; timeupdate fallback otherwise.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
+import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
 import {
   useTimelineStore,
   type TimelineSnapshot,
@@ -125,6 +126,8 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   const seekTargetS = useMediaStore((s) => s.timelineSeekTargetS);
   const setTimelineTime = useMediaStore((s) => s.setTimelineTime);
   const setPlaying = useMediaStore((s) => s.setPlaying);
+  const mediaError = useMediaStore((s) => s.mediaError);
+  const setMediaError = useMediaStore((s) => s.setMediaError);
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
 
   // Push the current timeline-time + active segment's clip-stem to
@@ -172,6 +175,7 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
       ensureSlotLoaded(active, seg);
       active.segIdx = segIdx;
     }
+    applySegmentPlaybackSettings(v, seg);
     const desired = seg.sourceStart + (timelineTime - seg.timelineStart);
     if (Math.abs(v.currentTime - desired) > 0.05) {
       tryAssignCurrentTime(v, desired);
@@ -196,9 +200,26 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   function ensureSlotLoaded(slot: Slot, seg: PlaySegment) {
     const v = slot.ref.current;
     if (!v) return;
-    const desiredSrc = convertFileSrc(seg.proxyPath);
-    if (v.src !== desiredSrc) {
-      v.src = desiredSrc;
+    const src = cachedMediaStreamUrl(seg.proxyPath);
+    if (!src) {
+      const wantPath = seg.proxyPath;
+      mediaStreamUrl(wantPath)
+        .then((url) => {
+          if (slot.ref.current !== v) return;
+          if (v.src !== url) v.src = url;
+          setMediaError(null);
+          alignSlotAfterLoad(slot === slotsRef.current.a ? "a" : "b");
+        })
+        .catch((e) => {
+          const message = `Could not open preview media: ${String(e)}`;
+          setMediaError(message);
+          console.warn("media stream url failed", e);
+        });
+      return;
+    }
+    if (v.src !== src) {
+      v.src = src;
+      setMediaError(null);
     }
     tryAssignCurrentTime(v, seg.sourceStart);
   }
@@ -227,6 +248,7 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     if (inactive.segIdx !== nextIdx) {
       ensureSlotLoaded(inactive, next);
       inactive.segIdx = nextIdx;
+      applySegmentPlaybackSettings(v, next);
     }
     if (!v.paused) v.pause();
   }
@@ -239,6 +261,10 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     const segIdx = activeSlot.segIdx;
     if (segIdx < 0 || segIdx >= segs.length) return;
     const seg = segs[segIdx];
+    if (vTime < seg.sourceStart - 0.05) {
+      tryAssignCurrentTime(v, seg.sourceStart);
+      return;
+    }
     if (vTime >= seg.sourceEnd - 0.001) {
       const nextIdx = segIdx + 1;
       if (nextIdx >= segs.length) {
@@ -264,9 +290,14 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
         // the user jumped back-and-forth and left it elsewhere.
         tryAssignCurrentTime(nextV, next.sourceStart);
       }
+      if (nextV) applySegmentPlaybackSettings(nextV, next);
       // Pause the leaving slot, play the entering slot.
       v.pause();
-      if (nextV) nextV.play().catch(() => {});
+      if (nextV) {
+        nextV.play().catch((err) => {
+          setMediaError(`Playback failed: ${String(err)}`);
+        });
+      }
       // Flip the visible slot. activeKey state drives the CSS
       // class swap; activeKeyRef updates on the next render via
       // the sync useEffect above.
@@ -321,6 +352,21 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     tickAtVideoTime(e.currentTarget, e.currentTarget.currentTime);
   }
 
+  function alignSlotAfterLoad(key: "a" | "b") {
+    const slot = slotsRef.current[key];
+    const v = slot.ref.current;
+    if (!v || slot.segIdx < 0) return;
+    const seg = segmentsRef.current[slot.segIdx];
+    if (!seg) return;
+    const desired =
+      key === activeKeyRef.current
+        ? seg.sourceStart + (useMediaStore.getState().timelineTime - seg.timelineStart)
+        : seg.sourceStart;
+    if (Math.abs(v.currentTime - desired) > 0.05) {
+      tryAssignCurrentTime(v, desired);
+    }
+  }
+
   // Push view-state (~1Hz, integer-second granularity).
   useEffect(() => {
     const segIdx = findActiveSegment(segments, timelineTime);
@@ -358,15 +404,63 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     const v = slotsRef.current[activeKeyRef.current].ref.current;
     if (!v) return;
     if (v.paused) {
-      v.play().catch(() => {});
+      v.play().catch((err) => {
+        setMediaError(`Playback failed: ${String(err)}`);
+      });
     } else {
       v.pause();
     }
   }
 
+  function applySegmentPlaybackSettings(v: HTMLVideoElement, seg: PlaySegment) {
+    const volume = Number.isFinite(seg.volume)
+      ? Math.max(0, Math.min(1, seg.volume))
+      : 1;
+    const speed = Number.isFinite(seg.speed)
+      ? Math.max(0.0625, Math.min(16, seg.speed))
+      : 1;
+    if (Math.abs(v.volume - volume) > 0.001) v.volume = volume;
+    if (Math.abs(v.playbackRate - speed) > 0.001) v.playbackRate = speed;
+  }
+
+  function onVideoError(e: React.SyntheticEvent<HTMLVideoElement>) {
+    const err = e.currentTarget.error;
+    const code = err ? `code ${err.code}` : "unknown error";
+    setMediaError(`Preview media failed to load (${code}).`);
+  }
+
   function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
     const t = Number(e.target.value);
     if (Number.isFinite(t)) requestTimelineSeek(t);
+  }
+
+  function onScrubInput(e: React.FormEvent<HTMLInputElement>) {
+    const t = Number(e.currentTarget.value);
+    if (Number.isFinite(t)) requestTimelineSeek(t);
+  }
+
+  function seekFromScrubPointer(
+    el: HTMLInputElement,
+    clientX: number,
+  ) {
+    if (timelineDurationS <= 0) return;
+    const rect = el.getBoundingClientRect();
+    const ratio =
+      rect.width > 0
+        ? Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+        : 0;
+    requestTimelineSeek(ratio * timelineDurationS);
+  }
+
+  function onScrubPointerDown(e: React.PointerEvent<HTMLInputElement>) {
+    if (timelineDurationS <= 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    seekFromScrubPointer(e.currentTarget, e.clientX);
+  }
+
+  function onScrubPointerMove(e: React.PointerEvent<HTMLInputElement>) {
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    seekFromScrubPointer(e.currentTarget, e.clientX);
   }
 
   // The hidden slot uses opacity 0 + pointer-events: none so it
@@ -387,12 +481,19 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   return (
     <div className="video-wrap">
       <div className="video-stack">
+        {mediaError && <MediaErrorOverlay message={mediaError} />}
         <video
           ref={refA}
           className="video-el"
           preload="auto"
           style={styleA}
           onTimeUpdate={activeKey === "a" ? onTimeUpdate : undefined}
+          onLoadedMetadata={() => alignSlotAfterLoad("a")}
+          onCanPlay={() => {
+            setMediaError(null);
+            alignSlotAfterLoad("a");
+          }}
+          onError={onVideoError}
           onPlay={activeKey === "a" ? () => setPlaying(true) : undefined}
           onPause={activeKey === "a" ? () => setPlaying(false) : undefined}
           onEnded={activeKey === "a" ? () => setPlaying(false) : undefined}
@@ -404,6 +505,12 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           preload="auto"
           style={styleB}
           onTimeUpdate={activeKey === "b" ? onTimeUpdate : undefined}
+          onLoadedMetadata={() => alignSlotAfterLoad("b")}
+          onCanPlay={() => {
+            setMediaError(null);
+            alignSlotAfterLoad("b");
+          }}
+          onError={onVideoError}
           onPlay={activeKey === "b" ? () => setPlaying(true) : undefined}
           onPause={activeKey === "b" ? () => setPlaying(false) : undefined}
           onEnded={activeKey === "b" ? () => setPlaying(false) : undefined}
@@ -426,6 +533,9 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           step={0.01}
           value={Math.min(timelineTime, timelineDurationS)}
           onChange={onScrub}
+          onInput={onScrubInput}
+          onPointerDown={onScrubPointerDown}
+          onPointerMove={onScrubPointerMove}
           disabled={timelineDurationS === 0}
         />
         <div className="transport-time">
@@ -484,6 +594,15 @@ function slotStyle(visible: boolean): React.CSSProperties {
     pointerEvents: visible ? "auto" : "none",
     zIndex: visible ? 2 : 1,
   };
+}
+
+function MediaErrorOverlay({ message }: { message: string }) {
+  return (
+    <div className="media-error-overlay">
+      <p className="media-error-title">Preview unavailable</p>
+      <p className="media-error-message">{message}</p>
+    </div>
+  );
 }
 
 // Some browsers throw when setting currentTime before the readyState

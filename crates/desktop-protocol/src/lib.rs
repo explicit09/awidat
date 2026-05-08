@@ -54,7 +54,6 @@ pub const PROTOCOL_VERSION: &str = "0.1.0";
 /// interpreted by the frontend beyond equality and ordering.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./", type = "string")]
-#[serde(transparent)]
 pub struct Id(pub String);
 
 impl Id {

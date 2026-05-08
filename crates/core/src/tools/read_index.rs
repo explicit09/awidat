@@ -127,10 +127,16 @@ fn project_channel(
     offset: usize,
     limit: usize,
 ) -> serde_json::Value {
-    let data = sidecar.get("data").cloned().unwrap_or(serde_json::Value::Null);
+    let data = sidecar
+        .get("data")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     match channel {
         "transcript" => {
-            let segments = data.get("segments").cloned().unwrap_or(serde_json::Value::Array(vec![]));
+            let segments = data
+                .get("segments")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
             let speakers = data.get("speakers").cloned();
             let language = data.get("language").cloned();
             let total = segments.as_array().map(Vec::len).unwrap_or(0);
@@ -146,7 +152,10 @@ fn project_channel(
             })
         }
         "scenes" => {
-            let shots = data.get("shots").cloned().unwrap_or(serde_json::Value::Array(vec![]));
+            let shots = data
+                .get("shots")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
             let total = shots.as_array().map(Vec::len).unwrap_or(0);
             let windowed = window(&shots, offset, limit);
             serde_json::json!({
@@ -181,7 +190,10 @@ fn project_channel(
             })
         }
         "topics" => {
-            let topics = data.get("topics").cloned().unwrap_or(serde_json::Value::Array(vec![]));
+            let topics = data
+                .get("topics")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
             let total = topics.as_array().map(Vec::len).unwrap_or(0);
             let windowed = window(&topics, offset, limit);
             serde_json::json!({
@@ -215,7 +227,10 @@ fn cap_size(s: &str) -> String {
     format!("{head}\n[truncated to {RESULT_CAP_BYTES} bytes; raise --offset to page]")
 }
 
-fn summary(project_root: &std::path::Path, asset_id: &str) -> Result<ToolOutput, FunctionCallError> {
+fn summary(
+    project_root: &std::path::Path,
+    asset_id: &str,
+) -> Result<ToolOutput, FunctionCallError> {
     let asset = AssetId::new(asset_id.to_string());
     let mut summary = serde_json::Map::new();
     for (channel, indexer) in [
@@ -228,13 +243,30 @@ fn summary(project_root: &std::path::Path, asset_id: &str) -> Result<ToolOutput,
             Ok(v) => {
                 let projected = project_channel(channel, &v, 0, 0);
                 let mut entry = serde_json::Map::new();
-                if let Some(v) = projected.get("language") { entry.insert("language".into(), v.clone()); }
-                if let Some(v) = projected.get("speakers") { entry.insert("speakers".into(), v.clone()); }
-                if let Some(v) = projected.get("total_segments") { entry.insert("total_segments".into(), v.clone()); }
-                if let Some(v) = projected.get("total_shots") { entry.insert("total_shots".into(), v.clone()); }
-                if let Some(v) = projected.get("duration_s") { entry.insert("duration_s".into(), v.clone()); }
-                if let Some(v) = projected.get("loudness_integrated_lufs") { entry.insert("loudness_integrated_lufs".into(), v.clone()); }
-                if let Some(v) = projected.get("topics") { entry.insert("topics_count".into(), serde_json::json!(v.as_array().map(Vec::len).unwrap_or(0))); }
+                if let Some(v) = projected.get("language") {
+                    entry.insert("language".into(), v.clone());
+                }
+                if let Some(v) = projected.get("speakers") {
+                    entry.insert("speakers".into(), v.clone());
+                }
+                if let Some(v) = projected.get("total_segments") {
+                    entry.insert("total_segments".into(), v.clone());
+                }
+                if let Some(v) = projected.get("total_shots") {
+                    entry.insert("total_shots".into(), v.clone());
+                }
+                if let Some(v) = projected.get("duration_s") {
+                    entry.insert("duration_s".into(), v.clone());
+                }
+                if let Some(v) = projected.get("loudness_integrated_lufs") {
+                    entry.insert("loudness_integrated_lufs".into(), v.clone());
+                }
+                if let Some(v) = projected.get("topics") {
+                    entry.insert(
+                        "topics_count".into(),
+                        serde_json::json!(v.as_array().map(Vec::len).unwrap_or(0)),
+                    );
+                }
                 summary.insert(channel.into(), serde_json::Value::Object(entry));
             }
             Err(SidecarError::NotFound { .. }) => {
@@ -276,7 +308,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -291,7 +326,10 @@ mod tests {
     }
 
     fn write_sidecar(root: &std::path::Path, indexer: &str, asset: &str, body: serde_json::Value) {
-        let p = root.join("index").join(indexer).join(format!("{asset}.json"));
+        let p = root
+            .join("index")
+            .join(indexer)
+            .join(format!("{asset}.json"));
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
     }

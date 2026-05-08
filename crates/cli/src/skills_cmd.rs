@@ -85,8 +85,7 @@ pub fn run(args: RunArgs) -> Result<()> {
     }
     let (registry, _errors) = discover_registry()?;
     if registry.get(&args.name).is_none() {
-        let mut available: Vec<&str> =
-            registry.all().map(|s| s.meta.name.as_str()).collect();
+        let mut available: Vec<&str> = registry.all().map(|s| s.meta.name.as_str()).collect();
         available.sort();
         let suggestions = if available.is_empty() {
             "no skills installed; run `awidat skills list` to see how to install one".to_string()

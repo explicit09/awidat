@@ -8,6 +8,7 @@ tools_allowlist:
   - search_broll
   - use_broll
   - apply_edl
+  - view_timeline
   - inspect_moment
   - read_index
   - update_plan

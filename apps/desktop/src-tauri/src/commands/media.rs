@@ -1,14 +1,18 @@
-//! Media-pane Tauri commands. Currently just listing proxies; the
-//! preview itself is served via Tauri's built-in `asset:` protocol
-//! whose scope was opened to the project's proxies dir by
-//! `set_project_root` / `init_project`.
+//! Media-pane Tauri commands.
 
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::AwidatState;
+use crate::state::{AwidatState, MediaServerInner};
 
 /// One playable proxy. The frontend feeds `proxy_path` into
 /// `convertFileSrc()` to get a `<video>`-compatible URL.
@@ -108,6 +112,211 @@ pub async fn proxy_path_for_stem(
     })
 }
 
+/// Return a localhost streaming URL for a proxy file. Unlike Tauri's
+/// `asset:` URL, this preserves audio in WKWebView; unlike a blob URL,
+/// it does not load a multi-GB proxy into WebKit memory.
+#[tauri::command]
+pub async fn media_url_for_path(
+    state: State<'_, AwidatState>,
+    path: String,
+) -> Result<String, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    let requested =
+        std::fs::canonicalize(&path).map_err(|e| format!("media path does not exist: {e}"))?;
+    let proxies_dir = std::fs::canonicalize(project_root.join(".awidat").join("proxies"))
+        .map_err(|e| format!("proxies dir unavailable: {e}"))?;
+    if !requested.starts_with(&proxies_dir) || !is_proxy_file(&requested) {
+        return Err("media path is outside this project's proxy directory".into());
+    }
+
+    let (port, files) = ensure_media_server(&state)?;
+    let token = media_token(&requested);
+    files
+        .lock()
+        .map_err(|_| "media server lock poisoned".to_string())?
+        .insert(token.clone(), requested);
+    Ok(format!("http://127.0.0.1:{port}/media/{token}"))
+}
+
+fn ensure_media_server(
+    state: &State<'_, AwidatState>,
+) -> Result<(u16, Arc<StdMutex<HashMap<String, PathBuf>>>), String> {
+    let mut slot = state
+        .media_server
+        .inner
+        .lock()
+        .map_err(|_| "media server lock poisoned".to_string())?;
+    if let Some(inner) = slot.as_ref() {
+        return Ok((inner.port, inner.files.clone()));
+    }
+
+    let listener =
+        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind media server: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("media server addr: {e}"))?
+        .port();
+    let files = Arc::new(StdMutex::new(HashMap::<String, PathBuf>::new()));
+    let files_for_thread = files.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let files = files_for_thread.clone();
+            thread::spawn(move || handle_media_connection(stream, files));
+        }
+    });
+
+    *slot = Some(MediaServerInner {
+        port,
+        files: files.clone(),
+    });
+    Ok((port, files))
+}
+
+fn handle_media_connection(mut stream: TcpStream, files: Arc<StdMutex<HashMap<String, PathBuf>>>) {
+    let mut req = [0_u8; 8192];
+    let Ok(n) = stream.read(&mut req) else {
+        return;
+    };
+    if n == 0 {
+        return;
+    }
+    let req = String::from_utf8_lossy(&req[..n]);
+    let mut lines = req.lines();
+    let Some(first) = lines.next() else {
+        return;
+    };
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
+    if method != "GET" && method != "HEAD" {
+        write_simple_response(&mut stream, "405 Method Not Allowed", "text/plain", b"");
+        return;
+    }
+    let Some(token) = path.strip_prefix("/media/") else {
+        write_simple_response(&mut stream, "404 Not Found", "text/plain", b"");
+        return;
+    };
+    let file_path = match files.lock().ok().and_then(|m| m.get(token).cloned()) {
+        Some(p) => p,
+        None => {
+            write_simple_response(&mut stream, "404 Not Found", "text/plain", b"");
+            return;
+        }
+    };
+    let range = lines.find_map(parse_range_header);
+    serve_file(&mut stream, &file_path, range, method == "HEAD");
+}
+
+enum RangeSpec {
+    From { start: u64, end: Option<u64> },
+    Suffix { len: u64 },
+}
+
+fn parse_range_header(line: &str) -> Option<RangeSpec> {
+    let value = line
+        .strip_prefix("Range: ")
+        .or_else(|| line.strip_prefix("range: "))?;
+    let range = value.strip_prefix("bytes=")?.split(',').next()?.trim();
+    let (start, end) = range.split_once('-')?;
+    if start.is_empty() {
+        return Some(RangeSpec::Suffix {
+            len: end.parse::<u64>().ok()?,
+        });
+    }
+    let start = start.parse::<u64>().ok()?;
+    let end = if end.is_empty() {
+        None
+    } else {
+        Some(end.parse::<u64>().ok()?)
+    };
+    Some(RangeSpec::From { start, end })
+}
+
+fn serve_file(stream: &mut TcpStream, path: &Path, range: Option<RangeSpec>, head_only: bool) {
+    let Ok(mut file) = File::open(path) else {
+        write_simple_response(stream, "404 Not Found", "text/plain", b"");
+        return;
+    };
+    let Ok(meta) = file.metadata() else {
+        write_simple_response(stream, "500 Internal Server Error", "text/plain", b"");
+        return;
+    };
+    let len = meta.len();
+    if len == 0 {
+        write_simple_response(stream, "416 Range Not Satisfiable", "text/plain", b"");
+        return;
+    }
+    let (status, start, end) = match range {
+        Some(RangeSpec::From { start, end }) if start < len => {
+            let end = end.unwrap_or(len - 1).min(len - 1);
+            ("206 Partial Content", start, end)
+        }
+        Some(RangeSpec::Suffix { len: suffix_len }) if suffix_len > 0 => {
+            let suffix_len = suffix_len.min(len);
+            ("206 Partial Content", len - suffix_len, len - 1)
+        }
+        Some(_) => {
+            let header = format!(
+                "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{len}\r\nContent-Length: 0\r\n\r\n"
+            );
+            let _ = stream.write_all(header.as_bytes());
+            return;
+        }
+        None => ("200 OK", 0, len - 1),
+    };
+    let content_len = end - start + 1;
+    let mut header = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: video/mp4\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {content_len}\r\nConnection: close\r\n"
+    );
+    if status.starts_with("206") {
+        header.push_str(&format!("Content-Range: bytes {start}-{end}/{len}\r\n"));
+    }
+    header.push_str("\r\n");
+    if stream.write_all(header.as_bytes()).is_err() || head_only {
+        return;
+    }
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return;
+    }
+    let mut remaining = content_len;
+    let mut buf = [0_u8; 64 * 1024];
+    while remaining > 0 {
+        let want = remaining.min(buf.len() as u64) as usize;
+        let Ok(read) = file.read(&mut buf[..want]) else {
+            break;
+        };
+        if read == 0 {
+            break;
+        }
+        if stream.write_all(&buf[..read]).is_err() {
+            break;
+        }
+        remaining -= read as u64;
+    }
+}
+
+fn write_simple_response(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) {
+    let header = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(body);
+}
+
+fn media_token(path: &Path) -> String {
+    let since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}-{:x}", since_epoch, stable_path_hash(path))
+}
+
 /// Compute the absolute proxy-mp4 path for an asset path.
 ///
 /// Used by the transcoder when generating proxies AND by the
@@ -126,7 +335,10 @@ pub fn proxy_path_for(proxies_dir: &Path, asset_abs_path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    proxies_dir.join(format!("{stem}-{:08x}.mp4", stable_path_hash(asset_abs_path)))
+    proxies_dir.join(format!(
+        "{stem}-{:08x}.mp4",
+        stable_path_hash(asset_abs_path)
+    ))
 }
 
 fn stable_path_hash(path: &Path) -> u32 {
@@ -151,7 +363,9 @@ pub fn proxy_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<St
     }
     let proxies_dir = project_root.join(".awidat").join("proxies");
     let proxy = proxy_path_for(&proxies_dir, &abs);
-    proxy.is_file().then(|| proxy.to_string_lossy().into_owned())
+    proxy
+        .is_file()
+        .then(|| proxy.to_string_lossy().into_owned())
 }
 
 /// Compute the absolute thumbnails-directory path for an asset path.
@@ -182,10 +396,10 @@ pub fn waveform_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf 
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    project_root
-        .join(".awidat")
-        .join("waveforms")
-        .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
+    project_root.join(".awidat").join("waveforms").join(format!(
+        "{stem}-{:08x}.json",
+        stable_path_hash(asset_abs_path)
+    ))
 }
 
 /// Compute the absolute silence-sidecar path for an asset path.
@@ -199,10 +413,10 @@ pub fn silences_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf 
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    project_root
-        .join(".awidat")
-        .join("silences")
-        .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
+    project_root.join(".awidat").join("silences").join(format!(
+        "{stem}-{:08x}.json",
+        stable_path_hash(asset_abs_path)
+    ))
 }
 
 /// Compute the absolute motion-sidecar path. Sidecar holds JSON
@@ -214,23 +428,26 @@ pub fn motion_path_for(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
-    project_root
-        .join(".awidat")
-        .join("motion")
-        .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_abs_path)))
+    project_root.join(".awidat").join("motion").join(format!(
+        "{stem}-{:08x}.json",
+        stable_path_hash(asset_abs_path)
+    ))
 }
 
 /// Resolve the motion-sidecar path for a project-relative asset id.
 /// Returns `Some(path)` when the sidecar exists on disk; `None`
 /// otherwise. The continuity tool tolerates absence — a missing
 /// sidecar means the motion rule abstains rather than blocks.
+#[allow(dead_code)]
 pub fn motion_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<String> {
     let abs = project_root.join(asset_id);
     if !abs.is_file() {
         return None;
     }
     let sidecar = motion_path_for(project_root, &abs);
-    sidecar.is_file().then(|| sidecar.to_string_lossy().into_owned())
+    sidecar
+        .is_file()
+        .then(|| sidecar.to_string_lossy().into_owned())
 }
 
 /// Resolve the absolute silence-sidecar path for a project-relative
@@ -239,13 +456,16 @@ pub fn motion_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<S
 /// helper, an empty `ranges: []` is a valid result (the asset has
 /// no detected silence, or has no audio stream — both are useful
 /// to the find_dead_air tool, which short-circuits on either).
+#[allow(dead_code)]
 pub fn silences_path_for_asset_id(project_root: &Path, asset_id: &str) -> Option<String> {
     let abs = project_root.join(asset_id);
     if !abs.is_file() {
         return None;
     }
     let sidecar = silences_path_for(project_root, &abs);
-    sidecar.is_file().then(|| sidecar.to_string_lossy().into_owned())
+    sidecar
+        .is_file()
+        .then(|| sidecar.to_string_lossy().into_owned())
 }
 
 /// Resolve the absolute waveform-sidecar path for a project-relative
@@ -300,12 +520,7 @@ pub fn thumbnails_dir_for_asset_id(project_root: &Path, asset_id: &str) -> Optio
     let has_frame = std::fs::read_dir(&dir)
         .ok()?
         .flatten()
-        .any(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("frame-")
-        });
+        .any(|entry| entry.file_name().to_string_lossy().starts_with("frame-"));
     has_frame.then(|| dir.to_string_lossy().into_owned())
 }
 

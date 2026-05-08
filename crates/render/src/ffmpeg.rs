@@ -24,7 +24,9 @@ use tokio::time::timeout;
 #[derive(Debug, Error)]
 pub enum FfmpegError {
     /// Couldn't find the binary.
-    #[error("could not locate '{which}': set AWIDAT_FFMPEG (or AWIDAT_FFPROBE) or install via your package manager")]
+    #[error(
+        "could not locate '{which}': set AWIDAT_FFMPEG (or AWIDAT_FFPROBE) or install via your package manager"
+    )]
     NotFound {
         /// Either `"ffmpeg"` or `"ffprobe"`.
         which: &'static str,
@@ -133,22 +135,29 @@ pub async fn extract_frame(
     //   `-ss` BEFORE `-i` → input-side seek (fast, keyframe-accurate)
     //   `-ss` AFTER  `-i` → output-side seek (slow, sub-frame-accurate)
     // Editorial preview tolerates keyframe-aligned thumbnails.
-    cmd.arg("-loglevel").arg("error")
+    cmd.arg("-loglevel")
+        .arg("error")
         .arg("-y")
-        .arg("-ss").arg(format!("{t_s}"))
-        .arg("-i").arg(asset_path)
-        .arg("-frames:v").arg("1");
+        .arg("-ss")
+        .arg(format!("{t_s}"))
+        .arg("-i")
+        .arg(asset_path)
+        .arg("-frames:v")
+        .arg("1");
 
     if let Some(dim) = max_dim {
         // Preserve aspect ratio; clamp the larger dimension to `dim`.
         // The `-2` keeps the other dimension even-numbered (ffmpeg
         // requires even dims for many codecs).
-        cmd.arg("-vf")
-            .arg(format!("scale='if(gt(iw,ih),{dim},-2)':'if(gt(iw,ih),-2,{dim})'"));
+        cmd.arg("-vf").arg(format!(
+            "scale='if(gt(iw,ih),{dim},-2)':'if(gt(iw,ih),-2,{dim})'"
+        ));
     }
 
-    cmd.arg("-f").arg("image2pipe")
-        .arg("-vcodec").arg(format.codec_name())
+    cmd.arg("-f")
+        .arg("image2pipe")
+        .arg("-vcodec")
+        .arg(format.codec_name())
         .arg("-");
 
     cmd.stdin(Stdio::null())
@@ -161,8 +170,14 @@ pub async fn extract_frame(
         source: e,
     })?;
 
-    let stdout = child.stdout.take().ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stdout missing")))?;
-    let stderr = child.stderr.take().ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stdout missing")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
 
     let collect_fut = async move {
         let mut so = Vec::new();
@@ -285,7 +300,8 @@ pub enum TranscodeProgress {
 /// shape as `awidat_index::ProgressCallback` (Arc-wrapped trait
 /// object, sync `Fn`, `Send + Sync + 'static`) so the desktop can
 /// wrap it the same way.
-pub type TranscodeProgressCallback = std::sync::Arc<dyn Fn(TranscodeProgress) + Send + Sync + 'static>;
+pub type TranscodeProgressCallback =
+    std::sync::Arc<dyn Fn(TranscodeProgress) + Send + Sync + 'static>;
 
 /// Transcode `asset_path` into a 720p H.264 proxy at `output_path`.
 ///
@@ -313,7 +329,9 @@ pub async fn transcode_proxy(
     // Ensure output dir exists (caller may have created the proxy/
     // dir first, but this saves a code path on the consumer side).
     if let Some(parent) = output_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(FfmpegError::Io)?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(FfmpegError::Io)?;
     }
 
     // Probe duration up front so the UI can show a real percent. A
@@ -668,9 +686,11 @@ pub async fn generate_waveform(
     let samples = match stdout_task.await {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => return Err(FfmpegError::Io(e)),
-        Err(_) => return Err(FfmpegError::Io(std::io::Error::other(
-            "waveform stdout task panicked",
-        ))),
+        Err(_) => {
+            return Err(FfmpegError::Io(std::io::Error::other(
+                "waveform stdout task panicked",
+            )));
+        }
     };
 
     if !status.success() {
@@ -710,10 +730,7 @@ fn bucket_peaks(samples: &[f32], bucket_count: usize) -> Vec<f32> {
             // single sample per bucket (last available).
             &samples[(start.min(total - 1))..(start.min(total - 1) + 1)]
         };
-        let peak = slice
-            .iter()
-            .fold(0f32, |acc, &s| acc.max(s.abs()))
-            .min(1.0);
+        let peak = slice.iter().fold(0f32, |acc, &s| acc.max(s.abs())).min(1.0);
         out.push(peak);
     }
     out
@@ -1058,7 +1075,13 @@ mod tests {
             .build()
             .unwrap()
             .block_on(async {
-                extract_frame(Path::new("/nonexistent.mp4"), f64::NAN, ImageFormat::Png, None).await
+                extract_frame(
+                    Path::new("/nonexistent.mp4"),
+                    f64::NAN,
+                    ImageFormat::Png,
+                    None,
+                )
+                .await
             });
         assert!(matches!(result, Err(FfmpegError::BadTimestamp(_))));
     }
@@ -1130,10 +1153,13 @@ mod tests {
 
         // Synth a 2s sine via lavfi, write as wav.
         let status = std::process::Command::new(ffmpeg_path().unwrap())
-            .arg("-loglevel").arg("error")
+            .arg("-loglevel")
+            .arg("error")
             .arg("-y")
-            .arg("-f").arg("lavfi")
-            .arg("-i").arg("sine=frequency=440:duration=2")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("sine=frequency=440:duration=2")
             .arg(&asset)
             .status()
             .expect("synth ffmpeg spawn");
@@ -1144,12 +1170,7 @@ mod tests {
             .build()
             .unwrap()
             .block_on(async {
-                generate_waveform(
-                    &asset,
-                    256,
-                    tokio_util::sync::CancellationToken::new(),
-                )
-                .await
+                generate_waveform(&asset, 256, tokio_util::sync::CancellationToken::new()).await
             })
             .expect("generate_waveform");
 
@@ -1187,12 +1208,17 @@ mod tests {
         // Build a 3s testsrc input directly with a blocking ffmpeg
         // call — we don't need the full async machinery here.
         let status = std::process::Command::new(&bin)
-            .arg("-loglevel").arg("error")
+            .arg("-loglevel")
+            .arg("error")
             .arg("-y")
-            .arg("-f").arg("lavfi")
-            .arg("-i").arg("testsrc=duration=3:size=320x240:rate=30")
-            .arg("-c:v").arg("libx264")
-            .arg("-pix_fmt").arg("yuv420p")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("testsrc=duration=3:size=320x240:rate=30")
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
             .arg(&asset)
             .status()
             .expect("synth ffmpeg spawn");
@@ -1204,12 +1230,8 @@ mod tests {
             .build()
             .unwrap()
             .block_on(async {
-                generate_thumbnails(
-                    &asset,
-                    &out_dir,
-                    tokio_util::sync::CancellationToken::new(),
-                )
-                .await
+                generate_thumbnails(&asset, &out_dir, tokio_util::sync::CancellationToken::new())
+                    .await
             });
         assert!(result.is_ok(), "generate_thumbnails failed: {result:?}");
 
@@ -1217,11 +1239,7 @@ mod tests {
         let entries: Vec<_> = std::fs::read_dir(&out_dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("frame-")
-            })
+            .filter(|e| e.file_name().to_string_lossy().starts_with("frame-"))
             .collect();
         assert!(
             (2..=4).contains(&entries.len()),
@@ -1330,16 +1348,25 @@ mod tests {
         // aevalsrc: pure-silence regions are exactly what silencedetect
         // is built for. We splice tone + silence + tone via concat.
         let status = std::process::Command::new(ffmpeg_path().unwrap())
-            .arg("-loglevel").arg("error")
+            .arg("-loglevel")
+            .arg("error")
             .arg("-y")
-            .arg("-f").arg("lavfi")
-            .arg("-i").arg("sine=frequency=440:duration=1")
-            .arg("-f").arg("lavfi")
-            .arg("-i").arg("anullsrc=duration=2:r=44100")
-            .arg("-f").arg("lavfi")
-            .arg("-i").arg("sine=frequency=440:duration=1")
-            .arg("-filter_complex").arg("[0][1][2]concat=n=3:v=0:a=1[a]")
-            .arg("-map").arg("[a]")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("sine=frequency=440:duration=1")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("anullsrc=duration=2:r=44100")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("sine=frequency=440:duration=1")
+            .arg("-filter_complex")
+            .arg("[0][1][2]concat=n=3:v=0:a=1[a]")
+            .arg("-map")
+            .arg("[a]")
             .arg(&asset)
             .status()
             .expect("synth ffmpeg spawn");
@@ -1370,11 +1397,13 @@ mod tests {
         // slack on each edge for the tone-fade margin.
         assert!(
             (0.8..=1.2).contains(&r.start_s),
-            "silence_start {} out of expected [0.8, 1.2]", r.start_s,
+            "silence_start {} out of expected [0.8, 1.2]",
+            r.start_s,
         );
         assert!(
             (2.8..=3.2).contains(&r.end_s),
-            "silence_end {} out of expected [2.8, 3.2]", r.end_s,
+            "silence_end {} out of expected [2.8, 3.2]",
+            r.end_s,
         );
     }
 
@@ -1444,12 +1473,17 @@ mod tests {
 
         // testsrc has rotating motion → non-zero scene scores.
         let status = std::process::Command::new(ffmpeg_path().unwrap())
-            .arg("-loglevel").arg("error")
+            .arg("-loglevel")
+            .arg("error")
             .arg("-y")
-            .arg("-f").arg("lavfi")
-            .arg("-i").arg("testsrc=duration=3:size=320x240:rate=30")
-            .arg("-c:v").arg("libx264")
-            .arg("-pix_fmt").arg("yuv420p")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg("testsrc=duration=3:size=320x240:rate=30")
+            .arg("-c:v")
+            .arg("libx264")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
             .arg(&asset)
             .status()
             .expect("synth ffmpeg spawn");
@@ -1460,11 +1494,7 @@ mod tests {
             .build()
             .unwrap()
             .block_on(async {
-                generate_motion_signal(
-                    &asset,
-                    tokio_util::sync::CancellationToken::new(),
-                )
-                .await
+                generate_motion_signal(&asset, tokio_util::sync::CancellationToken::new()).await
             })
             .expect("generate_motion_signal");
 

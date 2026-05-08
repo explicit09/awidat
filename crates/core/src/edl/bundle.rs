@@ -142,8 +142,7 @@ mod tests {
                 at_s: 5.0,
             }],
         };
-        let bundled =
-            bundle_with_dissolve(env, anchor("clip-a"), anchor("clip-b"), Some(0.5));
+        let bundled = bundle_with_dissolve(env, anchor("clip-a"), anchor("clip-b"), Some(0.5));
         match &bundled.ops[1] {
             EdlOp::InsertTransition { duration_s, .. } => {
                 assert!((duration_s - 0.5).abs() < 1e-9);
@@ -205,12 +204,8 @@ mod tests {
                 end: Some(2.0),
             }],
         };
-        let bundled = bundle_with_broll_cover(
-            env,
-            anchor("clip-a"),
-            "raw/broll/pexels-9.mp4",
-            None,
-        );
+        let bundled =
+            bundle_with_broll_cover(env, anchor("clip-a"), "raw/broll/pexels-9.mp4", None);
         assert_eq!(bundled.ops.len(), 2);
         match &bundled.ops[1] {
             EdlOp::InsertBRoll {
@@ -236,12 +231,8 @@ mod tests {
                 at_s: 5.0,
             }],
         };
-        let bundled = bundle_with_broll_cover(
-            env,
-            anchor("clip-a"),
-            "raw/broll/pexels-1.mp4",
-            Some(3.5),
-        );
+        let bundled =
+            bundle_with_broll_cover(env, anchor("clip-a"), "raw/broll/pexels-1.mp4", Some(3.5));
         match &bundled.ops[1] {
             EdlOp::InsertBRoll { duration_s, .. } => {
                 assert!((duration_s - 3.5).abs() < 1e-9);

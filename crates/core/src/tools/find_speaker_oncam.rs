@@ -109,7 +109,9 @@ impl ToolHandler for FindSpeakerOncamTool {
             {
                 continue;
             }
-            let Some(data) = sidecar.get("data") else { continue };
+            let Some(data) = sidecar.get("data") else {
+                continue;
+            };
 
             // Look up the face_id this speaker maps to. Empty mapping
             // means diarization wasn't available when face-mcp ran —
@@ -249,7 +251,10 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo { name: "test".into(), version: "0.0.0".into() }),
+            mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
+                name: "test".into(),
+                version: "0.0.0".into(),
+            }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
         }
@@ -325,12 +330,7 @@ mod tests {
     #[tokio::test]
     async fn missing_speaker_returns_hint() {
         let dir = tempfile::tempdir().unwrap();
-        write_face_sidecar(
-            dir.path(),
-            "raw/ep.mp4",
-            serde_json::json!({}),
-            vec![],
-        );
+        write_face_sidecar(dir.path(), "raw/ep.mp4", serde_json::json!({}), vec![]);
         let out = FindSpeakerOncamTool
             .handle(
                 invoke(serde_json::json!({"speaker": "A"})),

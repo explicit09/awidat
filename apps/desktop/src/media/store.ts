@@ -40,6 +40,8 @@ type MediaState = {
   durationS: number;
   /** True between play() and pause()/ended. */
   isPlaying: boolean;
+  /** Last media playback/load failure surfaced by a video element. */
+  mediaError: string | null;
   /**
    * Monotonically-increasing tick that bumps when an external caller
    * requests a source-time seek (e.g. the timeline canvas in
@@ -79,6 +81,8 @@ type MediaState = {
   setDuration: (d: number) => void;
   /** Called on `play` / `pause` / `ended`. */
   setPlaying: (p: boolean) => void;
+  /** Called by preview players when WebKit fails to load/play media. */
+  setMediaError: (message: string | null) => void;
   /** External caller asks the player to seek to `t` seconds (source-time). */
   requestSeek: (t: number) => void;
 
@@ -96,6 +100,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
   currentTime: 0,
   durationS: 0,
   isPlaying: false,
+  mediaError: null,
   seekRequestId: 0,
   seekTargetS: 0,
   timelineTime: 0,
@@ -130,6 +135,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
         currentTime: 0,
         durationS: 0,
         isPlaying: false,
+        mediaError: null,
       });
       return;
     }
@@ -140,22 +146,44 @@ export const useMediaStore = create<MediaState>((set, get) => ({
         currentTime: 0,
         durationS: 0,
         isPlaying: false,
+        mediaError: null,
       });
     }
   },
   setTime: (t) => set({ currentTime: t }),
   setDuration: (d) => set({ durationS: d }),
   setPlaying: (p) => set({ isPlaying: p }),
+  setMediaError: (message) => set({ mediaError: message }),
   requestSeek: (t) =>
     set((state) => ({
       seekRequestId: state.seekRequestId + 1,
       seekTargetS: Math.max(0, t),
     })),
-  setTimelineTime: (t) => set({ timelineTime: t }),
-  setTimelineDuration: (d) => set({ timelineDurationS: Math.max(0, d) }),
-  requestTimelineSeek: (t) =>
+  setTimelineTime: (t) =>
     set((state) => ({
-      timelineSeekRequestId: state.timelineSeekRequestId + 1,
-      timelineSeekTargetS: Math.max(0, t),
+      timelineTime: clampTimelineTime(t, state.timelineDurationS),
     })),
+  setTimelineDuration: (d) =>
+    set((state) => {
+      const duration = Math.max(0, d);
+      return {
+        timelineDurationS: duration,
+        timelineTime: clampTimelineTime(state.timelineTime, duration),
+        timelineSeekTargetS: clampTimelineTime(state.timelineSeekTargetS, duration),
+      };
+    }),
+  requestTimelineSeek: (t) =>
+    set((state) => {
+      const target = clampTimelineTime(t, state.timelineDurationS);
+      return {
+        timelineTime: target,
+        timelineSeekRequestId: state.timelineSeekRequestId + 1,
+        timelineSeekTargetS: target,
+      };
+    }),
 }));
+
+function clampTimelineTime(t: number, durationS: number): number {
+  const safe = Number.isFinite(t) ? Math.max(0, t) : 0;
+  return durationS > 0 ? Math.min(safe, durationS) : safe;
+}

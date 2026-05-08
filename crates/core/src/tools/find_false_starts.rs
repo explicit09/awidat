@@ -43,6 +43,7 @@ const RESTART_PHRASES: &[&[&str]] = &[&["let", "me"]];
 const DEFAULT_MAX_RESULTS: usize = 20;
 const HARD_MAX_RESULTS: usize = 100;
 
+/// Tool that finds false starts and restart phrases in the active timeline.
 pub struct FindFalseStartsTool;
 
 #[derive(Debug, Deserialize)]
@@ -86,12 +87,11 @@ impl ToolHandler for FindFalseStartsTool {
         invocation: ToolInvocation,
         ctx: ToolContext,
     ) -> Result<ToolOutput, FunctionCallError> {
-        let args: FindFalseStartsArgs =
-            serde_json::from_value(invocation.args).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "find_false_starts: invalid args ({e}). All fields optional."
-                ))
-            })?;
+        let args: FindFalseStartsArgs = serde_json::from_value(invocation.args).map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "find_false_starts: invalid args ({e}). All fields optional."
+            ))
+        })?;
         let max_results = args
             .max_results
             .unwrap_or(DEFAULT_MAX_RESULTS)
@@ -115,8 +115,7 @@ impl ToolHandler for FindFalseStartsTool {
             return Ok(ToolOutput::text(body.to_string()));
         }
 
-        let findings =
-            scan_false_starts(&ctx.project_root, &project.timeline, max_results);
+        let findings = scan_false_starts(&ctx.project_root, &project.timeline, max_results);
         let body = serde_json::json!({
             "findings": findings,
             "more_available": findings.len() == max_results,
@@ -136,7 +135,9 @@ pub fn scan_false_starts(
     let timeline_cursor_s = 0.0_f64;
 
     for stack_child in &timeline.tracks.children {
-        let StackChild::Track(track) = stack_child else { continue };
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
         let mut track_cursor_s = 0.0_f64;
         for tc in &track.children {
             match tc {
@@ -152,8 +153,7 @@ pub fn scan_false_starts(
                     };
                     let asset_id = ext.target_url.clone();
                     let clip_source_start = range.start_time.to_seconds();
-                    let clip_source_end =
-                        clip_source_start + range.duration.to_seconds();
+                    let clip_source_end = clip_source_start + range.duration.to_seconds();
                     let clip_track_start = track_cursor_s;
 
                     if let Some(words) = load_whisper_words(project_root, &asset_id) {
@@ -292,7 +292,9 @@ pub struct FalseStartFinding {
     pub source_start_s: f64,
     /// Source-time end (right before the restart marker word).
     pub source_end_s: f64,
+    /// Timeline-time start of the false-start range.
     pub timeline_start_s: f64,
+    /// Timeline-time end of the false-start range.
     pub timeline_end_s: f64,
     /// Short human-readable preview of the false-start text.
     pub snippet: String,
@@ -333,7 +335,11 @@ fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<Whisper
         .and_then(|v| v.as_array())?;
     let mut out = Vec::with_capacity(arr.len());
     for item in arr {
-        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let text = item
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         if text.is_empty() {
             continue;
         }
@@ -475,10 +481,7 @@ mod tests {
 
     #[test]
     fn skips_words_outside_clip_source_range() {
-        let ws = words(&[
-            ("wait", 30.0, 30.3),
-            ("actually", 30.3, 30.7),
-        ]);
+        let ws = words(&[("wait", 30.0, 30.3), ("actually", 30.3, 30.7)]);
         let mut out = Vec::new();
         // Clip plays only [0..10]; both markers are well outside.
         scan_words_for_restarts(&ws, "raw/ep.mp4", 0.0, 10.0, 0.0, &mut out);
@@ -487,10 +490,7 @@ mod tests {
 
     #[test]
     fn no_marker_no_finding() {
-        let ws = words(&[
-            ("hello", 0.0, 0.3),
-            ("world", 0.3, 0.6),
-        ]);
+        let ws = words(&[("hello", 0.0, 0.3), ("world", 0.3, 0.6)]);
         let mut out = Vec::new();
         scan_words_for_restarts(&ws, "raw/ep.mp4", 0.0, 1.0, 0.0, &mut out);
         assert!(out.is_empty());

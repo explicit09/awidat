@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import logging
 import subprocess
+from collections.abc import Iterator
 from typing import Any
 
 import numpy as np
@@ -87,16 +88,16 @@ def _probe_duration_s(asset_path: str) -> float:
     return float(out.stdout.strip())
 
 
-def _extract_frames(asset_path: str, fps: float) -> list[Image.Image]:
-    """Stream `fps`-rate RGB frames out of ffmpeg and return PIL Images.
+def _iter_frames(asset_path: str, fps: float) -> Iterator[Image.Image]:
+    """Stream `fps`-rate RGB frames out of ffmpeg as PIL Images.
 
     ffmpeg writes raw rgb24 to stdout at PROBE_W x PROBE_H. We slice
-    that bytestream per-frame. No intermediate disk files — everything
-    in-memory. PIL images come back already at the CLIP input size, so
-    the model preprocess is essentially a normalization.
+    that bytestream per-frame and yield immediately. No intermediate
+    disk files, and no full-video stdout buffer in Python memory.
     """
     cmd = [
         "ffmpeg",
+        "-nostdin",
         "-v",
         "error",
         "-i",
@@ -109,16 +110,27 @@ def _extract_frames(asset_path: str, fps: float) -> list[Image.Image]:
         "rawvideo",
         "-",
     ]
-    proc = subprocess.run(cmd, check=True, capture_output=True)
-    raw = proc.stdout
     frame_size = PROBE_W * PROBE_H * 3
-    n = len(raw) // frame_size
-    frames: list[Image.Image] = []
-    for i in range(n):
-        chunk = raw[i * frame_size : (i + 1) * frame_size]
-        img = Image.frombytes("RGB", (PROBE_W, PROBE_H), chunk)
-        frames.append(img)
-    return frames
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert proc.stdout is not None
+    try:
+        while True:
+            chunk = proc.stdout.read(frame_size)
+            if not chunk:
+                break
+            if len(chunk) != frame_size:
+                raise RuntimeError(
+                    f"ffmpeg produced a partial frame ({len(chunk)} of {frame_size} bytes)"
+                )
+            yield Image.frombytes("RGB", (PROBE_W, PROBE_H), chunk)
+        stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
+        rc = proc.wait()
+        if rc != 0:
+            raise RuntimeError(f"ffmpeg frame extraction failed (exit {rc}): {stderr.strip()}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
 
 
 _MODEL_CACHE: dict[str, Any] = {}
@@ -164,20 +176,28 @@ def _pack_embeddings_b64(arr: np.ndarray) -> str:
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     duration_s = _probe_duration_s(req.asset_path)
-    frames = _extract_frames(req.asset_path, SAMPLE_FPS)
     _log.info(
-        "clip-mcp: asset=%s duration=%.2fs sampled=%d frames @ %.2f fps",
+        "clip-mcp: asset=%s duration=%.2fs sampling @ %.2f fps",
         req.asset_id,
         duration_s,
-        len(frames),
         SAMPLE_FPS,
     )
 
-    # Encode in batches of 32 — keeps peak RAM bounded on CPU.
+    # Encode streamed frames in batches of 32. This avoids buffering the
+    # whole decoded video as raw RGB plus PIL objects.
     BATCH = 32
     chunks: list[np.ndarray] = []
-    for i in range(0, len(frames), BATCH):
-        chunks.append(_encode_batch(frames[i : i + BATCH]))
+    batch: list[Image.Image] = []
+    frame_count = 0
+    for frame in _iter_frames(req.asset_path, SAMPLE_FPS):
+        batch.append(frame)
+        if len(batch) >= BATCH:
+            chunks.append(_encode_batch(batch))
+            frame_count += len(batch)
+            batch.clear()
+    if batch:
+        chunks.append(_encode_batch(batch))
+        frame_count += len(batch)
     embeddings = (
         np.concatenate(chunks, axis=0)
         if chunks
@@ -185,7 +205,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     )
 
     # Build the per-second timeline — frame i corresponds to t_s = i / SAMPLE_FPS.
-    timestamps = [i / SAMPLE_FPS for i in range(len(frames))]
+    timestamps = [i / SAMPLE_FPS for i in range(frame_count)]
 
     return {
         "model": f"{MODEL_ARCH}/{MODEL_PRETRAINED}",
@@ -194,7 +214,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         "embedding_encoding": "base64",
         "frame_rate_sampled": SAMPLE_FPS,
         "duration_s": duration_s,
-        "frame_count": len(frames),
+        "frame_count": frame_count,
         "timestamps_s": timestamps,
         "embeddings_b64": _pack_embeddings_b64(embeddings),
     }
