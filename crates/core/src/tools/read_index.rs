@@ -63,8 +63,8 @@ impl ToolHandler for ReadIndexTool {
                     },
                     "channel": {
                         "type": "string",
-                        "enum": ["transcript", "scenes", "audio_levels", "topics", "summary"],
-                        "description": "Which signal to read. transcript=words+segments; scenes=shot boundaries; audio_levels=RMS+LUFS+silences; topics=topic-segmentation; summary=one-line overview of all channels."
+                        "enum": ["transcript", "scenes", "audio_levels", "topics", "color", "summary"],
+                        "description": "Which signal to read. transcript=words+segments; scenes=shot boundaries; audio_levels=RMS+LUFS+silences; topics=topic-segmentation; color=per-frame color/exposure analysis; summary=one-line overview of all channels."
                     },
                     "offset": { "type": "integer", "minimum": 0, "description": "0-based first entry. Default 0." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Max entries. Default 50, hard cap 300. For larger reads paginate via `offset`." }
@@ -87,7 +87,7 @@ impl ToolHandler for ReadIndexTool {
         let args: ReadIndexArgs = serde_json::from_value(invocation.args).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "read_index: invalid args ({e}). Required: {{ \"asset_id\": <str>, \
-                 \"channel\": \"transcript\"|\"scenes\"|\"audio_levels\"|\"topics\"|\"summary\" }}."
+                 \"channel\": \"transcript\"|\"scenes\"|\"audio_levels\"|\"topics\"|\"color\"|\"summary\" }}."
             ))
         })?;
 
@@ -96,11 +96,12 @@ impl ToolHandler for ReadIndexTool {
             "scenes" => "scenedetect",
             "audio_levels" => "audio-energy",
             "topics" => "topic",
+            "color" => "color-analysis",
             "summary" => return summary(&ctx.project_root, &args.asset_id),
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "read_index: channel '{other}' not recognized. Use one of: \
-                     transcript, scenes, audio_levels, topics, summary."
+                     transcript, scenes, audio_levels, topics, color, summary."
                 )));
             }
         };
@@ -204,6 +205,27 @@ fn project_channel(
                 "offset": offset, "limit": limit,
             })
         }
+        "color" => {
+            let per_frame = data
+                .get("per_frame")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let total = per_frame.as_array().map(Vec::len).unwrap_or(0);
+            let windowed = window(&per_frame, offset, limit);
+            serde_json::json!({
+                "asset_id": sidecar.get("asset_id"),
+                "frame_rate_sampled": data.get("frame_rate_sampled"),
+                "detect_width": data.get("detect_width"),
+                "detect_height": data.get("detect_height"),
+                "frame_count": data.get("frame_count"),
+                "summary": data.get("summary"),
+                "scenes": data.get("scenes"),
+                "ignored_frames": data.get("ignored_frames"),
+                "per_frame": windowed,
+                "total_frames": total,
+                "offset": offset, "limit": limit,
+            })
+        }
         _ => sidecar.clone(),
     }
 }
@@ -238,6 +260,7 @@ fn summary(
         ("scenes", "scenedetect"),
         ("audio_levels", "audio-energy"),
         ("topics", "topic"),
+        ("color", "color-analysis"),
     ] {
         match read_sidecar(project_root, indexer, &asset) {
             Ok(v) => {
@@ -267,6 +290,12 @@ fn summary(
                         serde_json::json!(v.as_array().map(Vec::len).unwrap_or(0)),
                     );
                 }
+                if let Some(v) = projected.get("summary") {
+                    entry.insert("summary".into(), v.clone());
+                }
+                if let Some(v) = projected.get("total_frames") {
+                    entry.insert("total_frames".into(), v.clone());
+                }
                 summary.insert(channel.into(), serde_json::Value::Object(entry));
             }
             Err(SidecarError::NotFound { .. }) => {
@@ -289,7 +318,8 @@ const DESCRIPTION: &str = "\
 Read one channel of the footage index for an asset. Channels: \
 'transcript' (whisper words+segments), 'scenes' (shot boundaries), \
 'audio_levels' (LUFS + silences), 'topics' (topic segmentation), \
-'summary' (one-line overview of all channels). Windowed channels accept \
+'color' (per-frame color/exposure analysis), 'summary' (one-line overview \
+of all channels). Windowed channels accept \
 offset+limit (default 0+50). Result is capped at 8KB; page via offset \
 when truncated.\
 ";
@@ -403,6 +433,54 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
         assert_eq!(body["limit"], 300, "limit must be clamped to MAX_LIMIT=300");
+    }
+
+    #[tokio::test]
+    async fn color_channel_projects_summary_and_frame_window() {
+        let dir = tempfile::tempdir().unwrap();
+        write_sidecar(
+            dir.path(),
+            "color-analysis",
+            "raw/x.mp4",
+            serde_json::json!({
+                "indexer": "color-analysis",
+                "asset_id": "raw/x.mp4",
+                "data": {
+                    "frame_rate_sampled": 1.0,
+                    "detect_width": 640,
+                    "detect_height": 360,
+                    "frame_count": 3,
+                    "summary": {
+                        "brightness_mean": 120.0,
+                        "contrast_mean": 42.0,
+                        "estimated_color_cast": "cool",
+                        "recommended_correction": {"exposure_ev": 0.1}
+                    },
+                    "per_frame": [
+                        {"t_s": 0, "brightness": 100},
+                        {"t_s": 1, "brightness": 120},
+                        {"t_s": 2, "brightness": 140}
+                    ]
+                }
+            }),
+        );
+        let out = ReadIndexTool
+            .handle(
+                invoke(serde_json::json!({
+                    "asset_id": "raw/x.mp4",
+                    "channel": "color",
+                    "offset": 1,
+                    "limit": 1,
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(body["summary"]["estimated_color_cast"], "cool");
+        assert_eq!(body["total_frames"], 3);
+        assert_eq!(body["per_frame"].as_array().unwrap().len(), 1);
+        assert_eq!(body["per_frame"][0]["t_s"], 1);
     }
 
     #[tokio::test]

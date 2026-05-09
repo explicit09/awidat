@@ -645,6 +645,11 @@ pub enum TimelineItem {
         /// input and to paint a `⚡ 2×` badge on clips with non-default
         /// values.
         speed: Option<f64>,
+        /// Clip-level color controls (`awidat.color_correction` Effect).
+        /// `None` when no correction is stamped on this clip.
+        color_correction: Option<ColorCorrectionStyling>,
+        /// Project-relative LUT path (`awidat.lut` Effect), if present.
+        lut_path: Option<String>,
         /// Title-overlay styling, populated when the clip carries an
         /// `awidat.title` Effect (i.e. it's on the Titles track).
         /// `None` for ordinary media clips. The frontend renders the
@@ -673,6 +678,28 @@ pub enum TimelineItem {
         /// `"SMPTE_Dissolve"`).
         effect_name: String,
     },
+}
+
+/// Clip-level color controls, lifted off `awidat.color_correction`.
+/// Fields are optional because an EDL op can set only the controls
+/// it needs; omitted fields use render defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct ColorCorrectionStyling {
+    /// Exposure offset in stops.
+    pub exposure_ev: Option<f64>,
+    /// Contrast multiplier.
+    pub contrast: Option<f64>,
+    /// Saturation multiplier.
+    pub saturation: Option<f64>,
+    /// Normalized warm/cool control.
+    pub temperature: Option<f64>,
+    /// Normalized green/magenta control.
+    pub tint: Option<f64>,
+    /// Normalized shadow control.
+    pub shadows: Option<f64>,
+    /// Normalized highlight control.
+    pub highlights: Option<f64>,
 }
 
 /// Styling fields for a title overlay, lifted off the

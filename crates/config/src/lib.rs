@@ -161,7 +161,7 @@ impl Config {
     /// Load: defaults → global → project. Each layer overlays the
     /// previous via [`Self::overlay`].
     ///
-    /// The defaults layer registers the 10 bundled indexer servers
+    /// The defaults layer registers the bundled indexer servers
     /// (whisper, clip, face, etc.) so a freshly-init'd project works
     /// with zero user config. User config becomes additive: add new
     /// servers, override fields on a default server (e.g. swap
@@ -375,9 +375,9 @@ WHISPER_MODEL = "small.en"
     #[test]
     fn load_with_no_files_returns_just_defaults() {
         // No global, no project — Config::load() returns the
-        // bundled defaults (10 indexers).
+        // bundled defaults.
         let c = Config::load(None).unwrap();
-        assert_eq!(c.mcp.servers.len(), 10);
+        assert_eq!(c.mcp.servers.len(), 11);
         assert!(c.find_server("whisper").is_some());
         assert!(c.find_server("clip").is_some());
     }
@@ -411,8 +411,8 @@ args = ["run", "custom-mcp"]
 "#,
         );
         let c = Config::load(Some(dir.path())).unwrap();
-        // Originally 10 defaults; project added one new ("my-custom-tool").
-        assert_eq!(c.mcp.servers.len(), 11);
+        // Originally 11 defaults; project added one new ("my-custom-tool").
+        assert_eq!(c.mcp.servers.len(), 12);
         let whisper = c.find_server("whisper").unwrap();
         // Project config replaced the default whisper command/args.
         assert_eq!(whisper.command, "/custom/uv");

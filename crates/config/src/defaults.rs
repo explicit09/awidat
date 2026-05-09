@@ -1,6 +1,6 @@
 //! Bundled indexer registry.
 //!
-//! Awidat ships with 10 canonical indexers pre-registered. New
+//! Awidat ships with 11 canonical indexers pre-registered. New
 //! projects work with zero `[[mcp.servers]]` config — the user's
 //! `.awidat/config.toml` (and `~/.config/awidat/config.toml`) become
 //! purely *additive overlays*: add custom indexers, swap a model,
@@ -289,6 +289,12 @@ const RECIPES: &[IndexerRecipe] = &[
         env: &[],
         depends_on: &[],
     },
+    IndexerRecipe {
+        name: "color-analysis",
+        package: "color-analysis-mcp",
+        env: &[],
+        depends_on: &[],
+    },
 ];
 
 /// Materialize the bundled defaults into a [`crate::Config`]. Called
@@ -339,15 +345,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ten_default_indexers_registered() {
+    fn eleven_default_indexers_registered() {
         let cfg = with_defaults();
-        assert_eq!(cfg.mcp.servers.len(), 10);
+        assert_eq!(cfg.mcp.servers.len(), 11);
         let names: Vec<&str> = cfg.mcp.servers.iter().map(|s| s.name.as_str()).collect();
         // Spot-check that the headline indexers are present.
         assert!(names.contains(&"whisper"));
         assert!(names.contains(&"clip"));
         assert!(names.contains(&"editorial-moments"));
         assert!(names.contains(&"face"));
+        assert!(names.contains(&"color-analysis"));
     }
 
     #[test]
@@ -401,6 +408,7 @@ mod tests {
             "face",
             "gaze",
             "frame-quality",
+            "color-analysis",
         ] {
             assert!(
                 cfg.find_server(name).unwrap().depends_on.is_empty(),

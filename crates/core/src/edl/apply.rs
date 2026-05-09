@@ -190,6 +190,32 @@ fn apply_one(
         EdlOp::SetSpeed { anchor, factor } => {
             apply_set_speed(working, index, anchor, *factor, ctx, locator)
         }
+        EdlOp::SetColorCorrection {
+            anchor,
+            exposure_ev,
+            contrast,
+            saturation,
+            temperature,
+            tint,
+            shadows,
+            highlights,
+        } => apply_set_color_correction(
+            working,
+            index,
+            anchor,
+            *exposure_ev,
+            *contrast,
+            *saturation,
+            *temperature,
+            *tint,
+            *shadows,
+            *highlights,
+            ctx,
+            locator,
+        ),
+        EdlOp::ApplyLut { anchor, lut_path } => {
+            apply_lut(working, index, anchor, lut_path, ctx, locator)
+        }
         EdlOp::InsertTitle {
             start_s,
             end_s,
@@ -293,6 +319,8 @@ fn resolve_locator_for_op(
         | EdlOp::InsertBRoll { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
         | EdlOp::SetSpeed { anchor, .. }
+        | EdlOp::SetColorCorrection { anchor, .. }
+        | EdlOp::ApplyLut { anchor, .. }
         | EdlOp::SetTitle { anchor, .. } => anchor,
         EdlOp::InsertClip { .. }
         | EdlOp::InsertTransition { .. }
@@ -1174,6 +1202,14 @@ const VOLUME_EFFECT_NAME: &str = "awidat.volume";
 /// on audio (chained when factor is outside `[0.5, 2.0]`).
 const SPEED_EFFECT_NAME: &str = "awidat.speed";
 
+/// Effect name used for clip-level color correction. Render reads the
+/// optional numeric fields and emits FFmpeg color filters before speed.
+const COLOR_CORRECTION_EFFECT_NAME: &str = "awidat.color_correction";
+
+/// Effect name used for clip-level LUT application. Render maps the
+/// project-relative `lut_path` to FFmpeg's `lut3d` filter.
+const LUT_EFFECT_NAME: &str = "awidat.lut";
+
 /// Effect name stamped on title-clip synthesized clips. The metadata
 /// holds text/position/font_size/color/font_weight/animation; render
 /// walks the Titles track and emits drawtext filters per title.
@@ -1277,6 +1313,137 @@ fn apply_set_speed(
     Ok(format!(
         "set speed on clip {clip_name:?} to {factor:.3}× (timeline duration scales by 1/factor)"
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_set_color_correction(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    exposure_ev: Option<f64>,
+    contrast: Option<f64>,
+    saturation: Option<f64>,
+    temperature: Option<f64>,
+    tint: Option<f64>,
+    shadows: Option<f64>,
+    highlights: Option<f64>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let fields = [
+        ("exposure_ev", exposure_ev, -4.0, 4.0),
+        ("contrast", contrast, 0.0, 3.0),
+        ("saturation", saturation, 0.0, 3.0),
+        ("temperature", temperature, -1.0, 1.0),
+        ("tint", tint, -1.0, 1.0),
+        ("shadows", shadows, -1.0, 1.0),
+        ("highlights", highlights, -1.0, 1.0),
+    ];
+    if fields.iter().all(|(_, value, _, _)| value.is_none()) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_color_correction: provide at least one correction field".into(),
+        });
+    }
+    for (name, value, min, max) in fields {
+        if let Some(value) = value {
+            if !value.is_finite() || value < min || value > max {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: format!(
+                        "set_color_correction: {name} {value} must be finite and within [{min}, {max}]"
+                    ),
+                });
+            }
+        }
+    }
+
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_color_correction: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_color_correction: anchor resolved to a non-clip track child".into(),
+        });
+    };
+
+    clip.effects
+        .retain(|e| e.effect_name != COLOR_CORRECTION_EFFECT_NAME);
+    let mut effect = awidat_proto::otio::Effect::new(COLOR_CORRECTION_EFFECT_NAME);
+    for (name, value, _, _) in [
+        ("exposure_ev", exposure_ev, -4.0, 4.0),
+        ("contrast", contrast, 0.0, 3.0),
+        ("saturation", saturation, 0.0, 3.0),
+        ("temperature", temperature, -1.0, 1.0),
+        ("tint", tint, -1.0, 1.0),
+        ("shadows", shadows, -1.0, 1.0),
+        ("highlights", highlights, -1.0, 1.0),
+    ] {
+        if let Some(value) = value {
+            effect
+                .metadata
+                .insert(name.to_string(), serde_json::json!(value));
+        }
+    }
+    let clip_name = clip.name.clone();
+    clip.effects.push(effect);
+    Ok(format!("set color correction on clip {clip_name:?}"))
+}
+
+fn apply_lut(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    lut_path: &str,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    validate_lut_path(index, lut_path)?;
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "apply_lut: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "apply_lut: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    clip.effects.retain(|e| e.effect_name != LUT_EFFECT_NAME);
+    let mut effect = awidat_proto::otio::Effect::new(LUT_EFFECT_NAME);
+    effect
+        .metadata
+        .insert("lut_path".to_string(), serde_json::json!(lut_path));
+    let clip_name = clip.name.clone();
+    clip.effects.push(effect);
+    Ok(format!("applied LUT {lut_path:?} to clip {clip_name:?}"))
+}
+
+fn validate_lut_path(index: usize, lut_path: &str) -> Result<(), ApplyError> {
+    let path = std::path::Path::new(lut_path);
+    if lut_path.trim().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "apply_lut: lut_path must be a non-empty project-relative path without '..'"
+                .into(),
+        });
+    }
+    Ok(())
 }
 
 /// Insert a title overlay onto the project's Titles track. The
@@ -3085,6 +3252,174 @@ mod tests {
         assert!(
             matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("> 0.0")),
             "expected validation error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_set_color_correction_stamps_effect_with_fields() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetColorCorrection {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                exposure_ev: Some(0.25),
+                contrast: Some(1.1),
+                saturation: None,
+                temperature: Some(-0.2),
+                tint: None,
+                shadows: None,
+                highlights: Some(-0.3),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.color_correction");
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("exposure_ev")
+                .and_then(|v| v.as_f64()),
+            Some(0.25)
+        );
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("temperature")
+                .and_then(|v| v.as_f64()),
+            Some(-0.2)
+        );
+        assert!(!clip.effects[0].metadata.contains_key("saturation"));
+    }
+
+    #[test]
+    fn apply_set_color_correction_replaces_existing_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetColorCorrection {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    exposure_ev: Some(0.25),
+                    contrast: None,
+                    saturation: None,
+                    temperature: None,
+                    tint: None,
+                    shadows: None,
+                    highlights: None,
+                },
+                EdlOp::SetColorCorrection {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    exposure_ev: None,
+                    contrast: Some(0.9),
+                    saturation: Some(1.2),
+                    temperature: None,
+                    tint: None,
+                    shadows: None,
+                    highlights: None,
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let color_effects: Vec<_> = clip
+            .effects
+            .iter()
+            .filter(|effect| effect.effect_name == "awidat.color_correction")
+            .collect();
+        assert_eq!(color_effects.len(), 1);
+        assert!(!color_effects[0].metadata.contains_key("exposure_ev"));
+        assert_eq!(
+            color_effects[0]
+                .metadata
+                .get("saturation")
+                .and_then(|v| v.as_f64()),
+            Some(1.2)
+        );
+    }
+
+    #[test]
+    fn apply_set_color_correction_rejects_invalid_field_value() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetColorCorrection {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                exposure_ev: Some(8.0),
+                contrast: None,
+                saturation: None,
+                temperature: None,
+                tint: None,
+                shadows: None,
+                highlights: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("exposure_ev")),
+            "expected validation error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_lut_stamps_effect_and_rejects_unsafe_paths() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ApplyLut {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                lut_path: "luts/show-look.cube".into(),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.lut");
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("lut_path")
+                .and_then(|v| v.as_str()),
+            Some("luts/show-look.cube")
+        );
+
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::ApplyLut {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    lut_path: "../secret.cube".into(),
+                }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("project-relative")),
+            "expected unsafe path validation error, got {err:?}",
         );
     }
 

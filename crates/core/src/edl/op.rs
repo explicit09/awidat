@@ -163,6 +163,36 @@ pub enum EdlOp {
         /// Speed multiplier. Must be finite and `> 0.0`.
         factor: f64,
     },
+    /// Set clip-level color correction controls. The apply layer stamps
+    /// an `awidat.color_correction` Effect on the clip; render converts
+    /// those normalized controls into FFmpeg video filters before speed,
+    /// titles, and concat. Re-applying replaces the prior correction.
+    SetColorCorrection {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Exposure offset in stops, typically `[-4.0, 4.0]`.
+        exposure_ev: Option<f64>,
+        /// Contrast multiplier, where `1.0` is unchanged.
+        contrast: Option<f64>,
+        /// Saturation multiplier, where `1.0` is unchanged.
+        saturation: Option<f64>,
+        /// Normalized warm/cool control, where positive warms.
+        temperature: Option<f64>,
+        /// Normalized green/magenta control, where positive magentas.
+        tint: Option<f64>,
+        /// Normalized shadow lift/drop control.
+        shadows: Option<f64>,
+        /// Normalized highlight recovery/boost control.
+        highlights: Option<f64>,
+    },
+    /// Apply a 3D LUT to a clip. The LUT path is project-relative and
+    /// stored as an `awidat.lut` Effect so render can emit `lut3d`.
+    ApplyLut {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Project-relative LUT path. Must not be absolute or contain `..`.
+        lut_path: String,
+    },
     /// Insert a title overlay on the project's "Titles" track. The
     /// titles track auto-creates on first insert (Video kind, flagged
     /// via metadata.awidat.extra["track_role"] = "titles") so the

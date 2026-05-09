@@ -531,6 +531,8 @@ fn build_diff_hints(
             | EdlOp::InsertTransition { .. }
             | EdlOp::SetVolume { .. }
             | EdlOp::SetSpeed { .. }
+            | EdlOp::SetColorCorrection { .. }
+            | EdlOp::ApplyLut { .. }
             | EdlOp::InsertTitle { .. }
             | EdlOp::SetTitle { .. }
             | EdlOp::InsertCaption { .. }
@@ -655,6 +657,8 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::SetVolume { .. } => "SetVolume",
         EdlOp::SetSpeed { .. } => "SetSpeed",
+        EdlOp::SetColorCorrection { .. } => "SetColorCorrection",
+        EdlOp::ApplyLut { .. } => "ApplyLut",
         EdlOp::InsertTitle { .. } => "InsertTitle",
         EdlOp::SetTitle { .. } => "SetTitle",
         EdlOp::InsertCaption { .. } => "InsertCaption",

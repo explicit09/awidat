@@ -142,6 +142,11 @@ impl ToolHandler for StartRenderTool {
                          (clip '{clip_name}'). Re-import the source file.",
                             missing.display()
                         ),
+                        RenderTimelineError::MissingLut { clip_name, missing } => format!(
+                            "start_render: clip '{clip_name}' references missing LUT {}. \
+                         Add the LUT under the project root or update the Apply LUT path.",
+                            missing.display()
+                        ),
                         RenderTimelineError::ClipMissingRange { clip_name } => format!(
                             "start_render: clip '{clip_name}' has no source_range — \
                          can't extract a renderable segment."

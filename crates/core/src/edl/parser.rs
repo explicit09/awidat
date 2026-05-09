@@ -44,7 +44,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Speed, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata"
     )]
     UnknownOp {
         /// Line number.
@@ -218,6 +218,8 @@ enum OpKind {
     InsertTransition,
     SetVolume,
     SetSpeed,
+    SetColorCorrection,
+    ApplyLut,
     InsertTitle,
     SetTitle,
     InsertCaption,
@@ -239,6 +241,8 @@ impl OpBuilder {
             "Insert Transition" => OpKind::InsertTransition,
             "Set Volume" => OpKind::SetVolume,
             "Set Speed" => OpKind::SetSpeed,
+            "Set Color Correction" => OpKind::SetColorCorrection,
+            "Apply LUT" => OpKind::ApplyLut,
             "Insert Title" => OpKind::InsertTitle,
             "Set Title" => OpKind::SetTitle,
             "Insert Caption" => OpKind::InsertCaption,
@@ -440,6 +444,35 @@ impl OpBuilder {
                     }
                 })?;
                 Ok(EdlOp::SetSpeed { anchor, factor })
+            }
+            OpKind::SetColorCorrection => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                Ok(EdlOp::SetColorCorrection {
+                    anchor,
+                    exposure_ev: take_field_f64(&mut fields, "exposure_ev"),
+                    contrast: take_field_f64(&mut fields, "contrast"),
+                    saturation: take_field_f64(&mut fields, "saturation"),
+                    temperature: take_field_f64(&mut fields, "temperature"),
+                    tint: take_field_f64(&mut fields, "tint"),
+                    shadows: take_field_f64(&mut fields, "shadows"),
+                    highlights: take_field_f64(&mut fields, "highlights"),
+                })
+            }
+            OpKind::ApplyLut => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let lut_path = take_field_string(&mut fields, "lut_path").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "lut_path".into(),
+                    }
+                })?;
+                Ok(EdlOp::ApplyLut { anchor, lut_path })
             }
             OpKind::InsertTitle => {
                 let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
@@ -982,6 +1015,61 @@ mod tests {
                 assert!((factor - 2.0).abs() < 1e-9);
             }
             other => panic!("want SetSpeed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_set_color_correction_with_partial_fields() {
+        let text = "\
+*** Begin EDL
+*** Set Color Correction
+@@ anchor: clip_uuid=clip-3
++ exposure_ev: 0.35
++ saturation: 1.15
++ temperature: -0.2
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetColorCorrection {
+                anchor,
+                exposure_ev,
+                contrast,
+                saturation,
+                temperature,
+                tint,
+                shadows,
+                highlights,
+            } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-3"));
+                assert_eq!(*exposure_ev, Some(0.35));
+                assert!(contrast.is_none());
+                assert_eq!(*saturation, Some(1.15));
+                assert_eq!(*temperature, Some(-0.2));
+                assert!(tint.is_none());
+                assert!(shadows.is_none());
+                assert!(highlights.is_none());
+            }
+            other => panic!("want SetColorCorrection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_apply_lut() {
+        let text = "\
+*** Begin EDL
+*** Apply LUT
+@@ anchor: clip_uuid=clip-4
++ lut_path: luts/show-look.cube
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::ApplyLut { anchor, lut_path } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-4"));
+                assert_eq!(lut_path, "luts/show-look.cube");
+            }
+            other => panic!("want ApplyLut, got {other:?}"),
         }
     }
 

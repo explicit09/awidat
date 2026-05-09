@@ -469,6 +469,19 @@ becomes `source_duration / factor`. Render uses \
 audio (atempo's per-instance range is `[0.5, 2.0]`; factors \
 outside chain — extreme values produce audible artifacts, so \
 keep within `[0.25, 4.0]` unless the clip is silent).\
+\n  - **Set Color Correction**: optional fields `+ exposure_ev`, \
+`+ contrast`, `+ saturation`, `+ temperature`, `+ tint`, `+ shadows`, \
+`+ highlights` (at least one required). Anchored to a clip. Stamps \
+an `awidat.color_correction` Effect; re-applying replaces the existing \
+correction rather than stacking. Render maps these controls to FFmpeg \
+color filters before speed, concat, transitions, and title overlays. \
+Ranges: exposure_ev `[-4,4]`, contrast/saturation `[0,3]`, all other \
+controls `[-1,1]`.\
+\n  - **Apply LUT**: `+ lut_path: <project-relative-path>` (required). \
+Anchored to a clip. Stamps an `awidat.lut` Effect with a project-relative \
+LUT path; paths must be non-empty, non-absolute, and must not contain \
+`..`. Render emits `lut3d` for this segment before speed, concat, \
+transitions, and title overlays.\
 \n  - **Insert Title**: `+ start_s: <seconds>`, `+ end_s: <seconds>`, \
 `+ text: \"<string>\"` (required). Optional `+ position: <top|center\
 |bottom>` (default `center`), `+ font_size: <px>` (default 64), \

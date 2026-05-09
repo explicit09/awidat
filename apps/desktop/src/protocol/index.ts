@@ -18,6 +18,7 @@ export type { Thread } from "./generated/Thread";
 export type { TimelineItem } from "./generated/TimelineItem";
 export type { TimelineTrack } from "./generated/TimelineTrack";
 export type { TimelineSnapshot } from "./generated/TimelineSnapshot";
+export type { ColorCorrectionStyling } from "./generated/ColorCorrectionStyling";
 export type { TitleStyling } from "./generated/TitleStyling";
 // Approval-as-diff additions.
 export type { ProposalSource } from "./generated/ProposalSource";

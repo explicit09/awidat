@@ -149,6 +149,26 @@ pub fn flatten_timeline_public(
                         .find(|e| e.effect_name == "awidat.speed")
                         .and_then(|e| e.metadata.get("factor"))
                         .and_then(|v| v.as_f64());
+                    let color_correction = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "awidat.color_correction")
+                        .map(|e| awidat_desktop_protocol::ColorCorrectionStyling {
+                            exposure_ev: e.metadata.get("exposure_ev").and_then(|v| v.as_f64()),
+                            contrast: e.metadata.get("contrast").and_then(|v| v.as_f64()),
+                            saturation: e.metadata.get("saturation").and_then(|v| v.as_f64()),
+                            temperature: e.metadata.get("temperature").and_then(|v| v.as_f64()),
+                            tint: e.metadata.get("tint").and_then(|v| v.as_f64()),
+                            shadows: e.metadata.get("shadows").and_then(|v| v.as_f64()),
+                            highlights: e.metadata.get("highlights").and_then(|v| v.as_f64()),
+                        });
+                    let lut_path = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "awidat.lut")
+                        .and_then(|e| e.metadata.get("lut_path"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     // Titles track special handling: clips use their
                     // source_range.start_time as the timeline-time
                     // anchor (rather than the cumulative cursor), and
@@ -214,6 +234,8 @@ pub fn flatten_timeline_public(
                         waveform_path,
                         volume,
                         speed,
+                        color_correction,
+                        lut_path,
                         title,
                     });
                     if !is_titles_track {

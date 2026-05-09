@@ -37,6 +37,18 @@ export type EdlOp =
   | { kind: "set_volume"; anchor: EdlAnchor; value: number }
   | { kind: "set_speed"; anchor: EdlAnchor; factor: number }
   | {
+      kind: "set_color_correction";
+      anchor: EdlAnchor;
+      exposureEv?: number;
+      contrast?: number;
+      saturation?: number;
+      temperature?: number;
+      tint?: number;
+      shadows?: number;
+      highlights?: number;
+    }
+  | { kind: "apply_lut"; anchor: EdlAnchor; lutPath: string }
+  | {
       kind: "insert_title";
       startS: number;
       endS: number;
@@ -114,6 +126,28 @@ function appendOp(lines: string[], op: EdlOp): void {
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       lines.push(`+ factor: ${op.factor.toFixed(3)}`);
       break;
+    case "set_color_correction":
+      lines.push("*** Set Color Correction");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      if (op.exposureEv !== undefined)
+        lines.push(`+ exposure_ev: ${formatFloat(op.exposureEv)}`);
+      if (op.contrast !== undefined)
+        lines.push(`+ contrast: ${formatFloat(op.contrast)}`);
+      if (op.saturation !== undefined)
+        lines.push(`+ saturation: ${formatFloat(op.saturation)}`);
+      if (op.temperature !== undefined)
+        lines.push(`+ temperature: ${formatFloat(op.temperature)}`);
+      if (op.tint !== undefined) lines.push(`+ tint: ${formatFloat(op.tint)}`);
+      if (op.shadows !== undefined)
+        lines.push(`+ shadows: ${formatFloat(op.shadows)}`);
+      if (op.highlights !== undefined)
+        lines.push(`+ highlights: ${formatFloat(op.highlights)}`);
+      break;
+    case "apply_lut":
+      lines.push("*** Apply LUT");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      lines.push(`+ lut_path: ${op.lutPath.replace(/"/g, "")}`);
+      break;
     case "insert_title":
       lines.push("*** Insert Title");
       lines.push(`+ start_s: ${formatTime(op.startS)}`);
@@ -171,4 +205,8 @@ function formatTime(s: number): string {
   // with whatever f64 string Rust's str::parse accepts, but we
   // keep the EDL human-readable.
   return s.toFixed(3);
+}
+
+function formatFloat(value: number): string {
+  return value.toFixed(3);
 }

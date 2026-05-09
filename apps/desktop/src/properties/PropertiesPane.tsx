@@ -19,6 +19,15 @@ import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
  *  Surface as "1.0" so the slider/input shows unity rather than empty. */
 const DEFAULT_VOLUME = 1.0;
 const DEFAULT_SPEED = 1.0;
+const DEFAULT_COLOR = {
+  exposureEv: 0,
+  contrast: 1,
+  saturation: 1,
+  temperature: 0,
+  tint: 0,
+  shadows: 0,
+  highlights: 0,
+};
 
 /** Debounce window before pushing a slider/input change through
  *  propose_user_edit. Long enough to coalesce a rapid drag; short
@@ -74,6 +83,29 @@ export function PropertiesPane() {
         <Field label="Name">
           <span className="properties-value">{item.name}</span>
         </Field>
+        {item.title ? (
+          <TitleEditor
+            clipUuid={item.clip_uuid}
+            title={item.title}
+            startS={trackStart}
+            endS={trackEnd}
+          />
+        ) : (
+          <>
+            {(item.volume ?? DEFAULT_VOLUME) <= 0.001 && (
+              <div className="properties-alert">
+                This clip is muted. Preview audio will be silent here.
+              </div>
+            )}
+            <ColorCorrectionControl
+              clipUuid={item.clip_uuid}
+              value={item.color_correction}
+            />
+            <LutControl clipUuid={item.clip_uuid} lutPath={item.lut_path} />
+            <VolumeControl clipUuid={item.clip_uuid} value={item.volume} />
+            <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
+          </>
+        )}
         <Field label="Track">
           <span className="properties-value">
             {trackName} <span className="properties-dim">· {trackKind}</span>
@@ -102,24 +134,6 @@ export function PropertiesPane() {
             {item.clip_uuid}
           </code>
         </Field>
-        {item.title ? (
-          <TitleEditor
-            clipUuid={item.clip_uuid}
-            title={item.title}
-            startS={trackStart}
-            endS={trackEnd}
-          />
-        ) : (
-          <>
-            {(item.volume ?? DEFAULT_VOLUME) <= 0.001 && (
-              <div className="properties-alert">
-                This clip is muted. Preview audio will be silent here.
-              </div>
-            )}
-            <VolumeControl clipUuid={item.clip_uuid} value={item.volume} />
-            <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
-          </>
-        )}
       </div>
     </section>
   );
@@ -457,6 +471,266 @@ function SpeedControl({
         <span className="properties-control-value">{local.toFixed(2)}×</span>
         {dirty && (
           <button className="properties-apply" type="button" onClick={apply}>
+            Apply
+          </button>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+type ColorCorrectionValue = {
+  exposureEv: number;
+  contrast: number;
+  saturation: number;
+  temperature: number;
+  tint: number;
+  shadows: number;
+  highlights: number;
+};
+
+function normalizeColorCorrection(
+  value: import("../protocol").ColorCorrectionStyling | null,
+): ColorCorrectionValue {
+  return {
+    exposureEv: value?.exposure_ev ?? DEFAULT_COLOR.exposureEv,
+    contrast: value?.contrast ?? DEFAULT_COLOR.contrast,
+    saturation: value?.saturation ?? DEFAULT_COLOR.saturation,
+    temperature: value?.temperature ?? DEFAULT_COLOR.temperature,
+    tint: value?.tint ?? DEFAULT_COLOR.tint,
+    shadows: value?.shadows ?? DEFAULT_COLOR.shadows,
+    highlights: value?.highlights ?? DEFAULT_COLOR.highlights,
+  };
+}
+
+function colorSignature(value: ColorCorrectionValue): string {
+  return [
+    value.exposureEv,
+    value.contrast,
+    value.saturation,
+    value.temperature,
+    value.tint,
+    value.shadows,
+    value.highlights,
+  ]
+    .map((n) => n.toFixed(3))
+    .join("|");
+}
+
+function ColorCorrectionControl({
+  clipUuid,
+  value,
+}: {
+  clipUuid: string;
+  value: import("../protocol").ColorCorrectionStyling | null;
+}) {
+  const initial = normalizeColorCorrection(value);
+  const [local, setLocal] = useState<ColorCorrectionValue>(initial);
+  const lastCommittedRef = useRef<string>(colorSignature(initial));
+
+  useEffect(() => {
+    const next = normalizeColorCorrection(value);
+    setLocal(next);
+    lastCommittedRef.current = colorSignature(next);
+  }, [clipUuid, value]);
+
+  const currentSig = colorSignature(local);
+  const dirty = currentSig !== lastCommittedRef.current;
+
+  function setField<K extends keyof ColorCorrectionValue>(
+    key: K,
+    nextValue: number,
+  ) {
+    setLocal((prev) => ({ ...prev, [key]: nextValue }));
+  }
+
+  function apply() {
+    lastCommittedRef.current = currentSig;
+    const op: EdlOp = {
+      kind: "set_color_correction",
+      anchor: { kind: "clip_uuid", uuid: clipUuid },
+      exposureEv: local.exposureEv,
+      contrast: local.contrast,
+      saturation: local.saturation,
+      temperature: local.temperature,
+      tint: local.tint,
+      shadows: local.shadows,
+      highlights: local.highlights,
+    };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (set_color_correction) failed", err);
+    });
+  }
+
+  return (
+    <>
+      <ColorSlider
+        label="Exposure"
+        value={local.exposureEv}
+        min={-4}
+        max={4}
+        step={0.05}
+        unit=" EV"
+        onChange={(next) => setField("exposureEv", next)}
+      />
+      <ColorSlider
+        label="Contrast"
+        value={local.contrast}
+        min={0}
+        max={3}
+        step={0.05}
+        unit="×"
+        onChange={(next) => setField("contrast", next)}
+      />
+      <ColorSlider
+        label="Saturation"
+        value={local.saturation}
+        min={0}
+        max={3}
+        step={0.05}
+        unit="×"
+        onChange={(next) => setField("saturation", next)}
+      />
+      <ColorSlider
+        label="Temp"
+        value={local.temperature}
+        min={-1}
+        max={1}
+        step={0.02}
+        onChange={(next) => setField("temperature", next)}
+      />
+      <ColorSlider
+        label="Tint"
+        value={local.tint}
+        min={-1}
+        max={1}
+        step={0.02}
+        onChange={(next) => setField("tint", next)}
+      />
+      <ColorSlider
+        label="Shadows"
+        value={local.shadows}
+        min={-1}
+        max={1}
+        step={0.02}
+        onChange={(next) => setField("shadows", next)}
+      />
+      <ColorSlider
+        label="Highlights"
+        value={local.highlights}
+        min={-1}
+        max={1}
+        step={0.02}
+        onChange={(next) => setField("highlights", next)}
+      />
+      {dirty && (
+        <Field label="Color">
+          <button className="properties-apply" type="button" onClick={apply}>
+            Apply
+          </button>
+        </Field>
+      )}
+    </>
+  );
+}
+
+function ColorSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  unit = "",
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  unit?: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <Field label={label}>
+      <div className="properties-control-row">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => onChange(parseFloat(e.target.value))}
+          className="properties-slider"
+        />
+        <span className="properties-control-value">
+          {value.toFixed(2)}
+          {unit}
+        </span>
+      </div>
+    </Field>
+  );
+}
+
+function LutControl({
+  clipUuid,
+  lutPath,
+}: {
+  clipUuid: string;
+  lutPath: string | null;
+}) {
+  const initial = lutPath ?? "";
+  const [local, setLocal] = useState(initial);
+  const lastCommittedRef = useRef(initial);
+
+  useEffect(() => {
+    setLocal(initial);
+    lastCommittedRef.current = initial;
+  }, [clipUuid, initial]);
+
+  const dirty = local !== lastCommittedRef.current;
+  const canApply =
+    dirty &&
+    local.trim().length > 0 &&
+    !local.startsWith("/") &&
+    !local.split(/[\\/]/).includes("..");
+
+  function apply() {
+    if (!canApply) return;
+    lastCommittedRef.current = local;
+    const op: EdlOp = {
+      kind: "apply_lut",
+      anchor: { kind: "clip_uuid", uuid: clipUuid },
+      lutPath: local.trim(),
+    };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (apply_lut) failed", err);
+    });
+  }
+
+  return (
+    <Field label="LUT">
+      <div className="properties-control-row">
+        <input
+          type="text"
+          className="properties-text-input"
+          value={local}
+          placeholder="luts/show-look.cube"
+          onChange={(e) => setLocal(e.target.value)}
+        />
+        {dirty && (
+          <button
+            className="properties-apply"
+            type="button"
+            onClick={apply}
+            disabled={!canApply}
+          >
             Apply
           </button>
         )}

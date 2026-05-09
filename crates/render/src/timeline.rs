@@ -54,6 +54,14 @@ pub enum RenderTimelineError {
         /// Clip name from the OTIO.
         clip_name: String,
     },
+    /// A clip referenced a LUT path that isn't on disk.
+    #[error("clip '{clip_name}' references missing LUT {missing}")]
+    MissingLut {
+        /// Clip name from the OTIO.
+        clip_name: String,
+        /// Absolute LUT path that didn't resolve.
+        missing: PathBuf,
+    },
     /// The timeline parsed but has no clips on any video track.
     #[error("timeline has no clips to render")]
     EmptyTimeline,
@@ -83,6 +91,30 @@ pub struct TimelineSegment {
     /// `factor` is `Some`. (Step 15.4 wires the setpts/atempo path;
     /// 15.3 only plumbs the field.)
     pub speed: Option<f64>,
+    /// Optional clip-level color correction controls, read from the
+    /// `awidat.color_correction` effect.
+    pub color_correction: Option<ColorCorrectionPlan>,
+    /// Optional absolute LUT path, read from the `awidat.lut` effect.
+    pub lut_path: Option<PathBuf>,
+}
+
+/// Clip-level color controls that render maps into FFmpeg filters.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ColorCorrectionPlan {
+    /// Exposure offset in stops.
+    pub exposure_ev: Option<f64>,
+    /// Contrast multiplier.
+    pub contrast: Option<f64>,
+    /// Saturation multiplier.
+    pub saturation: Option<f64>,
+    /// Normalized warm/cool control.
+    pub temperature: Option<f64>,
+    /// Normalized green/magenta control.
+    pub tint: Option<f64>,
+    /// Normalized shadow control.
+    pub shadows: Option<f64>,
+    /// Normalized highlight control.
+    pub highlights: Option<f64>,
 }
 
 /// Pull a numeric metadata field off the first effect on `clip` whose
@@ -99,6 +131,37 @@ fn read_effect_number(
         .find(|e| e.effect_name == effect_name)
         .and_then(|e| e.metadata.get(field))
         .and_then(|v| v.as_f64())
+}
+
+fn read_effect_string(
+    clip: &awidat_proto::otio::Clip,
+    effect_name: &str,
+    field: &str,
+) -> Option<String> {
+    clip.effects
+        .iter()
+        .find(|e| e.effect_name == effect_name)
+        .and_then(|e| e.metadata.get(field))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrectionPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.color_correction")?;
+    let m = &effect.metadata;
+    let plan = ColorCorrectionPlan {
+        exposure_ev: m.get("exposure_ev").and_then(|v| v.as_f64()),
+        contrast: m.get("contrast").and_then(|v| v.as_f64()),
+        saturation: m.get("saturation").and_then(|v| v.as_f64()),
+        temperature: m.get("temperature").and_then(|v| v.as_f64()),
+        tint: m.get("tint").and_then(|v| v.as_f64()),
+        shadows: m.get("shadows").and_then(|v| v.as_f64()),
+        highlights: m.get("highlights").and_then(|v| v.as_f64()),
+    };
+    Some(plan)
 }
 
 /// Walk `<project_root>/project.otio.json` and collect every
@@ -199,6 +262,17 @@ pub fn collect_timeline_full_plan(
                     }
                     let volume = read_effect_number(clip, "awidat.volume", "value");
                     let speed = read_effect_number(clip, "awidat.speed", "factor");
+                    let color_correction = read_color_correction(clip);
+                    let lut_path = read_effect_string(clip, "awidat.lut", "lut_path")
+                        .map(|lut_path| project_root.join(lut_path));
+                    if let Some(lut_path) = lut_path.as_ref()
+                        && !lut_path.exists()
+                    {
+                        return Err(RenderTimelineError::MissingLut {
+                            clip_name: clip.name.clone(),
+                            missing: lut_path.clone(),
+                        });
+                    }
                     let new_index = segs.len();
                     segs.push(TimelineSegment {
                         asset_path,
@@ -206,6 +280,8 @@ pub fn collect_timeline_full_plan(
                         duration_s: range.duration.to_seconds(),
                         volume,
                         speed,
+                        color_correction,
+                        lut_path,
                     });
                     if let Some((kind, duration_s)) = pending_transition.take()
                         && new_index > 0
@@ -665,14 +741,14 @@ impl<'a> FilterPlanner<'a> {
 }
 
 /// Build the per-segment video / audio entry labels into `filter`.
-/// Threads awidat.volume / awidat.speed effects in front of the raw
-/// stream so downstream filter graph nodes (concat, xfade) read the
-/// post-effect labels.
+/// Threads clip-level graph effects in front of the raw stream so
+/// downstream filter graph nodes (concat, xfade) read the post-effect
+/// labels.
 ///
-/// Order matters: for audio, `atempo` runs before `volume` so the
-/// volume gain applies to the time-stretched signal (avoiding any
-/// rate-dependent gain artifacts from atempo). For video, `setpts`
-/// is the only stage we touch in v1.
+/// Order matters: color correction and LUTs run before speed so
+/// visual transforms operate in source-frame space. For audio,
+/// `atempo` runs before `volume` so the volume gain applies to the
+/// time-stretched signal.
 ///
 /// Returns the `(video_label, audio_label)` pair to feed into the
 /// next filter graph node.
@@ -680,7 +756,22 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
     let mut video_label = format!("[{i}:v:0]");
     let mut audio_label = format!("[{i}:a:0]");
 
-    // Speed first: setpts on video, atempo (possibly chained) on audio.
+    if let Some(color) = seg.color_correction.as_ref()
+        && let Some(chain) = color_filter_chain(color)
+    {
+        let cv = format!("[cv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{cv};"));
+        video_label = cv;
+    }
+
+    if let Some(lut_path) = seg.lut_path.as_ref() {
+        let lv = format!("[lv{i}]");
+        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
+        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv};"));
+        video_label = lv;
+    }
+
+    // Speed after color: setpts on video, atempo (possibly chained) on audio.
     if let Some(factor) = seg.speed
         && (factor - 1.0).abs() > 1e-9
         && factor > 0.0
@@ -708,6 +799,85 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         audio_label = av;
     }
     (video_label, audio_label)
+}
+
+fn color_filter_chain(plan: &ColorCorrectionPlan) -> Option<String> {
+    let mut filters = Vec::new();
+    let exposure = plan.exposure_ev.unwrap_or(0.0);
+    let contrast = plan.contrast.unwrap_or(1.0);
+    let saturation = plan.saturation.unwrap_or(1.0);
+    if exposure.abs() > 1e-9 || (contrast - 1.0).abs() > 1e-9 || (saturation - 1.0).abs() > 1e-9 {
+        let shadows = plan.shadows.unwrap_or(0.0);
+        let highlights = plan.highlights.unwrap_or(0.0);
+        let brightness = (exposure * 0.14 + shadows * 0.06 + highlights * 0.03).clamp(-1.0, 1.0);
+        filters.push(format!(
+            "eq=brightness={}:contrast={}:saturation={}",
+            fmt_filter_num(brightness),
+            fmt_filter_num(contrast),
+            fmt_filter_num(saturation),
+        ));
+    }
+
+    let temperature = plan.temperature.unwrap_or(0.0);
+    let tint = plan.tint.unwrap_or(0.0);
+    let shadows = plan.shadows.unwrap_or(0.0);
+    let highlights = plan.highlights.unwrap_or(0.0);
+    if shadows.abs() > 1e-9 || highlights.abs() > 1e-9 {
+        let shadow_mid = (0.25 + shadows * 0.16).clamp(0.08, 0.45);
+        let highlight_mid = (0.75 + highlights * 0.16).clamp(0.55, 0.92);
+        filters.push(format!(
+            "curves=all='0/0 0.25/{} 0.75/{} 1/1'",
+            fmt_filter_num(shadow_mid),
+            fmt_filter_num(highlight_mid),
+        ));
+    }
+
+    if temperature.abs() > 1e-9 || tint.abs() > 1e-9 {
+        let rs = (temperature * 0.1 + tint * 0.045).clamp(-1.0, 1.0);
+        let gs = (-tint * 0.09).clamp(-1.0, 1.0);
+        let bs = (-temperature * 0.1 + tint * 0.045).clamp(-1.0, 1.0);
+        let rh = (temperature * 0.07 + tint * 0.035).clamp(-1.0, 1.0);
+        let gh = (-tint * 0.07).clamp(-1.0, 1.0);
+        let bh = (-temperature * 0.07 + tint * 0.035).clamp(-1.0, 1.0);
+        filters.push(format!(
+            "colorbalance=rs={}:gs={}:bs={}:rh={}:gh={}:bh={}",
+            fmt_filter_num(rs),
+            fmt_filter_num(gs),
+            fmt_filter_num(bs),
+            fmt_filter_num(rh),
+            fmt_filter_num(gh),
+            fmt_filter_num(bh),
+        ));
+    }
+
+    if filters.is_empty() {
+        None
+    } else {
+        Some(filters.join(","))
+    }
+}
+
+fn fmt_filter_num(value: f64) -> String {
+    let mut s = format!("{value:.6}");
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    if s == "-0" { "0".into() } else { s }
+}
+
+fn filter_escape_single_quoted(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| match c {
+            '\\' => "\\\\".chars().collect::<Vec<_>>(),
+            '\'' => "\\'".chars().collect::<Vec<_>>(),
+            ':' => "\\:".chars().collect::<Vec<_>>(),
+            ',' => "\\,".chars().collect::<Vec<_>>(),
+            other => vec![other],
+        })
+        .collect()
 }
 
 /// Length of the alpha / slide ramp for fade and slide animations,
@@ -1478,6 +1648,62 @@ mod tests {
         assert!(
             plan.filter_complex.contains("[sa0]volume=0.5[av0]"),
             "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_color_correction_before_speed() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.color_correction = Some(ColorCorrectionPlan {
+            exposure_ev: Some(0.5),
+            contrast: Some(1.2),
+            saturation: Some(0.9),
+            temperature: Some(0.4),
+            tint: None,
+            shadows: None,
+            highlights: Some(-0.3),
+        });
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0]eq=brightness=0.061:contrast=1.2:saturation=0.9,curves="),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains(",colorbalance="),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[cv0]setpts=0.5*PTS[sv0]"),
+            "color correction should feed speed, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_lut3d_before_speed_and_concat() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.lut_path = Some(PathBuf::from("/tmp/luts/show-look.cube"));
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0]lut3d=file='/tmp/luts/show-look.cube'[lv0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[lv0]setpts=0.5*PTS[sv0]"),
+            "LUT should feed speed, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[sv0][sa0]concat"),
+            "post-LUT/post-speed labels should feed concat, got: {}",
             plan.filter_complex,
         );
     }

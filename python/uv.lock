@@ -16,6 +16,7 @@ members = [
     "awidat-mcp",
     "awidat-python-workspace",
     "clip-mcp",
+    "color-analysis-mcp",
     "editorial-moments-mcp",
     "face-mcp",
     "frame-quality-mcp",
@@ -353,6 +354,23 @@ requires-dist = [
     { name = "open-clip-torch", specifier = ">=2.24,<3" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "torch", specifier = ">=2.2" },
+]
+
+[[package]]
+name = "color-analysis-mcp"
+version = "0.1.0"
+source = { editable = "packages/color-analysis-mcp" }
+dependencies = [
+    { name = "awidat-mcp" },
+    { name = "numpy" },
+    { name = "opencv-python-headless" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "opencv-python-headless", specifier = ">=4.9" },
 ]
 
 [[package]]
