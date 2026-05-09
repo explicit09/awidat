@@ -46,6 +46,15 @@ python3 <skill-root>/scripts/audio_polish_plan.py \
   --content-type interview
 ```
 
+For publish-readiness audio polish, also run:
+
+```bash
+python3 <skill-root>/scripts/audio_mix_plan.py \
+  --audio-energy index/audio-energy/raw/<asset>.json \
+  --transcript index/whisper/raw/<asset>.json \
+  --target-lufs -16
+```
+
 ### 2. Cut only what fails the editorial test
 
 Apply dead-air and filler cuts conservatively through `apply_edl`. Keep
@@ -63,8 +72,11 @@ fast speakers or emotional peaks.
 
 ### 4. Loudness and final verification
 
-Apply `Set Loudness Target` for the delivery target before rendering
-when the user wants publishable output.
+Apply `Set Volume` only for broad level correction recommended by the
+mix plan, then apply `Set Loudness Target` for the delivery target before
+rendering when the user wants publishable output. Treat denoise, EQ,
+de-essing, and per-speaker mix imbalance as detected recommendations
+unless the graph has a native primitive for the fix.
 
 Render and verify. If `ffprobe`/FFmpeg checks fail, fix the timeline or
 report the exact blocker. Do not claim completion without a render path
@@ -77,4 +89,4 @@ or a clear reason verification could not run.
 - Do not flatten personality by deleting every verbal tic.
 - Do not skip the `vedit_diff` checkpoint.
 - Final report must include seconds removed, speed changes, and any
-  speaker-balance concerns.
+  loudness/speaker-balance concerns.
