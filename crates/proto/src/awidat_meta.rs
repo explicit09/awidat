@@ -256,13 +256,13 @@ fn default_chapter_display_duration() -> f64 {
     6.0
 }
 fn default_name_bar_height() -> f64 {
-    150.0
+    75.0
 }
 fn default_ticker_height() -> f64 {
-    200.0
+    100.0
 }
 fn default_host_strip_height() -> f64 {
-    320.0
+    160.0
 }
 
 /// Content anchor for a clip. Used by `apply_edl` to relocate a clip after
