@@ -26,6 +26,7 @@ fn bundled_output_workflow_skills_load() {
         "auto-cutter",
         "beat-sync-editor",
         "b-roll-suggester",
+        "color-corrector",
         "interview-tightener",
         "meeting-highlights",
         "pacing-optimizer",
@@ -49,6 +50,50 @@ fn bundled_output_workflow_skills_load() {
         assert!(
             !skill.body.trim().is_empty(),
             "skill {name} must have a body"
+        );
+    }
+}
+
+#[test]
+fn color_corrector_skill_is_graph_native() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+    let skill = registry
+        .get("color-corrector")
+        .expect("color-corrector skill exists");
+
+    for tool in [
+        "read_index",
+        "view_frame",
+        "view_timeline",
+        "apply_edl",
+        "vedit_diff",
+        "start_render",
+    ] {
+        assert!(
+            skill.meta.tools_allowlist.iter().any(|t| t == tool),
+            "color-corrector must allow {tool}"
+        );
+    }
+
+    for required in [
+        "read_index(channel=\"color\"",
+        "Set Color Correction",
+        "Apply LUT",
+        "summary.policy",
+        "recommended_action",
+        "auto_correct_safe",
+        "color_apply_plan.py",
+        "camera_match_plan.py",
+        "color_review_package.py",
+        "rendered contact sheet",
+        "vedit_diff",
+        "edit graph is the source of truth",
+    ] {
+        assert!(
+            skill.body.contains(required),
+            "color-corrector must mention {required:?}"
         );
     }
 }
@@ -243,6 +288,7 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
         serde_json::json!({
             "data": {
                 "duration_s": 35.0,
+                "loudness_integrated_lufs": -20.0,
                 "windows": [
                     {"start_s": 0.0, "rms_db": -22.0},
                     {"start_s": 5.0, "rms_db": -18.0},
@@ -326,7 +372,119 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
         fixtures.path().join("beats.json"),
         serde_json::json!({"data": {"beats": [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]}}),
     )?;
+    let color = write_json(
+        fixtures.path().join("color.json"),
+        serde_json::json!({
+            "data": {
+                "frame_count": 2,
+                "summary": {
+                    "issue_tags": ["underexposed", "cool_cast"],
+                    "auto_correct_safe": true,
+                    "confidence": 0.86,
+                    "policy": {
+                        "recommended_action": "auto_correct",
+                        "reason": ["underexposed", "cool_cast"],
+                        "confidence": 0.86,
+                        "edit_types": ["lighting_correction", "white_balance"],
+                        "requires_review": false,
+                        "requires_contact_sheet": true,
+                        "apply_mode": "automatic",
+                        "graph_ops": ["Set Color Correction"]
+                    },
+                    "recommended_correction": {
+                        "exposure_ev": 0.4,
+                        "contrast": 1.1,
+                        "saturation": 1.0,
+                        "temperature": 0.2,
+                        "tint": 0.0,
+                        "shadows": 0.1,
+                        "highlights": 0.0
+                    }
+                },
+                "scenes": [{
+                    "scene_id": "color_scene_1",
+                    "start_s": 0.0,
+                    "end_s": 2.0,
+                    "issue_tags": ["underexposed"],
+                    "auto_correct_safe": true,
+                    "confidence": 0.9,
+                    "policy": {
+                        "recommended_action": "auto_correct",
+                        "reason": ["underexposed"],
+                        "confidence": 0.9,
+                        "edit_types": ["lighting_correction"],
+                        "requires_review": false,
+                        "requires_contact_sheet": true,
+                        "apply_mode": "automatic",
+                        "graph_ops": ["Set Color Correction"]
+                    },
+                    "recommended_correction": {"exposure_ev": 0.4}
+                }]
+            }
+        }),
+    )?;
+    let color_balanced = write_json(
+        fixtures.path().join("color-balanced.json"),
+        serde_json::json!({
+            "data": {
+                "summary": {
+                    "brightness_mean": 126.0,
+                    "luma_p05_mean": 45.0,
+                    "luma_p50_mean": 126.0,
+                    "luma_p95_mean": 210.0,
+                    "contrast_mean": 60.0,
+                    "mean_r": 126.0,
+                    "mean_g": 126.0,
+                    "mean_b": 126.0,
+                    "overexposed_fraction_mean": 0.0,
+                    "underexposed_fraction_mean": 0.0,
+                    "issue_tags": ["already_balanced"],
+                    "auto_correct_safe": false,
+                    "confidence": 0.75,
+                    "policy": {
+                        "recommended_action": "no_op",
+                        "reason": ["already_balanced"],
+                        "confidence": 0.75,
+                        "edit_types": [],
+                        "requires_review": false,
+                        "requires_contact_sheet": false,
+                        "apply_mode": "none",
+                        "graph_ops": []
+                    },
+                    "recommended_correction": {"exposure_ev": 0.0, "contrast": 1.0}
+                },
+                "scenes": []
+            }
+        }),
+    )?;
+    let color_review = write_json(
+        fixtures.path().join("color-review-only.json"),
+        serde_json::json!({
+            "data": {
+                "summary": {
+                    "issue_tags": ["underexposed", "crushed_shadows", "unsafe_to_auto_correct"],
+                    "auto_correct_safe": false,
+                    "confidence": 0.35,
+                    "policy": {
+                        "recommended_action": "review_only",
+                        "reason": ["underexposed", "crushed_shadows", "unsafe_to_auto_correct"],
+                        "confidence": 0.35,
+                        "edit_types": ["lighting_correction"],
+                        "requires_review": true,
+                        "requires_contact_sheet": true,
+                        "apply_mode": "manual_review",
+                        "graph_ops": ["Set Color Correction"]
+                    },
+                    "recommended_correction": {"exposure_ev": 0.8, "shadows": 0.6}
+                },
+                "scenes": []
+            }
+        }),
+    )?;
     let missing_render = fixtures.path().join("missing.mp4");
+    let missing_sheet = fixtures.path().join("sheet.ppm");
+    let review_report = fixtures.path().join("color-review.md");
+    let review_json = fixtures.path().join("color-review.json");
 
     run_script(
         &python,
@@ -349,6 +507,19 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
             path(&transcript),
         ],
         "speed_changes",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/podcast-editor/scripts/audio_mix_plan.py"),
+        &[
+            "--audio-energy",
+            path(&audio),
+            "--transcript",
+            path(&transcript),
+            "--target-lufs",
+            "-16",
+        ],
+        "graph_ops",
     )?;
     run_script(
         &python,
@@ -438,6 +609,92 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
         &python,
         root.join("skills/short-form/scripts/render_verify.py"),
         &["--file", path(&missing_render)],
+        "status",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/color-corrector/scripts/color_benchmark.py"),
+        &[
+            "--color-index",
+            path(&color),
+            "--dataset-dir",
+            path(fixtures.path()),
+        ],
+        "aggregate",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/color-corrector/scripts/color_apply_plan.py"),
+        &["--color-index", path(&color), "--clip-uuid", "clip-a"],
+        "edl_text",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/color-corrector/scripts/color_apply_plan.py"),
+        &[
+            "--color-index",
+            path(&color_balanced),
+            "--clip-uuid",
+            "clip-b",
+        ],
+        "ops",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/color-corrector/scripts/color_apply_plan.py"),
+        &[
+            "--color-index",
+            path(&color_review),
+            "--clip-uuid",
+            "clip-c",
+        ],
+        "review",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/color-corrector/scripts/camera_match_plan.py"),
+        &[
+            "--color-index",
+            path(&color),
+            "--color-index",
+            path(&color_balanced),
+            "--camera-label",
+            "A",
+            "--camera-label",
+            "B",
+        ],
+        "matches",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/color-corrector/scripts/rendered_contact_sheet.py"),
+        &[
+            "--before-render",
+            path(&missing_render),
+            "--after-render",
+            path(&missing_render),
+            "--output",
+            path(&missing_sheet),
+        ],
+        "status",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/color-corrector/scripts/color_review_package.py"),
+        &[
+            "--color-index",
+            path(&color),
+            "--before-render",
+            path(&missing_render),
+            "--after-render",
+            path(&missing_render),
+            "--contact-sheet",
+            path(&missing_sheet),
+            "--report-md",
+            path(&review_report),
+            "--benchmark-json",
+            path(&review_json),
+        ],
         "status",
     )?;
 
