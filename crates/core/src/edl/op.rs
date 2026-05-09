@@ -7,6 +7,7 @@
 
 use std::fmt;
 
+use awidat_proto::awidat_meta::BroadcastOverlayConfig;
 use serde::{Deserialize, Serialize};
 
 /// One change in an EDL envelope.
@@ -299,6 +300,11 @@ pub enum EdlOp {
         description: Option<String>,
         /// Optional comma-separated tags.
         tags: Option<String>,
+    },
+    /// Store or replace a reusable timeline-level broadcast overlay.
+    SetBroadcastOverlay {
+        /// Complete overlay config.
+        config: BroadcastOverlayConfig,
     },
 }
 

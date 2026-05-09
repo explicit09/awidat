@@ -40,10 +40,10 @@ pub use ffmpeg::{
 pub use job::{JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec};
 pub use progress::ProgressSnapshot;
 pub use timeline::{
-    FilterPlan, FilterPlanner, RenderTimelineError, TimelineSegment, TitleAnimation, TitlePlan,
-    TitlePosition, TitleWeight, TransitionPlan, build_timeline_argv, build_timeline_argv_full,
-    build_timeline_argv_with_transitions, build_timeline_render_spec, collect_timeline_full_plan,
-    collect_timeline_plan, collect_timeline_segments,
+    BroadcastOverlayPlan, FilterPlan, FilterPlanner, RenderTimelineError, TimelineSegment,
+    TitleAnimation, TitlePlan, TitlePosition, TitleWeight, TransitionPlan, build_timeline_argv,
+    build_timeline_argv_full, build_timeline_argv_with_transitions, build_timeline_render_spec,
+    collect_timeline_full_plan, collect_timeline_plan, collect_timeline_segments,
 };
 
 #[cfg(test)]

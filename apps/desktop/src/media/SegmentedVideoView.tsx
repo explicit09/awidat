@@ -33,9 +33,10 @@
 // available; timeupdate fallback otherwise.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
+import { useProjectStore } from "../app/state";
 import {
   useTimelineStore,
   type TimelineSnapshot,
@@ -129,6 +130,21 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   const mediaError = useMediaStore((s) => s.mediaError);
   const setMediaError = useMediaStore((s) => s.setMediaError);
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+  // Subscribe to the snapshot itself (Zustand caches the reference)
+  // and derive the overlay list with useMemo. The previous shape
+  // returned a fresh array from inside the selector on every render,
+  // which tripped React's "getSnapshot should be cached" infinite-
+  // loop guard.
+  const timelineSnapshot = useTimelineStore((s) => s.snapshot);
+  const projectRoot = useProjectStore((s) => s.current);
+  const activeTitles = useMemo(
+    () =>
+      activeTitleOverlays(
+        timelineSnapshot,
+        timelineSnapshot.duration_s > 0 ? timelineSnapshot.duration_s : 0,
+      ),
+    [timelineSnapshot],
+  );
 
   // Push the current timeline-time + active segment's clip-stem to
   // the agent's view-state ~1Hz. This lets the agent know which
@@ -516,6 +532,15 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           onEnded={activeKey === "b" ? () => setPlaying(false) : undefined}
           onClick={activeKey === "b" ? togglePlay : undefined}
         />
+        <TimelineTitleOverlays
+          overlays={activeTitles}
+          timelineTime={timelineTime}
+        />
+        <TimelineBroadcastOverlay
+          overlay={timelineSnapshot.broadcast_overlay}
+          timelineTime={timelineTime}
+          projectRoot={projectRoot}
+        />
       </div>
       <div className="transport">
         <button
@@ -557,6 +582,353 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
       </div>
     </div>
   );
+}
+
+type BroadcastOverlayConfig = NonNullable<TimelineSnapshot["broadcast_overlay"]>;
+type BroadcastHost = BroadcastOverlayConfig["host_a"];
+type BroadcastTimedEntry = BroadcastOverlayConfig["topics"][number];
+
+function TimelineBroadcastOverlay({
+  overlay,
+  timelineTime,
+  projectRoot,
+}: {
+  overlay: TimelineSnapshot["broadcast_overlay"];
+  timelineTime: number;
+  projectRoot: string | null;
+}) {
+  if (!overlay?.enabled) return null;
+
+  const style = overlay.style;
+  const gold = normalizeCssHex(style.gold_hex, "#C9A028");
+  const goldLight = normalizeCssHex(style.gold_light_hex, "#E8C040");
+  const cyan = normalizeCssHex(style.cyan_hex, "#22D3EE");
+  const navy = normalizeCssHex(style.dark_navy_hex, "#070D17");
+  const inTitle = timelineTime >= 0 && timelineTime < style.title_visible_end;
+  const inHostIntro =
+    timelineTime >= style.host_intro_start && timelineTime < style.host_intro_end;
+  const activeChapter = activeTimedEntry(
+    overlay.chapters,
+    timelineTime,
+    style.chapter_display_duration,
+    Math.max(0, style.title_visible_end),
+  );
+  const activeTopic = activeTimedEntry(
+    overlay.topics,
+    timelineTime,
+    style.ticker_topic_duration,
+    0,
+  );
+  const sponsorText =
+    overlay.sponsors.length > 0
+      ? overlay.sponsors.join("   ◆   ")
+      : overlay.show_name || overlay.template_name;
+
+  return (
+    <div className="broadcast-overlay-layer" aria-hidden="true">
+      {inTitle && (
+        <div
+          className="broadcast-title-card"
+          style={{
+            "--broadcast-navy": navy,
+            "--broadcast-gold": gold,
+            "--broadcast-cyan": cyan,
+            opacity: titleCardOpacity(timelineTime, style),
+          } as React.CSSProperties}
+        >
+          <div className="broadcast-title-eyebrow">EPISODE</div>
+          <div className="broadcast-title-main">
+            {(overlay.episode_title || overlay.show_name).toUpperCase()}
+          </div>
+          {overlay.episode_subtitle && (
+            <div className="broadcast-title-subtitle">
+              {overlay.episode_subtitle}
+            </div>
+          )}
+        </div>
+      )}
+
+      {inHostIntro ? (
+        <div
+          className="broadcast-host-intro-strip"
+          style={{
+            "--broadcast-gold": gold,
+            "--broadcast-gold-light": goldLight,
+            "--broadcast-navy": navy,
+          } as React.CSSProperties}
+        >
+          <BroadcastIntroHost
+            host={overlay.host_a}
+            projectRoot={projectRoot}
+          />
+          <BroadcastIntroHost
+            host={overlay.host_b}
+            projectRoot={projectRoot}
+            align="right"
+          />
+        </div>
+      ) : (
+        <>
+          <div
+            className="broadcast-name-bar"
+            style={{
+              "--broadcast-navy": navy,
+              "--broadcast-gold": gold,
+            } as React.CSSProperties}
+          >
+            <BroadcastName host={overlay.host_a} />
+            <div className="broadcast-name-divider" />
+            <BroadcastName host={overlay.host_b} align="right" />
+          </div>
+          <div
+            className="broadcast-ticker"
+            style={{
+              "--broadcast-navy": navy,
+              "--broadcast-gold": gold,
+              "--broadcast-cyan": cyan,
+            } as React.CSSProperties}
+          >
+            <div className="broadcast-ticker-show">
+              {(overlay.show_name || "BROADCAST").toUpperCase()}
+            </div>
+            {activeTopic ? (
+              <div className="broadcast-topic">
+                <span>NOW DISCUSSING</span>
+                <strong>{activeTopic.text}</strong>
+              </div>
+            ) : (
+              <div className="broadcast-sponsor-marquee">
+                <span>{sponsorText}</span>
+                <span>{sponsorText}</span>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {activeChapter && (
+        <div
+          className="broadcast-chapter-card"
+          style={{
+            "--broadcast-navy": navy,
+            "--broadcast-gold": gold,
+          } as React.CSSProperties}
+        >
+          <span>{chapterNumber(overlay.chapters, activeChapter)}</span>
+          <strong>{activeChapter.text.toUpperCase()}</strong>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BroadcastName({
+  host,
+  align,
+}: {
+  host: BroadcastHost;
+  align?: "right";
+}) {
+  if (!host.name.trim()) return <div />;
+  return (
+    <div className={`broadcast-name ${align === "right" ? "align-right" : ""}`}>
+      <strong>{host.name.toUpperCase()}</strong>
+      {host.title && <span>{host.title.toUpperCase()}</span>}
+    </div>
+  );
+}
+
+function BroadcastIntroHost({
+  host,
+  projectRoot,
+  align,
+}: {
+  host: BroadcastHost;
+  projectRoot: string | null;
+  align?: "right";
+}) {
+  if (!host.name.trim()) return <div />;
+  const photo = projectAssetUrl(projectRoot, host.photo_path);
+  const initials = host.name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+  return (
+    <div className={`broadcast-intro-host ${align === "right" ? "align-right" : ""}`}>
+      <div className="broadcast-host-photo">
+        {photo ? <img src={photo} alt="" /> : <span>{initials}</span>}
+      </div>
+      <div>
+        <strong>{host.name.toUpperCase()}</strong>
+        {host.title && <span>{host.title.toUpperCase()}</span>}
+      </div>
+    </div>
+  );
+}
+
+function activeTimedEntry(
+  entries: BroadcastTimedEntry[],
+  timelineTime: number,
+  duration: number,
+  minStart: number,
+): BroadcastTimedEntry | null {
+  for (const entry of entries) {
+    const start = Math.max(minStart, entry.time_seconds);
+    const end = start + Math.max(0.25, duration);
+    if (timelineTime >= start && timelineTime < end) return entry;
+  }
+  return null;
+}
+
+function chapterNumber(
+  chapters: BroadcastTimedEntry[],
+  active: BroadcastTimedEntry,
+): string {
+  const index = chapters.findIndex((chapter) => chapter === active);
+  return String(index >= 0 ? index + 1 : 1);
+}
+
+function titleCardOpacity(
+  t: number,
+  style: BroadcastOverlayConfig["style"],
+): number {
+  const fadeIn = Math.max(0.001, style.title_fade_in_end);
+  const fadeOutStart = style.title_fade_out_start;
+  const end = Math.max(fadeOutStart + 0.001, style.title_visible_end);
+  if (t < fadeIn) return Math.max(0, Math.min(1, t / fadeIn));
+  if (t < fadeOutStart) return 1;
+  return Math.max(0, Math.min(1, (end - t) / (end - fadeOutStart)));
+}
+
+function normalizeCssHex(value: string, fallback: string): string {
+  if (!value.trim()) return fallback;
+  return value.startsWith("#") ? value : `#${value}`;
+}
+
+function projectAssetUrl(projectRoot: string | null, relPath: string | null): string | null {
+  if (!projectRoot || !relPath) return null;
+  if (relPath.startsWith("/") || relPath.includes("..")) return null;
+  const root = projectRoot.endsWith("/") ? projectRoot.slice(0, -1) : projectRoot;
+  return convertFileSrc(`${root}/${relPath}`);
+}
+
+type PreviewTitleOverlay = {
+  key: string;
+  startS: number;
+  endS: number;
+  text: string;
+  position: "top" | "center" | "bottom";
+  fontSize: number;
+  color: string;
+  fontWeight: "normal" | "bold";
+  animation: "none" | "fade_in" | "fade_out" | "fade_in_out" | "slide_in" | "slide_out";
+};
+
+function activeTitleOverlays(
+  snapshot: TimelineSnapshot,
+  _durationS: number,
+): PreviewTitleOverlay[] {
+  const titleTrack = snapshot.tracks.find((track) => track.role === "titles");
+  if (!titleTrack) return [];
+
+  const overlays: PreviewTitleOverlay[] = [];
+  for (const item of titleTrack.items) {
+    if (item.kind !== "clip" || item.title === null) continue;
+    const startS = item.track_start_s;
+    const endS = item.track_start_s + item.duration_s;
+    if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
+      continue;
+    }
+    overlays.push({
+      key: item.clip_uuid || item.name,
+      startS,
+      endS,
+      text: item.title.text,
+      position: titlePosition(item.title.position),
+      fontSize: item.title.font_size,
+      color: item.title.color || "#FFFFFF",
+      fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
+      animation: titleAnimation(item.title.animation),
+    });
+  }
+  return overlays;
+}
+
+function TimelineTitleOverlays({
+  overlays,
+  timelineTime,
+}: {
+  overlays: PreviewTitleOverlay[];
+  timelineTime: number;
+}) {
+  const active = overlays.filter(
+    (overlay) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
+  );
+  if (active.length === 0) return null;
+  return (
+    <div className="timeline-title-layer" aria-hidden="true">
+      {active.map((overlay) => (
+        <div
+          key={overlay.key}
+          className={`timeline-title-overlay title-pos-${overlay.position}`}
+          style={titleOverlayStyle(overlay, timelineTime)}
+        >
+          {overlay.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function titleOverlayStyle(
+  overlay: PreviewTitleOverlay,
+  timelineTime: number,
+): React.CSSProperties {
+  const elapsed = timelineTime - overlay.startS;
+  const remaining = overlay.endS - timelineTime;
+  const fadeIn = Math.min(1, Math.max(0, elapsed / 0.45));
+  const fadeOut = Math.min(1, Math.max(0, remaining / 0.45));
+  let opacity = 1;
+  if (overlay.animation === "fade_in") opacity = fadeIn;
+  if (overlay.animation === "fade_out") opacity = fadeOut;
+  if (overlay.animation === "fade_in_out") opacity = Math.min(fadeIn, fadeOut);
+
+  let translateX = "-50%";
+  if (overlay.animation === "slide_in" && elapsed < 0.55) {
+    const p = Math.min(1, Math.max(0, elapsed / 0.55));
+    translateX = `calc(-50% + ${(1 - p) * -18}%)`;
+  } else if (overlay.animation === "slide_out" && remaining < 0.55) {
+    const p = Math.min(1, Math.max(0, remaining / 0.55));
+    translateX = `calc(-50% + ${(1 - p) * 18}%)`;
+  }
+  const translateY = overlay.position === "center" ? "-50%" : "0";
+
+  return {
+    color: overlay.color,
+    fontSize: `clamp(15px, ${Math.max(1.2, overlay.fontSize / 22).toFixed(2)}vw, ${overlay.fontSize}px)`,
+    fontWeight: overlay.fontWeight === "bold" ? 750 : 500,
+    opacity,
+    transform: `translate(${translateX}, ${translateY})`,
+  };
+}
+
+function titlePosition(value: string): PreviewTitleOverlay["position"] {
+  return value === "top" || value === "bottom" ? value : "center";
+}
+
+function titleAnimation(value: string): PreviewTitleOverlay["animation"] {
+  switch (value) {
+    case "fade_in":
+    case "fade_out":
+    case "fade_in_out":
+    case "slide_in":
+    case "slide_out":
+      return value;
+    default:
+      return "none";
+  }
 }
 
 /**

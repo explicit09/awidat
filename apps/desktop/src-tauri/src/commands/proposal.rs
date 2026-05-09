@@ -317,6 +317,7 @@ pub async fn reject_proposal(
             edl_text: String::new(),
             snapshot: TimelineSnapshot {
                 duration_s: 0.0,
+                broadcast_overlay: None,
                 tracks: Vec::new(),
             },
             diff_hints: Vec::new(),
@@ -533,6 +534,7 @@ fn build_diff_hints(
             | EdlOp::SetSpeed { .. }
             | EdlOp::SetColorCorrection { .. }
             | EdlOp::ApplyLut { .. }
+            | EdlOp::SetBroadcastOverlay { .. }
             | EdlOp::InsertTitle { .. }
             | EdlOp::SetTitle { .. }
             | EdlOp::InsertCaption { .. }
@@ -659,6 +661,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetSpeed { .. } => "SetSpeed",
         EdlOp::SetColorCorrection { .. } => "SetColorCorrection",
         EdlOp::ApplyLut { .. } => "ApplyLut",
+        EdlOp::SetBroadcastOverlay { .. } => "SetBroadcastOverlay",
         EdlOp::InsertTitle { .. } => "InsertTitle",
         EdlOp::SetTitle { .. } => "SetTitle",
         EdlOp::InsertCaption { .. } => "InsertCaption",

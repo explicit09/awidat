@@ -10,6 +10,7 @@
 use std::path::Path;
 
 use awidat_desktop_protocol::{TimelineItem, TimelineSnapshot, TimelineTrack};
+use awidat_proto::awidat_meta;
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::project::Project;
 use tauri::State;
@@ -39,6 +40,7 @@ pub async fn read_timeline(state: State<'_, AwidatState>) -> Result<TimelineSnap
 fn empty_snapshot() -> TimelineSnapshot {
     TimelineSnapshot {
         duration_s: 0.0,
+        broadcast_overlay: None,
         tracks: Vec::new(),
     }
 }
@@ -289,7 +291,82 @@ pub fn flatten_timeline_public(
 
     TimelineSnapshot {
         duration_s: max_end_s,
+        broadcast_overlay: timeline
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.broadcast_overlay.as_ref())
+            .map(broadcast_overlay_for_protocol),
         tracks,
+    }
+}
+
+fn broadcast_overlay_for_protocol(
+    config: &awidat_meta::BroadcastOverlayConfig,
+) -> awidat_desktop_protocol::BroadcastOverlayConfig {
+    awidat_desktop_protocol::BroadcastOverlayConfig {
+        enabled: config.enabled,
+        template_name: config.template_name.clone(),
+        episode_title: config.episode_title.clone(),
+        episode_subtitle: config.episode_subtitle.clone(),
+        show_name: config.show_name.clone(),
+        host_a: broadcast_host_for_protocol(&config.host_a),
+        host_b: broadcast_host_for_protocol(&config.host_b),
+        sponsors: config.sponsors.clone(),
+        topics: config
+            .topics
+            .iter()
+            .map(broadcast_timed_entry_for_protocol)
+            .collect(),
+        chapters: config
+            .chapters
+            .iter()
+            .map(broadcast_timed_entry_for_protocol)
+            .collect(),
+        brand_logo_path: config.brand_logo_path.clone(),
+        style: broadcast_style_for_protocol(&config.style),
+    }
+}
+
+fn broadcast_host_for_protocol(
+    host: &awidat_meta::BroadcastHost,
+) -> awidat_desktop_protocol::BroadcastHost {
+    awidat_desktop_protocol::BroadcastHost {
+        name: host.name.clone(),
+        title: host.title.clone(),
+        photo_path: host.photo_path.clone(),
+    }
+}
+
+fn broadcast_timed_entry_for_protocol(
+    entry: &awidat_meta::BroadcastTimedEntry,
+) -> awidat_desktop_protocol::BroadcastTimedEntry {
+    awidat_desktop_protocol::BroadcastTimedEntry {
+        time_seconds: entry.time_seconds,
+        text: entry.text.clone(),
+    }
+}
+
+fn broadcast_style_for_protocol(
+    style: &awidat_meta::BroadcastOverlayStyle,
+) -> awidat_desktop_protocol::BroadcastOverlayStyle {
+    awidat_desktop_protocol::BroadcastOverlayStyle {
+        gold_hex: style.gold_hex.clone(),
+        gold_light_hex: style.gold_light_hex.clone(),
+        cyan_hex: style.cyan_hex.clone(),
+        dark_navy_hex: style.dark_navy_hex.clone(),
+        title_fade_in_end: style.title_fade_in_end,
+        title_fade_out_start: style.title_fade_out_start,
+        title_visible_end: style.title_visible_end,
+        host_intro_start: style.host_intro_start,
+        host_intro_end: style.host_intro_end,
+        ticker_sponsor_duration: style.ticker_sponsor_duration,
+        ticker_fade_duration: style.ticker_fade_duration,
+        ticker_topic_duration: style.ticker_topic_duration,
+        chapter_display_duration: style.chapter_display_duration,
+        name_bar_height: style.name_bar_height,
+        ticker_height: style.ticker_height,
+        host_strip_height: style.host_strip_height,
     }
 }
 

@@ -40,11 +40,229 @@ pub struct AwidatTimelineMetadata {
     /// Most recent `edit-plan.json` item id this timeline applied.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub edit_plan_id: Option<String>,
+    /// Timeline-level broadcast overlay package. This is graph-native
+    /// presentation state: render and desktop preview derive visible
+    /// title cards, lower thirds, ticker, chapter cards, and host intro
+    /// strips from this config instead of treating them as detached
+    /// media files.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub broadcast_overlay: Option<BroadcastOverlayConfig>,
     /// Forward-compat passthrough. Future versions of this metadata can add
     /// fields here without breaking older readers. Engines that don't know
     /// about a field still round-trip it intact.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// Reusable timeline-level broadcast overlay configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BroadcastOverlayConfig {
+    /// Enable or disable rendering without deleting the saved preset.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Optional source template identifier for audit/debug UI.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub template_name: Option<String>,
+    /// Episode title shown by the title card.
+    #[serde(default)]
+    pub episode_title: String,
+    /// Optional subtitle shown under the title.
+    #[serde(default)]
+    pub episode_subtitle: String,
+    /// Persistent show/brand name used by the ticker label.
+    #[serde(default)]
+    pub show_name: String,
+    /// Left/primary host.
+    #[serde(default)]
+    pub host_a: BroadcastHost,
+    /// Right/secondary host.
+    #[serde(default)]
+    pub host_b: BroadcastHost,
+    /// Sponsor/brand names that scroll in the ticker.
+    #[serde(default)]
+    pub sponsors: Vec<String>,
+    /// Timed topic labels used by the smart ticker.
+    #[serde(default)]
+    pub topics: Vec<BroadcastTimedEntry>,
+    /// Timed chapter cards.
+    #[serde(default)]
+    pub chapters: Vec<BroadcastTimedEntry>,
+    /// Optional project-relative logo path.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub brand_logo_path: Option<String>,
+    /// Timing, colour, and layout style.
+    #[serde(default)]
+    pub style: BroadcastOverlayStyle,
+}
+
+impl Default for BroadcastOverlayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            template_name: None,
+            episode_title: String::new(),
+            episode_subtitle: String::new(),
+            show_name: String::new(),
+            host_a: BroadcastHost::default(),
+            host_b: BroadcastHost::default(),
+            sponsors: Vec::new(),
+            topics: Vec::new(),
+            chapters: Vec::new(),
+            brand_logo_path: None,
+            style: BroadcastOverlayStyle::default(),
+        }
+    }
+}
+
+/// Host data used by name bars and host intro strips.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BroadcastHost {
+    /// Display name rendered in the lower-third.
+    #[serde(default)]
+    pub name: String,
+    /// Subtitle / role rendered beside or below the name.
+    #[serde(default)]
+    pub title: String,
+    /// Optional project-relative portrait path.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub photo_path: Option<String>,
+}
+
+/// Timestamped chapter/topic label.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BroadcastTimedEntry {
+    /// Timeline time, in seconds.
+    pub time_seconds: f64,
+    /// Text displayed at that time.
+    pub text: String,
+}
+
+/// Visual/timing defaults for the broadcast overlay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BroadcastOverlayStyle {
+    /// Primary brand gold colour.
+    #[serde(default = "default_gold_hex")]
+    pub gold_hex: String,
+    /// Lighter gold used by split host-intro bars.
+    #[serde(default = "default_gold_light_hex")]
+    pub gold_light_hex: String,
+    /// Accent cyan used by topic badges.
+    #[serde(default = "default_cyan_hex")]
+    pub cyan_hex: String,
+    /// Dark lower-third/ticker background colour.
+    #[serde(default = "default_dark_navy_hex")]
+    pub dark_navy_hex: String,
+    /// End of title-card fade-in, in seconds.
+    #[serde(default = "default_title_fade_in_end")]
+    pub title_fade_in_end: f64,
+    /// Start of title-card fade-out, in seconds.
+    #[serde(default = "default_title_fade_out_start")]
+    pub title_fade_out_start: f64,
+    /// End of title-card visibility, in seconds.
+    #[serde(default = "default_title_visible_end")]
+    pub title_visible_end: f64,
+    /// Start of host-intro lower-third, in seconds.
+    #[serde(default = "default_host_intro_start")]
+    pub host_intro_start: f64,
+    /// End of host-intro lower-third, in seconds.
+    #[serde(default = "default_host_intro_end")]
+    pub host_intro_end: f64,
+    /// Sponsor ticker display cadence, in seconds.
+    #[serde(default = "default_ticker_sponsor_duration")]
+    pub ticker_sponsor_duration: f64,
+    /// Ticker fade duration, in seconds.
+    #[serde(default = "default_ticker_fade_duration")]
+    pub ticker_fade_duration: f64,
+    /// Topic badge display duration, in seconds.
+    #[serde(default = "default_ticker_topic_duration")]
+    pub ticker_topic_duration: f64,
+    /// Chapter-card display duration, in seconds.
+    #[serde(default = "default_chapter_display_duration")]
+    pub chapter_display_duration: f64,
+    /// Persistent host-name bar height, in pixels at 1080p reference.
+    #[serde(default = "default_name_bar_height")]
+    pub name_bar_height: f64,
+    /// Bottom ticker height, in pixels at 1080p reference.
+    #[serde(default = "default_ticker_height")]
+    pub ticker_height: f64,
+    /// Host-intro strip height, in pixels at 1080p reference.
+    #[serde(default = "default_host_strip_height")]
+    pub host_strip_height: f64,
+}
+
+impl Default for BroadcastOverlayStyle {
+    fn default() -> Self {
+        Self {
+            gold_hex: default_gold_hex(),
+            gold_light_hex: default_gold_light_hex(),
+            cyan_hex: default_cyan_hex(),
+            dark_navy_hex: default_dark_navy_hex(),
+            title_fade_in_end: default_title_fade_in_end(),
+            title_fade_out_start: default_title_fade_out_start(),
+            title_visible_end: default_title_visible_end(),
+            host_intro_start: default_host_intro_start(),
+            host_intro_end: default_host_intro_end(),
+            ticker_sponsor_duration: default_ticker_sponsor_duration(),
+            ticker_fade_duration: default_ticker_fade_duration(),
+            ticker_topic_duration: default_ticker_topic_duration(),
+            chapter_display_duration: default_chapter_display_duration(),
+            name_bar_height: default_name_bar_height(),
+            ticker_height: default_ticker_height(),
+            host_strip_height: default_host_strip_height(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_gold_hex() -> String {
+    "#C9A028".into()
+}
+fn default_gold_light_hex() -> String {
+    "#E8C040".into()
+}
+fn default_cyan_hex() -> String {
+    "#22D3EE".into()
+}
+fn default_dark_navy_hex() -> String {
+    "#070D17".into()
+}
+fn default_title_fade_in_end() -> f64 {
+    1.5
+}
+fn default_title_fade_out_start() -> f64 {
+    29.0
+}
+fn default_title_visible_end() -> f64 {
+    30.0
+}
+fn default_host_intro_start() -> f64 {
+    38.0
+}
+fn default_host_intro_end() -> f64 {
+    92.0
+}
+fn default_ticker_sponsor_duration() -> f64 {
+    25.0
+}
+fn default_ticker_fade_duration() -> f64 {
+    1.0
+}
+fn default_ticker_topic_duration() -> f64 {
+    14.0
+}
+fn default_chapter_display_duration() -> f64 {
+    6.0
+}
+fn default_name_bar_height() -> f64 {
+    150.0
+}
+fn default_ticker_height() -> f64 {
+    200.0
+}
+fn default_host_strip_height() -> f64 {
+    320.0
 }
 
 /// Content anchor for a clip. Used by `apply_edl` to relocate a clip after

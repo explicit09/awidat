@@ -20,7 +20,10 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use awidat_proto::awidat_meta::{AwidatClipMetadata, AwidatTimelineMetadata};
+use awidat_proto::awidat_meta::{
+    AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig, BroadcastOverlayStyle,
+    BroadcastTimedEntry,
+};
 use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild};
 use thiserror::Error;
 
@@ -301,6 +304,9 @@ fn apply_one(
             description.as_deref(),
             tags.as_deref(),
         ),
+        EdlOp::SetBroadcastOverlay { config } => {
+            apply_set_broadcast_overlay(working, index, config)
+        }
     }
 }
 
@@ -328,7 +334,8 @@ fn resolve_locator_for_op(
         | EdlOp::InsertCaption { .. }
         | EdlOp::SetOutputFormat { .. }
         | EdlOp::SetLoudnessTarget { .. }
-        | EdlOp::SetPackageMetadata { .. } => return Ok(None),
+        | EdlOp::SetPackageMetadata { .. }
+        | EdlOp::SetBroadcastOverlay { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
         .map(Some)
@@ -1736,6 +1743,140 @@ fn apply_set_package_metadata(
         "set package metadata platform={:?}, title={:?}",
         platform, title
     ))
+}
+
+fn apply_set_broadcast_overlay(
+    working: &mut Timeline,
+    index: usize,
+    config: &BroadcastOverlayConfig,
+) -> Result<String, ApplyError> {
+    validate_broadcast_overlay_config(index, config)?;
+    let meta = timeline_awidat_metadata(working);
+    meta.broadcast_overlay = Some(config.clone());
+    Ok(format!(
+        "set broadcast overlay enabled={}, title={:?}, topics={}, chapters={}",
+        config.enabled,
+        config.episode_title,
+        config.topics.len(),
+        config.chapters.len(),
+    ))
+}
+
+fn validate_broadcast_overlay_config(
+    index: usize,
+    config: &BroadcastOverlayConfig,
+) -> Result<(), ApplyError> {
+    validate_optional_project_path(index, "brand_logo_path", config.brand_logo_path.as_deref())?;
+    validate_optional_project_path(
+        index,
+        "host_a.photo_path",
+        config.host_a.photo_path.as_deref(),
+    )?;
+    validate_optional_project_path(
+        index,
+        "host_b.photo_path",
+        config.host_b.photo_path.as_deref(),
+    )?;
+    validate_timed_entries(index, "topics", &config.topics)?;
+    validate_timed_entries(index, "chapters", &config.chapters)?;
+    validate_overlay_style(index, &config.style)?;
+    Ok(())
+}
+
+fn validate_optional_project_path(
+    index: usize,
+    field: &str,
+    value: Option<&str>,
+) -> Result<(), ApplyError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if value.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_broadcast_overlay: {field} cannot be empty"),
+        });
+    }
+    let path = std::path::Path::new(value);
+    if path.is_absolute() || value.split('/').any(|part| part == "..") {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_broadcast_overlay: {field} must be project-relative and cannot contain '..'"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_timed_entries(
+    index: usize,
+    field: &str,
+    entries: &[BroadcastTimedEntry],
+) -> Result<(), ApplyError> {
+    for entry in entries {
+        if !entry.time_seconds.is_finite() || entry.time_seconds < 0.0 {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "set_broadcast_overlay: {field} time_seconds must be finite and >= 0"
+                ),
+            });
+        }
+        if entry.text.trim().is_empty() {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!("set_broadcast_overlay: {field} text cannot be empty"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_overlay_style(index: usize, style: &BroadcastOverlayStyle) -> Result<(), ApplyError> {
+    let finite_positive = [
+        ("title_fade_in_end", style.title_fade_in_end),
+        ("title_visible_end", style.title_visible_end),
+        ("host_intro_end", style.host_intro_end),
+        ("ticker_sponsor_duration", style.ticker_sponsor_duration),
+        ("ticker_fade_duration", style.ticker_fade_duration),
+        ("ticker_topic_duration", style.ticker_topic_duration),
+        ("chapter_display_duration", style.chapter_display_duration),
+        ("name_bar_height", style.name_bar_height),
+        ("ticker_height", style.ticker_height),
+        ("host_strip_height", style.host_strip_height),
+    ];
+    for (field, value) in finite_positive {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!("set_broadcast_overlay: style.{field} must be finite and > 0"),
+            });
+        }
+    }
+    if !style.title_fade_out_start.is_finite() || style.title_fade_out_start < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_broadcast_overlay: style.title_fade_out_start must be finite and >= 0"
+                .into(),
+        });
+    }
+    if !style.host_intro_start.is_finite() || style.host_intro_start < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_broadcast_overlay: style.host_intro_start must be finite and >= 0".into(),
+        });
+    }
+    if style.title_visible_end <= style.title_fade_in_end
+        || style.title_fade_out_start > style.title_visible_end
+        || style.host_intro_end <= style.host_intro_start
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_broadcast_overlay: style timing windows are inconsistent".into(),
+        });
+    }
+    Ok(())
 }
 
 /// Update the awidat.title effect on an anchored title clip.
@@ -3768,6 +3909,105 @@ mod tests {
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
         assert!(
             matches!(&err, ApplyError::Invalid { message, .. } if message.contains("awidat.title"))
+        );
+    }
+
+    #[test]
+    fn apply_set_broadcast_overlay_stores_timeline_metadata() {
+        let tl = timeline_with_three_clips();
+        let mut config = BroadcastOverlayConfig {
+            episode_title: "Ben Adams".into(),
+            show_name: "Technologia Talks".into(),
+            sponsors: vec!["LEARN-X".into(), "Throwly".into()],
+            ..BroadcastOverlayConfig::default()
+        };
+        config.host_a.name = "Tadiwa Mbuwayesango".into();
+        config.host_a.title = "Co-Host".into();
+        config.host_a.photo_path = Some("branding/tadiwa.jpg".into());
+        config.topics.push(BroadcastTimedEntry {
+            time_seconds: 42.0,
+            text: "Custom drones".into(),
+        });
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetBroadcastOverlay {
+                config: config.clone(),
+            }],
+        };
+        let (new_tl, applied) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert_eq!(applied.applied.len(), 1);
+        let stored = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.broadcast_overlay.as_ref())
+            .expect("overlay config should be stored");
+        assert_eq!(stored.episode_title, "Ben Adams");
+        assert_eq!(
+            stored.host_a.photo_path.as_deref(),
+            Some("branding/tadiwa.jpg")
+        );
+        assert_eq!(stored.topics[0].text, "Custom drones");
+    }
+
+    #[test]
+    fn apply_set_broadcast_overlay_replaces_existing_config() {
+        let tl = timeline_with_three_clips();
+        let first = BroadcastOverlayConfig {
+            episode_title: "First".into(),
+            ..BroadcastOverlayConfig::default()
+        };
+        let second = BroadcastOverlayConfig {
+            episode_title: "Second".into(),
+            topics: vec![BroadcastTimedEntry {
+                time_seconds: 5.0,
+                text: "Replacement".into(),
+            }],
+            ..BroadcastOverlayConfig::default()
+        };
+        let (after_first, _) = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::SetBroadcastOverlay { config: first }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap();
+        let (after_second, _) = apply(
+            &after_first,
+            &EdlEnvelope {
+                ops: vec![EdlOp::SetBroadcastOverlay {
+                    config: second.clone(),
+                }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap();
+        let stored = after_second
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.broadcast_overlay.as_ref())
+            .unwrap();
+        assert_eq!(stored.episode_title, "Second");
+        assert_eq!(stored.topics.len(), 1);
+    }
+
+    #[test]
+    fn apply_set_broadcast_overlay_rejects_unsafe_asset_paths() {
+        let tl = timeline_with_three_clips();
+        let mut config = BroadcastOverlayConfig::default();
+        config.host_a.photo_path = Some("../secret.jpg".into());
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::SetBroadcastOverlay { config }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("project-relative"))
         );
     }
 

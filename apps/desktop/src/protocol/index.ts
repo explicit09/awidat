@@ -20,6 +20,10 @@ export type { TimelineTrack } from "./generated/TimelineTrack";
 export type { TimelineSnapshot } from "./generated/TimelineSnapshot";
 export type { ColorCorrectionStyling } from "./generated/ColorCorrectionStyling";
 export type { TitleStyling } from "./generated/TitleStyling";
+export type { BroadcastOverlayConfig } from "./generated/BroadcastOverlayConfig";
+export type { BroadcastHost } from "./generated/BroadcastHost";
+export type { BroadcastTimedEntry } from "./generated/BroadcastTimedEntry";
+export type { BroadcastOverlayStyle } from "./generated/BroadcastOverlayStyle";
 // Approval-as-diff additions.
 export type { ProposalSource } from "./generated/ProposalSource";
 export type { AppliedDiff } from "./generated/AppliedDiff";

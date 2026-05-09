@@ -514,6 +514,17 @@ delivery intent on the timeline graph.\
 \n  - **Set Package Metadata**: optional `+ platform`, `+ title`, \
 `+ description`, `+ tags` (comma-separated). Stores publishing-package \
 intent on the timeline graph; at least one field is required.\
+\n  - **Set Broadcast Overlay**: timeline-level overlay config for \
+broadcast title cards, lower-thirds, host intro strips, ticker/topic \
+badges, and chapter cards. Preferred form is `+ config_json: {...}` \
+using the `awidat.broadcast_overlay` schema. Simple field form also \
+accepts `+ enabled`, `+ episode_title`, `+ episode_subtitle`, \
+`+ show_name`, `+ host_a_name`, `+ host_a_title`, `+ host_a_photo_path`, \
+`+ host_b_name`, `+ host_b_title`, `+ host_b_photo_path`, `+ sponsors` \
+(JSON array), `+ topics` (JSON array of `{time_seconds,text}`), \
+`+ chapters` (same), `+ brand_logo_path`, and `+ style` (JSON object). \
+Asset paths must be project-relative and must not contain `..`. \
+Re-applying replaces the prior timeline overlay config.\
 \n\n\
 **Anchors.** Each op identifies its target by content anchor — \
 `transcript_snippet`, `clip_uuid`, `scene_change_index` — not \

@@ -24,6 +24,9 @@
 //! shows the old value alongside the new). For trim, both `- end: <old>`
 //! and `+ end: <new>` are accepted; we use the `+` value as authoritative.
 
+use awidat_proto::awidat_meta::{
+    BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry,
+};
 use thiserror::Error;
 
 use super::op::{
@@ -44,7 +47,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
     )]
     UnknownOp {
         /// Line number.
@@ -226,6 +229,7 @@ enum OpKind {
     SetOutputFormat,
     SetLoudnessTarget,
     SetPackageMetadata,
+    SetBroadcastOverlay,
 }
 
 impl OpBuilder {
@@ -249,6 +253,7 @@ impl OpBuilder {
             "Set Output Format" => OpKind::SetOutputFormat,
             "Set Loudness Target" => OpKind::SetLoudnessTarget,
             "Set Package Metadata" => OpKind::SetPackageMetadata,
+            "Set Broadcast Overlay" => OpKind::SetBroadcastOverlay,
             other => {
                 return Err(EdlParseError::UnknownOp {
                     line,
@@ -632,7 +637,104 @@ impl OpBuilder {
                 description: take_field_string(&mut fields, "description"),
                 tags: take_field_string(&mut fields, "tags"),
             }),
+            OpKind::SetBroadcastOverlay => {
+                let config = parse_broadcast_overlay_config(&mut fields, head)?;
+                Ok(EdlOp::SetBroadcastOverlay { config })
+            }
         }
+    }
+}
+
+fn parse_broadcast_overlay_config(
+    fields: &mut Vec<(String, FieldValue)>,
+    line: usize,
+) -> Result<BroadcastOverlayConfig, EdlParseError> {
+    if let Some(raw) = take_field_string(fields, "config_json") {
+        return serde_json::from_str::<BroadcastOverlayConfig>(&raw).map_err(|e| {
+            EdlParseError::BadField {
+                line,
+                raw: "config_json".into(),
+                message: format!("must be valid broadcast overlay JSON: {e}"),
+            }
+        });
+    }
+
+    let mut config = BroadcastOverlayConfig::default();
+    if let Some(enabled) = take_field_string(fields, "enabled") {
+        config.enabled = parse_bool_field(&enabled, line, "enabled")?;
+    }
+    config.template_name = take_field_string(fields, "template_name");
+    if let Some(v) = take_field_string(fields, "episode_title") {
+        config.episode_title = v;
+    }
+    if let Some(v) = take_field_string(fields, "episode_subtitle") {
+        config.episode_subtitle = v;
+    }
+    if let Some(v) = take_field_string(fields, "show_name") {
+        config.show_name = v;
+    }
+    if let Some(v) = take_field_string(fields, "host_a") {
+        config.host_a = parse_json_value(&v, line, "host_a")?;
+    }
+    if let Some(v) = take_field_string(fields, "host_b") {
+        config.host_b = parse_json_value(&v, line, "host_b")?;
+    }
+    if let Some(v) = take_field_string(fields, "sponsors") {
+        config.sponsors = parse_json_value(&v, line, "sponsors")?;
+    }
+    if let Some(v) = take_field_string(fields, "topics") {
+        config.topics = parse_json_value::<Vec<BroadcastTimedEntry>>(&v, line, "topics")?;
+    }
+    if let Some(v) = take_field_string(fields, "chapters") {
+        config.chapters = parse_json_value::<Vec<BroadcastTimedEntry>>(&v, line, "chapters")?;
+    }
+    config.brand_logo_path = take_field_string(fields, "brand_logo_path");
+    if let Some(v) = take_field_string(fields, "style") {
+        config.style = parse_json_value::<BroadcastOverlayStyle>(&v, line, "style")?;
+    }
+    // Convenience fields for simple EDLs that do not want to JSON-encode hosts.
+    if let Some(v) = take_field_string(fields, "host_a_name") {
+        config.host_a.name = v;
+    }
+    if let Some(v) = take_field_string(fields, "host_a_title") {
+        config.host_a.title = v;
+    }
+    if let Some(v) = take_field_string(fields, "host_a_photo_path") {
+        config.host_a.photo_path = Some(v);
+    }
+    if let Some(v) = take_field_string(fields, "host_b_name") {
+        config.host_b.name = v;
+    }
+    if let Some(v) = take_field_string(fields, "host_b_title") {
+        config.host_b.title = v;
+    }
+    if let Some(v) = take_field_string(fields, "host_b_photo_path") {
+        config.host_b.photo_path = Some(v);
+    }
+    Ok(config)
+}
+
+fn parse_json_value<T: serde::de::DeserializeOwned>(
+    raw: &str,
+    line: usize,
+    field: &str,
+) -> Result<T, EdlParseError> {
+    serde_json::from_str(raw).map_err(|e| EdlParseError::BadField {
+        line,
+        raw: field.into(),
+        message: format!("must be valid JSON: {e}"),
+    })
+}
+
+fn parse_bool_field(raw: &str, line: usize, field: &str) -> Result<bool, EdlParseError> {
+    match raw {
+        "true" | "yes" | "1" => Ok(true),
+        "false" | "no" | "0" => Ok(false),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("{field}: {other}"),
+            message: "must be true or false".into(),
+        }),
     }
 }
 
@@ -1258,6 +1360,60 @@ mod tests {
                 ..
             } if platform == "youtube_shorts" && title == "Launch Risk"
         ));
+    }
+
+    #[test]
+    fn set_broadcast_overlay_parses_config_json() {
+        let text = r#"*** Begin EDL
+*** Set Broadcast Overlay
++ config_json: {"enabled":true,"template_name":"technologia","episode_title":"Ben Adams","show_name":"TECHNOLOGIA TALKS","host_a":{"name":"Tadiwa Mbuwayesango","title":"Co-Host","photo_path":"branding/tadiwa.jpg"},"host_b":{"name":"Elvis Kimara","title":"Co-Host","photo_path":"branding/elvis.jpg"},"sponsors":["LEARN-X","Throwly"],"topics":[{"time_seconds":45.0,"text":"Custom drones"}],"chapters":[{"time_seconds":90.0,"text":"Hardware barriers"}]}
+*** End EDL
+"#;
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetBroadcastOverlay { config } => {
+                assert!(config.enabled);
+                assert_eq!(config.template_name.as_deref(), Some("technologia"));
+                assert_eq!(config.episode_title, "Ben Adams");
+                assert_eq!(
+                    config.host_a.photo_path.as_deref(),
+                    Some("branding/tadiwa.jpg")
+                );
+                assert_eq!(config.sponsors, vec!["LEARN-X", "Throwly"]);
+                assert_eq!(config.topics[0].text, "Custom drones");
+                assert_eq!(config.chapters[0].time_seconds, 90.0);
+            }
+            _ => panic!("want SetBroadcastOverlay"),
+        }
+    }
+
+    #[test]
+    fn set_broadcast_overlay_parses_convenience_fields() {
+        let text = r#"*** Begin EDL
+*** Set Broadcast Overlay
++ enabled: true
++ episode_title: Ben Adams
++ show_name: Technologia Talks
++ host_a_name: Tadiwa Mbuwayesango
++ host_a_title: Co-Host
++ host_b_name: Elvis Kimara
++ host_b_title: Co-Host
++ sponsors: ["LEARN-X","Throwly"]
++ topics: [{"time_seconds":12,"text":"Opening"}]
+*** End EDL
+"#;
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetBroadcastOverlay { config } => {
+                assert_eq!(config.episode_title, "Ben Adams");
+                assert_eq!(config.show_name, "Technologia Talks");
+                assert_eq!(config.host_a.name, "Tadiwa Mbuwayesango");
+                assert_eq!(config.host_b.title, "Co-Host");
+                assert_eq!(config.sponsors.len(), 2);
+                assert_eq!(config.topics[0].text, "Opening");
+            }
+            _ => panic!("want SetBroadcastOverlay"),
+        }
     }
 
     #[test]

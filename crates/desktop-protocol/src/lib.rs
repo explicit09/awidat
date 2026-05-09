@@ -556,9 +556,106 @@ pub struct TimelineSnapshot {
     /// Total project duration in seconds (max track end across all
     /// tracks). Zero when timeline is empty.
     pub duration_s: f64,
+    /// Optional timeline-level broadcast overlay config. When present,
+    /// the desktop preview draws the same title card / lower-third /
+    /// ticker layers that the timeline render path will burn in.
+    pub broadcast_overlay: Option<BroadcastOverlayConfig>,
     /// Tracks in order: video first, then audio. Empty when project
     /// has no clips.
     pub tracks: Vec<TimelineTrack>,
+}
+
+/// Timeline-level broadcast overlay config, stored in OTIO metadata
+/// under `awidat.broadcast_overlay` and surfaced to desktop preview.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct BroadcastOverlayConfig {
+    /// Whether the overlay should render.
+    pub enabled: bool,
+    /// Optional source template name for audit/debug display.
+    pub template_name: Option<String>,
+    /// Episode title shown by the title card.
+    pub episode_title: String,
+    /// Optional subtitle shown under the title.
+    pub episode_subtitle: String,
+    /// Show/brand label used by the ticker.
+    pub show_name: String,
+    /// Left/primary host.
+    pub host_a: BroadcastHost,
+    /// Right/secondary host.
+    pub host_b: BroadcastHost,
+    /// Sponsor and brand names used by the ticker.
+    pub sponsors: Vec<String>,
+    /// Timed topic labels used by the ticker.
+    pub topics: Vec<BroadcastTimedEntry>,
+    /// Timed chapter cards.
+    pub chapters: Vec<BroadcastTimedEntry>,
+    /// Optional project-relative logo path.
+    pub brand_logo_path: Option<String>,
+    /// Timing, colour, and layout values.
+    pub style: BroadcastOverlayStyle,
+}
+
+/// Host/person data used by broadcast lower thirds.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct BroadcastHost {
+    /// Display name.
+    pub name: String,
+    /// Role/title text.
+    pub title: String,
+    /// Project-relative optional portrait path.
+    pub photo_path: Option<String>,
+}
+
+/// Timed text used by topic badges and chapter cards.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct BroadcastTimedEntry {
+    /// Timeline time, in seconds.
+    pub time_seconds: f64,
+    /// Display text.
+    pub text: String,
+}
+
+/// Broadcast overlay style values. These remain data-driven so private
+/// skills can define their own look without hard-coding branding in
+/// Awidat core.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct BroadcastOverlayStyle {
+    /// Primary brand gold colour.
+    pub gold_hex: String,
+    /// Lighter gold for split host-intro bars.
+    pub gold_light_hex: String,
+    /// Accent cyan for topic badges.
+    pub cyan_hex: String,
+    /// Dark lower-third/ticker background colour.
+    pub dark_navy_hex: String,
+    /// End of title-card fade-in, in seconds.
+    pub title_fade_in_end: f64,
+    /// Start of title-card fade-out, in seconds.
+    pub title_fade_out_start: f64,
+    /// End of title-card visibility, in seconds.
+    pub title_visible_end: f64,
+    /// Start of host-intro strip, in seconds.
+    pub host_intro_start: f64,
+    /// End of host-intro strip, in seconds.
+    pub host_intro_end: f64,
+    /// Sponsor ticker display cadence, in seconds.
+    pub ticker_sponsor_duration: f64,
+    /// Ticker fade duration, in seconds.
+    pub ticker_fade_duration: f64,
+    /// Topic badge display duration, in seconds.
+    pub ticker_topic_duration: f64,
+    /// Chapter-card display duration, in seconds.
+    pub chapter_display_duration: f64,
+    /// Host-name bar height, in pixels at 1080p reference.
+    pub name_bar_height: f64,
+    /// Ticker height, in pixels at 1080p reference.
+    pub ticker_height: f64,
+    /// Host-intro strip height, in pixels at 1080p reference.
+    pub host_strip_height: f64,
 }
 
 /// One row in [`TimelineSnapshot::tracks`].
@@ -1037,6 +1134,7 @@ mod tests {
             edl_text: "*** Begin EDL\n*** End EDL\n".into(),
             snapshot: TimelineSnapshot {
                 duration_s: 12.5,
+                broadcast_overlay: None,
                 tracks: vec![],
             },
             diff_hints: vec![AppliedDiff::TrimEdge {

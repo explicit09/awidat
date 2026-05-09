@@ -21,6 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
+use awidat_proto::awidat_meta::{BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle};
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::project::{files, read_otio_timeline};
 use chrono::Utc;
@@ -65,6 +66,16 @@ pub enum RenderTimelineError {
     /// The timeline parsed but has no clips on any video track.
     #[error("timeline has no clips to render")]
     EmptyTimeline,
+}
+
+/// Broadcast overlay config plus project root for resolving optional
+/// project-relative assets.
+#[derive(Debug, Clone)]
+pub struct BroadcastOverlayPlan {
+    /// Timeline-level overlay config read from OTIO metadata.
+    pub config: BroadcastOverlayConfig,
+    /// Project root used to resolve project-relative overlay assets.
+    pub project_root: PathBuf,
 }
 
 /// One source-media segment to feed into the timeline-render concat.
@@ -173,7 +184,7 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -191,7 +202,7 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -202,7 +213,15 @@ pub fn collect_timeline_plan(
 /// production — its clips are virtual, not media-bearing.
 pub fn collect_timeline_full_plan(
     project_root: &Path,
-) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>, Vec<TitlePlan>), RenderTimelineError> {
+) -> Result<
+    (
+        Vec<TimelineSegment>,
+        Vec<TransitionPlan>,
+        Vec<TitlePlan>,
+        Option<BroadcastOverlayPlan>,
+    ),
+    RenderTimelineError,
+> {
     let otio_path = project_root.join(files::OTIO);
     if !otio_path.exists() {
         return Err(RenderTimelineError::NoOtio(otio_path));
@@ -304,7 +323,16 @@ pub fn collect_timeline_full_plan(
             }
         }
     }
-    Ok((segs, transitions, titles))
+    let broadcast_overlay = timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .and_then(|m| m.broadcast_overlay.clone())
+        .map(|config| BroadcastOverlayPlan {
+            config,
+            project_root: project_root.to_path_buf(),
+        });
+    Ok((segs, transitions, titles, broadcast_overlay))
 }
 
 /// True iff the track is the project's Titles track. Mirrors the
@@ -506,6 +534,7 @@ pub struct FilterPlanner<'a> {
     segments: &'a [TimelineSegment],
     transitions: &'a [TransitionPlan],
     titles: &'a [TitlePlan],
+    broadcast_overlay: Option<&'a BroadcastOverlayPlan>,
 }
 
 /// Output of [`FilterPlanner::plan`]. Carries everything the caller
@@ -542,6 +571,23 @@ impl<'a> FilterPlanner<'a> {
             segments,
             transitions,
             titles,
+            broadcast_overlay: None,
+        }
+    }
+
+    /// Construct a planner over media segments, transitions, sparse
+    /// title overlays, and an optional timeline-level broadcast overlay.
+    pub fn with_titles_and_broadcast_overlay(
+        segments: &'a [TimelineSegment],
+        transitions: &'a [TransitionPlan],
+        titles: &'a [TitlePlan],
+        broadcast_overlay: Option<&'a BroadcastOverlayPlan>,
+    ) -> Self {
+        Self {
+            segments,
+            transitions,
+            titles,
+            broadcast_overlay,
         }
     }
 
@@ -570,10 +616,16 @@ impl<'a> FilterPlanner<'a> {
         } else {
             self.plan_with_transitions()
         };
+        let base = if let Some(overlay) = self.broadcast_overlay {
+            self.append_broadcast_overlay(base, overlay)
+        } else {
+            base
+        };
         if self.titles.is_empty() {
-            return base;
+            base
+        } else {
+            self.append_titles(base)
         }
-        self.append_titles(base)
     }
 
     /// Splice a `drawtext=` chain onto `base.video_out_label` and
@@ -605,6 +657,32 @@ impl<'a> FilterPlanner<'a> {
         filter.push_str(&parts.join(","));
         filter.push_str(&out_label);
 
+        FilterPlan {
+            filter_complex: filter,
+            video_out_label: out_label,
+            audio_out_label: base.audio_out_label,
+        }
+    }
+
+    fn append_broadcast_overlay(
+        &self,
+        base: FilterPlan,
+        overlay: &BroadcastOverlayPlan,
+    ) -> FilterPlan {
+        if !overlay.config.enabled {
+            return base;
+        }
+        let in_label = base.video_out_label.clone();
+        let out_label = "[broadcast_v]".to_string();
+        let parts = format_broadcast_overlay_filters(overlay);
+        if parts.is_empty() {
+            return base;
+        }
+        let mut filter = base.filter_complex.clone();
+        filter.push(';');
+        filter.push_str(&format_broadcast_overlay_graph(
+            &in_label, &out_label, overlay, &parts,
+        ));
         FilterPlan {
             filter_complex: filter,
             video_out_label: out_label,
@@ -935,6 +1013,458 @@ fn format_drawtext_filter(t: &TitlePlan) -> String {
     )
 }
 
+fn format_broadcast_overlay_filters(overlay: &BroadcastOverlayPlan) -> Vec<String> {
+    let c = &overlay.config;
+    let st = &c.style;
+    let mut parts = Vec::new();
+    let navy = normalize_hex(&st.dark_navy_hex);
+    let gold = normalize_hex(&st.gold_hex);
+    let gold_light = normalize_hex(&st.gold_light_hex);
+    let cyan = normalize_hex(&st.cyan_hex);
+    let show = if c.show_name.trim().is_empty() {
+        "BROADCAST".to_string()
+    } else {
+        c.show_name.to_uppercase()
+    };
+
+    if !c.episode_title.trim().is_empty() {
+        parts.extend(format_episode_title_card(c, st, &navy, &gold, &cyan));
+    }
+    if !c.host_a.name.trim().is_empty() || !c.host_b.name.trim().is_empty() {
+        parts.extend(format_host_name_bar(c, st, &navy, &gold));
+        parts.extend(format_host_intro_strip(c, st, &gold, &gold_light, &navy));
+    }
+    parts.extend(format_smart_ticker(c, st, &show, &navy, &gold, &cyan));
+    parts.extend(format_chapter_cards(c, st, &navy, &gold));
+    parts
+}
+
+fn format_episode_title_card(
+    c: &BroadcastOverlayConfig,
+    st: &BroadcastOverlayStyle,
+    navy: &str,
+    gold: &str,
+    cyan: &str,
+) -> Vec<String> {
+    let start = 0.0;
+    let end = st.title_visible_end;
+    let x = "iw*0.26";
+    let y = "ih*0.46";
+    let w = "iw*0.48";
+    let h = "ih*0.19";
+    let alpha = broadcast_title_alpha(st);
+    let mut out = vec![
+        format!(
+            "drawbox=x={x}:y={y}:w={w}:h={h}:color={navy}@0.88:t=fill:enable='between(t\\,{start}\\,{end})'"
+        ),
+        format!(
+            "drawbox=x={x}:y={y}:w={w}:h=4:color={gold}@1:t=fill:enable='between(t\\,{start}\\,{end})'"
+        ),
+        format!(
+            "drawbox=x={x}:y=ih*0.65-2:w={w}:h=2:color={cyan}@0.27:t=fill:enable='between(t\\,{start}\\,{end})'"
+        ),
+        broadcast_drawtext(
+            "EPISODE",
+            "w*0.29",
+            "h*0.50",
+            36,
+            gold,
+            Some(&alpha),
+            Some((start, end)),
+            false,
+        ),
+        broadcast_drawtext(
+            &c.episode_title.to_uppercase(),
+            "w*0.29",
+            "h*0.545",
+            76,
+            "#FFFFFF",
+            Some(&alpha),
+            Some((start, end)),
+            true,
+        ),
+    ];
+    if !c.episode_subtitle.trim().is_empty() {
+        out.push(broadcast_drawtext(
+            &c.episode_subtitle,
+            "w*0.29",
+            "h*0.60",
+            34,
+            "#CBD5E1",
+            Some(&alpha),
+            Some((start, end)),
+            false,
+        ));
+    }
+    out
+}
+
+fn format_host_name_bar(
+    c: &BroadcastOverlayConfig,
+    st: &BroadcastOverlayStyle,
+    navy: &str,
+    gold: &str,
+) -> Vec<String> {
+    let y = "ih-175";
+    let enable = format!(
+        "not(between(t\\,{s}\\,{e}))",
+        s = st.host_intro_start,
+        e = st.host_intro_end
+    );
+    let mut out = vec![
+        format!("drawbox=x=0:y={y}:w=iw:h=75:color={navy}@0.92:t=fill:enable='{enable}'"),
+        format!("drawbox=x=0:y={y}:w=iw:h=2:color={gold}@0.55:t=fill:enable='{enable}'"),
+        format!("drawbox=x=iw/2:y=ih-160:w=2:h=40:color={gold}@0.35:t=fill:enable='{enable}'"),
+    ];
+    out.extend(format_host_inline_text(&c.host_a, "56", "h-135", &enable));
+    out.extend(format_host_inline_text(
+        &c.host_b,
+        "w-text_w-56",
+        "h-135",
+        &enable,
+    ));
+    out
+}
+
+fn format_host_inline_text(host: &BroadcastHost, x: &str, y: &str, enable: &str) -> Vec<String> {
+    if host.name.trim().is_empty() {
+        return Vec::new();
+    }
+    let text = if host.title.trim().is_empty() {
+        host.name.to_uppercase()
+    } else {
+        format!(
+            "{}  {}",
+            host.name.to_uppercase(),
+            host.title.to_uppercase()
+        )
+    };
+    vec![
+        broadcast_drawtext(&text, x, y, 34, "#FFFFFF", None, None, true).replace(
+            ":enable='between(t\\,0\\,0)'",
+            &format!(":enable='{enable}'"),
+        ),
+    ]
+}
+
+fn format_smart_ticker(
+    c: &BroadcastOverlayConfig,
+    st: &BroadcastOverlayStyle,
+    show: &str,
+    navy: &str,
+    gold: &str,
+    cyan: &str,
+) -> Vec<String> {
+    let enable = format!(
+        "not(between(t\\,{s}\\,{e}))",
+        s = st.host_intro_start,
+        e = st.host_intro_end
+    );
+    let sponsors = if c.sponsors.is_empty() {
+        show.to_string()
+    } else {
+        c.sponsors
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("   ◆   ")
+    };
+    let mut out = vec![
+        format!("drawbox=x=0:y=ih-100:w=iw:h=100:color={navy}@1:t=fill:enable='{enable}'"),
+        format!("drawbox=x=0:y=ih-100:w=340:h=100:color={gold}@1:t=fill:enable='{enable}'"),
+        format!("drawbox=x=0:y=ih-100:w=iw:h=3:color={gold}@1:t=fill:enable='{enable}'"),
+        broadcast_drawtext(show, "32", "h-62", 30, navy, None, None, true).replace(
+            ":enable='between(t\\,0\\,0)'",
+            &format!(":enable='{enable}'"),
+        ),
+    ];
+    if !c.topics.is_empty() {
+        for topic in &c.topics {
+            let start = topic.time_seconds;
+            let end = start + st.ticker_topic_duration;
+            out.push(format!("drawbox=x=380:y=ih-75:w=112:h=28:color={cyan}@1:t=fill:enable='between(t\\,{start}\\,{end})'"));
+            out.push(broadcast_drawtext(
+                "NOW DISCUSSING",
+                "392",
+                "h-54",
+                16,
+                navy,
+                None,
+                Some((start, end)),
+                true,
+            ));
+            out.push(broadcast_drawtext(
+                &topic.text,
+                "510",
+                "h-59",
+                34,
+                "#FFFFFF",
+                None,
+                Some((start, end)),
+                false,
+            ));
+        }
+    }
+    if !sponsors.trim().is_empty() {
+        out.push(
+            broadcast_drawtext(
+                &sponsors,
+                "380-mod(t*70\\,900)",
+                "h-60",
+                34,
+                "#CBD5E1",
+                None,
+                None,
+                true,
+            )
+            .replace(
+                ":enable='between(t\\,0\\,0)'",
+                &format!(":enable='{enable}'"),
+            ),
+        );
+    }
+    out
+}
+
+fn format_host_intro_strip(
+    c: &BroadcastOverlayConfig,
+    st: &BroadcastOverlayStyle,
+    gold: &str,
+    gold_light: &str,
+    navy: &str,
+) -> Vec<String> {
+    let start = st.host_intro_start;
+    let end = st.host_intro_end;
+    let enable = format!("between(t\\,{start}\\,{end})");
+    let mut out = vec![
+        format!("drawbox=x=0:y=ih-160:w=iw/2:h=160:color={gold}@1:t=fill:enable='{enable}'"),
+        format!(
+            "drawbox=x=iw/2:y=ih-160:w=iw/2:h=160:color={gold_light}@1:t=fill:enable='{enable}'"
+        ),
+        format!("drawbox=x=iw/2:y=ih-130:w=2:h=100:color={navy}@0.2:t=fill:enable='{enable}'"),
+    ];
+    out.extend(format_host_intro_host(
+        &c.host_a, "180", "h-88", navy, start, end,
+    ));
+    out.extend(format_host_intro_host(
+        &c.host_b,
+        "w-text_w-180",
+        "h-88",
+        navy,
+        start,
+        end,
+    ));
+    out
+}
+
+fn format_host_intro_host(
+    host: &BroadcastHost,
+    x: &str,
+    y: &str,
+    navy: &str,
+    start: f64,
+    end: f64,
+) -> Vec<String> {
+    if host.name.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    out.push(broadcast_drawtext(
+        &host.name.to_uppercase(),
+        x,
+        y,
+        50,
+        navy,
+        None,
+        Some((start, end)),
+        true,
+    ));
+    if !host.title.trim().is_empty() {
+        out.push(broadcast_drawtext(
+            &host.title.to_uppercase(),
+            x,
+            "h-48",
+            28,
+            navy,
+            None,
+            Some((start, end)),
+            true,
+        ));
+    }
+    out
+}
+
+fn format_chapter_cards(
+    c: &BroadcastOverlayConfig,
+    st: &BroadcastOverlayStyle,
+    navy: &str,
+    gold: &str,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for (idx, chapter) in c.chapters.iter().enumerate() {
+        let start = chapter.time_seconds.max(st.title_visible_end);
+        let end = start + st.chapter_display_duration;
+        out.push(format!("drawbox=x=iw*0.30:y=ih*0.36:w=85:h=54:color={gold}@1:t=fill:enable='between(t\\,{start}\\,{end})'"));
+        out.push(format!("drawbox=x=iw*0.30+85:y=ih*0.36:w=iw*0.40:h=54:color={navy}@0.88:t=fill:enable='between(t\\,{start}\\,{end})'"));
+        out.push(broadcast_drawtext(
+            &(idx + 1).to_string(),
+            "w*0.30+32",
+            "h*0.36+38",
+            36,
+            navy,
+            None,
+            Some((start, end)),
+            true,
+        ));
+        out.push(broadcast_drawtext(
+            &chapter.text.to_uppercase(),
+            "w*0.30+110",
+            "h*0.36+38",
+            34,
+            "#FFFFFF",
+            None,
+            Some((start, end)),
+            true,
+        ));
+    }
+    out
+}
+
+fn broadcast_drawtext(
+    text: &str,
+    x: &str,
+    y: &str,
+    size: u32,
+    color: &str,
+    alpha: Option<&str>,
+    window: Option<(f64, f64)>,
+    bold: bool,
+) -> String {
+    let fontfile = pick_fontfile_attr();
+    let border = if bold { ":borderw=1" } else { "" };
+    let alpha = alpha.map(|a| format!(":alpha='{a}'")).unwrap_or_default();
+    let enable = if let Some((start, end)) = window {
+        format!(":enable='between(t\\,{start}\\,{end})'")
+    } else {
+        ":enable='between(t\\,0\\,0)'".into()
+    };
+    format!(
+        "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{border}:x={x}:y={y}{alpha}{enable}",
+        text = drawtext_escape(text),
+        font = fontfile,
+    )
+}
+
+fn broadcast_title_alpha(st: &BroadcastOverlayStyle) -> String {
+    format!(
+        "if(lt(t\\,{fade_in})\\,t/{fade_in}\\,if(lt(t\\,{fade_out})\\,1\\,({end}-t)/({end}-{fade_out})))",
+        fade_in = st.title_fade_in_end,
+        fade_out = st.title_fade_out_start,
+        end = st.title_visible_end,
+    )
+}
+
+fn normalize_hex(value: &str) -> String {
+    if value.starts_with('#') {
+        value.to_string()
+    } else {
+        format!("#{value}")
+    }
+}
+
+fn format_broadcast_overlay_graph(
+    in_label: &str,
+    out_label: &str,
+    overlay: &BroadcastOverlayPlan,
+    parts: &[String],
+) -> String {
+    let asset_overlays = broadcast_asset_overlays(overlay);
+    if asset_overlays.is_empty() {
+        let mut graph = String::new();
+        graph.push_str(in_label);
+        graph.push_str(&parts.join(","));
+        graph.push_str(out_label);
+        return graph;
+    }
+
+    let mut graph = String::new();
+    let mut current = "[broadcast_base]".to_string();
+    graph.push_str(in_label);
+    graph.push_str(&parts.join(","));
+    graph.push_str(&current);
+    for (idx, asset) in asset_overlays.iter().enumerate() {
+        let photo_label = format!("[broadcast_asset{idx}]");
+        let next = if idx + 1 == asset_overlays.len() {
+            out_label.to_string()
+        } else {
+            format!("[broadcast_asset_v{idx}]")
+        };
+        graph.push(';');
+        graph.push_str(&format!(
+            "movie='{path}',scale={size}:{size}:force_original_aspect_ratio=increase,crop={size}:{size},format=rgba{photo};{current}{photo}overlay=x={x}:y={y}:enable='between(t\\,{start}\\,{end})'{next}",
+            path = filter_escape_single_quoted(&asset.path.to_string_lossy()),
+            size = asset.size,
+            photo = photo_label,
+            current = current,
+            x = asset.x,
+            y = asset.y,
+            start = asset.start_s,
+            end = asset.end_s,
+            next = next,
+        ));
+        current = next;
+    }
+    graph
+}
+
+struct BroadcastAssetOverlay {
+    path: PathBuf,
+    x: String,
+    y: String,
+    size: u32,
+    start_s: f64,
+    end_s: f64,
+}
+
+fn broadcast_asset_overlays(overlay: &BroadcastOverlayPlan) -> Vec<BroadcastAssetOverlay> {
+    let c = &overlay.config;
+    let st = &c.style;
+    let mut out = Vec::new();
+    if let Some(path) = resolve_project_overlay_asset(overlay, c.host_a.photo_path.as_deref()) {
+        out.push(BroadcastAssetOverlay {
+            path,
+            x: "38".into(),
+            y: "main_h-136".into(),
+            size: 112,
+            start_s: st.host_intro_start,
+            end_s: st.host_intro_end,
+        });
+    }
+    if let Some(path) = resolve_project_overlay_asset(overlay, c.host_b.photo_path.as_deref()) {
+        out.push(BroadcastAssetOverlay {
+            path,
+            x: "main_w-150".into(),
+            y: "main_h-136".into(),
+            size: 112,
+            start_s: st.host_intro_start,
+            end_s: st.host_intro_end,
+        });
+    }
+    out
+}
+
+fn resolve_project_overlay_asset(
+    overlay: &BroadcastOverlayPlan,
+    rel_path: Option<&str>,
+) -> Option<PathBuf> {
+    let rel_path = rel_path?;
+    if rel_path.is_empty() || rel_path.starts_with('/') || rel_path.split('/').any(|p| p == "..") {
+        return None;
+    }
+    let path = overlay.project_root.join(rel_path);
+    path.is_file().then_some(path)
+}
+
 /// Per-animation x / y / alpha expressions. `x` and `y` always have
 /// the resting position as the default; `alpha` is empty when the
 /// animation doesn't fade. Fade ramps live in `alpha`; slide ramps
@@ -1210,7 +1740,7 @@ pub fn build_timeline_argv_with_transitions(
     transitions: &[TransitionPlan],
     output_path: &Path,
 ) -> Vec<String> {
-    build_timeline_argv_full(segs, transitions, &[], output_path)
+    build_timeline_argv_full(segs, transitions, &[], None, output_path)
 }
 
 /// Like [`build_timeline_argv_with_transitions`] but also takes a
@@ -1222,6 +1752,7 @@ pub fn build_timeline_argv_full(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
     titles: &[TitlePlan],
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
     output_path: &Path,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
@@ -1235,7 +1766,13 @@ pub fn build_timeline_argv_full(
             s.asset_path.to_string_lossy().into_owned(),
         ]);
     }
-    let plan = FilterPlanner::with_titles(segs, transitions, titles).plan();
+    let plan = FilterPlanner::with_titles_and_broadcast_overlay(
+        segs,
+        transitions,
+        titles,
+        broadcast_overlay,
+    )
+    .plan();
     argv.extend([
         "-filter_complex".into(),
         plan.filter_complex,
@@ -1265,7 +1802,7 @@ pub fn build_timeline_argv_full(
 pub fn build_timeline_render_spec(
     project_root: &Path,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
-    let (segs, transitions, titles) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, titles, broadcast_overlay) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
     }
@@ -1280,7 +1817,13 @@ pub fn build_timeline_render_spec(
     let renders_dir = project_root.join("renders");
     let timestamp = Utc::now().format("%H%M%S");
     let output_path = renders_dir.join(format!("timeline-{}.mp4", timestamp));
-    let argv = build_timeline_argv_full(&segs, &transitions, &titles, &output_path);
+    let argv = build_timeline_argv_full(
+        &segs,
+        &transitions,
+        &titles,
+        broadcast_overlay.as_ref(),
+        &output_path,
+    );
     Ok(RenderJobSpec {
         args: argv,
         total_duration_s: Some(total_duration_s),
@@ -1792,6 +2335,78 @@ mod tests {
         assert!(plan.filter_complex.contains("borderw=2"));
         // Bottom position uses h*0.85.
         assert!(plan.filter_complex.contains("y=h*0.85"));
+    }
+
+    #[test]
+    fn filter_planner_appends_broadcast_overlay_filters() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 120.0);
+        let mut config = BroadcastOverlayConfig {
+            episode_title: "Ben Adams".into(),
+            episode_subtitle: "Drone Hardware Entrepreneur".into(),
+            show_name: "TECHNOLOGIA TALKS".into(),
+            sponsors: vec!["LEARN-X".into(), "Throwly".into()],
+            ..BroadcastOverlayConfig::default()
+        };
+        config.host_a.name = "Tadiwa Mbuwayesango".into();
+        config.host_a.title = "Co-Host".into();
+        config.host_a.photo_path = Some("branding/tadiwa.jpg".into());
+        config.host_b.name = "Elvis Kimara".into();
+        config.host_b.title = "Co-Host".into();
+        config.host_b.photo_path = Some("branding/elvis.jpg".into());
+        config
+            .topics
+            .push(awidat_proto::awidat_meta::BroadcastTimedEntry {
+                time_seconds: 45.0,
+                text: "Custom drones".into(),
+            });
+        config
+            .chapters
+            .push(awidat_proto::awidat_meta::BroadcastTimedEntry {
+                time_seconds: 60.0,
+                text: "Hardware barriers".into(),
+            });
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("branding")).unwrap();
+        fs::write(dir.path().join("branding/tadiwa.jpg"), b"stub").unwrap();
+        fs::write(dir.path().join("branding/elvis.jpg"), b"stub").unwrap();
+        let overlay = BroadcastOverlayPlan {
+            config,
+            project_root: dir.path().to_path_buf(),
+        };
+        let plan =
+            FilterPlanner::with_titles_and_broadcast_overlay(&[s0], &[], &[], Some(&overlay))
+                .plan();
+        assert_eq!(plan.video_out_label, "[broadcast_v]");
+        assert!(
+            plan.filter_complex.contains("drawbox=x=0:y=ih-100"),
+            "expected ticker bar, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("BEN ADAMS"),
+            "expected title card text, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("NOW DISCUSSING"),
+            "expected topic badge, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("HARDWARE BARRIERS"),
+            "expected chapter card, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("movie='"),
+            "expected project-relative host photos to become movie filters, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("overlay=x=38:y=main_h-136"),
+            "expected left host photo overlay, got: {}",
+            plan.filter_complex,
+        );
     }
 
     #[test]
