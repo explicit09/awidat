@@ -403,11 +403,9 @@ impl OpBuilder {
                 let at_s = take_field_f64(&mut fields, "at_s");
                 let to_position = take_field_usize(&mut fields, "to_position")
                     .or_else(|| at_s.map(|_| 0))
-                    .ok_or_else(|| {
-                        EdlParseError::MissingField {
-                            line: head,
-                            field: "to_position or at_s".into(),
-                        }
+                    .ok_or_else(|| EdlParseError::MissingField {
+                        line: head,
+                        field: "to_position or at_s".into(),
                     })?;
                 Ok(EdlOp::MoveClip {
                     anchor,
@@ -1176,6 +1174,21 @@ mod tests {
 ";
         let env = parse(text).unwrap();
         assert!(matches!(env.ops[0], EdlOp::MoveClip { to_position: 4, .. }));
+    }
+
+    #[test]
+    fn parses_move_clip_at_timeline_time() {
+        let text = "\
+*** Begin EDL
+*** Move Clip
+@@ anchor: clip_uuid=c-9f2
++ at_s: 12.5
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        assert!(
+            matches!(env.ops[0], EdlOp::MoveClip { at_s: Some(v), .. } if (v - 12.5).abs() < 0.001)
+        );
     }
 
     #[test]

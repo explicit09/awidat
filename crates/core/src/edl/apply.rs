@@ -1230,9 +1230,7 @@ fn apply_move_clip_to_time(
         ));
     }
 
-    let rate = track.children[child_index]
-        .as_clip_rate()
-        .unwrap_or(24.0);
+    let rate = track.children[child_index].as_clip_rate().unwrap_or(24.0);
     let removed = std::mem::replace(
         &mut track.children[child_index],
         TrackChild::Gap(awidat_proto::otio::Gap::of_duration(duration_s, rate)),
@@ -1313,9 +1311,12 @@ fn insert_child_at_time(
         cursor_s = end_s;
     }
     if target_start_s > cursor_s + EPS {
-        track.children.push(TrackChild::Gap(
-            awidat_proto::otio::Gap::of_duration(target_start_s - cursor_s, rate),
-        ));
+        track
+            .children
+            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                target_start_s - cursor_s,
+                rate,
+            )));
     }
     track.children.push(child);
 }
