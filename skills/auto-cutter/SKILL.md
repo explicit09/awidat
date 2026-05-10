@@ -6,6 +6,7 @@ tier: editorial
 tools_allowlist:
   - view_episode
   - find_episode_start
+  - assess_continuity
   - find_dead_air
   - find_filler_words
   - find_false_starts
@@ -37,8 +38,17 @@ recommendation as a hypothesis, not a blind timestamp: inspect the
 surrounding moment if there are rehearsals, pre-roll, or multiple
 welcome phrases.
 
-If the recording contains multiple real episodes, make a plan entry per
-episode and ask which one to produce before cutting.
+Then run the episode-span planner before making extraction edits:
+
+```bash
+python3 <skill-root>/scripts/episode_span_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --audio-energy index/audio-energy/raw/<asset>.json \
+  --topic index/topic/raw/<asset>.json
+```
+
+If `requires_user_choice` is true, do not cut yet. Present the candidate
+episode spans and ask which one to produce.
 
 ### 2. Build the extraction cut
 
@@ -47,7 +57,24 @@ with `Trim Clip` or `Insert Clip` operations anchored by `clip_uuid`.
 Pass `reasoning` explaining why the chosen start/end are the real
 episode boundaries.
 
-### 3. Mechanical cleanup
+### 3. Semantic retake cleanup
+
+Run the semantic retake planner before dead-air/filler cleanup:
+
+```bash
+python3 <skill-root>/scripts/retake_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --audio-energy index/audio-energy/raw/<asset>.json \
+  --topic index/topic/raw/<asset>.json \
+  --moments index/editorial-moments/raw/<asset>.json \
+  --clip-uuid <clip_uuid>
+```
+
+Review every candidate. For medium/high-risk retake cuts, call
+`assess_continuity` at the cut boundary before applying. Apply only
+accepted retake cuts through `apply_edl`, then call `view_timeline`.
+
+### 4. Mechanical cleanup
 
 Run the bundled helper if you have audio-energy and transcript sidecars:
 
@@ -69,17 +96,18 @@ find_false_starts()
 For social/short-form output, rerun with `--preset aggressive`; for
 interviews or tutorials, use `--preset gentle`.
 
-### 4. Apply and verify
+### 5. Apply and verify
 
-Batch cleanup cuts in groups of 5-10 `apply_edl` ops. After each batch,
-call `view_timeline` and report running duration removed. Render only
-after the extraction and cleanup pass are complete. Before final render
-or final report, call `vedit_diff` and make sure the audit shows only
-the intended extraction and cleanup edits.
+Batch retake and cleanup cuts in groups of 5-10 `apply_edl` ops. After
+each batch, call `view_timeline` and report running duration removed.
+Render only after extraction, retake review, and cleanup are complete.
+Before final render or final report, call `vedit_diff` and make sure
+the audit shows only the intended extraction and cleanup edits.
 
 ## Rules
 
 - Never use energy alone to find the episode start.
+- Never run mechanical cleanup before episode-span and retake review.
 - Never remove conditional fillers ("like", "you know") unless the
   surrounding transcript still reads naturally.
 - Preserve 200-500ms of breathing room after strong statements.
@@ -88,7 +116,8 @@ the intended extraction and cleanup edits.
 ## Done when
 
 - The episode start was chosen with `find_episode_start`.
-- Mechanical cleanup happened only after extraction.
+- `episode_span_plan.py` and `retake_plan.py` were run before mechanical cleanup.
+- Medium/high-risk retake cuts were checked with `assess_continuity`.
 - `vedit_diff` was reviewed before render/report.
 - The final render or render plan was verified.
 - The report separates extraction edits from cleanup edits.

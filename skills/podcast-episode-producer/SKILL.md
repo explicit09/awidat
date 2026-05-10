@@ -8,6 +8,7 @@ tools_allowlist:
   - view_episode
   - read_index
   - find_episode_start
+  - assess_continuity
   - shot_summary
   - find_beat
   - inspect_moment
@@ -64,6 +65,10 @@ rendering.
   podcast recordings often begin with real transcript text that is
   still pre-roll, off-camera setup, or a rehearsed intro; do not infer
   the start from `read_index(offset=0)` or from the first dead-air gap.
+- Run `auto-cutter/scripts/episode_span_plan.py` when the source may
+  contain multiple episodes, repeated intros, long breaks, or topic
+  resets. If it returns multiple high-confidence spans, stop and ask the
+  user which episode to produce before trimming.
 - Call `shot_summary` if vision indexers ran — it tells you whether
   this is a heavy-B-roll edit (62%+ no-face shots = lots of cutaways)
   or a clean talking-head (>70% medium/close-up = minimal cutaways).
@@ -83,6 +88,14 @@ after the useful close. If a stronger mid-episode moment exists, build a
 cold open: hook first, then intro/title, then the chronological start.
 Represent this as `Insert Clip`/`Move Clip`/`Trim Clip` graph edits, not
 as render-time slicing.
+
+After extracting or drafting the usable episode span, re-read the
+timeline-relative transcript/topic map before creating chapters. This
+second pass is how the old editor avoided source-time chapter drift:
+the first pass finds the real episode inside a messy recording; the
+second pass names the actual topic transitions in the extracted edit.
+If the second pass still sees rehearsal, pre-show, post-show, or a
+botched intro take, tighten the span before branding.
 
 ### 4. Identify the editorial spine
 
@@ -115,12 +128,25 @@ find_filler_words(aggressive=false)
 find_false_starts()
 ```
 
+Before mechanical cleanup, run the deeper semantic planner:
+
+```bash
+python3 <repo-root>/skills/auto-cutter/scripts/retake_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --audio-energy index/audio-energy/raw/<asset>.json \
+  --topic index/topic/raw/<asset>.json \
+  --moments index/editorial-moments/raw/<asset>.json \
+  --clip-uuid <clip_uuid>
+```
+
 Cut dead air, egregious fillers, false starts, self-corrections,
 repeated content, technical glitches, and tangents that do not land.
 Preserve natural cadence. A perfectly de-fillered guest sounds robotic.
 For every meaningful removal, check continuity: question still matches
 answer, setup still exists for payoff, emotional tone does not jump, and
 references like "as I said earlier" still point to something visible.
+For retake candidates with `requires_review=true` or any
+`continuity_risks`, call `assess_continuity` before applying edits.
 
 ### 6. Draft the timeline
 
@@ -165,6 +191,21 @@ Once the conversation flow is locked, make visual decisions:
   matching notes. If color correction/grading is needed but no color
   primitive exists yet, report it as a required finishing pass instead
   of claiming it happened.
+- If the episode uses a show package such as Technologia, load that
+  private skill and use its `Set Broadcast Overlay` workflow instead of
+  stacking many `Insert Title` clips. Broadcast overlays keep title
+  card, lower thirds, host photos, ticker topics, and chapter cards in
+  one timeline-level graph config.
+- Build one canonical chapter/topic list from transcript/topic evidence
+  and reuse it for overlay cards, ticker topics, YouTube chapters,
+  metadata, and shorts planning. For long-form episodes, aim for 5-8
+  meaningful chapters. Chapter names should promise a viewer payoff
+  ("Why Hardware Startups Move Slower"), not just label a subject
+  ("Hardware").
+- Chapters/topics are timeline-relative after extraction and cuts.
+  Primary `Delete Clip` edits shift broadcast overlay timestamps
+  forward in the graph, but after major restructuring you should
+  regenerate or inspect the overlay config before rendering.
 
 ### 8. Audio mix and delivery metadata
 
@@ -265,7 +306,8 @@ or the source material genuinely demands it.
   motivated angle change, b-roll cover, title/card, or short transition.
 - **Render scope**: ALWAYS `scope="timeline"`. Never `scope="preview"`
   for the final cut — preview gives you the raw asset, not the edit.
-- **Lower thirds and chapters**: use `Insert Title` graph overlays.
+- **Lower thirds and chapters**: use `Set Broadcast Overlay` for show
+  packages when available; otherwise use `Insert Title` graph overlays.
 - **Loudness/package**: use `Set Loudness Target` and
   `Set Package Metadata`, not prose-only promises.
 - **Publishing package**: a finished episode includes metadata and
