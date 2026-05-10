@@ -2086,10 +2086,17 @@ body,
   bottom: 0;
   height: var(--broadcast-host-strip-height, 14.815%);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
   background:
     linear-gradient(90deg, var(--broadcast-gold) 0%, var(--broadcast-gold-light) 50%, var(--broadcast-gold) 100%);
   color: var(--broadcast-navy);
+}
+
+.broadcast-host-intro-divider {
+  align-self: center;
+  width: 1px;
+  height: 34.375%;
+  background: color-mix(in srgb, var(--broadcast-navy) 20%, transparent);
 }
 
 .broadcast-intro-host {
@@ -2101,7 +2108,7 @@ body,
 }
 
 .broadcast-intro-host.align-right {
-  justify-content: flex-end;
+  justify-content: flex-start;
   text-align: right;
   flex-direction: row-reverse;
 }
@@ -2179,6 +2186,39 @@ body,
   white-space: nowrap;
   font-weight: 900;
   font-size: clamp(16px, 1.875cqw, 36px);
+}
+
+.broadcast-short-brand-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4.17%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.83cqw;
+  padding: 0 2.96%;
+  background: color-mix(in srgb, var(--broadcast-navy) 90%, transparent);
+  border-top: 3px solid var(--broadcast-gold);
+  color: var(--broadcast-gold);
+}
+
+.broadcast-short-brand-bar img {
+  max-height: 72%;
+  max-width: 18%;
+  object-fit: contain;
+}
+
+.broadcast-short-brand-bar strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: clamp(13px, 2.96cqw, 32px);
+  line-height: 1;
+  font-weight: 900;
 }
 
 @keyframes broadcastMarquee {

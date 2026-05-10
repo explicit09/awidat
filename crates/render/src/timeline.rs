@@ -1027,6 +1027,10 @@ fn format_broadcast_overlay_filters(overlay: &BroadcastOverlayPlan) -> Vec<Strin
         c.show_name.to_uppercase()
     };
 
+    if c.short_form_mode {
+        return format_short_form_brand_bar(c, &show, &navy, &gold);
+    }
+
     if !c.episode_title.trim().is_empty() {
         parts.extend(format_episode_title_card(c, st, &navy, &gold, &cyan));
     }
@@ -1037,6 +1041,36 @@ fn format_broadcast_overlay_filters(overlay: &BroadcastOverlayPlan) -> Vec<Strin
     parts.extend(format_smart_ticker(c, st, &show, &navy, &gold, &cyan));
     parts.extend(format_chapter_cards(c, st, &navy, &gold));
     parts
+}
+
+fn format_short_form_brand_bar(
+    c: &BroadcastOverlayConfig,
+    show: &str,
+    navy: &str,
+    gold: &str,
+) -> Vec<String> {
+    let display = if !c.show_name.trim().is_empty() {
+        c.show_name.to_uppercase()
+    } else if !c.episode_title.trim().is_empty() {
+        c.episode_title.to_uppercase()
+    } else {
+        show.to_string()
+    };
+    vec![
+        format!("drawbox=x=0:y=ih*0.9583:w=iw:h=ih*0.0417:color={navy}@0.90:t=fill"),
+        format!("drawbox=x=0:y=ih*0.9583:w=iw:h=3:color={gold}@1:t=fill"),
+        broadcast_drawtext(
+            &display,
+            "(w-text_w)/2",
+            "h*0.983-text_h/2",
+            32,
+            gold,
+            None,
+            None,
+            true,
+        )
+        .replace(":enable='between(t\\,0\\,0)'", ""),
+    ]
 }
 
 fn format_episode_title_card(
@@ -1552,6 +1586,19 @@ fn broadcast_asset_overlays(overlay: &BroadcastOverlayPlan) -> Vec<BroadcastAsse
     let c = &overlay.config;
     let st = &c.style;
     let mut out = Vec::new();
+    if c.short_form_mode {
+        if let Some(path) = resolve_project_overlay_asset(overlay, c.brand_logo_path.as_deref()) {
+            out.push(BroadcastAssetOverlay {
+                path,
+                x: "32".into(),
+                y: "main_h-70".into(),
+                size: 52,
+                start_s: 0.0,
+                end_s: 1.0e9,
+            });
+        }
+        return out;
+    }
     let photo_size = broadcast_ref_to_1080_px(260.0).round() as u32;
     let host_h = broadcast_ref_to_1080_px(st.host_strip_height);
     let photo_y = format!("main_h-{}", fmt_px((host_h + f64::from(photo_size)) / 2.0));
@@ -2532,6 +2579,42 @@ mod tests {
         assert!(
             plan.filter_complex.contains("overlay=x=30:y=main_h-145"),
             "expected left host photo overlay, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_short_form_broadcast_overlay_suppresses_long_form_layers() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 30.0);
+        let config = BroadcastOverlayConfig {
+            short_form_mode: true,
+            episode_title: "Long Episode Title".into(),
+            show_name: "TECHNOLOGIA TALKS".into(),
+            sponsors: vec!["LEARN-X".into()],
+            ..BroadcastOverlayConfig::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let overlay = BroadcastOverlayPlan {
+            config,
+            project_root: dir.path().to_path_buf(),
+        };
+        let plan =
+            FilterPlanner::with_titles_and_broadcast_overlay(&[s0], &[], &[], Some(&overlay))
+                .plan();
+        assert_eq!(plan.video_out_label, "[broadcast_v]");
+        assert!(
+            plan.filter_complex.contains("TECHNOLOGIA TALKS"),
+            "expected short-form show label, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            !plan.filter_complex.contains("NOW DISCUSSING"),
+            "short-form mode should suppress long-form ticker/topic layers: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            !plan.filter_complex.contains("EPISODE"),
+            "short-form mode should suppress title card layers: {}",
             plan.filter_complex,
         );
     }

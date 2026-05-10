@@ -820,6 +820,7 @@ fn apply_delete(
 ) -> Result<String, ApplyError> {
     let _ = (anchor, ctx);
     let locator = required_locator(index, locator)?;
+    let overlay_shift = broadcast_overlay_shift_for_delete(working, &locator);
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
@@ -831,6 +832,9 @@ fn apply_delete(
         TrackChild::Clip(c) => c.name.clone(),
         _ => "<non-clip>".to_string(),
     };
+    if let Some((cut_point, duration)) = overlay_shift {
+        shift_broadcast_overlay_timestamps(working, cut_point, duration);
+    }
     Ok(format!("deleted clip {name:?}"))
 }
 
@@ -2089,6 +2093,66 @@ fn title_animation_str(a: super::op::TitleAnimation) -> &'static str {
         super::op::TitleAnimation::FadeInOut => "fade_in_out",
         super::op::TitleAnimation::SlideIn => "slide_in",
         super::op::TitleAnimation::SlideOut => "slide_out",
+    }
+}
+
+fn primary_content_track_index(timeline: &Timeline) -> Option<usize> {
+    timeline
+        .tracks
+        .children
+        .iter()
+        .enumerate()
+        .find_map(|(i, sc)| match sc {
+            StackChild::Track(track) if !is_titles_track(track) => Some(i),
+            _ => None,
+        })
+}
+
+fn broadcast_overlay_shift_for_delete(
+    timeline: &Timeline,
+    locator: &ClipLocator,
+) -> Option<(f64, f64)> {
+    if primary_content_track_index(timeline) != Some(locator.track_index) {
+        return None;
+    }
+    let StackChild::Track(track) = &timeline.tracks.children[locator.track_index] else {
+        return None;
+    };
+    if is_titles_track(track) {
+        return None;
+    }
+    let child = track.children.get(locator.child_index)?;
+    let duration = child_duration(child);
+    if !duration.is_finite() || duration <= 0.0 {
+        return None;
+    }
+    Some((
+        track_time_at(timeline, locator.track_index, locator.child_index),
+        duration,
+    ))
+}
+
+fn shift_broadcast_overlay_timestamps(timeline: &mut Timeline, cut_point: f64, duration: f64) {
+    if !cut_point.is_finite() || !duration.is_finite() || duration <= 0.0 {
+        return;
+    }
+    let meta = timeline_awidat_metadata(timeline);
+    let Some(overlay) = meta.broadcast_overlay.as_mut() else {
+        return;
+    };
+    shift_broadcast_timed_entries(&mut overlay.topics, cut_point, duration);
+    shift_broadcast_timed_entries(&mut overlay.chapters, cut_point, duration);
+}
+
+fn shift_broadcast_timed_entries(
+    entries: &mut [BroadcastTimedEntry],
+    cut_point: f64,
+    duration: f64,
+) {
+    for entry in entries {
+        if entry.time_seconds > cut_point {
+            entry.time_seconds = (entry.time_seconds - duration).max(0.0);
+        }
     }
 }
 
@@ -4009,6 +4073,53 @@ mod tests {
         assert!(
             matches!(&err, ApplyError::Invalid { message, .. } if message.contains("project-relative"))
         );
+    }
+
+    #[test]
+    fn delete_primary_clip_shifts_broadcast_overlay_topics_and_chapters() {
+        let mut tl = timeline_with_three_clips();
+        let mut config = BroadcastOverlayConfig::default();
+        config.topics = vec![
+            BroadcastTimedEntry {
+                time_seconds: 4.0,
+                text: "Before cut".into(),
+            },
+            BroadcastTimedEntry {
+                time_seconds: 12.0,
+                text: "After cut".into(),
+            },
+        ];
+        config.chapters = vec![BroadcastTimedEntry {
+            time_seconds: 14.0,
+            text: "Shifted chapter".into(),
+        }];
+        tl.metadata.awidat = Some(AwidatTimelineMetadata {
+            broadcast_overlay: Some(config),
+            ..AwidatTimelineMetadata::default()
+        });
+
+        let (new_tl, _) = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::DeleteClip {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap();
+
+        let overlay = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.broadcast_overlay.as_ref())
+            .unwrap();
+        assert_eq!(overlay.topics[0].time_seconds, 4.0);
+        assert_eq!(overlay.topics[1].time_seconds, 7.0);
+        assert_eq!(overlay.chapters[0].time_seconds, 9.0);
     }
 
     #[test]

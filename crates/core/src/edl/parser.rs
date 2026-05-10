@@ -689,6 +689,9 @@ fn parse_broadcast_overlay_config(
         config.chapters = parse_json_value::<Vec<BroadcastTimedEntry>>(&v, line, "chapters")?;
     }
     config.brand_logo_path = take_field_string(fields, "brand_logo_path");
+    if let Some(v) = take_field_string(fields, "short_form_mode") {
+        config.short_form_mode = parse_bool_field(&v, line, "short_form_mode")?;
+    }
     if let Some(v) = take_field_string(fields, "style") {
         config.style = parse_json_value::<BroadcastOverlayStyle>(&v, line, "style")?;
     }
@@ -1392,6 +1395,7 @@ mod tests {
         let text = r#"*** Begin EDL
 *** Set Broadcast Overlay
 + enabled: true
++ short_form_mode: true
 + episode_title: Ben Adams
 + show_name: Technologia Talks
 + host_a_name: Tadiwa Mbuwayesango
@@ -1405,6 +1409,7 @@ mod tests {
         let env = parse(text).unwrap();
         match &env.ops[0] {
             EdlOp::SetBroadcastOverlay { config } => {
+                assert!(config.short_form_mode);
                 assert_eq!(config.episode_title, "Ben Adams");
                 assert_eq!(config.show_name, "Technologia Talks");
                 assert_eq!(config.host_a.name, "Tadiwa Mbuwayesango");

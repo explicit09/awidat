@@ -592,6 +592,9 @@ pub struct BroadcastOverlayConfig {
     pub chapters: Vec<BroadcastTimedEntry>,
     /// Optional project-relative logo path.
     pub brand_logo_path: Option<String>,
+    /// Whether to suppress full long-form overlays and render only the
+    /// short-form brand bar.
+    pub short_form_mode: bool,
     /// Timing, colour, and layout values.
     pub style: BroadcastOverlayStyle,
 }

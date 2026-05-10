@@ -324,6 +324,7 @@ fn broadcast_overlay_for_protocol(
             .map(broadcast_timed_entry_for_protocol)
             .collect(),
         brand_logo_path: config.brand_logo_path.clone(),
+        short_form_mode: config.short_form_mode,
         style: broadcast_style_for_protocol(&config.style),
     }
 }

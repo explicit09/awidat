@@ -90,6 +90,9 @@ pub struct BroadcastOverlayConfig {
     /// Optional project-relative logo path.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub brand_logo_path: Option<String>,
+    /// Render only the minimal short-form brand bar.
+    #[serde(default)]
+    pub short_form_mode: bool,
     /// Timing, colour, and layout style.
     #[serde(default)]
     pub style: BroadcastOverlayStyle,
@@ -109,6 +112,7 @@ impl Default for BroadcastOverlayConfig {
             topics: Vec::new(),
             chapters: Vec::new(),
             brand_logo_path: None,
+            short_form_mode: false,
             style: BroadcastOverlayStyle::default(),
         }
     }

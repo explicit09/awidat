@@ -53,6 +53,11 @@ chapters: Array<BroadcastTimedEntry>,
  */
 brand_logo_path: string | null, 
 /**
+ * Whether to suppress full long-form overlays and render only the
+ * short-form brand bar.
+ */
+short_form_mode: boolean, 
+/**
  * Timing, colour, and layout values.
  */
 style: BroadcastOverlayStyle, };

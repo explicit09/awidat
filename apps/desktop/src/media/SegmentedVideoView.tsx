@@ -631,6 +631,22 @@ function TimelineBroadcastOverlay({
 
   return (
     <div className="broadcast-overlay-layer" style={overlayStyleVars} aria-hidden="true">
+      {overlay.short_form_mode ? (
+        <div
+          className="broadcast-short-brand-bar"
+          style={{
+            "--broadcast-navy": navy,
+            "--broadcast-gold": gold,
+          } as React.CSSProperties}
+        >
+          <BroadcastBrandLogo
+            logoPath={overlay.brand_logo_path}
+            projectRoot={projectRoot}
+          />
+          <strong>{(overlay.show_name || overlay.episode_title || "BROADCAST").toUpperCase()}</strong>
+        </div>
+      ) : (
+        <>
       {inTitle && (
         <div
           className="broadcast-title-card"
@@ -666,6 +682,7 @@ function TimelineBroadcastOverlay({
             host={overlay.host_a}
             projectRoot={projectRoot}
           />
+          <div className="broadcast-host-intro-divider" />
           <BroadcastIntroHost
             host={overlay.host_b}
             projectRoot={projectRoot}
@@ -723,8 +740,26 @@ function TimelineBroadcastOverlay({
           <strong>{activeChapter.text.toUpperCase()}</strong>
         </div>
       )}
+        </>
+      )}
     </div>
   );
+}
+
+function BroadcastBrandLogo({
+  logoPath,
+  projectRoot,
+}: {
+  logoPath: string | null;
+  projectRoot: string | null;
+}) {
+  const logo = projectAssetUrl(projectRoot, logoPath);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [logo]);
+  if (!logo || failed) return null;
+  return <img src={logo} alt="" onError={() => setFailed(true)} />;
 }
 
 function BroadcastName({
