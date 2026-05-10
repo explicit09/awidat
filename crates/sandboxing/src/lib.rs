@@ -20,8 +20,12 @@
 #![warn(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus};
+#[cfg(target_os = "macos")]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::process::Command;
+use std::process::ExitStatus;
 
 use thiserror::Error;
 
