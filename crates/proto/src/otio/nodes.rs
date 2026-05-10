@@ -173,6 +173,7 @@ mod stack_at_root {
 /// What can sit inside a [`Stack`]: a track, a nested stack, a clip, or a
 /// gap. The serde tag is `OTIO_SCHEMA` so it deserializes natively from
 /// OTIO JSON.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "OTIO_SCHEMA")]
 pub enum StackChild {
@@ -263,6 +264,7 @@ pub enum TrackKind {
 /// two clips on a track and describes the cut between them (cross-dissolve,
 /// fade, etc.). Modeling it now means Week-4's `apply_edl` can emit
 /// `Insert Transition` directives without a schema migration.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "OTIO_SCHEMA")]
 pub enum TrackChild {
