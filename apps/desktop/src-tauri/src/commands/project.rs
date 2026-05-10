@@ -11,15 +11,14 @@ use tokio::fs;
 use crate::state::AwidatState;
 
 /// Reconfigure Tauri's asset-protocol scope so the webview can fetch
-/// proxy mp4s out of `<project>/.awidat/proxies/` AND filmstrip JPEGs
-/// out of `<project>/.awidat/thumbnails/<stem>-<hash>/` via
-/// `convertFileSrc()`. We allow only those two roots — the scope is
-/// otherwise empty (set in tauri.conf.json) so the asset protocol
+/// preview media and project-local broadcast assets via
+/// `convertFileSrc()`. We allow only project-owned roots — the scope
+/// is otherwise empty (set in tauri.conf.json) so the asset protocol
 /// cannot be abused to read arbitrary files. Called from
 /// `set_project_root` and `init_project`.
-pub(crate) fn allow_proxies_dir(app: &AppHandle, project_root: &Path) {
+pub(crate) fn allow_project_asset_dirs(app: &AppHandle, project_root: &Path) {
     let scope = app.asset_protocol_scope();
-    for sub in [".awidat/proxies", ".awidat/thumbnails"] {
+    for sub in [".awidat/proxies", ".awidat/thumbnails", "branding"] {
         let dir = project_root.join(sub);
         // The dirs may not exist yet (first import will create them).
         // Allow them preemptively — the scope check is a glob, not a
@@ -65,7 +64,7 @@ pub async fn set_project_root(
     *state.project_root.lock().await = Some(buf.clone());
     *state.session.lock().await = None;
     *state.resume_log_path.lock().await = None;
-    allow_proxies_dir(&app, &buf);
+    allow_project_asset_dirs(&app, &buf);
 
     // Best-effort: ignore failures so a corrupted recents file
     // doesn't block project opening.
@@ -161,7 +160,7 @@ pub async fn init_project(
     *state.project_root.lock().await = Some(project_dir.clone());
     *state.session.lock().await = None;
     *state.resume_log_path.lock().await = None;
-    allow_proxies_dir(&app, &project_dir);
+    allow_project_asset_dirs(&app, &project_dir);
     if let Err(e) = update_recents(&project_dir).await {
         tracing::warn!(error = %e, "failed to update recents file");
     }

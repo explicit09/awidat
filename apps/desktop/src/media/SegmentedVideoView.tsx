@@ -752,8 +752,12 @@ function BroadcastIntroHost({
   projectRoot: string | null;
   align?: "right";
 }) {
-  if (!host.name.trim()) return <div />;
   const photo = projectAssetUrl(projectRoot, host.photo_path);
+  const [photoFailed, setPhotoFailed] = useState(false);
+  useEffect(() => {
+    setPhotoFailed(false);
+  }, [photo]);
+  if (!host.name.trim()) return <div />;
   const initials = host.name
     .split(/\s+/)
     .filter(Boolean)
@@ -763,7 +767,11 @@ function BroadcastIntroHost({
   return (
     <div className={`broadcast-intro-host ${align === "right" ? "align-right" : ""}`}>
       <div className="broadcast-host-photo">
-        {photo ? <img src={photo} alt="" /> : <span>{initials}</span>}
+        {photo && !photoFailed ? (
+          <img src={photo} alt="" onError={() => setPhotoFailed(true)} />
+        ) : (
+          <span>{initials}</span>
+        )}
       </div>
       <div>
         <strong>{host.name.toUpperCase()}</strong>

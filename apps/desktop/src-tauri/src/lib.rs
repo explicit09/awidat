@@ -64,7 +64,7 @@ pub fn run() {
                 .blocking_lock()
                 .clone()
             {
-                commands::project::allow_proxies_dir(app.handle(), &project_root);
+                commands::project::allow_project_asset_dirs(app.handle(), &project_root);
             }
             Ok(())
         })
