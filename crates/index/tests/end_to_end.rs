@@ -50,6 +50,8 @@ fn audio_energy_server(python_dir: &Path) -> McpServer {
         kind: McpServerKind::Indexer,
         enabled: true,
         depends_on: vec![],
+        resource_class: awidat_config::IndexerResourceClass::Light,
+        indexer_group: None,
     }
 }
 

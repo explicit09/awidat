@@ -88,7 +88,7 @@ enum Command {
         #[arg(long = "indexer")]
         indexers: Vec<String>,
         /// Maximum concurrent (server × asset) pairs. 0 = unbounded.
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 2)]
         concurrency: usize,
     },
     /// Open a text-only REPL with the agent. Type a prompt; the agent

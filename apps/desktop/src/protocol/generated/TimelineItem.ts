@@ -6,15 +6,15 @@ import type { TitleStyling } from "./TitleStyling";
  * One drawable item on a track. Variant-tagged so the frontend can
  * render each kind differently.
  */
-export type TimelineItem = { "kind": "clip",
+export type TimelineItem = { "kind": "clip", 
 /**
  * Index of this item within its track. Stable across reads.
  */
-index: number,
+index: number, 
 /**
  * Display name (clip's OTIO `name` field).
  */
-name: string,
+name: string, 
 /**
  * Anchor uuid for `Anchor::ClipUuid` in EDL ops. Pulled from
  * `clip.metadata.awidat.extra["clip_uuid"]` if present;
@@ -23,25 +23,25 @@ name: string,
  * Step 8's drag-to-trim builds `TrimClip { anchor:
  * ClipUuid { uuid } }` from this field.
  */
-clip_uuid: string,
+clip_uuid: string, 
 /**
  * Start of this clip on the track timeline, in seconds.
  */
-track_start_s: number,
+track_start_s: number, 
 /**
  * Duration on the track, in seconds.
  */
-duration_s: number,
+duration_s: number, 
 /**
  * Asset id (project-relative path), if the clip references
  * one. `None` for clips with missing or non-external refs.
  */
-asset_id: string | null,
+asset_id: string | null, 
 /**
  * Source-asset start offset, in seconds. Useful when the
  * frontend wants to map "this clip plays source[12.5s..]".
  */
-source_start_s: number | null,
+source_start_s: number | null, 
 /**
  * Absolute path to the asset's 720p proxy mp4 on disk, if
  * the proxy has finished generating. The frontend feeds this
@@ -50,7 +50,7 @@ source_start_s: number | null,
  * when the asset is missing, the proxy hasn't finished
  * transcoding, or the proxies dir doesn't exist yet.
  */
-proxy_path: string | null,
+proxy_path: string | null, 
 /**
  * Absolute path to the directory holding this asset's
  * extracted filmstrip JPEGs (e.g.
@@ -61,7 +61,7 @@ proxy_path: string | null,
  * [`JobKind::Thumbnails`] job hasn't completed) or the asset
  * doesn't resolve to a known thumbnails dir.
  */
-thumbnail_dir: string | null,
+thumbnail_dir: string | null, 
 /**
  * Absolute path to this asset's waveform-peaks JSON sidecar
  * (e.g. `<project>/.awidat/waveforms/<stem>-<hash>.json`).
@@ -71,7 +71,7 @@ thumbnail_dir: string | null,
  * hasn't completed (the [`JobKind::Waveform`] job hasn't
  * landed) or the asset has no audio stream.
  */
-waveform_path: string | null,
+waveform_path: string | null, 
 /**
  * Per-clip linear gain multiplier (`awidat.volume` Effect).
  * `None` when the clip has no volume effect; `1.0` is unity
@@ -79,7 +79,7 @@ waveform_path: string | null,
  * PropertiesPane volume slider and to paint a `🔉 0.5×` badge
  * on clips with non-default values.
  */
-volume: number | null,
+volume: number | null, 
 /**
  * Per-clip playback rate multiplier (`awidat.speed` Effect).
  * `None` when the clip has no speed effect; `1.0` is unity.
@@ -88,16 +88,16 @@ volume: number | null,
  * input and to paint a `⚡ 2×` badge on clips with non-default
  * values.
  */
-speed: number | null,
+speed: number | null, 
 /**
  * Clip-level color controls (`awidat.color_correction` Effect).
  * `None` when no correction is stamped on this clip.
  */
-color_correction: ColorCorrectionStyling | null,
+color_correction: ColorCorrectionStyling | null, 
 /**
  * Project-relative LUT path (`awidat.lut` Effect), if present.
  */
-lut_path: string | null,
+lut_path: string | null, 
 /**
  * Title-overlay styling, populated when the clip carries an
  * `awidat.title` Effect (i.e. it's on the Titles track).
@@ -105,31 +105,31 @@ lut_path: string | null,
  * title editor in PropertiesPane when this is `Some` and
  * paints the title text inline on the timeline band.
  */
-title: TitleStyling | null, } | { "kind": "gap",
+title: TitleStyling | null, } | { "kind": "gap", 
 /**
  * Index of this item within its track.
  */
-index: number,
+index: number, 
 /**
  * Start position on the track, in seconds.
  */
-track_start_s: number,
+track_start_s: number, 
 /**
  * Gap duration, in seconds.
  */
-duration_s: number, } | { "kind": "transition",
+duration_s: number, } | { "kind": "transition", 
 /**
  * Index of this item within its track.
  */
-index: number,
+index: number, 
 /**
  * Anchor position on the track, in seconds.
  */
-track_start_s: number,
+track_start_s: number, 
 /**
  * Cumulative effect duration (in_offset + out_offset).
  */
-duration_s: number,
+duration_s: number, 
 /**
  * Effect name from the OTIO transition (e.g.
  * `"SMPTE_Dissolve"`).

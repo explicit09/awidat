@@ -15,16 +15,16 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use awidat_config::McpServer;
+use awidat_config::{IndexerResourceClass, McpServer};
 use awidat_mcp::{Client, ClientInfo, ServerConfig};
 use awidat_proto::index::{AssetId, IndexSidecar, IndexerEntry, Manifest};
 use awidat_proto::project::files;
 use chrono::Utc;
 use futures::stream::{FuturesUnordered, StreamExt};
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tracing::{info, warn};
 
 mod manifest_io;
@@ -81,6 +81,8 @@ pub enum PairOutcome {
         indexer: String,
         /// Asset id.
         asset: AssetId,
+        /// Timing / resource telemetry for this pair.
+        telemetry: PairTelemetry,
     },
     /// Sidecar written or refreshed.
     Wrote {
@@ -90,6 +92,8 @@ pub enum PairOutcome {
         asset: AssetId,
         /// Path the sidecar was written to.
         path: PathBuf,
+        /// Timing / resource telemetry for this pair.
+        telemetry: PairTelemetry,
     },
     /// Indexer failed for this asset. Run continues; manifest is not updated
     /// for this pair.
@@ -100,6 +104,8 @@ pub enum PairOutcome {
         asset: AssetId,
         /// Diagnostic.
         message: String,
+        /// Timing / resource telemetry for this pair.
+        telemetry: PairTelemetry,
     },
     /// Indexer was not run because one of its declared `depends_on`
     /// indexers failed (or was itself skipped via this same path)
@@ -114,7 +120,40 @@ pub enum PairOutcome {
         /// Names of failed prerequisite indexers (in declaration
         /// order, deduplicated).
         missing: Vec<String>,
+        /// Timing / resource telemetry for this pair.
+        telemetry: PairTelemetry,
     },
+}
+
+/// Per-pair indexing telemetry. Durations are wall-clock measurements
+/// gathered by the dispatcher; RSS is best-effort and currently available
+/// only where the platform lets us cheaply sample child process memory.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PairTelemetry {
+    /// Time spent waiting in the scheduler after asset hashing completed.
+    pub queued: Duration,
+    /// Child process spawn + MCP initialize time.
+    pub launch_init: Duration,
+    /// `index_asset` tool runtime.
+    pub tool: Duration,
+    /// JSON serialization + sidecar write time.
+    pub write: Duration,
+    /// Total wall time from scheduler enqueue to terminal outcome.
+    pub total: Duration,
+    /// Peak resident set size for the child process, in bytes, when known.
+    pub peak_rss_bytes: Option<u64>,
+}
+
+impl PairOutcome {
+    /// Access the telemetry regardless of outcome variant.
+    pub fn telemetry(&self) -> &PairTelemetry {
+        match self {
+            PairOutcome::Skipped { telemetry, .. }
+            | PairOutcome::Wrote { telemetry, .. }
+            | PairOutcome::Failed { telemetry, .. }
+            | PairOutcome::SkippedDep { telemetry, .. } => telemetry,
+        }
+    }
 }
 
 /// One progress event emitted during a [`run`] invocation when the
@@ -327,11 +366,17 @@ pub async fn run(
         Failed,  // Indexer reported error / launch failed / dep-skipped.
     }
     let mut state: StdMap<ItemKey, ItemState> = StdMap::new();
+    let mut ordered_keys: Vec<ItemKey> = Vec::new();
     let mut server_by_name: StdMap<String, &McpServer> = StdMap::new();
+    let queued_at = Instant::now();
+    let mut queued_since: StdMap<ItemKey, Instant> = StdMap::new();
     for server in servers {
         server_by_name.insert(server.name.clone(), server);
         for (id, _path, _sha) in &hashes {
-            state.insert((server.name.clone(), id.clone()), ItemState::Pending);
+            let key = (server.name.clone(), id.clone());
+            ordered_keys.push(key.clone());
+            queued_since.insert(key.clone(), queued_at);
+            state.insert(key, ItemState::Pending);
         }
     }
 
@@ -344,8 +389,10 @@ pub async fn run(
     // Loop: pick `Pending` items whose deps are all `Done`, launch
     // up to the inflight cap, await one, repeat. Items whose deps
     // contain a `Failed` flip to `SkippedDep` synchronously.
-    let mut inflight: FuturesUnordered<tokio::task::JoinHandle<(ItemKey, ItemState)>> =
-        FuturesUnordered::new();
+    let mut inflight: FuturesUnordered<
+        tokio::task::JoinHandle<(ItemKey, ItemState, IndexerResourceClass)>,
+    > = FuturesUnordered::new();
+    let mut resources = ResourceUsage::default();
 
     // Per-asset hash lookup (path + sha) so we can build WorkItems
     // on the fly.
@@ -358,7 +405,10 @@ pub async fn run(
         // Find ready-to-launch items.
         let mut ready: Vec<ItemKey> = Vec::new();
         let mut to_skip_dep: Vec<(ItemKey, Vec<String>)> = Vec::new();
-        for (key, st) in state.iter() {
+        for key in &ordered_keys {
+            let Some(st) = state.get(key) else {
+                continue;
+            };
             if *st != ItemState::Pending {
                 continue;
             }
@@ -412,6 +462,14 @@ pub async fn run(
                 indexer: key.0.clone(),
                 asset: key.1.clone(),
                 missing,
+                telemetry: telemetry_for_terminal(
+                    *queued_since.get(&key).unwrap_or(&queued_at),
+                    Instant::now(),
+                    Duration::ZERO,
+                    Duration::ZERO,
+                    Duration::ZERO,
+                    None,
+                ),
             };
             report.lock().await.outcomes.push(outcome.clone());
             emit_completed(outcome);
@@ -419,7 +477,18 @@ pub async fn run(
 
         // Launch as many ready items as the cap permits.
         let slots = inflight_cap.saturating_sub(inflight.len());
-        for key in ready.into_iter().take(slots) {
+        let mut launched = 0_usize;
+        for key in ready {
+            if launched >= slots {
+                break;
+            }
+            let class = server_by_name
+                .get(&key.0)
+                .expect("server present")
+                .resource_class;
+            if !resources.can_launch(class) {
+                continue;
+            }
             // Single deep clone of the McpServer. The previous
             // `.clone().clone()` triggered clippy's
             // `suspicious_double_ref_op` because the outer `.clone()`
@@ -437,11 +506,14 @@ pub async fn run(
             // dispatch the same indexer over and over while waiting
             // for the first launch to finish.
             state.insert(key.clone(), ItemState::Running);
+            resources.add(class);
+            launched += 1;
             let item = WorkItem {
                 server,
                 asset_id: key.1.clone(),
                 asset_path,
                 asset_sha,
+                queued_at: *queued_since.get(&key).unwrap_or(&queued_at),
             };
             let project_root_owned = project_root.to_path_buf();
             let index_dir_owned = index_dir.clone();
@@ -470,7 +542,7 @@ pub async fn run(
                 }
                 report_clone.lock().await.outcomes.push(outcome.clone());
                 emit_completed(outcome);
-                (key_for_task, result_state)
+                (key_for_task, result_state, item.server.resource_class)
             }));
         }
 
@@ -490,6 +562,14 @@ pub async fn run(
                         indexer: key.0.clone(),
                         asset: key.1.clone(),
                         missing: vec!["<dependency cycle>".to_string()],
+                        telemetry: telemetry_for_terminal(
+                            *queued_since.get(key).unwrap_or(&queued_at),
+                            Instant::now(),
+                            Duration::ZERO,
+                            Duration::ZERO,
+                            Duration::ZERO,
+                            None,
+                        ),
                     };
                     report.lock().await.outcomes.push(outcome.clone());
                     emit_completed(outcome);
@@ -502,7 +582,8 @@ pub async fn run(
         // Await one completion before re-checking ready set.
         if let Some(joined) = inflight.next().await {
             match joined {
-                Ok((key, new_state)) => {
+                Ok((key, new_state, class)) => {
+                    resources.remove(class);
                     state.insert(key, new_state);
                 }
                 Err(e) => {
@@ -526,6 +607,64 @@ struct WorkItem {
     asset_id: AssetId,
     asset_path: PathBuf,
     asset_sha: String,
+    queued_at: Instant,
+}
+
+#[derive(Debug, Default)]
+struct ResourceUsage {
+    exclusive: usize,
+    vision: usize,
+    non_network: usize,
+}
+
+impl ResourceUsage {
+    fn can_launch(&self, class: IndexerResourceClass) -> bool {
+        match class {
+            // Exclusive indexers do the memory-heavy ML work. They may run
+            // beside network-only work, but not beside CPU/video/model work.
+            IndexerResourceClass::Exclusive => self.exclusive == 0 && self.non_network == 0,
+            // Network work is intentionally allowed alongside CPU-heavy work.
+            IndexerResourceClass::Network => true,
+            // Non-network work should not start while an exclusive worker is
+            // resident. Vision is additionally limited to one process.
+            IndexerResourceClass::Vision => self.exclusive == 0 && self.vision == 0,
+            IndexerResourceClass::Light | IndexerResourceClass::Embedding => self.exclusive == 0,
+        }
+    }
+
+    fn add(&mut self, class: IndexerResourceClass) {
+        match class {
+            IndexerResourceClass::Exclusive => {
+                self.exclusive += 1;
+                self.non_network += 1;
+            }
+            IndexerResourceClass::Vision => {
+                self.vision += 1;
+                self.non_network += 1;
+            }
+            IndexerResourceClass::Light | IndexerResourceClass::Embedding => {
+                self.non_network += 1;
+            }
+            IndexerResourceClass::Network => {}
+        }
+    }
+
+    fn remove(&mut self, class: IndexerResourceClass) {
+        match class {
+            IndexerResourceClass::Exclusive => {
+                self.exclusive = self.exclusive.saturating_sub(1);
+                self.non_network = self.non_network.saturating_sub(1);
+            }
+            IndexerResourceClass::Vision => {
+                self.vision = self.vision.saturating_sub(1);
+                self.non_network = self.non_network.saturating_sub(1);
+            }
+            IndexerResourceClass::Light | IndexerResourceClass::Embedding => {
+                self.non_network = self.non_network.saturating_sub(1);
+            }
+            IndexerResourceClass::Network => {}
+        }
+    }
 }
 
 async fn run_pair(
@@ -534,6 +673,12 @@ async fn run_pair(
     item: &WorkItem,
     client_info: ClientInfo,
 ) -> PairOutcome {
+    let pair_started = Instant::now();
+    let mut launch_init = Duration::ZERO;
+    let mut tool = Duration::ZERO;
+    let mut write = Duration::ZERO;
+    let mut peak_rss_bytes = None;
+
     // Idempotency: if a sidecar already exists with a matching sha, skip.
     let sidecar_path = match sidecar_path_in_index_dir(index_dir, &item.server.name, &item.asset_id)
     {
@@ -543,6 +688,14 @@ async fn run_pair(
                 indexer: item.server.name.clone(),
                 asset: item.asset_id.clone(),
                 message: e.to_string(),
+                telemetry: telemetry_for_terminal(
+                    item.queued_at,
+                    pair_started,
+                    launch_init,
+                    tool,
+                    write,
+                    peak_rss_bytes,
+                ),
             };
         }
     };
@@ -552,29 +705,59 @@ async fn run_pair(
         return PairOutcome::Skipped {
             indexer: item.server.name.clone(),
             asset: item.asset_id.clone(),
+            telemetry: telemetry_for_terminal(
+                item.queued_at,
+                pair_started,
+                launch_init,
+                tool,
+                write,
+                peak_rss_bytes,
+            ),
         };
     }
 
     // Launch the MCP server and call index_asset.
     let server_config = server_config_from(&item.server, project_root);
+    let launch_started = Instant::now();
     let mut client = match Client::launch(server_config) {
         Ok(c) => c,
         Err(e) => {
+            launch_init = launch_started.elapsed();
             return PairOutcome::Failed {
                 indexer: item.server.name.clone(),
                 asset: item.asset_id.clone(),
                 message: format!("failed to launch: {e}"),
+                telemetry: telemetry_for_terminal(
+                    item.queued_at,
+                    pair_started,
+                    launch_init,
+                    tool,
+                    write,
+                    peak_rss_bytes,
+                ),
             };
         }
     };
+    let mut rss_monitor = RssMonitor::start(client.child_pid());
 
     if let Err(e) = client.initialize(client_info).await {
+        launch_init = launch_started.elapsed();
+        peak_rss_bytes = stop_rss_monitor(&mut rss_monitor).await;
         return PairOutcome::Failed {
             indexer: item.server.name.clone(),
             asset: item.asset_id.clone(),
             message: format!("initialize failed: {e}"),
+            telemetry: telemetry_for_terminal(
+                item.queued_at,
+                pair_started,
+                launch_init,
+                tool,
+                write,
+                peak_rss_bytes,
+            ),
         };
     }
+    launch_init = launch_started.elapsed();
 
     let args = serde_json::json!({
         "asset_path": item.asset_path.to_string_lossy(),
@@ -583,10 +766,13 @@ async fn run_pair(
     });
     // Generous timeout for indexer runs; whisper on a long episode is the
     // worst case.
+    let tool_started = Instant::now();
     let result = client
         .call_tool_with_timeout("index_asset", args, Some(Duration::from_secs(60 * 60)))
         .await;
+    tool = tool_started.elapsed();
     let _ = client.shutdown().await;
+    peak_rss_bytes = stop_rss_monitor(&mut rss_monitor).await;
 
     let result = match result {
         Ok(r) => r,
@@ -595,6 +781,14 @@ async fn run_pair(
                 indexer: item.server.name.clone(),
                 asset: item.asset_id.clone(),
                 message: format!("index_asset call failed: {e}"),
+                telemetry: telemetry_for_terminal(
+                    item.queued_at,
+                    pair_started,
+                    launch_init,
+                    tool,
+                    write,
+                    peak_rss_bytes,
+                ),
             };
         }
     };
@@ -603,6 +797,14 @@ async fn run_pair(
             indexer: item.server.name.clone(),
             asset: item.asset_id.clone(),
             message: format!("indexer reported error: {result:?}"),
+            telemetry: telemetry_for_terminal(
+                item.queued_at,
+                pair_started,
+                launch_init,
+                tool,
+                write,
+                peak_rss_bytes,
+            ),
         };
     }
 
@@ -617,6 +819,14 @@ async fn run_pair(
                         indexer: item.server.name.clone(),
                         asset: item.asset_id.clone(),
                         message: format!("indexer returned non-JSON text: {e}"),
+                        telemetry: telemetry_for_terminal(
+                            item.queued_at,
+                            pair_started,
+                            launch_init,
+                            tool,
+                            write,
+                            peak_rss_bytes,
+                        ),
                     };
                 }
             },
@@ -625,6 +835,14 @@ async fn run_pair(
                     indexer: item.server.name.clone(),
                     asset: item.asset_id.clone(),
                     message: "indexer returned no structured_content and no text".into(),
+                    telemetry: telemetry_for_terminal(
+                        item.queued_at,
+                        pair_started,
+                        launch_init,
+                        tool,
+                        write,
+                        peak_rss_bytes,
+                    ),
                 };
             }
         },
@@ -639,6 +857,14 @@ async fn run_pair(
                     indexer: item.server.name.clone(),
                     asset: item.asset_id.clone(),
                     message: format!("indexer returned malformed sidecar: {e}"),
+                    telemetry: telemetry_for_terminal(
+                        item.queued_at,
+                        pair_started,
+                        launch_init,
+                        tool,
+                        write,
+                        peak_rss_bytes,
+                    ),
                 };
             }
         };
@@ -650,13 +876,24 @@ async fn run_pair(
         );
     }
 
+    let write_started = Instant::now();
     if let Err(e) = write_sidecar(&sidecar_path, &sidecar_value).await {
+        write = write_started.elapsed();
         return PairOutcome::Failed {
             indexer: item.server.name.clone(),
             asset: item.asset_id.clone(),
             message: format!("write failed: {e}"),
+            telemetry: telemetry_for_terminal(
+                item.queued_at,
+                pair_started,
+                launch_init,
+                tool,
+                write,
+                peak_rss_bytes,
+            ),
         };
     }
+    write = write_started.elapsed();
 
     info!(
         indexer = %item.server.name,
@@ -668,6 +905,37 @@ async fn run_pair(
         indexer: item.server.name.clone(),
         asset: item.asset_id.clone(),
         path: sidecar_path,
+        telemetry: telemetry_for_terminal(
+            item.queued_at,
+            pair_started,
+            launch_init,
+            tool,
+            write,
+            peak_rss_bytes,
+        ),
+    }
+}
+
+fn telemetry_for_terminal(
+    queued_at: Instant,
+    pair_started: Instant,
+    launch_init: Duration,
+    tool: Duration,
+    write: Duration,
+    peak_rss_bytes: Option<u64>,
+) -> PairTelemetry {
+    let total = queued_at.elapsed();
+    PairTelemetry {
+        queued: pair_started.saturating_duration_since(queued_at),
+        launch_init,
+        tool,
+        write,
+        total: if total.is_zero() {
+            Duration::from_nanos(1)
+        } else {
+            total
+        },
+        peak_rss_bytes,
     }
 }
 
@@ -686,6 +954,75 @@ fn server_config_from(server: &McpServer, project_root: &Path) -> ServerConfig {
         env: server.env.clone(),
         cwd,
     }
+}
+
+struct RssMonitor {
+    stop_tx: Option<oneshot::Sender<()>>,
+    handle: tokio::task::JoinHandle<Option<u64>>,
+}
+
+impl RssMonitor {
+    fn start(pid: Option<u32>) -> Option<Self> {
+        let pid = pid?;
+        let (stop_tx, mut stop_rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            let mut peak = sample_rss_bytes(pid).await;
+            let mut interval = tokio::time::interval(Duration::from_millis(250));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Some(rss) = sample_rss_bytes(pid).await {
+                            peak = Some(peak.map_or(rss, |p| p.max(rss)));
+                        }
+                    }
+                    _ = &mut stop_rx => {
+                        if let Some(rss) = sample_rss_bytes(pid).await {
+                            peak = Some(peak.map_or(rss, |p| p.max(rss)));
+                        }
+                        return peak;
+                    }
+                }
+            }
+        });
+        Some(Self {
+            stop_tx: Some(stop_tx),
+            handle,
+        })
+    }
+
+    async fn stop(mut self) -> Option<u64> {
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(());
+        }
+        self.handle.await.ok().flatten()
+    }
+}
+
+async fn stop_rss_monitor(monitor: &mut Option<RssMonitor>) -> Option<u64> {
+    match monitor.take() {
+        Some(m) => m.stop().await,
+        None => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn sample_rss_bytes(pid: u32) -> Option<u64> {
+    let out = tokio::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let kib = text.trim().parse::<u64>().ok()?;
+    Some(kib.saturating_mul(1024))
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn sample_rss_bytes(_pid: u32) -> Option<u64> {
+    None
 }
 
 /// Resolve a sidecar path under `<project>/index/`. The dispatcher passes
@@ -765,6 +1102,27 @@ fn update_manifest(manifest: &mut Manifest, indexer: &str, asset: &AssetId, serv
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn server(
+        name: &str,
+        class: IndexerResourceClass,
+        depends_on: Vec<String>,
+        command: &str,
+    ) -> McpServer {
+        McpServer {
+            name: name.into(),
+            command: command.into(),
+            args: vec![],
+            env: HashMap::new(),
+            cwd: None,
+            kind: awidat_config::McpServerKind::Indexer,
+            enabled: true,
+            depends_on,
+            resource_class: class,
+            indexer_group: None,
+        }
+    }
 
     #[test]
     fn report_counts() {
@@ -774,15 +1132,18 @@ mod tests {
                     indexer: "whisper".into(),
                     asset: AssetId::new("a"),
                     path: PathBuf::from("/x"),
+                    telemetry: PairTelemetry::default(),
                 },
                 PairOutcome::Skipped {
                     indexer: "whisper".into(),
                     asset: AssetId::new("b"),
+                    telemetry: PairTelemetry::default(),
                 },
                 PairOutcome::Failed {
                     indexer: "scenedetect".into(),
                     asset: AssetId::new("a"),
                     message: "boom".into(),
+                    telemetry: PairTelemetry::default(),
                 },
             ],
         };
@@ -799,19 +1160,157 @@ mod tests {
                     indexer: "whisper".into(),
                     asset: AssetId::new("a"),
                     path: PathBuf::from("/x.json"),
+                    telemetry: PairTelemetry::default(),
                 },
                 PairOutcome::Failed {
                     indexer: "whisper".into(),
                     asset: AssetId::new("b"),
                     message: "boom".into(),
+                    telemetry: PairTelemetry::default(),
                 },
                 PairOutcome::SkippedDep {
                     indexer: "topic".into(),
                     asset: AssetId::new("b"),
                     missing: vec!["whisper".into()],
+                    telemetry: PairTelemetry::default(),
                 },
             ],
         };
         assert_eq!(r.counts(), (0, 1, 1, 1));
+    }
+
+    #[test]
+    fn resource_usage_keeps_exclusive_apart() {
+        let mut usage = ResourceUsage::default();
+        assert!(usage.can_launch(IndexerResourceClass::Exclusive));
+        usage.add(IndexerResourceClass::Exclusive);
+        assert!(!usage.can_launch(IndexerResourceClass::Exclusive));
+        assert!(!usage.can_launch(IndexerResourceClass::Vision));
+        assert!(!usage.can_launch(IndexerResourceClass::Light));
+        assert!(usage.can_launch(IndexerResourceClass::Network));
+        usage.remove(IndexerResourceClass::Exclusive);
+        assert!(usage.can_launch(IndexerResourceClass::Exclusive));
+    }
+
+    #[test]
+    fn resource_usage_allows_light_beside_vision() {
+        let mut usage = ResourceUsage::default();
+        usage.add(IndexerResourceClass::Vision);
+        assert!(!usage.can_launch(IndexerResourceClass::Vision));
+        assert!(usage.can_launch(IndexerResourceClass::Light));
+        assert!(usage.can_launch(IndexerResourceClass::Embedding));
+        assert!(usage.can_launch(IndexerResourceClass::Network));
+    }
+
+    #[test]
+    fn resource_usage_serial_cap_is_represented_by_inflight_cap_not_resources() {
+        let usage = ResourceUsage::default();
+        assert!(usage.can_launch(IndexerResourceClass::Light));
+        assert!(usage.can_launch(IndexerResourceClass::Vision));
+        // The run loop's inflight cap, not ResourceUsage, enforces
+        // AWIDAT_INDEX_CONCURRENCY=1. ResourceUsage only models RAM classes.
+    }
+
+    #[tokio::test]
+    async fn skipped_outcome_has_nonzero_telemetry_and_no_rss_requirement() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let raw = root.join("raw");
+        std::fs::create_dir_all(&raw).unwrap();
+        let asset_path = raw.join("a.txt");
+        std::fs::write(&asset_path, b"hello").unwrap();
+        let sha = asset_sha256(&asset_path).unwrap();
+        let sidecar = root.join("index/dummy/raw/a.txt.json");
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(
+            &sidecar,
+            serde_json::to_vec(&serde_json::json!({
+                "indexer": "dummy",
+                "indexer_version": "1",
+                "schema_version": "1",
+                "asset_id": "raw/a.txt",
+                "asset_sha256": sha,
+                "produced_at": "2026-05-02T12:00:00Z",
+                "data": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let report = run(
+            root,
+            &[server(
+                "dummy",
+                IndexerResourceClass::Light,
+                vec![],
+                "/bin/false",
+            )],
+            &[AssetInput {
+                id: AssetId::new("raw/a.txt"),
+                path: asset_path,
+            }],
+            ClientInfo {
+                name: "test".into(),
+                version: "0".into(),
+            },
+            1,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(report.outcomes[0], PairOutcome::Skipped { .. }));
+        assert!(!report.outcomes[0].telemetry().total.is_zero());
+        // Unsupported RSS sampling should simply surface as None.
+        let _ = report.outcomes[0].telemetry().peak_rss_bytes;
+    }
+
+    #[tokio::test]
+    async fn failed_dependency_produces_dep_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let raw = root.join("raw");
+        std::fs::create_dir_all(&raw).unwrap();
+        let asset_path = raw.join("a.txt");
+        std::fs::write(&asset_path, b"hello").unwrap();
+        let assets = [AssetInput {
+            id: AssetId::new("raw/a.txt"),
+            path: asset_path,
+        }];
+        let servers = [
+            server(
+                "producer",
+                IndexerResourceClass::Light,
+                vec![],
+                "/bin/false",
+            ),
+            server(
+                "consumer",
+                IndexerResourceClass::Light,
+                vec!["producer".into()],
+                "/bin/false",
+            ),
+        ];
+        let report = run(
+            root,
+            &servers,
+            &assets,
+            ClientInfo {
+                name: "test".into(),
+                version: "0".into(),
+            },
+            2,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(report.outcomes.iter().any(|o| matches!(
+            o,
+            PairOutcome::Failed { indexer, .. } if indexer == "producer"
+        )));
+        assert!(report.outcomes.iter().any(|o| matches!(
+            o,
+            PairOutcome::SkippedDep { indexer, missing, .. }
+                if indexer == "consumer" && missing == &vec!["producer".to_string()]
+        )));
     }
 }

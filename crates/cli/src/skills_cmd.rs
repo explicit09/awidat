@@ -47,7 +47,9 @@ pub fn list(_args: ListArgs) -> Result<()> {
         println!("No skills installed.");
         println!();
         println!("Drop a skill folder under one of:");
-        println!("  ~/.config/awidat/skills/<name>/SKILL.md   (user)");
+        for root in awidat_config::defaults::user_skills_roots() {
+            println!("  {}/<name>/SKILL.md      (user)", root.display());
+        }
         if let Some(b) = awidat_config::defaults::skills_root() {
             println!("  {}/<name>/SKILL.md      (bundled)", b.display());
         }
@@ -126,8 +128,9 @@ fn initial_prompt_for_skill(name: &str) -> String {
 /// `run` commands operate against identical state.
 fn discover_registry() -> Result<(SkillRegistry, Vec<awidat_core::skills::SkillError>)> {
     let bundled = awidat_config::defaults::skills_root();
-    let user = awidat_config::defaults::user_skills_root();
-    let (reg, errs) = SkillRegistry::discover(bundled.as_deref(), user.as_deref());
+    let user_roots = awidat_config::defaults::user_skills_roots();
+    let (reg, errs) =
+        SkillRegistry::discover_many(bundled.as_deref(), user_roots.iter().map(PathBuf::as_path));
     Ok((reg, errs))
 }
 

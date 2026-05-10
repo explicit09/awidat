@@ -207,6 +207,9 @@ pub struct Client {
     /// Pending pre-`initialize` state: the spawned child process transport,
     /// kept here until `initialize()` consumes it.
     pending_transport: Option<TokioChildProcess>,
+    /// OS pid for the child process when the transport exposes it. Used by
+    /// long-running callers for optional process telemetry.
+    child_pid: Option<u32>,
     /// `Option` so we can `take()` it to consume in `shutdown`. Always
     /// `Some` between `initialize` and `shutdown`.
     service: Option<Arc<RunningService<RoleClient, AwidatHandler>>>,
@@ -238,14 +241,21 @@ impl Client {
             server: name.clone(),
             message: e.to_string(),
         })?;
+        let child_pid = transport.id();
         Ok(Self {
             server_name: name,
             handler: AwidatHandler::default(),
             pending_transport: Some(transport),
+            child_pid,
             service: None,
             capabilities: ServerCapabilities::default(),
             server_info: None,
         })
+    }
+
+    /// OS pid for the spawned server process, when available.
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child_pid
     }
 
     /// MCP `initialize` handshake.

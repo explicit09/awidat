@@ -149,7 +149,7 @@ pub async fn index_project_at_root(
     let concurrency = std::env::var("AWIDAT_INDEX_CONCURRENCY")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(1);
+        .unwrap_or(2);
     let dispatch = awidat_index::run(
         &project_root,
         &servers,
@@ -199,6 +199,7 @@ pub async fn index_project_at_root(
                         indexer,
                         asset,
                         message,
+                        ..
                     } = outcome
                     {
                         // First line of the message is usually the
@@ -239,11 +240,23 @@ struct JobOutcome {
 }
 
 fn pair_label(o: &PairOutcome) -> String {
+    let elapsed = compact_duration(o.telemetry().total);
     match o {
-        PairOutcome::Wrote { indexer, asset, .. } => format!("✓ {indexer} · {asset}"),
-        PairOutcome::Skipped { indexer, asset } => format!("· {indexer} · {asset}"),
-        PairOutcome::Failed { indexer, asset, .. } => format!("✗ {indexer} · {asset}"),
-        PairOutcome::SkippedDep { indexer, asset, .. } => format!("⊘ {indexer} · {asset}"),
+        PairOutcome::Wrote { indexer, asset, .. } => format!("✓ {indexer} · {asset} · {elapsed}"),
+        PairOutcome::Skipped { indexer, asset, .. } => format!("· {indexer} · {asset} · {elapsed}"),
+        PairOutcome::Failed { indexer, asset, .. } => format!("✗ {indexer} · {asset} · {elapsed}"),
+        PairOutcome::SkippedDep { indexer, asset, .. } => {
+            format!("⊘ {indexer} · {asset} · {elapsed}")
+        }
+    }
+}
+
+fn compact_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else {
+        format!("{}m {}s", secs / 60, secs % 60)
     }
 }
 

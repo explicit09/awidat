@@ -132,6 +132,15 @@ pub struct McpServer {
     /// scenedetect, face).
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Coarse resource class the index dispatcher uses to avoid
+    /// memory-heavy indexers running together. Missing user config
+    /// defaults to `light` for backwards compatibility.
+    #[serde(default)]
+    pub resource_class: IndexerResourceClass,
+    /// Optional future-facing profile group. Milestone 1 records this
+    /// as metadata only; no CLI or desktop surface dispatches on it yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexer_group: Option<IndexerGroup>,
 }
 
 fn default_true() -> bool {
@@ -155,6 +164,41 @@ impl McpServerKind {
     pub const fn default() -> Self {
         Self::Indexer
     }
+}
+
+/// Resource class for indexer scheduling. This is intentionally coarse:
+/// the dispatcher uses it to keep memory-heavy processes from overlapping,
+/// not to model exact RAM usage.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IndexerResourceClass {
+    /// Memory-heavy model processes that should not overlap with each other.
+    Exclusive,
+    /// Vision passes that tend to decode video and load native/ML deps.
+    Vision,
+    /// Lightweight CPU/pixel/audio passes that can usually run alongside
+    /// non-exclusive work.
+    #[default]
+    Light,
+    /// Network/API-bound indexers.
+    Network,
+    /// Local embedding/model passes that are lighter than the exclusive set.
+    Embedding,
+}
+
+/// Future-facing indexer grouping for progressive indexing profiles. Stored
+/// as metadata in milestone 1; no runtime behavior depends on this yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum IndexerGroup {
+    /// Fast navigation signals: transcript, audio energy, shots, topics.
+    Navigation,
+    /// Visual search and on-screen subject signals.
+    Vision,
+    /// Higher-level editorial judgment signals.
+    Editorial,
+    /// Frame/color/audio quality signals.
+    Quality,
 }
 
 impl Config {
@@ -219,8 +263,18 @@ impl Config {
     #[must_use]
     pub fn overlay(self, project: Self) -> Self {
         let mut servers = self.mcp.servers;
-        for entry in project.mcp.servers {
+        for mut entry in project.mcp.servers {
             if let Some(existing) = servers.iter_mut().find(|s| s.name == entry.name) {
+                // Project overrides often replace only command/args/env for a bundled
+                // indexer. Preserve bundled scheduler metadata when the override omits
+                // the new fields (which deserialize to light/None for compatibility).
+                if entry.resource_class == IndexerResourceClass::Light
+                    && entry.indexer_group.is_none()
+                    && existing.indexer_group.is_some()
+                {
+                    entry.resource_class = existing.resource_class;
+                    entry.indexer_group = existing.indexer_group;
+                }
                 *existing = entry;
             } else {
                 servers.push(entry);
@@ -299,6 +353,23 @@ WHISPER_MODEL = "small.en"
             Some("small.en")
         );
         assert_eq!(s.kind, McpServerKind::Indexer);
+        assert_eq!(s.resource_class, IndexerResourceClass::Light);
+        assert_eq!(s.indexer_group, None);
+    }
+
+    #[test]
+    fn server_entry_parses_resource_metadata() {
+        let body = r#"
+[[mcp.servers]]
+name = "clip"
+command = "uv"
+resource_class = "exclusive"
+indexer_group = "vision"
+"#;
+        let c: Config = toml::from_str(body).unwrap();
+        let s = &c.mcp.servers[0];
+        assert_eq!(s.resource_class, IndexerResourceClass::Exclusive);
+        assert_eq!(s.indexer_group, Some(IndexerGroup::Vision));
     }
 
     #[test]
@@ -315,6 +386,8 @@ WHISPER_MODEL = "small.en"
                         kind: McpServerKind::Indexer,
                         enabled: true,
                         depends_on: vec![],
+                        resource_class: IndexerResourceClass::Light,
+                        indexer_group: None,
                     },
                     McpServer {
                         name: "scenedetect".into(),
@@ -325,6 +398,8 @@ WHISPER_MODEL = "small.en"
                         kind: McpServerKind::Indexer,
                         enabled: true,
                         depends_on: vec![],
+                        resource_class: IndexerResourceClass::Light,
+                        indexer_group: None,
                     },
                 ],
             },
@@ -345,6 +420,8 @@ WHISPER_MODEL = "small.en"
                         kind: McpServerKind::Indexer,
                         enabled: true,
                         depends_on: vec![],
+                        resource_class: IndexerResourceClass::Light,
+                        indexer_group: None,
                     },
                     // New entry, appended.
                     McpServer {
@@ -356,6 +433,8 @@ WHISPER_MODEL = "small.en"
                         kind: McpServerKind::Indexer,
                         enabled: true,
                         depends_on: vec![],
+                        resource_class: IndexerResourceClass::Light,
+                        indexer_group: None,
                     },
                 ],
             },
@@ -417,6 +496,10 @@ args = ["run", "custom-mcp"]
         // Project config replaced the default whisper command/args.
         assert_eq!(whisper.command, "/custom/uv");
         assert_eq!(whisper.args, vec!["run", "whisper-tiny"]);
+        // Scheduler metadata from the bundled entry survives command-only
+        // overrides so heavy defaults don't silently become `light`.
+        assert_eq!(whisper.resource_class, IndexerResourceClass::Exclusive);
+        assert_eq!(whisper.indexer_group, Some(IndexerGroup::Navigation));
         assert!(c.find_server("my-custom-tool").is_some());
     }
 
@@ -471,6 +554,8 @@ enabled = false
                         kind: McpServerKind::Indexer,
                         enabled: true,
                         depends_on: vec![],
+                        resource_class: IndexerResourceClass::Light,
+                        indexer_group: None,
                     },
                     McpServer {
                         name: "bash".into(),
@@ -481,6 +566,8 @@ enabled = false
                         kind: McpServerKind::Tool,
                         enabled: true,
                         depends_on: vec![],
+                        resource_class: IndexerResourceClass::Light,
+                        indexer_group: None,
                     },
                 ],
             },

@@ -21,6 +21,10 @@ command = "uv"
 args = ["run", "--package", "audio-energy-mcp", "audio-energy-mcp"]
 cwd = "/abs/path/to/awidat/python"
 kind = "indexer"
+# Optional scheduler metadata. Omit for custom indexers unless they are
+# memory-heavy; omitted resource_class defaults to "light".
+# resource_class = "light"      # light | vision | exclusive | network | embedding
+# indexer_group = "navigation"  # navigation | vision | editorial | quality
 
 [[mcp.servers]]
 name = "scenedetect"

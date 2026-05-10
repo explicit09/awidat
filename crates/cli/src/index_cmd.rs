@@ -165,16 +165,18 @@ fn print_report(report: &IndexReport) {
                 indexer,
                 asset,
                 path,
+                ..
             } => {
                 println!("  ✓ {indexer:>14}  {asset}  →  {}", path.display());
             }
-            PairOutcome::Skipped { indexer, asset } => {
+            PairOutcome::Skipped { indexer, asset, .. } => {
                 println!("  · {indexer:>14}  {asset}  (sha unchanged)");
             }
             PairOutcome::Failed {
                 indexer,
                 asset,
                 message,
+                ..
             } => {
                 println!("  ✗ {indexer:>14}  {asset}  FAILED: {message}");
             }
@@ -182,6 +184,7 @@ fn print_report(report: &IndexReport) {
                 indexer,
                 asset,
                 missing,
+                ..
             } => {
                 println!(
                     "  ⊘ {indexer:>14}  {asset}  blocked: prerequisite indexer(s) {} did not produce a sidecar",

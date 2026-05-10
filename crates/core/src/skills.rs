@@ -15,7 +15,8 @@
 //!   match in its head — it calls scripts/embedding_search.py.
 //!
 //! Discovery hierarchy (highest priority first):
-//! 1. `~/.config/awidat/skills/<name>/SKILL.md` (user)
+//! 1. user skill roots, e.g. `~/Library/Application Support/awidat/skills`
+//!    and `~/.config/awidat/skills`
 //! 2. `<install_root>/share/awidat/skills/<name>/SKILL.md` (bundled)
 //! 3. Walk-up dev fallback: `<repo>/skills/<name>/SKILL.md`
 //!
@@ -140,6 +141,15 @@ impl SkillRegistry {
         bundled_root: Option<&Path>,
         user_root: Option<&Path>,
     ) -> (Self, Vec<SkillError>) {
+        Self::discover_many(bundled_root, user_root.into_iter())
+    }
+
+    /// Discover skills from bundled root plus any number of user roots.
+    /// Later user roots win on name conflicts.
+    pub fn discover_many<'a>(
+        bundled_root: Option<&Path>,
+        user_roots: impl IntoIterator<Item = &'a Path>,
+    ) -> (Self, Vec<SkillError>) {
         let mut skills: BTreeMap<String, Skill> = BTreeMap::new();
         let mut errors = Vec::new();
         let scan = |root: &Path, errors: &mut Vec<SkillError>| -> Vec<Skill> {
@@ -164,7 +174,7 @@ impl SkillRegistry {
                 skills.insert(s.meta.name.clone(), s);
             }
         }
-        if let Some(root) = user_root {
+        for root in user_roots {
             for s in scan(root, &mut errors) {
                 // User overrides bundled by name.
                 skills.insert(s.meta.name.clone(), s);
@@ -333,6 +343,44 @@ mod tests {
         let s = reg.get("interview-tightener").unwrap();
         assert_eq!(s.meta.description, "user override");
         assert!(s.body.contains("user body"));
+    }
+
+    #[test]
+    fn later_user_roots_override_earlier_user_roots() {
+        let bundled = tempfile::tempdir().unwrap();
+        let xdg_user = tempfile::tempdir().unwrap();
+        let platform_user = tempfile::tempdir().unwrap();
+        write_skill(
+            bundled.path(),
+            "technologia-podcast-brand",
+            "name: technologia-podcast-brand\ndescription: bundled fallback",
+            "bundled body",
+        );
+        write_skill(
+            xdg_user.path(),
+            "technologia-podcast-brand",
+            "name: technologia-podcast-brand\ndescription: xdg copy",
+            "xdg body",
+        );
+        write_skill(
+            platform_user.path(),
+            "technologia-podcast-brand",
+            "name: technologia-podcast-brand\ndescription: platform copy",
+            "platform body",
+        );
+
+        let user_roots = [
+            xdg_user.path().join("skills"),
+            platform_user.path().join("skills"),
+        ];
+        let (reg, errs) = SkillRegistry::discover_many(
+            Some(&bundled.path().join("skills")),
+            user_roots.iter().map(PathBuf::as_path),
+        );
+        assert!(errs.is_empty());
+        let s = reg.get("technologia-podcast-brand").unwrap();
+        assert_eq!(s.meta.description, "platform copy");
+        assert!(s.body.contains("platform body"));
     }
 
     #[test]

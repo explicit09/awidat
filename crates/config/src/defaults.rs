@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::{HooksConfig, McpConfig, McpServer, McpServerKind};
+use crate::{HooksConfig, IndexerGroup, IndexerResourceClass, McpConfig, McpServer, McpServerKind};
 
 /// Resolve the python workspace root per the priority model in the
 /// module doc. Returns `None` only when every fallback misses; in
@@ -166,11 +166,28 @@ fn walk_up_for_skills(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// User-scoped skills dir: `~/.config/awidat/skills/`. Always
-/// resolved (even when it doesn't exist yet) so user can drop
-/// folders in and they'll be discovered next session.
+/// Primary user-scoped skills dir. On macOS this is usually
+/// `~/Library/Application Support/awidat/skills`; on Linux this is
+/// usually `~/.config/awidat/skills`.
 pub fn user_skills_root() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("awidat").join("skills"))
+}
+
+/// User-scoped skill directories, ordered from lower to higher
+/// priority. We include the XDG-style `~/.config/awidat/skills`
+/// fallback even on macOS so skills copied there by older docs or
+/// hand-written installers still load.
+pub fn user_skills_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".config/awidat/skills"));
+    }
+    if let Some(primary) = user_skills_root()
+        && !roots.iter().any(|p| p == &primary)
+    {
+        roots.push(primary);
+    }
+    roots
 }
 
 /// Persistent state root: where session logs (`sessions/<date>/...jsonl`)
@@ -219,6 +236,8 @@ struct IndexerRecipe {
     /// dispatcher will not launch this indexer until every name
     /// here has produced its sidecar successfully.
     depends_on: &'static [&'static str],
+    resource_class: IndexerResourceClass,
+    group: IndexerGroup,
 }
 
 /// The canonical list. Adding a new indexer to the awidat install
@@ -232,12 +251,16 @@ const RECIPES: &[IndexerRecipe] = &[
         package: "audio-energy-mcp",
         env: &[],
         depends_on: &[],
+        resource_class: IndexerResourceClass::Light,
+        group: IndexerGroup::Navigation,
     },
     IndexerRecipe {
         name: "scenedetect",
         package: "scenedetect-mcp",
         env: &[],
         depends_on: &[],
+        resource_class: IndexerResourceClass::Vision,
+        group: IndexerGroup::Navigation,
     },
     IndexerRecipe {
         name: "whisper",
@@ -246,54 +269,72 @@ const RECIPES: &[IndexerRecipe] = &[
         // config or via setting the env directly.
         env: &[("WHISPER_MODEL", "small.en")],
         depends_on: &[],
+        resource_class: IndexerResourceClass::Exclusive,
+        group: IndexerGroup::Navigation,
     },
     IndexerRecipe {
         name: "topic",
         package: "topic-mcp",
         env: &[],
         depends_on: &["whisper"],
+        resource_class: IndexerResourceClass::Embedding,
+        group: IndexerGroup::Navigation,
     },
     IndexerRecipe {
         name: "editorial-moments",
         package: "editorial-moments-mcp",
         env: &[],
         depends_on: &["whisper", "topic"],
+        resource_class: IndexerResourceClass::Network,
+        group: IndexerGroup::Editorial,
     },
     IndexerRecipe {
         name: "clip",
         package: "clip-mcp",
         env: &[],
         depends_on: &[],
+        resource_class: IndexerResourceClass::Exclusive,
+        group: IndexerGroup::Vision,
     },
     IndexerRecipe {
         name: "face",
         package: "face-mcp",
         env: &[],
         depends_on: &[],
+        resource_class: IndexerResourceClass::Vision,
+        group: IndexerGroup::Vision,
     },
     IndexerRecipe {
         name: "shot",
         package: "shot-mcp",
         env: &[],
         depends_on: &["scenedetect", "face"],
+        resource_class: IndexerResourceClass::Vision,
+        group: IndexerGroup::Vision,
     },
     IndexerRecipe {
         name: "gaze",
         package: "gaze-mcp",
         env: &[],
         depends_on: &[],
+        resource_class: IndexerResourceClass::Vision,
+        group: IndexerGroup::Vision,
     },
     IndexerRecipe {
         name: "frame-quality",
         package: "frame-quality-mcp",
         env: &[],
         depends_on: &[],
+        resource_class: IndexerResourceClass::Light,
+        group: IndexerGroup::Quality,
     },
     IndexerRecipe {
         name: "color-analysis",
         package: "color-analysis-mcp",
         env: &[],
         depends_on: &[],
+        resource_class: IndexerResourceClass::Light,
+        group: IndexerGroup::Quality,
     },
 ];
 
@@ -330,6 +371,8 @@ pub fn with_defaults() -> crate::Config {
                 kind: McpServerKind::Indexer,
                 enabled: true,
                 depends_on: recipe.depends_on.iter().map(|s| (*s).into()).collect(),
+                resource_class: recipe.resource_class,
+                indexer_group: Some(recipe.group),
             }
         })
         .collect();
@@ -371,6 +414,39 @@ mod tests {
                 .servers
                 .iter()
                 .all(|s| s.kind == McpServerKind::Indexer)
+        );
+    }
+
+    #[test]
+    fn defaults_include_resource_classes_and_groups() {
+        let cfg = with_defaults();
+        assert_eq!(
+            cfg.find_server("whisper").unwrap().resource_class,
+            IndexerResourceClass::Exclusive
+        );
+        assert_eq!(
+            cfg.find_server("clip").unwrap().resource_class,
+            IndexerResourceClass::Exclusive
+        );
+        assert_eq!(
+            cfg.find_server("face").unwrap().resource_class,
+            IndexerResourceClass::Vision
+        );
+        assert_eq!(
+            cfg.find_server("audio-energy").unwrap().resource_class,
+            IndexerResourceClass::Light
+        );
+        assert_eq!(
+            cfg.find_server("topic").unwrap().resource_class,
+            IndexerResourceClass::Embedding
+        );
+        assert_eq!(
+            cfg.find_server("editorial-moments").unwrap().resource_class,
+            IndexerResourceClass::Network
+        );
+        assert_eq!(
+            cfg.find_server("frame-quality").unwrap().indexer_group,
+            Some(IndexerGroup::Quality)
         );
     }
 

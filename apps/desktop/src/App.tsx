@@ -55,8 +55,18 @@ function App() {
   // path change (open / new / future close) propagates to Composer's
   // disabled flag and any future panes that key off `current`.
   useEffect(() => {
-    refresh().catch(() => {});
-  }, [refresh]);
+    let cancelled = false;
+    refresh()
+      .then(() => {
+        if (!cancelled) {
+          return refreshTimeline();
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh, refreshTimeline]);
 
   // Subscribe at app-shell scope so toolbar-triggered jobs (import,
   // index, export) are captured independently of ChatStream mount
@@ -98,6 +108,10 @@ function App() {
     clearNotes();
     if (current !== null) {
       refreshTimeline().catch(() => {});
+      const retry = window.setTimeout(() => {
+        refreshTimeline().catch(() => {});
+      }, 500);
+      return () => window.clearTimeout(retry);
     }
   }, [
     current,

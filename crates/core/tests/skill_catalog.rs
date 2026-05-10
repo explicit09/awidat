@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use awidat_core::context::ContextualUserFragment;
+use awidat_core::edl;
 use awidat_core::skills::SkillRegistry;
 
 fn workspace_root() -> PathBuf {
@@ -95,6 +96,35 @@ fn color_corrector_skill_is_graph_native() {
             skill.body.contains(required),
             "color-corrector must mention {required:?}"
         );
+    }
+}
+
+#[test]
+fn auto_cutter_and_podcast_use_semantic_retake_planning() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    for name in ["auto-cutter", "podcast-episode-producer"] {
+        let skill = registry.get(name).expect("skill exists");
+        assert!(
+            skill
+                .meta
+                .tools_allowlist
+                .iter()
+                .any(|tool| tool == "assess_continuity"),
+            "{name} must allow assess_continuity for risky retake cuts"
+        );
+        for required in [
+            "episode_span_plan.py",
+            "retake_plan.py",
+            "assess_continuity",
+        ] {
+            assert!(
+                skill.body.contains(required),
+                "{name} must mention {required:?}"
+            );
+        }
     }
 }
 
@@ -318,6 +348,34 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
             }
         }),
     )?;
+    let retake_transcript = write_json(
+        fixtures.path().join("retake-transcript.json"),
+        serde_json::json!({
+            "data": {
+                "segments": [
+                    {"start_s": 0.0, "end_s": 4.0, "text": "The real problem is our launch was wait let me say that again", "speaker_id": "A"},
+                    {"start_s": 4.2, "end_s": 10.0, "text": "The real problem is that our launch process had too many manual steps.", "speaker_id": "A"},
+                    {"start_s": 12.0, "end_s": 15.0, "text": "Is the camera still recording we can cut that part.", "speaker_id": "B"},
+                    {"start_s": 15.5, "end_s": 21.0, "text": "Back to what I was saying, the customer story matters here.", "speaker_id": "A"}
+                ]
+            }
+        }),
+    )?;
+    let multi_episode_transcript = write_json(
+        fixtures.path().join("multi-episode-transcript.json"),
+        serde_json::json!({
+            "data": {
+                "segments": [
+                    {"start_s": 0.0, "end_s": 5.0, "text": "Welcome to the show today we have Sarah.", "speaker_id": "A"},
+                    {"start_s": 5.0, "end_s": 70.0, "text": "We talk about launch risk and product lessons.", "speaker_id": "A"},
+                    {"start_s": 72.0, "end_s": 77.0, "text": "Thanks for listening, see you next time.", "speaker_id": "A"},
+                    {"start_s": 140.0, "end_s": 145.0, "text": "Welcome back, this is episode two with Daniel.", "speaker_id": "A"},
+                    {"start_s": 145.0, "end_s": 220.0, "text": "Now we're going to discuss fundraising.", "speaker_id": "B"},
+                    {"start_s": 221.0, "end_s": 226.0, "text": "Thanks for listening and subscribe.", "speaker_id": "A"}
+                ]
+            }
+        }),
+    )?;
     let moments = write_json(
         fixtures.path().join("moments.json"),
         serde_json::json!({
@@ -365,6 +423,17 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
         serde_json::json!({
             "data": {
                 "topics": [{"start_s": 0.0, "end_s": 35.0, "label": "Launch Risk"}]
+            }
+        }),
+    )?;
+    let multi_topic = write_json(
+        fixtures.path().join("multi-topic.json"),
+        serde_json::json!({
+            "data": {
+                "topics": [
+                    {"start_s": 0.0, "end_s": 80.0, "label": "Episode One Launch Risk"},
+                    {"start_s": 140.0, "end_s": 230.0, "label": "next episode fundraising"}
+                ]
             }
         }),
     )?;
@@ -497,6 +566,66 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
         ],
         "cuts",
     )?;
+    let retake_plan = run_script(
+        &python,
+        root.join("skills/auto-cutter/scripts/retake_plan.py"),
+        &[
+            "--transcript",
+            path(&retake_transcript),
+            "--audio-energy",
+            path(&audio),
+            "--topic",
+            path(&topic),
+            "--moments",
+            path(&moments),
+            "--clip-uuid",
+            "clip-a",
+        ],
+        "candidates",
+    )?;
+    let edl_fragments = retake_plan
+        .get("edl_fragments")
+        .and_then(|value| value.as_array())
+        .expect("retake planner emits edl_fragments array");
+    assert!(
+        !edl_fragments.is_empty(),
+        "obvious leading retake should produce an EDL fragment"
+    );
+    for fragment in edl_fragments {
+        let text = fragment.as_str().expect("EDL fragment is text");
+        edl::parse(text).expect("retake planner emitted parseable EDL");
+    }
+    let retake_candidates = retake_plan
+        .get("candidates")
+        .and_then(|value| value.as_array())
+        .expect("retake planner emits candidates array");
+    assert!(
+        retake_candidates.iter().any(|candidate| candidate
+            .get("requires_review")
+            .and_then(|value| value.as_bool())
+            == Some(true)),
+        "internal or continuity-risk retakes should stay review gated"
+    );
+    let episode_spans = run_script(
+        &python,
+        root.join("skills/auto-cutter/scripts/episode_span_plan.py"),
+        &[
+            "--transcript",
+            path(&multi_episode_transcript),
+            "--audio-energy",
+            path(&audio),
+            "--topic",
+            path(&multi_topic),
+        ],
+        "episode_spans",
+    )?;
+    assert_eq!(
+        episode_spans
+            .get("requires_user_choice")
+            .and_then(|value| value.as_bool()),
+        Some(true),
+        "multiple publishable episode spans must require user choice"
+    );
     run_script(
         &python,
         root.join("skills/podcast-editor/scripts/audio_polish_plan.py"),

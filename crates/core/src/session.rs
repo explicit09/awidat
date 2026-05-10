@@ -236,10 +236,10 @@ impl Session {
         // which keeps tier-1 cache stable and lets the compaction
         // pass identify injected catalog blocks via the marker tags.
         let bundled_skills = awidat_config::defaults::skills_root();
-        let user_skills = awidat_config::defaults::user_skills_root();
-        let (skill_registry, skill_errors) = crate::skills::SkillRegistry::discover(
+        let user_skills = awidat_config::defaults::user_skills_roots();
+        let (skill_registry, skill_errors) = crate::skills::SkillRegistry::discover_many(
             bundled_skills.as_deref(),
-            user_skills.as_deref(),
+            user_skills.iter().map(std::path::PathBuf::as_path),
         );
         for err in &skill_errors {
             tracing::warn!(error = %err, "failed to load skill");

@@ -131,7 +131,7 @@ impl ToolHandler for StartIndexingTool {
         let concurrency = std::env::var("AWIDAT_INDEX_CONCURRENCY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(1);
+            .unwrap_or(2);
 
         let report = awidat_index::run(
             &project_root,
@@ -178,6 +178,7 @@ fn format_report(
                 indexer,
                 asset,
                 message,
+                ..
             } = o
             {
                 out.push_str(&format!("  ✗ {indexer} · {asset}: {message}\n"));
