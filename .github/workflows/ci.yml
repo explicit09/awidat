@@ -22,6 +22,8 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Fetch desktop sidecars
+        run: make desktop-yt-dlp
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
