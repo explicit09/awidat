@@ -8,6 +8,7 @@
 use std::fmt;
 
 use awidat_proto::awidat_meta::BroadcastOverlayConfig;
+use awidat_proto::transitions::SemanticTransitionSpec;
 use serde::{Deserialize, Serialize};
 
 /// One change in an EDL envelope.
@@ -81,8 +82,9 @@ pub enum EdlOp {
     /// agent has to bash-edit the OTIO file to start a project.
     ///
     /// Track is identified by name; if the named track doesn't exist
-    /// the op creates it (Video kind by default — F2 will add an
-    /// `audio: true` field). The new clip's media_reference is an
+    /// the op creates it. New-track kind defaults to video for
+    /// compatibility, can be forced via `track_kind`, or inferred
+    /// from A*/Audio* names when `track_kind = Auto`. The new clip's media_reference is an
     /// `ExternalReference` to the asset; the source_range defaults
     /// to `[0, available_range.duration)` if the asset declares an
     /// available range, otherwise the agent must specify `start`/`end`.
@@ -96,8 +98,11 @@ pub enum EdlOp {
     InsertClip {
         /// Project-relative asset path, e.g. `"raw/clip-1.MOV"`.
         asset: String,
-        /// Track name; created with Video kind if missing.
+        /// Track name. Existing track kind is preserved.
         track: String,
+        /// Optional new-track kind hint. Ignored for existing tracks.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        track_kind: Option<InsertTrackKind>,
         /// Where in the track to insert. `None` = append.
         at_position: Option<usize>,
         /// Source-media start in seconds. Defaults to 0.
@@ -109,6 +114,10 @@ pub enum EdlOp {
         end: Option<f64>,
         /// Optional clip name override.
         name: Option<String>,
+        /// Optional linkage id shared by related video/audio clips
+        /// imported from the same source asset.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        link_group_id: Option<String>,
     },
     /// Insert b-roll over an anchor moment. Currently F2; carried in the
     /// type so the parser/handler signatures stay stable.
@@ -128,6 +137,9 @@ pub enum EdlOp {
         anchor: Anchor,
         /// 0-based index in the destination track's children.
         to_position: usize,
+        /// Optional absolute timeline start time on the same track.
+        /// When set, gaps are split/created so the clip starts here.
+        at_s: Option<f64>,
     },
     /// Insert a transition between two adjacent clips. F2.
     InsertTransition {
@@ -137,6 +149,11 @@ pub enum EdlOp {
         kind: String,
         /// Duration in seconds.
         duration_s: f64,
+        /// Optional Awidat semantic transition metadata. When present,
+        /// this is persisted on the OTIO transition's metadata so the
+        /// agent's editorial intent survives render/export round trips.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        spec: Option<SemanticTransitionSpec>,
     },
     /// Set per-clip audio volume. `value` is a linear gain multiplier
     /// where `0.0` mutes the clip, `1.0` is unity (no change), and
@@ -149,6 +166,43 @@ pub enum EdlOp {
         anchor: Anchor,
         /// Linear gain multiplier. Must be finite and `>= 0.0`.
         value: f64,
+    },
+    /// Set per-clip audio fades in seconds. Replaces the existing
+    /// `awidat.audio_fade` effect on the clip.
+    SetAudioFade {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Fade-in duration from the clip start, seconds.
+        fade_in_s: Option<f64>,
+        /// Fade-out duration into the clip end, seconds.
+        fade_out_s: Option<f64>,
+    },
+    /// Set audio controls on a track by name.
+    SetTrackAudio {
+        /// Track name to update.
+        track: String,
+        /// Optional role: dialogue, music, or sfx.
+        role: Option<String>,
+        /// Optional linear track gain.
+        volume: Option<f64>,
+        /// Optional mute flag.
+        muted: Option<bool>,
+        /// Optional solo flag.
+        solo: Option<bool>,
+    },
+    /// Configure ducking on an audio track by name. Ducking is applied
+    /// against dialogue tracks during render.
+    SetDucking {
+        /// Track name to update.
+        track: String,
+        /// Enable/disable ducking. Defaults to true when omitted.
+        enabled: Option<bool>,
+        /// Gain reduction in dB. Defaults to -12.
+        amount_db: Option<f64>,
+        /// Attack in milliseconds. Defaults to 80.
+        attack_ms: Option<f64>,
+        /// Release in milliseconds. Defaults to 300.
+        release_ms: Option<f64>,
     },
     /// Set per-clip playback speed. `factor` rescales both video and
     /// audio: `2.0` plays at double speed (half the timeline length),
@@ -306,6 +360,19 @@ pub enum EdlOp {
         /// Complete overlay config.
         config: BroadcastOverlayConfig,
     },
+}
+
+/// Hint for the kind of track created by `Insert Clip` when the named
+/// track does not already exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InsertTrackKind {
+    /// Force a video track.
+    Video,
+    /// Force an audio track.
+    Audio,
+    /// Infer from track naming conventions (`A*` / `Audio*` -> audio).
+    Auto,
 }
 
 /// Where on the frame a title sits. Render maps these to proportional

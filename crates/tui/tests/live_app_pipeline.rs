@@ -10,6 +10,8 @@
 //! `#[ignore]` by default; requires `ANTHROPIC_API_KEY`. ~$0.005 / run
 //! on Sonnet.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::sync::Arc;
 use std::time::Duration;
 

@@ -37,6 +37,7 @@ const COMMIT_DEBOUNCE_MS = 300;
 export function PropertiesPane() {
   const snapshot = useTimelineStore((s) => s.snapshot);
   const key = useTimelineSelectionStore((s) => s.selectedClipKey);
+  const clearSelection = useTimelineSelectionStore((s) => s.clear);
   const timelineTime = useMediaStore((s) => s.timelineTime);
 
   const followsSelection = key !== null;
@@ -70,6 +71,32 @@ export function PropertiesPane() {
   const trackEnd = trackStart + item.duration_s;
   const trackName = track?.name ?? "?";
   const trackKind = track?.kind ?? "?";
+  const deleteClip = async () => {
+    const clips =
+      item.link_group_id !== null
+        ? snapshot.tracks.flatMap((candidateTrack) =>
+            candidateTrack.items.filter(
+              (candidate): candidate is Extract<TimelineItem, { kind: "clip" }> =>
+                candidate.kind === "clip" &&
+                candidate.link_group_id === item.link_group_id,
+            ),
+          )
+        : [item];
+    const seen = new Set<string>();
+    const ops: EdlOp[] = clips
+      .filter((clip) => {
+        if (seen.has(clip.clip_uuid)) return false;
+        seen.add(clip.clip_uuid);
+        return true;
+      })
+      .map((clip) => ({
+        kind: "delete_clip",
+        anchor: { kind: "clip_uuid", uuid: clip.clip_uuid },
+      }));
+    if (ops.length === 0) return;
+    await invoke<string>("propose_user_edit", { edlText: serializeEdl(ops) });
+    clearSelection();
+  };
 
   return (
     <section className="properties-pane">
@@ -83,6 +110,14 @@ export function PropertiesPane() {
         <Field label="Name">
           <span className="properties-value">{item.name}</span>
         </Field>
+        <div className="properties-action-row">
+          <button className="properties-danger" onClick={() => void deleteClip()}>
+            Delete clip
+          </button>
+          {item.link_group_id && (
+            <span className="properties-action-hint">Deletes linked audio/video</span>
+          )}
+        </div>
         {item.title ? (
           <TitleEditor
             clipUuid={item.clip_uuid}
@@ -103,9 +138,15 @@ export function PropertiesPane() {
             />
             <LutControl clipUuid={item.clip_uuid} lutPath={item.lut_path} />
             <VolumeControl clipUuid={item.clip_uuid} value={item.volume} />
+            <AudioFadeControl
+              clipUuid={item.clip_uuid}
+              fadeInS={item.fade_in_s}
+              fadeOutS={item.fade_out_s}
+            />
             <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
           </>
         )}
+        {track?.audio && <TrackAudioControl trackName={track.name} audio={track.audio} />}
         <Field label="Track">
           <span className="properties-value">
             {trackName} <span className="properties-dim">· {trackKind}</span>
@@ -420,6 +461,229 @@ function VolumeControl({
       </div>
     </Field>
   );
+}
+
+function AudioFadeControl({
+  clipUuid,
+  fadeInS,
+  fadeOutS,
+}: {
+  clipUuid: string;
+  fadeInS: number | null;
+  fadeOutS: number | null;
+}) {
+  const initialIn = fadeInS ?? 0;
+  const initialOut = fadeOutS ?? 0;
+  const [localIn, setLocalIn] = useState(initialIn);
+  const [localOut, setLocalOut] = useState(initialOut);
+  const lastCommittedRef = useRef(`${initialIn}|${initialOut}`);
+
+  useEffect(() => {
+    setLocalIn(initialIn);
+    setLocalOut(initialOut);
+    lastCommittedRef.current = `${initialIn}|${initialOut}`;
+  }, [clipUuid, initialIn, initialOut]);
+
+  const sig = `${localIn}|${localOut}`;
+  const dirty = sig !== lastCommittedRef.current;
+
+  function apply() {
+    lastCommittedRef.current = sig;
+    const op: EdlOp = {
+      kind: "set_audio_fade",
+      anchor: { kind: "clip_uuid", uuid: clipUuid },
+      fadeInS: Math.max(0, localIn),
+      fadeOutS: Math.max(0, localOut),
+    };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (set_audio_fade) failed", err);
+    });
+  }
+
+  return (
+    <Field label="Fades">
+      <div className="properties-control-row">
+        <input
+          type="number"
+          min={0}
+          step={0.05}
+          className="properties-number-input"
+          value={localIn}
+          onChange={(e) => setLocalIn(parseFloat(e.target.value) || 0)}
+          aria-label="Fade in seconds"
+        />
+        <input
+          type="number"
+          min={0}
+          step={0.05}
+          className="properties-number-input"
+          value={localOut}
+          onChange={(e) => setLocalOut(parseFloat(e.target.value) || 0)}
+          aria-label="Fade out seconds"
+        />
+        {dirty && (
+          <button className="properties-apply" type="button" onClick={apply}>
+            Apply
+          </button>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+function TrackAudioControl({
+  trackName,
+  audio,
+}: {
+  trackName: string;
+  audio: import("../protocol").TrackAudioControls;
+}) {
+  const [role, setRole] = useState(audio.role);
+  const [volume, setVolume] = useState(audio.volume);
+  const [muted, setMuted] = useState(audio.muted);
+  const [solo, setSolo] = useState(audio.solo);
+  const [ducking, setDucking] = useState(audio.ducking?.enabled ?? false);
+  const [amountDb, setAmountDb] = useState(audio.ducking?.amount_db ?? -12);
+  const lastCommittedRef = useRef("");
+
+  useEffect(() => {
+    setRole(audio.role);
+    setVolume(audio.volume);
+    setMuted(audio.muted);
+    setSolo(audio.solo);
+    setDucking(audio.ducking?.enabled ?? false);
+    setAmountDb(audio.ducking?.amount_db ?? -12);
+    lastCommittedRef.current = trackAudioSig(
+      audio.role,
+      audio.volume,
+      audio.muted,
+      audio.solo,
+      audio.ducking?.enabled ?? false,
+      audio.ducking?.amount_db ?? -12,
+    );
+  }, [trackName, audio]);
+
+  const sig = trackAudioSig(role, volume, muted, solo, ducking, amountDb);
+  const dirty = sig !== lastCommittedRef.current;
+
+  function apply() {
+    lastCommittedRef.current = sig;
+    const ops: EdlOp[] = [
+      {
+        kind: "set_track_audio",
+        track: trackName,
+        role,
+        volume,
+        muted,
+        solo,
+      },
+    ];
+    if (role !== "dialogue") {
+      ops.push({
+        kind: "set_ducking",
+        track: trackName,
+        enabled: ducking,
+        amountDb,
+        attackMs: 80,
+        releaseMs: 300,
+      });
+    }
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl(ops),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (set_track_audio) failed", err);
+    });
+  }
+
+  return (
+    <>
+      <Field label="Track role">
+        <select
+          className="properties-select"
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+        >
+          <option value="dialogue">Dialogue</option>
+          <option value="music">Music</option>
+          <option value="sfx">SFX</option>
+        </select>
+      </Field>
+      <Field label="Track mix">
+        <div className="properties-control-row">
+          <input
+            type="range"
+            min={0}
+            max={2}
+            step={0.01}
+            value={volume}
+            onChange={(e) => setVolume(parseFloat(e.target.value))}
+            className="properties-slider"
+          />
+          <span className="properties-control-value">{volume.toFixed(2)}×</span>
+          <label className="properties-inline-check">
+            <input
+              type="checkbox"
+              checked={muted}
+              onChange={(e) => setMuted(e.target.checked)}
+            />
+            Mute
+          </label>
+          <label className="properties-inline-check">
+            <input
+              type="checkbox"
+              checked={solo}
+              onChange={(e) => setSolo(e.target.checked)}
+            />
+            Solo
+          </label>
+        </div>
+      </Field>
+      {role !== "dialogue" && (
+        <Field label="Ducking">
+          <div className="properties-control-row">
+            <label className="properties-inline-check">
+              <input
+                type="checkbox"
+                checked={ducking}
+                onChange={(e) => setDucking(e.target.checked)}
+              />
+              On
+            </label>
+            <input
+              type="number"
+              step={1}
+              className="properties-number-input"
+              value={amountDb}
+              onChange={(e) => setAmountDb(parseFloat(e.target.value) || -12)}
+            />
+            <span className="properties-control-value">dB</span>
+          </div>
+        </Field>
+      )}
+      {dirty && (
+        <Field label="Track audio">
+          <button className="properties-apply" type="button" onClick={apply}>
+            Apply
+          </button>
+        </Field>
+      )}
+    </>
+  );
+}
+
+function trackAudioSig(
+  role: string,
+  volume: number,
+  muted: boolean,
+  solo: boolean,
+  ducking: boolean,
+  amountDb: number,
+): string {
+  return `${role}|${volume.toFixed(3)}|${muted}|${solo}|${ducking}|${amountDb.toFixed(1)}`;
 }
 
 function SpeedControl({

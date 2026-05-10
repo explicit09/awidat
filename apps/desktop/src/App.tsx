@@ -6,7 +6,10 @@
 // "open or create a project" placeholder → disabled composer.
 
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ProjectBanner } from "./app/ProjectBanner";
 import { ActionBar } from "./app/ActionBar";
 import { useProjectStore } from "./app/state";
@@ -19,6 +22,11 @@ import { useMediaStore } from "./media/store";
 import { TimelinePane } from "./timeline/TimelinePane";
 import { isProposedEditItem, useProposalStore } from "./timeline/proposal";
 import { useTimelineStore } from "./timeline/store";
+import {
+  MENU_COMMANDS,
+  emitMenuCommand,
+  onMenuCommand,
+} from "./app/menuCommands";
 import { PropertiesPane } from "./properties/PropertiesPane";
 import { useTimelineSelectionStore } from "./properties/store";
 import { NotesPanel } from "./notes/NotesPanel";
@@ -27,8 +35,10 @@ import { TranscriptSidebar } from "./transcript/TranscriptSidebar";
 import { VeditPanel } from "./vedit/VeditPanel";
 import {
   ITEM_EVENT,
+  MENU_COMMAND_EVENT,
   TURN_END_EVENT,
   type ItemEvent,
+  type NativeMenuCommandEvent,
   type TurnEndEvent,
 } from "./protocol";
 import "./App.css";
@@ -36,6 +46,11 @@ import "./App.css";
 function App() {
   const [sidebarTab, setSidebarTab] =
     useState<"chat" | "transcript" | "edits">("chat");
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [showMedia, setShowMedia] = useState(true);
+  const [showProperties, setShowProperties] = useState(true);
+  const [showTimeline, setShowTimeline] = useState(true);
+  const [showNotes, setShowNotes] = useState(true);
   const current = useProjectStore((s) => s.current);
   const setCurrent = useProjectStore((s) => s.setCurrent);
   const refresh = useProjectStore((s) => s.refresh);
@@ -47,9 +62,16 @@ function App() {
   const ingestProposal = useProposalStore((s) => s.ingest);
   const clearMediaSelection = useMediaStore((s) => s.select);
   const refreshTimeline = useTimelineStore((s) => s.refresh);
+  const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
+  const zoomIn = useTimelineStore((s) => s.zoomIn);
+  const zoomOut = useTimelineStore((s) => s.zoomOut);
+  const fitZoom = useTimelineStore((s) => s.fitZoom);
+  const selectedClipKey = useTimelineSelectionStore((s) => s.selectedClipKey);
   const clearSelection = useTimelineSelectionStore((s) => s.clear);
   const clearNotes = useNotesStore((s) => s.clear);
   const ingestNote = useNotesStore((s) => s.ingest);
+  const activeProposal = useProposalStore((s) => s.active);
+  const items = useAgentStore((s) => s.items);
 
   // Keep the banner's local-state callback wired to the store so any
   // path change (open / new / future close) propagates to Composer's
@@ -88,9 +110,14 @@ function App() {
       }
       setRunning(false);
     });
+    const menuUnlisten = listen<NativeMenuCommandEvent>(
+      MENU_COMMAND_EVENT,
+      (event) => emitMenuCommand(event.payload.id),
+    );
     return () => {
       itemsUnlisten.then((unlisten) => unlisten());
       endUnlisten.then((unlisten) => unlisten());
+      menuUnlisten.then((unlisten) => unlisten());
     };
   }, [
     upsertItem,
@@ -99,6 +126,101 @@ function App() {
     ingestProposal,
     ingestNote,
   ]);
+
+  useEffect(() => {
+    return onMenuCommand((id) => {
+      if (id === MENU_COMMANDS.CLOSE_PROJECT) {
+        invoke("close_project")
+          .then(() => setCurrent(null))
+          .catch((e) => console.warn("close_project failed", e));
+      } else if (id === MENU_COMMANDS.REVEAL_PROJECT && current) {
+        revealItemInDir(current).catch((e) =>
+          console.warn("reveal project failed", e),
+        );
+      } else if (id === MENU_COMMANDS.VIEW_MEDIA) {
+        setShowMedia((v) => !v);
+      } else if (id === MENU_COMMANDS.VIEW_TIMELINE) {
+        setShowTimeline((v) => !v);
+      } else if (id === MENU_COMMANDS.VIEW_PROPERTIES) {
+        setShowProperties((v) => !v);
+      } else if (id === MENU_COMMANDS.VIEW_NOTES) {
+        setShowNotes((v) => !v);
+      } else if (id === MENU_COMMANDS.VIEW_SIDEBAR) {
+        setShowSidebar((v) => !v);
+      } else if (id === MENU_COMMANDS.VIEW_CHAT) {
+        setShowSidebar(true);
+        setSidebarTab("chat");
+      } else if (id === MENU_COMMANDS.VIEW_TRANSCRIPT) {
+        setShowSidebar(true);
+        setSidebarTab("transcript");
+      } else if (id === MENU_COMMANDS.VIEW_EDITS) {
+        setShowSidebar(true);
+        setSidebarTab("edits");
+      } else if (id === MENU_COMMANDS.TIMELINE_ZOOM_IN) {
+        zoomIn();
+      } else if (id === MENU_COMMANDS.TIMELINE_ZOOM_OUT) {
+        zoomOut();
+      } else if (id === MENU_COMMANDS.TIMELINE_ZOOM_FIT) {
+        fitZoom();
+      } else if (id === MENU_COMMANDS.TOGGLE_FULLSCREEN) {
+        const win = getCurrentWindow();
+        win
+          .isFullscreen()
+          .then((fullscreen) => win.setFullscreen(!fullscreen))
+          .catch((e) => console.warn("toggle fullscreen failed", e));
+      }
+    });
+  }, [current, fitZoom, setCurrent, zoomIn, zoomOut]);
+
+  useEffect(() => {
+    const projectLoaded = current !== null;
+    const proposalActive = activeProposal !== null;
+    const runningKinds = items
+      .filter(
+        (it): it is Extract<typeof items[number], { kind: "job" }> =>
+          it.kind === "job" && it.phase !== "completed",
+      )
+      .map((it) => it.job_kind);
+    const importBusy =
+      runningKinds.includes("local_import") ||
+      runningKinds.includes("url_import");
+    const transcodeBusy = runningKinds.includes("transcode");
+    const indexBusy = runningKinds.includes("indexing");
+    const exportBusy = runningKinds.includes("render");
+    invoke("set_menu_item_enabled", {
+      states: [
+        { id: MENU_COMMANDS.CLOSE_PROJECT, enabled: projectLoaded },
+        { id: MENU_COMMANDS.IMPORT_FILES, enabled: projectLoaded && !importBusy },
+        { id: MENU_COMMANDS.IMPORT_URL, enabled: projectLoaded && !importBusy },
+        {
+          id: MENU_COMMANDS.RUN_INDEXERS,
+          enabled: projectLoaded && !indexBusy && !transcodeBusy,
+        },
+        {
+          id: MENU_COMMANDS.EXPORT_TIMELINE,
+          enabled: projectLoaded && timelineDuration > 0 && !exportBusy,
+        },
+        { id: MENU_COMMANDS.REVEAL_PROJECT, enabled: projectLoaded },
+        {
+          id: MENU_COMMANDS.DELETE_CLIP,
+          enabled: projectLoaded && selectedClipKey !== null && !proposalActive,
+        },
+        { id: MENU_COMMANDS.ACCEPT_PROPOSAL, enabled: proposalActive },
+        { id: MENU_COMMANDS.REJECT_PROPOSAL, enabled: proposalActive },
+        { id: MENU_COMMANDS.VIEW_MEDIA, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_TIMELINE, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_PROPERTIES, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_NOTES, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_SIDEBAR, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_CHAT, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_TRANSCRIPT, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_EDITS, enabled: projectLoaded },
+        { id: MENU_COMMANDS.TIMELINE_ZOOM_IN, enabled: projectLoaded },
+        { id: MENU_COMMANDS.TIMELINE_ZOOM_OUT, enabled: projectLoaded },
+        { id: MENU_COMMANDS.TIMELINE_ZOOM_FIT, enabled: projectLoaded },
+      ],
+    }).catch((e) => console.warn("set_menu_item_enabled failed", e));
+  }, [activeProposal, current, items, selectedClipKey, timelineDuration]);
 
   useEffect(() => {
     clearAgent();
@@ -124,6 +246,13 @@ function App() {
   ]);
 
   const projectReady = current !== null;
+  const workspaceColumns = [
+    showSidebar ? "clamp(330px, 25vw, 460px)" : null,
+    showMedia ? "minmax(540px, 1fr)" : null,
+    showProperties ? "clamp(250px, 17vw, 330px)" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const sidebarTitle =
     sidebarTab === "chat"
       ? "Agent"
@@ -143,7 +272,13 @@ function App() {
       {projectReady && <ActionBar />}
       {projectReady ? (
         <div className="workspace">
-          <div className="workspace-top">
+          <div
+            className="workspace-top"
+            style={{
+              gridTemplateColumns: workspaceColumns || "minmax(0, 1fr)",
+            }}
+          >
+            {showSidebar && (
             <div className="workspace-chat">
               <header className="sidebar-header">
                 <div>
@@ -191,7 +326,7 @@ function App() {
                 <>
                   <SessionBar />
                   <ChatStream />
-                  <NotesPanel />
+                  {showNotes && <NotesPanel />}
                   <Composer projectReady={projectReady} />
                 </>
               ) : sidebarTab === "transcript" ? (
@@ -200,14 +335,19 @@ function App() {
                 <VeditPanel />
               )}
             </div>
+            )}
+            {showMedia && (
             <div className="workspace-media">
               <MediaPane />
             </div>
+            )}
+            {showProperties && (
             <div className="workspace-properties">
               <PropertiesPane />
             </div>
+            )}
           </div>
-          <TimelinePane />
+          {showTimeline && <TimelinePane />}
         </div>
       ) : (
         <ChatStream />

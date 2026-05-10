@@ -86,6 +86,19 @@ pub async fn current_project_root(state: State<'_, AwidatState>) -> Result<Optio
         .map(|p| p.to_string_lossy().into_owned()))
 }
 
+/// Close the current project without opening a replacement. Mirrors
+/// `set_project_root`'s safety checks so we do not strand pending
+/// proposals, turns, or import/index/render jobs against a project
+/// the UI no longer shows.
+#[tauri::command]
+pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> {
+    ensure_project_switch_allowed(&state).await?;
+    *state.project_root.lock().await = None;
+    *state.session.lock().await = None;
+    *state.resume_log_path.lock().await = None;
+    Ok(())
+}
+
 /// Initialize a new awidat project at `<parent_dir>/<name>` and load
 /// it as the current project. Mirrors `awidat new --no-md=false
 /// --no-index` (init + starter AWIDAT.md, no asset import). Asset

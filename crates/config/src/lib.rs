@@ -10,6 +10,8 @@
 //!
 //! See `crates/config/EXAMPLE.toml` for the canonical shape.
 
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

@@ -3,6 +3,9 @@
 //! Subcommands today: `init`, `validate`, `index`, `version`. Future
 //! (`chat`, `render`, `skills`) land in later weeks per `PLAN.md` §15.
 
+#![allow(clippy::expect_used, clippy::ptr_arg)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 

@@ -7,7 +7,7 @@ export function EmptyState() {
     <div className="empty-state">
       <h2>Drop media in to get started</h2>
       <p className="empty-hint">
-        Use the bar above to <strong>Import file…</strong>,{" "}
+        Use the bar above to <strong>Import files…</strong>,{" "}
         <strong>Import URL…</strong>, or <strong>Run indexers</strong> on
         media you've already dropped into <code>raw/</code>. Imports
         auto-chain through proxy transcoding and indexing — three job

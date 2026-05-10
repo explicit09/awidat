@@ -2,6 +2,8 @@
 //! Clip with an `awidat.volume` Effect lands a `volume=` filter in
 //! the rendered argv.
 
+#![allow(clippy::unwrap_used)]
+
 use awidat_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,

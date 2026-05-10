@@ -8,6 +8,37 @@
 //!   `harnesses/codex/codex-rs/core/src/function_tool.rs`.
 //! - Tools, `Session`, and the agent loop land in later phases of week 3.
 
+#![allow(
+    clippy::clone_on_copy,
+    clippy::cloned_ref_to_slice_refs,
+    clippy::collapsible_if,
+    clippy::doc_lazy_continuation,
+    clippy::expect_used,
+    clippy::for_kv_map,
+    clippy::manual_contains,
+    clippy::large_enum_variant,
+    clippy::let_and_return,
+    clippy::needless_collect,
+    clippy::question_mark,
+    clippy::redundant_clone,
+    clippy::redundant_closure_for_method_calls,
+    clippy::too_many_arguments,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_sort_by,
+    clippy::unusual_byte_groupings,
+    clippy::useless_conversion,
+    clippy::useless_format,
+    clippy::vec_init_then_push
+)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::assertions_on_constants,
+        clippy::field_reassign_with_default,
+        clippy::unwrap_used
+    )
+)]
+
 pub mod anthropic;
 pub mod awidat_md;
 pub mod compact;

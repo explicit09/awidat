@@ -8,6 +8,8 @@
 //! `#[ignore]` by default. Requires `ANTHROPIC_API_KEY`. Costs ~$0.01
 //! per run (Sonnet, multi-turn).
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

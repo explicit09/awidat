@@ -27,23 +27,35 @@
 //! - [`progress::ProgressSnapshot`] — parsed view of ffmpeg's stderr
 //!   progress lines (`frame=`, `time=`, `speed=`).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::expect_used,
+        clippy::field_reassign_with_default,
+        clippy::unwrap_used
+    )
+)]
+
 pub mod ffmpeg;
 pub mod job;
 pub mod progress;
 pub mod timeline;
 
 pub use ffmpeg::{
-    FfmpegError, MotionSignal, SilenceRange, TranscodeProgress, TranscodeProgressCallback,
-    extract_frame, ffmpeg_path, ffprobe_path, generate_motion_signal, generate_silences,
-    generate_thumbnails, generate_waveform, probe_duration_s, transcode_proxy,
+    FfmpegError, MediaProbe, MotionSignal, SilenceRange, TranscodeProgress,
+    TranscodeProgressCallback, extract_frame, ffmpeg_path, ffprobe_path, generate_motion_signal,
+    generate_silences, generate_thumbnails, generate_waveform, probe_duration_s, probe_media,
+    transcode_proxy,
 };
 pub use job::{JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec};
 pub use progress::ProgressSnapshot;
 pub use timeline::{
-    BroadcastOverlayPlan, FilterPlan, FilterPlanner, RenderTimelineError, TimelineSegment,
-    TitleAnimation, TitlePlan, TitlePosition, TitleWeight, TransitionPlan, build_timeline_argv,
-    build_timeline_argv_full, build_timeline_argv_with_transitions, build_timeline_render_spec,
-    collect_timeline_full_plan, collect_timeline_plan, collect_timeline_segments,
+    AudioClipPlan, AudioTrackItemPlan, AudioTrackPlan, BroadcastOverlayPlan, DuckingPlan,
+    FilterPlan, FilterPlanner, RenderTimelineError, TimelineSegment, TitleAnimation, TitlePlan,
+    TitlePosition, TitleWeight, TransitionPlan, build_timeline_argv, build_timeline_argv_full,
+    build_timeline_argv_with_audio_tracks, build_timeline_argv_with_transitions,
+    build_timeline_render_spec, collect_timeline_full_plan, collect_timeline_plan,
+    collect_timeline_segments,
 };
 
 #[cfg(test)]

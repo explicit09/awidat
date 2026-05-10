@@ -8,6 +8,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useProjectStore } from "./state";
 import { NewProjectForm } from "./NewProjectForm";
 import type { ProjectType } from "../protocol";
+import { MENU_COMMANDS, onMenuCommand } from "./menuCommands";
 
 type Props = {
   /** Called whenever the active project changes (open/new/clear). */
@@ -79,6 +80,20 @@ export function ProjectBanner({ onChange }: Props) {
       setError(String(e));
     }
   }
+
+  useEffect(() => {
+    return onMenuCommand((id) => {
+      if (id === MENU_COMMANDS.NEW_PROJECT) {
+        setShowNew(true);
+        setOpen(false);
+      } else if (id === MENU_COMMANDS.OPEN_PROJECT) {
+        void pickAndOpen();
+      } else if (id === MENU_COMMANDS.OPEN_RECENT) {
+        setOpen(true);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="project-banner" ref={popRef}>

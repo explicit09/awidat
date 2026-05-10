@@ -3,6 +3,8 @@
 //! in the rendered argv and the spec's total_duration_s reflects
 //! the rescaled value.
 
+#![allow(clippy::unwrap_used)]
+
 use awidat_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,

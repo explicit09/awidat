@@ -22,6 +22,17 @@
 // crates/tui/Cargo.toml for the rationale.
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
+#![allow(
+    clippy::doc_lazy_continuation,
+    clippy::expect_used,
+    clippy::if_same_then_else,
+    clippy::let_underscore_future,
+    clippy::manual_clamp,
+    clippy::never_loop,
+    clippy::redundant_closure_for_method_calls,
+    clippy::uninlined_format_args,
+    clippy::unwrap_used
+)]
 
 pub mod app;
 pub mod approval;

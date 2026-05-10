@@ -18,5 +18,5 @@ pub mod parser;
 pub use anchor::{AnchorContext, AnchorMiss, ClipLocator, resolve};
 pub use apply::{AppliedOp, ApplyError, ApplyOutcome, apply};
 pub use bundle::{DEFAULT_DISSOLVE_S, bundle_with_dissolve, envelope_needs_continuity_check};
-pub use op::{Anchor, BRollPosition, EdlEnvelope, EdlOp, TransitionBetween};
+pub use op::{Anchor, BRollPosition, EdlEnvelope, EdlOp, InsertTrackKind, TransitionBetween};
 pub use parser::{EdlParseError, parse};

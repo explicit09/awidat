@@ -20,6 +20,19 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
+/// Lightweight media stream summary from ffprobe.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MediaProbe {
+    /// Container/source duration in seconds when available.
+    pub duration_s: Option<f64>,
+    /// True when at least one video stream exists.
+    pub has_video: bool,
+    /// True when at least one audio stream exists.
+    pub has_audio: bool,
+    /// Codec type strings reported by ffprobe, e.g. video/audio.
+    pub stream_types: Vec<String>,
+}
+
 /// Errors talking to ffmpeg.
 #[derive(Debug, Error)]
 pub enum FfmpegError {
@@ -274,6 +287,100 @@ pub async fn probe_duration_s(asset_path: &Path) -> Result<Option<f64>, FfmpegEr
     Ok(parsed.filter(|d| d.is_finite() && *d > 0.0))
 }
 
+/// Probe duration and stream presence in one ffprobe call.
+pub async fn probe_media(asset_path: &Path) -> Result<MediaProbe, FfmpegError> {
+    let bin = ffprobe_path()?;
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("format=duration:stream=codec_type")
+        .arg("-of")
+        .arg("json")
+        .arg(asset_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffprobe stdout missing")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffprobe stderr missing")))?;
+
+    let collect_fut = async move {
+        let mut so = Vec::new();
+        let mut se = Vec::new();
+        let mut stdout_buf = stdout;
+        let mut stderr_buf = stderr;
+        let (a, b) = tokio::join!(
+            stdout_buf.read_to_end(&mut so),
+            stderr_buf.read_to_end(&mut se),
+        );
+        a?;
+        b?;
+        let status = child.wait().await?;
+        Ok::<_, std::io::Error>((status, so, se))
+    };
+
+    let (status, stdout_bytes, stderr_bytes) = match timeout(DEFAULT_TIMEOUT, collect_fut).await {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return Err(FfmpegError::Io(e)),
+        Err(_) => return Err(FfmpegError::Timeout(DEFAULT_TIMEOUT)),
+    };
+    if !status.success() {
+        let stderr_tail = tail_string(&stderr_bytes, STDERR_TAIL_BYTES);
+        return Err(FfmpegError::NonZero {
+            code: status.code().unwrap_or(-1),
+            stderr_tail,
+        });
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ProbeJson {
+        #[serde(default)]
+        streams: Vec<StreamJson>,
+        format: Option<FormatJson>,
+    }
+    #[derive(serde::Deserialize)]
+    struct StreamJson {
+        codec_type: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FormatJson {
+        duration: Option<String>,
+    }
+
+    let parsed: ProbeJson = serde_json::from_slice(&stdout_bytes)
+        .map_err(|e| FfmpegError::Io(std::io::Error::other(format!("parse ffprobe json: {e}"))))?;
+    let duration_s = parsed
+        .format
+        .and_then(|f| f.duration)
+        .and_then(|d| d.parse::<f64>().ok())
+        .filter(|d| d.is_finite() && *d > 0.0);
+    let stream_types: Vec<String> = parsed
+        .streams
+        .into_iter()
+        .filter_map(|s| s.codec_type)
+        .collect();
+    let has_video = stream_types.iter().any(|s| s == "video");
+    let has_audio = stream_types.iter().any(|s| s == "audio");
+    Ok(MediaProbe {
+        duration_s,
+        has_video,
+        has_audio,
+        stream_types,
+    })
+}
+
 /// Per-tick progress emission from [`transcode_proxy`]. Identical
 /// shape to `IndexProgress` to keep the desktop's protocol mapping
 /// uniform across long-running tasks.
@@ -337,10 +444,7 @@ pub async fn transcode_proxy(
     // Probe duration up front so the UI can show a real percent. A
     // failure here downgrades us to indeterminate progress — we don't
     // bail the whole transcode.
-    let total_duration_s = match probe_duration_s(asset_path).await {
-        Ok(d) => d,
-        Err(_) => None,
-    };
+    let total_duration_s = probe_duration_s(asset_path).await.unwrap_or_default();
     if let Some(cb) = progress.as_ref() {
         cb(TranscodeProgress::Started { total_duration_s });
     }
@@ -415,10 +519,10 @@ pub async fn transcode_proxy(
                         snapshot.frames_done = Some(n);
                     }
                 } else if let Some(rest) = line.strip_prefix("speed=") {
-                    if let Some(num) = rest.trim().strip_suffix('x') {
-                        if let Ok(s) = num.parse::<f64>() {
-                            snapshot.speed = Some(s);
-                        }
+                    if let Some(num) = rest.trim().strip_suffix('x')
+                        && let Ok(s) = num.parse::<f64>()
+                    {
+                        snapshot.speed = Some(s);
                     }
                 } else if line == "progress=end" {
                     if let Some(cb) = progress.as_ref() {
@@ -469,10 +573,7 @@ pub async fn transcode_proxy(
         st = child.wait() => st.map_err(FfmpegError::Io)?,
     };
 
-    let stderr_tail = match progress_task.await {
-        Ok(s) => s,
-        Err(_) => String::new(),
-    };
+    let stderr_tail = progress_task.await.unwrap_or_default();
 
     if !status.success() {
         return Err(FfmpegError::NonZero {
@@ -870,31 +971,30 @@ fn parse_silence_ranges(stderr: &str) -> Vec<SilenceRange> {
             if let Ok(t) = rest.1.trim().parse::<f64>() {
                 pending_start = Some(t);
             }
-        } else if let Some(rest) = line.split_once("silence_end:") {
-            if let Some(start) = pending_start.take() {
-                // silence_end's payload is "<end_t> | silence_duration: <d>".
-                let end_t = rest
-                    .1
-                    .trim()
-                    .split_once('|')
-                    .map(|(t, _)| t.trim())
-                    .unwrap_or(rest.1.trim())
-                    .parse::<f64>()
-                    .ok();
-                if let Some(end) = end_t {
-                    if end > start {
-                        // silencedetect doesn't expose a per-range
-                        // dB floor — it only reports the threshold
-                        // we passed in. Use that as a conservative
-                        // upper bound; the find_dead_air tool only
-                        // needs ranges, not exact floors.
-                        out.push(SilenceRange {
-                            start_s: start,
-                            end_s: end,
-                            db_floor: -90.0,
-                        });
-                    }
-                }
+        } else if let Some(rest) = line.split_once("silence_end:")
+            && let Some(start) = pending_start.take()
+        {
+            // silence_end's payload is "<end_t> | silence_duration: <d>".
+            let end_t = rest
+                .1
+                .trim()
+                .split_once('|')
+                .map(|(t, _)| t.trim())
+                .unwrap_or(rest.1.trim())
+                .parse::<f64>()
+                .ok();
+            if let Some(end) = end_t
+                && end > start
+            {
+                // silencedetect doesn't expose a per-range dB floor —
+                // it only reports the threshold we passed in. Use that
+                // as a conservative upper bound; the find_dead_air tool
+                // only needs ranges, not exact floors.
+                out.push(SilenceRange {
+                    start_s: start,
+                    end_s: end,
+                    db_floor: -90.0,
+                });
             }
         }
     }
@@ -1238,14 +1338,17 @@ mod tests {
         // 3s source @ fps=1 → 3 frames. Allow ±1 for vfr edge cases.
         let entries: Vec<_> = std::fs::read_dir(&out_dir)
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name().to_string_lossy().starts_with("frame-"))
             .collect();
         assert!(
             (2..=4).contains(&entries.len()),
             "expected 2-4 frames, got {}: {:?}",
             entries.len(),
-            entries.iter().map(|e| e.file_name()).collect::<Vec<_>>()
+            entries
+                .iter()
+                .map(std::fs::DirEntry::file_name)
+                .collect::<Vec<_>>()
         );
     }
 

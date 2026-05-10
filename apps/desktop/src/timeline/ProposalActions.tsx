@@ -16,6 +16,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "../components/ui/Popover";
+import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 
 export function ProposalActions() {
   const proposal = useProposalStore((s) => s.active);
@@ -48,6 +49,17 @@ export function ProposalActions() {
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proposal]);
+
+  useEffect(() => {
+    return onMenuCommand((id) => {
+      if (id === MENU_COMMANDS.ACCEPT_PROPOSAL) {
+        void accept();
+      } else if (id === MENU_COMMANDS.REJECT_PROPOSAL) {
+        void reject();
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proposal, busy]);
 
   if (!proposal) return null;
 

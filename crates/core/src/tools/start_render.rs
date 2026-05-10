@@ -151,6 +151,10 @@ impl ToolHandler for StartRenderTool {
                             "start_render: clip '{clip_name}' has no source_range — \
                          can't extract a renderable segment."
                         ),
+                        RenderTimelineError::UnsupportedTransition { kind, message } => format!(
+                            "start_render: timeline transition {kind:?} cannot be exported: \
+                         {message}"
+                        ),
                     };
                     FunctionCallError::RespondToModel(msg)
                 })?;

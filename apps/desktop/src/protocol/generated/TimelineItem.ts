@@ -90,6 +90,27 @@ volume: number | null,
  */
 speed: number | null, 
 /**
+ * Per-clip audio fade in seconds from clip start.
+ */
+fade_in_s: number | null, 
+/**
+ * Per-clip audio fade out seconds into clip end.
+ */
+fade_out_s: number | null, 
+/**
+ * Link group shared by related video/audio clips imported
+ * from the same source.
+ */
+link_group_id: string | null, 
+/**
+ * Whether the referenced asset has a video stream.
+ */
+has_video: boolean | null, 
+/**
+ * Whether the referenced asset has an audio stream.
+ */
+has_audio: boolean | null, 
+/**
  * Clip-level color controls (`awidat.color_correction` Effect).
  * `None` when no correction is stamped on this clip.
  */

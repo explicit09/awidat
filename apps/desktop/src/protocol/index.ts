@@ -18,6 +18,8 @@ export type { Thread } from "./generated/Thread";
 export type { TimelineItem } from "./generated/TimelineItem";
 export type { TimelineTrack } from "./generated/TimelineTrack";
 export type { TimelineSnapshot } from "./generated/TimelineSnapshot";
+export type { TrackAudioControls } from "./generated/TrackAudioControls";
+export type { DuckingControls } from "./generated/DuckingControls";
 export type { ColorCorrectionStyling } from "./generated/ColorCorrectionStyling";
 export type { TitleStyling } from "./generated/TitleStyling";
 export type { BroadcastOverlayConfig } from "./generated/BroadcastOverlayConfig";
@@ -50,6 +52,7 @@ export type { BrollPreview } from "./generated/BrollPreview";
 export const ITEM_EVENT = "awidat://item";
 export const TURN_END_EVENT = "awidat://turn-end";
 export const TIMELINE_CHANGED_EVENT = "awidat://timeline-changed";
+export const MENU_COMMAND_EVENT = "awidat://menu-command";
 
 // Envelope shape emitted by the backend over `ITEM_EVENT`.
 import type { Item } from "./generated/Item";
@@ -57,3 +60,6 @@ export type ItemEvent = { item: Item };
 
 // Payload emitted on TURN_END_EVENT.
 export type TurnEndEvent = { error: string | null };
+
+// Payload emitted on MENU_COMMAND_EVENT.
+export type NativeMenuCommandEvent = { id: string };

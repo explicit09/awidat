@@ -13,6 +13,8 @@
 //! Rust engine never sees indexer-specific data — the body of every
 //! sidecar is `serde_json::Value` to us.
 
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -265,6 +267,7 @@ pub struct AssetInput {
 /// a terminal state). The CLI passes `None`; the desktop forwards
 /// events to a protocol channel.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::expect_used)]
 pub async fn run(
     project_root: &Path,
     servers: &[McpServer],

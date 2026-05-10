@@ -151,6 +151,24 @@ pub fn flatten_timeline_public(
                         .find(|e| e.effect_name == "awidat.speed")
                         .and_then(|e| e.metadata.get("factor"))
                         .and_then(|v| v.as_f64());
+                    let (fade_in_s, fade_out_s) = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "awidat.audio_fade")
+                        .map(|e| {
+                            (
+                                e.metadata.get("fade_in_s").and_then(|v| v.as_f64()),
+                                e.metadata.get("fade_out_s").and_then(|v| v.as_f64()),
+                            )
+                        })
+                        .unwrap_or((None, None));
+                    let link_group_id = clip
+                        .metadata
+                        .awidat
+                        .as_ref()
+                        .and_then(|m| m.extra.get("link_group_id"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
                     let color_correction = clip
                         .effects
                         .iter()
@@ -236,6 +254,11 @@ pub fn flatten_timeline_public(
                         waveform_path,
                         volume,
                         speed,
+                        fade_in_s,
+                        fade_out_s,
+                        link_group_id,
+                        has_video: Some(matches!(track.kind, TrackKind::Video)),
+                        has_audio: Some(matches!(track.kind, TrackKind::Audio)),
                         color_correction,
                         lut_path,
                         title,
@@ -281,6 +304,7 @@ pub fn flatten_timeline_public(
             name: track.name.clone(),
             kind: kind_str.into(),
             role: role.clone(),
+            audio: audio_controls_for_track(track),
             items,
         });
     }
@@ -326,6 +350,62 @@ fn broadcast_overlay_for_protocol(
         brand_logo_path: config.brand_logo_path.clone(),
         short_form_mode: config.short_form_mode,
         style: broadcast_style_for_protocol(&config.style),
+    }
+}
+
+fn audio_controls_for_track(
+    track: &awidat_proto::otio::Track,
+) -> Option<awidat_desktop_protocol::TrackAudioControls> {
+    if !matches!(track.kind, TrackKind::Audio) {
+        return None;
+    }
+    let value = track.metadata.get("awidat_audio");
+    let role = value
+        .and_then(|v| v.get("role"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| default_audio_role(&track.name));
+    let volume = value
+        .and_then(|v| v.get("volume"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0);
+    let muted = value
+        .and_then(|v| v.get("muted"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let solo = value
+        .and_then(|v| v.get("solo"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let ducking =
+        value
+            .and_then(|v| v.get("ducking"))
+            .map(|d| awidat_desktop_protocol::DuckingControls {
+                enabled: d.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                amount_db: d.get("amount_db").and_then(|v| v.as_f64()).unwrap_or(-12.0),
+                attack_ms: d.get("attack_ms").and_then(|v| v.as_f64()).unwrap_or(80.0),
+                release_ms: d
+                    .get("release_ms")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(300.0),
+            });
+    Some(awidat_desktop_protocol::TrackAudioControls {
+        role,
+        volume,
+        muted,
+        solo,
+        ducking,
+    })
+}
+
+fn default_audio_role(track_name: &str) -> String {
+    let name = track_name.trim().to_ascii_lowercase();
+    if name == "a1" || name == "audio 1" {
+        "dialogue".into()
+    } else if name.contains("music") {
+        "music".into()
+    } else {
+        "sfx".into()
     }
 }
 

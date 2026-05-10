@@ -1,4 +1,4 @@
-.PHONY: check fmt clippy test package install-local clean-dist desktop desktop-deps desktop-yt-dlp
+.PHONY: check fmt clippy test package install-local clean-dist desktop desktop-stop desktop-deps desktop-yt-dlp
 
 check: fmt clippy test
 
@@ -65,3 +65,13 @@ desktop-yt-dlp:
 
 desktop: desktop-deps desktop-yt-dlp
 	cd apps/desktop && pnpm tauri dev
+
+# Stop stale dev processes that can keep Vite's fixed Tauri port busy.
+desktop-stop:
+	@pids="$$(lsof -tiTCP:1420 -sTCP:LISTEN 2>/dev/null || true)"; \
+	if [ -z "$$pids" ]; then \
+	    echo "no process is listening on port 1420"; \
+	else \
+	    echo "stopping dev server on port 1420: $$pids"; \
+	    kill $$pids; \
+	fi

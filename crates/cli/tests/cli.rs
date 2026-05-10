@@ -1,5 +1,7 @@
 //! CLI integration tests that exercise the installed `awidat` binary.
 
+#![allow(clippy::unwrap_used)]
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};

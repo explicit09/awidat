@@ -46,6 +46,7 @@ pub fn bundle_with_dissolve(
         between: TransitionBetween { from, to },
         kind: "SMPTE_Dissolve".to_string(),
         duration_s: duration_s.unwrap_or(DEFAULT_DISSOLVE_S),
+        spec: None,
     });
     EdlEnvelope { ops }
 }
@@ -124,6 +125,7 @@ mod tests {
                 between,
                 kind,
                 duration_s,
+                ..
             } => {
                 assert_eq!(kind, "SMPTE_Dissolve");
                 assert!((duration_s - DEFAULT_DISSOLVE_S).abs() < 1e-9);

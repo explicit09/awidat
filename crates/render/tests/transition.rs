@@ -3,6 +3,8 @@
 //! `xfade=` token in the rendered argv. The render itself is gated
 //! on ffmpeg being available — the argv assertion runs unconditionally.
 
+#![allow(clippy::unwrap_used)]
+
 use awidat_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Timeline,
     Track, TrackChild, TrackKind, Transition,
@@ -13,6 +15,10 @@ use std::fs;
 use std::path::Path;
 
 fn write_two_clip_project_with_transition(dir: &Path) {
+    write_two_clip_project_with_transition_kind(dir, "SMPTE_Dissolve");
+}
+
+fn write_two_clip_project_with_transition_kind(dir: &Path, kind: &str) {
     let asset_a = "raw/a.mp4";
     let asset_b = "raw/b.mp4";
     fs::create_dir_all(dir.join("raw")).unwrap();
@@ -33,7 +39,7 @@ fn write_two_clip_project_with_transition(dir: &Path) {
         RationalTime::new(2.0 * 24.0, 24.0),
     ));
 
-    let transition = Transition::symmetric("SMPTE_Dissolve", 1.0, 24.0);
+    let transition = Transition::symmetric(kind, 1.0, 24.0);
 
     let mut track = Track::empty("V1", TrackKind::Video);
     track.children.push(TrackChild::Clip(clip_a));
@@ -71,6 +77,29 @@ fn project_with_transition_emits_xfade_in_argv() {
     assert!(
         (dur - 3.0).abs() < 1e-6,
         "expected total duration 3.0s after transition overlap, got {dur}",
+    );
+}
+
+#[test]
+fn project_with_awidat_transition_id_maps_to_xfade() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "awidat.slide_left");
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("xfade=transition=slideleft"),
+        "expected awidat id to resolve to xfade slideleft, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_unknown_awidat_transition_fails_before_ffmpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "awidat.not_registered");
+    let err = build_timeline_render_spec(dir.path()).unwrap_err();
+    assert!(
+        err.to_string().contains("unsupported"),
+        "expected clear unsupported transition error, got: {err}",
     );
 }
 

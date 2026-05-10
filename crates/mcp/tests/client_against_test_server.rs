@@ -4,6 +4,8 @@
 //! Test fixtures (the `cfg`/`client_info` helpers and the path-resolution
 //! for the test-server binary) live in `tests/common/mod.rs`.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::collections::HashMap;
 use std::time::Duration;
 

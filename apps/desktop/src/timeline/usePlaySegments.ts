@@ -22,9 +22,9 @@
 // render.
 //
 // v1 scope: video tracks only, single-track flat (V1). Multi-video
-// (V2 overlay) lands when we tackle B-roll preview. Audio-only
-// tracks are filtered out — the video element handles its own
-// audio mux from the same proxy.
+// (V2 overlay) lands when we tackle B-roll preview. When explicit
+// audio tracks exist, preview mutes embedded video audio so it does
+// not double with the first-class mix used by export.
 
 import { useMemo } from "react";
 import { useTimelineStore } from "./store";
@@ -67,6 +67,7 @@ export function usePlaySegments(): PlaySegment[] {
   return useMemo(() => {
     const videoTrack = snapshot.tracks.find((t) => t.kind === "video");
     if (!videoTrack) return [];
+    const hasExplicitAudio = snapshot.tracks.some((t) => t.kind === "audio");
 
     const segments: PlaySegment[] = [];
     for (const item of videoTrack.items) {
@@ -86,7 +87,7 @@ export function usePlaySegments(): PlaySegment[] {
         sourceEnd: sourceStart + item.duration_s,
         timelineStart: item.track_start_s,
         timelineEnd: item.track_start_s + item.duration_s,
-        volume: item.volume ?? 1,
+        volume: hasExplicitAudio ? 0 : item.volume ?? 1,
         speed: item.speed ?? 1,
         clipIndex: item.index,
       });

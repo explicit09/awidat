@@ -53,6 +53,14 @@ pub async fn transcode_project_proxies(
     let assets = collect_media(&raw_dir).map_err(|e| format!("scan raw/: {e}"))?;
     let mut generated = 0usize;
     for asset in assets {
+        match awidat_render::probe_media(&asset).await {
+            Ok(probe) if probe.has_video => {}
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::warn!(error = %e, asset = %asset.display(), "probe failed; skipping proxy");
+                continue;
+            }
+        }
         let proxy_path = proxy_path_for(&proxies_dir, &asset);
         if proxy_is_fresh(&asset, &proxy_path) {
             continue;
@@ -78,6 +86,11 @@ pub async fn transcode_single_asset_in_project(
         .await
         .map_err(|e| format!("create proxies dir: {e}"))?;
     let proxy_path = proxy_path_for(&proxies_dir, asset_path);
+    match awidat_render::probe_media(asset_path).await {
+        Ok(probe) if probe.has_video => {}
+        Ok(_) => return Ok(None),
+        Err(e) => return Err(format!("probe for transcode: {e}")),
+    }
     if proxy_is_fresh(asset_path, &proxy_path) {
         return Ok(Some(proxy_path));
     }
@@ -209,7 +222,9 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Whitelist of file extensions we treat as media for transcoding.
+/// Whitelist of file extensions we treat as media for scanning. The
+/// transcode command probes each asset and only video-bearing files
+/// get a proxy.
 /// We don't want to try to transcode a stray .DS_Store or a .json
 /// sidecar. ffmpeg can read more than this list — but extending it
 /// requires a real decision per format, not just "yolo, try it."
@@ -219,7 +234,24 @@ fn looks_like_media(path: &Path) -> bool {
     };
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "mp4" | "mov" | "mkv" | "webm" | "m4v" | "avi" | "flv" | "wmv" | "mpg" | "mpeg"
+        "mp4"
+            | "mov"
+            | "mkv"
+            | "webm"
+            | "m4v"
+            | "avi"
+            | "flv"
+            | "wmv"
+            | "mpg"
+            | "mpeg"
+            | "wav"
+            | "mp3"
+            | "m4a"
+            | "aac"
+            | "flac"
+            | "aiff"
+            | "aif"
+            | "ogg"
     )
 }
 

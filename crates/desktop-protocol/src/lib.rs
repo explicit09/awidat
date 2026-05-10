@@ -28,6 +28,8 @@
 //! does not understand.
 //!
 //! # TypeScript generation
+
+#![cfg_attr(test, allow(clippy::unwrap_used))]
 //!
 //! Types here `#[derive(TS)]` so `cargo test --features ts-export` writes
 //! `.ts` files into `apps/desktop/src/protocol/generated/`. Hand-edits to
@@ -78,6 +80,7 @@ impl Id {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum Item {
     /// A message the user typed into the composer. Always emitted as
     /// a single Completed item — the desktop has no streaming user
@@ -675,8 +678,40 @@ pub struct TimelineTrack {
     /// special amber-on-black band rather than a regular video lane.
     /// `None` for ordinary V1 / V2 / audio tracks.
     pub role: Option<String>,
+    /// Audio controls for audio tracks. `None` for video/title tracks.
+    pub audio: Option<TrackAudioControls>,
     /// Items in this track in playback order.
     pub items: Vec<TimelineItem>,
+}
+
+/// Audio controls surfaced for one timeline audio track.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TrackAudioControls {
+    /// Semantic track role: dialogue, music, or sfx.
+    pub role: String,
+    /// Linear track gain multiplier.
+    pub volume: f64,
+    /// Whether the track is muted.
+    pub muted: bool,
+    /// Whether the track is soloed.
+    pub solo: bool,
+    /// Optional ducking settings for this track.
+    pub ducking: Option<DuckingControls>,
+}
+
+/// Ducking controls for reducing a non-dialogue track under dialogue.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct DuckingControls {
+    /// Whether ducking is enabled.
+    pub enabled: bool,
+    /// Desired gain reduction in dB.
+    pub amount_db: f64,
+    /// Attack time in milliseconds.
+    pub attack_ms: f64,
+    /// Release time in milliseconds.
+    pub release_ms: f64,
 }
 
 /// One drawable item on a track. Variant-tagged so the frontend can
@@ -684,6 +719,7 @@ pub struct TimelineTrack {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum TimelineItem {
     /// A clip — references an asset, has a source range.
     Clip {
@@ -745,6 +781,17 @@ pub enum TimelineItem {
         /// input and to paint a `⚡ 2×` badge on clips with non-default
         /// values.
         speed: Option<f64>,
+        /// Per-clip audio fade in seconds from clip start.
+        fade_in_s: Option<f64>,
+        /// Per-clip audio fade out seconds into clip end.
+        fade_out_s: Option<f64>,
+        /// Link group shared by related video/audio clips imported
+        /// from the same source.
+        link_group_id: Option<String>,
+        /// Whether the referenced asset has a video stream.
+        has_video: Option<bool>,
+        /// Whether the referenced asset has an audio stream.
+        has_audio: Option<bool>,
         /// Clip-level color controls (`awidat.color_correction` Effect).
         /// `None` when no correction is stamped on this clip.
         color_correction: Option<ColorCorrectionStyling>,

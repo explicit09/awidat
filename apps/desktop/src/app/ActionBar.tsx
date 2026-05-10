@@ -2,7 +2,7 @@
 // visible when a project is loaded — replaces the implicit-popover
 // pattern from the v0 ProjectBanner where actions hid behind "Change."
 //
-// Three primary actions: Import file, Import URL, Run indexers.
+// Three primary actions: Import files, Import URL, Run indexers.
 // Each is project-scoped: disabled when no project is loaded, and
 // busy-disabled while a same-kind job is running (we don't want
 // double-fires of long jobs).
@@ -15,6 +15,7 @@ import { useTimelineStore } from "../timeline/store";
 import { useProjectStore } from "./state";
 import { useExportJob } from "./useExportJob";
 import type { PermissionMode } from "../protocol";
+import { MENU_COMMANDS, onMenuCommand } from "./menuCommands";
 
 export function ActionBar() {
   const items = useAgentStore((s) => s.items);
@@ -66,11 +67,13 @@ export function ActionBar() {
     try {
       const picked = await openDialog({
         directory: false,
-        multiple: false,
-        title: "Choose media file to import",
+        multiple: true,
+        title: "Choose media files to import",
       });
       if (typeof picked === "string") {
-        await invoke("import_local", { srcPath: picked, link: false });
+        await invoke("import_locals", { srcPaths: [picked], link: false });
+      } else if (Array.isArray(picked) && picked.length > 0) {
+        await invoke("import_locals", { srcPaths: picked, link: false });
       }
     } catch (e) {
       setError(String(e));
@@ -109,11 +112,25 @@ export function ActionBar() {
     }
   }
 
+  useEffect(() => {
+    return onMenuCommand((id) => {
+      if (id === MENU_COMMANDS.IMPORT_FILES) {
+        void importLocal();
+      } else if (id === MENU_COMMANDS.IMPORT_URL) {
+        setShowUrl(true);
+      } else if (id === MENU_COMMANDS.RUN_INDEXERS) {
+        void runIndex();
+      } else if (id === MENU_COMMANDS.EXPORT_TIMELINE) {
+        void runExport();
+      }
+    });
+  });
+
   return (
     <>
       <div className="action-bar">
         <button onClick={importLocal} disabled={importBusy}>
-          Import file…
+          Import files…
         </button>
         <button onClick={() => setShowUrl(true)} disabled={importBusy}>
           Import URL…

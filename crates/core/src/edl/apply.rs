@@ -24,11 +24,11 @@ use awidat_proto::awidat_meta::{
     AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig, BroadcastOverlayStyle,
     BroadcastTimedEntry,
 };
-use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild};
+use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
 use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
-use super::op::{Anchor, EdlEnvelope, EdlOp};
+use super::op::{Anchor, EdlEnvelope, EdlOp, InsertTrackKind};
 
 /// One record of what was applied. Surfaced back to the model + the TUI.
 #[derive(Debug, Clone)]
@@ -149,19 +149,23 @@ fn apply_one(
         EdlOp::InsertClip {
             asset,
             track,
+            track_kind,
             at_position,
             start,
             end,
             name,
+            link_group_id,
         } => apply_insert_clip(
             working,
             index,
             asset,
             track,
+            *track_kind,
             *at_position,
             *start,
             *end,
             name.as_deref(),
+            link_group_id.as_deref(),
         ),
         EdlOp::InsertBRoll {
             anchor,
@@ -181,15 +185,68 @@ fn apply_one(
         EdlOp::MoveClip {
             anchor,
             to_position,
-        } => apply_move_clip(working, index, anchor, *to_position, ctx, locator),
+            at_s,
+        } => apply_move_clip(working, index, anchor, *to_position, *at_s, ctx, locator),
         EdlOp::InsertTransition {
             between,
             kind,
             duration_s,
-        } => apply_insert_transition(working, index, between, kind, *duration_s, ctx),
+            spec,
+        } => apply_insert_transition(
+            working,
+            index,
+            between,
+            kind,
+            *duration_s,
+            spec.as_ref(),
+            ctx,
+        ),
         EdlOp::SetVolume { anchor, value } => {
             apply_set_volume(working, index, anchor, *value, ctx, locator)
         }
+        EdlOp::SetAudioFade {
+            anchor,
+            fade_in_s,
+            fade_out_s,
+        } => apply_set_audio_fade(
+            working,
+            index,
+            anchor,
+            *fade_in_s,
+            *fade_out_s,
+            ctx,
+            locator,
+        ),
+        EdlOp::SetTrackAudio {
+            track,
+            role,
+            volume,
+            muted,
+            solo,
+        } => apply_set_track_audio(
+            working,
+            index,
+            track,
+            role.as_deref(),
+            *volume,
+            *muted,
+            *solo,
+        ),
+        EdlOp::SetDucking {
+            track,
+            enabled,
+            amount_db,
+            attack_ms,
+            release_ms,
+        } => apply_set_ducking(
+            working,
+            index,
+            track,
+            *enabled,
+            *amount_db,
+            *attack_ms,
+            *release_ms,
+        ),
         EdlOp::SetSpeed { anchor, factor } => {
             apply_set_speed(working, index, anchor, *factor, ctx, locator)
         }
@@ -324,12 +381,15 @@ fn resolve_locator_for_op(
         | EdlOp::MoveClip { anchor, .. }
         | EdlOp::InsertBRoll { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
+        | EdlOp::SetAudioFade { anchor, .. }
         | EdlOp::SetSpeed { anchor, .. }
         | EdlOp::SetColorCorrection { anchor, .. }
         | EdlOp::ApplyLut { anchor, .. }
         | EdlOp::SetTitle { anchor, .. } => anchor,
         EdlOp::InsertClip { .. }
         | EdlOp::InsertTransition { .. }
+        | EdlOp::SetTrackAudio { .. }
+        | EdlOp::SetDucking { .. }
         | EdlOp::InsertTitle { .. }
         | EdlOp::InsertCaption { .. }
         | EdlOp::SetOutputFormat { .. }
@@ -599,13 +659,15 @@ fn apply_insert_clip(
     index: usize,
     asset: &str,
     track_name: &str,
+    track_kind_hint: Option<InsertTrackKind>,
     at_position: Option<usize>,
     start_s: Option<f64>,
     end_s: Option<f64>,
     name_override: Option<&str>,
+    link_group_id: Option<&str>,
 ) -> Result<String, ApplyError> {
     use awidat_proto::otio::{
-        Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track, TrackKind,
+        Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track,
     };
 
     // Find or create the named track.
@@ -621,17 +683,11 @@ fn apply_insert_clip(
     let track_idx = match track_idx {
         Some(i) => i,
         None => {
-            let track = Track::empty(track_name.to_string(), TrackKind::Video);
+            let kind = infer_insert_track_kind(track_name, track_kind_hint);
+            let track = Track::empty(track_name.to_string(), kind);
             working.tracks.children.push(StackChild::Track(track));
             working.tracks.children.len() - 1
         }
-    };
-
-    let StackChild::Track(track) = &mut working.tracks.children[track_idx] else {
-        return Err(ApplyError::Invalid {
-            index,
-            message: "track index resolved to a non-track stack child".into(),
-        });
     };
 
     // Determine the source range.
@@ -654,6 +710,36 @@ fn apply_insert_clip(
         RationalTime::new((end - start) * rate, rate),
     );
 
+    let linked_video_start_s = link_group_id.and_then(|id| {
+        let StackChild::Track(track) = &working.tracks.children[track_idx] else {
+            return None;
+        };
+        if at_position.is_none() && matches!(track.kind, TrackKind::Audio) {
+            linked_clip_track_time(working, id, TrackKind::Video)
+        } else {
+            None
+        }
+    });
+
+    let StackChild::Track(track) = &mut working.tracks.children[track_idx] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "track index resolved to a non-track stack child".into(),
+        });
+    };
+
+    if let Some(target_time_s) = linked_video_start_s {
+        let cursor_s = track_cursor(track);
+        if cursor_s + 0.001 < target_time_s {
+            track
+                .children
+                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    target_time_s - cursor_s,
+                    rate,
+                )));
+        }
+    }
+
     // Build the clip.
     let position = at_position
         .unwrap_or(track.children.len())
@@ -669,6 +755,9 @@ fn apply_insert_clip(
     // back to name-based matching (which works but is brittle when
     // two inserts pick the same default name).
     stamp_fresh_clip_uuid(&mut clip);
+    if let Some(link_group_id) = link_group_id {
+        stamp_link_group_id(&mut clip, link_group_id);
+    }
 
     track.children.insert(position, TrackChild::Clip(clip));
 
@@ -678,6 +767,26 @@ fn apply_insert_clip(
          ({:.3}s)",
         end - start
     ))
+}
+
+fn infer_insert_track_kind(track_name: &str, hint: Option<InsertTrackKind>) -> TrackKind {
+    match hint {
+        Some(InsertTrackKind::Video) => TrackKind::Video,
+        Some(InsertTrackKind::Audio) => TrackKind::Audio,
+        Some(InsertTrackKind::Auto) | None => {
+            let name = track_name.trim().to_ascii_lowercase();
+            if name == "a1"
+                || name.starts_with("a ")
+                || name.starts_with("a-")
+                || name.starts_with("audio")
+                || name.starts_with("music")
+            {
+                TrackKind::Audio
+            } else {
+                TrackKind::Video
+            }
+        }
+    }
 }
 
 /// Stamp a fresh, process-unique clip uuid into `clip.metadata.awidat
@@ -702,6 +811,51 @@ fn stamp_fresh_clip_uuid(clip: &mut Clip) {
     awidat
         .extra
         .insert("clip_uuid".into(), serde_json::Value::String(uuid));
+}
+
+fn stamp_link_group_id(clip: &mut Clip, link_group_id: &str) {
+    let awidat = clip
+        .metadata
+        .awidat
+        .get_or_insert_with(AwidatClipMetadata::default);
+    awidat.extra.insert(
+        "link_group_id".into(),
+        serde_json::Value::String(link_group_id.to_string()),
+    );
+}
+
+fn linked_clip_track_time(
+    timeline: &Timeline,
+    link_group_id: &str,
+    kind: TrackKind,
+) -> Option<f64> {
+    for stack_child in &timeline.tracks.children {
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
+        if track.kind != kind {
+            continue;
+        }
+        let mut cursor_s = 0.0;
+        for child in &track.children {
+            if let TrackChild::Clip(clip) = child
+                && clip_link_group_id(clip).as_deref() == Some(link_group_id)
+            {
+                return Some(cursor_s);
+            }
+            cursor_s += child_duration(child);
+        }
+    }
+    None
+}
+
+fn clip_link_group_id(clip: &Clip) -> Option<String> {
+    clip.metadata
+        .awidat
+        .as_ref()
+        .and_then(|m| m.extra.get("link_group_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 fn next_clip_name_in_track(track: &awidat_proto::otio::Track) -> String {
@@ -856,6 +1010,7 @@ fn apply_insert_transition(
     between: &super::op::TransitionBetween,
     kind: &str,
     duration_s: f64,
+    spec: Option<&awidat_proto::transitions::SemanticTransitionSpec>,
     ctx: &AnchorContext,
 ) -> Result<String, ApplyError> {
     use awidat_proto::otio::Transition;
@@ -865,6 +1020,23 @@ fn apply_insert_transition(
             index,
             message: format!("transition duration {duration_s} must be > 0"),
         });
+    }
+    awidat_proto::transitions::resolve_ffmpeg_xfade(kind)
+        .map_err(|e| ApplyError::Invalid {
+            index,
+            message: format!("transition {kind:?} is not supported by the phase-one renderer: {e}"),
+        })?
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: format!("transition {kind:?} is semantic-only and cannot be inserted"),
+        })?;
+    if let Some(spec) = spec {
+        awidat_proto::transitions::validate_semantic_transition_spec(spec).map_err(|e| {
+            ApplyError::Invalid {
+                index,
+                message: format!("transition spec for {:?} is invalid: {e}", spec.id),
+            }
+        })?;
     }
 
     let from_loc = resolve(working, &between.from, ctx)
@@ -915,7 +1087,16 @@ fn apply_insert_transition(
         .map(|r| r.start_time.rate)
         .unwrap_or(24.0);
 
-    let transition = Transition::symmetric(kind, duration_s, rate);
+    let mut transition = Transition::symmetric(kind, duration_s, rate);
+    if let Some(spec) = spec {
+        transition.metadata.insert(
+            "awidat_transition".into(),
+            serde_json::to_value(spec).map_err(|e| ApplyError::Invalid {
+                index,
+                message: format!("transition spec could not be serialized: {e}"),
+            })?,
+        );
+    }
     track
         .children
         .insert(from_loc.child_index + 1, TrackChild::Transition(transition));
@@ -943,6 +1124,7 @@ fn apply_move_clip(
     index: usize,
     anchor: &Anchor,
     to_position: usize,
+    at_s: Option<f64>,
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
@@ -964,6 +1146,10 @@ fn apply_move_clip(
                 track.children.len()
             ),
         });
+    }
+
+    if let Some(target_start_s) = at_s {
+        return apply_move_clip_to_time(index, track, locator.child_index, target_start_s);
     }
 
     // The user-facing target is "the clip's index in the post-move
@@ -1008,6 +1194,151 @@ fn apply_move_clip(
         "moved clip {:?} from position {} to position {} on track {}",
         c.name, locator.child_index, target_user, locator.track_index,
     ))
+}
+
+fn apply_move_clip_to_time(
+    index: usize,
+    track: &mut awidat_proto::otio::Track,
+    child_index: usize,
+    target_start_s: f64,
+) -> Result<String, ApplyError> {
+    if !target_start_s.is_finite() || target_start_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("move: at_s must be a finite non-negative time, got {target_start_s}"),
+        });
+    }
+
+    let original_start_s: f64 = track.children[..child_index]
+        .iter()
+        .map(child_duration)
+        .sum();
+    let duration_s = child_duration(&track.children[child_index]);
+    if duration_s <= 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "move: source clip has zero duration".into(),
+        });
+    }
+    if (target_start_s - original_start_s).abs() < 0.01 {
+        let TrackChild::Clip(c) = &track.children[child_index] else {
+            return Ok("move: source is not a clip; left timeline unchanged".into());
+        };
+        return Ok(format!(
+            "move: clip {:?} already starts at {target_start_s:.3}s; left timeline unchanged",
+            c.name
+        ));
+    }
+
+    let rate = track.children[child_index]
+        .as_clip_rate()
+        .unwrap_or(24.0);
+    let removed = std::mem::replace(
+        &mut track.children[child_index],
+        TrackChild::Gap(awidat_proto::otio::Gap::of_duration(duration_s, rate)),
+    );
+    let name = match &removed {
+        TrackChild::Clip(c) => c.name.clone(),
+        _ => "<non-clip>".to_string(),
+    };
+    insert_child_at_time(track, removed, target_start_s, duration_s, rate);
+    merge_adjacent_gaps(&mut track.children, rate);
+
+    Ok(format!(
+        "moved clip {name:?} from {original_start_s:.3}s to {target_start_s:.3}s on track {:?}",
+        track.name
+    ))
+}
+
+trait TrackChildClipRate {
+    fn as_clip_rate(&self) -> Option<f64>;
+}
+
+impl TrackChildClipRate for TrackChild {
+    fn as_clip_rate(&self) -> Option<f64> {
+        match self {
+            TrackChild::Clip(c) => c
+                .source_range
+                .as_ref()
+                .map(|r| r.start_time.rate)
+                .filter(|r| *r > 0.0),
+            _ => None,
+        }
+    }
+}
+
+fn insert_child_at_time(
+    track: &mut awidat_proto::otio::Track,
+    child: TrackChild,
+    target_start_s: f64,
+    child_duration_s: f64,
+    rate: f64,
+) {
+    const EPS: f64 = 0.001;
+    let mut cursor_s = 0.0;
+    for i in 0..track.children.len() {
+        let dur_s = child_duration(&track.children[i]);
+        let end_s = cursor_s + dur_s;
+        if target_start_s <= cursor_s + EPS {
+            track.children.insert(i, child);
+            return;
+        }
+        if target_start_s < end_s - EPS {
+            if matches!(track.children[i], TrackChild::Gap(_)) {
+                let before_s = (target_start_s - cursor_s).max(0.0);
+                let after_s = (end_s - target_start_s - child_duration_s).max(0.0);
+                let mut replacement = Vec::new();
+                if before_s > EPS {
+                    replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                        before_s, rate,
+                    )));
+                }
+                replacement.push(child);
+                if after_s > EPS {
+                    replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                        after_s, rate,
+                    )));
+                }
+                track.children.splice(i..=i, replacement);
+                return;
+            }
+            let insert_at = if target_start_s < cursor_s + dur_s / 2.0 {
+                i
+            } else {
+                i + 1
+            };
+            track.children.insert(insert_at, child);
+            return;
+        }
+        cursor_s = end_s;
+    }
+    if target_start_s > cursor_s + EPS {
+        track.children.push(TrackChild::Gap(
+            awidat_proto::otio::Gap::of_duration(target_start_s - cursor_s, rate),
+        ));
+    }
+    track.children.push(child);
+}
+
+fn merge_adjacent_gaps(children: &mut Vec<TrackChild>, rate: f64) {
+    let mut merged = Vec::with_capacity(children.len());
+    for child in std::mem::take(children) {
+        if let TrackChild::Gap(gap) = child {
+            let dur_s = gap.source_range.duration.to_seconds();
+            if dur_s <= 0.001 {
+                continue;
+            }
+            if let Some(TrackChild::Gap(prev)) = merged.last_mut() {
+                let total_s = prev.source_range.duration.to_seconds() + dur_s;
+                *prev = awidat_proto::otio::Gap::of_duration(total_s, rate);
+            } else {
+                merged.push(TrackChild::Gap(gap));
+            }
+        } else {
+            merged.push(child);
+        }
+    }
+    *children = merged;
 }
 
 /// Insert a b-roll clip near an anchor, either replacing footage in
@@ -1208,6 +1539,9 @@ fn apply_insert_broll(
 /// `volume=<value>` on the segment's audio stream.
 const VOLUME_EFFECT_NAME: &str = "awidat.volume";
 
+/// Effect name used for per-clip audio fades.
+const AUDIO_FADE_EFFECT_NAME: &str = "awidat.audio_fade";
+
 /// Effect name used for per-clip speed changes. Render reads this
 /// and emits `setpts=<1/factor>*PTS` on video + `atempo=<factor>`
 /// on audio (chained when factor is outside `[0.5, 2.0]`).
@@ -1238,6 +1572,9 @@ const TITLES_TRACK_ROLE_KEY: &str = "awidat_track_role";
 
 /// Track-metadata value for the titles track.
 const TITLES_TRACK_ROLE_VALUE: &str = "titles";
+
+/// Track metadata key holding first-class audio controls.
+const AUDIO_TRACK_METADATA_KEY: &str = "awidat_audio";
 
 /// Stamp an awidat.volume Effect on the anchored clip with `value`
 /// (linear gain multiplier). Idempotent: any existing
@@ -1280,6 +1617,173 @@ fn apply_set_volume(
     clip.effects.push(effect);
     Ok(format!(
         "set volume on clip {clip_name:?} to {value:.3} (linear gain)"
+    ))
+}
+
+fn apply_set_audio_fade(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    fade_in_s: Option<f64>,
+    fade_out_s: Option<f64>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let fade_in = fade_in_s.unwrap_or(0.0);
+    let fade_out = fade_out_s.unwrap_or(0.0);
+    if !fade_in.is_finite() || !fade_out.is_finite() || fade_in < 0.0 || fade_out < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_audio_fade: fade_in_s {fade_in} and fade_out_s {fade_out} must be finite and >= 0.0"
+            ),
+        });
+    }
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_audio_fade: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_audio_fade: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    clip.effects
+        .retain(|e| e.effect_name != AUDIO_FADE_EFFECT_NAME);
+    let mut effect = awidat_proto::otio::Effect::new(AUDIO_FADE_EFFECT_NAME);
+    effect
+        .metadata
+        .insert("fade_in_s".to_string(), serde_json::json!(fade_in));
+    effect
+        .metadata
+        .insert("fade_out_s".to_string(), serde_json::json!(fade_out));
+    let clip_name = clip.name.clone();
+    clip.effects.push(effect);
+    Ok(format!(
+        "set audio fade on clip {clip_name:?}: in={fade_in:.3}s out={fade_out:.3}s"
+    ))
+}
+
+fn apply_set_track_audio(
+    working: &mut Timeline,
+    index: usize,
+    track_name: &str,
+    role: Option<&str>,
+    volume: Option<f64>,
+    muted: Option<bool>,
+    solo: Option<bool>,
+) -> Result<String, ApplyError> {
+    if let Some(volume) = volume
+        && (!volume.is_finite() || volume < 0.0)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_track_audio: volume {volume} must be finite and >= 0.0"),
+        });
+    }
+    let track = find_track_mut(working, track_name).ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: format!("set_track_audio: track {track_name:?} not found"),
+    })?;
+    if !matches!(track.kind, TrackKind::Audio) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_track_audio: track {track_name:?} is not an audio track"),
+        });
+    }
+    let mut value = track
+        .metadata
+        .get(AUDIO_TRACK_METADATA_KEY)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let map = value.as_object_mut().ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: format!(
+            "set_track_audio: existing {AUDIO_TRACK_METADATA_KEY} metadata is not an object"
+        ),
+    })?;
+    if let Some(role) = role {
+        map.insert("role".into(), serde_json::Value::String(role.to_string()));
+    }
+    if let Some(volume) = volume {
+        map.insert("volume".into(), serde_json::json!(volume));
+    }
+    if let Some(muted) = muted {
+        map.insert("muted".into(), serde_json::json!(muted));
+    }
+    if let Some(solo) = solo {
+        map.insert("solo".into(), serde_json::json!(solo));
+    }
+    track
+        .metadata
+        .insert(AUDIO_TRACK_METADATA_KEY.to_string(), value);
+    Ok(format!("set audio controls on track {track_name:?}"))
+}
+
+fn apply_set_ducking(
+    working: &mut Timeline,
+    index: usize,
+    track_name: &str,
+    enabled: Option<bool>,
+    amount_db: Option<f64>,
+    attack_ms: Option<f64>,
+    release_ms: Option<f64>,
+) -> Result<String, ApplyError> {
+    let enabled = enabled.unwrap_or(true);
+    let amount_db = amount_db.unwrap_or(-12.0);
+    let attack_ms = attack_ms.unwrap_or(80.0);
+    let release_ms = release_ms.unwrap_or(300.0);
+    if !amount_db.is_finite()
+        || !attack_ms.is_finite()
+        || !release_ms.is_finite()
+        || attack_ms < 0.0
+        || release_ms < 0.0
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_ducking: amount_db, attack_ms, and release_ms must be finite; timings must be >= 0.0".into(),
+        });
+    }
+    let track = find_track_mut(working, track_name).ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: format!("set_ducking: track {track_name:?} not found"),
+    })?;
+    if !matches!(track.kind, TrackKind::Audio) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_ducking: track {track_name:?} is not an audio track"),
+        });
+    }
+    let mut value = track
+        .metadata
+        .get(AUDIO_TRACK_METADATA_KEY)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let map = value.as_object_mut().ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: format!(
+            "set_ducking: existing {AUDIO_TRACK_METADATA_KEY} metadata is not an object"
+        ),
+    })?;
+    map.insert(
+        "ducking".into(),
+        serde_json::json!({
+            "enabled": enabled,
+            "amount_db": amount_db,
+            "attack_ms": attack_ms,
+            "release_ms": release_ms,
+        }),
+    );
+    track
+        .metadata
+        .insert(AUDIO_TRACK_METADATA_KEY.to_string(), value);
+    Ok(format!(
+        "set ducking on track {track_name:?}: enabled={enabled} amount={amount_db:.1}dB"
     ))
 }
 
@@ -2156,6 +2660,16 @@ fn shift_broadcast_timed_entries(
     }
 }
 
+fn find_track_mut<'a>(
+    timeline: &'a mut Timeline,
+    track_name: &str,
+) -> Option<&'a mut awidat_proto::otio::Track> {
+    timeline.tracks.children.iter_mut().find_map(|sc| match sc {
+        StackChild::Track(track) if track.name == track_name => Some(track),
+        _ => None,
+    })
+}
+
 /// Sum the durations of children before `child_index` on the given
 /// track. Used by the overlay broll path to compute the anchor's
 /// track-time start so the broll on V2 lines up with the underlying
@@ -2522,10 +3036,12 @@ mod tests {
             ops: vec![EdlOp::InsertClip {
                 asset: "raw/x.mp4".into(),
                 track: "V1".into(),
+                track_kind: None,
                 at_position: None,
                 start: Some(0.0),
                 end: Some(3.0),
                 name: None,
+                link_group_id: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -2779,10 +3295,12 @@ mod tests {
             ops: vec![EdlOp::InsertClip {
                 asset: "raw/clip-1.MOV".into(),
                 track: "V1".into(),
+                track_kind: None,
                 at_position: None,
                 start: Some(0.0),
                 end: Some(56.47),
                 name: None,
+                link_group_id: None,
             }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -2808,10 +3326,12 @@ mod tests {
             ops: vec![EdlOp::InsertClip {
                 asset: "raw/extra.mp4".into(),
                 track: "V1".into(),
+                track_kind: None,
                 at_position: None,
                 start: Some(0.0),
                 end: Some(2.0),
                 name: Some("intro".into()),
+                link_group_id: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -2833,10 +3353,12 @@ mod tests {
             ops: vec![EdlOp::InsertClip {
                 asset: "raw/middle.mp4".into(),
                 track: "V1".into(),
+                track_kind: None,
                 at_position: Some(1),
                 start: Some(0.0),
                 end: Some(1.0),
                 name: Some("inserted".into()),
+                link_group_id: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -2857,10 +3379,12 @@ mod tests {
             ops: vec![EdlOp::InsertClip {
                 asset: "raw/middle.mp4".into(),
                 track: "V1".into(),
+                track_kind: None,
                 at_position: Some(1),
                 start: Some(0.0),
                 end: Some(1.0),
                 name: None,
+                link_group_id: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -2879,6 +3403,57 @@ mod tests {
     }
 
     #[test]
+    fn apply_linked_audio_insert_pads_to_video_start() {
+        use awidat_proto::otio::{
+            Clip, ExternalReference, MediaReference, RationalTime, TimeRange,
+        };
+
+        let mut tl = awidat_proto::otio::Timeline::empty("test");
+        let mut v1 = awidat_proto::otio::Track::empty("Video 1", TrackKind::Video);
+        let mut first = Clip::empty("first");
+        first.media_reference = MediaReference::External(ExternalReference::new("raw/first.mp4"));
+        first.source_range = Some(TimeRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(48.0, 24.0),
+        ));
+        v1.children.push(TrackChild::Clip(first));
+        tl.tracks.children.push(StackChild::Track(v1));
+
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::InsertClip {
+                    asset: "raw/second.mp4".into(),
+                    track: "Video 1".into(),
+                    track_kind: Some(InsertTrackKind::Video),
+                    at_position: None,
+                    start: Some(0.0),
+                    end: Some(5.0),
+                    name: None,
+                    link_group_id: Some("lg-1".into()),
+                },
+                EdlOp::InsertClip {
+                    asset: "raw/second.mp4".into(),
+                    track: "A1".into(),
+                    track_kind: Some(InsertTrackKind::Audio),
+                    at_position: None,
+                    start: Some(0.0),
+                    end: Some(5.0),
+                    name: None,
+                    link_group_id: Some("lg-1".into()),
+                },
+            ],
+        };
+
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(a1) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        assert!(matches!(a1.children[0], TrackChild::Gap(_)));
+        assert!((child_duration(&a1.children[0]) - 2.0).abs() < 0.001);
+        assert!(matches!(a1.children[1], TrackChild::Clip(_)));
+    }
+
+    #[test]
     fn apply_insert_clip_rejects_zero_duration() {
         use awidat_proto::otio::Timeline as Tl;
         let tl = Tl::empty("test");
@@ -2886,10 +3461,12 @@ mod tests {
             ops: vec![EdlOp::InsertClip {
                 asset: "raw/x.mp4".into(),
                 track: "V1".into(),
+                track_kind: None,
                 at_position: None,
                 start: Some(5.0),
                 end: Some(5.0),
                 name: None,
+                link_group_id: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -2899,6 +3476,119 @@ mod tests {
             }
             other => panic!("want Invalid, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn apply_insert_clip_can_create_audio_track() {
+        use awidat_proto::otio::Timeline as Tl;
+        let tl = Tl::empty("test");
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/dialogue.wav".into(),
+                track: "A1".into(),
+                track_kind: Some(InsertTrackKind::Audio),
+                at_position: None,
+                start: Some(0.0),
+                end: Some(10.0),
+                name: None,
+                link_group_id: Some("lg-test".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert!(matches!(t.kind, TrackKind::Audio));
+        let TrackChild::Clip(c) = &t.children[0] else {
+            panic!()
+        };
+        let link = c
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.extra.get("link_group_id"))
+            .and_then(|v| v.as_str());
+        assert_eq!(link, Some("lg-test"));
+    }
+
+    #[test]
+    fn apply_audio_fade_and_track_audio_replace_metadata() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetAudioFade {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-0".into(),
+                    },
+                    fade_in_s: Some(0.25),
+                    fade_out_s: Some(0.5),
+                },
+                EdlOp::SetTrackAudio {
+                    track: "V1".into(),
+                    role: Some("dialogue".into()),
+                    volume: Some(0.8),
+                    muted: Some(false),
+                    solo: Some(true),
+                },
+            ],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            err.to_string().contains("is not an audio track"),
+            "expected video-track rejection, got {err}"
+        );
+
+        let mut audio_tl = awidat_proto::otio::Timeline::empty("audio");
+        let mut track = awidat_proto::otio::Track::empty("A1", TrackKind::Audio);
+        let mut clip = awidat_proto::otio::Clip::empty("clip-0");
+        clip.media_reference = awidat_proto::otio::MediaReference::External(
+            awidat_proto::otio::ExternalReference::new("raw/a.wav"),
+        );
+        clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+            awidat_proto::otio::RationalTime::zero(24.0),
+            awidat_proto::otio::RationalTime::new(10.0 * 24.0, 24.0),
+        ));
+        stamp_fresh_clip_uuid(&mut clip);
+        track.children.push(TrackChild::Clip(clip));
+        audio_tl.tracks.children.push(StackChild::Track(track));
+        let uuid = match &audio_tl.tracks.children[0] {
+            StackChild::Track(t) => match &t.children[0] {
+                TrackChild::Clip(c) => extract_clip_uuid(c).unwrap(),
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetAudioFade {
+                    anchor: Anchor::ClipUuid { uuid },
+                    fade_in_s: Some(0.25),
+                    fade_out_s: Some(0.5),
+                },
+                EdlOp::SetTrackAudio {
+                    track: "A1".into(),
+                    role: Some("dialogue".into()),
+                    volume: Some(0.8),
+                    muted: Some(false),
+                    solo: Some(true),
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&audio_tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.metadata["awidat_audio"]["volume"].as_f64().unwrap(), 0.8);
+        let TrackChild::Clip(c) = &t.children[0] else {
+            panic!()
+        };
+        let fade = c
+            .effects
+            .iter()
+            .find(|e| e.effect_name == AUDIO_FADE_EFFECT_NAME)
+            .unwrap();
+        assert_eq!(fade.metadata["fade_in_s"].as_f64(), Some(0.25));
+        assert_eq!(fade.metadata["fade_out_s"].as_f64(), Some(0.5));
     }
 
     #[test]
@@ -3124,6 +3814,7 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 1.0,
+                spec: None,
             }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -3146,6 +3837,54 @@ mod tests {
     }
 
     #[test]
+    fn apply_insert_transition_persists_semantic_metadata() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "awidat.slide_left".into(),
+                duration_s: 0.28,
+                spec: Some(awidat_proto::transitions::SemanticTransitionSpec {
+                    id: "awidat.slide_left".into(),
+                    family: Some("slide".into()),
+                    intent: Some("hide_motion_jump".into()),
+                    energy: Some(0.7),
+                    direction: Some("left".into()),
+                    params: serde_json::Map::new(),
+                }),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Transition(tr) = &t.children[1] else {
+            panic!("expected transition")
+        };
+        assert_eq!(tr.transition_type, "awidat.slide_left");
+        let meta = tr
+            .metadata
+            .get("awidat_transition")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        assert_eq!(
+            meta.get("id").and_then(|v| v.as_str()),
+            Some("awidat.slide_left")
+        );
+        assert_eq!(
+            meta.get("intent").and_then(|v| v.as_str()),
+            Some("hide_motion_jump")
+        );
+    }
+
+    #[test]
     fn apply_insert_transition_rejects_non_adjacent_anchors() {
         let tl = timeline_with_three_clips();
         // "alpha" (idx 0) and "charlie" (idx 2) are 2 apart, not adjacent.
@@ -3161,6 +3900,7 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 1.0,
+                spec: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -3208,6 +3948,7 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 1.0,
+                spec: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -3232,6 +3973,7 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 0.0,
+                spec: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -3250,6 +3992,7 @@ mod tests {
                     text: "charlie snippet".into(),
                 },
                 to_position: 0,
+                at_s: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -3270,6 +4013,7 @@ mod tests {
                     text: "alpha snippet".into(),
                 },
                 to_position: 99, // way past the end — clamp.
+                at_s: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -3291,6 +4035,7 @@ mod tests {
                     text: "bravo snippet".into(),
                 },
                 to_position: 1, // already there.
+                at_s: None,
             }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -3310,6 +4055,31 @@ mod tests {
     }
 
     #[test]
+    fn apply_move_clip_to_time_leaves_gap_and_places_at_target() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MoveClip {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "alpha snippet".into(),
+                },
+                to_position: 0,
+                at_s: Some(20.0),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert!(matches!(&t.children[0], TrackChild::Gap(_)));
+        assert!((child_duration(&t.children[0]) - 5.0).abs() < 0.001);
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-2"));
+        assert!(matches!(&t.children[3], TrackChild::Gap(_)));
+        assert!((child_duration(&t.children[3]) - 5.0).abs() < 0.001);
+        assert!(matches!(&t.children[4], TrackChild::Clip(c) if c.name == "clip-0"));
+    }
+
+    #[test]
     fn apply_insert_transition_anchor_miss_surfaces_clearly() {
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
@@ -3324,6 +4094,7 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 1.0,
+                spec: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();

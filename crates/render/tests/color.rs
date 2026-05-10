@@ -1,6 +1,8 @@
 //! Integration tests for graph-native color effects: OTIO clip effects
 //! must flow into the timeline render argv as FFmpeg video filters.
 
+#![allow(clippy::unwrap_used)]
+
 use awidat_proto::otio::{
     Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
     Timeline, Track, TrackChild, TrackKind,

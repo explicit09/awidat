@@ -34,7 +34,43 @@ export type EdlOp =
     }
   | { kind: "delete_clip"; anchor: EdlAnchor }
   | { kind: "split_clip"; anchor: EdlAnchor; atS: number }
+  | { kind: "move_clip"; anchor: EdlAnchor; toPosition?: number; atS?: number }
+  | {
+      kind: "insert_transition";
+      from: EdlAnchor;
+      to: EdlAnchor;
+      transitionId?: string;
+      transitionKind?: string;
+      durationS: number;
+      family?: string;
+      intent?: string;
+      energy?: number;
+      direction?: "left" | "right" | "up" | "down" | "in" | "out";
+      params?: Record<string, unknown>;
+    }
   | { kind: "set_volume"; anchor: EdlAnchor; value: number }
+  | {
+      kind: "set_audio_fade";
+      anchor: EdlAnchor;
+      fadeInS?: number;
+      fadeOutS?: number;
+    }
+  | {
+      kind: "set_track_audio";
+      track: string;
+      role?: string;
+      volume?: number;
+      muted?: boolean;
+      solo?: boolean;
+    }
+  | {
+      kind: "set_ducking";
+      track: string;
+      enabled?: boolean;
+      amountDb?: number;
+      attackMs?: number;
+      releaseMs?: number;
+    }
   | { kind: "set_speed"; anchor: EdlAnchor; factor: number }
   | {
       kind: "set_color_correction";
@@ -116,10 +152,52 @@ function appendOp(lines: string[], op: EdlOp): void {
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       lines.push(`+ at_s: ${formatTime(op.atS)}`);
       break;
+    case "move_clip":
+      lines.push("*** Move Clip");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      if (op.toPosition !== undefined)
+        lines.push(`+ to_position: ${Math.max(0, Math.round(op.toPosition))}`);
+      if (op.atS !== undefined) lines.push(`+ at_s: ${formatTime(op.atS)}`);
+      break;
+    case "insert_transition":
+      lines.push("*** Insert Transition");
+      lines.push(`@@ between: ${formatAnchor(op.from)} and ${formatAnchor(op.to)}`);
+      if (op.transitionId !== undefined) lines.push(`+ id: ${op.transitionId}`);
+      lines.push(`+ kind: ${op.transitionKind ?? op.transitionId ?? "SMPTE_Dissolve"}`);
+      if (op.family !== undefined) lines.push(`+ family: ${op.family}`);
+      if (op.intent !== undefined) lines.push(`+ intent: ${op.intent}`);
+      if (op.energy !== undefined) lines.push(`+ energy: ${formatFloat(op.energy)}`);
+      if (op.direction !== undefined) lines.push(`+ direction: ${op.direction}`);
+      if (op.params !== undefined)
+        lines.push(`+ params_json: ${JSON.stringify(op.params)}`);
+      lines.push(`+ duration_s: ${formatTime(op.durationS)}`);
+      break;
     case "set_volume":
       lines.push("*** Set Volume");
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       lines.push(`+ value: ${op.value.toFixed(3)}`);
+      break;
+    case "set_audio_fade":
+      lines.push("*** Set Audio Fade");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      if (op.fadeInS !== undefined) lines.push(`+ fade_in_s: ${formatTime(op.fadeInS)}`);
+      if (op.fadeOutS !== undefined) lines.push(`+ fade_out_s: ${formatTime(op.fadeOutS)}`);
+      break;
+    case "set_track_audio":
+      lines.push("*** Set Track Audio");
+      lines.push(`+ track: ${op.track}`);
+      if (op.role !== undefined) lines.push(`+ role: ${op.role}`);
+      if (op.volume !== undefined) lines.push(`+ volume: ${op.volume.toFixed(3)}`);
+      if (op.muted !== undefined) lines.push(`+ muted: ${op.muted}`);
+      if (op.solo !== undefined) lines.push(`+ solo: ${op.solo}`);
+      break;
+    case "set_ducking":
+      lines.push("*** Set Ducking");
+      lines.push(`+ track: ${op.track}`);
+      if (op.enabled !== undefined) lines.push(`+ enabled: ${op.enabled}`);
+      if (op.amountDb !== undefined) lines.push(`+ amount_db: ${op.amountDb.toFixed(3)}`);
+      if (op.attackMs !== undefined) lines.push(`+ attack_ms: ${op.attackMs.toFixed(3)}`);
+      if (op.releaseMs !== undefined) lines.push(`+ release_ms: ${op.releaseMs.toFixed(3)}`);
       break;
     case "set_speed":
       lines.push("*** Set Speed");

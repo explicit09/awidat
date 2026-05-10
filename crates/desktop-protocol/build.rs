@@ -15,7 +15,7 @@ fn main() {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
-        .map(|p| p.to_path_buf())
+        .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
 
     let export_dir = workspace_root.join("apps/desktop/src/protocol/generated");

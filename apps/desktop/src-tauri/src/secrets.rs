@@ -21,12 +21,13 @@
 //! # Dev note: keychain prompts on every launch
 //!
 //! macOS gates keychain access by codesigning identity. A
-//! `cargo run` debug binary has an ad-hoc signature that changes
-//! across rebuilds, so macOS prompts on every launch. The release
-//! `.app` bundle from `tauri build` is properly signed and prompts
-//! exactly once (click "Always Allow"). Until we ship release, set
-//! `ANTHROPIC_API_KEY` in your shell env to avoid the prompt
-//! entirely.
+//! `cargo run` / `tauri dev` debug binary has an ad-hoc signature
+//! that changes across rebuilds, so macOS prompts on every launch.
+//! Release builds still prefetch keychain secrets, but debug builds
+//! skip the startup prefetch unless `AWIDAT_PREFETCH_KEYCHAIN=1`.
+//! Set `ANTHROPIC_API_KEY` / `HF_TOKEN` in your shell env during
+//! development to avoid the prompt entirely while keeping subprocesses
+//! wired.
 
 use std::sync::OnceLock;
 
@@ -56,6 +57,10 @@ static RESOLVED: OnceLock<()> = OnceLock::new();
 pub fn resolve_at_startup() {
     if RESOLVED.set(()).is_err() {
         return; // Already ran.
+    }
+    if !prefetch_enabled() {
+        info!("skipping startup keychain prefetch");
+        return;
     }
     for (env_name, account) in RESOLVE_AT_STARTUP {
         match awidat_secrets::get(env_name, account) {
@@ -88,4 +93,14 @@ pub fn resolve_at_startup() {
             }
         }
     }
+}
+
+fn prefetch_enabled() -> bool {
+    if cfg!(debug_assertions) {
+        return matches!(
+            std::env::var("AWIDAT_PREFETCH_KEYCHAIN").as_deref(),
+            Ok("1" | "true" | "TRUE" | "yes" | "YES")
+        );
+    }
+    true
 }

@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
@@ -145,7 +146,7 @@ impl Sandbox {
         }
         #[cfg(target_os = "macos")]
         {
-            self.run_macos(argv, policy)
+            (*self).run_macos(argv, policy)
         }
         #[cfg(target_os = "linux")]
         {
@@ -162,7 +163,7 @@ impl Sandbox {
     }
 
     #[cfg(target_os = "macos")]
-    fn run_macos(&self, argv: &[&str], policy: &Policy) -> Result<SandboxedOutput, SandboxErr> {
+    fn run_macos(self, argv: &[&str], policy: &Policy) -> Result<SandboxedOutput, SandboxErr> {
         let profile = render_seatbelt_profile(policy);
         let mut cmd = Command::new(MACOS_SEATBELT);
         cmd.arg("-p").arg(&profile);

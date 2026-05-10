@@ -348,7 +348,7 @@ async fn run_job(
                 let _ = child.kill().await;
                 let _ = drain_remaining(&mut reader, &mut log_buf, Duration::from_secs(2)).await;
                 log_buf.push(&format!(
-                    "\n[awidat-render: timed out after {:?}]\n", DEFAULT_JOB_TIMEOUT
+                    "\n[awidat-render: timed out after {DEFAULT_JOB_TIMEOUT:?}]\n"
                 ));
                 tx.send_modify(|s| {
                     s.state = JobState::Failed;

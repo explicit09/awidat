@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use awidat_proto::awidat_meta::{BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle};
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::project::{files, read_otio_timeline};
+use awidat_proto::transitions;
 use chrono::Utc;
 use thiserror::Error;
 
@@ -66,6 +67,14 @@ pub enum RenderTimelineError {
     /// The timeline parsed but has no clips on any video track.
     #[error("timeline has no clips to render")]
     EmptyTimeline,
+    /// A transition kind/id cannot be exported by the phase-one renderer.
+    #[error("unsupported timeline transition {kind:?}: {message}")]
+    UnsupportedTransition {
+        /// Transition kind or Awidat id from OTIO.
+        kind: String,
+        /// Detailed registry/lookup message.
+        message: String,
+    },
 }
 
 /// Broadcast overlay config plus project root for resolving optional
@@ -109,6 +118,69 @@ pub struct TimelineSegment {
     pub lut_path: Option<PathBuf>,
 }
 
+/// Render-time audio clip span extracted from an OTIO audio track.
+#[derive(Debug, Clone, Default)]
+pub struct AudioClipPlan {
+    /// Absolute source media path.
+    pub asset_path: PathBuf,
+    /// Source start time in seconds.
+    pub start_s: f64,
+    /// Source duration in seconds.
+    pub duration_s: f64,
+    /// Optional gain multiplier for the clip.
+    pub volume: Option<f64>,
+    /// Optional playback speed multiplier.
+    pub speed: Option<f64>,
+    /// Optional fade-in duration in seconds.
+    pub fade_in_s: Option<f64>,
+    /// Optional fade-out duration in seconds.
+    pub fade_out_s: Option<f64>,
+}
+
+/// Render-time item on an audio track.
+#[derive(Debug, Clone)]
+pub enum AudioTrackItemPlan {
+    /// Media-backed audio clip.
+    Clip(AudioClipPlan),
+    /// Silent gap with a duration in seconds.
+    Gap {
+        /// Gap duration in seconds.
+        duration_s: f64,
+    },
+}
+
+/// Render-time audio track plan including mix metadata and items.
+#[derive(Debug, Clone)]
+pub struct AudioTrackPlan {
+    /// Track display name.
+    pub name: String,
+    /// Semantic role such as dialogue, music, effects, or ambience.
+    pub role: String,
+    /// Track gain multiplier.
+    pub volume: f64,
+    /// Whether the track is muted.
+    pub muted: bool,
+    /// Whether the track is soloed.
+    pub solo: bool,
+    /// Optional ducking behavior for this track.
+    pub ducking: Option<DuckingPlan>,
+    /// Ordered audio items on the track.
+    pub items: Vec<AudioTrackItemPlan>,
+}
+
+/// Audio ducking parameters for music/effects under dialogue.
+#[derive(Debug, Clone)]
+pub struct DuckingPlan {
+    /// Whether ducking is active.
+    pub enabled: bool,
+    /// Gain reduction applied while ducking.
+    pub amount_db: f64,
+    /// Ducking attack in milliseconds.
+    pub attack_ms: f64,
+    /// Ducking release in milliseconds.
+    pub release_ms: f64,
+}
+
 /// Clip-level color controls that render maps into FFmpeg filters.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ColorCorrectionPlan {
@@ -141,7 +213,7 @@ fn read_effect_number(
         .iter()
         .find(|e| e.effect_name == effect_name)
         .and_then(|e| e.metadata.get(field))
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
 }
 
 fn read_effect_string(
@@ -164,16 +236,44 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
         .find(|e| e.effect_name == "awidat.color_correction")?;
     let m = &effect.metadata;
     let plan = ColorCorrectionPlan {
-        exposure_ev: m.get("exposure_ev").and_then(|v| v.as_f64()),
-        contrast: m.get("contrast").and_then(|v| v.as_f64()),
-        saturation: m.get("saturation").and_then(|v| v.as_f64()),
-        temperature: m.get("temperature").and_then(|v| v.as_f64()),
-        tint: m.get("tint").and_then(|v| v.as_f64()),
-        shadows: m.get("shadows").and_then(|v| v.as_f64()),
-        highlights: m.get("highlights").and_then(|v| v.as_f64()),
+        exposure_ev: m.get("exposure_ev").and_then(serde_json::Value::as_f64),
+        contrast: m.get("contrast").and_then(serde_json::Value::as_f64),
+        saturation: m.get("saturation").and_then(serde_json::Value::as_f64),
+        temperature: m.get("temperature").and_then(serde_json::Value::as_f64),
+        tint: m.get("tint").and_then(serde_json::Value::as_f64),
+        shadows: m.get("shadows").and_then(serde_json::Value::as_f64),
+        highlights: m.get("highlights").and_then(serde_json::Value::as_f64),
     };
     Some(plan)
 }
+
+fn read_audio_fade(clip: &awidat_proto::otio::Clip) -> (Option<f64>, Option<f64>) {
+    let Some(effect) = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.audio_fade")
+    else {
+        return (None, None);
+    };
+    (
+        effect
+            .metadata
+            .get("fade_in_s")
+            .and_then(serde_json::Value::as_f64),
+        effect
+            .metadata
+            .get("fade_out_s")
+            .and_then(serde_json::Value::as_f64),
+    )
+}
+
+type TimelineFullPlan = (
+    Vec<TimelineSegment>,
+    Vec<TransitionPlan>,
+    Vec<TitlePlan>,
+    Option<BroadcastOverlayPlan>,
+    Vec<AudioTrackPlan>,
+);
 
 /// Walk `<project_root>/project.otio.json` and collect every
 /// video-track clip's `(asset, source_range)` in playback order.
@@ -184,7 +284,7 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -202,7 +302,7 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -213,15 +313,7 @@ pub fn collect_timeline_plan(
 /// production — its clips are virtual, not media-bearing.
 pub fn collect_timeline_full_plan(
     project_root: &Path,
-) -> Result<
-    (
-        Vec<TimelineSegment>,
-        Vec<TransitionPlan>,
-        Vec<TitlePlan>,
-        Option<BroadcastOverlayPlan>,
-    ),
-    RenderTimelineError,
-> {
+) -> Result<TimelineFullPlan, RenderTimelineError> {
     let otio_path = project_root.join(files::OTIO);
     if !otio_path.exists() {
         return Err(RenderTimelineError::NoOtio(otio_path));
@@ -236,10 +328,15 @@ pub fn collect_timeline_full_plan(
     let mut segs = Vec::new();
     let mut transitions = Vec::new();
     let mut titles = Vec::new();
+    let mut audio_tracks = Vec::new();
     for child in &timeline.tracks.children {
         let StackChild::Track(track) = child else {
             continue;
         };
+        if matches!(track.kind, TrackKind::Audio) {
+            audio_tracks.push(collect_audio_track_plan(project_root, track)?);
+            continue;
+        }
         if !matches!(track.kind, TrackKind::Video) {
             continue;
         }
@@ -314,6 +411,19 @@ pub fn collect_timeline_full_plan(
                     }
                 }
                 TrackChild::Transition(t) => {
+                    let xfade =
+                        transitions::resolve_ffmpeg_xfade(&t.transition_type).map_err(|e| {
+                            RenderTimelineError::UnsupportedTransition {
+                                kind: t.transition_type.clone(),
+                                message: e.to_string(),
+                            }
+                        })?;
+                    if xfade.is_none() {
+                        return Err(RenderTimelineError::UnsupportedTransition {
+                            kind: t.transition_type.clone(),
+                            message: "semantic-only transition cannot be exported".into(),
+                        });
+                    }
                     let total = t.in_offset.to_seconds() + t.out_offset.to_seconds();
                     pending_transition = Some((t.transition_type.clone(), total));
                 }
@@ -332,7 +442,119 @@ pub fn collect_timeline_full_plan(
             config,
             project_root: project_root.to_path_buf(),
         });
-    Ok((segs, transitions, titles, broadcast_overlay))
+    Ok((segs, transitions, titles, broadcast_overlay, audio_tracks))
+}
+
+fn collect_audio_track_plan(
+    project_root: &Path,
+    track: &awidat_proto::otio::Track,
+) -> Result<AudioTrackPlan, RenderTimelineError> {
+    let settings = parse_audio_track_settings(track);
+    let mut items = Vec::new();
+    for tc in &track.children {
+        match tc {
+            TrackChild::Clip(clip) => {
+                let MediaReference::External(ext) = &clip.media_reference else {
+                    continue;
+                };
+                let Some(range) = clip.source_range.as_ref() else {
+                    return Err(RenderTimelineError::ClipMissingRange {
+                        clip_name: clip.name.clone(),
+                    });
+                };
+                let asset_path = project_root.join(&ext.target_url);
+                if !asset_path.exists() {
+                    return Err(RenderTimelineError::MissingAsset {
+                        clip_name: clip.name.clone(),
+                        missing: asset_path,
+                    });
+                }
+                let (fade_in_s, fade_out_s) = read_audio_fade(clip);
+                items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
+                    asset_path,
+                    start_s: range.start_time.to_seconds(),
+                    duration_s: range.duration.to_seconds(),
+                    volume: read_effect_number(clip, "awidat.volume", "value"),
+                    speed: read_effect_number(clip, "awidat.speed", "factor"),
+                    fade_in_s,
+                    fade_out_s,
+                }));
+            }
+            TrackChild::Gap(gap) => items.push(AudioTrackItemPlan::Gap {
+                duration_s: gap.source_range.duration.to_seconds(),
+            }),
+            TrackChild::Transition(_) | TrackChild::Stack(_) => {}
+        }
+    }
+    Ok(AudioTrackPlan {
+        name: track.name.clone(),
+        role: settings.role,
+        volume: settings.volume,
+        muted: settings.muted,
+        solo: settings.solo,
+        ducking: settings.ducking,
+        items,
+    })
+}
+
+fn parse_audio_track_settings(track: &awidat_proto::otio::Track) -> AudioTrackPlan {
+    let value = track.metadata.get("awidat_audio");
+    let role = value
+        .and_then(|v| v.get("role"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| default_audio_role(&track.name));
+    let volume = value
+        .and_then(|v| v.get("volume"))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .unwrap_or(1.0);
+    let muted = value
+        .and_then(|v| v.get("muted"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let solo = value
+        .and_then(|v| v.get("solo"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let ducking = value.and_then(|v| v.get("ducking")).map(|d| DuckingPlan {
+        enabled: d
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+        amount_db: d
+            .get("amount_db")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(-12.0),
+        attack_ms: d
+            .get("attack_ms")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(80.0),
+        release_ms: d
+            .get("release_ms")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(300.0),
+    });
+    AudioTrackPlan {
+        name: track.name.clone(),
+        role,
+        volume,
+        muted,
+        solo,
+        ducking,
+        items: Vec::new(),
+    }
+}
+
+fn default_audio_role(track_name: &str) -> String {
+    let name = track_name.trim().to_ascii_lowercase();
+    if name == "a1" || name == "audio 1" {
+        "dialogue".into()
+    } else if name.contains("music") {
+        "music".into()
+    } else {
+        "sfx".into()
+    }
 }
 
 /// True iff the track is the project's Titles track. Mirrors the
@@ -362,8 +584,8 @@ fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
         .find(|e| e.effect_name == "awidat.title")?;
     let m = &effect.metadata;
     let text = m.get("text").and_then(|v| v.as_str())?.to_string();
-    let start_s = m.get("start_s").and_then(|v| v.as_f64())?;
-    let end_s = m.get("end_s").and_then(|v| v.as_f64())?;
+    let start_s = m.get("start_s").and_then(serde_json::Value::as_f64)?;
+    let end_s = m.get("end_s").and_then(serde_json::Value::as_f64)?;
     if end_s <= start_s {
         return None;
     }
@@ -378,7 +600,7 @@ fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
     };
     let font_size = m
         .get("font_size")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .map(|n| n as u32)
         .unwrap_or(64);
     let color = m
@@ -626,6 +848,27 @@ impl<'a> FilterPlanner<'a> {
         } else {
             self.append_titles(base)
         }
+    }
+
+    /// Decorate a video-only graph with broadcast overlay and titles.
+    /// Used by explicit-audio renders, where audio is mixed separately.
+    pub fn decorate_video_filter(
+        &self,
+        filter_complex: String,
+        video_out_label: String,
+    ) -> FilterPlan {
+        let mut base = FilterPlan {
+            filter_complex,
+            video_out_label,
+            audio_out_label: String::new(),
+        };
+        if let Some(overlay) = self.broadcast_overlay {
+            base = self.append_broadcast_overlay(base, overlay);
+        }
+        if !self.titles.is_empty() {
+            base = self.append_titles(base);
+        }
+        base
     }
 
     /// Splice a `drawtext=` chain onto `base.video_out_label` and
@@ -1223,7 +1466,7 @@ fn format_smart_ticker(
         .topics
         .iter()
         .map(|t| t.time_seconds)
-        .min_by(|a, b| a.total_cmp(b))
+        .min_by(f64::total_cmp)
     {
         format!(
             "(lt(t\\,{first_topic})+lt(mod(t\\,{cycle})\\,{sponsor})+gte(mod(t\\,{cycle})\\,{topic_end}))",
@@ -1243,7 +1486,7 @@ fn format_smart_ticker(
     } else {
         c.sponsors
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join("   ◆   ")
     };
@@ -1273,7 +1516,7 @@ fn format_smart_ticker(
                 .filter_map(|candidate| {
                     (candidate.time_seconds > start).then_some(candidate.time_seconds)
                 })
-                .min_by(|a, b| a.total_cmp(b))
+                .min_by(f64::total_cmp)
                 .unwrap_or(1.0e12);
             let topic_enable = format!(
                 "(not(between(t\\,{host_s}\\,{host_e}))*gte(t\\,{start})*lt(t\\,{next_topic})*gte(mod(t\\,{cycle})\\,{topic_s})*lt(mod(t\\,{cycle})\\,{topic_e}))",
@@ -1473,6 +1716,7 @@ fn format_chapter_cards(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 fn broadcast_drawtext(
     text: &str,
     x: &str,
@@ -1750,16 +1994,12 @@ fn slide_expressions(
             // y(t) = off_y + (resting - off_y) * progress, where
             // progress = (t-start)/ramp clamped to 1.
             format!(
-                "if(lt(t\\,{ramp_in_end})\\,{off}+({rest}-({off}))*(t-{start})/{ramp}\\,{rest})",
-                off = off_y,
-                rest = resting_y,
+                "if(lt(t\\,{ramp_in_end})\\,{off_y}+({resting_y}-({off_y}))*(t-{start})/{ramp}\\,{resting_y})"
             ),
         ),
         (SlideDirection::In, false) => (
             format!(
-                "if(lt(t\\,{ramp_in_end})\\,{off}+({rest}-({off}))*(t-{start})/{ramp}\\,{rest})",
-                off = off_x,
-                rest = resting_x,
+                "if(lt(t\\,{ramp_in_end})\\,{off_x}+({resting_x}-({off_x}))*(t-{start})/{ramp}\\,{resting_x})"
             ),
             resting_y.to_string(),
         ),
@@ -1767,16 +2007,12 @@ fn slide_expressions(
             resting_x.to_string(),
             // y(t) = resting until ramp_out_start, then linear to off_y.
             format!(
-                "if(lt(t\\,{ramp_out_start})\\,{rest}\\,{rest}+({off}-({rest}))*(t-{ramp_out_start})/{ramp})",
-                off = off_y,
-                rest = resting_y,
+                "if(lt(t\\,{ramp_out_start})\\,{resting_y}\\,{resting_y}+({off_y}-({resting_y}))*(t-{ramp_out_start})/{ramp})"
             ),
         ),
         (SlideDirection::Out, false) => (
             format!(
-                "if(lt(t\\,{ramp_out_start})\\,{rest}\\,{rest}+({off}-({rest}))*(t-{ramp_out_start})/{ramp})",
-                off = off_x,
-                rest = resting_x,
+                "if(lt(t\\,{ramp_out_start})\\,{resting_x}\\,{resting_x}+({off_x}-({resting_x}))*(t-{ramp_out_start})/{ramp})"
             ),
             resting_y.to_string(),
         ),
@@ -1878,17 +2114,16 @@ fn atempo_chain(factor: f64) -> String {
         .join(",")
 }
 
-/// Map an OTIO transition kind to an ffmpeg `xfade=transition=` name.
-/// Unknown kinds pass through verbatim — ffmpeg will reject them at
-/// render time with a clear error, which is better than silently
-/// substituting a wrong-but-valid kind.
+/// Map an OTIO transition kind or Awidat transition id to an ffmpeg
+/// `xfade=transition=` name. Project-level render planning validates
+/// this earlier; direct test/helper callers get an intentionally
+/// invalid token for unsupported values instead of a wrong fallback.
 fn map_transition_kind(kind: &str) -> String {
-    match kind {
-        "SMPTE_Dissolve" => "fade".into(),
-        "awidat.fade_in" => "fadeblack".into(),
-        "awidat.fade_out" => "fadeblack".into(),
-        other => other.to_string(),
-    }
+    transitions::resolve_ffmpeg_xfade(kind)
+        .ok()
+        .flatten()
+        .unwrap_or("__unsupported_awidat_transition__")
+        .to_string()
 }
 
 /// Build the ffmpeg argv that concats `segs` into `output_path` with
@@ -1969,6 +2204,348 @@ pub fn build_timeline_argv_full(
     argv
 }
 
+/// Build an ffmpeg argv for explicit audio-track mixing plus video timeline rendering.
+/// Build an ffmpeg argv for timelines with first-class audio tracks.
+/// Video streams are rendered video-only and final audio is mixed from
+/// explicit audio-track plans.
+pub fn build_timeline_argv_with_audio_tracks(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    titles: &[TitlePlan],
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    audio_tracks: &[AudioTrackPlan],
+    output_path: &Path,
+) -> Vec<String> {
+    let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
+    for s in segs {
+        argv.extend([
+            "-ss".into(),
+            format!("{}", s.start_s),
+            "-t".into(),
+            format!("{}", s.duration_s),
+            "-i".into(),
+            s.asset_path.to_string_lossy().into_owned(),
+        ]);
+    }
+    for track in audio_tracks {
+        for item in &track.items {
+            let AudioTrackItemPlan::Clip(c) = item else {
+                continue;
+            };
+            argv.extend([
+                "-ss".into(),
+                format!("{}", c.start_s),
+                "-t".into(),
+                format!("{}", c.duration_s),
+                "-i".into(),
+                c.asset_path.to_string_lossy().into_owned(),
+            ]);
+        }
+    }
+
+    let fallback_video_duration = audio_tracks
+        .iter()
+        .map(audio_track_duration)
+        .fold(0.1_f64, f64::max);
+    let mut filter = plan_video_only_filter(segs, transitions, fallback_video_duration);
+    let base_video_label = "[vonly]";
+    let mut video_label = base_video_label.to_string();
+    if !titles.is_empty() || broadcast_overlay.is_some() {
+        let decorated =
+            FilterPlanner::with_titles_and_broadcast_overlay(&[], &[], titles, broadcast_overlay)
+                .decorate_video_filter(filter, video_label.clone());
+        filter = decorated.filter_complex;
+        video_label = decorated.video_out_label;
+    }
+
+    let mut next_input = segs.len();
+    let audio_label = plan_audio_mix_filter(&mut filter, audio_tracks, &mut next_input);
+    argv.extend([
+        "-filter_complex".into(),
+        filter,
+        "-map".into(),
+        video_label,
+        "-map".into(),
+        audio_label,
+        "-c:v".into(),
+        "libx264".into(),
+        "-preset".into(),
+        "veryfast".into(),
+        "-crf".into(),
+        "20".into(),
+        "-c:a".into(),
+        "aac".into(),
+        "-b:a".into(),
+        "192k".into(),
+        output_path.to_string_lossy().into_owned(),
+    ]);
+    argv
+}
+
+fn plan_video_only_filter(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    fallback_duration_s: f64,
+) -> String {
+    let mut filter = String::new();
+    if segs.is_empty() {
+        filter.push_str(&format!(
+            "color=c=black:s=1280x720:r=30:d={fallback_duration_s}[vonly];"
+        ));
+        return filter;
+    }
+    let video_inputs: Vec<String> = (0..segs.len())
+        .map(|i| stage_segment_video_input(&mut filter, i, &segs[i]))
+        .collect();
+    if transitions.is_empty() {
+        for v in &video_inputs {
+            filter.push_str(v);
+        }
+        filter.push_str(&format!("concat=n={}:v=1:a=0[vonly];", video_inputs.len()));
+        return filter;
+    }
+
+    // Explicit audio projects still preserve the common visual xfade
+    // case; audio transitions are owned by the audio tracks.
+    let mut used = vec![false; segs.len()];
+    let mut concat_inputs = Vec::new();
+    for t in transitions {
+        if t.from_segment_index + 1 != t.to_segment_index
+            || t.to_segment_index >= segs.len()
+            || used[t.from_segment_index]
+            || used[t.to_segment_index]
+        {
+            continue;
+        }
+        let offset = (effective_duration(&segs[t.from_segment_index]) - t.duration_s).max(0.0);
+        let label = format!("[xv{}]", t.from_segment_index);
+        filter.push_str(&format!(
+            "{}{}xfade=transition={}:duration={}:offset={}{};",
+            video_inputs[t.from_segment_index],
+            video_inputs[t.to_segment_index],
+            map_transition_kind(&t.kind),
+            t.duration_s,
+            offset,
+            label
+        ));
+        concat_inputs.push(label);
+        used[t.from_segment_index] = true;
+        used[t.to_segment_index] = true;
+    }
+    for (i, v) in video_inputs.iter().enumerate() {
+        if !used[i] {
+            concat_inputs.push(v.clone());
+        }
+    }
+    for v in &concat_inputs {
+        filter.push_str(v);
+    }
+    filter.push_str(&format!("concat=n={}:v=1:a=0[vonly];", concat_inputs.len()));
+    filter
+}
+
+fn audio_track_duration(track: &AudioTrackPlan) -> f64 {
+    track
+        .items
+        .iter()
+        .map(|item| match item {
+            AudioTrackItemPlan::Clip(c) => {
+                if let Some(factor) = c.speed
+                    && factor > 0.0
+                {
+                    return c.duration_s / factor;
+                }
+                c.duration_s
+            }
+            AudioTrackItemPlan::Gap { duration_s } => *duration_s,
+        })
+        .sum()
+}
+
+fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegment) -> String {
+    let mut video_label = format!("[{i}:v:0]");
+    if let Some(color) = seg.color_correction.as_ref()
+        && let Some(chain) = color_filter_chain(color)
+    {
+        let cv = format!("[cv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{cv};"));
+        video_label = cv;
+    }
+    if let Some(lut_path) = seg.lut_path.as_ref() {
+        let lv = format!("[lv{i}]");
+        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
+        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv};"));
+        video_label = lv;
+    }
+    if let Some(factor) = seg.speed
+        && (factor - 1.0).abs() > 1e-9
+        && factor > 0.0
+    {
+        let sv = format!("[sv{i}]");
+        filter.push_str(&format!(
+            "{video_label}setpts={inv}*PTS{sv};",
+            inv = 1.0 / factor,
+        ));
+        video_label = sv;
+    }
+    video_label
+}
+
+fn plan_audio_mix_filter(
+    filter: &mut String,
+    audio_tracks: &[AudioTrackPlan],
+    next_input: &mut usize,
+) -> String {
+    let solo_active = audio_tracks.iter().any(|t| t.solo);
+    let mut audible = Vec::<(&AudioTrackPlan, String)>::new();
+    for (track_index, track) in audio_tracks.iter().enumerate() {
+        if track.muted || (solo_active && !track.solo) || track.items.is_empty() {
+            continue;
+        }
+        let label = plan_one_audio_track(filter, track_index, track, next_input);
+        audible.push((track, label));
+    }
+    if audible.is_empty() {
+        filter.push_str("anullsrc=r=48000:cl=stereo:d=0.1[finala];");
+        return "[finala]".into();
+    }
+
+    let ducking_needed = audible.iter().any(|(t, _)| {
+        t.role != "dialogue" && t.ducking.as_ref().map(|d| d.enabled).unwrap_or(false)
+    });
+    let mut audible_labels: Vec<String> = audible.iter().map(|(_, label)| label.clone()).collect();
+    let mut dialogue_labels = Vec::new();
+    if ducking_needed {
+        for (idx, (track, label)) in audible.iter().enumerate() {
+            if track.role == "dialogue" {
+                let main = format!("[dlgmain{idx}]");
+                let sc = format!("[dlgsc{idx}]");
+                filter.push_str(&format!("{label}asplit=2{main}{sc};"));
+                audible_labels[idx] = main;
+                dialogue_labels.push(sc);
+            }
+        }
+    }
+    let sidechain_label = if dialogue_labels.is_empty() {
+        None
+    } else if dialogue_labels.len() == 1 {
+        Some(dialogue_labels[0].clone())
+    } else {
+        for l in &dialogue_labels {
+            filter.push_str(l);
+        }
+        filter.push_str(&format!(
+            "amix=inputs={}:duration=longest[ducksc];",
+            dialogue_labels.len()
+        ));
+        Some("[ducksc]".into())
+    };
+
+    let mut mix_labels = Vec::new();
+    for (idx, (track, _)) in audible.iter().enumerate() {
+        let label = &audible_labels[idx];
+        if let (Some(duck), Some(sidechain)) = (track.ducking.as_ref(), sidechain_label.as_ref())
+            && duck.enabled
+            && track.role != "dialogue"
+        {
+            let out = format!("[ducked{idx}]");
+            filter.push_str(&format!(
+                "{label}{sidechain}sidechaincompress=threshold=0.05:ratio=8:attack={}:release={}{};",
+                duck.attack_ms, duck.release_ms, out
+            ));
+            mix_labels.push(out);
+            continue;
+        }
+        mix_labels.push(label.to_string());
+    }
+    for l in &mix_labels {
+        filter.push_str(l);
+    }
+    filter.push_str(&format!(
+        "amix=inputs={}:duration=longest:dropout_transition=0[finala];",
+        mix_labels.len()
+    ));
+    "[finala]".into()
+}
+
+fn plan_one_audio_track(
+    filter: &mut String,
+    track_index: usize,
+    track: &AudioTrackPlan,
+    next_input: &mut usize,
+) -> String {
+    let mut item_labels = Vec::new();
+    for (item_index, item) in track.items.iter().enumerate() {
+        match item {
+            AudioTrackItemPlan::Gap { duration_s } => {
+                let label = format!("[agap{track_index}_{item_index}]");
+                filter.push_str(&format!(
+                    "anullsrc=r=48000:cl=stereo:d={duration_s}{label};"
+                ));
+                item_labels.push(label);
+            }
+            AudioTrackItemPlan::Clip(clip) => {
+                let input = *next_input;
+                *next_input += 1;
+                let mut label = format!("[{input}:a:0]");
+                let trimmed = format!("[atrim{track_index}_{item_index}]");
+                filter.push_str(&format!(
+                    "{label}atrim=0:{},asetpts=PTS-STARTPTS{};",
+                    clip.duration_s, trimmed
+                ));
+                label = trimmed;
+                if let Some(factor) = clip.speed
+                    && (factor - 1.0).abs() > 1e-9
+                    && factor > 0.0
+                {
+                    let sped = format!("[aspeed{track_index}_{item_index}]");
+                    filter.push_str(&format!("{label}{}{};", atempo_chain(factor), sped));
+                    label = sped;
+                }
+                if let Some(v) = clip.volume
+                    && (v - 1.0).abs() > 1e-9
+                {
+                    let vol = format!("[avol{track_index}_{item_index}]");
+                    filter.push_str(&format!("{label}volume={v}{vol};"));
+                    label = vol;
+                }
+                if let Some(fade_in) = clip.fade_in_s
+                    && fade_in > 0.0
+                {
+                    let fade = format!("[afi{track_index}_{item_index}]");
+                    filter.push_str(&format!("{label}afade=t=in:st=0:d={fade_in}{fade};"));
+                    label = fade;
+                }
+                if let Some(fade_out) = clip.fade_out_s
+                    && fade_out > 0.0
+                {
+                    let fade = format!("[afo{track_index}_{item_index}]");
+                    let st = (clip.duration_s - fade_out).max(0.0);
+                    filter.push_str(&format!("{label}afade=t=out:st={st}:d={fade_out}{fade};"));
+                    label = fade;
+                }
+                item_labels.push(label);
+            }
+        }
+    }
+    for l in &item_labels {
+        filter.push_str(l);
+    }
+    let track_label = format!("[atrack{track_index}]");
+    filter.push_str(&format!(
+        "concat=n={}:v=0:a=1{};",
+        item_labels.len(),
+        track_label
+    ));
+    if (track.volume - 1.0).abs() > 1e-9 {
+        let out = format!("[atrackv{track_index}]");
+        filter.push_str(&format!("{track_label}volume={}{};", track.volume, out));
+        out
+    } else {
+        track_label
+    }
+}
+
 /// One-call helper: walk OTIO, build the spec, return it. The output
 /// path is `<project_root>/renders/timeline-<HHMMSS>.mp4` — same
 /// naming `start_render scope=timeline` uses, so the agent and the
@@ -1976,8 +2553,9 @@ pub fn build_timeline_argv_full(
 pub fn build_timeline_render_spec(
     project_root: &Path,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
-    let (segs, transitions, titles, broadcast_overlay) = collect_timeline_full_plan(project_root)?;
-    if segs.is_empty() {
+    let (segs, transitions, titles, broadcast_overlay, audio_tracks) =
+        collect_timeline_full_plan(project_root)?;
+    if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
     }
     // Total duration is the sum of each segment's *effective*
@@ -1985,19 +2563,37 @@ pub fn build_timeline_render_spec(
     // overlap. A 4s clip at 2× contributes 2s; a 0.5s transition
     // overlaps two effective durations by 0.5s. Titles are
     // overlays — they don't add to the master timeline length.
-    let raw_total: f64 = segs.iter().map(effective_duration).sum();
+    let raw_total: f64 = if segs.is_empty() {
+        audio_tracks
+            .iter()
+            .map(audio_track_duration)
+            .fold(0.0_f64, f64::max)
+    } else {
+        segs.iter().map(effective_duration).sum()
+    };
     let trans_total: f64 = transitions.iter().map(|t| t.duration_s).sum();
     let total_duration_s = (raw_total - trans_total).max(0.0);
     let renders_dir = project_root.join("renders");
     let timestamp = Utc::now().format("%H%M%S");
-    let output_path = renders_dir.join(format!("timeline-{}.mp4", timestamp));
-    let argv = build_timeline_argv_full(
-        &segs,
-        &transitions,
-        &titles,
-        broadcast_overlay.as_ref(),
-        &output_path,
-    );
+    let output_path = renders_dir.join(format!("timeline-{timestamp}.mp4"));
+    let argv = if audio_tracks.is_empty() {
+        build_timeline_argv_full(
+            &segs,
+            &transitions,
+            &titles,
+            broadcast_overlay.as_ref(),
+            &output_path,
+        )
+    } else {
+        build_timeline_argv_with_audio_tracks(
+            &segs,
+            &transitions,
+            &titles,
+            broadcast_overlay.as_ref(),
+            &audio_tracks,
+            &output_path,
+        )
+    };
     Ok(RenderJobSpec {
         args: argv,
         total_duration_s: Some(total_duration_s),
@@ -2093,6 +2689,49 @@ mod tests {
             duration_s: dur,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn explicit_audio_tracks_use_video_only_concat_and_amix() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "A1".into(),
+            role: "dialogue".into(),
+            volume: 0.8,
+            muted: false,
+            solo: false,
+            ducking: None,
+            items: vec![
+                AudioTrackItemPlan::Clip(AudioClipPlan {
+                    asset_path: PathBuf::from("/tmp/a.wav"),
+                    start_s: 0.0,
+                    duration_s: 2.0,
+                    volume: Some(0.5),
+                    speed: None,
+                    fade_in_s: Some(0.1),
+                    fade_out_s: Some(0.2),
+                }),
+                AudioTrackItemPlan::Gap { duration_s: 1.0 },
+            ],
+        }];
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(filter.contains("concat=n=1:v=1:a=0[vonly]"));
+        assert!(filter.contains("atrim=0:2"));
+        assert!(filter.contains("volume=0.5"));
+        assert!(filter.contains("afade=t=in"));
+        assert!(filter.contains("anullsrc"));
+        assert!(filter.contains("amix=inputs=1"));
     }
 
     #[test]

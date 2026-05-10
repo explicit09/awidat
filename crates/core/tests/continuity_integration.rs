@@ -8,6 +8,8 @@
 //!
 //! No ffmpeg required — sidecars are written as JSON fixtures.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::path::Path;
 use std::sync::Arc;
 

@@ -23,6 +23,12 @@ use tokio_util::sync::CancellationToken;
 use crate::events::JobEmitter;
 use crate::state::{AwidatState, JobHandle};
 
+#[derive(Debug, Clone, Copy)]
+enum TimelineInsertMode {
+    IfEmpty,
+    Append,
+}
+
 /// Copy or symlink an existing local file into `<project>/raw/`.
 /// Emits an `Item::Job` (kind = `LocalImport`) for visibility, even
 /// though the operation is fast — keeps the chat-as-activity-log
@@ -74,7 +80,12 @@ pub async fn import_local(
             // emits its own job card; failures don't roll back
             // earlier steps (a transcoded file with no index is
             // still useful — the user can retry indexing).
-            spawn_post_import_chain(app.clone(), project_root.clone(), dst.clone());
+            spawn_post_import_chain(
+                app.clone(),
+                project_root.clone(),
+                dst.clone(),
+                TimelineInsertMode::IfEmpty,
+            );
             Ok(dst.to_string_lossy().into_owned())
         }
         Err(_e) if cancel.is_cancelled() => {
@@ -86,6 +97,81 @@ pub async fn import_local(
             Err(e)
         }
     }
+}
+
+/// Import several local files as one user action, then process them
+/// sequentially so each imported video is appended to the timeline in
+/// selection order without concurrent writes to `project.otio.json`.
+#[tauri::command]
+pub async fn import_locals(
+    app: AppHandle,
+    state: State<'_, AwidatState>,
+    src_paths: Vec<String>,
+    link: bool,
+) -> Result<Vec<String>, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    if src_paths.is_empty() {
+        return Err("no files selected".into());
+    }
+
+    let job_id = Id::new(format!(
+        "import-many-{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    ));
+    let cancel = register_job(&state, &job_id).await;
+    let emitter = JobEmitter::start(
+        app.clone(),
+        job_id.clone(),
+        JobKind::LocalImport,
+        format!("importing {} files", src_paths.len()),
+    );
+
+    let mut imported = Vec::with_capacity(src_paths.len());
+    for (i, src) in src_paths.iter().enumerate() {
+        if cancel.is_cancelled() {
+            unregister_job(&state, &job_id).await;
+            emitter.cancelled();
+            return Err("cancelled".into());
+        }
+        let current = i + 1;
+        emitter.progress(
+            Some(((i * 100) / src_paths.len()).min(99) as u8),
+            format!("importing {current}/{}: {src}", src_paths.len()),
+        );
+        match run_local_import(&project_root, src, link, &cancel).await {
+            Ok(dst) => imported.push(dst),
+            Err(_e) if cancel.is_cancelled() => {
+                unregister_job(&state, &job_id).await;
+                emitter.cancelled();
+                return Err("cancelled".into());
+            }
+            Err(e) => {
+                unregister_job(&state, &job_id).await;
+                emitter.err(e.clone());
+                return Err(e);
+            }
+        }
+    }
+    unregister_job(&state, &job_id).await;
+
+    let summary = format!("imported {} files", imported.len());
+    emitter.ok(Some(summary));
+    spawn_post_import_chain_many(
+        app.clone(),
+        project_root.clone(),
+        imported.clone(),
+        TimelineInsertMode::Append,
+    );
+
+    Ok(imported
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect())
 }
 
 /// Spawn the post-import auto-chain (proxy transcode → auto-insert
@@ -100,79 +186,128 @@ pub async fn import_local(
 /// rect immediately; the filmstrip flips in once the
 /// [`JobKind::Thumbnails`] job completes via a second
 /// `timeline-changed` event.
-fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf) {
+fn spawn_post_import_chain(
+    app: AppHandle,
+    project_root: PathBuf,
+    asset: PathBuf,
+    insert_mode: TimelineInsertMode,
+) {
+    spawn_post_import_chain_many(app, project_root, vec![asset], insert_mode);
+}
+
+fn spawn_post_import_chain_many(
+    app: AppHandle,
+    project_root: PathBuf,
+    assets: Vec<PathBuf>,
+    insert_mode: TimelineInsertMode,
+) {
     tokio::spawn(async move {
         let state = app.state::<AwidatState>();
-        // Transcode the just-imported asset.
-        if let Err(e) = crate::commands::transcode::transcode_single_asset_in_project(
-            &app,
-            &state,
-            &project_root,
-            &asset,
-        )
-        .await
-        {
-            tracing::warn!(error = %e, asset = %asset.display(), "auto-transcode failed; skipping auto-insert + index");
-            return;
-        }
-
-        // Auto-insert this asset onto the timeline if (and only if)
-        // the timeline has no video clips yet. First-asset-on-fresh-
-        // project case — users expect to see what they just
-        // imported, not have to ask the agent to add it.
-        match awidat_render::probe_duration_s(&asset).await {
-            Ok(Some(duration_s)) => {
-                match crate::commands::auto_insert::auto_insert_if_empty(
-                    &project_root,
-                    &asset,
-                    duration_s,
-                )
-                .await
-                {
-                    Ok(true) => {
-                        crate::events::emit_timeline_changed(&app, &project_root);
-                        tracing::info!(
-                            asset = %asset.display(),
-                            duration_s,
-                            "auto-inserted first asset onto empty timeline",
-                        );
-                    }
-                    Ok(false) => {
-                        // Non-empty timeline; user is arranging.
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "auto-insert failed");
-                    }
-                }
-            }
-            Ok(None) => {
+        for asset in assets {
+            if let Err(e) =
+                process_imported_asset(&app, &state, &project_root, &asset, insert_mode).await
+            {
                 tracing::warn!(
+                    error = %e,
                     asset = %asset.display(),
-                    "auto-insert: ffprobe couldn't determine duration; skipping",
+                    "post-import processing failed; continuing with remaining imported assets",
                 );
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "auto-insert: probe failed");
-            }
         }
 
-        // Generate filmstrip thumbnails + audio waveform for the
-        // just-imported asset. Both are idempotent (mtime-checked) so
-        // re-running the chain on an already-processed asset is a
-        // no-op. Each step fires `timeline-changed` on success so the
-        // frontend re-fetches and the corresponding field
-        // (thumbnail_dir / waveform_path) flips from null to the
-        // populated path.
+        // Index the whole project once after all selected assets have
+        // been imported and proxied. The indexer is sha-keyed, so this
+        // only does real work for new/changed assets.
+        if let Err(e) =
+            crate::commands::index::index_project_at_root(&app, &state, project_root.clone()).await
+        {
+            tracing::warn!(error = %e, "auto-index failed");
+        }
+    });
+}
+
+async fn process_imported_asset(
+    app: &AppHandle,
+    state: &State<'_, AwidatState>,
+    project_root: &std::path::Path,
+    asset: &std::path::Path,
+    insert_mode: TimelineInsertMode,
+) -> Result<(), String> {
+    let probe = awidat_render::probe_media(asset)
+        .await
+        .map_err(|e| format!("probe imported media: {e}"))?;
+
+    if probe.has_video {
+        crate::commands::transcode::transcode_single_asset_in_project(
+            app,
+            state,
+            project_root,
+            asset,
+        )
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, asset = %asset.display(), "auto-transcode failed; skipping timeline insert for this asset");
+            e
+        })?;
+    }
+
+    // Insert the asset onto the timeline. Single imports preserve the
+    // old "only if empty" behavior; plural imports append every
+    // selected file in order.
+    match probe.duration_s {
+        Some(duration_s) => {
+            let result = match insert_mode {
+                TimelineInsertMode::IfEmpty => {
+                    crate::commands::auto_insert::auto_insert_media_if_empty(
+                        project_root,
+                        asset,
+                        &probe,
+                    )
+                    .await
+                }
+                TimelineInsertMode::Append => {
+                    crate::commands::auto_insert::append_media(project_root, asset, &probe).await
+                }
+            };
+            match result {
+                Ok(true) => {
+                    crate::events::emit_timeline_changed(app, project_root);
+                    tracing::info!(
+                        asset = %asset.display(),
+                        duration_s,
+                        "inserted imported asset onto timeline",
+                    );
+                }
+                Ok(false) => {
+                    // Non-empty timeline in IfEmpty mode; user is arranging.
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "auto-insert failed");
+                }
+            }
+        }
+        None => {
+            tracing::warn!(
+                asset = %asset.display(),
+                "auto-insert: ffprobe couldn't determine duration; skipping",
+            );
+        }
+    }
+
+    // Generate filmstrip thumbnails + audio waveform for the
+    // just-imported asset. Both are idempotent (mtime-checked) so
+    // re-running the chain on an already-processed asset is a no-op.
+    if probe.has_video {
         match crate::commands::thumbnail::generate_thumbnails_for_asset_in_project(
-            &app,
-            &state,
-            &project_root,
-            &asset,
+            app,
+            state,
+            project_root,
+            asset,
         )
         .await
         {
             Ok(_) => {
-                crate::events::emit_timeline_changed(&app, &project_root);
+                crate::events::emit_timeline_changed(app, project_root);
             }
             Err(e) => {
                 tracing::warn!(
@@ -182,62 +317,56 @@ fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf
                 );
             }
         }
+    }
 
-        match crate::commands::waveform::generate_waveform_for_asset_in_project(
-            &app,
-            &state,
-            &project_root,
-            &asset,
-        )
-        .await
-        {
-            Ok(Some(_)) => {
-                crate::events::emit_timeline_changed(&app, &project_root);
-            }
-            Ok(None) => {
-                // No audio stream — sidecar written with empty
-                // buckets; flatten_timeline_public will report
-                // waveform_path: null. No timeline change.
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    asset = %asset.display(),
-                    "auto-waveform failed; audio clip stays without amplitude line",
-                );
-            }
+    match crate::commands::waveform::generate_waveform_for_asset_in_project(
+        app,
+        state,
+        project_root,
+        asset,
+    )
+    .await
+    {
+        Ok(Some(_)) => {
+            crate::events::emit_timeline_changed(app, project_root);
         }
-
-        // Silence detection: produces a per-asset sidecar the
-        // find_dead_air editorial tool reads. No timeline-changed
-        // event — the result feeds Notes (Phase 1.7), not the
-        // canvas. Failure is non-fatal; the tool just sees an
-        // absent sidecar and skips the asset.
-        if let Err(e) = crate::commands::silence::generate_silences_for_asset_in_project(
-            &app,
-            &state,
-            &project_root,
-            &asset,
-        )
-        .await
-        {
+        Ok(None) => {
+            // No audio stream — sidecar written with empty buckets.
+        }
+        Err(e) => {
             tracing::warn!(
                 error = %e,
                 asset = %asset.display(),
-                "auto-silences failed; find_dead_air will skip this asset",
+                "auto-waveform failed; audio clip stays without amplitude line",
             );
         }
+    }
 
+    // Silence detection: produces a per-asset sidecar the
+    // find_dead_air editorial tool reads.
+    if let Err(e) = crate::commands::silence::generate_silences_for_asset_in_project(
+        app,
+        state,
+        project_root,
+        asset,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            asset = %asset.display(),
+            "auto-silences failed; find_dead_air will skip this asset",
+        );
+    }
+
+    if probe.has_video {
         // Motion signal: per-second scene-change scores for the
-        // continuity engine (Phase 2). Sidecar consumed by the
-        // assess_continuity tool when it evaluates the no-mid-motion
-        // rule. Failure is non-fatal — assess_continuity treats a
-        // missing sidecar as "abstain" rather than blocking the cut.
+        // continuity engine (Phase 2).
         if let Err(e) = crate::commands::motion::generate_motion_for_asset_in_project(
-            &app,
-            &state,
-            &project_root,
-            &asset,
+            app,
+            state,
+            project_root,
+            asset,
         )
         .await
         {
@@ -247,16 +376,9 @@ fn spawn_post_import_chain(app: AppHandle, project_root: PathBuf, asset: PathBuf
                 "auto-motion failed; assess_continuity's motion rule will abstain on this asset",
             );
         }
+    }
 
-        // Index the whole project. The indexer is sha-keyed so this
-        // is idempotent for already-indexed assets — only the new
-        // asset's pairs do real work.
-        if let Err(e) =
-            crate::commands::index::index_project_at_root(&app, &state, project_root.clone()).await
-        {
-            tracing::warn!(error = %e, "auto-index failed");
-        }
-    });
+    Ok(())
 }
 
 /// Implementation of the local-import logic. Separated so the
@@ -360,7 +482,12 @@ pub async fn import_url(
                 path.file_name().unwrap_or_default().to_string_lossy()
             );
             emitter.ok(Some(summary));
-            spawn_post_import_chain(app.clone(), project_root.clone(), path.clone());
+            spawn_post_import_chain(
+                app.clone(),
+                project_root.clone(),
+                path.clone(),
+                TimelineInsertMode::IfEmpty,
+            );
             Ok(path.to_string_lossy().into_owned())
         }
         Err(_e) if cancel.is_cancelled() => {

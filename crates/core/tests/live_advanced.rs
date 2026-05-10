@@ -9,6 +9,8 @@
 //! Both `#[ignore]` by default; require `ANTHROPIC_API_KEY` and (test 1)
 //! `ffmpeg` on PATH. ~$0.01–$0.02 per run on Sonnet.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

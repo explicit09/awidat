@@ -10,6 +10,8 @@
 //! validated by hand smoke (`SMOKE.md`); their wiring shape is identical
 //! to audio-energy's, so this test exercises the full dispatch path.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

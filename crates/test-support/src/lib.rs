@@ -4,6 +4,8 @@
 //! This crate is `publish = false`; it's a workspace dev-dep used only from
 //! `tests/` and `#[cfg(test)]` blocks.
 
+#![allow(clippy::expect_used)]
+
 pub mod assert;
 pub mod fixture;
 pub mod mcp;

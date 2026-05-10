@@ -28,11 +28,14 @@
 //! project.write(Path::new("/tmp/awidat-demo")).unwrap();
 //! ```
 
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 pub mod awidat_meta;
 pub mod error;
 pub mod index;
 pub mod otio;
 pub mod project;
+pub mod transitions;
 pub mod validate;
 
 pub use error::{JsonPath, ProtoError};

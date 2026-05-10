@@ -13,6 +13,8 @@
 //! 2. The bash output contains a known sentinel.
 //! 3. The agent's final reply mentions the sentinel back to the user.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::sync::Arc;
 use std::time::Duration;
 

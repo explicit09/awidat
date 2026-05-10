@@ -21,12 +21,17 @@ type State = {
   snapshot: TimelineSnapshot;
   /** True if the next refresh should auto-fit zoom. Cleared once consumed. */
   refreshing: boolean;
+  zoom: number;
   refresh: () => Promise<void>;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  fitZoom: () => void;
 };
 
 export const useTimelineStore = create<State>((set) => ({
   snapshot: { duration_s: 0, broadcast_overlay: null, tracks: [] },
   refreshing: false,
+  zoom: 1,
   refresh: async () => {
     set({ refreshing: true });
     try {
@@ -38,4 +43,9 @@ export const useTimelineStore = create<State>((set) => ({
       set({ refreshing: false });
     }
   },
+  zoomIn: () =>
+    set((state) => ({ zoom: Math.min(8, state.zoom * 1.25) })),
+  zoomOut: () =>
+    set((state) => ({ zoom: Math.max(0.25, state.zoom / 1.25) })),
+  fitZoom: () => set({ zoom: 1 }),
 }));

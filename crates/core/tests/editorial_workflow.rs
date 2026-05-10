@@ -9,6 +9,8 @@
 //! Runs in normal `cargo test` (no `#[ignore]`); no network, no ffmpeg.
 //! For a live-agent variant see `tests/live_agent.rs`.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::path::Path;
 use std::sync::Arc;
 

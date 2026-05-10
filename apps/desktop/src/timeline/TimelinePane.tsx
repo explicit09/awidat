@@ -16,6 +16,7 @@ import { ProposalActions } from "./ProposalActions";
 import { ProposalHandles } from "./ProposalHandles";
 import { TIMELINE_CHANGED_EVENT, type AppliedDiff } from "../protocol";
 import { serializeEdl } from "./edlBuilder";
+import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 import {
   hitTestClipBody,
   hitTestEdge,
@@ -43,6 +44,7 @@ export function TimelinePane() {
   const projectReady = useProjectStore((s) => s.current !== null);
   const projectRoot = useProjectStore((s) => s.current);
   const snapshot = useTimelineStore((s) => s.snapshot);
+  const zoom = useTimelineStore((s) => s.zoom);
   const refresh = useTimelineStore((s) => s.refresh);
   const items = useAgentStore((s) => s.items);
   // The canvas is a timeline-time surface; the playhead should track
@@ -114,7 +116,7 @@ export function TimelinePane() {
         </span>
       </header>
       <div className="timeline-stage">
-        <TimelineSurface snapshot={snapshot} currentTime={currentTime} />
+        <TimelineSurface snapshot={snapshot} currentTime={currentTime} zoom={zoom} />
         <ProposalActions />
       </div>
     </section>
@@ -127,9 +129,11 @@ export function TimelinePane() {
 function TimelineSurface({
   snapshot,
   currentTime,
+  zoom,
 }: {
   snapshot: TimelineSnapshot;
   currentTime: number;
+  zoom: number;
 }) {
   const [layout, setLayout] = useState<{ pps: number; width: number }>({
     pps: PX_PER_SECOND_BASE,
@@ -148,6 +152,7 @@ function TimelineSurface({
       <TimelineCanvas
         snapshot={snapshot}
         currentTime={currentTime}
+        zoom={zoom}
         onLayout={handleLayout}
       />
       <ProposalHandles containerWidth={layout.width} pps={layout.pps} />
@@ -165,13 +170,26 @@ type UserTrimDrag = {
   currentX: number;
 };
 
+type UserMoveDrag = {
+  trackIndex: number;
+  clipIndex: number;
+  clipUuid: string;
+  linkGroupId: string | null;
+  startX: number;
+  currentX: number;
+  startY: number;
+  currentY: number;
+};
+
 function TimelineCanvas({
   snapshot,
   currentTime,
+  zoom,
   onLayout,
 }: {
   snapshot: TimelineSnapshot;
   currentTime: number;
+  zoom: number;
   onLayout: (pps: number, widthPx: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -191,6 +209,7 @@ function TimelineCanvas({
   const [edgeHover, setEdgeHover] = useState<EdgeHit | null>(null);
   // Active drag, set on pointerdown-near-edge, cleared on pointerup.
   const [userTrim, setUserTrim] = useState<UserTrimDrag | null>(null);
+  const [userMove, setUserMove] = useState<UserMoveDrag | null>(null);
   // Properties-pane selection: which clip is currently inspected.
   // The canvas paints a subtle amber outline on the selected clip
   // so the link between timeline selection and right-rail content
@@ -214,7 +233,8 @@ function TimelineCanvas({
     function paint() {
       if (!canvas || !container) return;
       const dpr = window.devicePixelRatio || 1;
-      const cssWidth = container.clientWidth;
+      const viewportWidth =
+        container.parentElement?.clientWidth || container.clientWidth;
       // Use the wider snapshot for layout — picking max of
       // current/proposed track counts keeps the canvas tall
       // enough that no track gets clipped.
@@ -225,6 +245,16 @@ function TimelineCanvas({
         1,
       );
       const cssHeight = RULER_HEIGHT + lanesCount * LANE_HEIGHT;
+      // Pps from the max of current vs proposed durations so the
+      // whole post-state fits even when a proposal extends past
+      // the original.
+      const proposedDuration = proposal?.snapshot.duration_s ?? 0;
+      const totalDuration = Math.max(snapshot.duration_s, proposedDuration);
+      const pps = computePps(totalDuration, viewportWidth, zoom);
+      const cssWidth =
+        totalDuration > 0
+          ? Math.max(viewportWidth, totalDuration * pps + 8)
+          : viewportWidth;
 
       canvas.width = Math.floor(cssWidth * dpr);
       canvas.height = Math.floor(cssHeight * dpr);
@@ -236,12 +266,6 @@ function TimelineCanvas({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-      // Pps from the max of current vs proposed durations so the
-      // whole post-state fits even when a proposal extends past
-      // the original.
-      const proposedDuration = proposal?.snapshot.duration_s ?? 0;
-      const totalDuration = Math.max(snapshot.duration_s, proposedDuration);
-      const pps = computePps(totalDuration, cssWidth);
       ppsRef.current = pps;
       onLayout(pps, cssWidth);
 
@@ -300,6 +324,10 @@ function TimelineCanvas({
         ctx.fillStyle = "#f59e0b";
         ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
       }
+
+      if (userMove) {
+        drawMoveGhost(ctx, snapshot, userMove, pps);
+      }
     }
 
     paint();
@@ -321,8 +349,10 @@ function TimelineCanvas({
     snapshot,
     currentTime,
     proposal,
+    zoom,
     onLayout,
     userTrim,
+    userMove,
     edgeHover,
     selectedClipKey,
   ]);
@@ -358,6 +388,74 @@ function TimelineCanvas({
     return Math.max(0, Math.min(t, snapshot.duration_s || t));
   }
 
+  const commitDeleteSelection = useCallback(async (): Promise<void> => {
+    if (proposal || !selectedClipKey) return;
+    const selectedTrack = snapshot.tracks[selectedClipKey.trackIndex];
+    const selectedItem = selectedTrack?.items.find(
+      (it) => it.index === selectedClipKey.clipIndex,
+    );
+    if (!selectedItem || selectedItem.kind !== "clip") return;
+
+    const clips =
+      selectedItem.link_group_id !== null
+        ? snapshot.tracks.flatMap((track) =>
+            track.items.filter(
+              (it): it is Extract<TimelineItem, { kind: "clip" }> =>
+                it.kind === "clip" &&
+                it.link_group_id === selectedItem.link_group_id,
+            ),
+          )
+        : [selectedItem];
+    const seen = new Set<string>();
+    const ops = clips
+      .filter((clip) => {
+        if (seen.has(clip.clip_uuid)) return false;
+        seen.add(clip.clip_uuid);
+        return true;
+      })
+      .map((clip) => ({
+        kind: "delete_clip" as const,
+        anchor: { kind: "clip_uuid" as const, uuid: clip.clip_uuid },
+      }));
+    if (ops.length === 0) return;
+
+    try {
+      await invoke<string>("propose_user_edit", {
+        edlText: serializeEdl(ops),
+      });
+      clearSelection();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (delete clip) failed", err);
+    }
+  }, [clearSelection, proposal, selectedClipKey, snapshot]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const isDeleteKey =
+        e.code === "Delete" ||
+        e.code === "Backspace" ||
+        e.key === "Delete" ||
+        e.key === "Backspace" ||
+        e.key === "Del";
+      if (!isDeleteKey) return;
+      if (isEditableTarget(e.target)) return;
+      if (!selectedClipKey || proposal) return;
+      e.preventDefault();
+      void commitDeleteSelection();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    const unlistenMenu = onMenuCommand((id) => {
+      if (id === MENU_COMMANDS.DELETE_CLIP) {
+        void commitDeleteSelection();
+      }
+    });
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      unlistenMenu();
+    };
+  }, [commitDeleteSelection, proposal, selectedClipKey]);
+
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (snapshot.duration_s <= 0) return; // nothing to interact with
     // Don't start a new user-trim while a proposal is already on
@@ -384,6 +482,23 @@ function TimelineCanvas({
     const body = hitTestClipBody(x, y, snapshot, ppsRef.current);
     if (body) {
       selectClip(body);
+      const item = snapshot.tracks[body.trackIndex]?.items.find(
+        (candidate) => candidate.index === body.clipIndex,
+      );
+      if (item?.kind === "clip") {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        setUserMove({
+          trackIndex: body.trackIndex,
+          clipIndex: body.clipIndex,
+          clipUuid: item.clip_uuid,
+          linkGroupId: item.link_group_id,
+          startX: x,
+          currentX: x,
+          startY: y,
+          currentY: y,
+        });
+        return;
+      }
     } else {
       clearSelection();
     }
@@ -396,6 +511,10 @@ function TimelineCanvas({
     if (userTrim) {
       // Active drag — update the phantom edge x.
       setUserTrim({ ...userTrim, currentX: x });
+      return;
+    }
+    if (userMove) {
+      setUserMove({ ...userMove, currentX: x, currentY: y });
       return;
     }
     // Hover state — update edge cursor hint.
@@ -413,6 +532,10 @@ function TimelineCanvas({
     if (userTrim) {
       void commitUserTrim(userTrim);
       setUserTrim(null);
+    }
+    if (userMove) {
+      void commitUserMove(userMove);
+      setUserMove(null);
     }
   }
 
@@ -463,6 +586,66 @@ function TimelineCanvas({
     }
   }
 
+  async function commitUserMove(drag: UserMoveDrag): Promise<void> {
+    const dxPx = drag.currentX - drag.startX;
+    const dyPx = drag.currentY - drag.startY;
+    if (Math.hypot(dxPx, dyPx) < 5) return;
+    const dxS = pxDeltaToSourceDelta(dxPx, ppsRef.current);
+    const primaryTrack = snapshot.tracks[drag.trackIndex];
+    const primary = primaryTrack?.items.find(
+      (item) => item.kind === "clip" && item.index === drag.clipIndex,
+    );
+    if (!primary || primary.kind !== "clip") return;
+
+    const movingClips =
+      drag.linkGroupId !== null
+        ? snapshot.tracks.flatMap((track, trackIndex) =>
+            track.items
+              .filter(
+                (item): item is Extract<TimelineItem, { kind: "clip" }> =>
+                  item.kind === "clip" && item.link_group_id === drag.linkGroupId,
+              )
+              .map((item) => ({ trackIndex, item })),
+          )
+        : [{ trackIndex: drag.trackIndex, item: primary }];
+
+    const seen = new Set<string>();
+    const ops = movingClips
+      .filter(({ item }) => {
+        if (seen.has(item.clip_uuid)) return false;
+        seen.add(item.clip_uuid);
+        return true;
+      })
+      .map(({ trackIndex, item }) => {
+        const track = snapshot.tracks[trackIndex];
+        const toPosition = targetPositionForMove(
+          track.items,
+          item.index,
+          item.track_start_s + dxS,
+        );
+        return {
+          kind: "move_clip" as const,
+          anchor: { kind: "clip_uuid" as const, uuid: item.clip_uuid },
+          toPosition,
+          atS: Math.max(0, item.track_start_s + dxS),
+          fromPosition: item.index,
+        };
+      })
+      .filter((op) => op.toPosition !== op.fromPosition)
+      .map(({ fromPosition: _fromPosition, ...op }) => op);
+
+    if (ops.length === 0) return;
+
+    try {
+      await invoke<string>("propose_user_edit", {
+        edlText: serializeEdl(ops),
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (move clip) failed", err);
+    }
+  }
+
   function onPointerLeave() {
     setEdgeHover(null);
   }
@@ -473,10 +656,12 @@ function TimelineCanvas({
   // via React style on the element is enough.
   const cursor = userTrim
     ? "ew-resize"
+    : userMove
+    ? "grabbing"
     : edgeHover
     ? "ew-resize"
     : snapshot.duration_s > 0
-    ? "col-resize"
+    ? "grab"
     : "default";
 
   return (
@@ -500,6 +685,7 @@ function TimelineCanvas({
       {userTrim && (
         <UserTrimTooltip drag={userTrim} pps={ppsRef.current} />
       )}
+      {userMove && <UserMoveTooltip drag={userMove} pps={ppsRef.current} />}
     </div>
   );
 }
@@ -540,10 +726,93 @@ function UserTrimTooltip({
   );
 }
 
-function computePps(durationS: number, cssWidth: number): number {
+function UserMoveTooltip({
+  drag,
+  pps,
+}: {
+  drag: UserMoveDrag;
+  pps: number;
+}) {
+  const dxS = (drag.currentX - drag.startX) / Math.max(0.001, pps);
+  return (
+    <div className="user-trim-tooltip" style={{ left: drag.currentX }}>
+      move {dxS >= 0 ? "+" : ""}
+      {dxS.toFixed(2)}s
+    </div>
+  );
+}
+
+function computePps(durationS: number, cssWidth: number, zoom: number): number {
   const fitPps =
     durationS > 0 ? Math.max(0.05, (cssWidth - 8) / durationS) : PX_PER_SECOND_BASE;
-  return Math.min(fitPps, PX_PER_SECOND_BASE * 8);
+  return Math.min(fitPps * zoom, PX_PER_SECOND_BASE * 8);
+}
+
+function targetPositionForMove(
+  items: TimelineItem[],
+  movingIndex: number,
+  targetStartS: number,
+): number {
+  const ordered = [...items].sort(
+    (a, b) => a.track_start_s - b.track_start_s || a.index - b.index,
+  );
+  let target = 0;
+  for (const item of ordered) {
+    if (item.index === movingIndex) continue;
+    const midpoint = item.track_start_s + item.duration_s / 2;
+    if (targetStartS < midpoint) {
+      return item.index;
+    }
+    target = item.index + 1;
+  }
+  return Math.max(0, target);
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select";
+}
+
+function drawMoveGhost(
+  ctx: CanvasRenderingContext2D,
+  snapshot: TimelineSnapshot,
+  drag: UserMoveDrag,
+  pps: number,
+) {
+  const dx = drag.currentX - drag.startX;
+  const drawClip = (trackIndex: number, item: Extract<TimelineItem, { kind: "clip" }>) => {
+    const x = Math.round(item.track_start_s * pps + dx);
+    const y = RULER_HEIGHT + trackIndex * LANE_HEIGHT + 4;
+    const w = Math.max(2, Math.round(item.duration_s * pps));
+    const h = LANE_HEIGHT - 8;
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = "#f59e0b";
+    ctx.lineWidth = 2;
+    strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 4);
+    ctx.restore();
+  };
+
+  if (drag.linkGroupId !== null) {
+    for (let trackIndex = 0; trackIndex < snapshot.tracks.length; trackIndex += 1) {
+      for (const item of snapshot.tracks[trackIndex].items) {
+        if (item.kind === "clip" && item.link_group_id === drag.linkGroupId) {
+          drawClip(trackIndex, item);
+        }
+      }
+    }
+    return;
+  }
+
+  const item = snapshot.tracks[drag.trackIndex]?.items.find(
+    (candidate): candidate is Extract<TimelineItem, { kind: "clip" }> =>
+      candidate.kind === "clip" && candidate.index === drag.clipIndex,
+  );
+  if (item) {
+    drawClip(drag.trackIndex, item);
+  }
 }
 
 /** Draw the time ruler with tick marks every 1, 5, or 10 seconds

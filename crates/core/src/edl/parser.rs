@@ -30,8 +30,8 @@ use awidat_proto::awidat_meta::{
 use thiserror::Error;
 
 use super::op::{
-    Anchor, BRollPosition, EdlEnvelope, EdlOp, TitleAnimation, TitlePosition, TitleWeight,
-    TransitionBetween,
+    Anchor, BRollPosition, EdlEnvelope, EdlOp, InsertTrackKind, TitleAnimation, TitlePosition,
+    TitleWeight, TransitionBetween,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -47,7 +47,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Audio Fade, Set Track Audio, Set Ducking, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
     )]
     UnknownOp {
         /// Line number.
@@ -220,6 +220,9 @@ enum OpKind {
     MoveClip,
     InsertTransition,
     SetVolume,
+    SetAudioFade,
+    SetTrackAudio,
+    SetDucking,
     SetSpeed,
     SetColorCorrection,
     ApplyLut,
@@ -244,6 +247,9 @@ impl OpBuilder {
             "Move Clip" => OpKind::MoveClip,
             "Insert Transition" => OpKind::InsertTransition,
             "Set Volume" => OpKind::SetVolume,
+            "Set Audio Fade" => OpKind::SetAudioFade,
+            "Set Track Audio" => OpKind::SetTrackAudio,
+            "Set Ducking" => OpKind::SetDucking,
             "Set Speed" => OpKind::SetSpeed,
             "Set Color Correction" => OpKind::SetColorCorrection,
             "Apply LUT" => OpKind::ApplyLut,
@@ -343,10 +349,15 @@ impl OpBuilder {
                 Ok(EdlOp::InsertClip {
                     asset,
                     track,
+                    track_kind: take_field_string(&mut fields, "track_kind")
+                        .as_deref()
+                        .map(|raw| parse_insert_track_kind(raw, head))
+                        .transpose()?,
                     at_position: take_field_usize(&mut fields, "at_position"),
                     start: take_field_f64(&mut fields, "start"),
                     end: take_field_f64(&mut fields, "end"),
                     name: take_field_string(&mut fields, "name"),
+                    link_group_id: take_field_string(&mut fields, "link_group_id"),
                 })
             }
             OpKind::InsertBRoll => {
@@ -389,16 +400,19 @@ impl OpBuilder {
                     line: head,
                     field: "anchor".into(),
                 })?;
-                let to_position =
-                    take_field_usize(&mut fields, "to_position").ok_or_else(|| {
+                let at_s = take_field_f64(&mut fields, "at_s");
+                let to_position = take_field_usize(&mut fields, "to_position")
+                    .or_else(|| at_s.map(|_| 0))
+                    .ok_or_else(|| {
                         EdlParseError::MissingField {
                             line: head,
-                            field: "to_position".into(),
+                            field: "to_position or at_s".into(),
                         }
                     })?;
                 Ok(EdlOp::MoveClip {
                     anchor,
                     to_position,
+                    at_s,
                 })
             }
             OpKind::InsertTransition => {
@@ -406,22 +420,38 @@ impl OpBuilder {
                     line: head,
                     field: "between".into(),
                 })?;
-                let kind = take_field_string(&mut fields, "kind").ok_or_else(|| {
-                    EdlParseError::MissingField {
+                let transition_id = take_field_string(&mut fields, "id");
+                let kind = take_field_string(&mut fields, "kind")
+                    .or_else(|| transition_id.clone())
+                    .ok_or_else(|| EdlParseError::MissingField {
                         line: head,
                         field: "kind".into(),
-                    }
-                })?;
+                    })?;
                 let duration_s = take_field_f64(&mut fields, "duration_s").ok_or_else(|| {
                     EdlParseError::MissingField {
                         line: head,
                         field: "duration_s".into(),
                     }
                 })?;
+                let family = take_field_string(&mut fields, "family");
+                let intent = take_field_string(&mut fields, "intent");
+                let energy = take_field_f64(&mut fields, "energy");
+                let direction = take_field_string(&mut fields, "direction");
+                let params = take_field_json_map(&mut fields, "params_json", head)?;
+                let spec =
+                    transition_id.map(|id| awidat_proto::transitions::SemanticTransitionSpec {
+                        id,
+                        family,
+                        intent,
+                        energy,
+                        direction,
+                        params,
+                    });
                 Ok(EdlOp::InsertTransition {
                     between,
                     kind,
                     duration_s,
+                    spec,
                 })
             }
             OpKind::SetVolume => {
@@ -436,6 +466,47 @@ impl OpBuilder {
                     }
                 })?;
                 Ok(EdlOp::SetVolume { anchor, value })
+            }
+            OpKind::SetAudioFade => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                Ok(EdlOp::SetAudioFade {
+                    anchor,
+                    fade_in_s: take_field_f64(&mut fields, "fade_in_s"),
+                    fade_out_s: take_field_f64(&mut fields, "fade_out_s"),
+                })
+            }
+            OpKind::SetTrackAudio => {
+                let track = take_field_string(&mut fields, "track").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "track".into(),
+                    }
+                })?;
+                Ok(EdlOp::SetTrackAudio {
+                    track,
+                    role: take_field_string(&mut fields, "role"),
+                    volume: take_field_f64(&mut fields, "volume"),
+                    muted: take_field_bool(&mut fields, "muted"),
+                    solo: take_field_bool(&mut fields, "solo"),
+                })
+            }
+            OpKind::SetDucking => {
+                let track = take_field_string(&mut fields, "track").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "track".into(),
+                    }
+                })?;
+                Ok(EdlOp::SetDucking {
+                    track,
+                    enabled: take_field_bool(&mut fields, "enabled"),
+                    amount_db: take_field_f64(&mut fields, "amount_db"),
+                    attack_ms: take_field_f64(&mut fields, "attack_ms"),
+                    release_ms: take_field_f64(&mut fields, "release_ms"),
+                })
             }
             OpKind::SetSpeed => {
                 let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
@@ -857,6 +928,58 @@ fn take_field_string(fields: &mut Vec<(String, FieldValue)>, key: &str) -> Optio
     })
 }
 
+fn take_field_bool(fields: &mut Vec<(String, FieldValue)>, key: &str) -> Option<bool> {
+    let pos = fields.iter().rposition(|(k, _)| k == key)?;
+    let (_, v) = fields.remove(pos);
+    match v {
+        FieldValue::String(s) => match s.to_ascii_lowercase().as_str() {
+            "true" | "yes" | "1" => Some(true),
+            "false" | "no" | "0" => Some(false),
+            _ => None,
+        },
+        FieldValue::Number(n) if (n - 1.0).abs() < f64::EPSILON => Some(true),
+        FieldValue::Number(n) if n.abs() < f64::EPSILON => Some(false),
+        FieldValue::Number(_) => None,
+    }
+}
+
+fn take_field_json_map(
+    fields: &mut Vec<(String, FieldValue)>,
+    key: &str,
+    line: usize,
+) -> Result<serde_json::Map<String, serde_json::Value>, EdlParseError> {
+    let Some(raw) = take_field_string(fields, key) else {
+        return Ok(serde_json::Map::new());
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| EdlParseError::BadField {
+            line,
+            raw: format!("{key}: {raw}"),
+            message: format!("must be a JSON object: {e}"),
+        })?;
+    value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| EdlParseError::BadField {
+            line,
+            raw: format!("{key}: {raw}"),
+            message: "must be a JSON object".into(),
+        })
+}
+
+fn parse_insert_track_kind(raw: &str, line: usize) -> Result<InsertTrackKind, EdlParseError> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "video" => Ok(InsertTrackKind::Video),
+        "audio" => Ok(InsertTrackKind::Audio),
+        "auto" => Ok(InsertTrackKind::Auto),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("track_kind: {other}"),
+            message: "must be 'video', 'audio', or 'auto'".into(),
+        }),
+    }
+}
+
 /// Parse `transcript_snippet="..."` / `clip_uuid=...` / `scene_change_index=ASSET:N`.
 ///
 /// Prefers `key=value`. Tolerates `key: value` (with the space) as
@@ -1071,9 +1194,11 @@ mod tests {
                 between,
                 kind,
                 duration_s,
+                spec,
             } => {
                 assert_eq!(kind, "SMPTE_Dissolve");
                 assert_eq!(*duration_s, 0.3);
+                assert!(spec.is_none());
                 assert!(
                     matches!(&between.from, Anchor::TranscriptSnippet { text } if text == "I realized")
                 );
@@ -1082,6 +1207,42 @@ mod tests {
                 );
             }
             _ => panic!("want InsertTransition"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_transition_semantic_spec() {
+        let text = "\
+*** Begin EDL
+*** Insert Transition
+@@ between: clip_uuid=clip-a and clip_uuid=clip-b
++ id: awidat.slide_left
++ family: slide
++ intent: hide_motion_jump
++ energy: 0.7
++ direction: left
++ params_json: {\"blur\":0.25}
++ duration_s: 0.28
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTransition {
+                kind,
+                duration_s,
+                spec: Some(spec),
+                ..
+            } => {
+                assert_eq!(kind, "awidat.slide_left");
+                assert_eq!(*duration_s, 0.28);
+                assert_eq!(spec.id, "awidat.slide_left");
+                assert_eq!(spec.family.as_deref(), Some("slide"));
+                assert_eq!(spec.intent.as_deref(), Some("hide_motion_jump"));
+                assert_eq!(spec.energy, Some(0.7));
+                assert_eq!(spec.direction.as_deref(), Some("left"));
+                assert_eq!(spec.params.get("blur").and_then(|v| v.as_f64()), Some(0.25));
+            }
+            other => panic!("want semantic InsertTransition, got {other:?}"),
         }
     }
 

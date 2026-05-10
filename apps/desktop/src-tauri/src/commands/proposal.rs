@@ -531,6 +531,9 @@ fn build_diff_hints(
             | EdlOp::MoveClip { .. }
             | EdlOp::InsertTransition { .. }
             | EdlOp::SetVolume { .. }
+            | EdlOp::SetAudioFade { .. }
+            | EdlOp::SetTrackAudio { .. }
+            | EdlOp::SetDucking { .. }
             | EdlOp::SetSpeed { .. }
             | EdlOp::SetColorCorrection { .. }
             | EdlOp::ApplyLut { .. }
@@ -658,6 +661,9 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::MoveClip { .. } => "MoveClip",
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::SetVolume { .. } => "SetVolume",
+        EdlOp::SetAudioFade { .. } => "SetAudioFade",
+        EdlOp::SetTrackAudio { .. } => "SetTrackAudio",
+        EdlOp::SetDucking { .. } => "SetDucking",
         EdlOp::SetSpeed { .. } => "SetSpeed",
         EdlOp::SetColorCorrection { .. } => "SetColorCorrection",
         EdlOp::ApplyLut { .. } => "ApplyLut",

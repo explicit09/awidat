@@ -1,5 +1,11 @@
 //! Regression coverage for bundled workflow skills and their L3 scripts.
 
+#![allow(
+    clippy::expect_used,
+    clippy::redundant_closure_for_method_calls,
+    clippy::unwrap_used
+)]
+
 use std::error::Error;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};

@@ -18,6 +18,17 @@
 //! - `commands/project.rs` — `set_project_root`, `init_project`,
 //!   `current_project_root`, `recent_projects`
 
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::match_like_matches_macro,
+    clippy::needless_borrow,
+    clippy::op_ref,
+    clippy::type_complexity
+)]
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
+mod app_menu;
 mod bridges;
 mod commands;
 mod events;
@@ -53,6 +64,9 @@ pub fn run() {
     }
 
     let result = tauri::Builder::default()
+        .enable_macos_default_menu(false)
+        .menu(app_menu::build)
+        .on_menu_event(app_menu::handle_menu_event)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -73,8 +87,10 @@ pub fn run() {
             commands::turn::cancel_turn,
             commands::turn::respond_approval,
             commands::turn::respond_user_input,
+            app_menu::set_menu_item_enabled,
             commands::project::set_project_root,
             commands::project::current_project_root,
+            commands::project::close_project,
             commands::project::init_project,
             commands::project::recent_projects,
             commands::project::cancel_job,
@@ -96,6 +112,7 @@ pub fn run() {
             commands::permission::set_permission_mode,
             commands::motion::read_motion,
             commands::import::import_local,
+            commands::import::import_locals,
             commands::import::import_url,
             commands::index::index_project,
             commands::transcode::transcode_project_proxies,

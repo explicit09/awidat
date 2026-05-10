@@ -3,6 +3,8 @@
 //! These tests keep the workflow catalog honest: every major output path
 //! must be expressible as EDL operations that apply to the OTIO graph.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use awidat_core::edl::{AnchorContext, apply, parse};
 use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
 use awidat_proto::otio::{
