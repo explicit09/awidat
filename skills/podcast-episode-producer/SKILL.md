@@ -214,12 +214,14 @@ Use the graph for what the graph can express:
 - Use `Set Volume` for obvious speaker/music balance fixes.
 - Use `Set Loudness Target` for publishable output, typically
   `integrated_lufs: -16` to `-14` and `true_peak_db: -1`.
+- Use `Set Clip Audio FX` and `Set Track Audio FX` for FFmpeg-native
+  high-pass/low-pass, hum notch, EQ, noise gate, compression, limiter,
+  de-ess approximation, and loudnorm cleanup.
 - Keep intro/outro music and stingers below dialogue; do not let music
   fight speech.
-- If noise reduction, EQ, compression, de-essing, room tone fill, or
-  detailed color grading is required and no graph primitive exists for
-  that exact operation yet, put it in the final finishing report as a
-  remaining post step. Do not fake it with FFmpeg-only side effects.
+- If room tone fill, detailed color grading, or an audio operation
+  outside the supported FX set is required, put it in the final finishing
+  report as a remaining post step.
 
 Use `Set Package Metadata` before final render when title/description/
 tags/platform are known.
@@ -281,7 +283,8 @@ thumbnail image, trailer, and transcript/chapters.
 
 Final handoff should name the render path, approximate duration,
 publishing metadata, derivative needs, and any manual finishing gaps
-such as unresolved sync, denoise/EQ, color match, or platform upload.
+such as unresolved low-confidence sync, unsupported audio restoration,
+color match, or platform upload.
 Archive intent belongs in the report for now unless a project archive
 tool exists.
 
@@ -336,7 +339,7 @@ or the source material genuinely demands it.
   it's the edit. It isn't. The edit is `scope="timeline"`.
 - Don't trim aggressively without inspecting the dependency graph.
   A punchline without its setup is a lie.
-- Don't say sync, denoise, EQ, color correction, or platform upload is
+- Don't say sync, audio cleanup, color correction, or platform upload is
   complete unless there is an actual graph/tool step or verified
   artifact behind it.
 - Don't ask the user to confirm every clip. Confirm the OVERALL

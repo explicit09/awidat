@@ -8,21 +8,22 @@ use std::sync::Arc;
 use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::tool::{ApprovalRequest, UserInputRequest};
 use awidat_core::tools::{
-    apply_edl::ApplyEdlTool, assess_continuity::AssessContinuityTool, bash::BashTool,
-    broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    download_yt_clip::DownloadYtClipTool, find_beat::FindBeatTool,
+    analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
+    assess_continuity::AssessContinuityTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
+    clip_search::ClipSearchTool, download_yt_clip::DownloadYtClipTool,
+    export_package::ExportPackageTool, find_beat::FindBeatTool,
     find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
     find_episode_start::FindEpisodeStartTool, find_eye_contact::FindEyeContactTool,
     find_false_starts::FindFalseStartsTool, find_filler_words::FindFillerWordsTool,
     find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
     inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
-    load_skill::LoadSkillTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
-    request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
-    shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
-    start_render::StartRenderTool, update_plan::UpdatePlanTool, use_broll::UseBrollTool,
-    vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
-    vedit_revert::VeditRevertTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
-    view_timeline::ViewTimelineTool,
+    load_skill::LoadSkillTool, plan_multicam::PlanMulticamTool, poll_render::PollRenderTool,
+    read_index::ReadIndexTool, request_user_input::RequestUserInputTool,
+    search_broll::SearchBrollTool, shot_summary::ShotSummaryTool,
+    start_indexing::StartIndexingTool, start_render::StartRenderTool, update_plan::UpdatePlanTool,
+    use_broll::UseBrollTool, vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool,
+    vedit_log::VeditLogTool, vedit_revert::VeditRevertTool, view_episode::ViewEpisodeTool,
+    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use tokio::sync::mpsc;
@@ -38,6 +39,7 @@ use tokio::sync::mpsc;
 pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ApplyEdlTool));
+    registry.register(Arc::new(AnalyzeSyncTool));
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(FindMomentTool));
     registry.register(Arc::new(FindDeadAirTool));
@@ -51,6 +53,8 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(StartRenderTool));
+    registry.register(Arc::new(ExportPackageTool));
+    registry.register(Arc::new(PlanMulticamTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(UpdatePlanTool));
     registry.register(Arc::new(FindBeatTool));

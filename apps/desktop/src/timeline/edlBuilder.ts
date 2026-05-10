@@ -23,6 +23,21 @@ export type EdlAnchor =
   | { kind: "clip_uuid"; uuid: string }
   | { kind: "transcript_snippet"; text: string };
 
+export type EdlAudioFx = {
+  highPassHz?: number;
+  lowPassHz?: number;
+  eqBands?: Array<{ freqHz: number; gainDb: number; widthHz?: number }>;
+  compressorThresholdDb?: number;
+  compressorRatio?: number;
+  limiterLimitDb?: number;
+  noiseGateThresholdDb?: number;
+  humNotchHz?: number;
+  deEssHz?: number;
+  deEssReductionDb?: number;
+  loudnormI?: number;
+  loudnormTp?: number;
+};
+
 export type EdlOp =
   | {
       kind: "trim_clip";
@@ -71,6 +86,16 @@ export type EdlOp =
       attackMs?: number;
       releaseMs?: number;
     }
+  | {
+      kind: "set_sync_group";
+      anchor: EdlAnchor;
+      syncGroupId: string;
+      offsetS: number;
+      speedFactor?: number;
+      confidence?: number;
+    }
+  | { kind: "set_clip_audio_fx"; anchor: EdlAnchor; fx: EdlAudioFx }
+  | { kind: "set_track_audio_fx"; track: string; fx: EdlAudioFx }
   | { kind: "set_speed"; anchor: EdlAnchor; factor: number }
   | {
       kind: "set_color_correction";
@@ -199,6 +224,26 @@ function appendOp(lines: string[], op: EdlOp): void {
       if (op.attackMs !== undefined) lines.push(`+ attack_ms: ${op.attackMs.toFixed(3)}`);
       if (op.releaseMs !== undefined) lines.push(`+ release_ms: ${op.releaseMs.toFixed(3)}`);
       break;
+    case "set_sync_group":
+      lines.push("*** Set Sync Group");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      lines.push(`+ sync_group_id: ${op.syncGroupId.replace(/"/g, "")}`);
+      lines.push(`+ offset_s: ${formatTime(op.offsetS)}`);
+      if (op.speedFactor !== undefined)
+        lines.push(`+ speed_factor: ${formatFloat(op.speedFactor)}`);
+      if (op.confidence !== undefined)
+        lines.push(`+ confidence: ${formatFloat(op.confidence)}`);
+      break;
+    case "set_clip_audio_fx":
+      lines.push("*** Set Clip Audio FX");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      appendAudioFx(lines, op.fx);
+      break;
+    case "set_track_audio_fx":
+      lines.push("*** Set Track Audio FX");
+      lines.push(`+ track: ${op.track}`);
+      appendAudioFx(lines, op.fx);
+      break;
     case "set_speed":
       lines.push("*** Set Speed");
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
@@ -255,6 +300,31 @@ function appendOp(lines: string[], op: EdlOp): void {
         lines.push(`+ animation: ${op.animation}`);
       break;
   }
+}
+
+function appendAudioFx(lines: string[], fx: EdlAudioFx): void {
+  if (fx.highPassHz !== undefined) lines.push(`+ high_pass_hz: ${formatFloat(fx.highPassHz)}`);
+  if (fx.lowPassHz !== undefined) lines.push(`+ low_pass_hz: ${formatFloat(fx.lowPassHz)}`);
+  if (fx.eqBands !== undefined)
+    lines.push(`+ eq_bands_json: ${JSON.stringify(fx.eqBands.map((b) => ({
+      freq_hz: b.freqHz,
+      gain_db: b.gainDb,
+      width_hz: b.widthHz,
+    })))}`);
+  if (fx.compressorThresholdDb !== undefined)
+    lines.push(`+ compressor_threshold_db: ${formatFloat(fx.compressorThresholdDb)}`);
+  if (fx.compressorRatio !== undefined)
+    lines.push(`+ compressor_ratio: ${formatFloat(fx.compressorRatio)}`);
+  if (fx.limiterLimitDb !== undefined)
+    lines.push(`+ limiter_limit_db: ${formatFloat(fx.limiterLimitDb)}`);
+  if (fx.noiseGateThresholdDb !== undefined)
+    lines.push(`+ noise_gate_threshold_db: ${formatFloat(fx.noiseGateThresholdDb)}`);
+  if (fx.humNotchHz !== undefined) lines.push(`+ hum_notch_hz: ${formatFloat(fx.humNotchHz)}`);
+  if (fx.deEssHz !== undefined) lines.push(`+ de_ess_hz: ${formatFloat(fx.deEssHz)}`);
+  if (fx.deEssReductionDb !== undefined)
+    lines.push(`+ de_ess_reduction_db: ${formatFloat(fx.deEssReductionDb)}`);
+  if (fx.loudnormI !== undefined) lines.push(`+ loudnorm_i: ${formatFloat(fx.loudnormI)}`);
+  if (fx.loudnormTp !== undefined) lines.push(`+ loudnorm_tp: ${formatFloat(fx.loudnormTp)}`);
 }
 
 /** Strip embedded double-quotes from title text so the parser's

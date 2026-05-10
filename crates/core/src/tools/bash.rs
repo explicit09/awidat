@@ -112,7 +112,7 @@ const BANNED_COMMANDS: &[&str] = &[
 /// Args the model passes to `bash`. JSON-shaped per [`schema`].
 #[derive(Debug, Deserialize)]
 struct BashArgs {
-    /// Command to execute. Run via `bash -lc`.
+    /// Command to execute. Run via `bash -c`.
     command: String,
     /// Working directory. Defaults to the inherited cwd.
     #[serde(default)]
@@ -140,7 +140,7 @@ impl ToolHandler for BashTool {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Shell command to run via `bash -lc`. Required."
+                        "description": "Shell command to run via `bash -c`. Required."
                     },
                     "workdir": {
                         "type": "string",
@@ -214,7 +214,7 @@ impl ToolHandler for BashTool {
         }
 
         let mut cmd = Command::new("bash");
-        cmd.arg("-lc").arg(&args.command);
+        cmd.arg("-c").arg(&args.command);
         cmd.current_dir(&workdir);
 
         let output_fut = cmd.output();
@@ -260,9 +260,11 @@ async fn run_sandboxed(
     let blocking = tokio::task::spawn_blocking(move || {
         let policy = Policy::for_project(&project_root);
         let sb = Sandbox;
-        // We pass the command via `bash -lc <command>` so user-supplied
+        // We pass the command via `bash -c <command>` so user-supplied
         // shell syntax (pipes, redirects) works. The bash binary
-        // itself is read-allowed by the seatbelt profile.
+        // itself is read-allowed by the seatbelt profile. Avoid a
+        // login shell here; macOS CI images may run Homebrew startup
+        // hooks that touch /dev/null before the requested command.
         // We can't change-cwd inside sandbox-exec's argv, so we cd in
         // the inline shell.
         let cmd = format!(
@@ -270,7 +272,7 @@ async fn run_sandboxed(
             shell_quote(workdir.to_str().unwrap_or(".")),
             command
         );
-        sb.run(&["/bin/bash", "-lc", &cmd], &policy)
+        sb.run(&["/bin/bash", "-c", &cmd], &policy)
     });
     let result = match timeout(deadline, blocking).await {
         Ok(Ok(r)) => r,

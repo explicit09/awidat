@@ -26,6 +26,7 @@ use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::project::{files, read_otio_timeline};
 use awidat_proto::transitions;
 use chrono::Utc;
+use serde::Deserialize;
 use thiserror::Error;
 
 use crate::job::RenderJobSpec;
@@ -116,6 +117,8 @@ pub struct TimelineSegment {
     pub color_correction: Option<ColorCorrectionPlan>,
     /// Optional absolute LUT path, read from the `awidat.lut` effect.
     pub lut_path: Option<PathBuf>,
+    /// Optional FFmpeg-native audio FX chain.
+    pub audio_fx: Option<AudioFxPlan>,
 }
 
 /// Render-time audio clip span extracted from an OTIO audio track.
@@ -135,10 +138,13 @@ pub struct AudioClipPlan {
     pub fade_in_s: Option<f64>,
     /// Optional fade-out duration in seconds.
     pub fade_out_s: Option<f64>,
+    /// Optional FFmpeg-native audio FX chain.
+    pub audio_fx: Option<AudioFxPlan>,
 }
 
 /// Render-time item on an audio track.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum AudioTrackItemPlan {
     /// Media-backed audio clip.
     Clip(AudioClipPlan),
@@ -164,6 +170,8 @@ pub struct AudioTrackPlan {
     pub solo: bool,
     /// Optional ducking behavior for this track.
     pub ducking: Option<DuckingPlan>,
+    /// Optional FFmpeg-native audio FX chain for the full mixed track.
+    pub audio_fx: Option<AudioFxPlan>,
     /// Ordered audio items on the track.
     pub items: Vec<AudioTrackItemPlan>,
 }
@@ -179,6 +187,47 @@ pub struct DuckingPlan {
     pub attack_ms: f64,
     /// Ducking release in milliseconds.
     pub release_ms: f64,
+}
+
+/// FFmpeg-native audio cleanup/EQ/dynamics settings.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct AudioFxPlan {
+    /// High-pass cutoff in Hz.
+    pub high_pass_hz: Option<f64>,
+    /// Low-pass cutoff in Hz.
+    pub low_pass_hz: Option<f64>,
+    /// Parametric EQ bands.
+    #[serde(default)]
+    pub eq_bands: Vec<EqBandPlan>,
+    /// Compressor threshold in dB.
+    pub compressor_threshold_db: Option<f64>,
+    /// Compressor ratio.
+    pub compressor_ratio: Option<f64>,
+    /// Limiter ceiling in dBFS.
+    pub limiter_limit_db: Option<f64>,
+    /// Noise gate threshold in dBFS.
+    pub noise_gate_threshold_db: Option<f64>,
+    /// Hum notch frequency in Hz.
+    pub hum_notch_hz: Option<f64>,
+    /// Center frequency for the de-ess approximation.
+    pub de_ess_hz: Option<f64>,
+    /// Gain reduction for the de-ess approximation.
+    pub de_ess_reduction_db: Option<f64>,
+    /// Loudnorm integrated loudness target.
+    pub loudnorm_i: Option<f64>,
+    /// Loudnorm true-peak target.
+    pub loudnorm_tp: Option<f64>,
+}
+
+/// One parametric EQ band.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct EqBandPlan {
+    /// Center frequency in Hz.
+    pub freq_hz: f64,
+    /// Gain in dB.
+    pub gain_db: f64,
+    /// Band width in Hz.
+    pub width_hz: Option<f64>,
 }
 
 /// Clip-level color controls that render maps into FFmpeg filters.
@@ -265,6 +314,14 @@ fn read_audio_fade(clip: &awidat_proto::otio::Clip) -> (Option<f64>, Option<f64>
             .get("fade_out_s")
             .and_then(serde_json::Value::as_f64),
     )
+}
+
+fn read_clip_audio_fx(clip: &awidat_proto::otio::Clip) -> Option<AudioFxPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.audio_fx")?;
+    serde_json::from_value(serde_json::Value::Object(effect.metadata.clone())).ok()
 }
 
 type TimelineFullPlan = (
@@ -379,6 +436,7 @@ pub fn collect_timeline_full_plan(
                     let volume = read_effect_number(clip, "awidat.volume", "value");
                     let speed = read_effect_number(clip, "awidat.speed", "factor");
                     let color_correction = read_color_correction(clip);
+                    let audio_fx = read_clip_audio_fx(clip);
                     let lut_path = read_effect_string(clip, "awidat.lut", "lut_path")
                         .map(|lut_path| project_root.join(lut_path));
                     if let Some(lut_path) = lut_path.as_ref()
@@ -398,6 +456,7 @@ pub fn collect_timeline_full_plan(
                         speed,
                         color_correction,
                         lut_path,
+                        audio_fx,
                     });
                     if let Some((kind, duration_s)) = pending_transition.take()
                         && new_index > 0
@@ -470,6 +529,7 @@ fn collect_audio_track_plan(
                     });
                 }
                 let (fade_in_s, fade_out_s) = read_audio_fade(clip);
+                let audio_fx = read_clip_audio_fx(clip);
                 items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
                     asset_path,
                     start_s: range.start_time.to_seconds(),
@@ -478,6 +538,7 @@ fn collect_audio_track_plan(
                     speed: read_effect_number(clip, "awidat.speed", "factor"),
                     fade_in_s,
                     fade_out_s,
+                    audio_fx,
                 }));
             }
             TrackChild::Gap(gap) => items.push(AudioTrackItemPlan::Gap {
@@ -493,6 +554,7 @@ fn collect_audio_track_plan(
         muted: settings.muted,
         solo: settings.solo,
         ducking: settings.ducking,
+        audio_fx: settings.audio_fx,
         items,
     })
 }
@@ -535,6 +597,9 @@ fn parse_audio_track_settings(track: &awidat_proto::otio::Track) -> AudioTrackPl
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(300.0),
     });
+    let audio_fx = value
+        .and_then(|v| v.get("fx"))
+        .and_then(|v| serde_json::from_value::<AudioFxPlan>(v.clone()).ok());
     AudioTrackPlan {
         name: track.name.clone(),
         role,
@@ -542,6 +607,7 @@ fn parse_audio_track_settings(track: &awidat_proto::otio::Track) -> AudioTrackPl
         muted,
         solo,
         ducking,
+        audio_fx,
         items: Vec::new(),
     }
 }
@@ -1092,7 +1158,19 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         video_label = lv;
     }
 
-    // Speed after color: setpts on video, atempo (possibly chained) on audio.
+    // Audio repair runs before speed/fades/gain/loudness on each clip:
+    // cleanup -> EQ -> dynamics. Track-level FX are applied after
+    // per-track concat.
+    if let Some(fx) = seg.audio_fx.as_ref()
+        && let Some(chain) = audio_fx_filter_chain(fx)
+    {
+        let fx_label = format!("[afx{i}]");
+        filter.push_str(&format!("{audio_label}{chain}{fx_label};"));
+        audio_label = fx_label;
+    }
+
+    // Speed after color/audio cleanup: setpts on video, atempo
+    // (possibly chained) on audio.
     if let Some(factor) = seg.speed
         && (factor - 1.0).abs() > 1e-9
         && factor > 0.0
@@ -1120,6 +1198,97 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         audio_label = av;
     }
     (video_label, audio_label)
+}
+
+fn audio_fx_filter_chain(plan: &AudioFxPlan) -> Option<String> {
+    let mut filters = Vec::new();
+
+    // cleanup
+    if let Some(freq) = positive(plan.high_pass_hz) {
+        filters.push(format!("highpass=f={}", fmt_filter_num(freq)));
+    }
+    if let Some(freq) = positive(plan.low_pass_hz) {
+        filters.push(format!("lowpass=f={}", fmt_filter_num(freq)));
+    }
+    if let Some(threshold_db) = finite(plan.noise_gate_threshold_db) {
+        filters.push(format!(
+            "agate=threshold={}:ratio=2:attack=8:release=120",
+            fmt_filter_num(db_to_linear(threshold_db).clamp(0.000001, 1.0))
+        ));
+    }
+    if let Some(freq) = positive(plan.hum_notch_hz) {
+        filters.push(format!(
+            "bandstop=f={}:width_type=h:width=4",
+            fmt_filter_num(freq)
+        ));
+        filters.push(format!(
+            "bandstop=f={}:width_type=h:width=4",
+            fmt_filter_num(freq * 2.0)
+        ));
+    }
+
+    // EQ
+    for band in &plan.eq_bands {
+        if band.freq_hz.is_finite() && band.freq_hz > 0.0 && band.gain_db.is_finite() {
+            let width = band.width_hz.filter(|v| v.is_finite() && *v > 0.0);
+            filters.push(format!(
+                "equalizer=f={}:width_type=h:width={}:g={}",
+                fmt_filter_num(band.freq_hz),
+                fmt_filter_num(width.unwrap_or(120.0)),
+                fmt_filter_num(band.gain_db),
+            ));
+        }
+    }
+    if let Some(freq) = positive(plan.de_ess_hz) {
+        let reduction = finite(plan.de_ess_reduction_db).unwrap_or(4.0).abs();
+        filters.push(format!(
+            "equalizer=f={}:width_type=h:width=2500:g=-{}",
+            fmt_filter_num(freq),
+            fmt_filter_num(reduction),
+        ));
+    }
+
+    // dynamics and final loudness
+    if let Some(threshold) = finite(plan.compressor_threshold_db) {
+        let ratio = finite(plan.compressor_ratio).unwrap_or(3.0).max(1.0);
+        filters.push(format!(
+            "acompressor=threshold={}dB:ratio={}:attack=5:release=80",
+            fmt_filter_num(threshold),
+            fmt_filter_num(ratio),
+        ));
+    }
+    if let Some(limit_db) = finite(plan.limiter_limit_db) {
+        filters.push(format!(
+            "alimiter=limit={}",
+            fmt_filter_num(db_to_linear(limit_db).clamp(0.000001, 1.0))
+        ));
+    }
+    if let Some(i) = finite(plan.loudnorm_i) {
+        let tp = finite(plan.loudnorm_tp).unwrap_or(-1.5);
+        filters.push(format!(
+            "loudnorm=I={}:TP={}:LRA=11",
+            fmt_filter_num(i),
+            fmt_filter_num(tp),
+        ));
+    }
+
+    if filters.is_empty() {
+        None
+    } else {
+        Some(filters.join(","))
+    }
+}
+
+fn finite(value: Option<f64>) -> Option<f64> {
+    value.filter(|v| v.is_finite())
+}
+
+fn positive(value: Option<f64>) -> Option<f64> {
+    value.filter(|v| v.is_finite() && *v > 0.0)
+}
+
+fn db_to_linear(db: f64) -> f64 {
+    10_f64.powf(db / 20.0)
 }
 
 fn color_filter_chain(plan: &ColorCorrectionPlan) -> Option<String> {
@@ -2489,11 +2658,19 @@ fn plan_one_audio_track(
                 *next_input += 1;
                 let mut label = format!("[{input}:a:0]");
                 let trimmed = format!("[atrim{track_index}_{item_index}]");
+                let source_end = clip.start_s + clip.duration_s;
                 filter.push_str(&format!(
-                    "{label}atrim=0:{},asetpts=PTS-STARTPTS{};",
-                    clip.duration_s, trimmed
+                    "{label}atrim={}:{},asetpts=PTS-STARTPTS{};",
+                    clip.start_s, source_end, trimmed
                 ));
                 label = trimmed;
+                if let Some(fx) = clip.audio_fx.as_ref()
+                    && let Some(chain) = audio_fx_filter_chain(fx)
+                {
+                    let fx_label = format!("[acfx{track_index}_{item_index}]");
+                    filter.push_str(&format!("{label}{chain}{fx_label};"));
+                    label = fx_label;
+                }
                 if let Some(factor) = clip.speed
                     && (factor - 1.0).abs() > 1e-9
                     && factor > 0.0
@@ -2537,6 +2714,14 @@ fn plan_one_audio_track(
         item_labels.len(),
         track_label
     ));
+    let mut track_label = track_label;
+    if let Some(fx) = track.audio_fx.as_ref()
+        && let Some(chain) = audio_fx_filter_chain(fx)
+    {
+        let out = format!("[atrackfx{track_index}]");
+        filter.push_str(&format!("{track_label}{chain}{out};"));
+        track_label = out;
+    }
     if (track.volume - 1.0).abs() > 1e-9 {
         let out = format!("[atrackv{track_index}]");
         filter.push_str(&format!("{track_label}volume={}{};", track.volume, out));
@@ -2701,6 +2886,7 @@ mod tests {
             muted: false,
             solo: false,
             ducking: None,
+            audio_fx: None,
             items: vec![
                 AudioTrackItemPlan::Clip(AudioClipPlan {
                     asset_path: PathBuf::from("/tmp/a.wav"),
@@ -2710,6 +2896,7 @@ mod tests {
                     speed: None,
                     fade_in_s: Some(0.1),
                     fade_out_s: Some(0.2),
+                    audio_fx: None,
                 }),
                 AudioTrackItemPlan::Gap { duration_s: 1.0 },
             ],
@@ -2908,6 +3095,33 @@ mod tests {
             "filter graph: {}",
             plan.filter_complex,
         );
+    }
+
+    #[test]
+    fn filter_planner_audio_fx_runs_before_speed_and_volume() {
+        let mut s = seg("/tmp/a.mp4", 0.0, 4.0);
+        s.audio_fx = Some(AudioFxPlan {
+            high_pass_hz: Some(80.0),
+            hum_notch_hz: Some(60.0),
+            compressor_threshold_db: Some(-18.0),
+            compressor_ratio: Some(2.5),
+            limiter_limit_db: Some(-1.0),
+            loudnorm_i: Some(-16.0),
+            loudnorm_tp: Some(-1.5),
+            ..Default::default()
+        });
+        s.speed = Some(1.1);
+        s.volume = Some(0.8);
+        let plan = FilterPlanner::new(&[s], &[]).plan();
+        let filter = plan.filter_complex;
+        let fx_pos = filter.find("highpass=f=80").unwrap();
+        let speed_pos = filter.find("atempo=1.1").unwrap();
+        let volume_pos = filter.find("volume=0.8").unwrap();
+        assert!(fx_pos < speed_pos, "filter graph: {filter}");
+        assert!(speed_pos < volume_pos, "filter graph: {filter}");
+        assert!(filter.contains("bandstop=f=60"));
+        assert!(filter.contains("acompressor=threshold=-18dB:ratio=2.5"));
+        assert!(filter.contains("loudnorm=I=-16:TP=-1.5:LRA=11"));
     }
 
     #[test]

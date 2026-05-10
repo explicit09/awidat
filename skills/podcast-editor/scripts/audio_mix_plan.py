@@ -49,6 +49,30 @@ def weak_windows(audio: dict[str, Any], threshold_db: float) -> list[dict[str, A
     return out[:50]
 
 
+def audio_risks(audio: dict[str, Any], target_lufs: float) -> dict[str, Any]:
+    windows = audio.get("windows", [])
+    rms_values = [float(w.get("rms_db", -90.0)) for w in windows if "rms_db" in w]
+    noise_floor = None
+    if rms_values:
+        noise_floor = sorted(rms_values)[max(0, int(len(rms_values) * 0.1) - 1)]
+    integrated = audio.get("loudness_integrated_lufs")
+    loudness_gap = None if integrated is None else target_lufs - float(integrated)
+    peak_values = [
+        float(w.get("peak_db", w.get("peak_dbfs", -90.0)))
+        for w in windows
+        if "peak_db" in w or "peak_dbfs" in w
+    ]
+    clipping = [p for p in peak_values if p >= -0.2]
+    return {
+        "noise_floor_db": None if noise_floor is None else round(noise_floor, 2),
+        "hum_risk": "check_50_60hz_notch" if noise_floor is not None and noise_floor > -50 else "low",
+        "clipping_risk": "high" if clipping else "low",
+        "sibilance_risk": "review_de_ess_6_8khz" if rms_values else "unknown",
+        "plosive_peak_risk": "review_high_pass_70_100hz" if peak_values else "unknown",
+        "loudness_gap_db": None if loudness_gap is None else round(loudness_gap, 2),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio-energy", required=True)
@@ -87,11 +111,27 @@ def main() -> None:
     }
 
     recommendations = []
+    audio_fx_op = {
+        "kind": "Set Track Audio FX",
+        "track": "A1",
+        "high_pass_hz": 80,
+        "hum_notch_hz": 60,
+        "noise_gate_threshold_db": -55,
+        "compressor_threshold_db": -18,
+        "compressor_ratio": 2.5,
+        "de_ess_hz": 6500,
+        "de_ess_reduction_db": 3,
+        "limiter_limit_db": -1,
+        "loudnorm_i": args.target_lufs,
+        "loudnorm_tp": -1.5,
+        "reason": "podcast_dialogue_cleanup_chain",
+    }
     if volume_op:
         recommendations.append(volume_op)
     if long_silences:
         recommendations.append({"kind": "Trim Silence", "count": len(long_silences), "reason": "long_silences"})
     recommendations.append({"kind": "Set Loudness Target", "target_lufs": args.target_lufs})
+    recommendations.append(audio_fx_op)
 
     print(
         json.dumps(
@@ -104,11 +144,16 @@ def main() -> None:
                 "loudness_op": {"kind": "Set Loudness Target", "target_lufs": args.target_lufs},
                 "long_silences": long_silences,
                 "weak_windows": weak_windows(audio, args.weak_db),
+                "analysis": audio_risks(audio, args.target_lufs),
                 "speaker_balance": speaker_balance,
                 "music_voice_balance_risks": [],
                 "recommendations": recommendations,
-                "graph_ops": [r["kind"] for r in recommendations if r["kind"] in {"Set Volume", "Set Loudness Target"}],
-                "detected_only": ["denoise", "eq", "de_ess"],
+                "graph_ops": [
+                    r["kind"]
+                    for r in recommendations
+                    if r["kind"] in {"Set Volume", "Set Loudness Target", "Set Track Audio FX", "Set Clip Audio FX"}
+                ],
+                "detected_only": [],
             },
             indent=2,
         )

@@ -28,7 +28,7 @@ use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
 use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
-use super::op::{Anchor, EdlEnvelope, EdlOp, InsertTrackKind};
+use super::op::{Anchor, AudioFxConfig, EdlEnvelope, EdlOp, InsertTrackKind};
 
 /// One record of what was applied. Surfaced back to the model + the TUI.
 #[derive(Debug, Clone)]
@@ -247,6 +247,27 @@ fn apply_one(
             *attack_ms,
             *release_ms,
         ),
+        EdlOp::SetSyncGroup {
+            anchor,
+            sync_group_id,
+            offset_s,
+            speed_factor,
+            confidence,
+        } => apply_set_sync_group(
+            working,
+            index,
+            anchor,
+            sync_group_id,
+            *offset_s,
+            *speed_factor,
+            *confidence,
+            ctx,
+            locator,
+        ),
+        EdlOp::SetClipAudioFx { anchor, fx } => {
+            apply_set_clip_audio_fx(working, index, anchor, fx, ctx, locator)
+        }
+        EdlOp::SetTrackAudioFx { track, fx } => apply_set_track_audio_fx(working, index, track, fx),
         EdlOp::SetSpeed { anchor, factor } => {
             apply_set_speed(working, index, anchor, *factor, ctx, locator)
         }
@@ -382,6 +403,8 @@ fn resolve_locator_for_op(
         | EdlOp::InsertBRoll { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
         | EdlOp::SetAudioFade { anchor, .. }
+        | EdlOp::SetSyncGroup { anchor, .. }
+        | EdlOp::SetClipAudioFx { anchor, .. }
         | EdlOp::SetSpeed { anchor, .. }
         | EdlOp::SetColorCorrection { anchor, .. }
         | EdlOp::ApplyLut { anchor, .. }
@@ -390,6 +413,7 @@ fn resolve_locator_for_op(
         | EdlOp::InsertTransition { .. }
         | EdlOp::SetTrackAudio { .. }
         | EdlOp::SetDucking { .. }
+        | EdlOp::SetTrackAudioFx { .. }
         | EdlOp::InsertTitle { .. }
         | EdlOp::InsertCaption { .. }
         | EdlOp::SetOutputFormat { .. }
@@ -1577,6 +1601,12 @@ const TITLES_TRACK_ROLE_VALUE: &str = "titles";
 /// Track metadata key holding first-class audio controls.
 const AUDIO_TRACK_METADATA_KEY: &str = "awidat_audio";
 
+/// Clip effect storing waveform/timecode sync metadata.
+const SYNC_GROUP_EFFECT_NAME: &str = "awidat.sync_group";
+
+/// Clip effect storing FFmpeg-native audio repair settings.
+const AUDIO_FX_EFFECT_NAME: &str = "awidat.audio_fx";
+
 /// Stamp an awidat.volume Effect on the anchored clip with `value`
 /// (linear gain multiplier). Idempotent: any existing
 /// awidat.volume effect on the clip is removed first, so two
@@ -1786,6 +1816,240 @@ fn apply_set_ducking(
     Ok(format!(
         "set ducking on track {track_name:?}: enabled={enabled} amount={amount_db:.1}dB"
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_set_sync_group(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    sync_group_id: &str,
+    offset_s: f64,
+    speed_factor: Option<f64>,
+    confidence: Option<f64>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    if sync_group_id.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_sync_group: sync_group_id must not be empty".into(),
+        });
+    }
+    if !offset_s.is_finite() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_sync_group: offset_s {offset_s} must be finite"),
+        });
+    }
+    if let Some(factor) = speed_factor
+        && (!factor.is_finite() || factor <= 0.0)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_sync_group: speed_factor {factor} must be finite and > 0.0"),
+        });
+    }
+    if let Some(confidence) = confidence
+        && (!confidence.is_finite() || !(0.0..=1.0).contains(&confidence))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_sync_group: confidence {confidence} must be in [0, 1]"),
+        });
+    }
+
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_sync_group: anchor resolved to a non-track stack child".into(),
+        });
+    };
+
+    let clip_name = {
+        let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "set_sync_group: anchor resolved to a non-clip track child".into(),
+            });
+        };
+        clip.effects
+            .retain(|e| e.effect_name != SYNC_GROUP_EFFECT_NAME);
+        let mut effect = awidat_proto::otio::Effect::new(SYNC_GROUP_EFFECT_NAME);
+        effect
+            .metadata
+            .insert("sync_group_id".into(), serde_json::json!(sync_group_id));
+        effect
+            .metadata
+            .insert("offset_s".into(), serde_json::json!(offset_s));
+        if let Some(speed_factor) = speed_factor {
+            effect
+                .metadata
+                .insert("speed_factor".into(), serde_json::json!(speed_factor));
+            if (speed_factor - 1.0).abs() > 1e-9 {
+                clip.effects.retain(|e| e.effect_name != SPEED_EFFECT_NAME);
+                let mut speed = awidat_proto::otio::Effect::new(SPEED_EFFECT_NAME);
+                speed
+                    .metadata
+                    .insert("factor".into(), serde_json::json!(speed_factor));
+                clip.effects.push(speed);
+            }
+        }
+        if let Some(confidence) = confidence {
+            effect
+                .metadata
+                .insert("confidence".into(), serde_json::json!(confidence));
+        }
+        clip.effects.push(effect);
+        clip.name.clone()
+    };
+
+    let aligned_to_s = offset_s.max(0.0);
+    if aligned_to_s > 0.0 {
+        apply_move_clip_to_time(index, track, locator.child_index, aligned_to_s)?;
+    }
+    Ok(format!(
+        "set sync group {sync_group_id:?} on clip {clip_name:?}: offset={offset_s:.3}s{}{}",
+        speed_factor
+            .map(|v| format!(" speed_factor={v:.6}"))
+            .unwrap_or_default(),
+        confidence
+            .map(|v| format!(" confidence={v:.2}"))
+            .unwrap_or_default()
+    ))
+}
+
+fn apply_set_clip_audio_fx(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    fx: &AudioFxConfig,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    validate_audio_fx(index, "set_clip_audio_fx", fx)?;
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_clip_audio_fx: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_clip_audio_fx: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    clip.effects
+        .retain(|e| e.effect_name != AUDIO_FX_EFFECT_NAME);
+    let mut effect = awidat_proto::otio::Effect::new(AUDIO_FX_EFFECT_NAME);
+    effect.metadata = audio_fx_metadata(index, fx)?;
+    let clip_name = clip.name.clone();
+    clip.effects.push(effect);
+    Ok(format!("set audio FX on clip {clip_name:?}"))
+}
+
+fn apply_set_track_audio_fx(
+    working: &mut Timeline,
+    index: usize,
+    track_name: &str,
+    fx: &AudioFxConfig,
+) -> Result<String, ApplyError> {
+    validate_audio_fx(index, "set_track_audio_fx", fx)?;
+    let track = find_track_mut(working, track_name).ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: format!("set_track_audio_fx: track {track_name:?} not found"),
+    })?;
+    if !matches!(track.kind, TrackKind::Audio) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_track_audio_fx: track {track_name:?} is not an audio track"),
+        });
+    }
+    let mut value = track
+        .metadata
+        .get(AUDIO_TRACK_METADATA_KEY)
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let map = value.as_object_mut().ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: format!(
+            "set_track_audio_fx: existing {AUDIO_TRACK_METADATA_KEY} metadata is not an object"
+        ),
+    })?;
+    map.insert(
+        "fx".into(),
+        serde_json::Value::Object(audio_fx_metadata(index, fx)?),
+    );
+    track
+        .metadata
+        .insert(AUDIO_TRACK_METADATA_KEY.to_string(), value);
+    Ok(format!("set audio FX on track {track_name:?}"))
+}
+
+fn validate_audio_fx(index: usize, label: &str, fx: &AudioFxConfig) -> Result<(), ApplyError> {
+    if fx.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("{label}: at least one audio FX parameter is required"),
+        });
+    }
+    let nums = [
+        ("high_pass_hz", fx.high_pass_hz),
+        ("low_pass_hz", fx.low_pass_hz),
+        ("compressor_threshold_db", fx.compressor_threshold_db),
+        ("compressor_ratio", fx.compressor_ratio),
+        ("limiter_limit_db", fx.limiter_limit_db),
+        ("noise_gate_threshold_db", fx.noise_gate_threshold_db),
+        ("hum_notch_hz", fx.hum_notch_hz),
+        ("de_ess_hz", fx.de_ess_hz),
+        ("de_ess_reduction_db", fx.de_ess_reduction_db),
+        ("loudnorm_i", fx.loudnorm_i),
+        ("loudnorm_tp", fx.loudnorm_tp),
+    ];
+    for (name, value) in nums {
+        if let Some(value) = value
+            && !value.is_finite()
+        {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!("{label}: {name} must be finite"),
+            });
+        }
+    }
+    for band in &fx.eq_bands {
+        if !band.freq_hz.is_finite()
+            || !band.gain_db.is_finite()
+            || band.width_hz.is_some_and(|v| !v.is_finite())
+        {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!("{label}: EQ band values must be finite"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn audio_fx_metadata(
+    index: usize,
+    fx: &AudioFxConfig,
+) -> Result<serde_json::Map<String, serde_json::Value>, ApplyError> {
+    serde_json::to_value(fx)
+        .map_err(|e| ApplyError::Invalid {
+            index,
+            message: format!("audio_fx: serialize config failed: {e}"),
+        })?
+        .as_object()
+        .cloned()
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: "audio_fx: serialized config was not an object".into(),
+        })
 }
 
 /// Stamp an awidat.speed Effect on the anchored clip with `factor`

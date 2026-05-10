@@ -30,8 +30,8 @@ use awidat_proto::awidat_meta::{
 use thiserror::Error;
 
 use super::op::{
-    Anchor, BRollPosition, EdlEnvelope, EdlOp, InsertTrackKind, TitleAnimation, TitlePosition,
-    TitleWeight, TransitionBetween,
+    Anchor, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand, InsertTrackKind,
+    TitleAnimation, TitlePosition, TitleWeight, TransitionBetween,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -47,7 +47,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Audio Fade, Set Track Audio, Set Ducking, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Audio Fade, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
     )]
     UnknownOp {
         /// Line number.
@@ -223,6 +223,9 @@ enum OpKind {
     SetAudioFade,
     SetTrackAudio,
     SetDucking,
+    SetSyncGroup,
+    SetClipAudioFx,
+    SetTrackAudioFx,
     SetSpeed,
     SetColorCorrection,
     ApplyLut,
@@ -250,6 +253,9 @@ impl OpBuilder {
             "Set Audio Fade" => OpKind::SetAudioFade,
             "Set Track Audio" => OpKind::SetTrackAudio,
             "Set Ducking" => OpKind::SetDucking,
+            "Set Sync Group" => OpKind::SetSyncGroup,
+            "Set Clip Audio FX" => OpKind::SetClipAudioFx,
+            "Set Track Audio FX" => OpKind::SetTrackAudioFx,
             "Set Speed" => OpKind::SetSpeed,
             "Set Color Correction" => OpKind::SetColorCorrection,
             "Apply LUT" => OpKind::ApplyLut,
@@ -504,6 +510,54 @@ impl OpBuilder {
                     amount_db: take_field_f64(&mut fields, "amount_db"),
                     attack_ms: take_field_f64(&mut fields, "attack_ms"),
                     release_ms: take_field_f64(&mut fields, "release_ms"),
+                })
+            }
+            OpKind::SetSyncGroup => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let sync_group_id =
+                    take_field_string(&mut fields, "sync_group_id").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "sync_group_id".into(),
+                        }
+                    })?;
+                let offset_s = take_field_f64(&mut fields, "offset_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "offset_s".into(),
+                    }
+                })?;
+                Ok(EdlOp::SetSyncGroup {
+                    anchor,
+                    sync_group_id,
+                    offset_s,
+                    speed_factor: take_field_f64(&mut fields, "speed_factor"),
+                    confidence: take_field_f64(&mut fields, "confidence"),
+                })
+            }
+            OpKind::SetClipAudioFx => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                Ok(EdlOp::SetClipAudioFx {
+                    anchor,
+                    fx: parse_audio_fx_config(&mut fields, head)?,
+                })
+            }
+            OpKind::SetTrackAudioFx => {
+                let track = take_field_string(&mut fields, "track").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "track".into(),
+                    }
+                })?;
+                Ok(EdlOp::SetTrackAudioFx {
+                    track,
+                    fx: parse_audio_fx_config(&mut fields, head)?,
                 })
             }
             OpKind::SetSpeed => {
@@ -784,6 +838,41 @@ fn parse_broadcast_overlay_config(
         config.host_b.photo_path = Some(v);
     }
     Ok(config)
+}
+
+fn parse_audio_fx_config(
+    fields: &mut Vec<(String, FieldValue)>,
+    line: usize,
+) -> Result<AudioFxConfig, EdlParseError> {
+    let mut fx = AudioFxConfig {
+        high_pass_hz: take_field_f64(fields, "high_pass_hz"),
+        low_pass_hz: take_field_f64(fields, "low_pass_hz"),
+        eq_bands: Vec::new(),
+        compressor_threshold_db: take_field_f64(fields, "compressor_threshold_db"),
+        compressor_ratio: take_field_f64(fields, "compressor_ratio"),
+        limiter_limit_db: take_field_f64(fields, "limiter_limit_db"),
+        noise_gate_threshold_db: take_field_f64(fields, "noise_gate_threshold_db"),
+        hum_notch_hz: take_field_f64(fields, "hum_notch_hz"),
+        de_ess_hz: take_field_f64(fields, "de_ess_hz"),
+        de_ess_reduction_db: take_field_f64(fields, "de_ess_reduction_db"),
+        loudnorm_i: take_field_f64(fields, "loudnorm_i"),
+        loudnorm_tp: take_field_f64(fields, "loudnorm_tp"),
+    };
+    if let Some(raw) = take_field_string(fields, "eq_bands_json") {
+        fx.eq_bands =
+            serde_json::from_str::<Vec<EqBand>>(&raw).map_err(|e| EdlParseError::BadField {
+                line,
+                raw: format!("eq_bands_json: {raw}"),
+                message: format!("must be valid JSON array of EQ bands: {e}"),
+            })?;
+    } else if let Some(freq_hz) = take_field_f64(fields, "eq_freq_hz") {
+        fx.eq_bands.push(EqBand {
+            freq_hz,
+            gain_db: take_field_f64(fields, "eq_gain_db").unwrap_or(0.0),
+            width_hz: take_field_f64(fields, "eq_width_hz"),
+        });
+    }
+    Ok(fx)
 }
 
 fn parse_json_value<T: serde::de::DeserializeOwned>(
@@ -1189,6 +1278,54 @@ mod tests {
         assert!(
             matches!(env.ops[0], EdlOp::MoveClip { at_s: Some(v), .. } if (v - 12.5).abs() < 0.001)
         );
+    }
+
+    #[test]
+    fn parses_sync_group_and_audio_fx_ops() {
+        let text = "\
+*** Begin EDL
+*** Set Sync Group
+@@ anchor: clip_uuid=mic-a
++ sync_group_id: sync-a
++ offset_s: 1.25
++ speed_factor: 1.0002
++ confidence: 0.91
+*** Set Clip Audio FX
+@@ anchor: clip_uuid=mic-a
++ high_pass_hz: 80
++ hum_notch_hz: 60
++ compressor_threshold_db: -18
++ compressor_ratio: 2.5
++ eq_bands_json: [{\"freq_hz\":3000,\"gain_db\":-2,\"width_hz\":800}]
+*** Set Track Audio FX
++ track: A1
++ loudnorm_i: -16
++ loudnorm_tp: -1.5
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        assert!(matches!(
+            &env.ops[0],
+            EdlOp::SetSyncGroup {
+                sync_group_id,
+                offset_s,
+                speed_factor: Some(_),
+                confidence: Some(_),
+                ..
+            } if sync_group_id == "sync-a" && (*offset_s - 1.25).abs() < 0.001
+        ));
+        assert!(matches!(
+            &env.ops[1],
+            EdlOp::SetClipAudioFx { fx, .. }
+                if fx.high_pass_hz == Some(80.0)
+                    && fx.hum_notch_hz == Some(60.0)
+                    && fx.eq_bands.len() == 1
+        ));
+        assert!(matches!(
+            &env.ops[2],
+            EdlOp::SetTrackAudioFx { track, fx }
+                if track == "A1" && fx.loudnorm_i == Some(-16.0)
+        ));
     }
 
     #[test]

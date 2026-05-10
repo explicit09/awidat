@@ -3,6 +3,7 @@
 //! Week 3 ships [`bash`]. Week 4 adds the editorial tools per `PLAN.md`
 //! §6.
 
+pub mod analyze_sync;
 pub mod apply_edl;
 pub mod assess_continuity;
 pub mod attempt_completion;
@@ -12,6 +13,7 @@ pub mod clip_search;
 pub mod delegate;
 pub mod delegate_all;
 pub mod download_yt_clip;
+pub mod export_package;
 pub mod find_beat;
 pub mod find_broll_opportunities;
 pub mod find_dead_air;
@@ -25,6 +27,7 @@ pub mod inspect_clip;
 pub mod inspect_moment;
 pub mod list_assets;
 pub mod load_skill;
+pub mod plan_multicam;
 pub mod poll_render;
 pub mod read_index;
 pub mod request_user_input;

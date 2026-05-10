@@ -70,13 +70,15 @@ If the script recommends speed changes, apply `Set Speed` only to
 sections below 130 WPM and never above 1.15x. Do not speed up already
 fast speakers or emotional peaks.
 
-### 4. Loudness and final verification
+### 4. Loudness, cleanup, and final verification
 
 Apply `Set Volume` only for broad level correction recommended by the
-mix plan, then apply `Set Loudness Target` for the delivery target before
-rendering when the user wants publishable output. Treat denoise, EQ,
-de-essing, and per-speaker mix imbalance as detected recommendations
-unless the graph has a native primitive for the fix.
+mix plan. Use `Set Clip Audio FX` or `Set Track Audio FX` for graph-native
+high-pass/low-pass, hum notch, EQ, noise gate, compression, limiter,
+de-ess approximation, and loudnorm cleanup. Apply `Set Loudness Target`
+for the delivery target before rendering when the user wants publishable
+output. Per-speaker mix imbalance still needs isolated tracks or careful
+clip-level/track-level gain decisions.
 
 Render and verify. If `ffprobe`/FFmpeg checks fail, fix the timeline or
 report the exact blocker. Do not claim completion without a render path

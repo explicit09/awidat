@@ -534,6 +534,9 @@ fn build_diff_hints(
             | EdlOp::SetAudioFade { .. }
             | EdlOp::SetTrackAudio { .. }
             | EdlOp::SetDucking { .. }
+            | EdlOp::SetSyncGroup { .. }
+            | EdlOp::SetClipAudioFx { .. }
+            | EdlOp::SetTrackAudioFx { .. }
             | EdlOp::SetSpeed { .. }
             | EdlOp::SetColorCorrection { .. }
             | EdlOp::ApplyLut { .. }
@@ -664,6 +667,9 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetAudioFade { .. } => "SetAudioFade",
         EdlOp::SetTrackAudio { .. } => "SetTrackAudio",
         EdlOp::SetDucking { .. } => "SetDucking",
+        EdlOp::SetSyncGroup { .. } => "SetSyncGroup",
+        EdlOp::SetClipAudioFx { .. } => "SetClipAudioFx",
+        EdlOp::SetTrackAudioFx { .. } => "SetTrackAudioFx",
         EdlOp::SetSpeed { .. } => "SetSpeed",
         EdlOp::SetColorCorrection { .. } => "SetColorCorrection",
         EdlOp::ApplyLut { .. } => "ApplyLut",

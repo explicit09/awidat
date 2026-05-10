@@ -204,6 +204,37 @@ pub enum EdlOp {
         /// Release in milliseconds. Defaults to 300.
         release_ms: Option<f64>,
     },
+    /// Store sync metadata on a clip and optionally align it on its
+    /// current track. Positive offsets place the clip later on the
+    /// timeline; negative offsets trim the source range earlier clips
+    /// cannot reach and place the clip at the track start. Small drift
+    /// corrections are carried as a speed factor.
+    SetSyncGroup {
+        /// Anchor identifying the clip/source to align.
+        anchor: Anchor,
+        /// Stable group id shared by synced camera/audio assets.
+        sync_group_id: String,
+        /// Timeline offset in seconds relative to the reference asset.
+        offset_s: f64,
+        /// Optional stable drift correction. `1.0` means no drift.
+        speed_factor: Option<f64>,
+        /// Tool confidence in [0, 1].
+        confidence: Option<f64>,
+    },
+    /// Set FFmpeg-native audio repair/effect parameters on a clip.
+    SetClipAudioFx {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Effect configuration.
+        fx: AudioFxConfig,
+    },
+    /// Set FFmpeg-native audio repair/effect parameters on a track.
+    SetTrackAudioFx {
+        /// Track name to update.
+        track: String,
+        /// Effect configuration.
+        fx: AudioFxConfig,
+    },
     /// Set per-clip playback speed. `factor` rescales both video and
     /// audio: `2.0` plays at double speed (half the timeline length),
     /// `0.5` plays at half speed (double the timeline length). `1.0`
@@ -373,6 +404,77 @@ pub enum InsertTrackKind {
     Audio,
     /// Infer from track naming conventions (`A*` / `Audio*` -> audio).
     Auto,
+}
+
+/// FFmpeg-native audio effect plan stored on clips/tracks.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AudioFxConfig {
+    /// High-pass cutoff in Hz.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub high_pass_hz: Option<f64>,
+    /// Low-pass cutoff in Hz.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub low_pass_hz: Option<f64>,
+    /// Parametric EQ bands.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub eq_bands: Vec<EqBand>,
+    /// Compressor threshold in dB.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub compressor_threshold_db: Option<f64>,
+    /// Compressor ratio.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub compressor_ratio: Option<f64>,
+    /// Limiter ceiling in dBFS.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub limiter_limit_db: Option<f64>,
+    /// Noise gate threshold in dBFS.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub noise_gate_threshold_db: Option<f64>,
+    /// Hum notch frequency in Hz, usually 50 or 60.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub hum_notch_hz: Option<f64>,
+    /// Center frequency for the de-ess approximation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub de_ess_hz: Option<f64>,
+    /// Gain reduction for the de-ess approximation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub de_ess_reduction_db: Option<f64>,
+    /// Loudnorm integrated loudness target.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub loudnorm_i: Option<f64>,
+    /// Loudnorm true-peak target.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub loudnorm_tp: Option<f64>,
+}
+
+impl AudioFxConfig {
+    /// True when no effect parameters were supplied.
+    pub fn is_empty(&self) -> bool {
+        self.high_pass_hz.is_none()
+            && self.low_pass_hz.is_none()
+            && self.eq_bands.is_empty()
+            && self.compressor_threshold_db.is_none()
+            && self.compressor_ratio.is_none()
+            && self.limiter_limit_db.is_none()
+            && self.noise_gate_threshold_db.is_none()
+            && self.hum_notch_hz.is_none()
+            && self.de_ess_hz.is_none()
+            && self.de_ess_reduction_db.is_none()
+            && self.loudnorm_i.is_none()
+            && self.loudnorm_tp.is_none()
+    }
+}
+
+/// One parametric EQ band.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EqBand {
+    /// Center frequency in Hz.
+    pub freq_hz: f64,
+    /// Gain in dB.
+    pub gain_db: f64,
+    /// Band width in Hz.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub width_hz: Option<f64>,
 }
 
 /// Where on the frame a title sits. Render maps these to proportional

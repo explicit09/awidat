@@ -14,15 +14,17 @@ use anyhow::{Context, Result, anyhow};
 use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::subagent::SubAgentRegistry;
 use awidat_core::tools::{
-    apply_edl::ApplyEdlTool, assess_continuity::AssessContinuityTool, bash::BashTool,
-    broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool, delegate::DelegateTool,
-    delegate_all::DelegateAllTool, download_yt_clip::DownloadYtClipTool, find_beat::FindBeatTool,
-    find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
-    find_episode_start::FindEpisodeStartTool, find_eye_contact::FindEyeContactTool,
-    find_false_starts::FindFalseStartsTool, find_filler_words::FindFillerWordsTool,
-    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
-    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
-    load_skill::LoadSkillTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
+    assess_continuity::AssessContinuityTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
+    clip_search::ClipSearchTool, delegate::DelegateTool, delegate_all::DelegateAllTool,
+    download_yt_clip::DownloadYtClipTool, export_package::ExportPackageTool,
+    find_beat::FindBeatTool, find_broll_opportunities::FindBrollOpportunitiesTool,
+    find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
+    find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
+    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
+    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
+    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
+    plan_multicam::PlanMulticamTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, update_plan::UpdatePlanTool, use_broll::UseBrollTool,
@@ -159,6 +161,7 @@ pub fn run(project_root: &Path, model_override: Option<&str>) -> Result<()> {
 pub fn build_full_registry(model: &str) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ApplyEdlTool));
+    registry.register(Arc::new(AnalyzeSyncTool));
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(FindMomentTool));
     registry.register(Arc::new(FindDeadAirTool));
@@ -172,6 +175,8 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(StartRenderTool));
+    registry.register(Arc::new(ExportPackageTool));
+    registry.register(Arc::new(PlanMulticamTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(UpdatePlanTool));
     registry.register(Arc::new(FindBeatTool));
