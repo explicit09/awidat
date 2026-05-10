@@ -623,9 +623,15 @@ function TimelineBroadcastOverlay({
     overlay.sponsors.length > 0
       ? overlay.sponsors.join("   ◆   ")
       : overlay.show_name || overlay.template_name;
+  const overlayStyleVars = {
+    "--broadcast-name-bar-height": refHeightPercent(style.name_bar_height),
+    "--broadcast-ticker-height": refHeightPercent(style.ticker_height),
+    "--broadcast-host-strip-height": refHeightPercent(style.host_strip_height),
+    "--broadcast-ticker-label-width": refWidthPercent(680),
+  } as React.CSSProperties;
 
   return (
-    <div className="broadcast-overlay-layer" aria-hidden="true">
+    <div className="broadcast-overlay-layer" style={overlayStyleVars} aria-hidden="true">
       {inTitle && (
         <div
           className="broadcast-title-card"
@@ -805,6 +811,14 @@ function titleCardOpacity(
 function normalizeCssHex(value: string, fallback: string): string {
   if (!value.trim()) return fallback;
   return value.startsWith("#") ? value : `#${value}`;
+}
+
+function refHeightPercent(value: number): string {
+  return `${(value / 2160) * 100}%`;
+}
+
+function refWidthPercent(value: number): string {
+  return `${(value / 3840) * 100}%`;
 }
 
 function projectAssetUrl(projectRoot: string | null, relPath: string | null): string | null {

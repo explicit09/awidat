@@ -179,13 +179,13 @@ pub struct BroadcastOverlayStyle {
     /// Chapter-card display duration, in seconds.
     #[serde(default = "default_chapter_display_duration")]
     pub chapter_display_duration: f64,
-    /// Persistent host-name bar height, in pixels at 1080p reference.
+    /// Persistent host-name bar height, in pixels at 3840x2160 reference.
     #[serde(default = "default_name_bar_height")]
     pub name_bar_height: f64,
-    /// Bottom ticker height, in pixels at 1080p reference.
+    /// Bottom ticker height, in pixels at 3840x2160 reference.
     #[serde(default = "default_ticker_height")]
     pub ticker_height: f64,
-    /// Host-intro strip height, in pixels at 1080p reference.
+    /// Host-intro strip height, in pixels at 3840x2160 reference.
     #[serde(default = "default_host_strip_height")]
     pub host_strip_height: f64,
 }
@@ -256,13 +256,13 @@ fn default_chapter_display_duration() -> f64 {
     6.0
 }
 fn default_name_bar_height() -> f64 {
-    75.0
+    150.0
 }
 fn default_ticker_height() -> f64 {
-    100.0
+    200.0
 }
 fn default_host_strip_height() -> f64 {
-    160.0
+    320.0
 }
 
 /// Content anchor for a clip. Used by `apply_edl` to relocate a clip after

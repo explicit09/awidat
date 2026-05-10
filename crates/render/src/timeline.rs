@@ -1105,22 +1105,33 @@ fn format_host_name_bar(
     navy: &str,
     gold: &str,
 ) -> Vec<String> {
-    let y = "ih-175";
+    let name_h = broadcast_ref_to_1080_px(st.name_bar_height);
+    let ticker_h = broadcast_ref_to_1080_px(st.ticker_height);
+    let y = format!("ih-{}", fmt_px(name_h + ticker_h));
+    let divider_h = broadcast_ref_to_1080_px(64.0);
+    let divider_y = format!("ih-{}", fmt_px(ticker_h + (name_h + divider_h) / 2.0));
+    let text_y = format!("h-{}", fmt_px(ticker_h + name_h / 2.0 + 16.0));
     let enable = format!(
         "not(between(t\\,{s}\\,{e}))",
         s = st.host_intro_start,
         e = st.host_intro_end
     );
     let mut out = vec![
-        format!("drawbox=x=0:y={y}:w=iw:h=75:color={navy}@0.92:t=fill:enable='{enable}'"),
+        format!(
+            "drawbox=x=0:y={y}:w=iw:h={h}:color={navy}@0.92:t=fill:enable='{enable}'",
+            h = fmt_px(name_h)
+        ),
         format!("drawbox=x=0:y={y}:w=iw:h=2:color={gold}@0.55:t=fill:enable='{enable}'"),
-        format!("drawbox=x=iw/2:y=ih-160:w=2:h=40:color={gold}@0.35:t=fill:enable='{enable}'"),
+        format!(
+            "drawbox=x=iw/2:y={divider_y}:w=1:h={divider_h}:color={gold}@0.35:t=fill:enable='{enable}'",
+            divider_h = fmt_px(divider_h)
+        ),
     ];
-    out.extend(format_host_inline_text(&c.host_a, "56", "h-135", &enable));
+    out.extend(format_host_inline_text(&c.host_a, "28", &text_y, &enable));
     out.extend(format_host_inline_text(
         &c.host_b,
-        "w-text_w-56",
-        "h-135",
+        "w-text_w-28",
+        &text_y,
         &enable,
     ));
     out
@@ -1140,7 +1151,7 @@ fn format_host_inline_text(host: &BroadcastHost, x: &str, y: &str, enable: &str)
         )
     };
     vec![
-        broadcast_drawtext(&text, x, y, 34, "#FFFFFF", None, None, true).replace(
+        broadcast_drawtext(&text, x, y, 32, "#FFFFFF", None, None, true).replace(
             ":enable='between(t\\,0\\,0)'",
             &format!(":enable='{enable}'"),
         ),
@@ -1160,6 +1171,16 @@ fn format_smart_ticker(
         s = st.host_intro_start,
         e = st.host_intro_end
     );
+    let ticker_h = broadcast_ref_to_1080_px(st.ticker_height);
+    let ticker_y = format!("ih-{}", fmt_px(ticker_h));
+    let label_w = broadcast_ref_to_1080_px(680.0);
+    let content_x = label_w + broadcast_ref_to_1080_px(48.0);
+    let topic_badge_x = content_x;
+    let topic_badge_w = broadcast_ref_to_1080_px(224.0);
+    let topic_text_x = topic_badge_x + topic_badge_w + broadcast_ref_to_1080_px(28.0);
+    let topic_badge_y = format!("ih-{}", fmt_px(ticker_h / 2.0 + 18.0));
+    let ticker_text_y = format!("h-{}", fmt_px(ticker_h / 2.0 + 20.0));
+    let label_text_y = format!("h-{}", fmt_px(ticker_h / 2.0 + 16.0));
     let sponsors = if c.sponsors.is_empty() {
         show.to_string()
     } else {
@@ -1170,10 +1191,17 @@ fn format_smart_ticker(
             .join("   ◆   ")
     };
     let mut out = vec![
-        format!("drawbox=x=0:y=ih-100:w=iw:h=100:color={navy}@1:t=fill:enable='{enable}'"),
-        format!("drawbox=x=0:y=ih-100:w=340:h=100:color={gold}@1:t=fill:enable='{enable}'"),
-        format!("drawbox=x=0:y=ih-100:w=iw:h=3:color={gold}@1:t=fill:enable='{enable}'"),
-        broadcast_drawtext(show, "32", "h-62", 30, navy, None, None, true).replace(
+        format!(
+            "drawbox=x=0:y={ticker_y}:w=iw:h={ticker_h}:color={navy}@1:t=fill:enable='{enable}'",
+            ticker_h = fmt_px(ticker_h)
+        ),
+        format!(
+            "drawbox=x=0:y={ticker_y}:w={label_w}:h={ticker_h}:color={gold}@1:t=fill:enable='{enable}'",
+            label_w = fmt_px(label_w),
+            ticker_h = fmt_px(ticker_h)
+        ),
+        format!("drawbox=x=0:y={ticker_y}:w=iw:h=3:color={gold}@1:t=fill:enable='{enable}'"),
+        broadcast_drawtext(show, "32", &label_text_y, 26, navy, None, None, true).replace(
             ":enable='between(t\\,0\\,0)'",
             &format!(":enable='{enable}'"),
         ),
@@ -1182,12 +1210,17 @@ fn format_smart_ticker(
         for topic in &c.topics {
             let start = topic.time_seconds;
             let end = start + st.ticker_topic_duration;
-            out.push(format!("drawbox=x=380:y=ih-75:w=112:h=28:color={cyan}@1:t=fill:enable='between(t\\,{start}\\,{end})'"));
+            out.push(format!(
+                "drawbox=x={x}:y={y}:w={w}:h=31:color={cyan}@1:t=fill:enable='between(t\\,{start}\\,{end})'",
+                x = fmt_px(topic_badge_x),
+                y = topic_badge_y,
+                w = fmt_px(topic_badge_w),
+            ));
             out.push(broadcast_drawtext(
                 "NOW DISCUSSING",
-                "392",
-                "h-54",
-                16,
+                &fmt_px(topic_badge_x + 12.0),
+                &format!("h-{}", fmt_px(ticker_h / 2.0 + 14.0)),
+                23,
                 navy,
                 None,
                 Some((start, end)),
@@ -1195,9 +1228,9 @@ fn format_smart_ticker(
             ));
             out.push(broadcast_drawtext(
                 &topic.text,
-                "510",
-                "h-59",
-                34,
+                &fmt_px(topic_text_x),
+                &ticker_text_y,
+                33,
                 "#FFFFFF",
                 None,
                 Some((start, end)),
@@ -1209,9 +1242,9 @@ fn format_smart_ticker(
         out.push(
             broadcast_drawtext(
                 &sponsors,
-                "380-mod(t*70\\,900)",
-                "h-60",
-                34,
+                &format!("{}-mod(t*70\\,900)", fmt_px(content_x)),
+                &ticker_text_y,
+                32,
                 "#CBD5E1",
                 None,
                 None,
@@ -1236,20 +1269,34 @@ fn format_host_intro_strip(
     let start = st.host_intro_start;
     let end = st.host_intro_end;
     let enable = format!("between(t\\,{start}\\,{end})");
+    let host_h = broadcast_ref_to_1080_px(st.host_strip_height);
+    let host_y = format!("ih-{}", fmt_px(host_h));
+    let divider_h = broadcast_ref_to_1080_px(110.0);
+    let divider_y = format!("ih-{}", fmt_px((host_h + divider_h) / 2.0));
+    let name_y = format!("h-{}", fmt_px(host_h / 2.0 - 10.0));
+    let title_y = format!("h-{}", fmt_px(host_h / 2.0 + 50.0));
     let mut out = vec![
-        format!("drawbox=x=0:y=ih-160:w=iw/2:h=160:color={gold}@1:t=fill:enable='{enable}'"),
         format!(
-            "drawbox=x=iw/2:y=ih-160:w=iw/2:h=160:color={gold_light}@1:t=fill:enable='{enable}'"
+            "drawbox=x=0:y={host_y}:w=iw/2:h={host_h}:color={gold}@1:t=fill:enable='{enable}'",
+            host_h = fmt_px(host_h)
         ),
-        format!("drawbox=x=iw/2:y=ih-130:w=2:h=100:color={navy}@0.2:t=fill:enable='{enable}'"),
+        format!(
+            "drawbox=x=iw/2:y={host_y}:w=iw/2:h={host_h}:color={gold_light}@1:t=fill:enable='{enable}'",
+            host_h = fmt_px(host_h)
+        ),
+        format!(
+            "drawbox=x=iw/2:y={divider_y}:w=2:h={divider_h}:color={navy}@0.2:t=fill:enable='{enable}'",
+            divider_h = fmt_px(divider_h)
+        ),
     ];
     out.extend(format_host_intro_host(
-        &c.host_a, "180", "h-88", navy, start, end,
+        &c.host_a, "180", &name_y, &title_y, navy, start, end,
     ));
     out.extend(format_host_intro_host(
         &c.host_b,
         "w-text_w-180",
-        "h-88",
+        &name_y,
+        &title_y,
         navy,
         start,
         end,
@@ -1260,7 +1307,8 @@ fn format_host_intro_strip(
 fn format_host_intro_host(
     host: &BroadcastHost,
     x: &str,
-    y: &str,
+    name_y: &str,
+    title_y: &str,
     navy: &str,
     start: f64,
     end: f64,
@@ -1272,7 +1320,7 @@ fn format_host_intro_host(
     out.push(broadcast_drawtext(
         &host.name.to_uppercase(),
         x,
-        y,
+        name_y,
         50,
         navy,
         None,
@@ -1283,8 +1331,8 @@ fn format_host_intro_host(
         out.push(broadcast_drawtext(
             &host.title.to_uppercase(),
             x,
-            "h-48",
-            28,
+            title_y,
+            29,
             navy,
             None,
             Some((start, end)),
@@ -1372,6 +1420,19 @@ fn normalize_hex(value: &str) -> String {
     }
 }
 
+fn broadcast_ref_to_1080_px(value: f64) -> f64 {
+    value * 0.5
+}
+
+fn fmt_px(value: f64) -> String {
+    let rounded = value.round();
+    if (value - rounded).abs() < 0.001 {
+        format!("{rounded:.0}")
+    } else {
+        format!("{value:.3}")
+    }
+}
+
 fn format_broadcast_overlay_graph(
     in_label: &str,
     out_label: &str,
@@ -1430,12 +1491,15 @@ fn broadcast_asset_overlays(overlay: &BroadcastOverlayPlan) -> Vec<BroadcastAsse
     let c = &overlay.config;
     let st = &c.style;
     let mut out = Vec::new();
+    let photo_size = broadcast_ref_to_1080_px(260.0).round() as u32;
+    let host_h = broadcast_ref_to_1080_px(st.host_strip_height);
+    let photo_y = format!("main_h-{}", fmt_px((host_h + f64::from(photo_size)) / 2.0));
     if let Some(path) = resolve_project_overlay_asset(overlay, c.host_a.photo_path.as_deref()) {
         out.push(BroadcastAssetOverlay {
             path,
-            x: "38".into(),
-            y: "main_h-136".into(),
-            size: 112,
+            x: "30".into(),
+            y: photo_y.clone(),
+            size: photo_size,
             start_s: st.host_intro_start,
             end_s: st.host_intro_end,
         });
@@ -1443,9 +1507,9 @@ fn broadcast_asset_overlays(overlay: &BroadcastOverlayPlan) -> Vec<BroadcastAsse
     if let Some(path) = resolve_project_overlay_asset(overlay, c.host_b.photo_path.as_deref()) {
         out.push(BroadcastAssetOverlay {
             path,
-            x: "main_w-150".into(),
-            y: "main_h-136".into(),
-            size: 112,
+            x: "main_w-160".into(),
+            y: photo_y,
+            size: photo_size,
             start_s: st.host_intro_start,
             end_s: st.host_intro_end,
         });
@@ -2403,7 +2467,7 @@ mod tests {
             plan.filter_complex,
         );
         assert!(
-            plan.filter_complex.contains("overlay=x=38:y=main_h-136"),
+            plan.filter_complex.contains("overlay=x=30:y=main_h-145"),
             "expected left host photo overlay, got: {}",
             plan.filter_complex,
         );
