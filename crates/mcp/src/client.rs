@@ -139,7 +139,7 @@ impl From<rmcp::model::Tool> for ToolDescriptor {
         Self {
             name: t.name.into_owned(),
             title: t.title,
-            description: t.description.map(|c| c.into_owned()),
+            description: t.description.map(std::borrow::Cow::into_owned),
             input_schema: serde_json::to_value(&*t.input_schema).ok(),
         }
     }
