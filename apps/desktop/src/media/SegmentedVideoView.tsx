@@ -607,17 +607,16 @@ function TimelineBroadcastOverlay({
   const inTitle = timelineTime >= 0 && timelineTime < style.title_visible_end;
   const inHostIntro =
     timelineTime >= style.host_intro_start && timelineTime < style.host_intro_end;
-  const activeChapter = activeTimedEntry(
+  const activeChapter = activeChapterEntry(
     overlay.chapters,
     timelineTime,
     style.chapter_display_duration,
     Math.max(0, style.title_visible_end),
   );
-  const activeTopic = activeTimedEntry(
+  const activeTopic = activeBroadcastTopic(
     overlay.topics,
     timelineTime,
-    style.ticker_topic_duration,
-    0,
+    style,
   );
   const sponsorText =
     overlay.sponsors.length > 0
@@ -774,18 +773,35 @@ function BroadcastIntroHost({
   );
 }
 
-function activeTimedEntry(
+function activeChapterEntry(
   entries: BroadcastTimedEntry[],
   timelineTime: number,
   duration: number,
   minStart: number,
 ): BroadcastTimedEntry | null {
+  let active: BroadcastTimedEntry | null = null;
   for (const entry of entries) {
     const start = Math.max(minStart, entry.time_seconds);
     const end = start + Math.max(0.25, duration);
-    if (timelineTime >= start && timelineTime < end) return entry;
+    if (timelineTime >= start && timelineTime < end) active = entry;
   }
-  return null;
+  return active;
+}
+
+function activeBroadcastTopic(
+  entries: BroadcastTimedEntry[],
+  timelineTime: number,
+  style: BroadcastOverlayConfig["style"],
+): BroadcastTimedEntry | null {
+  const topic = [...entries].reverse().find((entry) => entry.time_seconds <= timelineTime);
+  if (!topic) return null;
+  const sponsor = Math.max(0, style.ticker_sponsor_duration);
+  const fade = Math.max(0, style.ticker_fade_duration);
+  const topicDuration = Math.max(0.25, style.ticker_topic_duration);
+  const cycle = sponsor + fade + topicDuration + fade;
+  if (cycle <= 0) return topic;
+  const cyclePos = ((timelineTime % cycle) + cycle) % cycle;
+  return cyclePos >= sponsor && cyclePos < sponsor + fade + topicDuration ? topic : null;
 }
 
 function chapterNumber(

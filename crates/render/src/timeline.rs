@@ -1067,7 +1067,7 @@ fn format_episode_title_card(
             "EPISODE",
             "w*0.29",
             "h*0.50",
-            36,
+            18,
             gold,
             Some(&alpha),
             Some((start, end)),
@@ -1077,7 +1077,7 @@ fn format_episode_title_card(
             &c.episode_title.to_uppercase(),
             "w*0.29",
             "h*0.545",
-            76,
+            55,
             "#FFFFFF",
             Some(&alpha),
             Some((start, end)),
@@ -1089,7 +1089,7 @@ fn format_episode_title_card(
             &c.episode_subtitle,
             "w*0.29",
             "h*0.60",
-            34,
+            23,
             "#CBD5E1",
             Some(&alpha),
             Some((start, end)),
@@ -1176,11 +1176,34 @@ fn format_smart_ticker(
     let label_w = broadcast_ref_to_1080_px(680.0);
     let content_x = label_w + broadcast_ref_to_1080_px(48.0);
     let topic_badge_x = content_x;
-    let topic_badge_w = broadcast_ref_to_1080_px(224.0);
+    let topic_badge_w = broadcast_ref_to_1080_px(278.0);
     let topic_text_x = topic_badge_x + topic_badge_w + broadcast_ref_to_1080_px(28.0);
-    let topic_badge_y = format!("ih-{}", fmt_px(ticker_h / 2.0 + 18.0));
+    let topic_badge_y = format!("ih-{}", fmt_px(ticker_h / 2.0 + 31.0));
     let ticker_text_y = format!("h-{}", fmt_px(ticker_h / 2.0 + 20.0));
     let label_text_y = format!("h-{}", fmt_px(ticker_h / 2.0 + 16.0));
+    let cycle = st.ticker_sponsor_duration
+        + st.ticker_fade_duration
+        + st.ticker_topic_duration
+        + st.ticker_fade_duration;
+    let sponsor_phase_enable = if let Some(first_topic) = c
+        .topics
+        .iter()
+        .map(|t| t.time_seconds)
+        .min_by(|a, b| a.total_cmp(b))
+    {
+        format!(
+            "(lt(t\\,{first_topic})+lt(mod(t\\,{cycle})\\,{sponsor})+gte(mod(t\\,{cycle})\\,{topic_end}))",
+            sponsor = st.ticker_sponsor_duration,
+            topic_end = cycle - st.ticker_fade_duration
+        )
+    } else {
+        "1".to_string()
+    };
+    let sponsor_enable = format!(
+        "(not(between(t\\,{s}\\,{e}))*{sponsor_phase_enable})",
+        s = st.host_intro_start,
+        e = st.host_intro_end
+    );
     let sponsors = if c.sponsors.is_empty() {
         show.to_string()
     } else {
@@ -1210,32 +1233,59 @@ fn format_smart_ticker(
         for topic in &c.topics {
             let start = topic.time_seconds;
             let end = start + st.ticker_topic_duration;
+            let next_topic = c
+                .topics
+                .iter()
+                .filter_map(|candidate| {
+                    (candidate.time_seconds > start).then_some(candidate.time_seconds)
+                })
+                .min_by(|a, b| a.total_cmp(b))
+                .unwrap_or(1.0e12);
+            let topic_enable = format!(
+                "(not(between(t\\,{host_s}\\,{host_e}))*gte(t\\,{start})*lt(t\\,{next_topic})*gte(mod(t\\,{cycle})\\,{topic_s})*lt(mod(t\\,{cycle})\\,{topic_e}))",
+                host_s = st.host_intro_start,
+                host_e = st.host_intro_end,
+                topic_s = st.ticker_sponsor_duration,
+                topic_e = cycle - st.ticker_fade_duration,
+            );
             out.push(format!(
                 "drawbox=x={x}:y={y}:w={w}:h=31:color={cyan}@1:t=fill:enable='between(t\\,{start}\\,{end})'",
                 x = fmt_px(topic_badge_x),
                 y = topic_badge_y,
                 w = fmt_px(topic_badge_w),
-            ));
-            out.push(broadcast_drawtext(
-                "NOW DISCUSSING",
-                &fmt_px(topic_badge_x + 12.0),
-                &format!("h-{}", fmt_px(ticker_h / 2.0 + 14.0)),
-                23,
-                navy,
-                None,
-                Some((start, end)),
-                true,
-            ));
-            out.push(broadcast_drawtext(
-                &topic.text,
-                &fmt_px(topic_text_x),
-                &ticker_text_y,
-                33,
-                "#FFFFFF",
-                None,
-                Some((start, end)),
-                false,
-            ));
+            ).replace(&format!("between(t\\,{start}\\,{end})"), &topic_enable));
+            out.push(
+                broadcast_drawtext(
+                    "NOW DISCUSSING",
+                    &fmt_px(topic_badge_x + 12.0),
+                    &format!("h-{}", fmt_px(ticker_h / 2.0 + 14.0)),
+                    23,
+                    navy,
+                    None,
+                    None,
+                    true,
+                )
+                .replace(
+                    ":enable='between(t\\,0\\,0)'",
+                    &format!(":enable='{topic_enable}'"),
+                ),
+            );
+            out.push(
+                broadcast_drawtext(
+                    &topic.text,
+                    &fmt_px(topic_text_x),
+                    &ticker_text_y,
+                    33,
+                    "#FFFFFF",
+                    None,
+                    None,
+                    false,
+                )
+                .replace(
+                    ":enable='between(t\\,0\\,0)'",
+                    &format!(":enable='{topic_enable}'"),
+                ),
+            );
         }
     }
     if !sponsors.trim().is_empty() {
@@ -1252,7 +1302,7 @@ fn format_smart_ticker(
             )
             .replace(
                 ":enable='between(t\\,0\\,0)'",
-                &format!(":enable='{enable}'"),
+                &format!(":enable='{sponsor_enable}'"),
             ),
         );
     }
@@ -1275,6 +1325,11 @@ fn format_host_intro_strip(
     let divider_y = format!("ih-{}", fmt_px((host_h + divider_h) / 2.0));
     let name_y = format!("h-{}", fmt_px(host_h / 2.0 - 10.0));
     let title_y = format!("h-{}", fmt_px(host_h / 2.0 + 50.0));
+    let host_a_text_x = fmt_px(broadcast_ref_to_1080_px(60.0 + 260.0 + 28.0));
+    let host_b_text_x = format!(
+        "w-text_w-{}",
+        fmt_px(broadcast_ref_to_1080_px(60.0 + 260.0 + 28.0))
+    );
     let mut out = vec![
         format!(
             "drawbox=x=0:y={host_y}:w=iw/2:h={host_h}:color={gold}@1:t=fill:enable='{enable}'",
@@ -1290,11 +1345,17 @@ fn format_host_intro_strip(
         ),
     ];
     out.extend(format_host_intro_host(
-        &c.host_a, "180", &name_y, &title_y, navy, start, end,
+        &c.host_a,
+        &host_a_text_x,
+        &name_y,
+        &title_y,
+        navy,
+        start,
+        end,
     ));
     out.extend(format_host_intro_host(
         &c.host_b,
-        "w-text_w-180",
+        &host_b_text_x,
         &name_y,
         &title_y,
         navy,
@@ -1352,12 +1413,12 @@ fn format_chapter_cards(
     for (idx, chapter) in c.chapters.iter().enumerate() {
         let start = chapter.time_seconds.max(st.title_visible_end);
         let end = start + st.chapter_display_duration;
-        out.push(format!("drawbox=x=iw*0.30:y=ih*0.36:w=85:h=54:color={gold}@1:t=fill:enable='between(t\\,{start}\\,{end})'"));
-        out.push(format!("drawbox=x=iw*0.30+85:y=ih*0.36:w=iw*0.40:h=54:color={navy}@0.88:t=fill:enable='between(t\\,{start}\\,{end})'"));
+        out.push(format!("drawbox=x=iw*0.30:y=ih*0.38:w=80:h=50:color={gold}@1:t=fill:enable='between(t\\,{start}\\,{end})'"));
+        out.push(format!("drawbox=x=iw*0.30+80:y=ih*0.38:w=iw*0.40:h=50:color={navy}@0.88:t=fill:enable='between(t\\,{start}\\,{end})'"));
         out.push(broadcast_drawtext(
             &(idx + 1).to_string(),
             "w*0.30+32",
-            "h*0.36+38",
+            "h*0.38+36",
             36,
             navy,
             None,
@@ -1366,9 +1427,9 @@ fn format_chapter_cards(
         ));
         out.push(broadcast_drawtext(
             &chapter.text.to_uppercase(),
-            "w*0.30+110",
-            "h*0.36+38",
-            34,
+            "w*0.30+96",
+            "h*0.38+36",
+            36,
             "#FFFFFF",
             None,
             Some((start, end)),
@@ -1707,7 +1768,9 @@ fn drawtext_escape(s: &str) -> String {
 /// builds may fail at render time with a clear "no fontfile" error.
 fn pick_fontfile_attr() -> String {
     const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/HelveticaNeue.ttc",
         "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
