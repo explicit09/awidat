@@ -27,7 +27,7 @@ use crate::anthropic::Tool as ToolSchema;
 use crate::edl::{
     AnchorContext, ApplyError, EdlParseError, apply as edl_apply, parse as edl_parse,
 };
-use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `apply_edl` tool.
 pub struct ApplyEdlTool;
@@ -94,6 +94,18 @@ impl ToolHandler for ApplyEdlTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         !dry_run
+    }
+
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        let edl = invocation
+            .args
+            .get("edl")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<invalid>");
+        vec![ApprovalKey::new(
+            "apply_edl",
+            format!("edl:{}", short_sha256(edl.as_bytes())),
+        )]
     }
 
     async fn handle(
@@ -250,6 +262,16 @@ impl ToolHandler for ApplyEdlTool {
         }
         Ok(ToolOutput::text(summary))
     }
+}
+
+fn short_sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(bytes);
+    let mut out = String::with_capacity(16);
+    for b in &hash[..8] {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
 }
 
 fn format_parse_error(e: &EdlParseError) -> String {
@@ -578,6 +600,7 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),

@@ -22,6 +22,13 @@ pub enum FunctionCallError {
     /// (with `is_error: true`) so the model self-corrects.
     #[error("{0}")]
     RespondToModel(String),
+    /// Recoverable sandbox denial. The orchestrator may request an
+    /// explicit unsandboxed retry approval for sandbox-capable tools.
+    #[error("sandbox denied execution: {reason}")]
+    SandboxDenied {
+        /// Denial reason reported by the sandbox backend.
+        reason: String,
+    },
     /// Protocol violation: the model emitted a tool call with no id.
     /// Should never escape — bubbles up.
     #[error("tool call missing call_id or id")]

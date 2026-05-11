@@ -21,6 +21,7 @@
 //! in without a refactor.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -28,6 +29,66 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
+
+/// Session approval cache key. Unlike the old "tool name forever"
+/// cache, this captures the operation being approved so approving one
+/// render, download, or EDL envelope does not silently approve every
+/// future call to the same tool.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ApprovalKey {
+    /// Tool name, e.g. `bash` or `apply_edl`.
+    pub tool_name: String,
+    /// Stable, human-meaningful operation bucket.
+    pub operation: String,
+}
+
+impl ApprovalKey {
+    /// Construct a key.
+    pub fn new(tool_name: impl Into<String>, operation: impl Into<String>) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            operation: operation.into(),
+        }
+    }
+
+    /// Conservative fallback for tools without a custom key. Hashes the
+    /// full JSON args rather than caching by tool name.
+    pub fn for_invocation(invocation: &ToolInvocation) -> Self {
+        Self::new(
+            invocation.name.clone(),
+            format!("args:{}", stable_json_fingerprint(&invocation.args)),
+        )
+    }
+}
+
+/// Sandbox mode selected by the orchestrator for this tool attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// Tool should use its normal sandbox-first policy.
+    Default,
+    /// Tool should bypass its sandbox for an already-approved retry.
+    Bypass,
+}
+
+/// Sandbox orchestration policy for a tool invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolSandboxPolicy {
+    /// No centralized sandbox retry semantics.
+    None,
+    /// First attempt should run sandboxed when available. If the tool
+    /// reports sandbox denial, the orchestrator may ask for approval and
+    /// retry with [`SandboxMode::Bypass`].
+    SandboxFirst {
+        /// Whether a sandbox denial is eligible for an unsandboxed retry.
+        escalate_on_denial: bool,
+    },
+}
+
+fn stable_json_fingerprint(value: &serde_json::Value) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.to_string().hash(&mut hasher);
+    hasher.finish()
+}
 
 /// One in-flight tool call. Built by the agent loop from a parsed
 /// `ToolCallEnd` event.
@@ -86,6 +147,8 @@ pub struct ToolContext {
     /// future work-spawning tools (week 6+) can recursively request
     /// approvals for sub-calls. `None` ⇒ loop defaults to allow.
     pub approval_tx: Option<mpsc::Sender<ApprovalRequest>>,
+    /// Sandbox mode selected by the orchestrator for this attempt.
+    pub sandbox_mode: SandboxMode,
     /// Session-scoped MCP host. Tools that need warm ML processes
     /// (e.g. `clip_search` calling `clip-mcp`'s `query_text`) call
     /// `mcp_host.call_tool(server, tool, args)`. The first call to any
@@ -154,6 +217,27 @@ pub enum ApprovalDecision {
     /// Reject. The model sees a tool result with `is_error: true` and
     /// "user denied execution" text so it can route around it.
     Deny,
+}
+
+/// Session-scoped operation-keyed approval cache.
+#[derive(Debug, Default)]
+pub struct ApprovalCache {
+    approved_for_session: HashSet<ApprovalKey>,
+}
+
+impl ApprovalCache {
+    /// Returns true when every supplied key is already session-approved.
+    pub fn contains_all(&self, keys: &[ApprovalKey]) -> bool {
+        !keys.is_empty()
+            && keys
+                .iter()
+                .all(|key| self.approved_for_session.contains(key))
+    }
+
+    /// Store every supplied key as approved for the remainder of the session.
+    pub fn approve_for_session(&mut self, keys: impl IntoIterator<Item = ApprovalKey>) {
+        self.approved_for_session.extend(keys);
+    }
 }
 
 /// One pending user-input request emitted by `request_user_input`. The
@@ -278,6 +362,25 @@ pub trait ToolHandler: Send + Sync {
         true
     }
 
+    /// Operation-keyed approval cache entries for this invocation.
+    ///
+    /// Mutating tools should override this when they have a better
+    /// semantic key than raw JSON args. The default is intentionally much
+    /// narrower than "tool name forever".
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        vec![ApprovalKey::for_invocation(invocation)]
+    }
+
+    /// Human-readable approval summary.
+    fn approval_summary(&self, invocation: &ToolInvocation) -> String {
+        summarize_args(&invocation.args)
+    }
+
+    /// Sandbox policy for this invocation.
+    fn sandbox_policy(&self, _invocation: &ToolInvocation) -> ToolSandboxPolicy {
+        ToolSandboxPolicy::None
+    }
+
     /// Perform the call.
     ///
     /// `ctx` carries the broadcast event channel and the user-input
@@ -287,6 +390,22 @@ pub trait ToolHandler: Send + Sync {
         invocation: ToolInvocation,
         ctx: ToolContext,
     ) -> Result<ToolOutput, FunctionCallError>;
+}
+
+/// Build a short human-readable args summary for approval surfaces.
+///
+/// Truncation is by Unicode scalar count so multi-byte input cannot be
+/// split at an invalid UTF-8 boundary.
+pub fn summarize_args(args: &serde_json::Value) -> String {
+    const CAP: usize = 200;
+    let raw = args.to_string();
+    let squashed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if squashed.chars().count() > CAP {
+        let truncated: String = squashed.chars().take(CAP).collect();
+        format!("{truncated}…")
+    } else {
+        squashed
+    }
 }
 
 /// Name → handler lookup. Cheaply cloneable (handlers are `Arc<dyn>`).
@@ -410,6 +529,7 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),

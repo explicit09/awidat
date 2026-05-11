@@ -47,7 +47,7 @@ use tokio::time::timeout;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Per-download timeout. yt-dlp + a fast network can finish a 720p
 /// clip in 10s; slow networks or larger files can take a minute or
@@ -159,6 +159,25 @@ impl ToolHandler for DownloadYtClipTool {
 
     fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
+    }
+
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        let url = invocation
+            .args
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<missing-url>");
+        let source_window = match (
+            invocation.args.get("source_start_s"),
+            invocation.args.get("source_end_s"),
+        ) {
+            (Some(start), Some(end)) => format!("{start}-{end}"),
+            _ => "full".to_string(),
+        };
+        vec![ApprovalKey::new(
+            "download_yt_clip",
+            format!("{url}:{source_window}"),
+        )]
     }
 
     async fn handle(

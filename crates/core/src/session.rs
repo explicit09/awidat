@@ -16,13 +16,12 @@
 //! Events are broadcast via `tokio::sync::broadcast` so the week-5 TUI
 //! can subscribe alongside the week-3 REPL.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use awidat_proto::project::Project;
 
-use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
@@ -32,8 +31,8 @@ use crate::anthropic::{
     Usage,
 };
 use crate::tool::{
-    ApprovalDecision, ApprovalRequest, ModelFamily, ToolContext, ToolInvocation, ToolRegistry,
-    UserInputRequest,
+    ApprovalCache, ApprovalRequest, ModelFamily, SandboxMode, ToolContext, ToolInvocation,
+    ToolRegistry, UserInputRequest,
 };
 
 /// One event emitted by the agent loop. The REPL prints these; the TUI
@@ -125,6 +124,16 @@ pub enum SessionError {
     /// User cancelled the turn.
     #[error("cancelled")]
     Cancelled,
+    /// User denied a tool in the orchestrator approval flow.
+    #[error("{message}")]
+    ToolDenied {
+        /// Tool call id.
+        call_id: String,
+        /// Tool name.
+        tool_name: String,
+        /// Message to feed back to the model.
+        message: String,
+    },
     /// Catch-all for setup-time errors (resume failures, etc).
     #[error("{0}")]
     Other(String),
@@ -148,10 +157,9 @@ pub struct Session {
     /// Channel the loop uses to ask the front-end to approve mutating tool
     /// calls. `None` ⇒ loop defaults to allow (tests, batch CLI, MCP).
     approval_tx: Option<mpsc::Sender<ApprovalRequest>>,
-    /// Set of tool names the user has elected to allow for the rest of
-    /// the session via [`ApprovalDecision::AllowForSession`]. Future calls
-    /// to a name in this set skip the approval prompt.
-    approved_for_session: Arc<Mutex<HashSet<String>>>,
+    /// Session-scoped operation-keyed approval cache owned by the tool
+    /// orchestrator.
+    approval_cache: Arc<Mutex<ApprovalCache>>,
     /// Session-scoped MCP host. Tools that need warm ML processes
     /// (clip_search → clip-mcp's query_text) call into this rather
     /// than spawning per-call. Lazy: a registered server is only
@@ -337,7 +345,7 @@ impl Session {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
-            approved_for_session: Arc::new(Mutex::new(HashSet::new())),
+            approval_cache: Arc::new(Mutex::new(ApprovalCache::default())),
             mcp_host,
             skills: skill_registry,
             recorder: None,
@@ -842,64 +850,38 @@ impl Session {
             args,
         };
 
-        // Approval gate. Mutating tools must clear an approval check
-        // before dispatch when the runtime wired an approval channel.
-        // No channel ⇒ allow (tests, batch CLI, MCP).
-        let mutating = handler.is_mutating(&invocation);
-        if mutating && let Some(tx) = self.approval_tx.clone() {
-            let already_session_allowed =
-                self.approved_for_session.lock().await.contains(&call.name);
-            if !already_session_allowed {
-                let decision = self.request_approval(&tx, &invocation, cancel).await?;
-                // #149 — capture the decision in the rollout for
-                // offline pattern extraction. Best-effort: a missing
-                // recorder (tests, MCP server) just skips this.
-                if let Some(rec) = &self.recorder {
-                    rec.record_decision(
-                        call.name.clone(),
-                        summarize_args(&invocation.args),
-                        format!("{decision:?}"),
-                    );
-                }
-                match decision {
-                    ApprovalDecision::Allow => {}
-                    ApprovalDecision::AllowForSession => {
-                        self.approved_for_session
-                            .lock()
-                            .await
-                            .insert(call.name.clone());
-                    }
-                    ApprovalDecision::Deny => {
-                        let msg = format!("user denied execution of '{}'", call.name);
-                        let _ = self.events_tx.send(SessionEvent::ToolResult {
-                            id: call.id.clone(),
-                            name: call.name.clone(),
-                            result: Err(msg.clone()),
-                        });
-                        return Ok(ContentBlock::ToolResult {
-                            tool_use_id: call.id,
-                            content: crate::anthropic::tool_result::text(msg),
-                            is_error: Some(true),
-                        });
-                    }
-                }
-            }
-        }
-
         let ctx = ToolContext {
             project_root: self.project_root.clone(),
             events_tx: self.events_tx.clone(),
             user_input_tx: self.user_input_tx.clone(),
             job_manager: self.job_manager.clone(),
             approval_tx: self.approval_tx.clone(),
+            sandbox_mode: SandboxMode::Default,
             mcp_host: self.mcp_host.clone(),
             skills: self.skills.clone(),
             subagent_return: self.subagent_return.clone(),
         };
 
-        let result = tokio::select! {
-            biased;
-            () = cancel.cancelled() => {
+        let orchestrator = crate::orchestrator::ToolOrchestrator::new(
+            self.approval_tx.clone(),
+            self.approval_cache.clone(),
+            self.recorder.clone(),
+        );
+        let result = match orchestrator.run(handler, invocation, ctx, cancel).await {
+            Ok(result) => result,
+            Err(SessionError::ToolDenied { message, .. }) => {
+                let _ = self.events_tx.send(SessionEvent::ToolResult {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    result: Err(message.clone()),
+                });
+                return Ok(ContentBlock::ToolResult {
+                    tool_use_id: call.id,
+                    content: crate::anthropic::tool_result::text(message),
+                    is_error: Some(true),
+                });
+            }
+            Err(SessionError::Cancelled) => {
                 // Emit a ToolResult event before bailing — otherwise
                 // the TUI's Running spinner for this call sits there
                 // forever after a Ctrl-C cancel.
@@ -910,7 +892,7 @@ impl Session {
                 });
                 return Err(SessionError::Cancelled);
             }
-            res = handler.handle(invocation, ctx) => res,
+            Err(e) => return Err(e),
         };
 
         match result {
@@ -964,40 +946,6 @@ impl Session {
             }
         }
     }
-
-    /// Send an approval request and await the user's decision.
-    ///
-    /// On cancellation the loop reports `SessionError::Cancelled` so the
-    /// outer driver can shut down. On a closed reply oneshot (the UI
-    /// dropped without responding) we treat it as an implicit deny —
-    /// dropping is meaningfully different from explicit allow.
-    async fn request_approval(
-        &self,
-        approval_tx: &mpsc::Sender<ApprovalRequest>,
-        invocation: &ToolInvocation,
-        cancel: &CancellationToken,
-    ) -> Result<ApprovalDecision, SessionError> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        let req = ApprovalRequest {
-            call_id: invocation.call_id.clone(),
-            tool_name: invocation.name.clone(),
-            args_summary: summarize_args(&invocation.args),
-            args_full: invocation.args.clone(),
-            reply: reply_tx,
-        };
-        // If the channel is closed (no live UI), default to allow rather
-        // than hanging — the surrounding `is_some()` check already gated
-        // entry; a closed channel here means the UI process exited mid-turn.
-        if approval_tx.send(req).await.is_err() {
-            warn!("approval channel closed mid-turn; defaulting to allow");
-            return Ok(ApprovalDecision::Allow);
-        }
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(SessionError::Cancelled),
-            decision = reply_rx => Ok(decision.unwrap_or(ApprovalDecision::Deny)),
-        }
-    }
 }
 
 /// Build a short human-readable args summary for the approval modal.
@@ -1010,16 +958,9 @@ impl Session {
 ///
 /// Truncation is done by Unicode chars (not bytes) so multi-byte input
 /// (emoji, accents) doesn't trigger a panic at a sub-char boundary.
+#[cfg(test)]
 fn summarize_args(args: &serde_json::Value) -> String {
-    const CAP: usize = 200;
-    let raw = args.to_string();
-    let squashed: String = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    if squashed.chars().count() > CAP {
-        let truncated: String = squashed.chars().take(CAP).collect();
-        format!("{truncated}…")
-    } else {
-        squashed
-    }
+    crate::tool::summarize_args(args)
 }
 
 /// Walk the history and place the *moving* tier-2 cache breakpoint.

@@ -603,6 +603,7 @@ mod tests {
         let (tx, _) = broadcast::channel(8);
         ToolContext {
             project_root: root.to_path_buf(),
+            sandbox_mode: crate::tool::SandboxMode::Default,
             events_tx: tx,
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),

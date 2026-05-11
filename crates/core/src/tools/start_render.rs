@@ -31,7 +31,7 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `start_render` tool.
 pub struct StartRenderTool;
@@ -95,6 +95,28 @@ impl ToolHandler for StartRenderTool {
 
     fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
+    }
+
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        let scope = invocation
+            .args
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<missing-scope>");
+        let asset = invocation
+            .args
+            .get("asset")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<timeline>");
+        let range = invocation
+            .args
+            .get("range")
+            .map(serde_json::Value::to_string)
+            .unwrap_or_else(|| "<full>".to_string());
+        vec![ApprovalKey::new(
+            "start_render",
+            format!("{scope}:{asset}:{range}"),
+        )]
     }
 
     async fn handle(
@@ -342,6 +364,7 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),

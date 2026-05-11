@@ -32,7 +32,7 @@ use serde::Deserialize;
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::pexels;
-use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Safety cap on Pexels downloads in one process lifetime. Resets on
 /// restart — this is friction, not policy.
@@ -154,6 +154,25 @@ impl ToolHandler for UseBrollTool {
         // Writes a file under <project>/raw/broll. Treat as mutating
         // so the loop serializes it with apply_edl.
         true
+    }
+
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        let pexels_id = invocation
+            .args
+            .get("pexels_id")
+            .and_then(|v| v.as_u64())
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "<missing-pexels-id>".to_string());
+        let max_width = invocation
+            .args
+            .get("max_width")
+            .and_then(|v| v.as_u64())
+            .map(|w| w.to_string())
+            .unwrap_or_else(|| "default-width".to_string());
+        vec![ApprovalKey::new(
+            "use_broll",
+            format!("pexels:{pexels_id}:{max_width}"),
+        )]
     }
 
     async fn handle(

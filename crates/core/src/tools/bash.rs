@@ -33,7 +33,9 @@ use tracing::warn;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::tool::{ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool::{
+    ApprovalKey, SandboxMode, ToolHandler, ToolInvocation, ToolOutput, ToolSandboxPolicy,
+};
 
 /// Default timeout: 10s. Codex uses the same. Long-running commands fail
 /// cleanly rather than hanging the agent.
@@ -164,6 +166,29 @@ impl ToolHandler for BashTool {
         true
     }
 
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        let command = invocation
+            .args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<invalid>");
+        let workdir = invocation
+            .args
+            .get("workdir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<project>");
+        vec![ApprovalKey::new(
+            "bash",
+            format!("command:{workdir}:{}", command.trim()),
+        )]
+    }
+
+    fn sandbox_policy(&self, _invocation: &ToolInvocation) -> ToolSandboxPolicy {
+        ToolSandboxPolicy::SandboxFirst {
+            escalate_on_denial: true,
+        }
+    }
+
     async fn handle(
         &self,
         inv: ToolInvocation,
@@ -208,7 +233,9 @@ impl ToolHandler for BashTool {
             .as_deref()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| ctx.project_root.clone());
-        if std::env::var_os("AWIDAT_BASH_NO_SANDBOX").is_none() && awidat_sandboxing::is_available()
+        if ctx.sandbox_mode == SandboxMode::Default
+            && std::env::var_os("AWIDAT_BASH_NO_SANDBOX").is_none()
+            && awidat_sandboxing::is_available()
         {
             return run_sandboxed(&args.command, &workdir, &ctx.project_root, to).await;
         }
@@ -295,14 +322,7 @@ async fn run_sandboxed(
             let formatted = format_output(exit_code, &stdout, &stderr);
             Ok(ToolOutput::text(formatted))
         }
-        Err(SandboxErr::Denied { reason }) => Err(FunctionCallError::RespondToModel(format!(
-            "bash: sandbox denied the command ({reason}). The sandbox \
-                 only permits writes inside the project root + system \
-                 tempdirs, and denies network egress by default. Either \
-                 rewrite the command to stay within those bounds, or tell \
-                 the user this needs unsandboxed execution and let them \
-                 run it outside the agent loop."
-        ))),
+        Err(SandboxErr::Denied { reason }) => Err(FunctionCallError::SandboxDenied { reason }),
         Err(SandboxErr::LinuxNotImplemented) => {
             // Should never reach here — `is_available()` returns
             // false on Linux, so the caller picked the unsandboxed
@@ -450,6 +470,7 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),

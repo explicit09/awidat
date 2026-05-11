@@ -156,6 +156,7 @@ mod tests {
                 job_manager: awidat_render::JobManager::new(),
 
                 approval_tx: None,
+                sandbox_mode: crate::tool::SandboxMode::Default,
                 mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                     name: "test".into(),
                     version: "0.0.0".into(),
@@ -177,6 +178,7 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
