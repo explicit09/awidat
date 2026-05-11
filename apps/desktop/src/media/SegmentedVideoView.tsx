@@ -43,7 +43,10 @@ import {
 } from "../timeline/store";
 import {
   findActiveSegment,
+  type PreviewTransition,
   type PlaySegment,
+  usePreviewDuration,
+  usePreviewTransitions,
   usePlaySegments,
   type VideoOverlaySegment,
   useVideoOverlaySegments,
@@ -51,6 +54,7 @@ import {
 
 export function SegmentedVideoView() {
   const segments = usePlaySegments();
+  const previewDurationS = usePreviewDuration();
   const setTimelineDuration = useMediaStore((s) => s.setTimelineDuration);
   const timelineDurationS = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineTime = useMediaStore((s) => s.timelineTime);
@@ -59,8 +63,8 @@ export function SegmentedVideoView() {
   // Mirror the snapshot duration into the media store so the scrub
   // bar can clamp without subscribing to the timeline store too.
   useEffect(() => {
-    setTimelineDuration(timelineDurationS);
-  }, [timelineDurationS, setTimelineDuration]);
+    setTimelineDuration(previewDurationS || timelineDurationS);
+  }, [previewDurationS, timelineDurationS, setTimelineDuration]);
 
   // Clamp the playhead when the timeline shrinks past it (e.g. user
   // deletes the clip the playhead is parked in). Without this the
@@ -106,6 +110,7 @@ type Slot = {
 
 function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   const videoOverlays = useVideoOverlaySegments();
+  const previewTransitions = usePreviewTransitions();
   // For diagnostics: how many clips are on the OTIO but missing a
   // proxy (still transcoding). The user sees a "+ N transcoding…"
   // hint so they know the timeline isn't lying about its length.
@@ -156,6 +161,15 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           timelineTime < overlay.timelineEnd,
       ),
     [videoOverlays, timelineTime],
+  );
+  const activeTransition = useMemo(
+    () =>
+      previewTransitions.find(
+        (transition) =>
+          timelineTime >= transition.timelineStart &&
+          timelineTime < transition.timelineEnd,
+      ) ?? null,
+    [previewTransitions, timelineTime],
   );
 
   // Push the current timeline-time + active segment's clip-stem to
@@ -549,6 +563,11 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           timelineTime={timelineTime}
           isPlaying={isPlaying}
         />
+        <TimelineTransitionOverlay
+          transition={activeTransition}
+          timelineTime={timelineTime}
+          isPlaying={isPlaying}
+        />
         <TimelineTitleOverlays
           overlays={activeTitles}
           timelineTime={timelineTime}
@@ -599,6 +618,99 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
       </div>
     </div>
   );
+}
+
+function TimelineTransitionOverlay({
+  transition,
+  timelineTime,
+  isPlaying,
+}: {
+  transition: PreviewTransition | null;
+  timelineTime: number;
+  isPlaying: boolean;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [src, setSrc] = useState<string | null>(null);
+  const setMediaError = useMediaStore((s) => s.setMediaError);
+
+  useEffect(() => {
+    if (!transition) {
+      setSrc(null);
+      return;
+    }
+    const cached = cachedMediaStreamUrl(transition.to.proxyPath);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
+    let cancelled = false;
+    mediaStreamUrl(transition.to.proxyPath)
+      .then((url) => {
+        if (!cancelled) setSrc(url);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setMediaError(`Could not open transition preview media: ${String(e)}`);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transition, setMediaError]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !transition || !src) return;
+    const sourceTime =
+      transition.to.sourceStart + (timelineTime - transition.timelineStart);
+    if (Math.abs(v.currentTime - sourceTime) > 0.05) {
+      tryAssignCurrentTime(v, sourceTime);
+    }
+    const speed = Number.isFinite(transition.to.speed)
+      ? Math.max(0.0625, Math.min(16, transition.to.speed))
+      : 1;
+    if (Math.abs(v.playbackRate - speed) > 0.001) v.playbackRate = speed;
+    if (isPlaying && v.paused) {
+      v.play().catch(() => {});
+    } else if (!isPlaying && !v.paused) {
+      v.pause();
+    }
+  }, [transition, src, timelineTime, isPlaying]);
+
+  if (!transition || !src) return null;
+  const progress =
+    transition.duration > 0
+      ? Math.max(
+          0,
+          Math.min(
+            1,
+            (timelineTime - transition.timelineStart) / transition.duration,
+          ),
+        )
+      : 1;
+
+  return (
+    <video
+      ref={videoRef}
+      className="video-el timeline-transition-preview"
+      src={src}
+      muted
+      playsInline
+      preload="auto"
+      style={{
+        opacity: transitionOpacity(transition.kind, progress),
+        pointerEvents: "none",
+        zIndex: 3,
+      }}
+      aria-hidden="true"
+    />
+  );
+}
+
+function transitionOpacity(kind: string, progress: number): number {
+  if (kind === "awidat.fade_out") return progress;
+  if (kind === "awidat.fade_in") return progress;
+  return progress;
 }
 
 function TimelineVideoOverlays({

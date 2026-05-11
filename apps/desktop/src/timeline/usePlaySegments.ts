@@ -27,7 +27,7 @@
 // not double with the first-class mix used by export.
 
 import { useMemo } from "react";
-import { useTimelineStore } from "./store";
+import { useTimelineStore, type TimelineSnapshot } from "./store";
 
 export type PlaySegment = {
   /** Absolute path to the proxy mp4 — pass to convertFileSrc(). */
@@ -59,6 +59,21 @@ export type VideoOverlaySegment = PlaySegment & {
   zIndex: number;
 };
 
+export type PreviewTransition = {
+  kind: string;
+  timelineStart: number;
+  timelineEnd: number;
+  duration: number;
+  from: PlaySegment;
+  to: PlaySegment;
+};
+
+type PreviewPlan = {
+  segments: PlaySegment[];
+  transitions: PreviewTransition[];
+  duration: number;
+};
+
 /**
  * Walk the snapshot's first video track and produce the playable
  * segments. Empty array when:
@@ -72,41 +87,17 @@ export type VideoOverlaySegment = PlaySegment & {
  */
 export function usePlaySegments(): PlaySegment[] {
   const snapshot = useTimelineStore((s) => s.snapshot);
-  return useMemo(() => {
-    const videoTrack = snapshot.tracks.find(
-      (t) => t.kind === "video" && t.role !== "titles",
-    );
-    if (!videoTrack) return [];
-    const hasExplicitAudio = snapshot.tracks.some((t) => t.kind === "audio");
+  return useMemo(() => derivePreviewPlan(snapshot).segments, [snapshot]);
+}
 
-    const segments: PlaySegment[] = [];
-    for (const item of videoTrack.items) {
-      if (item.kind !== "clip") continue;
-      // Skip clips with no proxy yet — the segmented player would
-      // hit a 404 on the asset: protocol. Once the transcoder
-      // finishes and read_timeline returns, the segment shows up.
-      if (item.proxy_path === null) continue;
-      // Defensive: a clip with no source range is a 0-second item;
-      // skip it to avoid emitting a zero-duration segment.
-      if (item.duration_s <= 0) continue;
-      const sourceStart = item.source_start_s ?? 0;
-      segments.push({
-        proxyPath: item.proxy_path,
-        proxyStem: stemFromProxyPath(item.proxy_path),
-        sourceStart,
-        sourceEnd: sourceStart + item.duration_s,
-        timelineStart: item.track_start_s,
-        timelineEnd: item.track_start_s + item.duration_s,
-        volume: hasExplicitAudio ? 0 : item.volume ?? 1,
-        speed: item.speed ?? 1,
-        clipIndex: item.index,
-      });
-    }
-    // The OTIO walk already produces them in track order, but sort
-    // defensively in case a future flattener change reorders.
-    segments.sort((a, b) => a.timelineStart - b.timelineStart);
-    return segments;
-  }, [snapshot]);
+export function usePreviewTransitions(): PreviewTransition[] {
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  return useMemo(() => derivePreviewPlan(snapshot).transitions, [snapshot]);
+}
+
+export function usePreviewDuration(): number {
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  return useMemo(() => derivePreviewPlan(snapshot).duration, [snapshot]);
 }
 
 /**
@@ -181,6 +172,97 @@ function clampNumber(
 ): number {
   if (!Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, value as number));
+}
+
+function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
+  const videoTrack = snapshot.tracks.find(
+    (t) => t.kind === "video" && t.role !== "titles",
+  );
+  if (!videoTrack) return { segments: [], transitions: [], duration: 0 };
+  const hasExplicitAudio = snapshot.tracks.some((t) => t.kind === "audio");
+
+  const segments: PlaySegment[] = [];
+  const transitions: PreviewTransition[] = [];
+  let outputCursor = 0;
+  let pendingTransition: { kind: string; duration: number } | null = null;
+
+  for (const item of videoTrack.items) {
+    if (item.kind === "gap") {
+      outputCursor += item.duration_s;
+      pendingTransition = null;
+      continue;
+    }
+    if (item.kind === "transition") {
+      pendingTransition = {
+        kind: item.effect_name,
+        duration: Math.max(0, item.duration_s),
+      };
+      continue;
+    }
+    if (item.kind !== "clip") continue;
+    if (item.proxy_path === null || item.duration_s <= 0) {
+      pendingTransition = null;
+      continue;
+    }
+
+    const originalSourceStart = item.source_start_s ?? 0;
+    const incomingTransition = pendingTransition;
+    const incomingDuration = incomingTransition
+      ? Math.min(incomingTransition.duration, item.duration_s)
+      : 0;
+    const playableDuration = Math.max(0, item.duration_s - incomingDuration);
+    const sourceStart = originalSourceStart + incomingDuration;
+    const segment: PlaySegment = {
+      proxyPath: item.proxy_path,
+      proxyStem: stemFromProxyPath(item.proxy_path),
+      sourceStart,
+      sourceEnd: originalSourceStart + item.duration_s,
+      timelineStart: outputCursor,
+      timelineEnd: outputCursor + playableDuration,
+      volume: hasExplicitAudio ? 0 : item.volume ?? 1,
+      speed: item.speed ?? 1,
+      clipIndex: item.index,
+    };
+
+    const previous = segments[segments.length - 1];
+    if (incomingTransition && previous && incomingDuration > 0) {
+      const duration = Math.min(
+        incomingDuration,
+        Math.max(0, previous.timelineEnd - previous.timelineStart),
+      );
+      if (duration > 0) {
+        transitions.push({
+          kind: incomingTransition.kind,
+          timelineStart: previous.timelineEnd - duration,
+          timelineEnd: previous.timelineEnd,
+          duration,
+          from: previous,
+          to: {
+            ...segment,
+            sourceStart: originalSourceStart,
+            sourceEnd: originalSourceStart + duration,
+            timelineStart: previous.timelineEnd - duration,
+            timelineEnd: previous.timelineEnd,
+          },
+        });
+      }
+    }
+
+    if (playableDuration > 0) {
+      segments.push(segment);
+      outputCursor = segment.timelineEnd;
+    }
+    pendingTransition = null;
+  }
+
+  return {
+    segments,
+    transitions,
+    duration: Math.max(
+      outputCursor,
+      transitions.length > 0 ? transitions[transitions.length - 1].timelineEnd : 0,
+    ),
+  };
 }
 
 /**
