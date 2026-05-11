@@ -260,6 +260,6 @@ function permissionModeTitle(mode: PermissionMode): string {
     case "copilot":
       return "Copilot: agent surfaces editorial notes; you ask it to act on them.";
     case "autopilot":
-      return "Autopilot: agent applies editing/index/render tool calls without approval cards; shell still asks.";
+      return "Autopilot: agent applies editing, indexing, render, and shell tool calls without approval cards.";
   }
 }

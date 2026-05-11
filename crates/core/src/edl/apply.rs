@@ -1105,9 +1105,8 @@ fn remove_transitions_around_deleted_child(
 /// Validation:
 /// - both anchors must resolve
 /// - both must be on the *same* track
-/// - they must be at *adjacent* indices (`to.child_index ==
-///   from.child_index + 1`); we don't support transitions that cross
-///   a gap or another transition in v1
+/// - they must be adjacent clips, or separated only by an existing
+///   transition node that this operation replaces
 /// - `duration_s > 0`
 fn apply_insert_transition(
     working: &mut Timeline,
@@ -1159,13 +1158,23 @@ fn apply_insert_transition(
             ),
         });
     }
-    if to_loc.child_index != from_loc.child_index + 1 {
+    let replaces_existing_transition = to_loc.child_index == from_loc.child_index + 2
+        && matches!(
+            working.tracks.children.get(from_loc.track_index),
+            Some(StackChild::Track(track))
+                if matches!(
+                    track.children.get(from_loc.child_index + 1),
+                    Some(TrackChild::Transition(_))
+                )
+        );
+    if to_loc.child_index != from_loc.child_index + 1 && !replaces_existing_transition {
         return Err(ApplyError::Invalid {
             index,
             message: format!(
                 "transition: anchors are not adjacent (from at \
-                 index {}, to at index {}). Transitions only insert \
-                 between consecutive clips in v1.",
+                 index {}, to at index {}). Transitions insert between \
+                 consecutive clips, or replace an existing transition \
+                 between the same clips.",
                 from_loc.child_index, to_loc.child_index,
             ),
         });
@@ -1202,12 +1211,20 @@ fn apply_insert_transition(
             })?,
         );
     }
+    if replaces_existing_transition {
+        track.children.remove(from_loc.child_index + 1);
+    }
     track
         .children
         .insert(from_loc.child_index + 1, TrackChild::Transition(transition));
 
+    let action = if replaces_existing_transition {
+        "replaced"
+    } else {
+        "inserted"
+    };
     Ok(format!(
-        "inserted transition {kind:?} ({duration_s:.3}s) between \
+        "{action} transition {kind:?} ({duration_s:.3}s) between \
          clips at indices {} and {} on track {}",
         from_loc.child_index,
         from_loc.child_index + 2, // shifted by the insert
@@ -4545,6 +4562,66 @@ mod tests {
         assert!((tr.in_offset.to_seconds() - 0.5).abs() < 1e-9);
         assert!((tr.out_offset.to_seconds() - 0.5).abs() < 1e-9);
         assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-1"));
+    }
+
+    #[test]
+    fn apply_insert_transition_replaces_existing_transition_between_same_clips() {
+        let tl = timeline_with_three_clips();
+        let insert_env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.3,
+                spec: None,
+            }],
+        };
+        let (tl_with_transition, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
+
+        let replace_env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 2.0,
+                spec: None,
+            }],
+        };
+        let (new_tl, outcome) =
+            apply(&tl_with_transition, &replace_env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("replaced transition"),
+            "expected replacement outcome, got {:?}",
+            outcome.applied,
+        );
+
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.children.len(), 4);
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-0"));
+        let TrackChild::Transition(tr) = &t.children[1] else {
+            panic!("expected transition at index 1, got {:?}", t.children[1])
+        };
+        assert_eq!(tr.transition_type, "SMPTE_Dissolve");
+        assert!((tr.in_offset.to_seconds() - 1.0).abs() < 1e-9);
+        assert!((tr.out_offset.to_seconds() - 1.0).abs() < 1e-9);
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(matches!(&t.children[3], TrackChild::Clip(c) if c.name == "clip-2"));
     }
 
     #[test]

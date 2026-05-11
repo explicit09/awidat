@@ -204,6 +204,33 @@ export function timelineTimeForSource(
 }
 
 /**
+ * Best-effort variant for transcript clicks outside the current cut.
+ * When the exact source time is trimmed out, jump to the closest
+ * timeline occurrence for the same asset instead of falling back to
+ * source-preview seeking while the timeline monitor is active.
+ */
+export function nearestTimelineTimeForSource(
+  segments: PlaySegment[],
+  stem: string,
+  sourceTime: number,
+): number | null {
+  let best: { distance: number; timelineTime: number } | null = null;
+  for (const seg of segments) {
+    if (seg.proxyStem !== stem) continue;
+    const clampedSource = Math.max(
+      seg.sourceStart,
+      Math.min(sourceTime, seg.sourceEnd),
+    );
+    const distance = Math.abs(sourceTime - clampedSource);
+    const timelineTime = seg.timelineStart + (clampedSource - seg.sourceStart);
+    if (!best || distance < best.distance) {
+      best = { distance, timelineTime };
+    }
+  }
+  return best?.timelineTime ?? null;
+}
+
+/**
  * Binary-search for the segment that owns `timelineTime`. Returns
  * the index, or -1 when the time falls in a gap or after the last
  * segment. The SegmentedVideoView uses -1 to render a black frame /

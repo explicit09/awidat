@@ -160,10 +160,10 @@ async fn current_permission_mode(state: &AwidatState) -> PermissionMode {
     crate::commands::permission::read_mode_pub(&project_root)
 }
 
-fn auto_allows_tool(mode: PermissionMode, tool_name: &str) -> bool {
+fn auto_allows_tool(mode: PermissionMode, _tool_name: &str) -> bool {
     match mode {
         PermissionMode::Manual | PermissionMode::Copilot => false,
-        PermissionMode::Autopilot => tool_name != "bash",
+        PermissionMode::Autopilot => true,
     }
 }
 
@@ -186,14 +186,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn autopilot_auto_allows_editing_tools_but_not_bash() {
+    fn autopilot_auto_allows_agent_tools() {
         assert!(auto_allows_tool(PermissionMode::Autopilot, "apply_edl"));
         assert!(auto_allows_tool(
             PermissionMode::Autopilot,
             "start_indexing"
         ));
         assert!(auto_allows_tool(PermissionMode::Autopilot, "start_render"));
-        assert!(!auto_allows_tool(PermissionMode::Autopilot, "bash"));
+        assert!(auto_allows_tool(PermissionMode::Autopilot, "bash"));
     }
 
     #[test]
