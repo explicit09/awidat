@@ -291,9 +291,8 @@ impl Chat {
                 }
             }
             SessionEvent::ToolResult { id, result, .. } => {
-                // Find the matching Running tool call in `items` and
-                // mark Done/Failed in place. Moving it to pending
-                // history would reorder it ahead of the user's prompt.
+                // Mark the matching Running tool call in place; moving it
+                // to pending_history would reorder it ahead of the prompt.
                 if let Some(item) = self
                     .items
                     .iter_mut()
@@ -341,9 +340,6 @@ impl Chat {
 /// (plan, tool result) get their own block.
 fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
     match item {
-        // Single-glyph role marks. No "you/awidat" labels — every line
-        // gets too noisy. Magenta › for the user (matches the composer
-        // glyph) and a soft white left-margin for the assistant.
         ChatItem::User(text) => user_message_lines(text),
         ChatItem::Assistant(text) => prefixed_text_lines(
             Span::styled("• ", Style::default().fg(Color::Gray)),
@@ -391,9 +387,6 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
             }
             lines.push(Line::from(head));
             match status {
-                // Tool results: one-line summary derived from the
-                // tool's output type. Anything richer goes in the
-                // chat scrollback only on demand (future feature).
                 ToolStatus::Done(out) => {
                     if let Some(summary) = summarize_tool_result(name, out) {
                         lines.push(Line::from(vec![
@@ -442,8 +435,6 @@ fn render_item(item: &ChatItem, spinner_phase: u8) -> Vec<Line<'static>> {
             }
             lines
         }
-        // ApprovalPending exists in the scrollback as a quiet crumb;
-        // the actual modal is what blocks the user. Don't shout.
         ChatItem::ApprovalPending {
             tool_name,
             args_summary,
@@ -804,7 +795,6 @@ impl Widget for &Chat {
 /// push into the terminal scrollback. Borrowed by the App on each
 /// `flush_history` pass.
 pub fn render_item_for_history(item: &ChatItem) -> Vec<Line<'static>> {
-    // Spinner phase is irrelevant in scrollback (the item is frozen).
     render_item(item, 0)
 }
 

@@ -206,7 +206,7 @@ hits — use content words (`battery`, `kitchen`, `Samsung`).\
 /// Terser variant for Haiku per #154. Same args schema, different
 /// description. Haiku tolerates fewer tokens of preamble + benefits
 /// from a tight rule statement. The stopword note is kept (one-line
-/// version) — it's a real footgun, worth the tokens.
+/// version) — this edge case is worth naming despite the extra tokens.
 const DESCRIPTION_HAIKU: &str = "\
 BM25 search of whisper transcript segments. Returns asset_id, \
 start/end timestamps, speaker_id, snippet, score. Paths/ranges only \

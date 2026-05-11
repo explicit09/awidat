@@ -15,8 +15,7 @@
 //! - [`MessagesRequest`] / [`Message`] / [`ContentBlock`] / [`Tool`] — the
 //!   typed wire surface, narrow to what we actually use today.
 //!
-//! See `_notes/anthropic.md` (TODO) for design rationale; for now, the
-//! load-bearing reference is
+//! The load-bearing reference is
 //! `harnesses/goose/crates/goose/src/providers/formats/anthropic.rs:557-797`
 //! which is the production Rust implementation we're modeled after.
 

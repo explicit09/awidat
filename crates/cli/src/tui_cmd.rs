@@ -68,7 +68,7 @@ visible — needs whisper diarization + face), find_eye_contact \
 (any indexer channel), inspect_clip (one clip's metadata), \
 view_frame (extract a frame at a timestamp).\
 \n  - **Editing**: apply_edl (commit edits — Trim, Untrim, Delete, \
-Split, Insert). For `@@ anchor: clip_uuid=...`, use the clip \
+Split, Insert, Insert PiP). For `@@ anchor: clip_uuid=...`, use the clip \
 anchor shown by view_timeline, usually the clip name like `clip-0`; \
 never use the asset filename, proxy stem, or raw media basename as \
 clip_uuid. Times are source-media seconds. view_timeline shows current \
@@ -110,7 +110,7 @@ is_error=true; route around it rather than retrying the same call.\
 \n\n\
 EDL format (freeform, NOT JSON-escaped):\n\
 *** Begin EDL\n\
-*** Trim Clip|Untrim Clip|Delete Clip|Split Clip|Insert Clip|Insert BRoll|Move Clip|Insert Transition\n\
+*** Trim Clip|Untrim Clip|Delete Clip|Split Clip|Insert Clip|Insert BRoll|Insert PiP|Move Clip|Insert Transition\n\
 @@ anchor: transcript_snippet=\"...\" or clip_uuid=...\n\
 + key: value\n\
 *** End EDL\n\
@@ -282,8 +282,7 @@ async fn run_async(
     )
     .with_approval_channel(approval_tx)
     .with_user_input_channel(user_input_tx);
-    // Mount the rollout recorder so this session is `awidat resume`-able
-    // later. Disabled by `AWIDAT_NO_ROLLOUT=1` (tests, ad-hoc runs).
+    // AWIDAT_NO_ROLLOUT=1 disables session recording (tests, ad-hoc runs).
     if std::env::var("AWIDAT_NO_ROLLOUT").ok().as_deref() != Some("1")
         && let Some(state_root) = awidat_config::defaults::state_root()
     {

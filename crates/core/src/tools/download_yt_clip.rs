@@ -394,7 +394,6 @@ fn build_yt_dlp_argv(
         "--no-warnings".into(),
         // Skip playlists that share the same id.
         "--no-playlist".into(),
-        // Output path.
         "-o".into(),
         dest.display().to_string(),
     ];

@@ -47,8 +47,6 @@ impl ProjectInsights {
             .filter(|n| exists(n))
             .collect();
 
-        // Editorial-moments roll-up. Walk every sidecar under
-        // index/editorial-moments/ and tally moments + kinds.
         let (moment_count, moment_kinds) = if exists("editorial-moments") {
             count_moments(&index_dir.join("editorial-moments"))
         } else {
@@ -71,9 +69,6 @@ impl ProjectInsights {
         if self.vision_indexers.is_empty() && self.editorial_indexers.is_empty() {
             return None;
         }
-        // Compact form: just the names joined by `·`. Order is
-        // canonical-chain order across both lists. Mostly a status
-        // glance, not a deep summary.
         let mut parts: Vec<&str> = Vec::new();
         parts.extend(self.editorial_indexers.iter().copied());
         parts.extend(self.vision_indexers.iter().copied());
@@ -90,7 +85,6 @@ impl ProjectInsights {
     /// welcome card even though the live data was 159 moments after
     /// re-indexing.
     pub fn welcome_moments_line(&self) -> Option<String> {
-        // Equivalent to width-unaware caller: assume ample width.
         self.welcome_moments_line_for_width(u16::MAX)
     }
 
@@ -111,7 +105,6 @@ impl ProjectInsights {
         let max = max_width as usize;
         let total_label = format!("{total} moments");
 
-        // Build the full part list (verbose form).
         let mut parts: Vec<String> = vec![total_label.clone()];
         for (kind, n) in self.moment_kinds.iter().take(3) {
             parts.push(format!("{n} {kind}{}", if *n == 1 { "" } else { "s" }));

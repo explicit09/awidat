@@ -250,7 +250,8 @@ silently emit a dirty cut.\
 \n  • `abstain`: tell the user which sidecars are missing (the \
 rules array shows `verdict: abstain` per missing input) and ask \
 whether to proceed without the check.\
-\n- apply_edl: cut/trim/delete/split/insert clips on the timeline. \
+\n- apply_edl: cut/trim/delete/split/insert clips on the timeline, \
+including `*** Insert PiP` for picture-in-picture overlays. \
 For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
 view_timeline, usually the clip name like `clip-0`; never use the \
 asset filename, proxy stem, or raw media basename as clip_uuid. \
@@ -259,6 +260,13 @@ Times are source-media seconds. view_timeline shows current \
 clip, set `start` to source start + N, and to trim the last N \
 seconds, set `end` to source end - N.\
 \n- start_render (scope='timeline'): render the edited timeline to mp4.\
+\n- poll_render: continue tracking a render job. If a previous turn \
+was interrupted while waiting/polling, recover by using the last \
+known job_id/output_path from chat history. If poll_render reports an \
+unknown job or the backend likely restarted, verify the output_path \
+before calling the render done; an interrupted MP4 may exist but fail \
+ffprobe with a missing moov atom. If verification fails, call \
+start_render(scope='timeline') again.\
 \n- start_indexing: (re)run the configured indexers on raw/. Use when \
 view_episode shows missing sidecars and the user asked for an \
 operation that needs them. Imports auto-chain through indexing in \

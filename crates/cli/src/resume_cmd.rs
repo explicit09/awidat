@@ -24,8 +24,6 @@ pub fn run(selector: Option<&str>, model_override: Option<&str>) -> Result<()> {
         .with_context(|| format!("failed to list sessions under {}", state_root.display()))?;
 
     match selector {
-        // No selector → listing mode. Empty state root prints the
-        // friendly bringup message; otherwise the recent-sessions list.
         None => {
             if entries.is_empty() {
                 println!(
@@ -38,10 +36,8 @@ pub fn run(selector: Option<&str>, model_override: Option<&str>) -> Result<()> {
             }
             Ok(())
         }
-        // Selector → resume mode. `pick` handles path / list-index /
-        // id-prefix on its own and surfaces the right error if nothing
-        // matches. We still call it on an empty `entries` because the
-        // path branch may resolve a session outside the state root.
+        // `pick` may resolve a session outside the state root, so we
+        // call it even when `entries` is empty.
         Some(sel) => {
             let (path, meta) = pick(&entries, sel)?;
             resume_into_tui(path, meta, model_override)
@@ -61,15 +57,14 @@ fn print_listing(entries: &[(PathBuf, SessionMeta)]) {
 }
 
 fn pick(entries: &[(PathBuf, SessionMeta)], sel: &str) -> Result<(PathBuf, SessionMeta)> {
-    // 1) Path: exists + .jsonl extension.
+    // Path mode: re-parse to get meta even if the file isn't under state_root.
     let as_path = PathBuf::from(sel);
     if as_path.is_file() {
-        // Re-parse to get meta even if the file isn't under state_root.
         let (m, _hist) = Recorder::resume(&as_path)
             .with_context(|| format!("failed to read {}", as_path.display()))?;
         return Ok((as_path, m));
     }
-    // 2) List index (1-based).
+    // List index (1-based).
     if let Ok(idx) = sel.parse::<usize>()
         && idx >= 1
         && idx <= entries.len()
@@ -77,7 +72,7 @@ fn pick(entries: &[(PathBuf, SessionMeta)], sel: &str) -> Result<(PathBuf, Sessi
         let (p, m) = &entries[idx - 1];
         return Ok((p.clone(), m.clone()));
     }
-    // 3) Session id (exact or unique prefix).
+    // Session id (exact or unique prefix).
     let matches: Vec<_> = entries
         .iter()
         .filter(|(_, m)| m.id == sel || m.id.starts_with(sel))

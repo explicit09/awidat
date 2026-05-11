@@ -154,8 +154,8 @@ impl Client {
     }
 
     /// Stream-download a `video_files` URL to disk. Caller picks the
-    /// quality/dimension by inspecting [`VideoFile`] entries; this is
-    /// intentionally a dumb pipe.
+    /// quality/dimension by inspecting [`VideoFile`] entries; this method
+    /// intentionally passes bytes through without media interpretation.
     pub async fn download_to(&self, url: &str, dest: &Path) -> Result<u64, PexelsError> {
         let resp = self
             .http

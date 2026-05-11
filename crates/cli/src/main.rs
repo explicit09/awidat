@@ -280,11 +280,8 @@ fn cmd_secrets_set(account: &str) -> Result<()> {
     use std::io::{BufRead, IsTerminal, Write};
     let stdin = std::io::stdin();
     let value = if stdin.is_terminal() {
-        // Interactive: prompt without echo. We don't have rpassword as
-        // a dep so we just instruct the user to paste; it will echo,
-        // but that's the cost of zero deps. For pipes (the normal
-        // path) the value isn't echoed because it never passes
-        // through the terminal.
+        // No rpassword dep — the value will echo when typed. Piping in
+        // the key is the unechoed path.
         eprint!("API key: ");
         std::io::stderr().flush().ok();
         let mut buf = String::new();

@@ -447,11 +447,7 @@ const PRE_ROLL_CUES: &[(&str, f64, &str)] = &[
         6.0,
         "pre-roll asks whether recording should start",
     ),
-    (
-        "can't say anything dumb",
-        5.0,
-        "pre-roll banter before the show",
-    ),
+    ("can't say anything", 5.0, "pre-roll banter before the show"),
     ("where are we at", 3.0, "recording-position check"),
     ("one or two cuts", 6.0, "production chatter"),
     ("two extra hats", 4.0, "production/planning aside"),
@@ -603,11 +599,11 @@ mod tests {
         let (tx, _) = broadcast::channel(8);
         ToolContext {
             project_root: root.to_path_buf(),
-            sandbox_mode: crate::tool::SandboxMode::Default,
             events_tx: tx,
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),

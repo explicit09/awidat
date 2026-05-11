@@ -65,7 +65,6 @@ pub fn run(args: NewArgs) -> Result<()> {
         .with_context(|| format!("failed to init project at {}", project_dir.display()))?;
     println!("  ✓ Initialized OTIO timeline, edit-plan, manifest, raw/, renders/, .awidat/");
 
-    // Optional starter AWIDAT.md.
     if !args.no_md {
         let md_path = project_dir.join("AWIDAT.md");
         std::fs::write(&md_path, AWIDAT_MD_TEMPLATE).with_context(|| {
@@ -74,7 +73,6 @@ pub fn run(args: NewArgs) -> Result<()> {
         println!("  ✓ Wrote starter AWIDAT.md (delete or edit to taste)");
     }
 
-    // Optional asset import.
     let imported_asset = match args.import.as_deref() {
         Some(src) if is_url(src) => Some(import_url(src, &project_dir)?),
         Some(src) => Some(import_local(Path::new(src), &project_dir, args.link)?),
@@ -108,7 +106,6 @@ pub fn run(args: NewArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Index synchronously. Honest wall time; the user sees the cost.
     println!();
     println!("Running indexers (this can take 20+ minutes for hour-long video)...");
     println!(

@@ -68,8 +68,11 @@ impl ToolHandler for PollRenderTool {
             Err(JobError::UnknownJob(_)) => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "poll_render: unknown job_id '{}'. Either it was \
-                     never started, or it completed >5 minutes ago and \
-                     was reaped.",
+                     never started, it completed >5 minutes ago and \
+                     was reaped, or the desktop/backend restarted after \
+                     the render was queued. If prior chat history includes \
+                     an output_path, verify that file before assuming the \
+                     render succeeded; otherwise call start_render again.",
                     id
                 )));
             }
@@ -134,10 +137,10 @@ mod tests {
             job_manager: awidat_render::JobManager::new(),
 
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
-            sandbox_mode: crate::tool::SandboxMode::Default,
             }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,
@@ -220,10 +223,10 @@ mod tests {
             user_input_tx: None,
             job_manager: manager,
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),
-            sandbox_mode: crate::tool::SandboxMode::Default,
             }),
             skills: std::sync::Arc::new(crate::skills::SkillRegistry::default()),
             subagent_return: None,

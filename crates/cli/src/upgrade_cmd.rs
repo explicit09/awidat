@@ -45,12 +45,9 @@ pub struct UpgradeArgs {
 /// fails with a clear "no release URL" message.
 const DEFAULT_RELEASE_BASE: &str = "https://github.com/explicit09/awidat/releases/latest/download";
 
-/// Entry point.
 pub fn run(args: UpgradeArgs) -> Result<()> {
-    // Resolve the install layout. We expect the *installed* binary
-    // tree (~/.local/share/awidat/current/) to contain the install
-    // script under share/awidat/install.sh — that's where package.sh
-    // bundles it.
+    // Installed binary tree (~/.local/share/awidat/current/) is expected
+    // to contain share/awidat/install.sh — that's where package.sh puts it.
     let installed_root =
         find_installed_root().context("failed to locate the awidat install tree")?;
     let install_script = installed_root.join("share/awidat/install.sh");
@@ -63,7 +60,7 @@ pub fn run(args: UpgradeArgs) -> Result<()> {
         );
     }
 
-    // Resolve the source. Priority: --from > AWIDAT_RELEASE_BASE env > default.
+    // Source priority: --from > AWIDAT_RELEASE_BASE env > default.
     let release_base = args
         .from
         .clone()
@@ -72,14 +69,8 @@ pub fn run(args: UpgradeArgs) -> Result<()> {
     let release_base = normalize_release_base(&release_base);
 
     if args.check {
-        // --check semantics: in a real release flow, fetch the
-        // remote VERSION file and compare to installed. With our
-        // current file:// + GitHub Releases setup we don't have a
-        // stable VERSION endpoint separate from the tarball — so
-        // we just print what's installed and where, and tell the
-        // user to run upgrade to actually install. Once Phase 3
-        // CI lands a release.json or similar, plumb the comparison
-        // here. Tracked as Chunk 4 followup.
+        // TODO: once a release.json (or similar) ships, fetch and diff
+        // against the installed VERSION instead of the lite path below.
         return run_check_lite(&release_base, &installed_root);
     }
 
@@ -116,11 +107,9 @@ pub fn run(args: UpgradeArgs) -> Result<()> {
 /// install.sh` marker the bundler ships.
 fn find_installed_root() -> Result<PathBuf> {
     let raw_exe = std::env::current_exe().context("std::env::current_exe failed")?;
-    // current_exe() on macOS does NOT auto-resolve symlinks (it
-    // returns the path used to invoke the binary). canonicalize()
-    // walks the chain. Without this, the installed binary at
-    // ~/.local/bin/awidat would walk up to ~/.local/, never finding
-    // the install tree under ~/.local/share/awidat/current/.
+    // current_exe() on macOS does NOT resolve symlinks; canonicalize()
+    // walks the chain so ~/.local/bin/awidat reaches the install tree
+    // under ~/.local/share/awidat/current/ instead of stopping at ~/.local/.
     let exe = raw_exe.canonicalize().unwrap_or_else(|_| raw_exe.clone());
     let mut cur: Option<&Path> = Some(&exe);
     while let Some(dir) = cur {
@@ -144,7 +133,6 @@ fn normalize_release_base(raw: &str) -> String {
     if s.starts_with("http://") || s.starts_with("https://") || s.starts_with("file://") {
         return s.to_string();
     }
-    // Bare path: `~/foo` or `./bar` or `/abs/path` or `relative/path`.
     let expanded = expand_tilde(s);
     let abs = if expanded.is_absolute() {
         expanded

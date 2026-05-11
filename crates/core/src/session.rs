@@ -407,7 +407,6 @@ impl Session {
             Some(prompt),
             meta.project_root.clone(),
         );
-        // Replay history.
         *session.history.lock().await = history;
         // Open a fresh recorder with lineage stamped in.
         match crate::rollout::Recorder::create_resumed(
@@ -492,7 +491,6 @@ impl Session {
     ) -> Result<(), SessionError> {
         let _ = self.events_tx.send(SessionEvent::TurnStart);
 
-        // 1. Append user input to history (and rollout log).
         let user_msg = Message::user_text(user_input);
         if let Some(rec) = &self.recorder {
             rec.record_message(user_msg.clone());
@@ -502,8 +500,8 @@ impl Session {
             h.push(user_msg);
         }
 
-        // 2. Outer loop: keep sampling until the model says end_turn (or
-        //    we're cancelled).
+        // Outer loop: keep sampling until the model says end_turn (or
+        // we're cancelled).
         //
         // Cap raised to 64 after first-real-video runs surfaced the
         // editorial-flow agent burning 8-12 iterations on legitimate
@@ -526,7 +524,7 @@ impl Session {
                 return Err(SessionError::Cancelled);
             }
 
-            // 3. Build the request from current history.
+            // Build the request from current history.
             //
             // Two-tier prompt cache (mirrors aider/chat_chunks.py and
             // swe-agent/CacheControlHistoryProcessor):
@@ -630,7 +628,6 @@ impl Session {
                 }
             }
 
-            // 4. Inner sampling loop.
             let outcome = self.run_sampling(req, &cancel).await?;
 
             match outcome.stop_reason {
@@ -741,7 +738,6 @@ impl Session {
                         StreamEvent::Done { stop_reason: sr, usage: u } => {
                             stop_reason = sr;
                             usage = u;
-                            // Stream's done; loop exits.
                             break;
                         }
                     }
@@ -762,17 +758,14 @@ impl Session {
                 input: call.args.clone().unwrap_or(serde_json::json!({})),
             });
         }
-        if !assistant_blocks.is_empty() {
-            let assistant_msg = Message {
+        let assistant_msg = if assistant_blocks.is_empty() {
+            None
+        } else {
+            Some(Message {
                 role: Role::Assistant,
                 content: assistant_blocks,
-            };
-            if let Some(rec) = &self.recorder {
-                rec.record_message(assistant_msg.clone());
-            }
-            let mut h = self.history.lock().await;
-            h.push(assistant_msg);
-        }
+            })
+        };
 
         // Dispatch tool calls and append their results as a single user
         // message (Anthropic's tool-result protocol expects all tool_results
@@ -787,11 +780,24 @@ impl Session {
                 role: Role::User,
                 content: result_blocks,
             };
+            if let Some(assistant_msg) = assistant_msg {
+                if let Some(rec) = &self.recorder {
+                    rec.record_message(assistant_msg.clone());
+                }
+                let mut h = self.history.lock().await;
+                h.push(assistant_msg);
+            }
             if let Some(rec) = &self.recorder {
                 rec.record_message(tool_result_msg.clone());
             }
             let mut h = self.history.lock().await;
             h.push(tool_result_msg);
+        } else if let Some(assistant_msg) = assistant_msg {
+            if let Some(rec) = &self.recorder {
+                rec.record_message(assistant_msg.clone());
+            }
+            let mut h = self.history.lock().await;
+            h.push(assistant_msg);
         }
 
         let _ = self.events_tx.send(SessionEvent::SamplingComplete {
@@ -1123,7 +1129,6 @@ mod tests {
         ];
         apply_moving_cache_breakpoint(&mut history);
 
-        // Helper: count text blocks with cache_control set.
         fn marked(m: &Message) -> usize {
             m.content
                 .iter()

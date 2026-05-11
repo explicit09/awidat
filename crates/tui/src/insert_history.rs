@@ -66,9 +66,8 @@ where
     let last_cursor_pos = terminal.last_known_cursor_pos;
     let writer = terminal.backend_mut();
 
-    // We don't pre-wrap; let the terminal soft-wrap visually if a
-    // line is wider than the viewport. Each row of `lines` counts as
-    // one row inserted.
+    // No pre-wrapping; the terminal soft-wraps visually if a line
+    // exceeds the viewport. Each row of `lines` counts as one inserted row.
     let inserted_rows = lines.len() as u16;
     if inserted_rows == 0 {
         return Ok(());
@@ -95,14 +94,13 @@ where
         area.top().saturating_sub(1)
     };
 
-    // Clip the scroll region to "everything above the viewport". When
-    // we now print `\r\n` the terminal scrolls only that region; new
-    // text lands at the bottom of the region (immediately above the
-    // viewport).
+    // Clip the scroll region to everything above the viewport so a
+    // subsequent `\r\n` scrolls only that region; new text lands at
+    // the bottom of the region (immediately above the viewport).
     queue!(writer, SetScrollRegion(1..area.top()))?;
-    // MoveTo (not the Terminal's set_cursor_position) on purpose:
-    // insert_history_lines must be cursor-position-neutral. We
-    // explicitly restore at the end of the function.
+    // MoveTo (not Terminal::set_cursor_position) is deliberate:
+    // insert_history_lines is cursor-position-neutral and restores at
+    // the end of the function.
     queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
 
     for line in &lines {
@@ -111,7 +109,6 @@ where
     }
 
     queue!(writer, ResetScrollRegion)?;
-    // Restore cursor position so subsequent draws aren't surprised.
     queue!(writer, MoveTo(last_cursor_pos.x, last_cursor_pos.y))?;
 
     if should_update_area {
@@ -139,8 +136,8 @@ fn write_history_line<W: Write>(writer: &mut W, line: &Line, _wrap_width: usize)
     )?;
     queue!(writer, Clear(ClearType::UntilNewLine))?;
 
-    // Merge each span's style into the line's style so any
-    // line-level color (e.g. on a Diff item) shows on every span.
+    // Merge each span's style into the line's so a line-level color
+    // (e.g. on a Diff item) shows on every span.
     let merged_spans: Vec<Span> = line
         .spans
         .iter()

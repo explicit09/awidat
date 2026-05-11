@@ -56,7 +56,7 @@ indexer ran): clip_search (free-text frame search), shot_summary, \
 broll_candidates, find_speaker_oncam, find_eye_contact.\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index, \
 inspect_clip, view_frame.\
-\n  - **Editing**: apply_edl (Trim, Untrim, Delete, Split, Insert). \
+\n  - **Editing**: apply_edl (Trim, Untrim, Delete, Split, Insert, Insert PiP). \
 For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
 view_timeline, usually the clip name like `clip-0`; never use the \
 asset filename, proxy stem, or raw media basename as clip_uuid. \
@@ -106,9 +106,6 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     })?;
 
     let mut registry = ToolRegistry::new();
-    // Same full editorial registry as `awidat tui`. Chat is the
-    // text-only fallback; both surfaces should expose the same
-    // editorial powers.
     registry.register(Arc::new(ApplyEdlTool));
     registry.register(Arc::new(AnalyzeSyncTool));
     registry.register(Arc::new(BashTool));
@@ -185,19 +182,16 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
             return Ok(());
         }
 
-        // Subscribe to events for this turn.
         let mut events = session.subscribe();
         let cancel = CancellationToken::new();
 
-        // Drive the turn in the background; render events on the
-        // foreground task.
         let session_clone = session.clone();
         let cancel_clone = cancel.clone();
         let user_input = trimmed.to_string();
         let turn_handle =
             tokio::spawn(async move { session_clone.run_turn(user_input, cancel_clone).await });
 
-        // Wire Ctrl-C to cancel; restore on next prompt.
+        // Ctrl-C cancels the in-flight turn but should not exit the REPL.
         let cancel_for_signal = cancel.clone();
         let signal_handle = tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
@@ -205,7 +199,6 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
             }
         });
 
-        // Render events until TurnEnd.
         loop {
             match events.recv().await {
                 Ok(ev) => {
@@ -219,8 +212,6 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
-        // Make sure the turn task finished before next prompt; surface
-        // unrecoverable errors.
         if let Err(e) = turn_handle.await? {
             eprintln!("\nturn error: {e}");
         }
@@ -241,8 +232,6 @@ fn render_event(ev: &SessionEvent) -> bool {
             println!("\n▶ {name}(...)");
         }
         SessionEvent::ToolCallArgs { args, .. } => {
-            // One-line preview of the args; full args are echoed on the
-            // ToolCallStart line in week 5+ TUI. For week 3 keep it terse.
             let preview = args.to_string();
             let preview = if preview.len() > 200 {
                 format!("{}…", &preview[..200])
@@ -290,9 +279,8 @@ fn render_event(ev: &SessionEvent) -> bool {
                     println!("   [{i}] {o}");
                 }
             }
-            // The chat REPL doesn't yet drive the user_input channel —
-            // wired in when we add the runtime input loop. For now this
-            // event is informational; the tool will time out / cancel.
+            // The REPL has no input channel for tool-driven prompts;
+            // the tool eventually times out or the user cancels.
         }
         SessionEvent::TurnEnd => {
             println!();

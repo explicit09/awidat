@@ -15,6 +15,7 @@
 //! `RolloutItem::SessionMeta`; subsequent lines are `RolloutItem::Message`
 //! and `RolloutItem::Compaction` events in append order.
 
+use std::collections::HashSet;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,7 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use crate::anthropic::Message;
+use crate::anthropic::{ContentBlock, Message, Role};
 
 /// One entry in the JSONL log. Each variant is one line.
 ///
@@ -250,7 +251,7 @@ impl Recorder {
                 format!("{}: no SessionMeta line found", path.display()),
             ));
         };
-        Ok((meta, messages))
+        Ok((meta, sanitize_resume_messages(messages)))
     }
 
     /// Read every `EditorialDecision` from every rollout under
@@ -423,6 +424,118 @@ fn generate_session_id(ts: DateTime<Utc>) -> String {
     format!("{mixed:012x}").chars().take(12).collect()
 }
 
+fn sanitize_resume_messages(messages: Vec<Message>) -> Vec<Message> {
+    let mut out = Vec::with_capacity(messages.len());
+    let mut i = 0;
+
+    while i < messages.len() {
+        let message = messages[i].clone();
+        match message.role {
+            Role::Assistant => {
+                let tool_use_ids = tool_use_ids(&message);
+                let followed_by_results = messages
+                    .get(i + 1)
+                    .is_some_and(|next| tool_results_cover(next, &tool_use_ids));
+                if tool_use_ids.is_empty() || followed_by_results {
+                    out.push(message);
+                    i += 1;
+                    continue;
+                }
+
+                let content: Vec<ContentBlock> = message
+                    .content
+                    .into_iter()
+                    .filter(|block| !matches!(block, ContentBlock::ToolUse { .. }))
+                    .collect();
+                warn!(
+                    count = tool_use_ids.len(),
+                    "rollout: stripping orphaned assistant tool_use block(s) during resume"
+                );
+                if !content.is_empty() {
+                    out.push(Message {
+                        role: Role::Assistant,
+                        content,
+                    });
+                }
+            }
+            Role::User if has_tool_result(&message) => {
+                if previous_assistant_matches_tool_results(&out, &message) {
+                    out.push(message);
+                    i += 1;
+                    continue;
+                }
+
+                let content: Vec<ContentBlock> = message
+                    .content
+                    .into_iter()
+                    .filter(|block| !matches!(block, ContentBlock::ToolResult { .. }))
+                    .collect();
+                warn!("rollout: stripping orphaned user tool_result block(s) during resume");
+                if !content.is_empty() {
+                    out.push(Message {
+                        role: Role::User,
+                        content,
+                    });
+                }
+            }
+            _ => out.push(message),
+        }
+        i += 1;
+    }
+
+    out
+}
+
+fn previous_assistant_matches_tool_results(out: &[Message], message: &Message) -> bool {
+    let Some(previous) = out.last() else {
+        return false;
+    };
+    let tool_use_ids = tool_use_ids(previous);
+    !tool_use_ids.is_empty() && tool_results_cover(message, &tool_use_ids)
+}
+
+fn tool_use_ids(message: &Message) -> HashSet<String> {
+    if !matches!(message.role, Role::Assistant) {
+        return HashSet::new();
+    }
+    message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn tool_result_ids(message: &Message) -> HashSet<&str> {
+    if !matches!(message.role, Role::User) {
+        return HashSet::new();
+    }
+    message
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn has_tool_result(message: &Message) -> bool {
+    message
+        .content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::ToolResult { .. }))
+}
+
+fn tool_results_cover(message: &Message, tool_use_ids: &HashSet<String>) -> bool {
+    let result_ids = tool_result_ids(message);
+    tool_use_ids
+        .iter()
+        .all(|tool_use_id| result_ids.contains(tool_use_id.as_str()))
+}
+
 fn walk_jsonl(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -493,6 +606,78 @@ mod tests {
         let (meta, messages) = Recorder::resume(&path).unwrap();
         assert_eq!(meta.model, "m");
         assert_eq!(messages.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn resume_preserves_valid_tool_use_result_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = {
+            let rec = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
+            rec.record_message(Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "toolu_1".into(),
+                    name: "bash".into(),
+                    input: serde_json::json!({ "command": "true" }),
+                }],
+            });
+            rec.record_message(Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "toolu_1".into(),
+                    content: crate::anthropic::tool_result::text("ok"),
+                    is_error: None,
+                }],
+            });
+            rec.flush().await.unwrap();
+            rec.path().to_path_buf()
+        };
+
+        let (_meta, messages) = Recorder::resume(&path).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(
+            messages[0].content.first(),
+            Some(ContentBlock::ToolUse { id, .. }) if id == "toolu_1"
+        ));
+        assert!(matches!(
+            messages[1].content.first(),
+            Some(ContentBlock::ToolResult { tool_use_id, .. }) if tool_use_id == "toolu_1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn resume_strips_orphaned_tool_use_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = {
+            let rec = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
+            rec.record_message(Message {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::text("I'll wait, then poll the render."),
+                    ContentBlock::ToolUse {
+                        id: "toolu_orphan".into(),
+                        name: "bash".into(),
+                        input: serde_json::json!({ "command": "sleep 20" }),
+                    },
+                ],
+            });
+            rec.record_message(Message::user_text("continue"));
+            rec.flush().await.unwrap();
+            rec.path().to_path_buf()
+        };
+
+        let (_meta, messages) = Recorder::resume(&path).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(
+            messages[0]
+                .content
+                .iter()
+                .all(|block| { !matches!(block, ContentBlock::ToolUse { .. }) })
+        );
+        assert!(matches!(
+            messages[0].content.first(),
+            Some(ContentBlock::Text { text, .. }) if text.contains("poll the render")
+        ));
     }
 
     #[tokio::test]

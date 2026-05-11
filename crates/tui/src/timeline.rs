@@ -164,8 +164,8 @@ impl Widget for &Timeline {
             return;
         }
 
-        // Header. Stale-on-error banner replaces the normal stat line
-        // so the user knows they're looking at maybe-old data.
+        // On read errors the header surfaces a stale banner instead of
+        // the normal stat line.
         let header = if let Some(err) = &self.error {
             Line::from(Span::styled(
                 format!("timeline (stale — {err})"),

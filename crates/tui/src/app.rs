@@ -136,8 +136,6 @@ impl App {
     ) -> Result<()> {
         let (app_tx, mut app_rx) = mpsc::unbounded_channel::<AppEvent>();
 
-        // Spawn the input/event pumps. Each translates its source into
-        // AppEvent and feeds the unified queue.
         let _terminal_pump = spawn_terminal_pump(app_tx.clone());
         let _session_pump = spawn_session_pump(self.session.subscribe(), app_tx.clone());
         let _approval_pump = spawn_approval_pump(cfg.approval_rx, app_tx.clone());
@@ -146,7 +144,6 @@ impl App {
         }
         let _tick_pump = spawn_tick_pump(app_tx.clone());
 
-        // Initial paint.
         self.paint(terminal)?;
 
         while !self.quit
@@ -169,31 +166,22 @@ impl App {
             AppEvent::Resize { .. } => true,
             AppEvent::Key(key) => self.handle_key(key),
             AppEvent::Paste(s) => {
-                // Bracketed paste — insert at cursor without
-                // submitting. Newlines in `s` are preserved as literal
-                // newlines so the user's multi-line paste stays intact
-                // and they submit explicitly with Enter.
+                // Preserve newlines so multi-line pastes stay one input;
+                // submission still requires an explicit Enter.
                 self.composer.insert_str(&s);
                 true
             }
             AppEvent::Mouse(_) => false,
             AppEvent::Session(ev) => {
-                // Turn lifecycle signals — clear in-flight state when
-                // the session reports the turn is over, so the next
-                // composer submission can start a new one.
                 if matches!(&ev, SessionEvent::TurnEnd | SessionEvent::Error(_)) {
                     self.turn_task = None;
                     self.turn_cancel = None;
                 }
-                // Snapshot the timeline at the start of an apply_edl call
-                // so we can produce a diff crumb after it commits.
                 if let SessionEvent::ToolCallStart { id, name } = &ev
                     && name == "apply_edl"
                 {
                     self.pending_apply_edl_snapshot = Some((id.clone(), self.timeline.snapshot()));
                 }
-                // On a successful apply_edl ToolResult, refresh the
-                // timeline pane and emit a chat-pane diff crumb.
                 if let SessionEvent::ToolResult {
                     id,
                     name,
@@ -210,8 +198,6 @@ impl App {
                         self.chat.push_diff(diff);
                     }
                 }
-                // On a failed apply_edl ToolResult, drop the snapshot so
-                // the next call doesn't reuse stale state.
                 if let SessionEvent::ToolResult {
                     id,
                     name,
@@ -248,7 +234,7 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> bool {
-        // Global: Ctrl-C cancels in-flight turn or quits when idle.
+        // Ctrl-C cancels an in-flight turn; on an idle prompt it quits.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if let Some(cancel) = self.turn_cancel.take() {
                 cancel.cancel();
@@ -269,7 +255,7 @@ impl App {
             return false;
         }
 
-        // Modal capture: when an approval modal is open, all keys go to it.
+        // While the approval modal is open, all keys route to it.
         if let Some(modal) = self.modal.as_mut()
             && let Some((decision, crumb)) = modal.handle_key(key)
         {
@@ -283,11 +269,10 @@ impl App {
             return true;
         }
 
-        // Composer routing for Enter / arrows.
         if key.code == KeyCode::Enter {
             if let Some(text) = self.composer.submit() {
-                // If the agent is waiting on user-input, this submission
-                // answers that oneshot rather than starting a new turn.
+                // When the agent is waiting on user-input, the next
+                // submission answers that oneshot instead of starting a turn.
                 if let Some(req) = self.pending_user_input.take() {
                     self.chat.push_user(text.clone());
                     let _ = req.reply.send(text);
@@ -303,10 +288,9 @@ impl App {
     }
 
     fn start_turn(&mut self, prompt: String) {
-        // If a turn is already running, silently drop the new submission.
-        // Spamming an error crumb on every keystroke during a slow turn
-        // is worse than the implicit "your input was ignored" feel —
-        // the composer text was already cleared by submit().
+        // Drop submissions while a turn is in flight — composer text was
+        // already cleared by submit(), and an error crumb per keystroke
+        // is worse than the implicit ignored feel.
         if self.turn_task.is_some() {
             return;
         }
@@ -314,10 +298,8 @@ impl App {
         let cancel = CancellationToken::new();
         self.turn_cancel = Some(cancel.clone());
         let session = self.session.clone();
-        // When the spawned turn finishes, the session emits TurnEnd
-        // through the broadcast — that's the App's signal to clear
-        // turn_task so the next prompt can start a new turn. We do
-        // that in handle_event below.
+        // turn_task is cleared in handle_event when SessionEvent::TurnEnd
+        // arrives over the broadcast.
         self.turn_task = Some(tokio::spawn(async move {
             if let Err(e) = session.run_turn(prompt, cancel).await {
                 debug!("turn ended with error: {e}");
@@ -927,15 +909,10 @@ fn spawn_session_pump(
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    // Surface lag as a visible Error event rather
-                    // than silently `continue`. Silent drops were
-                    // the prime suspect for the "TUI silently went
-                    // unresponsive" report on the 44-min real-video
-                    // session: if the paint loop ever did fall behind
-                    // by enough to drop deltas, the user would see
-                    // a partial transcript and have no signal that
-                    // anything went wrong. Now they get a tracing
-                    // line + an inline error in the chat pane.
+                    // Surface lag rather than silently dropping deltas; a
+                    // silent partial transcript was the prime suspect for
+                    // the "TUI went unresponsive" report on the 44-min
+                    // real-video session.
                     tracing::warn!(dropped = n, "TUI session pump lagged; some events lost");
                     let _ = tx.send(AppEvent::Session(SessionEvent::Error(format!(
                         "TUI fell behind by {n} event(s); some streaming output may be missing. \

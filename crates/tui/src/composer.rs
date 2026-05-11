@@ -70,9 +70,6 @@ impl Composer {
         let inner_width = inner_width.max(1) as usize;
         let byte_idx = self.byte_idx_for_char(self.cursor);
         let before = &self.text[..byte_idx];
-        // Walk the text up to the cursor, tracking wrap. Newlines
-        // force a hard wrap; otherwise we wrap when the running width
-        // would exceed inner_width.
         let mut col: usize = 0;
         let mut row: usize = 0;
         for ch in before.chars() {
@@ -253,10 +250,8 @@ impl Widget for &Composer {
         if area.height == 0 || area.width == 0 {
             return;
         }
-        // Paint the composer background across the full allotted area
-        // so it reads as one box even when text wraps to multiple
-        // rows. The full area is the "input area" now (no centering
-        // tricks); the cursor logic in `app.rs` honors wrap rows.
+        // Paint the composer background across the whole allotted area
+        // so it reads as one box even when text wraps.
         Block::default()
             .style(Style::default().bg(Color::Rgb(45, 45, 45)))
             .render(area, buf);
@@ -292,10 +287,7 @@ impl Widget for &Composer {
                 ),
             ])
         };
-        // Wrap long input. `trim: false` preserves leading whitespace
-        // the user typed; ratatui wraps on whitespace-or-overflow when
-        // wrap is set, which gives natural soft-wrap for English-ish
-        // text and falls back to hard-wrap for long unbroken tokens.
+        // `trim: false` preserves user-typed leading whitespace.
         Paragraph::new(line)
             .wrap(ratatui::widgets::Wrap { trim: false })
             .scroll((self.scroll_y(area.width.saturating_sub(2), area.height), 0))

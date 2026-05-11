@@ -134,6 +134,5 @@ fn discover_registry() -> Result<(SkillRegistry, Vec<awidat_core::skills::SkillE
     Ok((reg, errs))
 }
 
-// Silence the unused-import lint on the path import in some builds.
 #[allow(dead_code)]
 fn _unused(_p: &Path) {}
