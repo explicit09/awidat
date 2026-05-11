@@ -243,7 +243,11 @@ in order of preference: (a) bundle a 0.3s *** Insert Transition \
 (b) for visually-driven moments (mid-motion or speaker-switch \
 mid-utterance), call `find_broll_opportunities` for the affected \
 range and surface a `broll_suggestion` Note offering a b-roll \
-cover instead — this is the right move when the cut would jar \
+cover instead. The b-roll Note must include a concrete `broll_anchor` \
+object using either `{kind: \"clip_uuid\", uuid: ...}` from \
+view_timeline or `{kind: \"transcript_snippet\", text: ...}` from \
+the matched transcript context; never leave placement for the UI \
+or a later turn to infer from prose. This is the right move when the cut would jar \
 visually but the audio reads fine; (c) surface a continuity_warning \
 Note quoting the rule reasons and let the user decide. Never \
 silently emit a dirty cut.\
