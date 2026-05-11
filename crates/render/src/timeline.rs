@@ -972,10 +972,10 @@ pub struct FilterPlan {
     pub audio_out_label: String,
 }
 
-fn transition_edge_map<'a>(
+fn transition_edge_map(
     segment_count: usize,
-    transitions: &'a [TransitionPlan],
-) -> Vec<Option<&'a TransitionPlan>> {
+    transitions: &[TransitionPlan],
+) -> Vec<Option<&TransitionPlan>> {
     let mut transition_after = vec![None; segment_count.saturating_sub(1)];
     for t in transitions {
         if t.from_segment_index >= segment_count || t.to_segment_index != t.from_segment_index + 1 {
@@ -1759,9 +1759,9 @@ fn format_broadcast_overlay_filters(overlay: &BroadcastOverlayPlan) -> Vec<Strin
     parts
 }
 
-fn broadcast_ticker_entries<'a>(
-    c: &'a BroadcastOverlayConfig,
-) -> &'a [awidat_proto::awidat_meta::BroadcastTimedEntry] {
+fn broadcast_ticker_entries(
+    c: &BroadcastOverlayConfig,
+) -> &[awidat_proto::awidat_meta::BroadcastTimedEntry] {
     if c.topics.is_empty() {
         &c.chapters
     } else {
@@ -2885,6 +2885,7 @@ pub fn build_timeline_argv_with_transitions(
 /// titles slice. Each [`TitlePlan`] becomes a `drawtext=` filter
 /// chained off the master video output of the segment + transition
 /// graph; alpha / x / y expressions handle title animations.
+#[allow(clippy::too_many_arguments)]
 pub fn build_timeline_argv_full(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
@@ -2983,6 +2984,7 @@ pub fn build_timeline_argv_full(
 /// Build an ffmpeg argv for timelines with first-class audio tracks.
 /// Video streams are rendered video-only and final audio is mixed from
 /// explicit audio-track plans.
+#[allow(clippy::too_many_arguments)]
 pub fn build_timeline_argv_with_audio_tracks(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
