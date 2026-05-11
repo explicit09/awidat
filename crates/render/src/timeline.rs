@@ -59,6 +59,23 @@ pub enum RenderTimelineError {
         /// Clip name from the OTIO.
         clip_name: String,
     },
+    /// A centered transition needs source media outside the visible
+    /// edit range, but that handle is not available.
+    #[error(
+        "transition {kind:?} around clip '{clip_name}' needs {needed_s:.3}s {side} handle, but only {available_s:.3}s is available"
+    )]
+    TransitionHandleUnavailable {
+        /// Transition kind or Awidat id from OTIO.
+        kind: String,
+        /// Clip whose source range lacks the requested handle.
+        clip_name: String,
+        /// "incoming" for pre-roll, "outgoing" for post-roll.
+        side: &'static str,
+        /// Timeline seconds requested by the transition.
+        needed_s: f64,
+        /// Timeline seconds available in the source media.
+        available_s: f64,
+    },
     /// A clip referenced a LUT path that isn't on disk.
     #[error("clip '{clip_name}' references missing LUT {missing}")]
     MissingLut {
@@ -108,12 +125,24 @@ pub struct LoudnessTargetPlan {
 /// before kicking off ffmpeg.
 #[derive(Debug, Clone, Default)]
 pub struct TimelineSegment {
+    /// Clip display name from OTIO, used for diagnostics.
+    pub clip_name: String,
     /// Absolute path to the source media.
     pub asset_path: PathBuf,
     /// Seconds into the source media where the cut starts.
     pub start_s: f64,
     /// Seconds of duration to take from the source.
     pub duration_s: f64,
+    /// Extra timeline seconds included before the visible edit-in so
+    /// a centered incoming transition has media to fade up from.
+    pub pre_handle_s: f64,
+    /// Extra timeline seconds included after the visible edit-out so
+    /// a centered outgoing transition has media to fade down through.
+    pub post_handle_s: f64,
+    /// Optional source-media lower bound from OTIO available_range.
+    pub source_available_start_s: Option<f64>,
+    /// Optional source-media upper bound from OTIO available_range.
+    pub source_available_end_s: Option<f64>,
     /// Linear gain multiplier for this segment's audio. `None` means
     /// no `awidat.volume` effect is on the underlying clip — the
     /// FilterPlanner skips emitting a `volume=` filter and the audio
@@ -501,7 +530,7 @@ pub fn collect_timeline_full_plan(
         // pointing at the *next* clip we'll see (`pending_transition`).
         // Other children (Gap, Stack) reset the pending state — they
         // can't sit between clips that share a transition in v1.
-        let mut pending_transition: Option<(String, f64)> = None;
+        let mut pending_transition: Option<(String, f64, f64)> = None;
         for tc in &track.children {
             match tc {
                 TrackChild::Clip(clip) => {
@@ -511,14 +540,24 @@ pub fn collect_timeline_full_plan(
                     };
                     let new_index = segs.len();
                     segs.push(segment);
-                    if let Some((kind, duration_s)) = pending_transition.take()
+                    if let Some((kind, in_offset_s, out_offset_s)) = pending_transition.take()
                         && new_index > 0
                     {
+                        extend_transition_handles(
+                            &mut segs,
+                            new_index - 1,
+                            new_index,
+                            &kind,
+                            in_offset_s,
+                            out_offset_s,
+                        )?;
                         transitions.push(TransitionPlan {
                             from_segment_index: new_index - 1,
                             to_segment_index: new_index,
                             kind,
-                            duration_s,
+                            in_offset_s,
+                            out_offset_s,
+                            duration_s: in_offset_s + out_offset_s,
                         });
                     }
                 }
@@ -536,8 +575,11 @@ pub fn collect_timeline_full_plan(
                             message: "semantic-only transition cannot be exported".into(),
                         });
                     }
-                    let total = t.in_offset.to_seconds() + t.out_offset.to_seconds();
-                    pending_transition = Some((t.transition_type.clone(), total));
+                    pending_transition = Some((
+                        t.transition_type.clone(),
+                        t.in_offset.to_seconds(),
+                        t.out_offset.to_seconds(),
+                    ));
                 }
                 TrackChild::Gap(_) | TrackChild::Stack(_) => {
                     pending_transition = None;
@@ -601,14 +643,95 @@ fn collect_timeline_segment(
     }
     Ok(Some(TimelineSegment {
         asset_path,
+        clip_name: clip.name.clone(),
         start_s: range.start_time.to_seconds(),
         duration_s: range.duration.to_seconds(),
+        pre_handle_s: 0.0,
+        post_handle_s: 0.0,
+        source_available_start_s: ext
+            .available_range
+            .as_ref()
+            .map(|r| r.start_time.to_seconds()),
+        source_available_end_s: ext
+            .available_range
+            .as_ref()
+            .map(|r| r.start_time.to_seconds() + r.duration.to_seconds()),
         volume: read_effect_number(clip, "awidat.volume", "value"),
         speed: read_effect_number(clip, "awidat.speed", "factor"),
         color_correction: read_color_correction(clip),
         lut_path,
         audio_fx: read_clip_audio_fx(clip),
     }))
+}
+
+fn extend_transition_handles(
+    segs: &mut [TimelineSegment],
+    outgoing_index: usize,
+    incoming_index: usize,
+    kind: &str,
+    in_offset_s: f64,
+    out_offset_s: f64,
+) -> Result<(), RenderTimelineError> {
+    if in_offset_s > 0.0 {
+        add_pre_handle(&mut segs[incoming_index], kind, in_offset_s)?;
+    }
+    if out_offset_s > 0.0 {
+        add_post_handle(&mut segs[outgoing_index], kind, out_offset_s)?;
+    }
+    Ok(())
+}
+
+fn add_pre_handle(
+    seg: &mut TimelineSegment,
+    kind: &str,
+    handle_timeline_s: f64,
+) -> Result<(), RenderTimelineError> {
+    let speed = segment_speed(seg);
+    let handle_source_s = handle_timeline_s * speed;
+    let available_source_s = seg
+        .source_available_start_s
+        .map(|start| (seg.start_s - start).max(0.0))
+        .unwrap_or(seg.start_s.max(0.0));
+    let available_timeline_s = available_source_s / speed;
+    if available_timeline_s + 1e-6 < handle_timeline_s {
+        return Err(RenderTimelineError::TransitionHandleUnavailable {
+            kind: kind.to_string(),
+            clip_name: seg.clip_name.clone(),
+            side: "incoming",
+            needed_s: handle_timeline_s,
+            available_s: available_timeline_s,
+        });
+    }
+    seg.start_s -= handle_source_s;
+    seg.duration_s += handle_source_s;
+    seg.pre_handle_s += handle_timeline_s;
+    Ok(())
+}
+
+fn add_post_handle(
+    seg: &mut TimelineSegment,
+    kind: &str,
+    handle_timeline_s: f64,
+) -> Result<(), RenderTimelineError> {
+    let speed = segment_speed(seg);
+    let handle_source_s = handle_timeline_s * speed;
+    if let Some(end) = seg.source_available_end_s {
+        let visible_end = seg.start_s + seg.duration_s;
+        let available_source_s = (end - visible_end).max(0.0);
+        let available_timeline_s = available_source_s / speed;
+        if available_timeline_s + 1e-6 < handle_timeline_s {
+            return Err(RenderTimelineError::TransitionHandleUnavailable {
+                kind: kind.to_string(),
+                clip_name: seg.clip_name.clone(),
+                side: "outgoing",
+                needed_s: handle_timeline_s,
+                available_s: available_timeline_s,
+            });
+        }
+    }
+    seg.duration_s += handle_source_s;
+    seg.post_handle_s += handle_timeline_s;
+    Ok(())
 }
 
 fn read_video_overlay_mode(clip: &awidat_proto::otio::Clip) -> VideoOverlayMode {
@@ -941,6 +1064,10 @@ pub struct TransitionPlan {
     /// Transition kind (`"SMPTE_Dissolve"`, `"awidat.fade_in"`, etc).
     /// Mapped to ffmpeg's xfade transition names by the planner.
     pub kind: String,
+    /// Timeline seconds before the cut occupied by the transition.
+    pub in_offset_s: f64,
+    /// Timeline seconds after the cut occupied by the transition.
+    pub out_offset_s: f64,
     /// Total transition duration on the timeline, in seconds.
     pub duration_s: f64,
 }
@@ -2801,9 +2928,17 @@ fn pick_sponsor_fontfile_attr() -> String {
 /// raw `duration_s` otherwise. A 4s clip at 2× plays in 2s; at 0.5×
 /// it plays in 8s.
 fn effective_duration(seg: &TimelineSegment) -> f64 {
+    seg.duration_s / segment_speed(seg)
+}
+
+fn visible_effective_duration(seg: &TimelineSegment) -> f64 {
+    (effective_duration(seg) - seg.pre_handle_s - seg.post_handle_s).max(0.0)
+}
+
+fn segment_speed(seg: &TimelineSegment) -> f64 {
     match seg.speed {
-        Some(f) if f > 0.0 => seg.duration_s / f,
-        _ => seg.duration_s,
+        Some(f) if f > 0.0 => f,
+        _ => 1.0,
     }
 }
 
@@ -3413,21 +3548,18 @@ pub fn build_timeline_render_spec(
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
     }
-    // Total duration is the sum of each segment's *effective*
-    // duration (post-speed) minus the cumulative transition
-    // overlap. A 4s clip at 2× contributes 2s; a 0.5s transition
-    // overlaps two effective durations by 0.5s. Titles are
-    // overlays — they don't add to the master timeline length.
-    let raw_total: f64 = if segs.is_empty() {
+    // Total duration is the sum of each segment's visible effective
+    // duration. Centered transitions extend source handles before
+    // and after clips for xfade inputs, but they do not shorten the
+    // master timeline the way the old phase-one overlap model did.
+    let total_duration_s: f64 = if segs.is_empty() {
         audio_tracks
             .iter()
             .map(audio_track_duration)
             .fold(0.0_f64, f64::max)
     } else {
-        segs.iter().map(effective_duration).sum()
+        segs.iter().map(visible_effective_duration).sum()
     };
-    let trans_total: f64 = transitions.iter().map(|t| t.duration_s).sum();
-    let total_duration_s = (raw_total - trans_total).max(0.0);
     let renders_dir = project_root.join("renders");
     fs::create_dir_all(&renders_dir)
         .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
@@ -3623,6 +3755,17 @@ mod tests {
         }
     }
 
+    fn trans(from: usize, to: usize, duration_s: f64) -> TransitionPlan {
+        TransitionPlan {
+            from_segment_index: from,
+            to_segment_index: to,
+            kind: "SMPTE_Dissolve".into(),
+            in_offset_s: duration_s / 2.0,
+            out_offset_s: duration_s / 2.0,
+            duration_s,
+        }
+    }
+
     #[test]
     fn explicit_audio_tracks_use_video_only_concat_and_amix() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
@@ -3716,12 +3859,7 @@ mod tests {
     #[test]
     fn filter_planner_with_one_transition_emits_xfade_pair() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 5.0), seg("/tmp/b.mp4", 0.0, 4.0)];
-        let trans = vec![TransitionPlan {
-            from_segment_index: 0,
-            to_segment_index: 1,
-            kind: "SMPTE_Dissolve".into(),
-            duration_s: 1.0,
-        }];
+        let trans = vec![trans(0, 1, 1.0)];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         // xfade with kind=fade (mapped from SMPTE_Dissolve), offset =
         // from.duration - transition.duration = 4.0.
@@ -3756,12 +3894,7 @@ mod tests {
             seg("/tmp/b.mp4", 0.0, 4.0),
             seg("/tmp/c.mp4", 0.0, 2.0),
         ];
-        let trans = vec![TransitionPlan {
-            from_segment_index: 0,
-            to_segment_index: 1,
-            kind: "SMPTE_Dissolve".into(),
-            duration_s: 0.5,
-        }];
+        let trans = vec![trans(0, 1, 0.5)];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         assert!(plan.filter_complex.contains("xfade="));
         // Concat takes 2 inputs: chunk(A,B) + raw C.
@@ -3783,20 +3916,7 @@ mod tests {
             seg("/tmp/b.mp4", 0.0, 4.0),
             seg("/tmp/c.mp4", 0.0, 2.0),
         ];
-        let trans = vec![
-            TransitionPlan {
-                from_segment_index: 0,
-                to_segment_index: 1,
-                kind: "SMPTE_Dissolve".into(),
-                duration_s: 0.5,
-            },
-            TransitionPlan {
-                from_segment_index: 1,
-                to_segment_index: 2,
-                kind: "SMPTE_Dissolve".into(),
-                duration_s: 0.5,
-            },
-        ];
+        let trans = vec![trans(0, 1, 0.5), trans(1, 2, 0.5)];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         let xfade_count = plan.filter_complex.matches("xfade=").count();
         assert_eq!(xfade_count, 2, "filter graph: {}", plan.filter_complex);
@@ -3840,20 +3960,7 @@ mod tests {
             seg("/tmp/c.mp4", 0.0, 2.0),
             seg("/tmp/d.mp4", 0.0, 5.0),
         ];
-        let trans = vec![
-            TransitionPlan {
-                from_segment_index: 0,
-                to_segment_index: 1,
-                kind: "SMPTE_Dissolve".into(),
-                duration_s: 0.5,
-            },
-            TransitionPlan {
-                from_segment_index: 2,
-                to_segment_index: 3,
-                kind: "SMPTE_Dissolve".into(),
-                duration_s: 0.25,
-            },
-        ];
+        let trans = vec![trans(0, 1, 0.5), trans(2, 3, 0.25)];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         let xfade_count = plan.filter_complex.matches("xfade=").count();
         assert_eq!(xfade_count, 2, "filter graph: {}", plan.filter_complex);
@@ -3910,12 +4017,7 @@ mod tests {
         let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
         let mut s1 = seg("/tmp/b.mp4", 0.0, 4.0);
         s1.volume = Some(0.3);
-        let trans = vec![TransitionPlan {
-            from_segment_index: 0,
-            to_segment_index: 1,
-            kind: "SMPTE_Dissolve".into(),
-            duration_s: 1.0,
-        }];
+        let trans = vec![trans(0, 1, 1.0)];
         let plan = FilterPlanner::new(&[s0, s1], &trans).plan();
         assert!(
             plan.filter_complex.contains("[1:a:0]volume=0.3[av1]"),
@@ -4016,12 +4118,7 @@ mod tests {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
         s0.speed = Some(2.0);
         let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
-        let trans = vec![TransitionPlan {
-            from_segment_index: 0,
-            to_segment_index: 1,
-            kind: "SMPTE_Dissolve".into(),
-            duration_s: 0.5,
-        }];
+        let trans = vec![trans(0, 1, 0.5)];
         let plan = FilterPlanner::new(&[s0, s1], &trans).plan();
         assert!(
             plan.filter_complex.contains("offset=1.5"),

@@ -159,6 +159,14 @@ track_start_s: number,
  */
 duration_s: number, 
 /**
+ * Seconds before the cut occupied by the transition.
+ */
+in_offset_s: number,
+/**
+ * Seconds after the cut occupied by the transition.
+ */
+out_offset_s: number,
+/**
  * Effect name from the OTIO transition (e.g.
  * `"SMPTE_Dissolve"`).
  */

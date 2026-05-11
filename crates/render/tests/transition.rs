@@ -26,16 +26,16 @@ fn write_two_clip_project_with_transition_kind(dir: &Path, kind: &str) {
     fs::write(dir.join(asset_b), b"stub").unwrap();
 
     let mut clip_a = Clip::empty("clip-a".to_string());
-    clip_a.media_reference = MediaReference::External(ExternalReference::new(asset_a));
+    clip_a.media_reference = MediaReference::External(external_ref_with_available(asset_a, 4.0));
     clip_a.source_range = Some(TimeRange::new(
-        RationalTime::new(0.0, 24.0),
+        RationalTime::new(1.0 * 24.0, 24.0),
         RationalTime::new(2.0 * 24.0, 24.0),
     ));
 
     let mut clip_b = Clip::empty("clip-b".to_string());
-    clip_b.media_reference = MediaReference::External(ExternalReference::new(asset_b));
+    clip_b.media_reference = MediaReference::External(external_ref_with_available(asset_b, 4.0));
     clip_b.source_range = Some(TimeRange::new(
-        RationalTime::new(0.0, 24.0),
+        RationalTime::new(1.0 * 24.0, 24.0),
         RationalTime::new(2.0 * 24.0, 24.0),
     ));
 
@@ -58,6 +58,15 @@ fn write_two_clip_project_with_transition_kind(dir: &Path, kind: &str) {
     .unwrap();
 }
 
+fn external_ref_with_available(asset: &str, duration_s: f64) -> ExternalReference {
+    let mut ext = ExternalReference::new(asset);
+    ext.available_range = Some(TimeRange::new(
+        RationalTime::new(0.0, 24.0),
+        RationalTime::new(duration_s * 24.0, 24.0),
+    ));
+    ext
+}
+
 fn write_three_clip_project_with_chained_transitions(dir: &Path) {
     let asset_a = "raw/a.mp4";
     let asset_b = "raw/b.mp4";
@@ -69,9 +78,9 @@ fn write_three_clip_project_with_chained_transitions(dir: &Path) {
 
     fn clip(name: &str, asset: &str) -> Clip {
         let mut clip = Clip::empty(name.to_string());
-        clip.media_reference = MediaReference::External(ExternalReference::new(asset));
+        clip.media_reference = MediaReference::External(external_ref_with_available(asset, 4.0));
         clip.source_range = Some(TimeRange::new(
-            RationalTime::new(0.0, 24.0),
+            RationalTime::new(1.0 * 24.0, 24.0),
             RationalTime::new(2.0 * 24.0, 24.0),
         ));
         clip
@@ -128,11 +137,40 @@ fn project_with_transition_emits_xfade_in_argv() {
         cmd.contains("acrossfade=d=1"),
         "expected acrossfade in argv, got: {cmd}",
     );
-    // Total duration accounts for the 1s overlap: 2 + 2 - 1 = 3.
+    assert!(
+        cmd.contains("-ss 1 -t 2.5") && cmd.contains("-ss 0.5 -t 2.5"),
+        "expected centered transition handles in argv, got: {cmd}",
+    );
+    // Centered transitions use source handles and preserve timeline duration.
     let dur = spec.total_duration_s.unwrap();
     assert!(
-        (dur - 3.0).abs() < 1e-6,
-        "expected total duration 3.0s after transition overlap, got {dur}",
+        (dur - 4.0).abs() < 1e-6,
+        "expected total duration 4.0s with centered transition handles, got {dur}",
+    );
+}
+
+#[test]
+fn project_with_transition_fails_when_incoming_handle_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition(dir.path());
+    let otio_path = dir.path().join(files::OTIO);
+    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+        panic!("expected track");
+    };
+    let TrackChild::Clip(clip_b) = &mut track.children[2] else {
+        panic!("expected clip-b");
+    };
+    clip_b.source_range = Some(TimeRange::new(
+        RationalTime::new(0.0, 24.0),
+        RationalTime::new(2.0 * 24.0, 24.0),
+    ));
+    fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+    let err = build_timeline_render_spec(dir.path()).unwrap_err();
+    assert!(
+        err.to_string().contains("incoming handle"),
+        "expected clear missing-handle error, got: {err}",
     );
 }
 
@@ -149,12 +187,11 @@ fn project_with_chained_transitions_emits_all_xfades_in_argv() {
         acrossfade_count, 2,
         "expected two chained acrossfades, got: {cmd}"
     );
-    // Total duration accounts for both 0.5s overlaps:
-    // 2 + 2 + 2 - 0.5 - 0.5 = 5.
+    // Centered transitions use source handles and preserve timeline duration.
     let dur = spec.total_duration_s.unwrap();
     assert!(
-        (dur - 5.0).abs() < 1e-6,
-        "expected total duration 5.0s after chained overlaps, got {dur}",
+        (dur - 6.0).abs() < 1e-6,
+        "expected total duration 6.0s with centered transition handles, got {dur}",
     );
 }
 

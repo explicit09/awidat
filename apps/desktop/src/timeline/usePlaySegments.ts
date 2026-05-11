@@ -186,7 +186,12 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
 
   const segments: PlaySegment[] = [];
   const transitions: PreviewTransition[] = [];
-  let pendingTransition: { kind: string; duration: number } | null = null;
+  let pendingTransition: {
+    kind: string;
+    duration: number;
+    inOffset: number;
+    outOffset: number;
+  } | null = null;
 
   for (const item of videoTrack.items) {
     if (item.kind === "gap") {
@@ -197,6 +202,8 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
       pendingTransition = {
         kind: item.effect_name,
         duration: Math.max(0, item.duration_s),
+        inOffset: Math.max(0, item.in_offset_s),
+        outOffset: Math.max(0, item.out_offset_s),
       };
       continue;
     }
@@ -227,8 +234,11 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
         Math.max(0, segment.timelineEnd - segment.timelineStart),
       );
       if (duration > 0) {
-        const inOffset = duration / 2;
-        const outOffset = duration - inOffset;
+        const inOffset = Math.min(pendingTransition.inOffset, duration);
+        const outOffset = Math.min(
+          pendingTransition.outOffset,
+          Math.max(0, duration - inOffset),
+        );
         const cutTime = segment.timelineStart;
         transitions.push({
           kind: pendingTransition.kind,

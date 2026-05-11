@@ -834,6 +834,10 @@ pub enum TimelineItem {
         track_start_s: f64,
         /// Cumulative effect duration (in_offset + out_offset).
         duration_s: f64,
+        /// Seconds before the cut occupied by the transition.
+        in_offset_s: f64,
+        /// Seconds after the cut occupied by the transition.
+        out_offset_s: f64,
         /// Effect name from the OTIO transition (e.g.
         /// `"SMPTE_Dissolve"`).
         effect_name: String,

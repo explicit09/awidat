@@ -286,14 +286,18 @@ pub fn flatten_timeline_public(
                 }
                 TrackChild::Transition(t) => {
                     let duration_s = t.in_offset.to_seconds() + t.out_offset.to_seconds();
+                    let in_offset_s = t.in_offset.to_seconds();
+                    let out_offset_s = t.out_offset.to_seconds();
                     items.push(TimelineItem::Transition {
                         index: i,
                         // Transition straddles the cut between
                         // surrounding clips. It does NOT advance the
                         // cursor because its time overlaps the
                         // neighboring clips.
-                        track_start_s: (track_cursor_s - t.in_offset.to_seconds()).max(0.0),
+                        track_start_s: (track_cursor_s - in_offset_s).max(0.0),
                         duration_s,
+                        in_offset_s,
+                        out_offset_s,
                         effect_name: t.transition_type.clone(),
                     });
                 }

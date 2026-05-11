@@ -173,6 +173,17 @@ impl ToolHandler for StartRenderTool {
                             "start_render: clip '{clip_name}' has no source_range — \
                          can't extract a renderable segment."
                         ),
+                        RenderTimelineError::TransitionHandleUnavailable {
+                            kind,
+                            clip_name,
+                            side,
+                            needed_s,
+                            available_s,
+                        } => format!(
+                            "start_render: transition {kind:?} around clip '{clip_name}' needs \
+                         {needed_s:.3}s {side} handle, but only {available_s:.3}s is available. \
+                         Shorten the transition or widen the clip source range before rendering."
+                        ),
                         RenderTimelineError::UnsupportedTransition { kind, message } => format!(
                             "start_render: timeline transition {kind:?} cannot be exported: \
                          {message}"
