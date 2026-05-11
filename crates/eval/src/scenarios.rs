@@ -40,6 +40,8 @@ pub fn defaults() -> Vec<Box<dyn Scenario>> {
         Box::new(EmptyTimelineViewTimeline),
         Box::new(OrchestratorApprovalCacheIsOperationKeyed),
         Box::new(OrchestratorSandboxDenialEscalates),
+        Box::new(OrchestratorNoSilentUnsandboxedRetry),
+        Box::new(RolloutApprovalDecisionMetadata),
         Box::new(RealProjectViewEpisode),
         Box::new(RealProjectFindMoment),
         Box::new(RealProjectFindBeat),
@@ -345,6 +347,8 @@ impl Scenario for OrchestratorApprovalCacheIsOperationKeyed {
 /// Sandbox-capable tools can report a denial; the orchestrator asks for
 /// explicit escalation and retries with sandbox bypassed.
 struct OrchestratorSandboxDenialEscalates;
+struct OrchestratorNoSilentUnsandboxedRetry;
+struct RolloutApprovalDecisionMetadata;
 
 struct EvalSandboxedTool;
 
@@ -463,6 +467,117 @@ impl Scenario for OrchestratorSandboxDenialEscalates {
                 }
             },
         )
+    }
+}
+
+#[async_trait]
+impl Scenario for OrchestratorNoSilentUnsandboxedRetry {
+    fn id(&self) -> &'static str {
+        "runtime::orchestrator_no_silent_unsandboxed_retry"
+    }
+    fn description(&self) -> &'static str {
+        "Sandbox denial is returned to the model when no explicit approval channel exists."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        Project::init(dir.path())?;
+        let orchestrator = awidat_core::orchestrator::ToolOrchestrator::new(
+            None,
+            Arc::new(tokio::sync::Mutex::new(ApprovalCache::default())),
+            None,
+        );
+        let handler: Arc<dyn ToolHandler> = Arc::new(EvalSandboxedTool);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let out = orchestrator
+            .run(
+                handler,
+                make_call(
+                    "eval_sandboxed",
+                    serde_json::json!({"path": "/etc/blocked"}),
+                ),
+                ctx_at(dir.path()),
+                &cancel,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let elapsed = started.elapsed();
+        Ok(match out {
+            Err(awidat_core::FunctionCallError::SandboxDenied { reason })
+                if reason.contains("outside project") =>
+            {
+                ScenarioOutcome {
+                    id: self.id().into(),
+                    status: ScenarioStatus::Pass,
+                    elapsed,
+                    message: "denial returned without bypass retry".into(),
+                }
+            }
+            other => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("expected SandboxDenied without retry, got {other:?}"),
+            },
+        })
+    }
+}
+
+#[async_trait]
+impl Scenario for RolloutApprovalDecisionMetadata {
+    fn id(&self) -> &'static str {
+        "runtime::rollout_approval_decision_metadata"
+    }
+    fn description(&self) -> &'static str {
+        "Rollout logs approval operation keys and retry reasons for replay/debugging."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        let rec = awidat_core::rollout::Recorder::create(
+            dir.path(),
+            std::path::PathBuf::from("/project"),
+            "m".into(),
+        )?;
+        rec.record_decision(
+            "bash".into(),
+            "touch /tmp/outside".into(),
+            vec![ApprovalKey::new(
+                "bash",
+                "command:/project:touch /tmp/outside:unsandboxed",
+            )],
+            Some("sandbox denied 'bash': write outside project. Retry unsandboxed?".into()),
+            "Deny".into(),
+        );
+        rec.flush().await?;
+        let decisions = awidat_core::rollout::Recorder::collect_decisions(dir.path())?;
+        let elapsed = started.elapsed();
+        let ok = decisions.len() == 1
+            && decisions[0]
+                .retry_reason
+                .as_deref()
+                .is_some_and(|s| s.contains("sandbox denied"))
+            && decisions[0]
+                .approval_keys
+                .iter()
+                .any(|k| k.operation.contains("unsandboxed"));
+        Ok(if ok {
+            ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Pass,
+                elapsed,
+                message: "approval metadata round-tripped".into(),
+            }
+        } else {
+            ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("unexpected decisions: {decisions:?}"),
+            }
+        })
     }
 }
 

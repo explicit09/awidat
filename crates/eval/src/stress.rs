@@ -692,6 +692,8 @@ impl Scenario for DecisionBurstWriteAndExtract {
                 rec.record_decision(
                     "apply_edl".into(),
                     format!("kind={kind} score=0.{}{}", (i % 9) + 1, i % 10),
+                    vec![],
+                    None,
                     decision.into(),
                 );
             }
@@ -769,6 +771,8 @@ impl Scenario for LessonsAtScale {
                     score = (i % 9) + 1,
                     cmd = ["ls", "git", "rm", "ffmpeg"][i % 4],
                 ),
+                approval_keys: vec![],
+                retry_reason: None,
                 decision: if i % 3 == 0 { "Deny" } else { "Allow" }.into(),
                 timestamp: chrono::Utc::now(),
             })
