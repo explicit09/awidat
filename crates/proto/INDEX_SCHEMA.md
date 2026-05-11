@@ -1,10 +1,9 @@
 # Index sidecar contract
 
-> Status: load-bearing schema doc. The footage index is "the single biggest
-> determinant of agent quality" (`PLAN.md` §5). v1.5 indexers (speaker
-> emotion, conversational structure, visual moments, cross-modal alignment —
-> see `PLAN.md` §16.7) MUST slot into the v1 layout without engine changes.
-> If they can't, this document is wrong.
+The footage index is the single biggest determinant of agent quality.
+Future indexers (speaker emotion, conversational structure, visual
+moments, cross-modal alignment) must slot into this layout without engine
+changes. If they can't, this document is wrong.
 
 ## What an indexer is
 
@@ -41,8 +40,7 @@ different indexers never share a file. Sidecars within an indexer's
 directory are keyed by asset.
 
 This is **not** a single `index/<asset>.json` file with all signals merged.
-That shape would calcify v1's signal set and break v1.5 additions, exactly
-the failure mode `PLAN.md` Concern A is designed to prevent.
+That shape would calcify the signal set and break additions of new indexers.
 
 ## The shared coordinate model
 
@@ -225,6 +223,4 @@ That's the whole point.
 ## See also
 
 - [`src/index.rs`](src/index.rs) — Rust types implementing this contract.
-- [`PLAN.md` §5](../../PLAN.md) — v1 indexer list.
-- [`PLAN.md` §16.7](../../PLAN.md) — v1.5 indexer roadmap.
 - [`OTIO_NOTES.md`](OTIO_NOTES.md) — sister doc for the OTIO superset.

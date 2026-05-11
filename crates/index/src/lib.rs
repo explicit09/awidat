@@ -207,7 +207,7 @@ pub struct IndexReport {
 }
 
 impl IndexReport {
-    /// Just the failures, for the CLI to surface non-zero exit hints.
+    /// Iterator over failed pairs, for non-zero exit hints.
     pub fn failures(&self) -> impl Iterator<Item = &PairOutcome> {
         self.outcomes
             .iter()
@@ -288,8 +288,8 @@ pub async fn run(
         })?;
 
     // Hash all assets up front, in parallel. SHA-256 of a 1h video on
-    // M-series silicon: a few seconds. We do this synchronously per asset
-    // (CPU-bound) but parallelize across assets via spawn_blocking.
+    // M-series silicon takes a few seconds; spawn_blocking parallelizes
+    // across assets.
     let mut hashes = Vec::with_capacity(assets.len());
     for asset in assets {
         let path = asset.path.clone();

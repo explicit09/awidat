@@ -226,13 +226,11 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     for shot in shots:
         start_s = float(shot["start_s"])
         end_s = float(shot["end_s"])
-        # ---- Shot type from face data ----
         face_ratio = _avg_face_ratio_in_window(
             per_frame_faces, detect_w, detect_h, start_s, end_s
         )
         shot_type = _classify_shot_type(face_ratio)
-        # ---- Camera motion from sparse optical flow ----
-        # Sample at start, middle, end; pair adjacent samples.
+        # Sample optical flow at start, middle, end; pair adjacent samples.
         probes = max(2, FLOW_PROBES_PER_SHOT)
         if end_s - start_s < 0.2:
             mag = 0.0

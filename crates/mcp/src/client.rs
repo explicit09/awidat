@@ -445,12 +445,10 @@ impl Client {
 
         let response_result = match cancel {
             Some(c) => {
-                // We need both a cancel future and a response future, but
                 // `handle.await_response(self)` and `handle.cancel(self)`
-                // both consume the handle. So we first stash the id (for the
-                // cancel notification) and clone the peer (for sending it),
-                // then drive the response future; if the cancel token fires
-                // first we send notifications/cancelled directly.
+                // both consume the handle. Stash the id and clone the peer
+                // up front so a cancel firing first can send
+                // notifications/cancelled directly without the handle.
                 let request_id = handle.id.clone();
                 let peer_for_cancel = service.peer().clone();
                 let response_fut = handle.await_response();
