@@ -179,7 +179,7 @@ impl ToolHandler for UseBrollTool {
             .unwrap_or_else(|| "default-width".to_string());
         vec![ApprovalKey::new(
             "use_broll",
-            format!("pexels:{pexels_id}:{max_width}"),
+            format!("pexels:{pexels_id}:{max_width}:dest=raw/broll"),
         )]
     }
 

@@ -115,7 +115,7 @@ impl ToolHandler for StartRenderTool {
             .unwrap_or_else(|| "<full>".to_string());
         vec![ApprovalKey::new(
             "start_render",
-            format!("{scope}:{asset}:{range}"),
+            format!("{scope}:{asset}:{range}:writes=renders"),
         )]
     }
 

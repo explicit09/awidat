@@ -176,7 +176,7 @@ impl ToolHandler for DownloadYtClipTool {
         };
         vec![ApprovalKey::new(
             "download_yt_clip",
-            format!("{url}:{source_window}"),
+            format!("{url}:{source_window}:dest=raw/broll"),
         )]
     }
 

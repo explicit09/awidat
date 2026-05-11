@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::vc;
 
 /// The `vedit_commit` tool.
@@ -64,6 +64,22 @@ impl ToolHandler for VeditCommitTool {
 
     fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
+    }
+
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        let header = invocation
+            .args
+            .get("header")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<missing-header>")
+            .trim();
+        vec![ApprovalKey::new(
+            "vedit_commit",
+            format!(
+                "checkpoint:{}",
+                crate::tool::summarize_args(&serde_json::json!({ "header": header }))
+            ),
+        )]
     }
 
     async fn handle(

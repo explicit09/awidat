@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::vc;
 
 /// The `vedit_revert` tool.
@@ -71,6 +71,25 @@ impl ToolHandler for VeditRevertTool {
 
     fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
+    }
+
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        let refstr = invocation
+            .args
+            .get("refstr")
+            .or_else(|| invocation.args.get("ref"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("<missing-ref>")
+            .trim();
+        let commit = invocation
+            .args
+            .get("commit")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        vec![ApprovalKey::new(
+            "vedit_revert",
+            format!("restore:{refstr}:audit_commit={commit}"),
+        )]
     }
 
     async fn handle(

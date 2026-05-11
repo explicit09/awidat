@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
-use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `start_indexing` tool.
 pub struct StartIndexingTool;
@@ -63,6 +63,31 @@ impl ToolHandler for StartIndexingTool {
         // Indexing writes sidecars + manifest; long, expensive,
         // disk-touching. Approval-gate it like start_render.
         true
+    }
+
+    fn approval_keys(&self, invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+        let mut indexers = invocation
+            .args
+            .get("indexers")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                let mut names = items
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                names.sort();
+                names.join(",")
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "all".to_string());
+        if indexers.len() > 160 {
+            indexers.truncate(160);
+        }
+        vec![ApprovalKey::new(
+            "start_indexing",
+            format!("indexers:{indexers}:writes=index-sidecars"),
+        )]
     }
 
     async fn handle(

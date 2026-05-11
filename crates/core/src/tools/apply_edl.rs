@@ -104,7 +104,10 @@ impl ToolHandler for ApplyEdlTool {
             .unwrap_or("<invalid>");
         vec![ApprovalKey::new(
             "apply_edl",
-            format!("edl:{}", short_sha256(edl.as_bytes())),
+            format!(
+                "edl:{}",
+                short_sha256(normalize_edl_for_approval(edl).as_bytes())
+            ),
         )]
     }
 
@@ -270,6 +273,14 @@ fn short_sha256(bytes: &[u8]) -> String {
         out.push_str(&format!("{b:02x}"));
     }
     out
+}
+
+fn normalize_edl_for_approval(edl: &str) -> String {
+    edl.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn format_parse_error(e: &EdlParseError) -> String {
