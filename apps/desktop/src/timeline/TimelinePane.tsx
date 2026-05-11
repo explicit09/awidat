@@ -26,6 +26,7 @@ import {
 import { getStrip, onThumbnailDecoded } from "./thumbnailCache";
 import { getBuckets, onWaveformDecoded } from "./waveformCache";
 import { useTimelineSelectionStore } from "../properties/store";
+import { shouldKeepMoveDraft } from "./moveDraft";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -629,10 +630,11 @@ function TimelineCanvas({
           toPosition,
           atS: Math.max(0, item.track_start_s + dxS),
           fromPosition: item.index,
+          fromAtS: item.track_start_s,
         };
       })
-      .filter((op) => op.toPosition !== op.fromPosition)
-      .map(({ fromPosition: _fromPosition, ...op }) => op);
+      .filter(shouldKeepMoveDraft)
+      .map(({ fromPosition: _fromPosition, fromAtS: _fromAtS, ...op }) => op);
 
     if (ops.length === 0) return;
 
@@ -1320,8 +1322,14 @@ function collectHighlightKeys(diffs: AppliedDiff[]): Set<string> {
       // Both halves of a split are "new" relative to the original.
       out.add(`${d.track_index}:${d.item_index}`);
       out.add(`${d.track_index}:${d.item_index + 1}`);
-    } else if (d.kind === "insert") {
+    } else if (
+      d.kind === "insert" ||
+      d.kind === "insert_b_roll" ||
+      d.kind === "insert_pi_p"
+    ) {
       out.add(`${d.track_index}:${d.item_index}`);
+    } else if (d.kind === "move") {
+      out.add(`${d.to_track_index}:${d.to_item_index}`);
     }
   }
   return out;

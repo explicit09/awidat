@@ -229,6 +229,10 @@ function handleForDiff(
       // just the right edge to keep the handle math simple. Left
       // edge could come later.
       return null;
+    case "insert_b_roll":
+    case "insert_pi_p":
+    case "move":
+      return null;
     case "delete":
       return null;
   }
