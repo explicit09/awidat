@@ -107,74 +107,92 @@ export function PropertiesPane() {
         </span>
       </header>
       <div className="properties-body">
-        <Field label="Name">
-          <span className="properties-value">{item.name}</span>
-        </Field>
-        <div className="properties-action-row">
-          <button className="properties-danger" onClick={() => void deleteClip()}>
-            Delete clip
-          </button>
-          {item.link_group_id && (
-            <span className="properties-action-hint">Deletes linked audio/video</span>
-          )}
-        </div>
+        <PanelSection title="Identity">
+          <Field label="Name">
+            <span className="properties-value">{item.name}</span>
+          </Field>
+          <Field label="Track">
+            <span className="properties-value">
+              {trackName} <span className="properties-dim">· {trackKind}</span>
+            </span>
+          </Field>
+          <Field label="Asset">
+            <code className="properties-code" title={item.asset_id ?? ""}>
+              {item.asset_id ?? "(none)"}
+            </code>
+          </Field>
+        </PanelSection>
         {item.title ? (
-          <TitleEditor
-            clipUuid={item.clip_uuid}
-            title={item.title}
-            startS={trackStart}
-            endS={trackEnd}
-          />
+          <PanelSection title="Title">
+            <TitleEditor
+              clipUuid={item.clip_uuid}
+              title={item.title}
+              startS={trackStart}
+              endS={trackEnd}
+            />
+          </PanelSection>
         ) : (
           <>
-            {(item.volume ?? DEFAULT_VOLUME) <= 0.001 && (
-              <div className="properties-alert">
-                This clip is muted. Preview audio will be silent here.
-              </div>
-            )}
-            <ColorCorrectionControl
-              clipUuid={item.clip_uuid}
-              value={item.color_correction}
-            />
-            <LutControl clipUuid={item.clip_uuid} lutPath={item.lut_path} />
-            <VolumeControl clipUuid={item.clip_uuid} value={item.volume} />
-            <AudioFadeControl
-              clipUuid={item.clip_uuid}
-              fadeInS={item.fade_in_s}
-              fadeOutS={item.fade_out_s}
-            />
-            <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
+            <PanelSection title="Visual">
+              <ColorCorrectionControl
+                clipUuid={item.clip_uuid}
+                value={item.color_correction}
+              />
+              <LutControl clipUuid={item.clip_uuid} lutPath={item.lut_path} />
+            </PanelSection>
+            <PanelSection title="Audio">
+              {(item.volume ?? DEFAULT_VOLUME) <= 0.001 && (
+                <div className="properties-alert">
+                  This clip is muted. Preview audio will be silent here.
+                </div>
+              )}
+              <VolumeControl clipUuid={item.clip_uuid} value={item.volume} />
+              <AudioFadeControl
+                clipUuid={item.clip_uuid}
+                fadeInS={item.fade_in_s}
+                fadeOutS={item.fade_out_s}
+              />
+            </PanelSection>
+            <PanelSection title="Timing">
+              <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
+            </PanelSection>
           </>
         )}
-        {track?.audio && <TrackAudioControl trackName={track.name} audio={track.audio} />}
-        <Field label="Track">
-          <span className="properties-value">
-            {trackName} <span className="properties-dim">· {trackKind}</span>
-          </span>
-        </Field>
-        <Field label="Asset">
-          <code className="properties-code" title={item.asset_id ?? ""}>
-            {item.asset_id ?? "(none)"}
-          </code>
-        </Field>
-        <Field label="Source">
-          <span className="properties-value">
-            {sourceStart.toFixed(2)}s → {sourceEnd.toFixed(2)}s
-          </span>
-        </Field>
-        <Field label="Timeline">
-          <span className="properties-value">
-            {trackStart.toFixed(2)}s → {trackEnd.toFixed(2)}s
-          </span>
-        </Field>
-        <Field label="Duration">
-          <span className="properties-value">{item.duration_s.toFixed(2)}s</span>
-        </Field>
-        <Field label="Clip uuid">
-          <code className="properties-code" title={item.clip_uuid}>
-            {item.clip_uuid}
-          </code>
-        </Field>
+        {track?.audio && (
+          <PanelSection title="Track Mix">
+            <TrackAudioControl trackName={track.name} audio={track.audio} />
+          </PanelSection>
+        )}
+        <PanelSection title="Timing Metadata">
+          <Field label="Source">
+            <span className="properties-value">
+              {sourceStart.toFixed(2)}s → {sourceEnd.toFixed(2)}s
+            </span>
+          </Field>
+          <Field label="Timeline">
+            <span className="properties-value">
+              {trackStart.toFixed(2)}s → {trackEnd.toFixed(2)}s
+            </span>
+          </Field>
+          <Field label="Duration">
+            <span className="properties-value">{item.duration_s.toFixed(2)}s</span>
+          </Field>
+          <Field label="Clip uuid">
+            <code className="properties-code" title={item.clip_uuid}>
+              {item.clip_uuid}
+            </code>
+          </Field>
+        </PanelSection>
+        <PanelSection title="Danger Zone">
+          <div className="properties-action-row">
+            <button className="properties-danger" onClick={() => void deleteClip()}>
+              Delete clip
+            </button>
+            {item.link_group_id && (
+              <span className="properties-action-hint">Deletes linked audio/video</span>
+            )}
+          </div>
+        </PanelSection>
       </div>
     </section>
   );
@@ -1015,5 +1033,20 @@ function Field({
       <div className="properties-field-label">{label}</div>
       <div className="properties-field-value">{children}</div>
     </div>
+  );
+}
+
+function PanelSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="properties-section">
+      <h3>{title}</h3>
+      {children}
+    </section>
   );
 }

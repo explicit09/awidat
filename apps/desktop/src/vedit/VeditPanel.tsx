@@ -175,7 +175,7 @@ export function VeditPanel() {
                       {shortHash(diffs[entry.commitHash].fromRef)}...{shortHash(diffs[entry.commitHash].toRef)}
                     </code>
                   </div>
-                  <pre>{JSON.stringify(diffs[entry.commitHash].changes, null, 2)}</pre>
+                  <DiffPreview changes={diffs[entry.commitHash].changes} />
                 </section>
               )}
               {restoreTarget === entry.commitHash && (
@@ -207,6 +207,46 @@ export function VeditPanel() {
           </details>
         ))}
       </div>
+    </div>
+  );
+}
+
+function DiffPreview({ changes }: { changes: unknown }) {
+  const list = Array.isArray(changes) ? changes : null;
+  if (!list) {
+    return <pre>{JSON.stringify(changes, null, 2)}</pre>;
+  }
+  return (
+    <div className="vedit-diff-list">
+      {list.slice(0, 12).map((change, index) => {
+        const record =
+          change !== null && typeof change === "object"
+            ? (change as Record<string, unknown>)
+            : null;
+        const kind = typeof record?.kind === "string" ? record.kind : "change";
+        const path =
+          typeof record?.path === "string"
+            ? record.path
+            : typeof record?.clip_uuid === "string"
+            ? record.clip_uuid
+            : `entry ${index + 1}`;
+        return (
+          <div key={index} className="vedit-diff-row">
+            <span>{kind.replace(/_/g, " ")}</span>
+            <code>{path}</code>
+          </div>
+        );
+      })}
+      {list.length > 12 && (
+        <div className="vedit-diff-row vedit-diff-row-muted">
+          <span>additional</span>
+          <code>{list.length - 12} more</code>
+        </div>
+      )}
+      <details className="vedit-diff-json">
+        <summary>Raw JSON</summary>
+        <pre>{JSON.stringify(changes, null, 2)}</pre>
+      </details>
     </div>
   );
 }
