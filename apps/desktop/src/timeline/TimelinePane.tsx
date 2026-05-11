@@ -311,7 +311,7 @@ function TimelineCanvas({
               ? item.track_start_s * pps
               : (item.track_start_s + item.duration_s) * pps;
           const yTop = RULER_HEIGHT + edgeHover.trackIndex * LANE_HEIGHT + 4;
-          ctx.fillStyle = "rgba(245, 158, 11, 0.55)";
+          ctx.fillStyle = "rgba(120, 184, 255, 0.62)";
           ctx.fillRect(edgeX - 1, yTop, 2, LANE_HEIGHT - 8);
         }
       }
@@ -322,7 +322,7 @@ function TimelineCanvas({
         const x = userTrim.currentX;
         const yTop = RULER_HEIGHT;
         const yBot = RULER_HEIGHT + LANE_HEIGHT * snapshot.tracks.length;
-        ctx.fillStyle = "#f59e0b";
+        ctx.fillStyle = "#78b8ff";
         ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
       }
 
@@ -791,7 +791,7 @@ function drawMoveGhost(
     const h = LANE_HEIGHT - 8;
     ctx.save();
     ctx.setLineDash([5, 4]);
-    ctx.strokeStyle = "#f59e0b";
+    ctx.strokeStyle = "#78b8ff";
     ctx.lineWidth = 2;
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 4);
     ctx.restore();
@@ -825,9 +825,9 @@ function drawRuler(
   duration: number,
   pps: number,
 ) {
-  ctx.fillStyle = "#161b22";
+  ctx.fillStyle = "#151711";
   ctx.fillRect(0, 0, width, RULER_HEIGHT);
-  ctx.strokeStyle = "#30363d";
+  ctx.strokeStyle = "#30352d";
   ctx.beginPath();
   ctx.moveTo(0, RULER_HEIGHT - 0.5);
   ctx.lineTo(width, RULER_HEIGHT - 0.5);
@@ -839,7 +839,7 @@ function drawRuler(
   let interval =
     candidates.find((c) => c * pps >= desiredPx) ?? candidates[candidates.length - 1];
 
-  ctx.fillStyle = "#8b949e";
+  ctx.fillStyle = "#a49f91";
   ctx.font =
     "11px ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace";
   ctx.textBaseline = "middle";
@@ -847,7 +847,7 @@ function drawRuler(
   for (let t = 0; t <= duration + interval; t += interval) {
     const x = Math.round(t * pps) + 0.5;
     if (x > width) break;
-    ctx.strokeStyle = "#30363d";
+    ctx.strokeStyle = "#30352d";
     ctx.beginPath();
     ctx.moveTo(x, RULER_HEIGHT - 8);
     ctx.lineTo(x, RULER_HEIGHT);
@@ -881,14 +881,14 @@ function drawTracks(
     // so it reads as a different kind of layer; audio is the
     // existing dark-green ish; video lanes keep their default tint.
     if (isTitlesRow) {
-      ctx.fillStyle = "#0a0a0a";
+      ctx.fillStyle = "#070b10";
     } else if (track.kind === "audio") {
-      ctx.fillStyle = "#0d1117";
+      ctx.fillStyle = "#0b100d";
     } else {
-      ctx.fillStyle = "#0f141b";
+      ctx.fillStyle = "#0d0f0d";
     }
     ctx.fillRect(0, y, width, LANE_HEIGHT);
-    ctx.strokeStyle = "#30363d";
+    ctx.strokeStyle = "#30352d";
     ctx.beginPath();
     ctx.moveTo(0, y + LANE_HEIGHT - 0.5);
     ctx.lineTo(width, y + LANE_HEIGHT - 0.5);
@@ -941,9 +941,9 @@ function drawItem(
     // with inline text rather than the regular media-clip styling.
     const isTitleClip = isTitlesRow && item.title !== null && item.title !== undefined;
     if (isTitleClip) {
-      ctx.fillStyle = "#1a1207"; // dark amber-tinted background
+      ctx.fillStyle = "#0a1622";
     } else {
-      ctx.fillStyle = trackKind === "audio" ? "#1f4d3f" : "#1f3d5d";
+      ctx.fillStyle = trackKind === "audio" ? "#1b4a39" : "#263b48";
     }
     fillRoundedRect(ctx, x, y, w, h, radius);
     // Filmstrip / waveform: drawn on top of the coloured fill, under
@@ -966,14 +966,14 @@ function drawItem(
     // border to match their warm fill.
     const stroke =
       flag === "deleted"
-        ? "#f85149"
+        ? "#ef7168"
         : flag === "highlight"
-        ? "#d29922"
+        ? "#78b8ff"
         : isTitleClip
-        ? "#f59e0b"
+        ? "#e4ae52"
         : trackKind === "audio"
-        ? "#3fb950"
-        : "#58a6ff";
+        ? "#71c587"
+        : "#71b7a6";
     ctx.strokeStyle = stroke;
     ctx.lineWidth = flag === "normal" ? 1 : 2;
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
@@ -990,7 +990,7 @@ function drawItem(
       const labelY = y + h / 2;
       if (drewOverlay) {
         const metrics = ctx.measureText(label);
-        ctx.fillStyle = "rgba(13, 17, 23, 0.7)";
+        ctx.fillStyle = "rgba(5, 6, 5, 0.74)";
         ctx.fillRect(
           x + CLIP_PADDING_X - 2,
           labelY - 7,
@@ -998,7 +998,7 @@ function drawItem(
           14,
         );
       }
-      ctx.fillStyle = "#e6edf3";
+      ctx.fillStyle = "#eee8d7";
       ctx.fillText(label, x + CLIP_PADDING_X, labelY);
     }
     // Volume / speed badges — painted in the top-right corner so they
@@ -1010,7 +1010,7 @@ function drawItem(
     if (flag === "deleted") {
       // Strike-through line so the "before" is visually marked
       // for deletion even at low contrast.
-      ctx.strokeStyle = "#f85149";
+      ctx.strokeStyle = "#ef7168";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(x + 2, y + h / 2);
@@ -1025,24 +1025,24 @@ function drawItem(
       // proposal highlight (amber over amber is still distinct
       // because the proposal stroke is inside the rect, this
       // one straddles it).
-      ctx.strokeStyle = "#f59e0b";
+      ctx.strokeStyle = "#91d7ff";
       ctx.lineWidth = 2;
       strokeRoundedRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, radius + 1);
       ctx.lineWidth = 1;
     }
   } else if (item.kind === "gap") {
-    ctx.fillStyle = "rgba(139, 148, 158, 0.12)";
+    ctx.fillStyle = "rgba(164, 159, 145, 0.12)";
     fillRoundedRect(ctx, x, y, w, h, radius);
     // Cross-hatch pattern feel via dashed border so gaps stand out.
-    ctx.strokeStyle = "#30363d";
+    ctx.strokeStyle = "#30352d";
     ctx.setLineDash([3, 3]);
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
     ctx.setLineDash([]);
   } else {
     // transition
-    ctx.fillStyle = "rgba(210, 153, 34, 0.18)";
+    ctx.fillStyle = "rgba(120, 184, 255, 0.18)";
     fillRoundedRect(ctx, x, y, w, h, radius);
-    ctx.strokeStyle = "#d29922";
+    ctx.strokeStyle = "#78b8ff";
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
   }
 }
@@ -1178,7 +1178,7 @@ function drawClipWaveform(
 
   // Stroke the upper envelope as a single path.
   ctx.beginPath();
-  ctx.strokeStyle = "rgba(63, 185, 80, 0.85)";
+  ctx.strokeStyle = "rgba(113, 197, 135, 0.86)";
   ctx.lineWidth = 1;
   for (let i = 0; i < w; i++) {
     // Pick the bucket(s) that map to this pixel column.
@@ -1240,7 +1240,7 @@ function drawClipTitleText(
   ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
   ctx.textBaseline = "middle";
   const label = truncateToWidth(ctx, styling.text, w - 2 * CLIP_PADDING_X);
-  ctx.fillStyle = "#f59e0b";
+  ctx.fillStyle = "#91d7ff";
   ctx.fillText(label, x + CLIP_PADDING_X, y + h / 2);
 }
 
@@ -1284,9 +1284,9 @@ function drawClipBadges(
     const boxX = cursorX - boxW;
     const boxY = y + 3;
     if (boxX < x + 4) break; // Out of room — drop later badges.
-    ctx.fillStyle = "rgba(13, 17, 23, 0.78)";
+    ctx.fillStyle = "rgba(5, 6, 5, 0.78)";
     ctx.fillRect(boxX, boxY, boxW, boxH);
-    ctx.fillStyle = "#f59e0b";
+    ctx.fillStyle = "#91d7ff";
     ctx.fillText(text, boxX + padX, boxY + padY);
     cursorX = boxX - 4;
   }
@@ -1344,14 +1344,14 @@ function drawPlayhead(
 ) {
   const x = Math.round(currentTime * pps) + 0.5;
   if (x < 0 || x > width) return;
-  ctx.strokeStyle = "#f85149";
+  ctx.strokeStyle = "#ef7168";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(x, 0);
   ctx.lineTo(x, height);
   ctx.stroke();
   // Triangle handle at top.
-  ctx.fillStyle = "#f85149";
+  ctx.fillStyle = "#ef7168";
   ctx.beginPath();
   ctx.moveTo(x - 5, 0);
   ctx.lineTo(x + 5, 0);
