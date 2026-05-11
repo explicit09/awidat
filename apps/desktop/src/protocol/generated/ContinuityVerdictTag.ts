@@ -3,9 +3,8 @@
 /**
  * Wire-side mirror of `awidat_core::continuity::Verdict`. Lives
  * here in the protocol crate so the frontend can render it via
- * ts-rs without depending on `awidat-core`. Phase 2.5 added this
- * for `continuity_warning` Notes; the panel maps each variant to
- * a color (clean → green, risky → amber, dirty → red, abstain →
- * muted).
+ * ts-rs without depending on `awidat-core`. The panel maps each
+ * variant to a color: clean → green, risky → amber, dirty → red,
+ * abstain → muted.
  */
 export type ContinuityVerdictTag = "clean" | "risky" | "dirty" | "abstain";

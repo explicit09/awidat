@@ -258,11 +258,8 @@ suggested_proposal: string | null,
  * For `continuity_warning` notes: the rule engine's verdict
  * (`clean` / `risky` / `dirty` / `abstain`) so the panel
  * can color-code the card. `None` for non-continuity kinds
- * (silence, filler, etc).
- *
- * Step 2.5 added this so continuity notes show urgency at
- * a glance — dirty cuts get a red border, risky get amber,
- * abstain reads as muted.
+ * (silence, filler, etc). Dirty cuts render with a red
+ * border, risky get amber, abstain reads muted.
  */
 continuity_verdict: ContinuityVerdictTag | null, 
 /**
@@ -280,10 +277,6 @@ continuity_reasons: Array<string> | null,
  * "Search Pexels" button (which dispatches a chat directive
  * asking the agent to call `search_broll(query)` on the
  * user's behalf). `None` for non-broll kinds.
- *
- * Step 3.4 added this so the BrollNoteCard knows what to
- * search for without asking the agent to re-derive the
- * query mid-flow.
  */
 broll_query: string | null, 
 /**

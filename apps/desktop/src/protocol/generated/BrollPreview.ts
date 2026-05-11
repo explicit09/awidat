@@ -6,8 +6,6 @@
  * called `search_broll` and wants to surface the top hits inline.
  * The UI renders a thumbnail row with click-to-place; clicking
  * triggers a chat directive that calls `use_broll(pexels_id, ...)`.
- *
- * Step 3.4 added this for the BrollNoteCard.
  */
 export type BrollPreview = { 
 /**

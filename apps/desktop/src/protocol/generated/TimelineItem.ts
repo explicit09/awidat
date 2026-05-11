@@ -21,8 +21,8 @@ name: string,
  * `clip.metadata.awidat.extra["clip_uuid"]` if present;
  * otherwise falls back to the clip's display name (which the
  * `awidat_core::edl::anchor` resolver also matches against).
- * Step 8's drag-to-trim builds `TrimClip { anchor:
- * ClipUuid { uuid } }` from this field.
+ * Drag-to-trim wires this directly into
+ * `TrimClip { anchor: ClipUuid { uuid } }`.
  */
 clip_uuid: string, 
 /**
