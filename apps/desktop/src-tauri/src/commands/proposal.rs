@@ -183,9 +183,9 @@ pub async fn accept_proposal(
     let user_adjusted = proposal.revision > 0;
     let agent_initiated = proposal.reply.is_some();
 
-    // Decide whether the desktop writes to disk. Agent-initiated +
-    // unchanged means the agent's handler will do the write itself
-    // (after we send Allow); writing here would cause a double-apply.
+    // For agent-initiated + unchanged proposals the agent's handler
+    // does the write after we send Allow; writing here would cause a
+    // double-apply.
     let desktop_writes = !agent_initiated || user_adjusted;
 
     if desktop_writes {
@@ -338,8 +338,8 @@ pub async fn adjust_proposal(
     call_id: String,
     adjustments: Vec<EditAdjustment>,
 ) -> Result<(), String> {
-    // We hold the proposal mutex across an apply() call so a second
-    // adjust_proposal racing against this one serializes naturally.
+    // Hold the mutex across the apply() call so racing adjust_proposal
+    // requests serialize.
     let mut map = state.pending_proposals.lock().await;
     let proposal = map
         .get_mut(&call_id)
@@ -378,9 +378,9 @@ pub async fn adjust_proposal(
         &proposed_timeline,
     );
     let summary = summarize_envelope(&proposal.envelope);
-    let edl_text = String::new(); // EDL text could be re-serialized; not needed for Delta
+    let edl_text = String::new(); // not re-serialized; Delta doesn't need it
 
-    drop(map); // release before emit so the frontend's response can grab it again
+    drop(map); // release before emit so the frontend's response can grab the lock again
 
     emit_item(
         &app,
@@ -506,11 +506,10 @@ fn build_diff_hints(
                 name,
                 ..
             } => {
-                // Find the named track in the proposed snapshot. Use
-                // the explicit inserted name when present; otherwise
-                // use the requested insertion index clamped to the
-                // original track length. This keeps middle inserts
-                // highlighted where they actually landed.
+                // Locate by inserted name when present; otherwise by
+                // the requested insertion index clamped to the original
+                // track length. Keeps middle inserts highlighted at
+                // their landed position.
                 if let Some((track_index, item_index)) =
                     find_inserted_position(proposed, track, original, *at_position, name.as_deref())
                 {
@@ -521,13 +520,12 @@ fn build_diff_hints(
                     });
                 }
             }
-            // F2 ops; not rendered in v1. SetVolume / SetSpeed /
-            // SetTitle mutate effect metadata (no structural change),
-            // so the ghost overlay paints them as a re-render of the
-            // same clip rect — no diff hint needed. InsertTitle adds
-            // a synthesized clip on the Titles track; v1 doesn't
-            // emit a hint there either.
+            // F2 ops; not rendered in v1. SetVolume/SetSpeed/SetTitle
+            // mutate effect metadata only — the ghost overlay re-renders
+            // the same clip rect. InsertTitle adds a synthesized clip
+            // on the Titles track; v1 emits no hint for it either.
             EdlOp::InsertBRoll { .. }
+            | EdlOp::InsertPiP { .. }
             | EdlOp::MoveClip { .. }
             | EdlOp::InsertTransition { .. }
             | EdlOp::SetVolume { .. }
@@ -537,6 +535,7 @@ fn build_diff_hints(
             | EdlOp::SetSyncGroup { .. }
             | EdlOp::SetClipAudioFx { .. }
             | EdlOp::SetTrackAudioFx { .. }
+            | EdlOp::SetEffect { .. }
             | EdlOp::SetSpeed { .. }
             | EdlOp::SetColorCorrection { .. }
             | EdlOp::ApplyLut { .. }
@@ -661,6 +660,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SplitClip { .. } => "SplitClip",
         EdlOp::InsertClip { .. } => "InsertClip",
         EdlOp::InsertBRoll { .. } => "InsertBRoll",
+        EdlOp::InsertPiP { .. } => "InsertPiP",
         EdlOp::MoveClip { .. } => "MoveClip",
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::SetVolume { .. } => "SetVolume",
@@ -670,6 +670,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetSyncGroup { .. } => "SetSyncGroup",
         EdlOp::SetClipAudioFx { .. } => "SetClipAudioFx",
         EdlOp::SetTrackAudioFx { .. } => "SetTrackAudioFx",
+        EdlOp::SetEffect { .. } => "SetEffect",
         EdlOp::SetSpeed { .. } => "SetSpeed",
         EdlOp::SetColorCorrection { .. } => "SetColorCorrection",
         EdlOp::ApplyLut { .. } => "ApplyLut",

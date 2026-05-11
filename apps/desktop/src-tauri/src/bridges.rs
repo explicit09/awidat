@@ -56,10 +56,8 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
             }
 
             if proposal_overlay_enabled() && req.tool_name == "apply_edl" {
-                // Route to the proposal pipeline. Pull the EDL text out
-                // of args_full — we added that field in commit 5.1
-                // exactly so the bridge could re-parse the full EDL
-                // without losing characters to args_summary truncation.
+                // Read the full EDL from args_full so the bridge can
+                // re-parse without args_summary's truncation.
                 let edl_text = req
                     .args_full
                     .as_object()
@@ -69,15 +67,13 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                 let project_root_opt = state.project_root.lock().await.clone();
 
                 if let (Some(edl_text), Some(project_root)) = (edl_text, project_root_opt) {
-                    // Decompose the request so we can hand `reply`
-                    // to build_proposal but keep the rest available
-                    // for an error-recovery path. If preview
-                    // construction fails during parse/apply,
-                    // build_proposal allows the underlying tool call
-                    // to continue so the agent receives the same
-                    // actionable apply_edl error it would see in the
-                    // TUI. We also surface the preview failure to chat
-                    // so the user knows why no overlay appeared.
+                    // Hand `reply` to build_proposal but keep the rest
+                    // around for the error-recovery path. On parse/apply
+                    // failure, build_proposal lets the underlying
+                    // apply_edl tool call proceed so the agent gets a
+                    // self-correction signal; we surface the preview
+                    // failure to chat so the user knows why no overlay
+                    // appeared.
                     let ApprovalRequest { call_id, reply, .. } = req;
                     if let Err(e) = crate::commands::proposal::build_proposal(
                         &app,
@@ -93,13 +89,9 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                     .await
                     {
                         warn!(error = %e, call_id = %call_id, "build_proposal failed");
-                        // build_proposal failed before stashing the
-                        // PendingProposal. For parse/apply failures,
-                        // it allowed the original apply_edl call to
-                        // proceed and fail in the tool handler, giving
-                        // the agent a self-correction path. Surface
-                        // the preview error too so the user knows why
-                        // nothing showed up.
+                        // No PendingProposal was stashed; surface the
+                        // preview error in chat so the user sees why
+                        // nothing rendered.
                         emit_item(
                             &app,
                             Item::Error {
@@ -114,12 +106,9 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                     continue;
                 }
 
-                // Soft failures: missing edl arg, no project loaded.
-                // Surface the failure to chat (otherwise the user
-                // sees nothing happen — the legacy card would show
-                // up but req.reply has not been moved yet so we
-                // could fall through here. We Deny explicitly to
-                // be safe.)
+                // Soft failures (missing edl arg, no project loaded).
+                // Deny explicitly and surface the failure in chat —
+                // otherwise nothing would appear.
                 warn!(
                     call_id = %req.call_id,
                     "apply_edl missing args.edl or project_root; denying without preview",
@@ -140,8 +129,8 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                 continue;
             }
 
-            // Legacy / non-apply_edl path: emit Item::ApprovalRequest,
-            // stash reply oneshot for respond_approval.
+            // Legacy / non-apply_edl path: emit Item::ApprovalRequest
+            // and stash the reply oneshot for respond_approval.
             let call_id = req.call_id.clone();
             let item = Item::ApprovalRequest {
                 id: Id::new(&req.call_id),

@@ -47,8 +47,21 @@ export function Composer({ projectReady }: Props) {
     try {
       await invoke("start_turn", { input: trimmed });
     } catch (err) {
+      if (String(err).includes("turn is already running")) {
+        try {
+          await invoke("cancel_turn");
+          await invoke("start_turn", { input: trimmed });
+          return;
+        } catch (retryErr) {
+          setTurnError(String(retryErr));
+          setRunning(false);
+          setText(trimmed);
+          return;
+        }
+      }
       setTurnError(String(err));
       setRunning(false);
+      setText(trimmed);
     }
   }
 

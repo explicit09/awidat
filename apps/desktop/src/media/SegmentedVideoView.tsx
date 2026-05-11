@@ -32,7 +32,7 @@
 // Boundary detection is requestVideoFrameCallback (Step 9.4) when
 // available; timeupdate fallback otherwise.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
@@ -45,6 +45,8 @@ import {
   findActiveSegment,
   type PlaySegment,
   usePlaySegments,
+  type VideoOverlaySegment,
+  useVideoOverlaySegments,
 } from "../timeline/usePlaySegments";
 
 export function SegmentedVideoView() {
@@ -103,6 +105,7 @@ type Slot = {
 };
 
 function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
+  const videoOverlays = useVideoOverlaySegments();
   // For diagnostics: how many clips are on the OTIO but missing a
   // proxy (still transcoding). The user sees a "+ N transcoding…"
   // hint so they know the timeline isn't lying about its length.
@@ -144,6 +147,15 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
         timelineSnapshot.duration_s > 0 ? timelineSnapshot.duration_s : 0,
       ),
     [timelineSnapshot],
+  );
+  const activeVideoOverlays = useMemo(
+    () =>
+      videoOverlays.filter(
+        (overlay) =>
+          timelineTime >= overlay.timelineStart &&
+          timelineTime < overlay.timelineEnd,
+      ),
+    [videoOverlays, timelineTime],
   );
 
   // Push the current timeline-time + active segment's clip-stem to
@@ -532,6 +544,11 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           onEnded={activeKey === "b" ? () => setPlaying(false) : undefined}
           onClick={activeKey === "b" ? togglePlay : undefined}
         />
+        <TimelineVideoOverlays
+          overlays={activeVideoOverlays}
+          timelineTime={timelineTime}
+          isPlaying={isPlaying}
+        />
         <TimelineTitleOverlays
           overlays={activeTitles}
           timelineTime={timelineTime}
@@ -584,18 +601,153 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   );
 }
 
+function TimelineVideoOverlays({
+  overlays,
+  timelineTime,
+  isPlaying,
+}: {
+  overlays: VideoOverlaySegment[];
+  timelineTime: number;
+  isPlaying: boolean;
+}) {
+  if (overlays.length === 0) return null;
+  return (
+    <div className="timeline-video-overlay-layer" aria-hidden="true">
+      {overlays.map((overlay) => (
+        <TimelineVideoOverlay
+          key={`${overlay.proxyPath}:${overlay.timelineStart}:${overlay.zIndex}`}
+          overlay={overlay}
+          timelineTime={timelineTime}
+          isPlaying={isPlaying}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TimelineVideoOverlay({
+  overlay,
+  timelineTime,
+  isPlaying,
+}: {
+  overlay: VideoOverlaySegment;
+  timelineTime: number;
+  isPlaying: boolean;
+}) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  const [src, setSrc] = useState<string | null>(() =>
+    cachedMediaStreamUrl(overlay.proxyPath) ?? null,
+  );
+
+  useEffect(() => {
+    const cached = cachedMediaStreamUrl(overlay.proxyPath);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
+    let cancelled = false;
+    mediaStreamUrl(overlay.proxyPath)
+      .then((url) => {
+        if (!cancelled) setSrc(url);
+      })
+      .catch((e) => {
+        console.warn("overlay media stream url failed", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [overlay.proxyPath]);
+
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    const desired = overlay.sourceStart + (timelineTime - overlay.timelineStart);
+    if (Number.isFinite(desired) && Math.abs(v.currentTime - desired) > 0.08) {
+      tryAssignCurrentTime(v, desired);
+    }
+    const speed = Number.isFinite(overlay.speed)
+      ? Math.max(0.0625, Math.min(16, overlay.speed))
+      : 1;
+    if (Math.abs(v.playbackRate - speed) > 0.001) v.playbackRate = speed;
+    v.muted = true;
+    if (isPlaying && v.paused) {
+      v.play().catch(() => {});
+    } else if (!isPlaying && !v.paused) {
+      v.pause();
+    }
+  }, [overlay, timelineTime, isPlaying]);
+
+  if (!src) return null;
+  return (
+    <video
+      ref={ref}
+      className="timeline-video-overlay"
+      src={src}
+      muted
+      playsInline
+      preload="auto"
+      style={videoOverlayStyle(overlay)}
+    />
+  );
+}
+
+function videoOverlayStyle(overlay: VideoOverlaySegment): React.CSSProperties {
+  const zIndex = 10 + overlay.zIndex;
+  if (overlay.mode === "full_frame") {
+    return {
+      position: "absolute",
+      inset: 0,
+      width: "100%",
+      height: "100%",
+      objectFit: "contain",
+      zIndex,
+    };
+  }
+  const size = `${overlay.scale * 100}%`;
+  const margin = `${overlay.marginPct * 100}%`;
+  return {
+    position: "absolute",
+    width: size,
+    height: "auto",
+    maxHeight: `calc(100% - (${margin} * 2))`,
+    objectFit: "contain",
+    borderRadius: 6,
+    boxShadow: "0 10px 28px rgba(0, 0, 0, 0.42)",
+    zIndex,
+    ...cornerStyle(overlay.corner, margin),
+  };
+}
+
+function cornerStyle(
+  corner: VideoOverlaySegment["corner"],
+  margin: string,
+): React.CSSProperties {
+  switch (corner) {
+    case "top_left":
+      return { top: margin, left: margin };
+    case "top_right":
+      return { top: margin, right: margin };
+    case "bottom_left":
+      return { bottom: margin, left: margin };
+    case "bottom_right":
+      return { bottom: margin, right: margin };
+  }
+}
+
 type BroadcastOverlayConfig = NonNullable<TimelineSnapshot["broadcast_overlay"]>;
 type BroadcastHost = BroadcastOverlayConfig["host_a"];
 type BroadcastTimedEntry = BroadcastOverlayConfig["topics"][number];
 
-function TimelineBroadcastOverlay({
+export function TimelineBroadcastOverlay({
   overlay,
   timelineTime,
   projectRoot,
+  resolveAssetUrl = projectAssetUrl,
 }: {
   overlay: TimelineSnapshot["broadcast_overlay"];
   timelineTime: number;
   projectRoot: string | null;
+  resolveAssetUrl?: (projectRoot: string | null, relPath: string | null) => string | null;
 }) {
   if (!overlay?.enabled) return null;
 
@@ -607,21 +759,25 @@ function TimelineBroadcastOverlay({
   const inTitle = timelineTime >= 0 && timelineTime < style.title_visible_end;
   const inHostIntro =
     timelineTime >= style.host_intro_start && timelineTime < style.host_intro_end;
-  const activeChapter = activeChapterEntry(
-    overlay.chapters,
-    timelineTime,
-    style.chapter_display_duration,
-    Math.max(0, style.title_visible_end),
-  );
-  const activeTopic = activeBroadcastTopic(
-    overlay.topics,
+  const tickerEntries = broadcastTickerEntries(overlay);
+  const activeChapter =
+    overlay.chapters.length > 0
+      ? activeChapterEntry(
+          overlay.chapters,
+          timelineTime,
+          style.chapter_display_duration,
+          Math.max(0, style.title_visible_end),
+        )
+      : null;
+  const tickerPhase = broadcastTickerPhase(
+    tickerEntries,
     timelineTime,
     style,
   );
   const sponsorText =
     overlay.sponsors.length > 0
-      ? overlay.sponsors.join("   ◆   ")
-      : overlay.show_name || overlay.template_name;
+      ? `${overlay.sponsors.join("   ◆   ")}   ◆`
+      : overlay.show_name || overlay.template_name || "BROADCAST";
   const overlayStyleVars = {
     "--broadcast-name-bar-height": refHeightPercent(style.name_bar_height),
     "--broadcast-ticker-height": refHeightPercent(style.ticker_height),
@@ -631,6 +787,11 @@ function TimelineBroadcastOverlay({
 
   return (
     <div className="broadcast-overlay-layer" style={overlayStyleVars} aria-hidden="true">
+      <BroadcastAssetPreloads
+        overlay={overlay}
+        projectRoot={projectRoot}
+        resolveAssetUrl={resolveAssetUrl}
+      />
       {overlay.short_form_mode ? (
         <div
           className="broadcast-short-brand-bar"
@@ -642,6 +803,7 @@ function TimelineBroadcastOverlay({
           <BroadcastBrandLogo
             logoPath={overlay.brand_logo_path}
             projectRoot={projectRoot}
+            resolveAssetUrl={resolveAssetUrl}
           />
           <strong>{(overlay.show_name || overlay.episode_title || "BROADCAST").toUpperCase()}</strong>
         </div>
@@ -681,11 +843,13 @@ function TimelineBroadcastOverlay({
           <BroadcastIntroHost
             host={overlay.host_a}
             projectRoot={projectRoot}
+            resolveAssetUrl={resolveAssetUrl}
           />
           <div className="broadcast-host-intro-divider" />
           <BroadcastIntroHost
             host={overlay.host_b}
             projectRoot={projectRoot}
+            resolveAssetUrl={resolveAssetUrl}
             align="right"
           />
         </div>
@@ -713,17 +877,22 @@ function TimelineBroadcastOverlay({
             <div className="broadcast-ticker-show">
               {(overlay.show_name || "BROADCAST").toUpperCase()}
             </div>
-            {activeTopic ? (
-              <div className="broadcast-topic">
-                <span>NOW DISCUSSING</span>
-                <strong>{activeTopic.text}</strong>
-              </div>
-            ) : (
-              <div className="broadcast-sponsor-marquee">
-                <span>{sponsorText}</span>
-                <span>{sponsorText}</span>
-              </div>
-            )}
+            <div className="broadcast-ticker-content">
+              <BroadcastSponsorMarquee
+                sponsorText={sponsorText}
+                timelineTime={timelineTime}
+                opacity={tickerPhase.sponsorOpacity}
+              />
+              {tickerPhase.activeTopic && (
+                <div
+                  className="broadcast-topic"
+                  style={{ opacity: tickerPhase.topicOpacity }}
+                >
+                  <span>NOW DISCUSSING</span>
+                  <strong>{tickerPhase.activeTopic.text}</strong>
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}
@@ -746,14 +915,86 @@ function TimelineBroadcastOverlay({
   );
 }
 
+function BroadcastAssetPreloads({
+  overlay,
+  projectRoot,
+  resolveAssetUrl,
+}: {
+  overlay: BroadcastOverlayConfig;
+  projectRoot: string | null;
+  resolveAssetUrl: (projectRoot: string | null, relPath: string | null) => string | null;
+}) {
+  const urls = [
+    resolveAssetUrl(projectRoot, overlay.brand_logo_path),
+    resolveAssetUrl(projectRoot, overlay.host_a.photo_path),
+    resolveAssetUrl(projectRoot, overlay.host_b.photo_path),
+  ].filter((url): url is string => Boolean(url));
+  if (urls.length === 0) return null;
+  return (
+    <div className="broadcast-asset-preloads">
+      {urls.map((url) => (
+        <img key={url} src={url} alt="" />
+      ))}
+    </div>
+  );
+}
+
+function BroadcastSponsorMarquee({
+  sponsorText,
+  timelineTime,
+  opacity,
+}: {
+  sponsorText: string;
+  timelineTime: number;
+  opacity: number;
+}) {
+  const segmentRef = useRef<HTMLSpanElement | null>(null);
+  const [segmentWidth, setSegmentWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const element = segmentRef.current;
+    if (!element) return;
+    const measure = () => setSegmentWidth(element.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [sponsorText]);
+
+  const scrollPxPerSecond = 48 * (segmentWidth > 0 ? segmentWidth / sponsorTextReferenceWidth(sponsorText) : 0);
+  const offset =
+    segmentWidth > 0 ? (timelineTime * scrollPxPerSecond) % segmentWidth : 0;
+
+  return (
+    <div className="broadcast-sponsor-marquee" style={{ opacity }}>
+      <div
+        className="broadcast-sponsor-track"
+        style={{ transform: `translate3d(${-offset}px, 0, 0)` }}
+      >
+        <span ref={segmentRef} className="broadcast-sponsor-segment">
+          {sponsorText}
+        </span>
+        <span className="broadcast-sponsor-segment">{sponsorText}</span>
+        <span className="broadcast-sponsor-segment">{sponsorText}</span>
+      </div>
+    </div>
+  );
+}
+
+function sponsorTextReferenceWidth(text: string): number {
+  return Math.max(1, text.length * 28);
+}
+
 function BroadcastBrandLogo({
   logoPath,
   projectRoot,
+  resolveAssetUrl,
 }: {
   logoPath: string | null;
   projectRoot: string | null;
+  resolveAssetUrl: (projectRoot: string | null, relPath: string | null) => string | null;
 }) {
-  const logo = projectAssetUrl(projectRoot, logoPath);
+  const logo = resolveAssetUrl(projectRoot, logoPath);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     setFailed(false);
@@ -781,13 +1022,15 @@ function BroadcastName({
 function BroadcastIntroHost({
   host,
   projectRoot,
+  resolveAssetUrl,
   align,
 }: {
   host: BroadcastHost;
   projectRoot: string | null;
+  resolveAssetUrl: (projectRoot: string | null, relPath: string | null) => string | null;
   align?: "right";
 }) {
-  const photo = projectAssetUrl(projectRoot, host.photo_path);
+  const photo = resolveAssetUrl(projectRoot, host.photo_path);
   const [photoFailed, setPhotoFailed] = useState(false);
   useEffect(() => {
     setPhotoFailed(false);
@@ -831,20 +1074,54 @@ function activeChapterEntry(
   return active;
 }
 
-function activeBroadcastTopic(
+function broadcastTickerEntries(
+  overlay: BroadcastOverlayConfig,
+): BroadcastTimedEntry[] {
+  return overlay.topics.length > 0 ? overlay.topics : overlay.chapters;
+}
+
+function broadcastTickerPhase(
   entries: BroadcastTimedEntry[],
   timelineTime: number,
   style: BroadcastOverlayConfig["style"],
-): BroadcastTimedEntry | null {
+): {
+  activeTopic: BroadcastTimedEntry | null;
+  sponsorOpacity: number;
+  topicOpacity: number;
+} {
   const topic = [...entries].reverse().find((entry) => entry.time_seconds <= timelineTime);
-  if (!topic) return null;
+  if (!topic) {
+    return { activeTopic: null, sponsorOpacity: 1, topicOpacity: 0 };
+  }
   const sponsor = Math.max(0, style.ticker_sponsor_duration);
   const fade = Math.max(0, style.ticker_fade_duration);
   const topicDuration = Math.max(0.25, style.ticker_topic_duration);
   const cycle = sponsor + fade + topicDuration + fade;
-  if (cycle <= 0) return topic;
+  if (cycle <= 0) return { activeTopic: topic, sponsorOpacity: 0, topicOpacity: 1 };
   const cyclePos = ((timelineTime % cycle) + cycle) % cycle;
-  return cyclePos >= sponsor && cyclePos < sponsor + fade + topicDuration ? topic : null;
+  if (cyclePos < sponsor - fade) {
+    return { activeTopic: topic, sponsorOpacity: 1, topicOpacity: 0 };
+  }
+  if (cyclePos < sponsor) {
+    const topicOpacity = fade <= 0 ? 1 : (cyclePos - (sponsor - fade)) / fade;
+    return {
+      activeTopic: topic,
+      sponsorOpacity: 1 - topicOpacity,
+      topicOpacity,
+    };
+  }
+  if (cyclePos < sponsor + topicDuration) {
+    return { activeTopic: topic, sponsorOpacity: 0, topicOpacity: 1 };
+  }
+  if (cyclePos < sponsor + topicDuration + fade) {
+    const sponsorOpacity = fade <= 0 ? 1 : (cyclePos - sponsor - topicDuration) / fade;
+    return {
+      activeTopic: topic,
+      sponsorOpacity,
+      topicOpacity: 1 - sponsorOpacity,
+    };
+  }
+  return { activeTopic: topic, sponsorOpacity: 1, topicOpacity: 0 };
 }
 
 function chapterNumber(
@@ -903,6 +1180,8 @@ function activeTitleOverlays(
   snapshot: TimelineSnapshot,
   _durationS: number,
 ): PreviewTitleOverlay[] {
+  if (broadcastOverlayOwnsProgramTitles(snapshot.broadcast_overlay)) return [];
+
   const titleTrack = snapshot.tracks.find((track) => track.role === "titles");
   if (!titleTrack) return [];
 
@@ -927,6 +1206,12 @@ function activeTitleOverlays(
     });
   }
   return overlays;
+}
+
+function broadcastOverlayOwnsProgramTitles(
+  overlay: TimelineSnapshot["broadcast_overlay"],
+): boolean {
+  return Boolean(overlay?.enabled && !overlay.short_form_mode);
 }
 
 function TimelineTitleOverlays({

@@ -93,7 +93,6 @@ export const useProposalStore = create<ProposalState>((set) => ({
   clear: () => set({ active: null }),
 }));
 
-/** Subscribes the proposal store to ITEM_EVENT once at app start. */
 export function isProposedEditItem(
   item: Item,
 ): item is Extract<Item, { kind: "proposed_edit" }> {

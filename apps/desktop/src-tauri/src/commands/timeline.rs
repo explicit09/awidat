@@ -26,8 +26,8 @@ pub async fn read_timeline(state: State<'_, AwidatState>) -> Result<TimelineSnap
         Some(p) => p,
         None => return Ok(empty_snapshot()),
     };
-    // Project::read is sync; spawn_blocking so we don't hold the
-    // tokio runtime on disk I/O.
+    // Project::read is sync; spawn_blocking keeps disk I/O off the
+    // runtime threads.
     let snapshot = tokio::task::spawn_blocking(move || -> Result<TimelineSnapshot, String> {
         let project = Project::read(&project_root).map_err(|e| format!("read project: {e}"))?;
         Ok(flatten_timeline_public(&project.timeline, &project_root))
@@ -96,36 +96,26 @@ pub fn flatten_timeline_public(
                         }
                         MediaReference::Missing(_) => None,
                     };
-                    // Resolve the proxy path once per clip so the
-                    // frontend can play this segment without doing
-                    // its own filesystem lookups. `None` is fine —
-                    // the frontend treats it as "still transcoding"
-                    // and falls back to its empty-state placeholder
-                    // for that clip's window.
+                    // Proxy path: `None` means "still transcoding" — the
+                    // frontend draws its empty-state placeholder.
                     let proxy_path = asset_id.as_deref().and_then(|aid| {
                         crate::commands::media::proxy_path_for_asset_id(project_root, aid)
                     });
-                    // Resolve the thumbnails dir once per clip so the
-                    // canvas can tile filmstrip frames inside the
-                    // clip body. `None` while the post-import
-                    // [`JobKind::Thumbnails`] job hasn't completed —
-                    // the canvas falls back to the same coloured-rect
-                    // it drew before Step 10.
+                    // Thumbnails dir: `None` while the post-import
+                    // [`JobKind::Thumbnails`] job is still pending.
                     let thumbnail_dir = asset_id.as_deref().and_then(|aid| {
                         crate::commands::media::thumbnails_dir_for_asset_id(project_root, aid)
                     });
-                    // Resolve the waveform sidecar path once per clip
-                    // so audio tracks can draw the amplitude line.
-                    // `None` while the post-import [`JobKind::Waveform`]
-                    // job hasn't completed, AND when the asset has no
-                    // audio stream (sidecar exists but its buckets
-                    // array is empty).
+                    // Waveform sidecar: `None` while the post-import
+                    // [`JobKind::Waveform`] job is pending and when the
+                    // asset has no audio stream (sidecar exists with
+                    // an empty buckets array).
                     let waveform_path = asset_id.as_deref().and_then(|aid| {
                         crate::commands::media::waveform_path_for_asset_id(project_root, aid)
                     });
-                    // Anchor uuid: prefer clip.metadata.awidat.extra["clip_uuid"];
-                    // fall back to display name (the EDL resolver also
-                    // matches names, so the fallback round-trips).
+                    // Prefer clip.metadata.awidat.extra["clip_uuid"];
+                    // fall back to display name (the EDL resolver
+                    // matches on either, so the fallback round-trips).
                     let clip_uuid = clip
                         .metadata
                         .awidat
@@ -134,11 +124,9 @@ pub fn flatten_timeline_public(
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| clip.name.clone());
-                    // Pull per-clip volume / speed off the OTIO Effect
-                    // nodes the apply layer stamps. The PropertiesPane
-                    // reads these to populate its sliders; the canvas
-                    // paints a small badge on clips with non-default
-                    // values.
+                    // Per-clip volume/speed live on OTIO Effect nodes
+                    // the apply layer stamps. PropertiesPane sliders
+                    // and the canvas badge both read these.
                     let volume = clip
                         .effects
                         .iter()
@@ -236,6 +224,25 @@ pub fn flatten_timeline_public(
                                 .unwrap_or("none")
                                 .to_string(),
                         });
+                    let video_overlay = clip
+                        .effects
+                        .iter()
+                        .find(|e| e.effect_name == "awidat.video_overlay")
+                        .map(|e| awidat_desktop_protocol::VideoOverlayStyling {
+                            mode: e
+                                .metadata
+                                .get("mode")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("full_frame")
+                                .to_string(),
+                            corner: e
+                                .metadata
+                                .get("corner")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string),
+                            scale: e.metadata.get("scale").and_then(|v| v.as_f64()),
+                            margin_pct: e.metadata.get("margin_pct").and_then(|v| v.as_f64()),
+                        });
                     let item_track_start_s = if is_titles_track {
                         source_start_s.unwrap_or(track_cursor_s)
                     } else {
@@ -262,6 +269,7 @@ pub fn flatten_timeline_public(
                         color_correction,
                         lut_path,
                         title,
+                        video_overlay,
                     });
                     if !is_titles_track {
                         track_cursor_s += duration_s;
@@ -291,8 +299,7 @@ pub fn flatten_timeline_public(
                     });
                 }
                 TrackChild::Stack(_) => {
-                    // Nested stacks: skipped in v1. The cursor doesn't
-                    // advance — they don't draw on this row.
+                    // v1 doesn't draw nested stacks; cursor unchanged.
                 }
             }
         }
@@ -309,8 +316,7 @@ pub fn flatten_timeline_public(
         });
     }
 
-    // Sort: video tracks first (shown above audio in the pane),
-    // preserve original order within each kind.
+    // Video tracks render above audio; preserve order within each kind.
     tracks.sort_by_key(|t| if t.kind == "video" { 0 } else { 1 });
 
     TimelineSnapshot {

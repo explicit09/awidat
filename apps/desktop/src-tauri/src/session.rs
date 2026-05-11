@@ -28,14 +28,7 @@ use awidat_core::tools::{
 use awidat_core::{Session, ToolRegistry};
 use tokio::sync::mpsc;
 
-// Step 1.9: the system prompt is no longer a static const — it's
-// assembled per-project by `awidat_core::system_prompt::assemble_for
-// _project`, which folds in the project type's editorial defaults
-// (podcast / shorts / tutorial / other) plus the active permission
-// mode. See crates/core/src/system_prompt.rs.
-
-/// Build the full editorial-tool registry. Mirrors the TUI's set; the
-/// desktop is the buyer surface and gets every tool the agent has.
+/// Build the full editorial-tool registry. Mirrors the TUI's set.
 pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ApplyEdlTool));
@@ -79,13 +72,14 @@ pub fn build_registry() -> ToolRegistry {
     registry
 }
 
-/// Build a fresh `Session` rooted at `project_root`. Step 1.9
-/// replaced the static `SYSTEM_PROMPT` constant with a per-project
-/// builder: the prompt now includes format-specific defaults
-/// (podcast / shorts / tutorial / other) read from the OTIO
-/// metadata, plus the active permission mode read from
-/// `.awidat/permission_mode`. Both reads tolerate missing/corrupt
-/// state and fall back to Other + Manual.
+/// Build a fresh `Session` rooted at `project_root`.
+///
+/// The system prompt is assembled per-project by
+/// `awidat_core::system_prompt::assemble_for_project`, which folds in
+/// the project type's editorial defaults (podcast / shorts / tutorial
+/// / other) and the active permission mode read from
+/// `.awidat/permission_mode`. Both reads fall back to Other + Manual
+/// on missing/corrupt state.
 pub async fn build_session(
     project_root: PathBuf,
     approval_tx: mpsc::Sender<ApprovalRequest>,

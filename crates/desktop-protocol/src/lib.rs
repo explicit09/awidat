@@ -262,9 +262,6 @@ pub enum Item {
     /// `<project>/.awidat/notes.json`, and have a three-state
     /// lifecycle: `open` → `resolved` (user took action) or
     /// `dismissed` (user explicitly rejected this finding).
-    ///
-    /// Step 1.1 wires the protocol surface; Steps 1.4–1.7 land the
-    /// tools that emit Notes + the panel UI that renders them.
     EditorialNote {
         /// Stable id (matches the underlying Note record so dismiss /
         /// resolve commands can find it).
@@ -297,11 +294,8 @@ pub enum Item {
         /// For `continuity_warning` notes: the rule engine's verdict
         /// (`clean` / `risky` / `dirty` / `abstain`) so the panel
         /// can color-code the card. `None` for non-continuity kinds
-        /// (silence, filler, etc).
-        ///
-        /// Step 2.5 added this so continuity notes show urgency at
-        /// a glance — dirty cuts get a red border, risky get amber,
-        /// abstain reads as muted.
+        /// (silence, filler, etc). Dirty cuts render with a red
+        /// border, risky get amber, abstain reads muted.
         #[serde(default)]
         continuity_verdict: Option<ContinuityVerdictTag>,
         /// For `continuity_warning` notes: the per-rule reasons the
@@ -317,10 +311,6 @@ pub enum Item {
         /// "Search Pexels" button (which dispatches a chat directive
         /// asking the agent to call `search_broll(query)` on the
         /// user's behalf). `None` for non-broll kinds.
-        ///
-        /// Step 3.4 added this so the BrollNoteCard knows what to
-        /// search for without asking the agent to re-derive the
-        /// query mid-flow.
         #[serde(default)]
         broll_query: Option<String>,
         /// For `broll_suggestion` notes: pre-fetched preview thumbnails
@@ -403,10 +393,9 @@ pub enum JobResult {
 
 /// Wire-side mirror of `awidat_core::continuity::Verdict`. Lives
 /// here in the protocol crate so the frontend can render it via
-/// ts-rs without depending on `awidat-core`. Phase 2.5 added this
-/// for `continuity_warning` Notes; the panel maps each variant to
-/// a color (clean → green, risky → amber, dirty → red, abstain →
-/// muted).
+/// ts-rs without depending on `awidat-core`. The panel maps each
+/// variant to a color: clean → green, risky → amber, dirty → red,
+/// abstain → muted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 #[serde(rename_all = "snake_case")]
@@ -430,8 +419,6 @@ pub enum ContinuityVerdictTag {
 /// called `search_broll` and wants to surface the top hits inline.
 /// The UI renders a thumbnail row with click-to-place; clicking
 /// triggers a chat directive that calls `use_broll(pexels_id, ...)`.
-///
-/// Step 3.4 added this for the BrollNoteCard.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 pub struct BrollPreview {
@@ -731,8 +718,8 @@ pub enum TimelineItem {
         /// `clip.metadata.awidat.extra["clip_uuid"]` if present;
         /// otherwise falls back to the clip's display name (which the
         /// `awidat_core::edl::anchor` resolver also matches against).
-        /// Step 8's drag-to-trim builds `TrimClip { anchor:
-        /// ClipUuid { uuid } }` from this field.
+        /// Drag-to-trim wires this directly into
+        /// `TrimClip { anchor: ClipUuid { uuid } }`.
         clip_uuid: String,
         /// Start of this clip on the track timeline, in seconds.
         track_start_s: f64,
@@ -803,6 +790,10 @@ pub enum TimelineItem {
         /// title editor in PropertiesPane when this is `Some` and
         /// paints the title text inline on the timeline band.
         title: Option<TitleStyling>,
+        /// Video overlay styling for upper-track media clips. `None`
+        /// means a regular full-frame overlay/cutaway when the clip
+        /// is on an upper video track.
+        video_overlay: Option<VideoOverlayStyling>,
     },
     /// Empty time on the track (silence / black frames).
     Gap {
@@ -870,6 +861,21 @@ pub struct TitleStyling {
     /// Animation: `"none"`, `"fade_in"`, `"fade_out"`, `"fade_in_out"`,
     /// `"slide_in"`, or `"slide_out"`.
     pub animation: String,
+}
+
+/// Clip-level media overlay styling, lifted off
+/// `awidat.video_overlay` effect metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct VideoOverlayStyling {
+    /// Overlay mode: `"pip"` or `"full_frame"`.
+    pub mode: String,
+    /// PiP corner. `None` for full-frame overlays.
+    pub corner: Option<String>,
+    /// PiP width as a fraction of output width.
+    pub scale: Option<f64>,
+    /// PiP margin as a fraction of output width/height.
+    pub margin_pct: Option<f64>,
 }
 
 /// One paragraph-sized segment from a whisper transcript sidecar.

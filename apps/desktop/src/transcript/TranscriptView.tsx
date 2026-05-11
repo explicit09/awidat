@@ -445,8 +445,6 @@ function fmt(s: number): string {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-// --- Active-word helpers ----------------------------------------
-
 /** Imperative `classList.remove` on the previously-active span.
  *  Cheap — typical case is a single querySelector + classList op. */
 function clearActive(scope: HTMLDivElement | null, idx: number): void {
@@ -533,8 +531,6 @@ function wordIdxFromTarget(target: HTMLElement | null): number {
   const idx = v === null ? NaN : Number(v);
   return Number.isFinite(idx) ? idx : -1;
 }
-
-// --- Delete-range EDL builder -----------------------------------
 
 /**
  * Build the EDL envelope to cut `[sourceStart, sourceEnd]` of asset

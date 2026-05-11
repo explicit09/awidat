@@ -3,6 +3,7 @@
 // App.tsx so toolbar-triggered jobs are heard even when this pane
 // remounts during project changes.
 
+import { useEffect, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Item } from "../protocol";
@@ -17,15 +18,45 @@ export function ChatStream() {
   const items = useAgentStore((s) => s.items);
   const running = useAgentStore((s) => s.running);
   const turnError = useAgentStore((s) => s.turnError);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const shouldFollowRef = useRef(true);
 
   const projectReady = useProjectStore((s) => s.current !== null);
   const hasTimelineClips = useTimelineStore((s) =>
     s.snapshot.tracks.some((track) => track.items.length > 0),
   );
   const timelineRefreshing = useTimelineStore((s) => s.refreshing);
+  const activePrompt = useMemo(() => latestUserPrompt(items), [items]);
+
+  useEffect(() => {
+    if (!shouldFollowRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ block: "end" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [items, running, turnError]);
+
+  function handleScroll() {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldFollowRef.current = distanceFromBottom < 96;
+  }
 
   return (
-    <div className="chat-items" aria-live="polite">
+    <div
+      ref={scrollerRef}
+      onScroll={handleScroll}
+      className="chat-items"
+      aria-live="polite"
+    >
+      {activePrompt && (
+        <div className="sticky-user-prompt">
+          <span>Replying to</span>
+          <p>{activePrompt}</p>
+        </div>
+      )}
       {items.length === 0 &&
         !running &&
         !turnError &&
@@ -52,8 +83,21 @@ export function ChatStream() {
           <div className="item-body">{turnError}</div>
         </article>
       )}
+      <div ref={bottomRef} aria-hidden="true" />
     </div>
   );
+}
+
+function latestUserPrompt(items: Item[]): string | null {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item.kind === "user_input" && item.text.trim()) {
+      const hasReplyAfter = items.slice(i + 1).some((next) => next.kind !== "user_input");
+      if (!hasReplyAfter) return null;
+      return summarizeText(item.text, 160);
+    }
+  }
+  return null;
 }
 
 function ItemView({ item }: { item: Item }) {

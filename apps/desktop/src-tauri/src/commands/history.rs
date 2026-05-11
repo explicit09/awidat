@@ -97,7 +97,8 @@ async fn load_history_from_path(
     meta: SessionMeta,
 ) -> Result<ChatHistory, String> {
     let (_meta, messages) = Recorder::resume(&path).map_err(|e| e.to_string())?;
-    let summary = summarize_session(&path, &meta, messages.len());
+    let title = generated_session_title(&meta, &messages);
+    let summary = summarize_session(&path, &meta, messages.len(), title);
     let items = messages_to_items(&meta.id, &messages);
     *state.session.lock().await = None;
     *state.resume_log_path.lock().await = Some(path);
@@ -117,10 +118,11 @@ fn list_project_sessions(project_root: &Path) -> Result<Vec<ChatSessionSummary>,
         if !same_project_root(&meta.project_root, project_root) {
             continue;
         }
-        let message_count = Recorder::resume(&path)
-            .map(|(_, messages)| messages.len())
-            .unwrap_or(0);
-        out.push(summarize_session(&path, &meta, message_count));
+        let (message_count, title) = match Recorder::resume(&path) {
+            Ok((_, messages)) => (messages.len(), generated_session_title(&meta, &messages)),
+            Err(_) => (0, fallback_session_title(&meta)),
+        };
+        out.push(summarize_session(&path, &meta, message_count, title));
     }
     Ok(out)
 }
@@ -135,18 +137,67 @@ fn latest_project_session(project_root: &Path) -> Result<Option<(PathBuf, Sessio
         .find(|(_, meta)| same_project_root(&meta.project_root, project_root)))
 }
 
-fn summarize_session(path: &Path, meta: &SessionMeta, message_count: usize) -> ChatSessionSummary {
+fn summarize_session(
+    path: &Path,
+    meta: &SessionMeta,
+    message_count: usize,
+    title: String,
+) -> ChatSessionSummary {
     ChatSessionSummary {
         id: meta.id.clone(),
-        title: format!(
-            "{} · {}",
-            meta.started_at.format("%b %-d, %-I:%M %p"),
-            meta.model
-        ),
+        title,
         project_root: meta.project_root.to_string_lossy().into_owned(),
         log_path: path.to_string_lossy().into_owned(),
         started_at: meta.started_at.to_rfc3339(),
         message_count,
+    }
+}
+
+fn generated_session_title(meta: &SessionMeta, messages: &[Message]) -> String {
+    messages
+        .iter()
+        .filter(|message| matches!(message.role, Role::User))
+        .flat_map(|message| &message.content)
+        .filter_map(|block| match block {
+            ContentBlock::Text { text, .. } => Some(strip_view_context(text)),
+            _ => None,
+        })
+        .map(|text| title_from_prompt(&text))
+        .find(|title| !title.is_empty())
+        .unwrap_or_else(|| fallback_session_title(meta))
+}
+
+fn fallback_session_title(meta: &SessionMeta) -> String {
+    format!("Chat from {}", meta.started_at.format("%b %-d, %-I:%M %p"))
+}
+
+fn title_from_prompt(prompt: &str) -> String {
+    let normalized = prompt
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(prompt)
+        .trim()
+        .trim_matches(|c: char| c == '"' || c == '\'' || c.is_ascii_punctuation());
+
+    let mut words = Vec::new();
+    for word in normalized.split_whitespace() {
+        let cleaned = word
+            .trim_matches(|c: char| c == '"' || c == '\'' || c == '`')
+            .trim_matches(|c: char| c == ',' || c == '.' || c == ':' || c == ';');
+        if cleaned.is_empty() {
+            continue;
+        }
+        words.push(cleaned);
+        if words.len() == 7 {
+            break;
+        }
+    }
+
+    let title = words.join(" ");
+    if title.len() <= 64 {
+        title
+    } else {
+        format!("{}...", title.chars().take(61).collect::<String>())
     }
 }
 

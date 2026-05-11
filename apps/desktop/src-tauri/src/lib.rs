@@ -45,15 +45,14 @@ use tracing::{error, warn};
 /// Tauri entrypoint. Called from `main.rs`.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Resolve API keys (Anthropic, HuggingFace) before any thread
-    // spawns. If they live in the OS keychain, also export them to
-    // the parent env so MCP indexer subprocesses inherit them.
-    // Safe to call any number of times; the OnceLock guards repeats.
+    // Resolve API keys before any thread spawns and (when stored in the
+    // OS keychain) export them so MCP indexer subprocesses inherit them.
+    // Idempotent — guarded by a OnceLock.
     secrets::resolve_at_startup();
 
     let state = AwidatState::default();
 
-    // Pre-populate project_root from env if set, for dev convenience.
+    // Dev convenience — preload project_root from env when set.
     if let Ok(p) = std::env::var("AWIDAT_DESKTOP_PROJECT") {
         let buf = PathBuf::from(&p);
         if buf.is_dir() && buf.join("project.otio.json").is_file() {

@@ -215,9 +215,8 @@ fn spawn_post_import_chain_many(
             }
         }
 
-        // Index the whole project once after all selected assets have
-        // been imported and proxied. The indexer is sha-keyed, so this
-        // only does real work for new/changed assets.
+        // The indexer is sha-keyed; running on already-indexed assets
+        // is a fast no-op.
         if let Err(e) =
             crate::commands::index::index_project_at_root(&app, &state, project_root.clone()).await
         {
@@ -251,9 +250,8 @@ async fn process_imported_asset(
         })?;
     }
 
-    // Insert the asset onto the timeline. Single imports preserve the
-    // old "only if empty" behavior; plural imports append every
-    // selected file in order.
+    // Single imports keep the original "only-if-empty" insert; plural
+    // imports append every selected file in order.
     match probe.duration_s {
         Some(duration_s) => {
             let result = match insert_mode {
@@ -294,9 +292,8 @@ async fn process_imported_asset(
         }
     }
 
-    // Generate filmstrip thumbnails + audio waveform for the
-    // just-imported asset. Both are idempotent (mtime-checked) so
-    // re-running the chain on an already-processed asset is a no-op.
+    // Thumbnails + waveform are mtime-idempotent, so re-running the
+    // chain on an already-processed asset is a no-op.
     if probe.has_video {
         match crate::commands::thumbnail::generate_thumbnails_for_asset_in_project(
             app,
@@ -428,8 +425,8 @@ async fn run_local_import(
             return Err("symlinks not supported on this platform; pass link=false".into());
         }
     } else {
-        // tokio::fs::copy streams in 64KB chunks — fine for big
-        // media. Cancellation polled around the call.
+        // tokio::fs::copy streams in 64KB chunks; cancellation polled
+        // around the call.
         tokio::select! {
             _ = cancel.cancelled() => return Err("cancelled".into()),
             r = fs::copy(&src, &dst) => {
@@ -515,10 +512,9 @@ async fn run_url_import(
     let output_template = raw.join("yt-%(id)s.%(ext)s");
 
     // `--newline` makes yt-dlp emit one progress line per percent
-    // (vs. carriage-returned in-place updates), which is what
-    // `CommandEvent::Stdout` gives us per-line.
-    // `--print after_move:filepath` makes the very last stdout line
-    // be the final filepath — we capture and parse it out.
+    // (instead of CR-replaced in-place updates), matching what
+    // `CommandEvent::Stdout` delivers. `--print after_move:filepath`
+    // makes the final stdout line be the resolved filepath.
     let cmd = app
         .shell()
         .sidecar("yt-dlp")

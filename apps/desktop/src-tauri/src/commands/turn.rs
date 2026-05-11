@@ -157,7 +157,7 @@ pub async fn start_turn(
 /// Cancel the in-flight turn. No-op if no turn is running.
 #[tauri::command]
 pub async fn cancel_turn(state: State<'_, AwidatState>) -> Result<(), String> {
-    if let Some(handle) = state.turn.lock().await.as_ref() {
+    if let Some(handle) = state.turn.lock().await.take() {
         handle.cancel.cancel();
     }
     Ok(())

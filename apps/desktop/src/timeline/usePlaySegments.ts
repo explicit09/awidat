@@ -51,6 +51,14 @@ export type PlaySegment = {
   clipIndex: number;
 };
 
+export type VideoOverlaySegment = PlaySegment & {
+  mode: "full_frame" | "pip";
+  corner: "top_left" | "top_right" | "bottom_left" | "bottom_right";
+  scale: number;
+  marginPct: number;
+  zIndex: number;
+};
+
 /**
  * Walk the snapshot's first video track and produce the playable
  * segments. Empty array when:
@@ -65,7 +73,9 @@ export type PlaySegment = {
 export function usePlaySegments(): PlaySegment[] {
   const snapshot = useTimelineStore((s) => s.snapshot);
   return useMemo(() => {
-    const videoTrack = snapshot.tracks.find((t) => t.kind === "video");
+    const videoTrack = snapshot.tracks.find(
+      (t) => t.kind === "video" && t.role !== "titles",
+    );
     if (!videoTrack) return [];
     const hasExplicitAudio = snapshot.tracks.some((t) => t.kind === "audio");
 
@@ -99,12 +109,78 @@ export function usePlaySegments(): PlaySegment[] {
   }, [snapshot]);
 }
 
+/**
+ * Derive upper video-track overlays. The first non-title video track
+ * is the base program; later non-title video tracks composite above it.
+ */
+export function useVideoOverlaySegments(): VideoOverlaySegment[] {
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  return useMemo(() => {
+    const videoTracks = snapshot.tracks.filter(
+      (t) => t.kind === "video" && t.role !== "titles",
+    );
+    const overlayTracks = videoTracks.slice(1);
+    const segments: VideoOverlaySegment[] = [];
+    overlayTracks.forEach((track, trackOffset) => {
+      for (const item of track.items) {
+        if (item.kind !== "clip") continue;
+        if (item.proxy_path === null || item.duration_s <= 0) continue;
+        const sourceStart = item.source_start_s ?? 0;
+        const overlay = item.video_overlay;
+        const isPip = overlay?.mode === "pip";
+        segments.push({
+          proxyPath: item.proxy_path,
+          proxyStem: stemFromProxyPath(item.proxy_path),
+          sourceStart,
+          sourceEnd: sourceStart + item.duration_s,
+          timelineStart: item.track_start_s,
+          timelineEnd: item.track_start_s + item.duration_s,
+          volume: 0,
+          speed: item.speed ?? 1,
+          clipIndex: item.index,
+          mode: isPip ? "pip" : "full_frame",
+          corner: normalizeCorner(overlay?.corner),
+          scale: clampNumber(overlay?.scale, 0.28, 0.1, 0.6),
+          marginPct: clampNumber(overlay?.margin_pct, 0.035, 0, 0.15),
+          zIndex: trackOffset,
+        });
+      }
+    });
+    segments.sort((a, b) => a.timelineStart - b.timelineStart || a.zIndex - b.zIndex);
+    return segments;
+  }, [snapshot]);
+}
+
 /** Extract the stem (filename minus extension) from a proxy path. */
 function stemFromProxyPath(path: string): string {
   const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   const file = slash >= 0 ? path.slice(slash + 1) : path;
   const dot = file.lastIndexOf(".");
   return dot > 0 ? file.slice(0, dot) : file;
+}
+
+function normalizeCorner(
+  corner: string | null | undefined,
+): VideoOverlaySegment["corner"] {
+  if (
+    corner === "top_left" ||
+    corner === "top_right" ||
+    corner === "bottom_left" ||
+    corner === "bottom_right"
+  ) {
+    return corner;
+  }
+  return "bottom_right";
+}
+
+function clampNumber(
+  value: number | null | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value as number));
 }
 
 /**

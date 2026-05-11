@@ -246,20 +246,14 @@ function App() {
   ]);
 
   const projectReady = current !== null;
+  const chatFocused = !showMedia && !showProperties && !showTimeline;
   const workspaceColumns = [
-    showSidebar ? "clamp(330px, 25vw, 460px)" : null,
+    showSidebar ? (chatFocused ? "minmax(0, 1fr)" : "clamp(330px, 25vw, 460px)") : null,
     showMedia ? "minmax(540px, 1fr)" : null,
     showProperties ? "clamp(250px, 17vw, 330px)" : null,
   ]
     .filter(Boolean)
     .join(" ");
-  const sidebarTitle =
-    sidebarTab === "chat"
-      ? "Agent"
-      : sidebarTab === "transcript"
-        ? "Transcript"
-        : "Edit history";
-
   return (
     <main className="app-shell">
       <header className="app-header">
@@ -280,19 +274,6 @@ function App() {
           >
             {showSidebar && (
             <div className="workspace-chat">
-              <header className="sidebar-header">
-                <div>
-                  <span className="sidebar-kicker">Workspace</span>
-                  <strong>{sidebarTitle}</strong>
-                </div>
-                <span className="sidebar-chip">
-                  {sidebarTab === "chat"
-                    ? "Prompt"
-                    : sidebarTab === "transcript"
-                      ? "Words"
-                      : "Cuts"}
-                </span>
-              </header>
               <div className="sidebar-tabs" role="tablist" aria-label="Workspace sidebar">
                 <button
                   type="button"
@@ -324,7 +305,21 @@ function App() {
               </div>
               {sidebarTab === "chat" ? (
                 <>
-                  <SessionBar />
+                  <SessionBar
+                    focused={chatFocused}
+                    onFocusChat={() => {
+                      setShowSidebar(true);
+                      setShowMedia(false);
+                      setShowProperties(false);
+                      setShowTimeline(false);
+                    }}
+                    onRestoreWorkspace={() => {
+                      setShowSidebar(true);
+                      setShowMedia(true);
+                      setShowProperties(true);
+                      setShowTimeline(true);
+                    }}
+                  />
                   <ChatStream />
                   {showNotes && <NotesPanel />}
                   <Composer projectReady={projectReady} />
