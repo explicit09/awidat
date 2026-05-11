@@ -145,6 +145,9 @@ pub fn resolve_ffmpeg_xfade(kind_or_id: &str) -> Result<Option<&str>, Transition
     }
     match kind_or_id {
         "SMPTE_Dissolve" => Ok(Some("fade")),
+        // Legacy aliases kept for old projects. New agent-authored EDLs
+        // should use `awidat.fade_black` for an intentional black dip;
+        // `fade_in` / `fade_out` are ambiguous between adjacent clips.
         "awidat.fade_in" | "awidat.fade_out" => Ok(Some("fadeblack")),
         // Common raw FFmpeg xfade names remain accepted for old EDLs.
         "fade" | "fadeblack" | "fadewhite" | "distance" | "wipeleft" | "wiperight" | "wipeup"

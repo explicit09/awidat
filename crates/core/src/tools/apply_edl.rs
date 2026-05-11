@@ -463,13 +463,16 @@ created Video-kind if missing). The ONLY op that doesn't take an \
 \n  - **Insert Transition**: `+ kind: <name>` and `+ duration_s: \
 <seconds>` (required). Anchored via `@@ between: ANCHOR_A and \
 ANCHOR_B` where the two anchors identify ADJACENT clips on the \
-same track (the transition sits between them at the cut). Common \
-kinds: `SMPTE_Dissolve` (cross-fade), `awidat.fade_in`, \
-`awidat.fade_out`. The render pipeline maps these to ffmpeg's \
-xfade transition names. duration_s applies symmetrically — half \
-reaches into the outgoing clip, half into the incoming. Transitions \
-may be chained across adjacent clips; transitions still cannot cross \
-gaps or non-adjacent anchors.\
+same track. The transition is centered on the cut: half of \
+`duration_s` reaches into the outgoing clip, half reaches into the \
+incoming clip. Prefer `awidat.cross_dissolve` or `SMPTE_Dissolve` \
+for interview/dialogue smoothing. Use `awidat.fade_black` only for \
+intentional chapter resets or endings; it is a fade-through-black, \
+not a normal dissolve. Do not use legacy `awidat.fade_in` / \
+`awidat.fade_out` between ordinary adjacent clips unless the user \
+explicitly asks for a black dip. Transitions may be chained across \
+adjacent clips; transitions still cannot cross gaps or non-adjacent \
+anchors.\
 \n  - **Move Clip**: `+ to_position: <index>` (required). Moves \
 the anchored clip to a new position within its current track \
 (no cross-track moves in v1). Index is the clip's slot in the \

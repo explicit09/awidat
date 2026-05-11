@@ -50,9 +50,11 @@ call `vedit_diff` and verify the diff matches the beat plan.
 
 ### 3. Motivate transitions and speed
 
-Use `SMPTE_Dissolve` for soft phrase changes, `awidat.fade_in/out` for
-starts/ends, and speed accents only on drops or action peaks. Do not add
-decorative transitions unsupported by `apply_edl`.
+Use `awidat.cross_dissolve` or `SMPTE_Dissolve` for soft phrase
+changes, `awidat.fade_black` only for intentional starts/ends or
+chapter resets, and speed accents only on drops or action peaks. Do not
+use legacy `awidat.fade_in/out` between ordinary adjacent clips, and do
+not add decorative transitions unsupported by `apply_edl`.
 
 ### 4. Verify
 

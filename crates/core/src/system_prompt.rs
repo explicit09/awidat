@@ -196,8 +196,9 @@ fn permission_line(mode: PromptPermissionMode) -> &'static str {
         PromptPermissionMode::Autopilot => {
             "**Permission mode: autopilot.** When the user asks for cleanup, scan for findings \
              and bundle them into a single apply_edl envelope rather than emitting them \
-             one-by-one. For dirty continuity verdicts, silently bundle a 0.3s SMPTE_Dissolve \
-             via the bundle_with_dissolve pattern — don't ask, just include the transition \
+             one-by-one. For dirty continuity verdicts, silently bundle a 0.3s \
+             cross dissolve via the bundle_with_dissolve pattern using \
+             `awidat.cross_dissolve` or `SMPTE_Dissolve` — don't ask, just include the transition \
              in the envelope. The user reviews the bundle in the ghost overlay and accepts \
              or rejects as a whole. For dirty cuts that read as visual jar (mid-motion, \
              speaker-switch mid-utterance), prefer bundling a `*** Insert BRoll` cover when \
@@ -239,7 +240,8 @@ verdict is `clean` / `risky` / `dirty` / `abstain`. Behavior:\
 continuity_warning) describing the risk; let the user decide.\
 \n  • `dirty`: do NOT propose the raw cut. You have THREE options, \
 in order of preference: (a) bundle a 0.3s *** Insert Transition \
-(SMPTE_Dissolve) at the cut point — works for most dirty cuts; \
+(`awidat.cross_dissolve` or `SMPTE_Dissolve`) centered on the cut \
+point — works for most dirty cuts; \
 (b) for visually-driven moments (mid-motion or speaker-switch \
 mid-utterance), call `find_broll_opportunities` for the affected \
 range and surface a `broll_suggestion` Note offering a b-roll \
