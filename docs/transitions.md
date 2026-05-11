@@ -15,11 +15,9 @@ The main repo owns the stable product contract:
 
 ## Phase Two
 
-The external `/Users/tadies/Projects/awidat-transitions` repo is the
-transition lab/registry. It contains stable manifests, a larger candidate
-pool, validation tooling, and placeholders for preview rendering and
-`gl-transitions` import.
-
-Awidat should consume that repo through a small wrapper and a pinned git
-revision once a remote exists. Until then, `awidat_proto::transitions`
-is the in-tree fallback registry and compatibility boundary.
+A separate transition lab/registry holds stable manifests, a larger
+candidate pool, validation tooling, and placeholders for preview rendering
+and `gl-transitions` import. Awidat consumes it through a small wrapper
+and a pinned git revision; until that integration lands,
+`awidat_proto::transitions` is the in-tree fallback registry and
+compatibility boundary.

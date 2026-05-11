@@ -20,6 +20,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use awidat_effects::StackPolicy;
 use awidat_proto::awidat_meta::{
     AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig, BroadcastOverlayStyle,
     BroadcastTimedEntry,
@@ -182,6 +183,27 @@ fn apply_one(
             ctx,
             locator,
         ),
+        EdlOp::InsertPiP {
+            anchor,
+            asset,
+            duration_s,
+            source_start_s,
+            corner,
+            scale,
+            margin_pct,
+        } => apply_insert_pip(
+            working,
+            index,
+            anchor,
+            asset,
+            *duration_s,
+            *source_start_s,
+            *corner,
+            *scale,
+            *margin_pct,
+            ctx,
+            locator,
+        ),
         EdlOp::MoveClip {
             anchor,
             to_position,
@@ -268,6 +290,21 @@ fn apply_one(
             apply_set_clip_audio_fx(working, index, anchor, fx, ctx, locator)
         }
         EdlOp::SetTrackAudioFx { track, fx } => apply_set_track_audio_fx(working, index, track, fx),
+        EdlOp::SetEffect {
+            anchor,
+            effect,
+            params,
+            rationale,
+        } => apply_set_effect(
+            working,
+            index,
+            anchor,
+            effect,
+            params,
+            rationale.as_deref(),
+            ctx,
+            locator,
+        ),
         EdlOp::SetSpeed { anchor, factor } => {
             apply_set_speed(working, index, anchor, *factor, ctx, locator)
         }
@@ -401,10 +438,12 @@ fn resolve_locator_for_op(
         | EdlOp::UntrimClip { anchor, .. }
         | EdlOp::MoveClip { anchor, .. }
         | EdlOp::InsertBRoll { anchor, .. }
+        | EdlOp::InsertPiP { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
         | EdlOp::SetAudioFade { anchor, .. }
         | EdlOp::SetSyncGroup { anchor, .. }
         | EdlOp::SetClipAudioFx { anchor, .. }
+        | EdlOp::SetEffect { anchor, .. }
         | EdlOp::SetSpeed { anchor, .. }
         | EdlOp::SetColorCorrection { anchor, .. }
         | EdlOp::ApplyLut { anchor, .. }
@@ -882,6 +921,14 @@ fn clip_link_group_id(clip: &Clip) -> Option<String> {
         .map(str::to_string)
 }
 
+fn clip_uuid(clip: &Clip) -> Option<&str> {
+    clip.metadata
+        .awidat
+        .as_ref()
+        .and_then(|m| m.extra.get("clip_uuid"))
+        .and_then(|v| v.as_str())
+}
+
 fn next_clip_name_in_track(track: &awidat_proto::otio::Track) -> String {
     let used = track
         .children
@@ -963,6 +1010,7 @@ fn apply_split(
     // this op. Stamp a fresh one so Anchor::ClipUuid resolves
     // unambiguously to whichever piece the agent (or user) names.
     stamp_fresh_clip_uuid(&mut right);
+    let right_uuid = clip_uuid(&right).map(str::to_string);
 
     // Trim the left piece in place.
     let TrackChild::Clip(left) = &mut track.children[locator.child_index] else {
@@ -982,9 +1030,14 @@ fn apply_split(
         .children
         .insert(locator.child_index + 1, TrackChild::Clip(right));
 
+    let right_name = format!("{original_name}-b");
+    let right_anchor = right_uuid
+        .as_deref()
+        .map(|uuid| format!(" anchor=clip_uuid={uuid}"))
+        .unwrap_or_default();
     Ok(format!(
         "split clip {original_name:?} at {at_s:.3}s → {original_name:?} \
-         [{start_s:.3}s..{at_s:.3}s] + {original_name:?}-b \
+         [{start_s:.3}s..{at_s:.3}s] + {right_name:?}{right_anchor} \
          [{at_s:.3}s..{end_s:.3}s]"
     ))
 }
@@ -1010,10 +1063,38 @@ fn apply_delete(
         TrackChild::Clip(c) => c.name.clone(),
         _ => "<non-clip>".to_string(),
     };
+    let removed_transitions = remove_transitions_around_deleted_child(track, locator.child_index);
     if let Some((cut_point, duration)) = overlay_shift {
         shift_broadcast_overlay_timestamps(working, cut_point, duration);
     }
-    Ok(format!("deleted clip {name:?}"))
+    if removed_transitions == 0 {
+        Ok(format!("deleted clip {name:?}"))
+    } else {
+        Ok(format!(
+            "deleted clip {name:?} and removed {removed_transitions} adjacent transition(s)"
+        ))
+    }
+}
+
+fn remove_transitions_around_deleted_child(
+    track: &mut awidat_proto::otio::Track,
+    index: usize,
+) -> usize {
+    let mut removed = 0;
+    if matches!(track.children.get(index), Some(TrackChild::Transition(_))) {
+        track.children.remove(index);
+        removed += 1;
+    }
+    if index > 0
+        && matches!(
+            track.children.get(index - 1),
+            Some(TrackChild::Transition(_))
+        )
+    {
+        track.children.remove(index - 1);
+        removed += 1;
+    }
+    removed
 }
 
 /// Insert a `Transition` node between two adjacent clips on the same
@@ -1559,31 +1640,161 @@ fn apply_insert_broll(
     }
 }
 
+/// Insert a picture-in-picture clip on an upper video track.
+fn apply_insert_pip(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    asset: &str,
+    duration_s: f64,
+    source_start_s: f64,
+    corner: super::op::PiPCorner,
+    scale: f64,
+    margin_pct: f64,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    use awidat_proto::otio::{
+        Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track, TrackChild,
+        TrackKind,
+    };
+    let _ = (anchor, ctx);
+
+    validate_project_relative_asset(index, "insert_pip", asset)?;
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("insert_pip: duration_s {duration_s} must be > 0"),
+        });
+    }
+    if !source_start_s.is_finite() || source_start_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("insert_pip: source_start_s {source_start_s} must be >= 0"),
+        });
+    }
+    if !scale.is_finite() || !(0.10..=0.60).contains(&scale) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("insert_pip: scale {scale} must be in range 0.10..=0.60"),
+        });
+    }
+    if !margin_pct.is_finite() || !(0.0..=0.15).contains(&margin_pct) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("insert_pip: margin_pct {margin_pct} must be in range 0.0..=0.15"),
+        });
+    }
+
+    let locator = required_locator(index, locator)?;
+    let (anchor_name, rate) = {
+        let StackChild::Track(track) = &working.tracks.children[locator.track_index] else {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "insert_pip: anchor resolved to a non-track stack child".into(),
+            });
+        };
+        let TrackChild::Clip(clip) = &track.children[locator.child_index] else {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "insert_pip: anchor resolved to a non-clip track child".into(),
+            });
+        };
+        let range = clip
+            .source_range
+            .as_ref()
+            .ok_or_else(|| ApplyError::Invalid {
+                index,
+                message: "insert_pip: anchor clip has no source_range".into(),
+            })?;
+        (clip.name.clone(), range.start_time.rate)
+    };
+
+    let mut pip = Clip::empty(format!("pip-from-{anchor_name}"));
+    pip.media_reference = MediaReference::External(ExternalReference::new(asset.to_string()));
+    pip.source_range = Some(TimeRange::new(
+        RationalTime::new(source_start_s * rate, rate),
+        RationalTime::new(duration_s * rate, rate),
+    ));
+    stamp_fresh_clip_uuid(&mut pip);
+    stamp_video_overlay_effect(&mut pip, "pip", Some(corner), Some(scale), Some(margin_pct));
+
+    let target_idx = working
+        .tracks
+        .children
+        .iter()
+        .enumerate()
+        .find_map(|(i, sc)| match sc {
+            StackChild::Track(t)
+                if matches!(t.kind, TrackKind::Video) && i != locator.track_index =>
+            {
+                Some(i)
+            }
+            _ => None,
+        });
+    let target_idx = match target_idx {
+        Some(i) => i,
+        None => {
+            let next_name = next_video_track_name(working);
+            let track = Track::empty(next_name, TrackKind::Video);
+            working.tracks.children.push(StackChild::Track(track));
+            working.tracks.children.len() - 1
+        }
+    };
+
+    let anchor_track_time = track_time_at(working, locator.track_index, locator.child_index);
+    let StackChild::Track(target) = &mut working.tracks.children[target_idx] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "insert_pip: overlay target resolved to a non-track stack child".into(),
+        });
+    };
+    let target_cursor = track_cursor(target);
+    if target_cursor < anchor_track_time {
+        target
+            .children
+            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                anchor_track_time - target_cursor,
+                rate,
+            )));
+    }
+    target.children.push(TrackChild::Clip(pip));
+    Ok(format!(
+        "inserted PiP over {anchor_name:?} on overlay track {}: asset={asset:?} \
+         source_start={source_start_s:.3}s duration={duration_s:.3}s corner={}",
+        target.name,
+        pip_corner_str(corner),
+    ))
+}
+
 /// Effect name used for per-clip volume changes. Render reads this
 /// in [`crates/render/src/timeline.rs`]'s FilterPlanner and emits
 /// `volume=<value>` on the segment's audio stream.
-const VOLUME_EFFECT_NAME: &str = "awidat.volume";
+const VOLUME_EFFECT_NAME: &str = awidat_effects::VOLUME;
+
+/// Effect name used for media overlays and picture-in-picture clips.
+const VIDEO_OVERLAY_EFFECT_NAME: &str = awidat_effects::VIDEO_OVERLAY;
 
 /// Effect name used for per-clip audio fades.
-const AUDIO_FADE_EFFECT_NAME: &str = "awidat.audio_fade";
+const AUDIO_FADE_EFFECT_NAME: &str = awidat_effects::AUDIO_FADE;
 
 /// Effect name used for per-clip speed changes. Render reads this
 /// and emits `setpts=<1/factor>*PTS` on video + `atempo=<factor>`
 /// on audio (chained when factor is outside `[0.5, 2.0]`).
-const SPEED_EFFECT_NAME: &str = "awidat.speed";
+const SPEED_EFFECT_NAME: &str = awidat_effects::SPEED;
 
 /// Effect name used for clip-level color correction. Render reads the
 /// optional numeric fields and emits FFmpeg color filters before speed.
-const COLOR_CORRECTION_EFFECT_NAME: &str = "awidat.color_correction";
+const COLOR_CORRECTION_EFFECT_NAME: &str = awidat_effects::COLOR_CORRECTION;
 
 /// Effect name used for clip-level LUT application. Render maps the
 /// project-relative `lut_path` to FFmpeg's `lut3d` filter.
-const LUT_EFFECT_NAME: &str = "awidat.lut";
+const LUT_EFFECT_NAME: &str = awidat_effects::LUT;
 
 /// Effect name stamped on title-clip synthesized clips. The metadata
 /// holds text/position/font_size/color/font_weight/animation; render
 /// walks the Titles track and emits drawtext filters per title.
-const TITLE_EFFECT_NAME: &str = "awidat.title";
+const TITLE_EFFECT_NAME: &str = awidat_effects::TITLE;
 
 /// Track name used for the auto-created Titles track. Render walks
 /// any video track whose `metadata["awidat_track_role"]` is "titles"
@@ -2052,6 +2263,65 @@ fn audio_fx_metadata(
         })
 }
 
+fn apply_set_effect(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    effect_id: &str,
+    params: &serde_json::Map<String, serde_json::Value>,
+    rationale: Option<&str>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let (definition, mut metadata) =
+        awidat_effects::normalize_params(effect_id, params).map_err(|e| ApplyError::Invalid {
+            index,
+            message: format!("set_effect: {e}"),
+        })?;
+    if !matches!(definition.scope, awidat_effects::EffectScope::Clip) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_effect: effect {effect_id:?} is not a clip-scoped effect"),
+        });
+    }
+    if let Some(rationale) = rationale
+        && !rationale.trim().is_empty()
+    {
+        metadata.insert(
+            "rationale".to_string(),
+            serde_json::Value::String(rationale.to_string()),
+        );
+    }
+
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_effect: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_effect: anchor resolved to a non-clip track child".into(),
+        });
+    };
+
+    if matches!(definition.stack_policy, StackPolicy::ReplaceSameId) {
+        clip.effects.retain(|e| e.effect_name != definition.id);
+    }
+    let mut effect = awidat_proto::otio::Effect::new(definition.id);
+    effect.name = definition.display_name.to_string();
+    effect.metadata = metadata;
+    let clip_name = clip.name.clone();
+    clip.effects.push(effect);
+    Ok(format!(
+        "set effect {} on clip {clip_name:?}",
+        definition.id
+    ))
+}
+
 /// Stamp an awidat.speed Effect on the anchored clip with `factor`
 /// (playback rate multiplier). Idempotent: any existing
 /// awidat.speed effect on the clip is removed first.
@@ -2224,6 +2494,69 @@ fn validate_lut_path(index: usize, lut_path: &str) -> Result<(), ApplyError> {
         });
     }
     Ok(())
+}
+
+fn validate_project_relative_asset(
+    index: usize,
+    op_name: &str,
+    asset: &str,
+) -> Result<(), ApplyError> {
+    let path = std::path::Path::new(asset);
+    if asset.trim().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "{op_name}: asset must be a non-empty project-relative path without '..'"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn stamp_video_overlay_effect(
+    clip: &mut awidat_proto::otio::Clip,
+    mode: &str,
+    corner: Option<super::op::PiPCorner>,
+    scale: Option<f64>,
+    margin_pct: Option<f64>,
+) {
+    clip.effects
+        .retain(|e| e.effect_name != VIDEO_OVERLAY_EFFECT_NAME);
+    let mut effect = awidat_proto::otio::Effect::new(VIDEO_OVERLAY_EFFECT_NAME);
+    effect
+        .metadata
+        .insert("mode".to_string(), serde_json::json!(mode));
+    if let Some(corner) = corner {
+        effect.metadata.insert(
+            "corner".to_string(),
+            serde_json::json!(pip_corner_str(corner)),
+        );
+    }
+    if let Some(scale) = scale {
+        effect
+            .metadata
+            .insert("scale".to_string(), serde_json::json!(scale));
+    }
+    if let Some(margin_pct) = margin_pct {
+        effect
+            .metadata
+            .insert("margin_pct".to_string(), serde_json::json!(margin_pct));
+    }
+    clip.effects.push(effect);
+}
+
+fn pip_corner_str(corner: super::op::PiPCorner) -> &'static str {
+    match corner {
+        super::op::PiPCorner::TopLeft => "top_left",
+        super::op::PiPCorner::TopRight => "top_right",
+        super::op::PiPCorner::BottomLeft => "bottom_left",
+        super::op::PiPCorner::BottomRight => "bottom_right",
+    }
 }
 
 /// Insert a title overlay onto the project's Titles track. The
@@ -3191,6 +3524,70 @@ mod tests {
     }
 
     #[test]
+    fn apply_delete_removes_adjacent_transitions() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::InsertTransition {
+                    between: super::super::op::TransitionBetween {
+                        from: Anchor::TranscriptSnippet {
+                            text: "alpha snippet".into(),
+                        },
+                        to: Anchor::TranscriptSnippet {
+                            text: "bravo snippet".into(),
+                        },
+                    },
+                    kind: "SMPTE_Dissolve".into(),
+                    duration_s: 0.3,
+                    spec: None,
+                },
+                EdlOp::InsertTransition {
+                    between: super::super::op::TransitionBetween {
+                        from: Anchor::TranscriptSnippet {
+                            text: "bravo snippet".into(),
+                        },
+                        to: Anchor::TranscriptSnippet {
+                            text: "charlie snippet".into(),
+                        },
+                    },
+                    kind: "SMPTE_Dissolve".into(),
+                    duration_s: 0.3,
+                    spec: None,
+                },
+            ],
+        };
+        let (tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        let (new_tl, outcome) = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::DeleteClip {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap();
+
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("removed 2 adjacent transition")
+        );
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.children.len(), 2);
+        assert!(
+            t.children
+                .iter()
+                .all(|child| matches!(child, TrackChild::Clip(_)))
+        );
+    }
+
+    #[test]
     fn apply_split_partitions_clip_at_timestamp() {
         let tl = timeline_with_three_clips();
         // bravo's source_range is [0, 5s]. Split at 2.0s into two
@@ -3267,7 +3664,7 @@ mod tests {
                 at_s: 2.0,
             }],
         };
-        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         let StackChild::Track(t) = &new_tl.tracks.children[0] else {
             panic!()
         };
@@ -3282,6 +3679,8 @@ mod tests {
         assert_eq!(left_uuid, "parent-uuid");
         assert_ne!(left_uuid, right_uuid);
         assert!(right_uuid.starts_with("c-"));
+        assert!(outcome.applied[0].description.contains(&right_uuid));
+        assert!(outcome.applied[0].description.contains("anchor=clip_uuid="));
     }
 
     #[test]
@@ -4045,6 +4444,53 @@ mod tests {
     }
 
     #[test]
+    fn apply_insert_pip_creates_overlay_track_and_stamps_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertPiP {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                asset: "raw/pip.mp4".into(),
+                duration_s: 2.0,
+                source_start_s: 1.0,
+                corner: super::super::op::PiPCorner::BottomRight,
+                scale: 0.28,
+                margin_pct: 0.035,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(v2) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        assert_eq!(v2.name, "V2");
+        assert_eq!(v2.children.len(), 2);
+        let TrackChild::Gap(g) = &v2.children[0] else {
+            panic!("expected gap at v2 idx 0")
+        };
+        assert!((g.source_range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        let TrackChild::Clip(pip) = &v2.children[1] else {
+            panic!("expected pip clip")
+        };
+        let range = pip.source_range.as_ref().unwrap();
+        assert!((range.start_time.to_seconds() - 1.0).abs() < 1e-9);
+        assert!((range.duration.to_seconds() - 2.0).abs() < 1e-9);
+        let effect = pip
+            .effects
+            .iter()
+            .find(|e| e.effect_name == VIDEO_OVERLAY_EFFECT_NAME)
+            .expect("video overlay effect");
+        assert_eq!(
+            effect.metadata.get("mode").and_then(|v| v.as_str()),
+            Some("pip")
+        );
+        assert_eq!(
+            effect.metadata.get("corner").and_then(|v| v.as_str()),
+            Some("bottom_right")
+        );
+    }
+
+    #[test]
     fn apply_insert_broll_rejects_zero_duration() {
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
@@ -4448,6 +4894,199 @@ mod tests {
             matches!(err, ApplyError::Invalid { ref message, .. } if message.contains(">= 0.0")),
             "expected validation error, got {err:?}",
         );
+    }
+
+    #[test]
+    fn apply_set_effect_stamps_validated_metadata() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_correction".into(),
+                params: serde_json::Map::from_iter([
+                    ("contrast".into(), serde_json::json!(1.15)),
+                    ("saturation".into(), serde_json::json!(0.9)),
+                ]),
+                rationale: Some("subtle correction for flat camera angle".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.color_correction");
+        assert_eq!(clip.effects[0].name, "Color Correction");
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("contrast")
+                .and_then(|v| v.as_f64()),
+            Some(1.15)
+        );
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("rationale")
+                .and_then(|v| v.as_str()),
+            Some("subtle correction for flat camera angle")
+        );
+    }
+
+    #[test]
+    fn apply_set_effect_replaces_same_id_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetEffect {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    effect: "awidat.color_correction".into(),
+                    params: serde_json::Map::from_iter([(
+                        "contrast".into(),
+                        serde_json::json!(1.15),
+                    )]),
+                    rationale: None,
+                },
+                EdlOp::SetEffect {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    effect: "awidat.color_correction".into(),
+                    params: serde_json::Map::from_iter([(
+                        "saturation".into(),
+                        serde_json::json!(0.8),
+                    )]),
+                    rationale: None,
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let color_effects: Vec<_> = clip
+            .effects
+            .iter()
+            .filter(|effect| effect.effect_name == "awidat.color_correction")
+            .collect();
+        assert_eq!(color_effects.len(), 1);
+        assert!(!color_effects[0].metadata.contains_key("contrast"));
+        assert_eq!(
+            color_effects[0]
+                .metadata
+                .get("saturation")
+                .and_then(|v| v.as_f64()),
+            Some(0.8)
+        );
+    }
+
+    #[test]
+    fn apply_set_effect_preserves_different_effect_ids() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetEffect {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    effect: "awidat.volume".into(),
+                    params: serde_json::Map::from_iter([("value".into(), serde_json::json!(0.75))]),
+                    rationale: None,
+                },
+                EdlOp::SetEffect {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    effect: "awidat.color_correction".into(),
+                    params: serde_json::Map::from_iter([(
+                        "contrast".into(),
+                        serde_json::json!(1.1),
+                    )]),
+                    rationale: None,
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(
+            clip.effects
+                .iter()
+                .any(|e| e.effect_name == "awidat.volume")
+        );
+        assert!(
+            clip.effects
+                .iter()
+                .any(|e| e.effect_name == "awidat.color_correction")
+        );
+    }
+
+    #[test]
+    fn apply_set_effect_rejects_unknown_effect_before_writing() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.nope".into(),
+                params: serde_json::Map::new(),
+                rationale: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("unknown effect id")),
+            "expected unknown effect validation error, got {err:?}"
+        );
+        let StackChild::Track(t) = &tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(clip.effects.is_empty());
+    }
+
+    #[test]
+    fn apply_set_effect_rejects_out_of_range_params_before_writing() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_correction".into(),
+                params: serde_json::Map::from_iter([("contrast".into(), serde_json::json!(4.0))]),
+                rationale: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("contrast")),
+            "expected range validation error, got {err:?}"
+        );
+        let StackChild::Track(t) = &tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(clip.effects.is_empty());
     }
 
     #[test]

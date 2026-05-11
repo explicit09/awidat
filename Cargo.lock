@@ -341,6 +341,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "awidat-config",
+ "awidat-effects",
  "awidat-index",
  "awidat-mcp",
  "awidat-proto",
@@ -408,6 +409,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "awidat-effects"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "awidat-eval"
 version = "0.1.0"
 dependencies = [
@@ -423,6 +432,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

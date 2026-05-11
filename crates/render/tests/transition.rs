@@ -58,6 +58,62 @@ fn write_two_clip_project_with_transition_kind(dir: &Path, kind: &str) {
     .unwrap();
 }
 
+fn write_three_clip_project_with_chained_transitions(dir: &Path) {
+    let asset_a = "raw/a.mp4";
+    let asset_b = "raw/b.mp4";
+    let asset_c = "raw/c.mp4";
+    fs::create_dir_all(dir.join("raw")).unwrap();
+    fs::write(dir.join(asset_a), b"stub").unwrap();
+    fs::write(dir.join(asset_b), b"stub").unwrap();
+    fs::write(dir.join(asset_c), b"stub").unwrap();
+
+    fn clip(name: &str, asset: &str) -> Clip {
+        let mut clip = Clip::empty(name.to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        clip
+    }
+
+    let mut track = Track::empty("V1", TrackKind::Video);
+    track
+        .children
+        .push(TrackChild::Clip(clip("clip-a", asset_a)));
+    track
+        .children
+        .push(TrackChild::Transition(Transition::symmetric(
+            "SMPTE_Dissolve",
+            0.5,
+            24.0,
+        )));
+    track
+        .children
+        .push(TrackChild::Clip(clip("clip-b", asset_b)));
+    track
+        .children
+        .push(TrackChild::Transition(Transition::symmetric(
+            "SMPTE_Dissolve",
+            0.5,
+            24.0,
+        )));
+    track
+        .children
+        .push(TrackChild::Clip(clip("clip-c", asset_c)));
+
+    let mut tl = Timeline::empty("p");
+    let mut stack = Stack::empty("root");
+    stack.children.push(StackChild::Track(track));
+    tl.tracks = stack;
+
+    fs::write(
+        dir.join(files::OTIO),
+        serde_json::to_string_pretty(&tl).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn project_with_transition_emits_xfade_in_argv() {
     let dir = tempfile::tempdir().unwrap();
@@ -77,6 +133,28 @@ fn project_with_transition_emits_xfade_in_argv() {
     assert!(
         (dur - 3.0).abs() < 1e-6,
         "expected total duration 3.0s after transition overlap, got {dur}",
+    );
+}
+
+#[test]
+fn project_with_chained_transitions_emits_all_xfades_in_argv() {
+    let dir = tempfile::tempdir().unwrap();
+    write_three_clip_project_with_chained_transitions(dir.path());
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    let xfade_count = cmd.matches("xfade=transition=fade").count();
+    assert_eq!(xfade_count, 2, "expected two chained xfades, got: {cmd}");
+    let acrossfade_count = cmd.matches("acrossfade=d=0.5").count();
+    assert_eq!(
+        acrossfade_count, 2,
+        "expected two chained acrossfades, got: {cmd}"
+    );
+    // Total duration accounts for both 0.5s overlaps:
+    // 2 + 2 + 2 - 0.5 - 0.5 = 5.
+    let dur = spec.total_duration_s.unwrap();
+    assert!(
+        (dur - 5.0).abs() < 1e-6,
+        "expected total duration 5.0s after chained overlaps, got {dur}",
     );
 }
 

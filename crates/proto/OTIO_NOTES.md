@@ -1,10 +1,8 @@
 # OTIO superset notes
 
-> Status: load-bearing schema doc. The Week 1 OTIO scope is wider than the
-> "minimal viable" subset because Week 4's `apply_edl` and Week 5's TUI
-> both need typed access to markers and effects. Adding them later as
-> `serde_json::Value` blobs would calcify into a wrong shape. See `PLAN.md`
-> Concern B.
+The OTIO scope here is wider than a "minimal viable" subset because
+`apply_edl` and the TUI need typed access to markers and effects. Adding
+them later as `serde_json::Value` blobs would calcify into a wrong shape.
 
 ## What we model
 
@@ -20,7 +18,7 @@ namespaced metadata key `awidat`**. The Rust types in
 | `Clip.1` | [`Clip`](src/otio/nodes.rs) | Single piece of media on a track. |
 | `Gap.1` | [`Gap`](src/otio/nodes.rs) | Empty space — needed because trim semantics in `apply_edl` produce gaps explicitly. |
 | `ExternalReference.1` | [`ExternalReference`](src/otio/nodes.rs) | Reference to a media file. The common case. |
-| `MissingReference.1` | [`MissingReference`](src/otio/nodes.rs) | Used when the agent says "I want a b-roll insert here but the asset isn't loaded yet" (`PLAN.md` Concern B). Default `media_reference` of a fresh `Clip`. |
+| `MissingReference.1` | [`MissingReference`](src/otio/nodes.rs) | Used when the agent says "I want a b-roll insert here but the asset isn't loaded yet". Default `media_reference` of a fresh `Clip`. |
 | `Effect.1` | [`Effect`](src/otio/nodes.rs) | Base effect type. v1 holds `effect_name: String` + `metadata: serde_json::Value`. Specializations land in v1.5+. The typed *slot* (`Vec<Effect>` on `Clip`) is what we needed Week 1. |
 | `Marker.1` | [`Marker`](src/otio/nodes.rs) | Timeline annotation. Heavy use by Week 4 `apply_edl` and the agent ("the laugh at 4:12", "speaker mentioned Stripe here"). |
 | `RationalTime` | [`RationalTime`](src/otio/time.rs) | Value type for time. `value: f64`, `rate: f64`. Matches the OTIO spec. |
@@ -44,7 +42,6 @@ support is purely additive (see [Adding a new OTIO type](#adding-a-new-otio-type
 ## Schema versioning rules
 
 Every OTIO node carries an `OTIO_SCHEMA: "Name.Major"` discriminator.
-Decisions per `PLAN.md` Concern B:
 
 1. **Known name + matching major** → parsed as the matching variant. The
    happy path. Example: `"Clip.1"` ✓ when we ship `Clip.1`.
@@ -89,8 +86,8 @@ impls per type for forward-compat).
 
 ## The `awidat` metadata namespace
 
-Per `PLAN.md` §3, the only schema *extension* we make to OTIO is the
-`metadata.awidat` block. We model it strongly (NOT `serde_json::Value`)
+The only schema *extension* we make to OTIO is the `metadata.awidat`
+block. We model it strongly (NOT `serde_json::Value`)
 so unknown fields surface as parse errors against our own schema.
 
 Three locations:
@@ -210,7 +207,6 @@ correct behavior for a new schema name.
 
 - [`src/otio/`](src/otio/) — Rust source for the typed model.
 - [`src/awidat_meta.rs`](src/awidat_meta.rs) — `metadata.awidat` types.
-- [`PLAN.md` §3](../../PLAN.md) — design rationale for OTIO superset.
 - [`INDEX_SCHEMA.md`](INDEX_SCHEMA.md) — sister doc for the index sidecar
   contract.
 

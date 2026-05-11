@@ -1,0 +1,17 @@
+[package]
+name = "awidat-effects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "awidat_effects"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

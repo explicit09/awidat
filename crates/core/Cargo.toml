@@ -14,6 +14,7 @@ awidat-proto = { workspace = true }
 awidat-secrets = { workspace = true }
 awidat-index = { workspace = true }
 awidat-render = { workspace = true }
+awidat-effects = { workspace = true }
 awidat-config = { workspace = true }
 awidat-mcp = { workspace = true }
 awidat-sandboxing = { workspace = true }

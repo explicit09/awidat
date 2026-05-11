@@ -19,7 +19,9 @@
 //! Gaps and Transitions are skipped in v1; they land when the EDL
 //! grows transition / gap awareness on the render side.
 
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use awidat_proto::awidat_meta::{BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle};
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
@@ -76,6 +78,10 @@ pub enum RenderTimelineError {
         /// Detailed registry/lookup message.
         message: String,
     },
+    /// Browser-backed broadcast overlay generation failed before the
+    /// final ffmpeg render could start.
+    #[error("broadcast overlay render failed: {0}")]
+    BroadcastOverlayRender(String),
 }
 
 /// Broadcast overlay config plus project root for resolving optional
@@ -86,6 +92,15 @@ pub struct BroadcastOverlayPlan {
     pub config: BroadcastOverlayConfig,
     /// Project root used to resolve project-relative overlay assets.
     pub project_root: PathBuf,
+}
+
+/// Timeline-level final loudness target from `metadata.awidat`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LoudnessTargetPlan {
+    /// Integrated loudness target in LUFS.
+    pub integrated_lufs: f64,
+    /// True peak ceiling in dBTP.
+    pub true_peak_db: Option<f64>,
 }
 
 /// One source-media segment to feed into the timeline-render concat.
@@ -109,8 +124,7 @@ pub struct TimelineSegment {
     /// Playback rate multiplier. `None` means no `awidat.speed`
     /// effect — the segment plays at 1×. The segment's contribution
     /// to the master timeline duration is `duration_s / factor` when
-    /// `factor` is `Some`. (Step 15.4 wires the setpts/atempo path;
-    /// 15.3 only plumbs the field.)
+    /// `factor` is `Some`.
     pub speed: Option<f64>,
     /// Optional clip-level color correction controls, read from the
     /// `awidat.color_correction` effect.
@@ -119,6 +133,33 @@ pub struct TimelineSegment {
     pub lut_path: Option<PathBuf>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
+}
+
+/// Render-time media overlay extracted from an upper video track.
+#[derive(Debug, Clone)]
+pub struct VideoOverlayPlan {
+    /// Source-media segment for the overlay input.
+    pub segment: TimelineSegment,
+    /// Start time on the master timeline, in seconds.
+    pub track_start_s: f64,
+    /// Visual layout mode.
+    pub mode: VideoOverlayMode,
+}
+
+/// Visual layout mode for upper-track media overlays.
+#[derive(Debug, Clone, PartialEq)]
+pub enum VideoOverlayMode {
+    /// Full-frame cutaway composited over the base program.
+    FullFrame,
+    /// Picture-in-picture overlay.
+    PiP {
+        /// Output corner string: top_left, top_right, bottom_left, bottom_right.
+        corner: String,
+        /// Fraction of output width.
+        scale: f64,
+        /// Fractional output margin.
+        margin_pct: f64,
+    },
 }
 
 /// Render-time audio clip span extracted from an OTIO audio track.
@@ -324,12 +365,32 @@ fn read_clip_audio_fx(clip: &awidat_proto::otio::Clip) -> Option<AudioFxPlan> {
     serde_json::from_value(serde_json::Value::Object(effect.metadata.clone())).ok()
 }
 
+fn read_timeline_loudness_target(
+    metadata: &awidat_proto::awidat_meta::AwidatTimelineMetadata,
+) -> Option<LoudnessTargetPlan> {
+    let value = metadata.extra.get("loudness_target")?;
+    let integrated_lufs = value.get("integrated_lufs")?.as_f64()?;
+    if !integrated_lufs.is_finite() || integrated_lufs >= 0.0 {
+        return None;
+    }
+    let true_peak_db = value
+        .get("true_peak_db")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|v| v.is_finite() && *v <= 0.0);
+    Some(LoudnessTargetPlan {
+        integrated_lufs,
+        true_peak_db,
+    })
+}
+
 type TimelineFullPlan = (
     Vec<TimelineSegment>,
     Vec<TransitionPlan>,
+    Vec<VideoOverlayPlan>,
     Vec<TitlePlan>,
     Option<BroadcastOverlayPlan>,
     Vec<AudioTrackPlan>,
+    Option<LoudnessTargetPlan>,
 );
 
 /// Walk `<project_root>/project.otio.json` and collect every
@@ -341,25 +402,23 @@ type TimelineFullPlan = (
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
 /// Walk `<project_root>/project.otio.json` and collect both the
 /// renderable segments AND the transitions between adjacent
 /// segments. Returned in playback order; `TransitionPlan` indices
-/// reference the returned segments slice.
-///
-/// Step 14.5: the render pipeline uses this to splice xfade filters
-/// between the segments that have a [`TrackChild::Transition`]
-/// between them on the OTIO track.
+/// reference the returned segments slice. The render pipeline uses
+/// this to splice xfade filters between segments that have a
+/// [`TrackChild::Transition`] between them on the OTIO track.
 ///
 /// Wraps [`collect_timeline_full_plan`] and drops the titles —
 /// preserved for callers that don't need title awareness.
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -384,8 +443,10 @@ pub fn collect_timeline_full_plan(
 
     let mut segs = Vec::new();
     let mut transitions = Vec::new();
+    let mut video_overlays = Vec::new();
     let mut titles = Vec::new();
     let mut audio_tracks = Vec::new();
+    let mut saw_base_video_track = false;
     for child in &timeline.tracks.children {
         let StackChild::Track(track) = child else {
             continue;
@@ -408,6 +469,33 @@ pub fn collect_timeline_full_plan(
             }
             continue;
         }
+        if saw_base_video_track {
+            let mut track_cursor_s = 0.0_f64;
+            for tc in &track.children {
+                match tc {
+                    TrackChild::Clip(clip) => {
+                        let Some(segment) = collect_timeline_segment(project_root, clip)? else {
+                            continue;
+                        };
+                        let mode = read_video_overlay_mode(clip);
+                        video_overlays.push(VideoOverlayPlan {
+                            segment,
+                            track_start_s: track_cursor_s,
+                            mode,
+                        });
+                        if let Some(range) = clip.source_range.as_ref() {
+                            track_cursor_s += range.duration.to_seconds();
+                        }
+                    }
+                    TrackChild::Gap(gap) => {
+                        track_cursor_s += gap.source_range.duration.to_seconds();
+                    }
+                    TrackChild::Transition(_) | TrackChild::Stack(_) => {}
+                }
+            }
+            continue;
+        }
+        saw_base_video_track = true;
         // Walk the track's children. Clips become segments; a
         // Transition immediately following a Clip queues a transition
         // pointing at the *next* clip we'll see (`pending_transition`).
@@ -417,47 +505,12 @@ pub fn collect_timeline_full_plan(
         for tc in &track.children {
             match tc {
                 TrackChild::Clip(clip) => {
-                    let MediaReference::External(ext) = &clip.media_reference else {
+                    let Some(segment) = collect_timeline_segment(project_root, clip)? else {
                         pending_transition = None;
                         continue;
                     };
-                    let Some(range) = clip.source_range.as_ref() else {
-                        return Err(RenderTimelineError::ClipMissingRange {
-                            clip_name: clip.name.clone(),
-                        });
-                    };
-                    let asset_path = project_root.join(&ext.target_url);
-                    if !asset_path.exists() {
-                        return Err(RenderTimelineError::MissingAsset {
-                            clip_name: clip.name.clone(),
-                            missing: asset_path,
-                        });
-                    }
-                    let volume = read_effect_number(clip, "awidat.volume", "value");
-                    let speed = read_effect_number(clip, "awidat.speed", "factor");
-                    let color_correction = read_color_correction(clip);
-                    let audio_fx = read_clip_audio_fx(clip);
-                    let lut_path = read_effect_string(clip, "awidat.lut", "lut_path")
-                        .map(|lut_path| project_root.join(lut_path));
-                    if let Some(lut_path) = lut_path.as_ref()
-                        && !lut_path.exists()
-                    {
-                        return Err(RenderTimelineError::MissingLut {
-                            clip_name: clip.name.clone(),
-                            missing: lut_path.clone(),
-                        });
-                    }
                     let new_index = segs.len();
-                    segs.push(TimelineSegment {
-                        asset_path,
-                        start_s: range.start_time.to_seconds(),
-                        duration_s: range.duration.to_seconds(),
-                        volume,
-                        speed,
-                        color_correction,
-                        lut_path,
-                        audio_fx,
-                    });
+                    segs.push(segment);
                     if let Some((kind, duration_s)) = pending_transition.take()
                         && new_index > 0
                     {
@@ -501,7 +554,94 @@ pub fn collect_timeline_full_plan(
             config,
             project_root: project_root.to_path_buf(),
         });
-    Ok((segs, transitions, titles, broadcast_overlay, audio_tracks))
+    let loudness_target = timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .and_then(read_timeline_loudness_target);
+    Ok((
+        segs,
+        transitions,
+        video_overlays,
+        titles,
+        broadcast_overlay,
+        audio_tracks,
+        loudness_target,
+    ))
+}
+
+fn collect_timeline_segment(
+    project_root: &Path,
+    clip: &awidat_proto::otio::Clip,
+) -> Result<Option<TimelineSegment>, RenderTimelineError> {
+    let MediaReference::External(ext) = &clip.media_reference else {
+        return Ok(None);
+    };
+    let Some(range) = clip.source_range.as_ref() else {
+        return Err(RenderTimelineError::ClipMissingRange {
+            clip_name: clip.name.clone(),
+        });
+    };
+    let asset_path = project_root.join(&ext.target_url);
+    if !asset_path.exists() {
+        return Err(RenderTimelineError::MissingAsset {
+            clip_name: clip.name.clone(),
+            missing: asset_path,
+        });
+    }
+    let lut_path = read_effect_string(clip, "awidat.lut", "lut_path")
+        .map(|lut_path| project_root.join(lut_path));
+    if let Some(lut_path) = lut_path.as_ref()
+        && !lut_path.exists()
+    {
+        return Err(RenderTimelineError::MissingLut {
+            clip_name: clip.name.clone(),
+            missing: lut_path.clone(),
+        });
+    }
+    Ok(Some(TimelineSegment {
+        asset_path,
+        start_s: range.start_time.to_seconds(),
+        duration_s: range.duration.to_seconds(),
+        volume: read_effect_number(clip, "awidat.volume", "value"),
+        speed: read_effect_number(clip, "awidat.speed", "factor"),
+        color_correction: read_color_correction(clip),
+        lut_path,
+        audio_fx: read_clip_audio_fx(clip),
+    }))
+}
+
+fn read_video_overlay_mode(clip: &awidat_proto::otio::Clip) -> VideoOverlayMode {
+    let Some(effect) = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.video_overlay")
+    else {
+        return VideoOverlayMode::FullFrame;
+    };
+    if effect.metadata.get("mode").and_then(|v| v.as_str()) != Some("pip") {
+        return VideoOverlayMode::FullFrame;
+    }
+    VideoOverlayMode::PiP {
+        corner: effect
+            .metadata
+            .get("corner")
+            .and_then(|v| v.as_str())
+            .unwrap_or("bottom_right")
+            .to_string(),
+        scale: effect
+            .metadata
+            .get("scale")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.28)
+            .clamp(0.10, 0.60),
+        margin_pct: effect
+            .metadata
+            .get("margin_pct")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.035)
+            .clamp(0.0, 0.15),
+    }
 }
 
 fn collect_audio_track_plan(
@@ -784,11 +924,9 @@ pub enum TitleAnimation {
     SlideOut,
 }
 
-/// One transition between two segments in the timeline. Step 14.4
-/// introduces this type so the [`FilterPlanner`] has a slot for
-/// future transition wiring; in 14.4 callers always pass an empty
-/// `transitions` slice and the planner emits the same monolithic
-/// concat filter as before.
+/// One transition between two segments in the timeline. Callers may
+/// pass an empty `transitions` slice; the planner then emits the
+/// monolithic concat filter without xfade splicing.
 ///
 /// `from_segment_index` and `to_segment_index` are indices into the
 /// segments slice the planner is fed. They MUST be adjacent
@@ -801,23 +939,17 @@ pub struct TransitionPlan {
     /// Index of the incoming segment. Must be `from_segment_index + 1`.
     pub to_segment_index: usize,
     /// Transition kind (`"SMPTE_Dissolve"`, `"awidat.fade_in"`, etc).
-    /// Wired to ffmpeg's xfade transition names in 14.5.
+    /// Mapped to ffmpeg's xfade transition names by the planner.
     pub kind: String,
     /// Total transition duration on the timeline, in seconds.
     pub duration_s: f64,
 }
 
 /// Plans the `-filter_complex` argument + map labels for a render.
+/// With empty `transitions` AND empty `titles` the output is the
+/// monolithic concat filter that the rest of the pipeline expects.
 ///
-/// Step 14.4 extracts this from the prior monolithic
-/// [`build_timeline_argv`] so future filter types (transitions in
-/// 14.5; volume / speed in Step 15; drawtext in Step 16) can compose
-/// without rewriting the same builder. Behaviour with empty
-/// `transitions` AND empty `titles` is identical to the pre-extract
-/// code.
-///
-/// The planner doesn't take ownership of the segments or care about
-/// the input source — callers feed the slices by reference.
+/// The planner borrows segments — callers feed the slices by reference.
 pub struct FilterPlanner<'a> {
     segments: &'a [TimelineSegment],
     transitions: &'a [TransitionPlan],
@@ -828,8 +960,8 @@ pub struct FilterPlanner<'a> {
 /// Output of [`FilterPlanner::plan`]. Carries everything the caller
 /// needs to splice into an ffmpeg argv: the filter graph string and
 /// the `[outv]` / `[outa]` map labels (the planner picks these so
-/// 14.5's xfade chain can rename them if it needs intermediate
-/// stages without breaking the caller's `-map` args).
+/// the xfade chain can rename intermediate stages without breaking
+/// the caller's `-map` args).
 #[derive(Debug, Clone)]
 pub struct FilterPlan {
     /// Value for `-filter_complex`.
@@ -838,6 +970,33 @@ pub struct FilterPlan {
     pub video_out_label: String,
     /// Label for `-map` on the audio output (typically `[outa]`).
     pub audio_out_label: String,
+}
+
+fn transition_edge_map<'a>(
+    segment_count: usize,
+    transitions: &'a [TransitionPlan],
+) -> Vec<Option<&'a TransitionPlan>> {
+    let mut transition_after = vec![None; segment_count.saturating_sub(1)];
+    for t in transitions {
+        if t.from_segment_index >= segment_count || t.to_segment_index != t.from_segment_index + 1 {
+            tracing::debug!(
+                transition = ?t,
+                "FilterPlanner: dropping transition with non-adjacent indices"
+            );
+            continue;
+        }
+        if let Some(slot) = transition_after.get_mut(t.from_segment_index) {
+            if slot.is_some() {
+                tracing::debug!(
+                    transition = ?t,
+                    "FilterPlanner: dropping duplicate transition edge"
+                );
+                continue;
+            }
+            *slot = Some(t);
+        }
+    }
+    transition_after
 }
 
 impl<'a> FilterPlanner<'a> {
@@ -885,19 +1044,10 @@ impl<'a> FilterPlanner<'a> {
     /// `[0:v:0][0:a:0]…concat=n=N:v=1:a=1[outv][outa]` graph the
     /// pre-extract code produced.
     ///
-    /// With transitions (Step 14.5): groups consecutive segments
-    /// connected by a transition into "chunks." Each pair-chunk
-    /// emits `xfade` + `acrossfade` filters into a `[xv<i>][xa<i>]`
-    /// pair which then participates in the final concat in place
-    /// of the two raw segment streams. Lone segments still feed in
-    /// directly via `[i:v:0][i:a:0]`.
-    ///
-    /// v1 chunk policy: each segment can participate in at most one
-    /// transition. If two transitions try to share the same middle
-    /// segment (a chain of three), the second transition is dropped
-    /// with a debug-trace log — the render still produces a valid
-    /// output, just without that overlap. Multi-transition chains
-    /// land in a future commit.
+    /// With transitions: builds maximal runs of consecutive segments
+    /// connected by transition edges. Each run emits a chained
+    /// `xfade` + `acrossfade` graph. Hard-cut boundaries between runs
+    /// still feed into a final concat.
     pub fn plan(&self) -> FilterPlan {
         let base = if self.transitions.is_empty() {
             self.plan_no_transitions()
@@ -909,7 +1059,7 @@ impl<'a> FilterPlanner<'a> {
         } else {
             base
         };
-        if self.titles.is_empty() {
+        if self.titles.is_empty() || broadcast_overlay_owns_program_titles(self.broadcast_overlay) {
             base
         } else {
             self.append_titles(base)
@@ -931,7 +1081,8 @@ impl<'a> FilterPlanner<'a> {
         if let Some(overlay) = self.broadcast_overlay {
             base = self.append_broadcast_overlay(base, overlay);
         }
-        if !self.titles.is_empty() {
+        if !self.titles.is_empty() && !broadcast_overlay_owns_program_titles(self.broadcast_overlay)
+        {
             base = self.append_titles(base);
         }
         base
@@ -962,7 +1113,11 @@ impl<'a> FilterPlanner<'a> {
         // Comma-separate the drawtext filters so they all run on the
         // same input → single output. drawtext's `enable=` keeps each
         // bounded to its window without cross-contamination.
-        let parts: Vec<String> = self.titles.iter().map(format_drawtext_filter).collect();
+        let parts: Vec<String> = self
+            .titles
+            .iter()
+            .map(|title| format_drawtext_filter(title, self.broadcast_overlay))
+            .collect();
         filter.push_str(&parts.join(","));
         filter.push_str(&out_label);
 
@@ -1022,69 +1177,52 @@ impl<'a> FilterPlanner<'a> {
 
     fn plan_with_transitions(&self) -> FilterPlan {
         let n = self.segments.len();
-
-        // Build a "next-segment-of-the-same-chunk" map. seg `i`'s
-        // partner is `j` iff there's a transition between them. We
-        // enforce v1 single-transition-per-segment by only
-        // remembering the *first* transition for any given segment.
-        let mut paired_with: Vec<Option<&TransitionPlan>> = vec![None; n];
-        for t in self.transitions {
-            if t.from_segment_index >= n || t.to_segment_index != t.from_segment_index + 1 {
-                tracing::debug!(
-                    transition = ?t,
-                    "FilterPlanner: dropping transition with non-adjacent indices"
-                );
-                continue;
-            }
-            // Either segment already taken? Drop this one.
-            if paired_with[t.from_segment_index].is_some()
-                || paired_with[t.to_segment_index].is_some()
-            {
-                tracing::debug!(
-                    transition = ?t,
-                    "FilterPlanner: dropping transition (segment already part of a chunk)",
-                );
-                continue;
-            }
-            paired_with[t.from_segment_index] = Some(t);
-        }
+        let transition_after = transition_edge_map(n, self.transitions);
 
         let mut filter = String::new();
 
-        // Pre-stage each segment's video / audio inputs. Step 15.3
-        // adds the per-segment volume filter here: when a segment
-        // carries an awidat.volume effect, its audio stream goes
-        // through `volume=<v>` first, producing a [av<i>] label that
-        // downstream graph nodes use in place of [i:a:0]. Speed
-        // lands in 15.4 with a parallel pass on video + atempo on
-        // audio.
+        // Pre-stage each segment's video / audio inputs. When a
+        // segment carries an awidat.volume effect, its audio stream
+        // goes through `volume=<v>` first; downstream nodes use the
+        // resulting [av<i>] label in place of [i:a:0]. Speed runs
+        // through a parallel setpts pass on video + atempo on audio.
         let inputs: Vec<(String, String)> = (0..n)
             .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i]))
             .collect();
+        let inputs: Vec<(String, String)> = inputs
+            .into_iter()
+            .enumerate()
+            .map(|(i, (video, audio))| reset_segment_pts(&mut filter, i, &video, &audio))
+            .collect();
 
-        // Track the order of concat input pairs (each entry is a
-        // pre-built (video_label, audio_label) ready to drop in).
+        // Track the order of hard-cut groups. A group may be one raw
+        // segment or a chained transition run.
         let mut concat_inputs: Vec<(String, String)> = Vec::with_capacity(n);
 
         let mut i = 0;
-        let mut chunk_id: usize = 0;
+        let mut transition_id: usize = 0;
         while i < n {
-            if let Some(t) = paired_with[i] {
-                let j = t.to_segment_index;
-                let v_label = format!("[xv{chunk_id}]");
-                let a_label = format!("[xa{chunk_id}]");
+            let mut current_v = inputs[i].0.clone();
+            let mut current_a = inputs[i].1.clone();
+            let mut current_duration = effective_duration(&self.segments[i]);
+            let mut group_end = i;
+
+            while group_end + 1 < n {
+                let Some(t) = transition_after[group_end] else {
+                    break;
+                };
+                let next = group_end + 1;
+                let v_label = format!("[xv{transition_id}]");
+                let a_label = format!("[xa{transition_id}]");
                 let xfade_kind = map_transition_kind(&t.kind);
-                // xfade offset = the from-segment's *post-speed*
-                // duration minus the transition duration. Both inputs
-                // must be at the cut point at offset
-                // `effective_duration - transition.duration`. A
-                // 4s clip at 2x speed has effective duration 2s.
-                let from_dur = effective_duration(&self.segments[i]);
-                let offset = (from_dur - t.duration_s).max(0.0);
+                // xfade offset is relative to the first input of the
+                // current operation. For a chain, that first input is
+                // the already-shortened output of previous xfades.
+                let offset = (current_duration - t.duration_s).max(0.0);
                 filter.push_str(&format!(
                     "{from_v}{to_v}xfade=transition={kind}:duration={dur}:offset={off}{out};",
-                    from_v = inputs[i].0,
-                    to_v = inputs[j].0,
+                    from_v = current_v,
+                    to_v = inputs[next].0,
                     kind = xfade_kind,
                     dur = t.duration_s,
                     off = offset,
@@ -1092,18 +1230,20 @@ impl<'a> FilterPlanner<'a> {
                 ));
                 filter.push_str(&format!(
                     "{from_a}{to_a}acrossfade=d={dur}{out};",
-                    from_a = inputs[i].1,
-                    to_a = inputs[j].1,
+                    from_a = current_a,
+                    to_a = inputs[next].1,
                     dur = t.duration_s,
                     out = a_label,
                 ));
-                concat_inputs.push((v_label, a_label));
-                chunk_id += 1;
-                i += 2;
-            } else {
-                concat_inputs.push((inputs[i].0.clone(), inputs[i].1.clone()));
-                i += 1;
+                current_v = v_label;
+                current_a = a_label;
+                current_duration =
+                    current_duration + effective_duration(&self.segments[next]) - t.duration_s;
+                transition_id += 1;
+                group_end = next;
             }
+            concat_inputs.push((current_v, current_a));
+            i = group_end + 1;
         }
 
         // Tail: single-input concat would just rename, so when we
@@ -1125,6 +1265,142 @@ impl<'a> FilterPlanner<'a> {
             audio_out_label: "[outa]".into(),
         }
     }
+}
+
+fn reset_segment_pts(
+    filter: &mut String,
+    i: usize,
+    video_label: &str,
+    audio_label: &str,
+) -> (String, String) {
+    let video_out = format!("[vpts{i}]");
+    let audio_out = format!("[apts{i}]");
+    filter.push_str(&format!(
+        "{video_label}setpts=PTS-STARTPTS,fps=30000/1001{video_out};"
+    ));
+    filter.push_str(&format!("{audio_label}asetpts=PTS-STARTPTS{audio_out};"));
+    (video_out, audio_out)
+}
+
+fn append_video_overlays(
+    base: FilterPlan,
+    video_overlays: &[VideoOverlayPlan],
+    first_overlay_input: usize,
+) -> FilterPlan {
+    if video_overlays.is_empty() {
+        return base;
+    }
+    let mut filter = base.filter_complex;
+    let mut current = base.video_out_label;
+    for (idx, overlay) in video_overlays.iter().enumerate() {
+        let input_idx = first_overlay_input + idx;
+        let pts_label = format!("[media_overlay_pts{idx}]");
+        let scaled_label = format!("[media_overlay_scaled{idx}]");
+        let ref_label = format!("[media_overlay_ref{idx}]");
+        let next = format!("[media_overlay_v{idx}]");
+        let start = overlay.track_start_s;
+        let end = overlay.track_start_s + effective_duration(&overlay.segment);
+        let overlay_input = stage_overlay_video_input(&mut filter, input_idx, &overlay.segment);
+        let (scale_expr, x_expr, y_expr) = match &overlay.mode {
+            VideoOverlayMode::FullFrame => (
+                "w=main_w:h=main_h".to_string(),
+                "0".to_string(),
+                "0".to_string(),
+            ),
+            VideoOverlayMode::PiP {
+                corner,
+                scale,
+                margin_pct,
+            } => {
+                let margin_x = format!("main_w*{margin_pct}");
+                let margin_y = format!("main_h*{margin_pct}");
+                let x = match corner.as_str() {
+                    "top_left" | "bottom_left" => margin_x,
+                    _ => format!("main_w-overlay_w-main_w*{margin_pct}"),
+                };
+                let y = match corner.as_str() {
+                    "top_left" | "top_right" => margin_y,
+                    _ => format!("main_h-overlay_h-main_h*{margin_pct}"),
+                };
+                (format!("w=main_w*{scale}:h=-2"), x, y)
+            }
+        };
+        filter.push(';');
+        filter.push_str(&format!(
+            "{overlay_input}setpts=PTS-STARTPTS+{start}/TB{pts_label};\
+             {pts_label}{current}scale2ref={scale_expr}{scaled_label}{ref_label};\
+             {ref_label}{scaled_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
+        ));
+        current = next;
+    }
+    FilterPlan {
+        filter_complex: filter,
+        video_out_label: current,
+        audio_out_label: base.audio_out_label,
+    }
+}
+
+fn append_timeline_loudness_filter(
+    filter: &mut String,
+    audio_label: String,
+    loudness_target: Option<LoudnessTargetPlan>,
+) -> String {
+    let Some(target) = loudness_target else {
+        return audio_label;
+    };
+    if !target.integrated_lufs.is_finite() || target.integrated_lufs >= 0.0 {
+        return audio_label;
+    }
+    let true_peak_db = target
+        .true_peak_db
+        .filter(|v| v.is_finite() && *v <= 0.0)
+        .unwrap_or(-1.5);
+    let out = "[mastera]".to_string();
+    if !filter.ends_with(';') {
+        filter.push(';');
+    }
+    filter.push_str(&format!(
+        "{audio_label}aresample=async=1:first_pts=0,loudnorm=I={}:TP={}:LRA=11{out}",
+        fmt_filter_num(target.integrated_lufs),
+        fmt_filter_num(true_peak_db),
+    ));
+    out
+}
+
+fn stage_overlay_video_input(
+    filter: &mut String,
+    input_idx: usize,
+    seg: &TimelineSegment,
+) -> String {
+    let mut video_label = format!("[{input_idx}:v:0]");
+    if let Some(color) = seg.color_correction.as_ref()
+        && let Some(chain) = color_filter_chain(color)
+    {
+        let cv = format!("[media_overlay_cv{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!("{video_label}{chain}{cv}"));
+        video_label = cv;
+    }
+    if let Some(lut_path) = seg.lut_path.as_ref() {
+        let lv = format!("[media_overlay_lv{input_idx}]");
+        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
+        filter.push(';');
+        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv}"));
+        video_label = lv;
+    }
+    if let Some(factor) = seg.speed
+        && (factor - 1.0).abs() > 1e-9
+        && factor > 0.0
+    {
+        let sv = format!("[media_overlay_sv{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!(
+            "{video_label}setpts={inv}*PTS{sv}",
+            inv = 1.0 / factor,
+        ));
+        video_label = sv;
+    }
+    video_label
 }
 
 /// Build the per-segment video / audio entry labels into `filter`.
@@ -1381,6 +1657,8 @@ const ANIMATION_RAMP_S: f64 = 0.5;
 ///   - top    → `y=h*0.05`
 ///   - center → `y=(h-text_h)/2`
 ///   - bottom → `y=h*0.85`
+///     (or a higher safe band when a broadcast overlay owns the
+///     lower-third area)
 ///
 /// Animations modulate alpha (fade) or x/y (slide) via piecewise
 /// expressions; see [`apply_title_animation`] for the math. The
@@ -1390,12 +1668,15 @@ const ANIMATION_RAMP_S: f64 = 0.5;
 ///
 /// `text_h` and `text_w` are drawtext-evaluated dimensions of the
 /// rendered text; `h` and `w` are the frame dimensions.
-fn format_drawtext_filter(t: &TitlePlan) -> String {
+fn format_drawtext_filter(
+    t: &TitlePlan,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
     let escaped_text = drawtext_escape(&t.text);
     let resting_y = match t.position {
         TitlePosition::Top => "h*0.05".to_string(),
         TitlePosition::Center => "(h-text_h)/2".to_string(),
-        TitlePosition::Bottom => "h*0.85".to_string(),
+        TitlePosition::Bottom => title_bottom_y(broadcast_overlay),
     };
     let resting_x = "(w-text_w)/2".to_string();
     let weight_attr = match t.font_weight {
@@ -1425,6 +1706,27 @@ fn format_drawtext_filter(t: &TitlePlan) -> String {
     )
 }
 
+fn title_bottom_y(broadcast_overlay: Option<&BroadcastOverlayPlan>) -> String {
+    let Some(overlay) = broadcast_overlay else {
+        return "h*0.85".to_string();
+    };
+    if !overlay.config.enabled {
+        return "h*0.85".to_string();
+    }
+    if overlay.config.short_form_mode {
+        return "h*0.75".to_string();
+    }
+    // Long-form broadcast overlays reserve the lower frame for host
+    // name bars and the ticker. Keep generic bottom titles in the
+    // lower-middle safe band instead of drawing them into that chrome.
+    "h*0.56".to_string()
+}
+
+fn broadcast_overlay_owns_program_titles(broadcast_overlay: Option<&BroadcastOverlayPlan>) -> bool {
+    broadcast_overlay
+        .is_some_and(|overlay| overlay.config.enabled && !overlay.config.short_form_mode)
+}
+
 fn format_broadcast_overlay_filters(overlay: &BroadcastOverlayPlan) -> Vec<String> {
     let c = &overlay.config;
     let st = &c.style;
@@ -1451,8 +1753,20 @@ fn format_broadcast_overlay_filters(overlay: &BroadcastOverlayPlan) -> Vec<Strin
         parts.extend(format_host_intro_strip(c, st, &gold, &gold_light, &navy));
     }
     parts.extend(format_smart_ticker(c, st, &show, &navy, &gold, &cyan));
-    parts.extend(format_chapter_cards(c, st, &navy, &gold));
+    if !c.chapters.is_empty() {
+        parts.extend(format_chapter_cards(c, st, &navy, &gold));
+    }
     parts
+}
+
+fn broadcast_ticker_entries<'a>(
+    c: &'a BroadcastOverlayConfig,
+) -> &'a [awidat_proto::awidat_meta::BroadcastTimedEntry] {
+    if c.topics.is_empty() {
+        &c.chapters
+    } else {
+        &c.topics
+    }
 }
 
 fn format_short_form_brand_bar(
@@ -1531,7 +1845,7 @@ fn format_episode_title_card(
         ),
     ];
     if !c.episode_subtitle.trim().is_empty() {
-        out.push(broadcast_drawtext(
+        out.push(broadcast_drawtext_body(
             &c.episode_subtitle,
             "w*0.29",
             "h*0.60",
@@ -1554,9 +1868,10 @@ fn format_host_name_bar(
     let name_h = broadcast_ref_to_1080_px(st.name_bar_height);
     let ticker_h = broadcast_ref_to_1080_px(st.ticker_height);
     let y = format!("ih-{}", fmt_px(name_h + ticker_h));
-    let divider_h = broadcast_ref_to_1080_px(64.0);
+    let divider_h = broadcast_ref_to_1080_px(114.0);
     let divider_y = format!("ih-{}", fmt_px(ticker_h + (name_h + divider_h) / 2.0));
-    let text_y = format!("h-{}", fmt_px(ticker_h + name_h / 2.0 + 16.0));
+    let name_text_y = format!("h-{}", fmt_px(ticker_h + name_h / 2.0 + 16.0));
+    let title_text_y = format!("h-{}", fmt_px(ticker_h + name_h / 2.0 + 11.0));
     let enable = format!(
         "not(between(t\\,{s}\\,{e}))",
         s = st.host_intro_start,
@@ -1573,35 +1888,90 @@ fn format_host_name_bar(
             divider_h = fmt_px(divider_h)
         ),
     ];
-    out.extend(format_host_inline_text(&c.host_a, "28", &text_y, &enable));
+    out.extend(format_host_inline_text(
+        &c.host_a,
+        HostTextSide::Left,
+        &name_text_y,
+        &title_text_y,
+        gold,
+        &enable,
+    ));
     out.extend(format_host_inline_text(
         &c.host_b,
-        "w-text_w-28",
-        &text_y,
+        HostTextSide::Right,
+        &name_text_y,
+        &title_text_y,
+        gold,
         &enable,
     ));
     out
 }
 
-fn format_host_inline_text(host: &BroadcastHost, x: &str, y: &str, enable: &str) -> Vec<String> {
+enum HostTextSide {
+    Left,
+    Right,
+}
+
+fn format_host_inline_text(
+    host: &BroadcastHost,
+    side: HostTextSide,
+    name_y: &str,
+    title_y: &str,
+    gold: &str,
+    enable: &str,
+) -> Vec<String> {
     if host.name.trim().is_empty() {
         return Vec::new();
     }
-    let text = if host.title.trim().is_empty() {
-        host.name.to_uppercase()
-    } else {
-        format!(
-            "{}  {}",
-            host.name.to_uppercase(),
-            host.title.to_uppercase()
-        )
+    let name = host.name.to_uppercase();
+    let title = host.title.to_uppercase();
+    let gap = 8.0;
+    let margin = 28.0;
+    let name_size = 32;
+    let title_size = 23;
+    let mut out = Vec::new();
+    if title.trim().is_empty() {
+        let x = match side {
+            HostTextSide::Left => fmt_px(margin),
+            HostTextSide::Right => format!("w-text_w-{}", fmt_px(margin)),
+        };
+        out.push(
+            broadcast_drawtext(&name, &x, name_y, name_size, "#FFFFFF", None, None, true).replace(
+                ":enable='between(t\\,0\\,0)'",
+                &format!(":enable='{enable}'"),
+            ),
+        );
+        return out;
+    }
+
+    let name_w = estimated_broadcast_text_width(&name, name_size);
+    let title_w = estimated_broadcast_text_width(&title, title_size);
+    let (name_x, title_x) = match side {
+        HostTextSide::Left => (fmt_px(margin), fmt_px(margin + name_w + gap)),
+        HostTextSide::Right => (
+            format!("w-{}", fmt_px(margin + title_w + gap + name_w)),
+            format!("w-{}", fmt_px(margin + title_w)),
+        ),
     };
-    vec![
-        broadcast_drawtext(&text, x, y, 32, "#FFFFFF", None, None, true).replace(
+    out.push(
+        broadcast_drawtext(
+            &name, &name_x, name_y, name_size, "#FFFFFF", None, None, true,
+        )
+        .replace(
             ":enable='between(t\\,0\\,0)'",
             &format!(":enable='{enable}'"),
         ),
-    ]
+    );
+    out.push(
+        broadcast_drawtext(
+            &title, &title_x, title_y, title_size, gold, None, None, true,
+        )
+        .replace(
+            ":enable='between(t\\,0\\,0)'",
+            &format!(":enable='{enable}'"),
+        ),
+    );
+    out
 }
 
 fn format_smart_ticker(
@@ -1622,21 +1992,26 @@ fn format_smart_ticker(
     let label_w = broadcast_ref_to_1080_px(680.0);
     let content_x = label_w + broadcast_ref_to_1080_px(48.0);
     let topic_badge_x = content_x;
-    let topic_badge_w = broadcast_ref_to_1080_px(278.0);
+    let topic_badge_font_size = 23;
+    let topic_badge_pad_x = broadcast_ref_to_1080_px(24.0);
+    let topic_badge_w = estimated_condensed_text_width("NOW DISCUSSING", topic_badge_font_size)
+        + topic_badge_pad_x * 2.0;
+    let topic_badge_h = f64::from(topic_badge_font_size) + broadcast_ref_to_1080_px(16.0);
     let topic_text_x = topic_badge_x + topic_badge_w + broadcast_ref_to_1080_px(28.0);
-    let topic_badge_y = format!("ih-{}", fmt_px(ticker_h / 2.0 + 31.0));
+    let topic_badge_y = format!("ih-{}", fmt_px(ticker_h / 2.0 + topic_badge_h / 2.0));
+    let topic_badge_text_y = format!("h-{}", fmt_px(ticker_h / 2.0 + 14.0));
     let ticker_text_y = format!("h-{}", fmt_px(ticker_h / 2.0 + 20.0));
     let label_text_y = format!("h-{}", fmt_px(ticker_h / 2.0 + 16.0));
     let cycle = st.ticker_sponsor_duration
         + st.ticker_fade_duration
         + st.ticker_topic_duration
         + st.ticker_fade_duration;
-    let sponsor_phase_enable = if let Some(first_topic) = c
-        .topics
+    let entries = broadcast_ticker_entries(c);
+    let first_entry_time = entries
         .iter()
         .map(|t| t.time_seconds)
-        .min_by(f64::total_cmp)
-    {
+        .min_by(f64::total_cmp);
+    let sponsor_phase_enable = if let Some(first_topic) = first_entry_time {
         format!(
             "(lt(t\\,{first_topic})+lt(mod(t\\,{cycle})\\,{sponsor})+gte(mod(t\\,{cycle})\\,{topic_end}))",
             sponsor = st.ticker_sponsor_duration,
@@ -1645,42 +2020,49 @@ fn format_smart_ticker(
     } else {
         "1".to_string()
     };
+    let topic_fade_start = (st.ticker_sponsor_duration - st.ticker_fade_duration).max(0.0);
+    let topic_hold_end = st.ticker_sponsor_duration + st.ticker_topic_duration;
+    let sponsor_alpha = first_entry_time
+        .filter(|_| st.ticker_fade_duration > 0.0)
+        .map(|first_topic| {
+            format!(
+                "if(lt(t\\,{first_topic})\\,1\\,if(lt(mod(t\\,{cycle})\\,{topic_fade_start})\\,1\\,if(lt(mod(t\\,{cycle})\\,{sponsor})\\,({sponsor}-mod(t\\,{cycle}))/{fade}\\,if(lt(mod(t\\,{cycle})\\,{topic_hold_end})\\,0\\,(mod(t\\,{cycle})-{topic_hold_end})/{fade}))))",
+                sponsor = st.ticker_sponsor_duration,
+                fade = st.ticker_fade_duration,
+            )
+        });
+    let topic_alpha = (st.ticker_fade_duration > 0.0).then(|| {
+        format!(
+            "if(lt(mod(t\\,{cycle})\\,{sponsor})\\,(mod(t\\,{cycle})-{topic_fade_start})/{fade}\\,if(lt(mod(t\\,{cycle})\\,{topic_hold_end})\\,1\\,({cycle}-mod(t\\,{cycle}))/{fade}))",
+            sponsor = st.ticker_sponsor_duration,
+            fade = st.ticker_fade_duration,
+        )
+    });
     let sponsor_enable = format!(
         "(not(between(t\\,{s}\\,{e}))*{sponsor_phase_enable})",
         s = st.host_intro_start,
         e = st.host_intro_end
     );
-    let sponsors = if c.sponsors.is_empty() {
-        show.to_string()
+    let sponsor_items = if c.sponsors.is_empty() {
+        vec![show.to_string()]
     } else {
         c.sponsors
             .iter()
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
-            .join("   ◆   ")
     };
     let mut out = vec![
         format!(
             "drawbox=x=0:y={ticker_y}:w=iw:h={ticker_h}:color={navy}@1:t=fill:enable='{enable}'",
             ticker_h = fmt_px(ticker_h)
         ),
-        format!(
-            "drawbox=x=0:y={ticker_y}:w={label_w}:h={ticker_h}:color={gold}@1:t=fill:enable='{enable}'",
-            label_w = fmt_px(label_w),
-            ticker_h = fmt_px(ticker_h)
-        ),
         format!("drawbox=x=0:y={ticker_y}:w=iw:h=3:color={gold}@1:t=fill:enable='{enable}'"),
-        broadcast_drawtext(show, "32", &label_text_y, 26, navy, None, None, true).replace(
-            ":enable='between(t\\,0\\,0)'",
-            &format!(":enable='{enable}'"),
-        ),
     ];
-    if !c.topics.is_empty() {
-        for topic in &c.topics {
+    if !entries.is_empty() {
+        for topic in entries {
             let start = topic.time_seconds;
             let end = start + st.ticker_topic_duration;
-            let next_topic = c
-                .topics
+            let next_topic = entries
                 .iter()
                 .filter_map(|candidate| {
                     (candidate.time_seconds > start).then_some(candidate.time_seconds)
@@ -1691,23 +2073,24 @@ fn format_smart_ticker(
                 "(not(between(t\\,{host_s}\\,{host_e}))*gte(t\\,{start})*lt(t\\,{next_topic})*gte(mod(t\\,{cycle})\\,{topic_s})*lt(mod(t\\,{cycle})\\,{topic_e}))",
                 host_s = st.host_intro_start,
                 host_e = st.host_intro_end,
-                topic_s = st.ticker_sponsor_duration,
-                topic_e = cycle - st.ticker_fade_duration,
+                topic_s = topic_fade_start,
+                topic_e = cycle,
             );
             out.push(format!(
-                "drawbox=x={x}:y={y}:w={w}:h=31:color={cyan}@1:t=fill:enable='between(t\\,{start}\\,{end})'",
+                "drawbox=x={x}:y={y}:w={w}:h={h}:color={cyan}@1:t=fill:enable='between(t\\,{start}\\,{end})'",
                 x = fmt_px(topic_badge_x),
                 y = topic_badge_y,
                 w = fmt_px(topic_badge_w),
+                h = fmt_px(topic_badge_h),
             ).replace(&format!("between(t\\,{start}\\,{end})"), &topic_enable));
             out.push(
                 broadcast_drawtext(
                     "NOW DISCUSSING",
-                    &fmt_px(topic_badge_x + 12.0),
-                    &format!("h-{}", fmt_px(ticker_h / 2.0 + 14.0)),
-                    23,
+                    &fmt_px(topic_badge_x + topic_badge_pad_x),
+                    &topic_badge_text_y,
+                    topic_badge_font_size,
                     navy,
-                    None,
+                    topic_alpha.as_deref(),
                     None,
                     true,
                 )
@@ -1717,13 +2100,13 @@ fn format_smart_ticker(
                 ),
             );
             out.push(
-                broadcast_drawtext(
+                broadcast_drawtext_body(
                     &topic.text,
                     &fmt_px(topic_text_x),
                     &ticker_text_y,
                     33,
                     "#FFFFFF",
-                    None,
+                    topic_alpha.as_deref(),
                     None,
                     false,
                 )
@@ -1734,23 +2117,93 @@ fn format_smart_ticker(
             );
         }
     }
-    if !sponsors.trim().is_empty() {
-        out.push(
-            broadcast_drawtext(
-                &sponsors,
-                &format!("{}-mod(t*70\\,900)", fmt_px(content_x)),
-                &ticker_text_y,
-                32,
-                "#CBD5E1",
-                None,
-                None,
-                true,
-            )
-            .replace(
+    if sponsor_items.iter().any(|item| !item.trim().is_empty()) {
+        out.extend(format_sponsor_marquee_filters(
+            &sponsor_items,
+            content_x,
+            &ticker_text_y,
+            sponsor_alpha.as_deref(),
+            &sponsor_enable,
+        ));
+    }
+    // Match the reference overlay renderer: ticker/topic text can
+    // move continuously, but the branded gold label owns the left
+    // lane and masks anything passing underneath it.
+    out.push(format!(
+        "drawbox=x=0:y={ticker_y}:w={label_w}:h={ticker_h}:color={gold}@1:t=fill:enable='{enable}'",
+        label_w = fmt_px(label_w),
+        ticker_h = fmt_px(ticker_h)
+    ));
+    out.push(
+        broadcast_drawtext(
+            show,
+            &format!("({}-text_w)/2", fmt_px(label_w)),
+            &label_text_y,
+            26,
+            navy,
+            None,
+            None,
+            true,
+        )
+        .replace(
+            ":enable='between(t\\,0\\,0)'",
+            &format!(":enable='{enable}'"),
+        ),
+    );
+    out
+}
+
+fn format_sponsor_marquee_filters(
+    sponsors: &[String],
+    content_x: f64,
+    y: &str,
+    alpha: Option<&str>,
+    enable: &str,
+) -> Vec<String> {
+    let text_size = 32;
+    let diamond_size = 42;
+    let diamond_gap = 36.0;
+    let item_gap = 36.0;
+    let diamond_y = format!("{y}-4");
+    let mut offsets = Vec::new();
+    let mut cursor = 0.0;
+    for sponsor in sponsors {
+        let text_w = estimated_condensed_text_width(sponsor, text_size);
+        offsets.push((sponsor.as_str(), cursor, text_w));
+        cursor += text_w + diamond_gap;
+        offsets.push(("◆", cursor, estimated_diamond_width(diamond_size)));
+        cursor += estimated_diamond_width(diamond_size) + item_gap;
+    }
+    let loop_w = cursor.max(1.0);
+    let mut out = Vec::new();
+    for repeat in 0..3 {
+        let repeat_offset = loop_w * f64::from(repeat);
+        for (text, offset, _) in &offsets {
+            let x = format!(
+                "{}+{}-mod(t*70\\,{})",
+                fmt_px(content_x),
+                fmt_px(repeat_offset + offset),
+                fmt_px(loop_w)
+            );
+            let filter = if *text == "◆" {
+                broadcast_drawtext_sponsor(
+                    text,
+                    &x,
+                    &diamond_y,
+                    diamond_size,
+                    "#CBD5E1",
+                    alpha,
+                    None,
+                    false,
+                )
+            } else {
+                broadcast_drawtext(text, &x, y, text_size, "#CBD5E1", alpha, None, true)
+            };
+            out.push(filter.replace(
                 ":enable='between(t\\,0\\,0)'",
-                &format!(":enable='{sponsor_enable}'"),
-            ),
-        );
+                &format!(":enable='{enable}'"),
+            ));
+        }
     }
     out
 }
@@ -1911,6 +2364,58 @@ fn broadcast_drawtext(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn broadcast_drawtext_body(
+    text: &str,
+    x: &str,
+    y: &str,
+    size: u32,
+    color: &str,
+    alpha: Option<&str>,
+    window: Option<(f64, f64)>,
+    bold: bool,
+) -> String {
+    let fontfile = pick_body_fontfile_attr();
+    let border = if bold { ":borderw=1" } else { "" };
+    let alpha = alpha.map(|a| format!(":alpha='{a}'")).unwrap_or_default();
+    let enable = if let Some((start, end)) = window {
+        format!(":enable='between(t\\,{start}\\,{end})'")
+    } else {
+        ":enable='between(t\\,0\\,0)'".into()
+    };
+    format!(
+        "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{border}:x={x}:y={y}{alpha}{enable}",
+        text = drawtext_escape(text),
+        font = fontfile,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn broadcast_drawtext_sponsor(
+    text: &str,
+    x: &str,
+    y: &str,
+    size: u32,
+    color: &str,
+    alpha: Option<&str>,
+    window: Option<(f64, f64)>,
+    bold: bool,
+) -> String {
+    let fontfile = pick_sponsor_fontfile_attr();
+    let border = if bold { ":borderw=1" } else { "" };
+    let alpha = alpha.map(|a| format!(":alpha='{a}'")).unwrap_or_default();
+    let enable = if let Some((start, end)) = window {
+        format!(":enable='between(t\\,{start}\\,{end})'")
+    } else {
+        ":enable='between(t\\,0\\,0)'".into()
+    };
+    format!(
+        "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{border}:x={x}:y={y}{alpha}{enable}",
+        text = drawtext_escape(text),
+        font = fontfile,
+    )
+}
+
 fn broadcast_title_alpha(st: &BroadcastOverlayStyle) -> String {
     format!(
         "if(lt(t\\,{fade_in})\\,t/{fade_in}\\,if(lt(t\\,{fade_out})\\,1\\,({end}-t)/({end}-{fade_out})))",
@@ -1918,6 +2423,22 @@ fn broadcast_title_alpha(st: &BroadcastOverlayStyle) -> String {
         fade_out = st.title_fade_out_start,
         end = st.title_visible_end,
     )
+}
+
+fn estimated_condensed_text_width(text: &str, font_size: u32) -> f64 {
+    let weighted_chars = text
+        .chars()
+        .map(|ch| if ch.is_whitespace() { 0.35 } else { 0.57 })
+        .sum::<f64>();
+    weighted_chars * f64::from(font_size)
+}
+
+fn estimated_broadcast_text_width(text: &str, font_size: u32) -> f64 {
+    estimated_condensed_text_width(text, font_size)
+}
+
+fn estimated_diamond_width(font_size: u32) -> f64 {
+    f64::from(font_size) * 0.72
 }
 
 fn normalize_hex(value: &str) -> String {
@@ -1970,7 +2491,7 @@ fn format_broadcast_overlay_graph(
         };
         graph.push(';');
         graph.push_str(&format!(
-            "movie='{path}',scale={size}:{size}:force_original_aspect_ratio=increase,crop={size}:{size},format=rgba{photo};{current}{photo}overlay=x={x}:y={y}:enable='between(t\\,{start}\\,{end})'{next}",
+            "movie='{path}',scale={size}:{size}:force_original_aspect_ratio=increase,crop={size}:{size},format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2)\\,(W/2)*(W/2))\\,255\\,0)'{photo};{current}{photo}overlay=x={x}:y={y}:enable='between(t\\,{start}\\,{end})'{next}",
             path = filter_escape_single_quoted(&asset.path.to_string_lossy()),
             size = asset.size,
             photo = photo_label,
@@ -2209,20 +2730,59 @@ fn drawtext_escape(s: &str) -> String {
         .collect()
 }
 
-/// Best-effort font lookup. Returns either an empty string (let
-/// ffmpeg's drawtext fall back to its default font search) or a
-/// `:fontfile=<path>` segment ready to splice into the filter args.
-///
-/// We probe a small list of well-known system fonts in priority
-/// order: macOS Helvetica, Linux DejaVu, Linux Liberation. If none
-/// resolve, we omit `fontfile=` and rely on ffmpeg's default —
-/// recent ffmpeg builds (5+) handle this gracefully on macOS; older
-/// builds may fail at render time with a clear "no fontfile" error.
+/// Best-effort condensed font lookup for broadcast labels. Returns
+/// either an empty string or a `:fontfile=<path>` segment ready to
+/// splice into the filter args.
 fn pick_fontfile_attr() -> String {
     const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/Avenir Next Condensed.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Narrow.ttf",
         "/System/Library/Fonts/HelveticaNeue.ttc",
         "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/Supplemental/Arial Narrow Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    ];
+    for path in CANDIDATES {
+        if std::path::Path::new(path).is_file() {
+            return format!(":fontfile={path}");
+        }
+    }
+    String::new()
+}
+
+/// Best-effort body font lookup for readable ticker topics and
+/// subtitles. The reference renderer keeps these non-condensed while
+/// the surrounding broadcast chrome stays condensed.
+fn pick_body_fontfile_attr() -> String {
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/HelveticaNeue.ttc",
+        "/System/Library/Fonts/Avenir Next.ttc",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    ];
+    for path in CANDIDATES {
+        if std::path::Path::new(path).is_file() {
+            return format!(":fontfile={path}");
+        }
+    }
+    String::new()
+}
+
+/// Sponsor ticker text needs broad Unicode coverage for the diamond
+/// separator. Some condensed system fonts render `◆` as a missing-glyph
+/// box, which is worse than using a slightly less condensed face here.
+fn pick_sponsor_fontfile_attr() -> String {
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/HelveticaNeue.ttc",
+        "/System/Library/Fonts/Avenir Next.ttc",
+        "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
@@ -2318,19 +2878,21 @@ pub fn build_timeline_argv_with_transitions(
     transitions: &[TransitionPlan],
     output_path: &Path,
 ) -> Vec<String> {
-    build_timeline_argv_full(segs, transitions, &[], None, output_path)
+    build_timeline_argv_full(segs, transitions, &[], &[], None, None, None, output_path)
 }
 
 /// Like [`build_timeline_argv_with_transitions`] but also takes a
 /// titles slice. Each [`TitlePlan`] becomes a `drawtext=` filter
 /// chained off the master video output of the segment + transition
-/// graph. Step 16.3 ships the basic shape (no animation);
-/// 16.4 wires alpha / x / y expressions for animations.
+/// graph; alpha / x / y expressions handle title animations.
 pub fn build_timeline_argv_full(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
+    video_overlays: &[VideoOverlayPlan],
     titles: &[TitlePlan],
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    browser_broadcast_overlay: Option<&Path>,
+    loudness_target: Option<LoudnessTargetPlan>,
     output_path: &Path,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
@@ -2344,26 +2906,70 @@ pub fn build_timeline_argv_full(
             s.asset_path.to_string_lossy().into_owned(),
         ]);
     }
+    for overlay in video_overlays {
+        argv.extend([
+            "-ss".into(),
+            format!("{}", overlay.segment.start_s),
+            "-t".into(),
+            format!("{}", overlay.segment.duration_s),
+            "-i".into(),
+            overlay.segment.asset_path.to_string_lossy().into_owned(),
+        ]);
+    }
+    if let Some(path) = browser_broadcast_overlay {
+        argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
+    }
+    let base = FilterPlanner::new(segs, transitions).plan();
+    let media = append_video_overlays(base, video_overlays, segs.len());
+    let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
+        &[]
+    } else {
+        titles
+    };
+    let ffmpeg_broadcast_overlay = browser_broadcast_overlay
+        .is_none()
+        .then_some(broadcast_overlay)
+        .flatten();
     let plan = FilterPlanner::with_titles_and_broadcast_overlay(
-        segs,
-        transitions,
+        &[],
+        &[],
         titles,
-        broadcast_overlay,
+        ffmpeg_broadcast_overlay,
     )
-    .plan();
+    .decorate_video_filter(media.filter_complex, media.video_out_label);
+    let mut filter_complex = plan.filter_complex;
+    let video_out_label = if browser_broadcast_overlay.is_some() {
+        let overlay_input = segs.len() + video_overlays.len();
+        let out = "[browser_broadcast_v]".to_string();
+        filter_complex.push_str(&format!(
+            "{}[{overlay_input}:v:0]format=rgba[browser_broadcast_overlay];{}[browser_broadcast_overlay]overlay=x=0:y=0:format=auto{out};",
+            if filter_complex.ends_with(';') || filter_complex.is_empty() { "" } else { ";" },
+            plan.video_out_label,
+        ));
+        out
+    } else {
+        plan.video_out_label
+    };
+    let audio_out_label = append_timeline_loudness_filter(
+        &mut filter_complex,
+        media.audio_out_label,
+        loudness_target,
+    );
     argv.extend([
         "-filter_complex".into(),
-        plan.filter_complex,
+        filter_complex,
         "-map".into(),
-        plan.video_out_label,
+        video_out_label,
         "-map".into(),
-        plan.audio_out_label,
+        audio_out_label,
         "-c:v".into(),
         "libx264".into(),
         "-preset".into(),
         "veryfast".into(),
         "-crf".into(),
         "20".into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
         "-c:a".into(),
         "aac".into(),
         "-b:a".into(),
@@ -2380,8 +2986,11 @@ pub fn build_timeline_argv_full(
 pub fn build_timeline_argv_with_audio_tracks(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
+    video_overlays: &[VideoOverlayPlan],
     titles: &[TitlePlan],
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    browser_broadcast_overlay: Option<&Path>,
+    loudness_target: Option<LoudnessTargetPlan>,
     audio_tracks: &[AudioTrackPlan],
     output_path: &Path,
 ) -> Vec<String> {
@@ -2395,6 +3004,19 @@ pub fn build_timeline_argv_with_audio_tracks(
             "-i".into(),
             s.asset_path.to_string_lossy().into_owned(),
         ]);
+    }
+    for overlay in video_overlays {
+        argv.extend([
+            "-ss".into(),
+            format!("{}", overlay.segment.start_s),
+            "-t".into(),
+            format!("{}", overlay.segment.duration_s),
+            "-i".into(),
+            overlay.segment.asset_path.to_string_lossy().into_owned(),
+        ]);
+    }
+    if let Some(path) = browser_broadcast_overlay {
+        argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
     }
     for track in audio_tracks {
         for item in &track.items {
@@ -2418,17 +3040,52 @@ pub fn build_timeline_argv_with_audio_tracks(
         .fold(0.1_f64, f64::max);
     let mut filter = plan_video_only_filter(segs, transitions, fallback_video_duration);
     let base_video_label = "[vonly]";
-    let mut video_label = base_video_label.to_string();
-    if !titles.is_empty() || broadcast_overlay.is_some() {
-        let decorated =
-            FilterPlanner::with_titles_and_broadcast_overlay(&[], &[], titles, broadcast_overlay)
-                .decorate_video_filter(filter, video_label.clone());
+    let media = append_video_overlays(
+        FilterPlan {
+            filter_complex: filter,
+            video_out_label: base_video_label.to_string(),
+            audio_out_label: String::new(),
+        },
+        video_overlays,
+        segs.len(),
+    );
+    filter = media.filter_complex;
+    let mut video_label = media.video_out_label;
+    let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
+        &[]
+    } else {
+        titles
+    };
+    let ffmpeg_broadcast_overlay = browser_broadcast_overlay
+        .is_none()
+        .then_some(broadcast_overlay)
+        .flatten();
+    if !titles.is_empty() || ffmpeg_broadcast_overlay.is_some() {
+        let decorated = FilterPlanner::with_titles_and_broadcast_overlay(
+            &[],
+            &[],
+            titles,
+            ffmpeg_broadcast_overlay,
+        )
+        .decorate_video_filter(filter, video_label.clone());
         filter = decorated.filter_complex;
         video_label = decorated.video_out_label;
     }
 
-    let mut next_input = segs.len();
+    if browser_broadcast_overlay.is_some() {
+        let overlay_input = segs.len() + video_overlays.len();
+        let out = "[browser_broadcast_v]".to_string();
+        filter.push_str(&format!(
+            "{}[{overlay_input}:v:0]format=rgba[browser_broadcast_overlay];{video_label}[browser_broadcast_overlay]overlay=x=0:y=0:format=auto{out};",
+            if filter.ends_with(';') || filter.is_empty() { "" } else { ";" },
+        ));
+        video_label = out;
+    }
+
+    let mut next_input =
+        segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
     let audio_label = plan_audio_mix_filter(&mut filter, audio_tracks, &mut next_input);
+    let audio_label = append_timeline_loudness_filter(&mut filter, audio_label, loudness_target);
     argv.extend([
         "-filter_complex".into(),
         filter,
@@ -2442,6 +3099,8 @@ pub fn build_timeline_argv_with_audio_tracks(
         "veryfast".into(),
         "-crf".into(),
         "20".into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
         "-c:a".into(),
         "aac".into(),
         "-b:a".into(),
@@ -2474,37 +3133,39 @@ fn plan_video_only_filter(
         return filter;
     }
 
-    // Explicit audio projects still preserve the common visual xfade
-    // case; audio transitions are owned by the audio tracks.
-    let mut used = vec![false; segs.len()];
+    // Explicit audio projects still preserve visual transition chains;
+    // audio transitions are owned by the audio tracks.
+    let transition_after = transition_edge_map(segs.len(), transitions);
     let mut concat_inputs = Vec::new();
-    for t in transitions {
-        if t.from_segment_index + 1 != t.to_segment_index
-            || t.to_segment_index >= segs.len()
-            || used[t.from_segment_index]
-            || used[t.to_segment_index]
-        {
-            continue;
+    let mut i = 0;
+    let mut transition_id = 0;
+    while i < segs.len() {
+        let mut current_v = video_inputs[i].clone();
+        let mut current_duration = effective_duration(&segs[i]);
+        let mut group_end = i;
+        while group_end + 1 < segs.len() {
+            let Some(t) = transition_after[group_end] else {
+                break;
+            };
+            let next = group_end + 1;
+            let label = format!("[xv{transition_id}]");
+            let offset = (current_duration - t.duration_s).max(0.0);
+            filter.push_str(&format!(
+                "{}{}xfade=transition={}:duration={}:offset={}{};",
+                current_v,
+                video_inputs[next],
+                map_transition_kind(&t.kind),
+                t.duration_s,
+                offset,
+                label
+            ));
+            current_v = label;
+            current_duration = current_duration + effective_duration(&segs[next]) - t.duration_s;
+            transition_id += 1;
+            group_end = next;
         }
-        let offset = (effective_duration(&segs[t.from_segment_index]) - t.duration_s).max(0.0);
-        let label = format!("[xv{}]", t.from_segment_index);
-        filter.push_str(&format!(
-            "{}{}xfade=transition={}:duration={}:offset={}{};",
-            video_inputs[t.from_segment_index],
-            video_inputs[t.to_segment_index],
-            map_transition_kind(&t.kind),
-            t.duration_s,
-            offset,
-            label
-        ));
-        concat_inputs.push(label);
-        used[t.from_segment_index] = true;
-        used[t.to_segment_index] = true;
-    }
-    for (i, v) in video_inputs.iter().enumerate() {
-        if !used[i] {
-            concat_inputs.push(v.clone());
-        }
+        concat_inputs.push(current_v);
+        i = group_end + 1;
     }
     for v in &concat_inputs {
         filter.push_str(v);
@@ -2738,8 +3399,15 @@ fn plan_one_audio_track(
 pub fn build_timeline_render_spec(
     project_root: &Path,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
-    let (segs, transitions, titles, broadcast_overlay, audio_tracks) =
-        collect_timeline_full_plan(project_root)?;
+    let (
+        segs,
+        transitions,
+        video_overlays,
+        titles,
+        broadcast_overlay,
+        audio_tracks,
+        loudness_target,
+    ) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
     }
@@ -2759,22 +3427,43 @@ pub fn build_timeline_render_spec(
     let trans_total: f64 = transitions.iter().map(|t| t.duration_s).sum();
     let total_duration_s = (raw_total - trans_total).max(0.0);
     let renders_dir = project_root.join("renders");
+    fs::create_dir_all(&renders_dir)
+        .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
     let timestamp = Utc::now().format("%H%M%S");
     let output_path = renders_dir.join(format!("timeline-{timestamp}.mp4"));
+    let browser_broadcast_overlay = if let Some(overlay) = broadcast_overlay.as_ref()
+        && overlay.config.enabled
+        && !overlay.config.short_form_mode
+    {
+        Some(prepare_browser_broadcast_overlay_video(
+            overlay,
+            total_duration_s,
+            &renders_dir,
+            &timestamp.to_string(),
+        )?)
+    } else {
+        None
+    };
     let argv = if audio_tracks.is_empty() {
         build_timeline_argv_full(
             &segs,
             &transitions,
+            &video_overlays,
             &titles,
             broadcast_overlay.as_ref(),
+            browser_broadcast_overlay.as_deref(),
+            loudness_target,
             &output_path,
         )
     } else {
         build_timeline_argv_with_audio_tracks(
             &segs,
             &transitions,
+            &video_overlays,
             &titles,
             broadcast_overlay.as_ref(),
+            browser_broadcast_overlay.as_deref(),
+            loudness_target,
             &audio_tracks,
             &output_path,
         )
@@ -2785,6 +3474,62 @@ pub fn build_timeline_render_spec(
         cwd: Some(project_root.to_path_buf()),
         output_path,
     })
+}
+
+fn prepare_browser_broadcast_overlay_video(
+    overlay: &BroadcastOverlayPlan,
+    duration_s: f64,
+    renders_dir: &Path,
+    timestamp: &str,
+) -> Result<PathBuf, RenderTimelineError> {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            RenderTimelineError::BroadcastOverlayRender(
+                "could not resolve repository root".to_string(),
+            )
+        })?;
+    let script = repo_root
+        .join("apps")
+        .join("desktop")
+        .join("scripts")
+        .join("render-broadcast-overlay.mjs");
+    if !script.exists() {
+        return Err(RenderTimelineError::BroadcastOverlayRender(format!(
+            "missing overlay renderer script at {}",
+            script.display()
+        )));
+    }
+    let output = renders_dir.join(format!("broadcast-overlay-{timestamp}.mov"));
+    let config_json = serde_json::to_string(&overlay.config)
+        .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
+    let status = Command::new("node")
+        .arg(&script)
+        .arg("--config")
+        .arg(config_json)
+        .arg("--project-root")
+        .arg(&overlay.project_root)
+        .arg("--duration")
+        .arg(format!("{duration_s}"))
+        .arg("--output")
+        .arg(&output)
+        .arg("--width")
+        .arg("1920")
+        .arg("--height")
+        .arg("1080")
+        .arg("--fps")
+        .arg("30")
+        .current_dir(repo_root.join("apps").join("desktop"))
+        .status()
+        .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
+    if !status.success() {
+        return Err(RenderTimelineError::BroadcastOverlayRender(format!(
+            "overlay renderer exited with {status}"
+        )));
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -2905,6 +3650,9 @@ mod tests {
             &segs,
             &[],
             &[],
+            &[],
+            None,
+            None,
             None,
             &audio_tracks,
             Path::new("/tmp/out.mp4"),
@@ -2922,10 +3670,37 @@ mod tests {
     }
 
     #[test]
+    fn timeline_loudness_target_appends_final_audio_loudnorm() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            Some(LoudnessTargetPlan {
+                integrated_lufs: -16.0,
+                true_peak_db: Some(-1.5),
+            }),
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(filter.contains(
+            "[outa]aresample=async=1:first_pts=0,loudnorm=I=-16:TP=-1.5:LRA=11[mastera]"
+        ));
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "-map" && w[1] == "[mastera]")
+        );
+    }
+
+    #[test]
     fn filter_planner_with_no_transitions_emits_legacy_concat_graph() {
-        // Step 14.4 extracted FilterPlanner from build_timeline_argv;
-        // this test pins the no-transition graph shape so future
-        // commits can't drift it without noticing.
+        // Pins the no-transition graph shape so future changes can't drift it.
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 1.0, 3.0)];
         let plan = FilterPlanner::new(&segs, &[]).plan();
         assert_eq!(
@@ -2992,16 +3767,15 @@ mod tests {
             plan.filter_complex
                 .contains("concat=n=2:v=1:a=1[outv][outa]")
         );
-        // C's raw streams must appear in the concat input list.
-        assert!(plan.filter_complex.contains("[2:v:0][2:a:0]"));
+        // C's streams are timestamp-normalized before concat.
+        assert!(plan.filter_complex.contains("[vpts2][apts2]"));
     }
 
     #[test]
-    fn filter_planner_drops_chained_transitions() {
-        // [A, B, C] with transitions A-B AND B-C: B can only belong
-        // to one chunk in v1. The first transition wins; the second
-        // is dropped (with a debug-trace log we can't easily assert
-        // here). Resulting concat: xfade(A,B) + raw C.
+    fn filter_planner_renders_chained_transitions() {
+        // [A, B, C] with transitions A-B AND B-C must render both
+        // transitions. The second xfade consumes the first xfade's
+        // output and uses the shortened chain duration for its offset.
         let segs = vec![
             seg("/tmp/a.mp4", 0.0, 3.0),
             seg("/tmp/b.mp4", 0.0, 4.0),
@@ -3022,18 +3796,75 @@ mod tests {
             },
         ];
         let plan = FilterPlanner::new(&segs, &trans).plan();
-        // Exactly one xfade (A-B).
         let xfade_count = plan.filter_complex.matches("xfade=").count();
-        assert_eq!(xfade_count, 1, "filter graph: {}", plan.filter_complex);
-        // C still in the concat as a raw input.
-        assert!(plan.filter_complex.contains("[2:v:0][2:a:0]"));
+        assert_eq!(xfade_count, 2, "filter graph: {}", plan.filter_complex);
+        assert!(
+            plan.filter_complex
+                .contains("[vpts0][vpts1]xfade=transition=fade:duration=0.5:offset=2.5[xv0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("[xv0][vpts2]xfade=transition=fade:duration=0.5:offset=6[xv1]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("[apts0][apts1]acrossfade=d=0.5[xa0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("[xa0][apts2]acrossfade=d=0.5[xa1]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("concat=n=1:v=1:a=1[outv][outa]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_preserves_hard_cuts_between_transition_runs() {
+        let segs = vec![
+            seg("/tmp/a.mp4", 0.0, 3.0),
+            seg("/tmp/b.mp4", 0.0, 4.0),
+            seg("/tmp/c.mp4", 0.0, 2.0),
+            seg("/tmp/d.mp4", 0.0, 5.0),
+        ];
+        let trans = vec![
+            TransitionPlan {
+                from_segment_index: 0,
+                to_segment_index: 1,
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.5,
+            },
+            TransitionPlan {
+                from_segment_index: 2,
+                to_segment_index: 3,
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.25,
+            },
+        ];
+        let plan = FilterPlanner::new(&segs, &trans).plan();
+        let xfade_count = plan.filter_complex.matches("xfade=").count();
+        assert_eq!(xfade_count, 2, "filter graph: {}", plan.filter_complex);
+        assert!(
+            plan.filter_complex
+                .contains("[xv0][xa0][xv1][xa1]concat=n=2:v=1:a=1[outv][outa]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
     }
 
     #[test]
     fn filter_planner_emits_volume_filter_when_segment_carries_value() {
-        // Step 15.3: a segment with volume=0.5 prepends a volume=
-        // filter that produces [av0], then the concat consumes
-        // [av0] in place of the raw [0:a:0].
         let mut s0 = seg("/tmp/a.mp4", 0.0, 2.0);
         s0.volume = Some(0.5);
         let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
@@ -3089,9 +3920,9 @@ mod tests {
             "filter graph: {}",
             plan.filter_complex,
         );
-        // acrossfade reads [0:a:0] (no volume on s0) and [av1] (volume on s1).
+        // acrossfade reads timestamp-normalized audio after clip effects.
         assert!(
-            plan.filter_complex.contains("[0:a:0][av1]acrossfade"),
+            plan.filter_complex.contains("[apts0][apts1]acrossfade"),
             "filter graph: {}",
             plan.filter_complex,
         );
@@ -3126,9 +3957,6 @@ mod tests {
 
     #[test]
     fn filter_planner_emits_setpts_and_atempo_for_speed_segment() {
-        // Step 15.4: a segment with speed=2.0 prepends setpts on
-        // video and atempo on audio, threads the [sv<i>]/[sa<i>]
-        // labels into the concat.
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
         s0.speed = Some(2.0);
         let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
@@ -3365,6 +4193,40 @@ mod tests {
     }
 
     #[test]
+    fn long_form_broadcast_overlay_suppresses_generic_titles() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
+        let title = TitlePlan {
+            text: "Chapter".into(),
+            start_s: 1.0,
+            end_s: 4.0,
+            position: TitlePosition::Bottom,
+            font_size: 48,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Bold,
+            animation: TitleAnimation::None,
+            role: "title".into(),
+            safe_area: None,
+        };
+        let overlay = BroadcastOverlayPlan {
+            config: BroadcastOverlayConfig {
+                enabled: true,
+                show_name: "SHOW".into(),
+                sponsors: vec!["Sponsor".into()],
+                ..BroadcastOverlayConfig::default()
+            },
+            project_root: PathBuf::from("/tmp"),
+        };
+        let plan =
+            FilterPlanner::with_titles_and_broadcast_overlay(&[s0], &[], &[title], Some(&overlay))
+                .plan();
+        assert!(
+            !plan.filter_complex.contains("text='Chapter'"),
+            "filter graph: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
     fn filter_planner_appends_broadcast_overlay_filters() {
         let s0 = seg("/tmp/a.mp4", 0.0, 120.0);
         let mut config = BroadcastOverlayConfig {
@@ -3419,6 +4281,23 @@ mod tests {
             "expected topic badge, got: {}",
             plan.filter_complex,
         );
+        let sponsor_pos = plan.filter_complex.find("LEARN-X").unwrap();
+        assert!(
+            plan.filter_complex.contains("◆"),
+            "expected diamond separator drawtext, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("Throwly"),
+            "expected second sponsor drawtext, got: {}",
+            plan.filter_complex,
+        );
+        let label_pos = plan.filter_complex.rfind("w=340:h=100:color=").unwrap();
+        assert!(
+            label_pos > sponsor_pos,
+            "expected branded ticker label to draw after sponsor text so it masks the left lane, got: {}",
+            plan.filter_complex,
+        );
         assert!(
             plan.filter_complex.contains("HARDWARE BARRIERS"),
             "expected chapter card, got: {}",
@@ -3434,6 +4313,66 @@ mod tests {
             "expected left host photo overlay, got: {}",
             plan.filter_complex,
         );
+    }
+
+    #[test]
+    fn timeline_argv_composites_pip_overlay_after_base_concat() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/pip.mp4", 1.0, 2.0),
+            track_start_s: 1.5,
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".into(),
+                scale: 0.28,
+                margin_pct: 0.035,
+            },
+        }];
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &overlays,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(filter.contains("concat=n=1:v=1:a=1[outv][outa]"));
+        assert!(filter.contains("[1:v:0]setpts=PTS-STARTPTS+1.5/TB"));
+        assert!(filter.contains("scale2ref=w=main_w*0.28:h=-2"));
+        assert!(filter.contains("overlay=x=main_w-overlay_w-main_w*0.035:y=main_h-overlay_h-main_h*0.035:enable='between(t\\,1.5\\,3.5)'"));
+    }
+
+    #[test]
+    fn timeline_argv_composites_full_frame_overlay_without_base_concat_append() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/cover.mp4", 0.0, 2.0),
+            track_start_s: 1.0,
+            mode: VideoOverlayMode::FullFrame,
+        }];
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &overlays,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(filter.contains("concat=n=1:v=1:a=1[outv][outa]"));
+        assert!(!filter.contains("concat=n=2"));
+        assert!(filter.contains("scale2ref=w=main_w:h=main_h"));
+        assert!(filter.contains("overlay=x=0:y=0:enable='between(t\\,1\\,3)'"));
     }
 
     #[test]

@@ -280,8 +280,8 @@ fn probe_stream_durations(path: &Path) -> Result<StreamDurations, String> {
 /// Tier-2 check: every clip with a `transcript_snippet` anchor still
 /// has that snippet's transcript range overlapping its `source_range`.
 ///
-/// Per `PLAN.md` §9 / #146 V1 scope: catches the structural footgun
-/// where `apply_edl Trim` narrows a clip's window past the snippet
+/// Per `PLAN.md` §9 / #146 V1 scope: catches the structural risk where
+/// `apply_edl Trim` narrows a clip's window past the snippet
 /// that anchored it. Without this, the agent can silently produce a
 /// cut whose anchor no longer matches its content — a hard-to-trace
 /// bug at render time.
@@ -303,7 +303,7 @@ fn probe_stream_durations(path: &Path) -> Result<StreamDurations, String> {
 ///     ("anchor lost"; either the transcript changed or the agent
 ///     anchored on text that doesn't exist).
 ///   - Anchor present + snippet found but range doesn't overlap
-///     `source_range` → fail (the trim-past-anchor footgun).
+///     `source_range` → fail (the trim-past-anchor risk).
 fn check_transcript_cut_alignment(project_root: &Path) -> CheckVerdict {
     const ID: &str = "transcript_cut_alignment";
 

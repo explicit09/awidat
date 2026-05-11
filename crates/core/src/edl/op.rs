@@ -131,6 +131,23 @@ pub enum EdlOp {
         /// Where it sits relative to the existing clips.
         position: BRollPosition,
     },
+    /// Insert a picture-in-picture clip over an anchor moment.
+    InsertPiP {
+        /// Where to insert.
+        anchor: Anchor,
+        /// Asset path (project-relative).
+        asset: String,
+        /// Duration in seconds.
+        duration_s: f64,
+        /// Source-media start in seconds.
+        source_start_s: f64,
+        /// Output corner.
+        corner: PiPCorner,
+        /// Fraction of output width.
+        scale: f64,
+        /// Fraction of output width/height used as the margin.
+        margin_pct: f64,
+    },
     /// Move a clip to a new track position. F2.
     MoveClip {
         /// Source anchor.
@@ -234,6 +251,23 @@ pub enum EdlOp {
         track: String,
         /// Effect configuration.
         fx: AudioFxConfig,
+    },
+    /// Set a generic graph-native Awidat effect on a clip. The `effect`
+    /// id must be registered in `awidat-effects`; `params` are
+    /// validated against that registry before the OTIO `Effect.1` is
+    /// stamped. Re-applying a non-stackable effect replaces the prior
+    /// same-id effect.
+    SetEffect {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Stable effect id, e.g. `awidat.color_correction`.
+        effect: String,
+        /// Raw effect parameters from `params_json`.
+        #[serde(default)]
+        params: serde_json::Map<String, serde_json::Value>,
+        /// Optional editorial rationale persisted in metadata.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        rationale: Option<String>,
     },
     /// Set per-clip playback speed. `factor` rescales both video and
     /// audio: `2.0` plays at double speed (half the timeline length),
@@ -572,6 +606,20 @@ pub enum BRollPosition {
     Overlay,
     /// New clip replaces the existing media (split + insert).
     Replace,
+}
+
+/// Output corner for picture-in-picture clips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PiPCorner {
+    /// Upper-left corner.
+    TopLeft,
+    /// Upper-right corner.
+    TopRight,
+    /// Lower-left corner.
+    BottomLeft,
+    /// Lower-right corner.
+    BottomRight,
 }
 
 /// Anchor pair for `InsertTransition`.

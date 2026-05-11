@@ -41,9 +41,8 @@ impl JobId {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        // Embed a process-monotonic counter and a randomish epoch nibble.
-        // Not cryptographic — just unique enough across jobs in one
-        // session.
+        // Process-monotonic counter mixed with an epoch nibble. Not
+        // cryptographic — just unique across jobs in one session.
         let epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
@@ -204,9 +203,6 @@ impl JobManager {
         let (tx, rx) = watch::channel(initial.clone());
         let cancel = CancellationToken::new();
 
-        // Add `-progress pipe:2` so ffmpeg writes structured progress
-        // *into stderr* alongside its log lines. We tolerate either form
-        // (parse_progress_line handles both).
         let mut cmd = Command::new(&bin);
         cmd.args(&spec.args)
             .stdin(Stdio::null())
@@ -221,14 +217,12 @@ impl JobManager {
             .spawn()
             .map_err(|e| JobError::Spawn(format!("{bin}: {e}", bin = bin.display())))?;
 
-        // Spawn the runner.
         let runner_cancel = cancel.clone();
         let manager = self.clone();
         let id_for_runner = id.clone();
         tokio::spawn(async move {
             run_job(child, tx, runner_cancel, spec.total_duration_s).await;
-            // After terminal state, hold the JobHandle for a grace window
-            // so a final poll still works, then drop.
+            // Grace window so one more poll after terminal state still works.
             tokio::time::sleep(POST_TERMINAL_RETENTION).await;
             manager.inner.jobs.write().await.remove(&id_for_runner);
             debug!(job = %id_for_runner, "render job retention expired; reaped");
@@ -301,7 +295,6 @@ async fn run_job(
     let mut log_buf = TailBuffer::new(STDERR_LOG_CAP_BYTES);
     let started = Instant::now();
 
-    // Mark Running on first byte of stderr.
     let mut became_running = false;
 
     loop {
@@ -389,7 +382,6 @@ async fn run_job(
         s.state = final_state;
         s.exit_code = exit.code();
         s.log_excerpt = log_buf.snapshot();
-        // On Done, force progress to 100% even if total was unknown.
         if matches!(final_state, JobState::Done) {
             s.progress_pct = Some(100.0);
             s.eta_s = Some(0.0);

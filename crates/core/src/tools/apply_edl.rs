@@ -119,7 +119,6 @@ impl ToolHandler for ApplyEdlTool {
             ))
         })?;
 
-        // 1. Parse.
         let envelope = edl_parse(&args.edl)
             .map_err(|e| FunctionCallError::RespondToModel(format_parse_error(&e)))?;
 
@@ -159,7 +158,6 @@ impl ToolHandler for ApplyEdlTool {
             run_apply_edl_hook("pre_apply_edl", cmd, &args.edl, &ctx.project_root)?;
         }
 
-        // 2-4. Apply against a clone of the current timeline.
         let project = Project::read(&ctx.project_root).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "apply_edl: failed to read project at {}: {e}",
@@ -174,7 +172,7 @@ impl ToolHandler for ApplyEdlTool {
         let (new_timeline, outcome) = edl_apply(&project.timeline, &envelope, &anchor_ctx)
             .map_err(|e| FunctionCallError::RespondToModel(format_apply_error(&e)))?;
 
-        // 6. Commit to disk (skip when dry_run).
+        // Commit to disk (skip when dry_run).
         if !args.dry_run {
             let mut updated = project.clone();
             updated.timeline = new_timeline;
@@ -184,7 +182,7 @@ impl ToolHandler for ApplyEdlTool {
                 ))
             })?;
 
-            // 7. Phase B auto-commit. Snapshot the post-apply state
+            // Phase B auto-commit. Snapshot the post-apply state
             // into vedit so every accepted envelope becomes a
             // structured commit. Best-effort: a vedit failure must
             // not unwind the disk write that already happened —
@@ -290,12 +288,14 @@ fn format_parse_error(e: &EdlParseError) -> String {
                  `+ start: <seconds>` or `+ end: <seconds>` (in \
                  source-media seconds).",
             ),
-            "asset" => Some("Insert Clip / Insert BRoll needs `+ asset: <project-relative path>`."),
+            "asset" => Some(
+                "Insert Clip / Insert BRoll / Insert PiP needs `+ asset: <project-relative path>`.",
+            ),
             "track" => Some(
                 "Insert Clip needs `+ track: <track name>`. The track is created \
                  if it doesn't exist (Video kind). Common default: `V1`.",
             ),
-            "duration_s" => Some("Insert BRoll needs `+ duration_s: <seconds>`."),
+            "duration_s" => Some("Insert BRoll / Insert PiP needs `+ duration_s: <seconds>`."),
             "anchor" => Some(
                 "Every op needs an `@@ anchor: ...` line. Either \
                  transcript_snippet=\"...\" or clip_uuid=<clip name from view_timeline>.",
@@ -308,7 +308,7 @@ fn format_parse_error(e: &EdlParseError) -> String {
         "apply_edl: parse failed — {e}. The envelope must begin with \
          `*** Begin EDL` and end with `*** End EDL`; ops are `*** Trim \
          Clip | Untrim Clip | Delete Clip | Split Clip | Insert Clip | \
-         Insert BRoll | Move Clip | Insert Transition`. Anchors look \
+         Insert BRoll | Insert PiP | Move Clip | Insert Transition`. Anchors look \
          like `@@ anchor: transcript_snippet=\"...\"` or `@@ anchor: \
          clip_uuid=clip-0`. Insert Clip skips the `@@ anchor:` line — \
          it doesn't anchor against an existing clip."
@@ -456,10 +456,9 @@ same track (the transition sits between them at the cut). Common \
 kinds: `SMPTE_Dissolve` (cross-fade), `awidat.fade_in`, \
 `awidat.fade_out`. The render pipeline maps these to ffmpeg's \
 xfade transition names. duration_s applies symmetrically — half \
-reaches into the outgoing clip, half into the incoming. v1 does \
-not support transitions across gaps or chained transitions \
-sharing a clip; if you ask for both, the second one is dropped \
-at render time.\
+reaches into the outgoing clip, half into the incoming. Transitions \
+may be chained across adjacent clips; transitions still cannot cross \
+gaps or non-adjacent anchors.\
 \n  - **Move Clip**: `+ to_position: <index>` (required). Moves \
 the anchored clip to a new position within its current track \
 (no cross-track moves in v1). Index is the clip's slot in the \
@@ -474,6 +473,13 @@ a higher video track (a fresh `V<N+1>` is created if no other \
 video track exists), at the anchor clip's track-time start, with \
 a leading Gap on the overlay track so it lines up under the \
 anchor.\
+\n  - **Insert PiP**: `+ asset: <path>` and `+ duration_s: \
+<seconds>` required. Optional `+ source_start_s: <seconds>` \
+(default 0), `+ corner: <top_left|top_right|bottom_left|bottom_right>` \
+(default bottom_right), `+ scale: <0.10..0.60>` (default 0.28), \
+and `+ margin_pct: <0.0..0.15>` (default 0.035). Anchored to a clip; \
+lands on an upper video track with `awidat.video_overlay` metadata. \
+PiP overlay audio is muted in v1.\
 \n  - **Set Volume**: `+ value: <gain>` (required). Linear gain \
 multiplier on the clip's audio: `0.0` mutes, `1.0` is unity (no \
 change — the default for clips with no Set Volume), values above \
@@ -481,6 +487,14 @@ change — the default for clips with no Set Volume), values above \
 on the clip; re-applying replaces the existing effect rather than \
 stacking. Render emits `volume=<value>` on this segment's audio \
 stream before concat / xfade.\
+\n  - **Set Effect**: generic registered clip effect. Required \
+fields: `+ effect: <awidat.effect_id>` and optional `+ params_json: \
+{...}` plus optional `+ rationale: <why>`. The effect id must exist \
+in the in-tree `awidat-effects` registry. Parameters are validated \
+against the registry before writing, then stamped as OTIO Effect \
+metadata. Same-id effects replace by default unless the registry \
+marks them stackable. Use this when an operation is easier to express \
+as a semantic graph-native effect than as a dedicated EDL op.\
 \n  - **Set Speed**: `+ factor: <multiplier>` (required). Playback \
 rate multiplier: `1.0` is unity (no change), `2.0` plays at double \
 speed (half timeline length), `0.5` plays at half speed (double \

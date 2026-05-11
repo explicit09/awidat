@@ -62,8 +62,8 @@ pub fn parse_progress_line(line: &str, prev: &mut ProgressSnapshot) {
         let tok = tokens[i];
         let (key, value) = if let Some((k, v)) = tok.split_once('=') {
             if v.is_empty() && i + 1 < tokens.len() {
-                // ffmpeg right-pads numeric values: `frame=  234` arrives
-                // as the tokens `frame=` and `234`. Reach forward.
+                // ffmpeg right-pads numeric values (`frame=  234` arrives
+                // as `frame=` followed by `234`); reach into the next token.
                 let v = tokens[i + 1];
                 i += 2;
                 (k, v)
@@ -104,7 +104,7 @@ pub fn parse_progress_line(line: &str, prev: &mut ProgressSnapshot) {
 }
 
 fn parse_time(s: &str) -> Option<f64> {
-    // ffmpeg: `HH:MM:SS.mmm` (always 3 components).
+    // ffmpeg always emits 3 components: `HH:MM:SS.mmm`.
     let mut parts = s.split(':');
     let h: f64 = parts.next()?.parse().ok()?;
     let m: f64 = parts.next()?.parse().ok()?;
@@ -113,7 +113,7 @@ fn parse_time(s: &str) -> Option<f64> {
 }
 
 fn parse_size(s: &str) -> Option<u64> {
-    // ffmpeg writes `1024kB` or `2MB`. Lowercase, then strip suffix.
+    // ffmpeg writes `1024kB` / `2MB`; lowercase and strip the suffix.
     let lower = s.to_ascii_lowercase();
     let (num, mult): (&str, u64) = if let Some(rest) = lower.strip_suffix("kb") {
         (rest, 1024)

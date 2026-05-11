@@ -30,7 +30,7 @@ use awidat_proto::awidat_meta::{
 use thiserror::Error;
 
 use super::op::{
-    Anchor, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand, InsertTrackKind,
+    Anchor, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand, InsertTrackKind, PiPCorner,
     TitleAnimation, TitlePosition, TitleWeight, TransitionBetween,
 };
 
@@ -47,7 +47,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Move Clip, Insert Transition, Set Volume, Set Audio Fade, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Set Volume, Set Audio Fade, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
     )]
     UnknownOp {
         /// Line number.
@@ -217,6 +217,7 @@ enum OpKind {
     UntrimClip,
     InsertClip,
     InsertBRoll,
+    InsertPiP,
     MoveClip,
     InsertTransition,
     SetVolume,
@@ -226,6 +227,7 @@ enum OpKind {
     SetSyncGroup,
     SetClipAudioFx,
     SetTrackAudioFx,
+    SetEffect,
     SetSpeed,
     SetColorCorrection,
     ApplyLut,
@@ -247,6 +249,7 @@ impl OpBuilder {
             "Untrim Clip" => OpKind::UntrimClip,
             "Insert Clip" => OpKind::InsertClip,
             "Insert BRoll" => OpKind::InsertBRoll,
+            "Insert PiP" => OpKind::InsertPiP,
             "Move Clip" => OpKind::MoveClip,
             "Insert Transition" => OpKind::InsertTransition,
             "Set Volume" => OpKind::SetVolume,
@@ -256,6 +259,7 @@ impl OpBuilder {
             "Set Sync Group" => OpKind::SetSyncGroup,
             "Set Clip Audio FX" => OpKind::SetClipAudioFx,
             "Set Track Audio FX" => OpKind::SetTrackAudioFx,
+            "Set Effect" => OpKind::SetEffect,
             "Set Speed" => OpKind::SetSpeed,
             "Set Color Correction" => OpKind::SetColorCorrection,
             "Apply LUT" => OpKind::ApplyLut,
@@ -399,6 +403,44 @@ impl OpBuilder {
                     asset,
                     duration_s,
                     position,
+                })
+            }
+            OpKind::InsertPiP => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let asset = take_field_string(&mut fields, "asset").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "asset".into(),
+                    }
+                })?;
+                let duration_s = take_field_f64(&mut fields, "duration_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "duration_s".into(),
+                    }
+                })?;
+                let source_start_s = take_field_f64(&mut fields, "source_start_s").unwrap_or(0.0);
+                let corner = parse_pip_corner(
+                    take_field_string(&mut fields, "corner")
+                        .as_deref()
+                        .unwrap_or("bottom_right"),
+                    head,
+                )?;
+                let scale = take_field_f64(&mut fields, "scale").unwrap_or(0.28);
+                let margin_pct = take_field_f64(&mut fields, "margin_pct").unwrap_or(0.035);
+                validate_pip_number(head, "scale", scale, 0.10, 0.60)?;
+                validate_pip_number(head, "margin_pct", margin_pct, 0.0, 0.15)?;
+                Ok(EdlOp::InsertPiP {
+                    anchor,
+                    asset,
+                    duration_s,
+                    source_start_s,
+                    corner,
+                    scale,
+                    margin_pct,
                 })
             }
             OpKind::MoveClip => {
@@ -558,6 +600,25 @@ impl OpBuilder {
                 Ok(EdlOp::SetTrackAudioFx {
                     track,
                     fx: parse_audio_fx_config(&mut fields, head)?,
+                })
+            }
+            OpKind::SetEffect => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let effect = take_field_string(&mut fields, "effect").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "effect".into(),
+                    }
+                })?;
+                let params = take_field_json_map(&mut fields, "params_json", head)?;
+                Ok(EdlOp::SetEffect {
+                    anchor,
+                    effect,
+                    params,
+                    rationale: take_field_string(&mut fields, "rationale"),
                 })
             }
             OpKind::SetSpeed => {
@@ -954,6 +1015,37 @@ fn parse_title_animation(
     }
 }
 
+fn parse_pip_corner(raw: &str, line: usize) -> Result<PiPCorner, EdlParseError> {
+    match raw {
+        "top_left" => Ok(PiPCorner::TopLeft),
+        "top_right" => Ok(PiPCorner::TopRight),
+        "bottom_left" => Ok(PiPCorner::BottomLeft),
+        "bottom_right" => Ok(PiPCorner::BottomRight),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("corner: {other}"),
+            message: "must be 'top_left', 'top_right', 'bottom_left', or 'bottom_right'".into(),
+        }),
+    }
+}
+
+fn validate_pip_number(
+    line: usize,
+    field: &str,
+    value: f64,
+    min: f64,
+    max: f64,
+) -> Result<(), EdlParseError> {
+    if value.is_finite() && (min..=max).contains(&value) {
+        return Ok(());
+    }
+    Err(EdlParseError::BadField {
+        line,
+        raw: format!("{field}: {value}"),
+        message: format!("must be finite and in range {min}..={max}"),
+    })
+}
+
 /// One parsed `+ key: value` or `- key: value` field. We tag the value
 /// type so the OpBuilder can pull strongly-typed coercions back out.
 #[derive(Debug, Clone)]
@@ -1253,6 +1345,53 @@ mod tests {
     }
 
     #[test]
+    fn parses_insert_pip_with_defaults() {
+        let text = "\
+*** Begin EDL
+*** Insert PiP
+@@ anchor: clip_uuid=clip-1
++ asset: raw/broll/pip.mp4
++ duration_s: 4
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertPiP {
+                asset,
+                duration_s,
+                source_start_s,
+                corner,
+                scale,
+                margin_pct,
+                ..
+            } => {
+                assert_eq!(asset, "raw/broll/pip.mp4");
+                assert_eq!(*duration_s, 4.0);
+                assert_eq!(*source_start_s, 0.0);
+                assert_eq!(*corner, PiPCorner::BottomRight);
+                assert_eq!(*scale, 0.28);
+                assert_eq!(*margin_pct, 0.035);
+            }
+            _ => panic!("want InsertPiP"),
+        }
+    }
+
+    #[test]
+    fn insert_pip_rejects_bad_layout_fields() {
+        let text = "\
+*** Begin EDL
+*** Insert PiP
+@@ anchor: clip_uuid=clip-1
++ asset: raw/broll/pip.mp4
++ duration_s: 4
++ corner: middle
+*** End EDL
+";
+        let err = parse(text).unwrap_err();
+        assert!(err.to_string().contains("corner"));
+    }
+
+    #[test]
     fn parses_move_clip() {
         let text = "\
 *** Begin EDL
@@ -1413,6 +1552,68 @@ mod tests {
             }
             other => panic!("want SetVolume, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_set_effect_with_params_and_rationale() {
+        let text = "\
+*** Begin EDL
+*** Set Effect
+@@ anchor: clip_uuid=clip-1
++ effect: awidat.color_correction
++ params_json: {\"contrast\":1.15,\"saturation\":0.9}
++ rationale: subtle correction for flat camera angle
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetEffect {
+                anchor,
+                effect,
+                params,
+                rationale,
+            } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-1"));
+                assert_eq!(effect, "awidat.color_correction");
+                assert_eq!(params.get("contrast").and_then(|v| v.as_f64()), Some(1.15));
+                assert_eq!(params.get("saturation").and_then(|v| v.as_f64()), Some(0.9));
+                assert_eq!(
+                    rationale.as_deref(),
+                    Some("subtle correction for flat camera angle")
+                );
+            }
+            other => panic!("want SetEffect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_effect_missing_effect_is_error() {
+        let text = "\
+*** Begin EDL
+*** Set Effect
+@@ anchor: clip_uuid=clip-1
++ params_json: {\"contrast\":1.15}
+*** End EDL
+";
+        let err = parse(text).unwrap_err();
+        assert!(matches!(err, EdlParseError::MissingField { ref field, .. } if field == "effect"));
+    }
+
+    #[test]
+    fn set_effect_rejects_invalid_params_json() {
+        let text = "\
+*** Begin EDL
+*** Set Effect
+@@ anchor: clip_uuid=clip-1
++ effect: awidat.color_correction
++ params_json: {\"contrast\":
+*** End EDL
+";
+        let err = parse(text).unwrap_err();
+        assert!(
+            matches!(err, EdlParseError::BadField { ref message, .. } if message.contains("JSON object")),
+            "got: {err:?}"
+        );
     }
 
     #[test]

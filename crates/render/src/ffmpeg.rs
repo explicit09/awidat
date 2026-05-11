@@ -108,18 +108,16 @@ fn resolve_binary(name: &str, env_var: &str) -> Result<PathBuf, ()> {
             return Ok(pb);
         }
     }
-    // PATH lookup. We don't pull in `which` to keep the dep tree small —
-    // walk PATH ourselves.
+    // Walk PATH ourselves so we don't pull in `which`.
     let path_env = std::env::var_os("PATH").ok_or(())?;
     for dir in std::env::split_paths(&path_env) {
         let candidate = dir.join(name);
         if candidate.is_file() {
             return Ok(candidate);
         }
-        // On macOS, `ffmpeg` may live in `/opt/homebrew/bin/` even when
-        // PATH wasn't propagated (e.g. spawned from a non-login shell).
-        // We could probe a few well-known paths here, but env override
-        // is the documented escape hatch — keep this lookup simple.
+        // On macOS ffmpeg often lives in /opt/homebrew/bin/ even when
+        // PATH wasn't propagated (e.g. non-login shells); the env-var
+        // override is the documented escape hatch in that case.
     }
     Err(())
 }
@@ -144,10 +142,9 @@ pub async fn extract_frame(
     let bin = ffmpeg_path()?;
 
     let mut cmd = Command::new(&bin);
-    // Order matters for seek perf:
-    //   `-ss` BEFORE `-i` → input-side seek (fast, keyframe-accurate)
-    //   `-ss` AFTER  `-i` → output-side seek (slow, sub-frame-accurate)
-    // Editorial preview tolerates keyframe-aligned thumbnails.
+    // `-ss` before `-i` → input-side seek (fast, keyframe-accurate);
+    // `-ss` after `-i` → output-side seek (slow, sub-frame-accurate).
+    // Editorial previews tolerate keyframe-aligned thumbnails.
     cmd.arg("-loglevel")
         .arg("error")
         .arg("-y")
@@ -159,9 +156,8 @@ pub async fn extract_frame(
         .arg("1");
 
     if let Some(dim) = max_dim {
-        // Preserve aspect ratio; clamp the larger dimension to `dim`.
-        // The `-2` keeps the other dimension even-numbered (ffmpeg
-        // requires even dims for many codecs).
+        // The `-2` keeps the other dimension even-numbered, which many
+        // codecs require.
         cmd.arg("-vf").arg(format!(
             "scale='if(gt(iw,ih),{dim},-2)':'if(gt(iw,ih),-2,{dim})'"
         ));
@@ -433,17 +429,14 @@ pub async fn transcode_proxy(
 ) -> Result<(), FfmpegError> {
     let bin = ffmpeg_path()?;
 
-    // Ensure output dir exists (caller may have created the proxy/
-    // dir first, but this saves a code path on the consumer side).
     if let Some(parent) = output_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(FfmpegError::Io)?;
     }
 
-    // Probe duration up front so the UI can show a real percent. A
-    // failure here downgrades us to indeterminate progress — we don't
-    // bail the whole transcode.
+    // Probe duration up front so the UI can render a real percent;
+    // failure downgrades to indeterminate progress rather than aborting.
     let total_duration_s = probe_duration_s(asset_path).await.unwrap_or_default();
     if let Some(cb) = progress.as_ref() {
         cb(TranscodeProgress::Started { total_duration_s });
@@ -496,8 +489,8 @@ pub async fn transcode_proxy(
         .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
 
     // Drive stderr in a parallel task so the wait() future and the
-    // cancel future can race cleanly. The progress task ticks the
-    // callback per `out_time_us=` line ffmpeg emits via `-progress`.
+    // cancel future race cleanly. The progress task ticks the callback
+    // per `out_time_us=` line ffmpeg emits via `-progress`.
     let progress_task = {
         let progress = progress.clone();
         tokio::spawn(async move {
@@ -506,10 +499,6 @@ pub async fn transcode_proxy(
             let mut snapshot = crate::progress::ProgressSnapshot::default();
             let mut tail = Vec::<String>::new();
             while let Ok(Some(line)) = reader.next_line().await {
-                // -progress emits key=value pairs; parse as a virtual
-                // ffmpeg progress line so existing snapshot logic
-                // works. Specifically: `out_time_ms=12345` ms and
-                // `progress=continue|end` are what we care about.
                 if let Some(rest) = line.strip_prefix("out_time_ms=") {
                     if let Ok(us) = rest.parse::<i64>() {
                         snapshot.time_done_s = Some((us as f64) / 1_000_000.0);
@@ -742,9 +731,8 @@ pub async fn generate_waveform(
         .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
 
     // Drive stdout into the bucket aggregator and stderr into a tail
-    // for error reporting, in parallel. Each f32 is 4 bytes
-    // little-endian; we read in chunks rather than one-sample-at-a-
-    // time to avoid syscall overhead on long inputs.
+    // for error reporting, in parallel. Read in chunks (each f32 is
+    // 4 bytes LE) to avoid per-sample syscall overhead.
     let stdout_task = tokio::spawn(async move {
         let mut buf = vec![0u8; 64 * 1024];
         let mut samples = Vec::<f32>::with_capacity(1024 * 1024);
@@ -753,8 +741,8 @@ pub async fn generate_waveform(
             if n == 0 {
                 break;
             }
-            // The kernel may hand us a partial frame at the end — drop
-            // any trailing odd bytes (4-byte float-aligned).
+            // Drop any trailing bytes the kernel hands us that don't
+            // make a full f32 frame.
             let aligned = n - (n % 4);
             for chunk in buf[..aligned].chunks_exact(4) {
                 let mut bytes = [0u8; 4];
@@ -801,9 +789,8 @@ pub async fn generate_waveform(
         });
     }
 
-    // Empty audio stream (no audio at all, or `-map 0:a:0?` matched
-    // nothing) — return an empty bucket vector. The desktop wrapper
-    // treats this as "asset has no audio; don't write a sidecar".
+    // No audio stream (or `-map 0:a:0?` matched nothing). The desktop
+    // wrapper treats this as "asset has no audio; skip the sidecar".
     if samples.is_empty() {
         return Ok(Vec::new());
     }
@@ -827,8 +814,7 @@ fn bucket_peaks(samples: &[f32], bucket_count: usize) -> Vec<f32> {
         let slice = if start < end {
             &samples[start..end]
         } else {
-            // Bucket count exceeds sample count — fall back to a
-            // single sample per bucket (last available).
+            // bucket_count > sample count: fall back to one sample per bucket.
             &samples[(start.min(total - 1))..(start.min(total - 1) + 1)]
         };
         let peak = slice.iter().fold(0f32, |acc, &s| acc.max(s.abs())).min(1.0);

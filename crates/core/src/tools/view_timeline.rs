@@ -236,14 +236,13 @@ fn format_line(
             end_s - start_s,
             g.name
         ),
-        TrackChild::Transition(t) => format!(
-            "[{kind} {:>7.3}-{:>7.3}s {:.3}s] transition {:?} ({})",
-            start_s,
-            end_s,
-            end_s - start_s,
-            t.name,
-            t.transition_type
-        ),
+        TrackChild::Transition(t) => {
+            let visual_duration_s = t.in_offset.to_seconds() + t.out_offset.to_seconds();
+            format!(
+                "[{kind} {:>7.3}s visual={visual_duration_s:.3}s] transition {:?} ({})",
+                start_s, t.name, t.transition_type
+            )
+        }
         TrackChild::Stack(_) => format!("[{kind} {:>7.3}-{:>7.3}s] nested-stack", start_s, end_s),
     }
 }
@@ -329,8 +328,8 @@ mod tests {
             user_input_tx: None,
             job_manager: awidat_render::JobManager::new(),
 
-            sandbox_mode: crate::tool::SandboxMode::Default,
             approval_tx: None,
+            sandbox_mode: crate::tool::SandboxMode::Default,
             mcp_host: crate::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
                 name: "test".into(),
                 version: "0.0.0".into(),

@@ -51,11 +51,12 @@ pub use job::{JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec};
 pub use progress::ProgressSnapshot;
 pub use timeline::{
     AudioClipPlan, AudioFxPlan, AudioTrackItemPlan, AudioTrackPlan, BroadcastOverlayPlan,
-    DuckingPlan, EqBandPlan, FilterPlan, FilterPlanner, RenderTimelineError, TimelineSegment,
-    TitleAnimation, TitlePlan, TitlePosition, TitleWeight, TransitionPlan, build_timeline_argv,
-    build_timeline_argv_full, build_timeline_argv_with_audio_tracks,
-    build_timeline_argv_with_transitions, build_timeline_render_spec, collect_timeline_full_plan,
-    collect_timeline_plan, collect_timeline_segments,
+    DuckingPlan, EqBandPlan, FilterPlan, FilterPlanner, LoudnessTargetPlan, RenderTimelineError,
+    TimelineSegment, TitleAnimation, TitlePlan, TitlePosition, TitleWeight, TransitionPlan,
+    VideoOverlayMode, VideoOverlayPlan, build_timeline_argv, build_timeline_argv_full,
+    build_timeline_argv_with_audio_tracks, build_timeline_argv_with_transitions,
+    build_timeline_render_spec, collect_timeline_full_plan, collect_timeline_plan,
+    collect_timeline_segments,
 };
 
 #[cfg(test)]

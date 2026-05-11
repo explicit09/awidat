@@ -5,7 +5,7 @@
 //! Two-step flow with `search_broll`:
 //!
 //! 1. `search_broll(query)` — agent or user picks a `pexels_id`.
-//! 2. `use_broll(pexels_id, anchor, duration_s, position?)` — this
+//! 2. `use_broll(pexels_id, anchor, duration_s, position?, insert_as?)` — this
 //!    tool downloads the video to `<project>/raw/broll/pexels-<id>.mp4`
 //!    (idempotent on file existence; we don't refetch a clip we already
 //!    have) and returns a structured response containing the EDL
@@ -73,6 +73,9 @@ struct Args {
     /// `replace` (cuts the underlying clip out for `duration_s`).
     #[serde(default)]
     position: Option<String>,
+    /// `broll` (default) returns Insert BRoll; `pip` returns Insert PiP.
+    #[serde(default)]
+    insert_as: Option<String>,
     /// Override max-width for the downloaded rendition. Default
     /// 1920px wide; raise only if the project renders 4K.
     #[serde(default)]
@@ -138,6 +141,11 @@ impl ToolHandler for UseBrollTool {
                         "enum": ["overlay", "replace"],
                         "description": "Default overlay (V2). Use replace to cut the underlying clip for duration_s."
                     },
+                    "insert_as": {
+                        "type": "string",
+                        "enum": ["broll", "pip"],
+                        "description": "Default broll returns Insert BRoll. pip returns an Insert PiP fragment with default layout."
+                    },
                     "max_width": {
                         "type": "integer",
                         "minimum": 320,
@@ -195,6 +203,15 @@ impl ToolHandler for UseBrollTool {
                 )));
             }
         };
+        let insert_as = match args.insert_as.as_deref().unwrap_or("broll") {
+            "broll" => "broll",
+            "pip" => "pip",
+            other => {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "use_broll: invalid insert_as '{other}'. Use 'broll' or 'pip'."
+                )));
+            }
+        };
         let max_width = args.max_width.unwrap_or(DEFAULT_MAX_WIDTH);
         if !(0.5..=30.0).contains(&args.duration_s) {
             return Err(FunctionCallError::RespondToModel(format!(
@@ -236,7 +253,13 @@ impl ToolHandler for UseBrollTool {
             DOWNLOAD_COUNT.fetch_add(1, Ordering::SeqCst);
         }
 
-        let edl_fragment = build_edl_fragment(&asset_rel, &args.anchor, args.duration_s, position);
+        let edl_fragment = build_edl_fragment(
+            &asset_rel,
+            &args.anchor,
+            args.duration_s,
+            position,
+            insert_as,
+        );
 
         let body = serde_json::json!({
             "asset_path": asset_rel,
@@ -319,6 +342,7 @@ fn build_edl_fragment(
     anchor: &AnchorArg,
     duration_s: f64,
     position: &str,
+    insert_as: &str,
 ) -> String {
     let anchor_line = match anchor {
         AnchorArg::Transcript { transcript_snippet } => {
@@ -331,15 +355,30 @@ fn build_edl_fragment(
             format!("@@ anchor: clip_uuid={clip_uuid}")
         }
     };
-    format!(
-        "*** Begin EDL\n\
-         *** Insert BRoll\n\
-         {anchor_line}\n\
-         + asset: {asset_rel}\n\
-         + duration_s: {duration_s}\n\
-         + position: {position}\n\
-         *** End EDL\n"
-    )
+    if insert_as == "pip" {
+        format!(
+            "*** Begin EDL\n\
+             *** Insert PiP\n\
+             {anchor_line}\n\
+             + asset: {asset_rel}\n\
+             + duration_s: {duration_s}\n\
+             + source_start_s: 0\n\
+             + corner: bottom_right\n\
+             + scale: 0.28\n\
+             + margin_pct: 0.035\n\
+             *** End EDL\n"
+        )
+    } else {
+        format!(
+            "*** Begin EDL\n\
+             *** Insert BRoll\n\
+             {anchor_line}\n\
+             + asset: {asset_rel}\n\
+             + duration_s: {duration_s}\n\
+             + position: {position}\n\
+             *** End EDL\n"
+        )
+    }
 }
 
 fn map_pexels_err(err: pexels::PexelsError) -> FunctionCallError {
@@ -391,7 +430,8 @@ without quietly succeeding-with-partial-state.\
 \n\nDefaults: max_width=1920 (skip 4K renditions), \
 position=overlay (V2 cutaway over the existing clip). Pass \
 position=replace to cut the underlying clip for the duration of \
-the b-roll.\
+the b-roll. Pass insert_as=pip to return an Insert PiP fragment \
+instead, using the default bottom-right PiP layout.\
 \n\nReturns: { asset_path, absolute_path, downloaded, edl_fragment, \
 downloads_remaining_this_session, next_step }.\
 ";
@@ -405,7 +445,13 @@ mod tests {
         let anchor = AnchorArg::Transcript {
             transcript_snippet: "the city skyline reminded me".into(),
         };
-        let frag = build_edl_fragment("raw/broll/pexels-1234.mp4", &anchor, 2.4, "overlay");
+        let frag = build_edl_fragment(
+            "raw/broll/pexels-1234.mp4",
+            &anchor,
+            2.4,
+            "overlay",
+            "broll",
+        );
         assert!(frag.contains("Insert BRoll"));
         assert!(frag.contains("@@ anchor: transcript_snippet=\"the city skyline reminded me\""));
         assert!(frag.contains("+ asset: raw/broll/pexels-1234.mp4"));
@@ -418,7 +464,7 @@ mod tests {
         let anchor = AnchorArg::Uuid {
             clip_uuid: "clip-3".into(),
         };
-        let frag = build_edl_fragment("raw/broll/pexels-9.mp4", &anchor, 3.0, "replace");
+        let frag = build_edl_fragment("raw/broll/pexels-9.mp4", &anchor, 3.0, "replace", "broll");
         assert!(frag.contains("@@ anchor: clip_uuid=clip-3"));
         assert!(frag.contains("+ position: replace"));
     }
@@ -428,7 +474,7 @@ mod tests {
         let anchor = AnchorArg::Transcript {
             transcript_snippet: r#"he said "yes" loudly"#.into(),
         };
-        let frag = build_edl_fragment("raw/broll/pexels-1.mp4", &anchor, 2.0, "overlay");
+        let frag = build_edl_fragment("raw/broll/pexels-1.mp4", &anchor, 2.0, "overlay", "broll");
         // The parser accepts \" inside the quoted string — we must
         // escape, otherwise the fragment is unparseable.
         assert!(

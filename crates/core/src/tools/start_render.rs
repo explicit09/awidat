@@ -177,6 +177,9 @@ impl ToolHandler for StartRenderTool {
                             "start_render: timeline transition {kind:?} cannot be exported: \
                          {message}"
                         ),
+                        RenderTimelineError::BroadcastOverlayRender(message) => {
+                            format!("start_render: broadcast overlay render failed: {message}")
+                        }
                     };
                     FunctionCallError::RespondToModel(msg)
                 })?;

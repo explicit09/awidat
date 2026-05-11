@@ -9,6 +9,7 @@ members = [
     "crates/tui",
     "crates/cli",
     "crates/render",
+    "crates/effects",
     "crates/test-support",
     "crates/config",
     "crates/secrets",
@@ -84,6 +85,7 @@ awidat-mcp = { path = "crates/mcp" }
 awidat-sandboxing = { path = "crates/sandboxing" }
 awidat-tui = { path = "crates/tui" }
 awidat-render = { path = "crates/render" }
+awidat-effects = { path = "crates/effects" }
 awidat-config = { path = "crates/config" }
 awidat-secrets = { path = "crates/secrets" }
 awidat-index = { path = "crates/index" }
@@ -93,7 +95,7 @@ awidat-desktop-protocol = { path = "crates/desktop-protocol" }
 # OTIO timelines. Pinned to a specific commit because vedit is under
 # active development and we don't want surprise API churn. Bump
 # deliberately, with a probe-test, the way we'd bump any external dep.
-# See VEDIT_INTEGRATION.md (TODO) for the integration design memo.
+# See PLAN.md for the vedit integration rationale.
 vedit-core = { git = "https://github.com/explicit09/vedit.git", rev = "23a2bbc9cd2ac11e68988bf27d6c0094ac29975e" }
 
 # External (locked per Week 1 prompt).
