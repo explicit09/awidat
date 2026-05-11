@@ -67,6 +67,11 @@ pub struct PersistedNote {
     /// Phase 3.4.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub broll_previews: Option<Vec<serde_json::Value>>,
+    /// For `broll_suggestion` notes: exact anchor the desktop should
+    /// hand to `use_broll`, e.g. `{ "kind": "clip_uuid", "uuid": "clip-3" }`
+    /// or `{ "kind": "transcript_snippet", "text": "..." }`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub broll_anchor: Option<serde_json::Value>,
 }
 
 /// On-disk shape: versioned wrapper so future schema growth
@@ -175,6 +180,7 @@ mod tests {
             continuity_reasons: None,
             broll_query: None,
             broll_previews: None,
+            broll_anchor: None,
         }
     }
 

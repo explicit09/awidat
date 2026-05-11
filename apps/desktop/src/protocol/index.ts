@@ -47,6 +47,7 @@ export type { PermissionMode } from "./generated/PermissionMode";
 export type { ContinuityVerdictTag } from "./generated/ContinuityVerdictTag";
 // B-roll suggestions (Phase 3).
 export type { BrollPreview } from "./generated/BrollPreview";
+export type { BrollAnchor } from "./generated/BrollAnchor";
 
 // Tauri event channel names. Mirror the constants in
 // `apps/desktop/src-tauri/src/lib.rs` — there is no runtime check.

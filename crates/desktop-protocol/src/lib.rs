@@ -320,6 +320,11 @@ pub enum Item {
         /// alongside a "Search Pexels" affordance.
         #[serde(default)]
         broll_previews: Option<Vec<BrollPreview>>,
+        /// For `broll_suggestion` notes: exact anchor to pass to
+        /// `use_broll`. The UI must not ask the agent to infer this
+        /// from prose because placement needs to survive handoff.
+        #[serde(default)]
+        broll_anchor: Option<BrollAnchor>,
     },
 }
 
@@ -434,6 +439,23 @@ pub struct BrollPreview {
     pub attribution: String,
     /// Pexels page URL — link target for the attribution string.
     pub pexels_page: String,
+}
+
+/// Exact anchor carried by a b-roll note for `use_broll`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BrollAnchor {
+    /// Match by transcript snippet.
+    TranscriptSnippet {
+        /// Snippet text.
+        text: String,
+    },
+    /// Match by stable clip UUID.
+    ClipUuid {
+        /// Clip UUID.
+        uuid: String,
+    },
 }
 
 /// What kind of editorial finding an [`Item::EditorialNote`] holds.
@@ -1040,6 +1062,40 @@ pub enum AppliedDiff {
         /// Index of the inserted item within that track.
         item_index: usize,
     },
+    /// A b-roll clip was inserted. Indexes refer to the **proposed**
+    /// snapshot.
+    InsertBRoll {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
+        /// Track index in the proposed snapshot.
+        track_index: usize,
+        /// Index of the inserted b-roll item within that track.
+        item_index: usize,
+    },
+    /// A picture-in-picture clip was inserted. Indexes refer to the
+    /// **proposed** snapshot.
+    InsertPiP {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
+        /// Track index in the proposed snapshot.
+        track_index: usize,
+        /// Index of the inserted PiP item within that track.
+        item_index: usize,
+    },
+    /// A clip moved. `from_*` indexes refer to the original snapshot;
+    /// `to_*` indexes refer to the proposed snapshot.
+    Move {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
+        /// Track index in the original snapshot.
+        from_track_index: usize,
+        /// Item index in the original snapshot.
+        from_item_index: usize,
+        /// Track index in the proposed snapshot.
+        to_track_index: usize,
+        /// Item index in the proposed snapshot.
+        to_item_index: usize,
+    },
 }
 
 /// One adjustment the user applied to a proposed edit before
@@ -1241,6 +1297,16 @@ mod tests {
         assert_eq!(back.op_index, 2);
         assert_eq!(back.field, AdjustField::TrimEnd);
         assert!((back.value_s - 4.21).abs() < 1e-9);
+    }
+
+    #[test]
+    fn broll_anchor_roundtrips_json() {
+        let anchor = BrollAnchor::ClipUuid {
+            uuid: "clip-3".into(),
+        };
+        let json = serde_json::to_string(&anchor).unwrap();
+        let back: BrollAnchor = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, anchor);
     }
 
     #[test]
