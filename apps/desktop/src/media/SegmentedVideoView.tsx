@@ -511,13 +511,19 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   // has opacity 1 and z-index above. We avoid `display: none` and
   // `visibility: hidden` because both can pause buffering on some
   // browsers.
+  const activeSlotOpacity = activeTransition
+    ? outgoingTransitionOpacity(
+        activeTransition.kind,
+        transitionProgress(activeTransition, timelineTime),
+      )
+    : 1;
   const styleA = useMemo(
-    () => slotStyle(activeKey === "a"),
-    [activeKey],
+    () => slotStyle(activeKey === "a", activeKey === "a" ? activeSlotOpacity : 0),
+    [activeKey, activeSlotOpacity],
   );
   const styleB = useMemo(
-    () => slotStyle(activeKey === "b"),
-    [activeKey],
+    () => slotStyle(activeKey === "b", activeKey === "b" ? activeSlotOpacity : 0),
+    [activeKey, activeSlotOpacity],
   );
 
   return (
@@ -678,16 +684,7 @@ function TimelineTransitionOverlay({
   }, [transition, src, timelineTime, isPlaying]);
 
   if (!transition || !src) return null;
-  const progress =
-    transition.duration > 0
-      ? Math.max(
-          0,
-          Math.min(
-            1,
-            (timelineTime - transition.timelineStart) / transition.duration,
-          ),
-        )
-      : 1;
+  const progress = transitionProgress(transition, timelineTime);
 
   return (
     <video
@@ -707,10 +704,33 @@ function TimelineTransitionOverlay({
   );
 }
 
+function transitionProgress(
+  transition: PreviewTransition,
+  timelineTime: number,
+): number {
+  if (transition.duration <= 0) return 1;
+  return Math.max(
+    0,
+    Math.min(1, (timelineTime - transition.timelineStart) / transition.duration),
+  );
+}
+
+function outgoingTransitionOpacity(kind: string, progress: number): number {
+  if (isFadeThroughBlack(kind)) {
+    return progress < 0.5 ? 1 - progress * 2 : 0;
+  }
+  return 1 - progress;
+}
+
 function transitionOpacity(kind: string, progress: number): number {
-  if (kind === "awidat.fade_out") return progress;
-  if (kind === "awidat.fade_in") return progress;
+  if (isFadeThroughBlack(kind)) {
+    return progress < 0.5 ? 0 : (progress - 0.5) * 2;
+  }
   return progress;
+}
+
+function isFadeThroughBlack(kind: string): boolean {
+  return kind === "awidat.fade_in" || kind === "awidat.fade_out";
 }
 
 function TimelineVideoOverlays({
@@ -1426,13 +1446,13 @@ function countClipsAwaitingProxy(snapshot: TimelineSnapshot): number {
   return n;
 }
 
-function slotStyle(visible: boolean): React.CSSProperties {
+function slotStyle(visible: boolean, opacity: number): React.CSSProperties {
   return {
     position: "absolute",
     inset: 0,
     width: "100%",
     height: "100%",
-    opacity: visible ? 1 : 0,
+    opacity: visible ? opacity : 0,
     pointerEvents: visible ? "auto" : "none",
     zIndex: visible ? 2 : 1,
   };
