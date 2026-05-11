@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Instant;
 
-use awidat_core::tool::ToolHandler;
+use awidat_core::tool::{ApprovalCache, ApprovalDecision, ApprovalKey, SandboxMode, ToolHandler};
 use awidat_core::tools::{
     find_beat::FindBeatTool, find_moment::FindMomentTool, list_assets::ListAssetsTool,
     read_index::ReadIndexTool, view_episode::ViewEpisodeTool, view_timeline::ViewTimelineTool,
@@ -38,6 +38,8 @@ pub fn defaults() -> Vec<Box<dyn Scenario>> {
         Box::new(FreshProjectViewEpisode),
         Box::new(EmptyProjectListAssets),
         Box::new(EmptyTimelineViewTimeline),
+        Box::new(OrchestratorApprovalCacheIsOperationKeyed),
+        Box::new(OrchestratorSandboxDenialEscalates),
         Box::new(RealProjectViewEpisode),
         Box::new(RealProjectFindMoment),
         Box::new(RealProjectFindBeat),
@@ -55,6 +57,7 @@ pub(crate) fn ctx_at(root: &std::path::Path) -> awidat_core::tool::ToolContext {
         user_input_tx: None,
         job_manager: awidat_render::JobManager::new(),
         approval_tx: None,
+        sandbox_mode: awidat_core::tool::SandboxMode::Default,
         mcp_host: awidat_core::mcp_host::McpHost::new(awidat_mcp::ClientInfo {
             name: "eval".into(),
             version: env!("CARGO_PKG_VERSION").into(),
@@ -218,6 +221,248 @@ impl Scenario for EmptyTimelineViewTimeline {
             },
         };
         Ok(outcome)
+    }
+}
+
+/// Operation-keyed approval caching: "allow for session" on one
+/// operation must not approve a different operation for the same tool.
+struct OrchestratorApprovalCacheIsOperationKeyed;
+
+struct EvalMutatingTool;
+
+#[async_trait]
+impl ToolHandler for EvalMutatingTool {
+    fn name(&self) -> &'static str {
+        "eval_mutating"
+    }
+
+    fn schema(&self) -> awidat_core::anthropic::Tool {
+        awidat_core::anthropic::Tool {
+            name: "eval_mutating".into(),
+            description: "eval-only mutating tool".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            cache_control: None,
+        }
+    }
+
+    fn approval_keys(&self, invocation: &awidat_core::tool::ToolInvocation) -> Vec<ApprovalKey> {
+        vec![ApprovalKey::new(
+            invocation.name.clone(),
+            invocation.args["operation"].as_str().unwrap_or("missing"),
+        )]
+    }
+
+    async fn handle(
+        &self,
+        invocation: awidat_core::tool::ToolInvocation,
+        _ctx: awidat_core::tool::ToolContext,
+    ) -> Result<awidat_core::tool::ToolOutput, awidat_core::FunctionCallError> {
+        Ok(awidat_core::tool::ToolOutput::text(format!(
+            "ran {}",
+            invocation.args["operation"]
+        )))
+    }
+}
+
+#[async_trait]
+impl Scenario for OrchestratorApprovalCacheIsOperationKeyed {
+    fn id(&self) -> &'static str {
+        "runtime::orchestrator_operation_keyed_approval_cache"
+    }
+    fn description(&self) -> &'static str {
+        "Allow-for-session approval is cached by operation key, not just tool name."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        Project::init(dir.path())?;
+        let (approval_tx, mut approval_rx) = tokio::sync::mpsc::channel(8);
+        let orchestrator = awidat_core::orchestrator::ToolOrchestrator::new(
+            Some(approval_tx),
+            Arc::new(tokio::sync::Mutex::new(ApprovalCache::default())),
+            None,
+        );
+        let handler: Arc<dyn ToolHandler> = Arc::new(EvalMutatingTool);
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        let approvals = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            if let Some(req) = approval_rx.recv().await {
+                seen.push(req.args_summary.clone());
+                let _ = req.reply.send(ApprovalDecision::AllowForSession);
+            }
+            if let Some(req) = approval_rx.recv().await {
+                seen.push(req.args_summary.clone());
+                let _ = req.reply.send(ApprovalDecision::Allow);
+            }
+            seen
+        });
+
+        for op in ["alpha", "alpha", "beta"] {
+            let out = orchestrator
+                .run(
+                    handler.clone(),
+                    make_call("eval_mutating", serde_json::json!({"operation": op})),
+                    ctx_at(dir.path()),
+                    &cancel,
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if !out.content.contains(op) {
+                return Ok(ScenarioOutcome {
+                    id: self.id().into(),
+                    status: ScenarioStatus::Fail,
+                    elapsed: started.elapsed(),
+                    message: format!("unexpected output for {op}: {}", out.content),
+                });
+            }
+        }
+
+        let seen = approvals.await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let elapsed = started.elapsed();
+        Ok(
+            if seen.len() == 2 && seen[0].contains("alpha") && seen[1].contains("beta") {
+                ScenarioOutcome {
+                    id: self.id().into(),
+                    status: ScenarioStatus::Pass,
+                    elapsed,
+                    message: "prompted for alpha once and beta once".into(),
+                }
+            } else {
+                ScenarioOutcome {
+                    id: self.id().into(),
+                    status: ScenarioStatus::Fail,
+                    elapsed,
+                    message: format!("expected two operation-keyed prompts, got {seen:?}"),
+                }
+            },
+        )
+    }
+}
+
+/// Sandbox-capable tools can report a denial; the orchestrator asks for
+/// explicit escalation and retries with sandbox bypassed.
+struct OrchestratorSandboxDenialEscalates;
+
+struct EvalSandboxedTool;
+
+#[async_trait]
+impl ToolHandler for EvalSandboxedTool {
+    fn name(&self) -> &'static str {
+        "eval_sandboxed"
+    }
+
+    fn schema(&self) -> awidat_core::anthropic::Tool {
+        awidat_core::anthropic::Tool {
+            name: "eval_sandboxed".into(),
+            description: "eval-only sandboxed tool".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            cache_control: None,
+        }
+    }
+
+    fn approval_keys(&self, _invocation: &awidat_core::tool::ToolInvocation) -> Vec<ApprovalKey> {
+        vec![ApprovalKey::new("eval_sandboxed", "write:/outside-project")]
+    }
+
+    fn sandbox_policy(
+        &self,
+        _invocation: &awidat_core::tool::ToolInvocation,
+    ) -> awidat_core::tool::ToolSandboxPolicy {
+        awidat_core::tool::ToolSandboxPolicy::SandboxFirst {
+            escalate_on_denial: true,
+        }
+    }
+
+    async fn handle(
+        &self,
+        _invocation: awidat_core::tool::ToolInvocation,
+        ctx: awidat_core::tool::ToolContext,
+    ) -> Result<awidat_core::tool::ToolOutput, awidat_core::FunctionCallError> {
+        match ctx.sandbox_mode {
+            SandboxMode::Default => Err(awidat_core::FunctionCallError::SandboxDenied {
+                reason: "write outside project root".into(),
+            }),
+            SandboxMode::Bypass => Ok(awidat_core::tool::ToolOutput::text(
+                "retried without sandbox",
+            )),
+        }
+    }
+}
+
+#[async_trait]
+impl Scenario for OrchestratorSandboxDenialEscalates {
+    fn id(&self) -> &'static str {
+        "runtime::orchestrator_sandbox_denial_escalates"
+    }
+    fn description(&self) -> &'static str {
+        "Sandbox denial reports cleanly and can retry unsandboxed after approval."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        Project::init(dir.path())?;
+        let (approval_tx, mut approval_rx) = tokio::sync::mpsc::channel(8);
+        let orchestrator = awidat_core::orchestrator::ToolOrchestrator::new(
+            Some(approval_tx),
+            Arc::new(tokio::sync::Mutex::new(ApprovalCache::default())),
+            None,
+        );
+        let handler: Arc<dyn ToolHandler> = Arc::new(EvalSandboxedTool);
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let approvals = tokio::spawn(async move {
+            let mut summaries = Vec::new();
+            while let Some(req) = approval_rx.recv().await {
+                summaries.push(req.args_summary.clone());
+                let _ = req.reply.send(ApprovalDecision::Allow);
+                if summaries.len() == 2 {
+                    break;
+                }
+            }
+            summaries
+        });
+
+        let out = orchestrator
+            .run(
+                handler,
+                make_call(
+                    "eval_sandboxed",
+                    serde_json::json!({"path": "/etc/blocked"}),
+                ),
+                ctx_at(dir.path()),
+                &cancel,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let summaries = approvals.await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let elapsed = started.elapsed();
+        Ok(
+            if out.content.contains("retried without sandbox")
+                && summaries.len() == 2
+                && summaries[1].contains("sandbox denied")
+            {
+                ScenarioOutcome {
+                    id: self.id().into(),
+                    status: ScenarioStatus::Pass,
+                    elapsed,
+                    message: "denial prompted for unsandboxed retry".into(),
+                }
+            } else {
+                ScenarioOutcome {
+                    id: self.id().into(),
+                    status: ScenarioStatus::Fail,
+                    elapsed,
+                    message: format!(
+                        "unexpected output/summaries: {} / {summaries:?}",
+                        out.content
+                    ),
+                }
+            },
+        )
     }
 }
 
