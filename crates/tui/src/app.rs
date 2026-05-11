@@ -1025,6 +1025,8 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "apply_edl".into(),
             args_summary: "{\"edl\":\"...\"}".into(),
+            operation_keys: vec![],
+            retry_reason: None,
             args_full: serde_json::Value::Null,
             reply: tx,
         };
@@ -1047,6 +1049,8 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "apply_edl".into(),
             args_summary: "summary".into(),
+            operation_keys: vec![],
+            retry_reason: None,
             args_full: serde_json::Value::Null,
             reply: tx,
         };
@@ -1068,6 +1072,8 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "apply_edl".into(),
             args_summary: "x".into(),
+            operation_keys: vec![],
+            retry_reason: None,
             args_full: serde_json::Value::Null,
             reply: tx,
         };
@@ -1087,6 +1093,8 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "bash".into(),
             args_summary: "rm -rf /".into(),
+            operation_keys: vec![],
+            retry_reason: None,
             args_full: serde_json::Value::Null,
             reply: tx,
         };
@@ -1104,6 +1112,8 @@ mod tests {
             call_id: "c1".into(),
             tool_name: "start_render".into(),
             args_summary: "scope=preview".into(),
+            operation_keys: vec![],
+            retry_reason: None,
             args_full: serde_json::Value::Null,
             reply: tx,
         };

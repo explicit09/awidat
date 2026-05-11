@@ -71,6 +71,15 @@ pub struct EditorialDecision {
     /// ops, score=0.72, kind=hook`). Caller-supplied — `Session`
     /// builds it from the args + tool-specific summarizer.
     pub args_summary: String,
+    /// Operation-scoped approval keys considered by the orchestrator.
+    /// Used to debug why an AllowForSession did or did not cover a
+    /// later request.
+    #[serde(default)]
+    pub approval_keys: Vec<crate::tool::ApprovalKey>,
+    /// Present for an explicit unsandboxed retry prompt after sandbox
+    /// denial. Absence means this was the first-attempt approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_reason: Option<String>,
     /// What the user picked. String form for forward-compat: a future
     /// awidat may add new decision variants and we don't want a session
     /// log to be unreadable just because the enum grew.
@@ -328,11 +337,20 @@ impl Recorder {
     /// Append an editorial decision (#149). Called by `Session` after
     /// the user replies to the approval modal. Fire-and-forget on the
     /// writer task.
-    pub fn record_decision(&self, tool: String, args_summary: String, decision: String) {
+    pub fn record_decision(
+        &self,
+        tool: String,
+        args_summary: String,
+        approval_keys: Vec<crate::tool::ApprovalKey>,
+        retry_reason: Option<String>,
+        decision: String,
+    ) {
         self.send(WriterCmd::Append(RolloutItem::EditorialDecision(
             EditorialDecision {
                 tool,
                 args_summary,
+                approval_keys,
+                retry_reason,
                 decision,
                 timestamp: Utc::now(),
             },
@@ -719,6 +737,8 @@ mod tests {
         rec.record_decision(
             "apply_edl".into(),
             "3 ops, kind=hook".into(),
+            vec![crate::tool::ApprovalKey::new("apply_edl", "edl:abc")],
+            None,
             "Allow".into(),
         );
         rec.flush().await.unwrap();
@@ -733,6 +753,7 @@ mod tests {
                 assert_eq!(d.tool, "apply_edl");
                 assert_eq!(d.decision, "Allow");
                 assert!(d.args_summary.contains("kind=hook"));
+                assert_eq!(d.approval_keys[0].operation, "edl:abc");
             }
             _ => panic!("expected EditorialDecision"),
         }
@@ -760,12 +781,24 @@ mod tests {
     async fn collect_decisions_walks_all_sessions() {
         let dir = tempfile::tempdir().unwrap();
         let r1 = Recorder::create(dir.path(), PathBuf::from("/p"), "m".into()).unwrap();
-        r1.record_decision("apply_edl".into(), "op A".into(), "Allow".into());
+        r1.record_decision(
+            "apply_edl".into(),
+            "op A".into(),
+            vec![],
+            None,
+            "Allow".into(),
+        );
         r1.flush().await.unwrap();
         // Force second session a tick later for stable ordering.
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let r2 = Recorder::create(dir.path(), PathBuf::from("/p"), "m".into()).unwrap();
-        r2.record_decision("apply_edl".into(), "op B".into(), "Deny".into());
+        r2.record_decision(
+            "apply_edl".into(),
+            "op B".into(),
+            vec![],
+            None,
+            "Deny".into(),
+        );
         r2.flush().await.unwrap();
 
         let decisions = Recorder::collect_decisions(dir.path()).unwrap();

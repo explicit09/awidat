@@ -190,6 +190,13 @@ pub struct ApprovalRequest {
     /// of JSON. Tools that want richer summaries can override later via
     /// `ToolHandler::approval_summary` (week 6+).
     pub args_summary: String,
+    /// Operation-scoped cache keys the orchestrator is asking about.
+    /// These are stable enough for debugging why a session approval did
+    /// or did not apply to a later request.
+    pub operation_keys: Vec<ApprovalKey>,
+    /// Present when this approval is for an unsandboxed retry after a
+    /// structured sandbox denial.
+    pub retry_reason: Option<String>,
     /// Untruncated tool arguments. The TUI ignores this; the desktop's
     /// approval-as-diff path needs it to re-parse the EDL for the
     /// proposal preview without losing characters to `args_summary`'s
@@ -211,8 +218,8 @@ pub struct ApprovalRequest {
 pub enum ApprovalDecision {
     /// Allow this single invocation.
     Allow,
-    /// Allow this tool name for the rest of the session — future calls
-    /// to the same tool skip the modal. The loop tracks this set.
+    /// Allow this exact operation key for the rest of the session.
+    /// Future calls to materially different operations still prompt.
     AllowForSession,
     /// Reject. The model sees a tool result with `is_error: true` and
     /// "user denied execution" text so it can route around it.

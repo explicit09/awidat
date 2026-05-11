@@ -305,6 +305,8 @@ mod tests {
         EditorialDecision {
             tool: tool.into(),
             args_summary: summary.into(),
+            approval_keys: vec![],
+            retry_reason: None,
             decision: decision.into(),
             timestamp: Utc::now(),
         }

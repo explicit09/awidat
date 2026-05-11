@@ -54,7 +54,8 @@ impl ToolOrchestrator {
         cancel: &CancellationToken,
     ) -> Result<OrchestratorResult, SessionError> {
         let sandbox_policy = handler.sandbox_policy(&invocation);
-        self.ensure_approved(handler.as_ref(), &invocation, None, cancel)
+        let initial_keys = self.approval_keys(handler.as_ref(), &invocation, &base_ctx, false);
+        self.ensure_approved(handler.as_ref(), &invocation, initial_keys, None, cancel)
             .await?;
 
         let first_result = self
@@ -80,13 +81,54 @@ impl ToolOrchestrator {
                     "sandbox denied '{}': {reason}. Retry unsandboxed?",
                     invocation.name
                 );
-                self.ensure_approved(handler.as_ref(), &invocation, Some(&retry_reason), cancel)
-                    .await?;
+                if self.approval_tx.is_none() {
+                    return Ok(Err(FunctionCallError::SandboxDenied { reason }));
+                }
+                let retry_keys = self.approval_keys(handler.as_ref(), &invocation, &base_ctx, true);
+                self.ensure_approved(
+                    handler.as_ref(),
+                    &invocation,
+                    retry_keys,
+                    Some(&retry_reason),
+                    cancel,
+                )
+                .await?;
                 self.run_attempt(handler, invocation, base_ctx, SandboxMode::Bypass, cancel)
                     .await
             }
             other => Ok(other),
         }
+    }
+
+    fn approval_keys(
+        &self,
+        handler: &dyn ToolHandler,
+        invocation: &ToolInvocation,
+        ctx: &ToolContext,
+        unsandboxed_retry: bool,
+    ) -> Vec<crate::tool::ApprovalKey> {
+        let base_keys = handler.approval_keys(invocation);
+        let mut keys = Vec::new();
+        for mut key in base_keys {
+            if matches!(
+                handler.sandbox_policy(invocation),
+                ToolSandboxPolicy::SandboxFirst { .. }
+            ) {
+                key.operation.push_str(":sandbox=default");
+            }
+            if unsandboxed_retry {
+                keys.push(key.clone());
+                key.operation.push_str(":unsandboxed");
+            }
+            keys.push(key);
+        }
+        if handler.is_mutating(invocation) {
+            keys.push(crate::tool::ApprovalKey::new(
+                invocation.name.clone(),
+                format!("project_root:{}", ctx.project_root.display()),
+            ));
+        }
+        keys
     }
 
     async fn run_attempt(
@@ -117,6 +159,7 @@ impl ToolOrchestrator {
         &self,
         handler: &dyn ToolHandler,
         invocation: &ToolInvocation,
+        keys: Vec<crate::tool::ApprovalKey>,
         retry_reason: Option<&str>,
         cancel: &CancellationToken,
     ) -> Result<(), SessionError> {
@@ -127,12 +170,6 @@ impl ToolOrchestrator {
             return Ok(());
         };
 
-        let mut keys = handler.approval_keys(invocation);
-        if retry_reason.is_some() {
-            for key in &mut keys {
-                key.operation.push_str(":unsandboxed");
-            }
-        }
         if self.approval_cache.lock().await.contains_all(&keys) {
             return Ok(());
         }
@@ -141,12 +178,22 @@ impl ToolOrchestrator {
         if let Some(reason) = retry_reason {
             summary = format!("{reason}\n{summary}");
         }
-        let decision = request_approval(approval_tx, invocation, summary, cancel).await?;
+        let decision = request_approval(
+            approval_tx,
+            invocation,
+            summary,
+            keys.clone(),
+            retry_reason.map(str::to_string),
+            cancel,
+        )
+        .await?;
 
         if let Some(rec) = &self.recorder {
             rec.record_decision(
                 invocation.name.clone(),
                 handler.approval_summary(invocation),
+                keys.clone(),
+                retry_reason.map(str::to_string),
                 format!("{decision:?}"),
             );
         }
@@ -170,6 +217,8 @@ async fn request_approval(
     approval_tx: &mpsc::Sender<ApprovalRequest>,
     invocation: &ToolInvocation,
     args_summary: String,
+    operation_keys: Vec<crate::tool::ApprovalKey>,
+    retry_reason: Option<String>,
     cancel: &CancellationToken,
 ) -> Result<ApprovalDecision, SessionError> {
     let (reply_tx, reply_rx) = oneshot::channel();
@@ -177,12 +226,14 @@ async fn request_approval(
         call_id: invocation.call_id.clone(),
         tool_name: invocation.name.clone(),
         args_summary,
+        operation_keys,
+        retry_reason,
         args_full: invocation.args.clone(),
         reply: reply_tx,
     };
     if approval_tx.send(req).await.is_err() {
-        warn!("approval channel closed mid-turn; defaulting to allow");
-        return Ok(ApprovalDecision::Allow);
+        warn!("approval channel closed mid-turn; denying mutating tool request");
+        return Ok(ApprovalDecision::Deny);
     }
     tokio::select! {
         biased;
@@ -233,6 +284,47 @@ mod tests {
                 "ok {}",
                 invocation.args["target"]
             )))
+        }
+    }
+
+    struct FakeSandboxed;
+
+    #[async_trait]
+    impl ToolHandler for FakeSandboxed {
+        fn name(&self) -> &'static str {
+            "fake_sandboxed"
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: "fake_sandboxed".into(),
+                description: "test".into(),
+                input_schema: serde_json::json!({"type": "object"}),
+                cache_control: None,
+            }
+        }
+
+        fn approval_keys(&self, _invocation: &ToolInvocation) -> Vec<ApprovalKey> {
+            vec![ApprovalKey::new("fake_sandboxed", "write:/blocked")]
+        }
+
+        fn sandbox_policy(&self, _invocation: &ToolInvocation) -> ToolSandboxPolicy {
+            ToolSandboxPolicy::SandboxFirst {
+                escalate_on_denial: true,
+            }
+        }
+
+        async fn handle(
+            &self,
+            _invocation: ToolInvocation,
+            ctx: ToolContext,
+        ) -> Result<ToolOutput, FunctionCallError> {
+            match ctx.sandbox_mode {
+                SandboxMode::Default => Err(FunctionCallError::SandboxDenied {
+                    reason: "blocked by sandbox".into(),
+                }),
+                SandboxMode::Bypass => Ok(ToolOutput::text("bypassed")),
+            }
         }
     }
 
@@ -302,6 +394,69 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(out.content.contains("beta"));
+        approver.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn sandbox_denial_does_not_retry_unsandboxed_without_approval_channel() {
+        let orchestrator =
+            ToolOrchestrator::new(None, Arc::new(Mutex::new(ApprovalCache::default())), None);
+        let handler: Arc<dyn ToolHandler> = Arc::new(FakeSandboxed);
+        let result = orchestrator
+            .run(handler, inv("alpha"), ctx(), &CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            Err(FunctionCallError::SandboxDenied { reason }) if reason.contains("blocked")
+        ));
+    }
+
+    #[tokio::test]
+    async fn approval_request_carries_keys_and_retry_reason() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let orchestrator = ToolOrchestrator::new(
+            Some(tx),
+            Arc::new(Mutex::new(ApprovalCache::default())),
+            None,
+        );
+        let handler: Arc<dyn ToolHandler> = Arc::new(FakeSandboxed);
+        let cancel = CancellationToken::new();
+
+        let approver = tokio::spawn(async move {
+            let first = rx.recv().await.unwrap();
+            assert!(first.retry_reason.is_none());
+            assert!(
+                first
+                    .operation_keys
+                    .iter()
+                    .any(|k| k.operation.contains("sandbox=default"))
+            );
+            first.reply.send(ApprovalDecision::Allow).unwrap();
+
+            let second = rx.recv().await.unwrap();
+            assert!(
+                second
+                    .retry_reason
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("sandbox denied")
+            );
+            assert!(
+                second
+                    .operation_keys
+                    .iter()
+                    .any(|k| k.operation.contains("unsandboxed"))
+            );
+            second.reply.send(ApprovalDecision::Allow).unwrap();
+        });
+
+        let out = orchestrator
+            .run(handler, inv("alpha"), ctx(), &cancel)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.content, "bypassed");
         approver.await.unwrap();
     }
 }

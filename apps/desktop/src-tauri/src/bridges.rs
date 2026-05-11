@@ -136,7 +136,11 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                 id: Id::new(&req.call_id),
                 phase: ItemLifecycle::Started,
                 tool_name: req.tool_name.clone(),
-                args_summary: req.args_summary.clone(),
+                args_summary: req
+                    .retry_reason
+                    .as_ref()
+                    .map(|reason| format!("{reason}\n{}", req.args_summary))
+                    .unwrap_or_else(|| req.args_summary.clone()),
             };
             state
                 .pending_approvals
