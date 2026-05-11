@@ -12,6 +12,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { UserInputCard } from "./UserInputCard";
 import { JobCard } from "./JobCard";
 import { useProjectStore } from "../app/state";
+import { EmptyState } from "../app/EmptyState";
 import { useTimelineStore } from "../timeline/store";
 
 export function ChatStream() {
@@ -61,13 +62,15 @@ export function ChatStream() {
         !running &&
         !turnError &&
         projectReady && (
-          <p className="chat-empty chat-empty-loaded">
-            {timelineRefreshing
-              ? "Loading project..."
-              : hasTimelineClips
-                ? "Timeline loaded. Ask Awidat for an edit, or select a clip below to inspect it."
-                : "No chat history yet. Import media or ask Awidat to get started."}
-          </p>
+          hasTimelineClips ? (
+            <p className="chat-empty chat-empty-loaded">
+              Timeline loaded. Ask Awidat for an edit, or select a clip below to inspect it.
+            </p>
+          ) : timelineRefreshing ? (
+            <p className="chat-empty chat-empty-loaded">Loading project...</p>
+          ) : (
+            <EmptyState />
+          )
         )}
       {items.length === 0 && !running && !turnError && !projectReady && (
         <p className="chat-empty">

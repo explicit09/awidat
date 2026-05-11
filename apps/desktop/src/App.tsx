@@ -247,9 +247,10 @@ function App() {
 
   const projectReady = current !== null;
   const chatFocused = !showMedia && !showProperties && !showTimeline;
+  const showCenter = showMedia || showTimeline;
   const workspaceColumns = [
     showSidebar ? (chatFocused ? "minmax(0, 1fr)" : "clamp(330px, 25vw, 460px)") : null,
-    showMedia ? "minmax(540px, 1fr)" : null,
+    showCenter ? "minmax(540px, 1fr)" : null,
     showProperties ? "clamp(250px, 17vw, 330px)" : null,
   ]
     .filter(Boolean)
@@ -267,7 +268,7 @@ function App() {
       {projectReady ? (
         <div className="workspace">
           <div
-            className="workspace-top"
+            className="workspace-editor"
             style={{
               gridTemplateColumns: workspaceColumns || "minmax(0, 1fr)",
             }}
@@ -282,7 +283,7 @@ function App() {
                   className={sidebarTab === "chat" ? "sidebar-tab-active" : ""}
                   onClick={() => setSidebarTab("chat")}
                 >
-                  Chat
+                  <span>Agent</span>
                 </button>
                 <button
                   type="button"
@@ -291,7 +292,7 @@ function App() {
                   className={sidebarTab === "transcript" ? "sidebar-tab-active" : ""}
                   onClick={() => setSidebarTab("transcript")}
                 >
-                  Transcript
+                  <span>Script</span>
                 </button>
                 <button
                   type="button"
@@ -300,7 +301,7 @@ function App() {
                   className={sidebarTab === "edits" ? "sidebar-tab-active" : ""}
                   onClick={() => setSidebarTab("edits")}
                 >
-                  Edits
+                  <span>Vedit</span>
                 </button>
               </div>
               {sidebarTab === "chat" ? (
@@ -331,9 +332,14 @@ function App() {
               )}
             </div>
             )}
-            {showMedia && (
-            <div className="workspace-media">
-              <MediaPane />
+            {showCenter && (
+            <div className="workspace-center">
+              {showMedia && (
+                <div className="workspace-media">
+                  <MediaPane />
+                </div>
+              )}
+              {showTimeline && <TimelinePane />}
             </div>
             )}
             {showProperties && (
@@ -342,10 +348,29 @@ function App() {
             </div>
             )}
           </div>
-          {showTimeline && <TimelinePane />}
         </div>
       ) : (
-        <ChatStream />
+        <div className="project-launcher">
+          <aside className="launcher-rail">
+            <span>Copilot</span>
+            <strong>Project required</strong>
+            <p>Open or create a project from the header.</p>
+          </aside>
+          <section className="launcher-center">
+            <div className="launcher-monitor">
+              <span>Viewer</span>
+            </div>
+            <div className="launcher-timeline" aria-label="Timeline placeholder">
+              <div />
+              <div />
+              <div />
+            </div>
+          </section>
+          <aside className="launcher-inspector">
+            <span>Inspector</span>
+            <strong>No active clip</strong>
+          </aside>
+        </div>
       )}
       {!projectReady && <Composer projectReady={projectReady} />}
     </main>
