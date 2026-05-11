@@ -289,11 +289,10 @@ pub fn flatten_timeline_public(
                     items.push(TimelineItem::Transition {
                         index: i,
                         // Transition straddles the cut between
-                        // surrounding clips; we anchor it at the
-                        // current cursor for drawing purposes. It
-                        // does NOT advance the cursor — its time
-                        // overlaps the neighboring clips.
-                        track_start_s: track_cursor_s,
+                        // surrounding clips. It does NOT advance the
+                        // cursor because its time overlaps the
+                        // neighboring clips.
+                        track_start_s: (track_cursor_s - t.in_offset.to_seconds()).max(0.0),
                         duration_s,
                         effect_name: t.transition_type.clone(),
                     });

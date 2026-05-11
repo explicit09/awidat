@@ -61,6 +61,9 @@ export type VideoOverlaySegment = PlaySegment & {
 
 export type PreviewTransition = {
   kind: string;
+  cutTime: number;
+  inOffset: number;
+  outOffset: number;
   timelineStart: number;
   timelineEnd: number;
   duration: number;
@@ -183,12 +186,10 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
 
   const segments: PlaySegment[] = [];
   const transitions: PreviewTransition[] = [];
-  let outputCursor = 0;
   let pendingTransition: { kind: string; duration: number } | null = null;
 
   for (const item of videoTrack.items) {
     if (item.kind === "gap") {
-      outputCursor += item.duration_s;
       pendingTransition = null;
       continue;
     }
@@ -206,62 +207,51 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
     }
 
     const originalSourceStart = item.source_start_s ?? 0;
-    const incomingTransition = pendingTransition;
-    const incomingDuration = incomingTransition
-      ? Math.min(incomingTransition.duration, item.duration_s)
-      : 0;
-    const playableDuration = Math.max(0, item.duration_s - incomingDuration);
-    const sourceStart = originalSourceStart + incomingDuration;
     const segment: PlaySegment = {
       proxyPath: item.proxy_path,
       proxyStem: stemFromProxyPath(item.proxy_path),
-      sourceStart,
+      sourceStart: originalSourceStart,
       sourceEnd: originalSourceStart + item.duration_s,
-      timelineStart: outputCursor,
-      timelineEnd: outputCursor + playableDuration,
+      timelineStart: item.track_start_s,
+      timelineEnd: item.track_start_s + item.duration_s,
       volume: hasExplicitAudio ? 0 : item.volume ?? 1,
       speed: item.speed ?? 1,
       clipIndex: item.index,
     };
 
     const previous = segments[segments.length - 1];
-    if (incomingTransition && previous && incomingDuration > 0) {
+    if (pendingTransition && previous && pendingTransition.duration > 0) {
       const duration = Math.min(
-        incomingDuration,
+        pendingTransition.duration,
         Math.max(0, previous.timelineEnd - previous.timelineStart),
+        Math.max(0, segment.timelineEnd - segment.timelineStart),
       );
       if (duration > 0) {
+        const inOffset = duration / 2;
+        const outOffset = duration - inOffset;
+        const cutTime = segment.timelineStart;
         transitions.push({
-          kind: incomingTransition.kind,
-          timelineStart: previous.timelineEnd - duration,
-          timelineEnd: previous.timelineEnd,
+          kind: pendingTransition.kind,
+          cutTime,
+          inOffset,
+          outOffset,
+          timelineStart: cutTime - inOffset,
+          timelineEnd: cutTime + outOffset,
           duration,
           from: previous,
-          to: {
-            ...segment,
-            sourceStart: originalSourceStart,
-            sourceEnd: originalSourceStart + duration,
-            timelineStart: previous.timelineEnd - duration,
-            timelineEnd: previous.timelineEnd,
-          },
+          to: segment,
         });
       }
     }
 
-    if (playableDuration > 0) {
-      segments.push(segment);
-      outputCursor = segment.timelineEnd;
-    }
+    segments.push(segment);
     pendingTransition = null;
   }
 
   return {
     segments,
     transitions,
-    duration: Math.max(
-      outputCursor,
-      transitions.length > 0 ? transitions[transitions.length - 1].timelineEnd : 0,
-    ),
+    duration: snapshot.duration_s,
   };
 }
 

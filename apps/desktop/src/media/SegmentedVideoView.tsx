@@ -512,9 +512,10 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
   // `visibility: hidden` because both can pause buffering on some
   // browsers.
   const activeSlotOpacity = activeTransition
-    ? outgoingTransitionOpacity(
+    ? baseTransitionOpacity(
         activeTransition.kind,
         transitionProgress(activeTransition, timelineTime),
+        timelineTime < activeTransition.cutTime ? "outgoing" : "incoming",
       )
     : 1;
   const styleA = useMemo(
@@ -638,19 +639,23 @@ function TimelineTransitionOverlay({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [src, setSrc] = useState<string | null>(null);
   const setMediaError = useMediaStore((s) => s.setMediaError);
+  const overlaySide =
+    transition && timelineTime < transition.cutTime ? "incoming" : "outgoing";
+  const overlaySegment =
+    transition && overlaySide === "incoming" ? transition.to : transition?.from;
 
   useEffect(() => {
-    if (!transition) {
+    if (!transition || !overlaySegment) {
       setSrc(null);
       return;
     }
-    const cached = cachedMediaStreamUrl(transition.to.proxyPath);
+    const cached = cachedMediaStreamUrl(overlaySegment.proxyPath);
     if (cached) {
       setSrc(cached);
       return;
     }
     let cancelled = false;
-    mediaStreamUrl(transition.to.proxyPath)
+    mediaStreamUrl(overlaySegment.proxyPath)
       .then((url) => {
         if (!cancelled) setSrc(url);
       })
@@ -662,18 +667,21 @@ function TimelineTransitionOverlay({
     return () => {
       cancelled = true;
     };
-  }, [transition, setMediaError]);
+  }, [transition, overlaySegment, setMediaError]);
 
   useEffect(() => {
     const v = videoRef.current;
-    if (!v || !transition || !src) return;
+    if (!v || !transition || !overlaySegment || !src) return;
+    const elapsed = timelineTime - transition.timelineStart;
     const sourceTime =
-      transition.to.sourceStart + (timelineTime - transition.timelineStart);
+      overlaySide === "incoming"
+        ? transition.to.sourceStart - transition.inOffset + elapsed
+        : transition.from.sourceEnd - transition.inOffset + elapsed;
     if (Math.abs(v.currentTime - sourceTime) > 0.05) {
       tryAssignCurrentTime(v, sourceTime);
     }
-    const speed = Number.isFinite(transition.to.speed)
-      ? Math.max(0.0625, Math.min(16, transition.to.speed))
+    const speed = Number.isFinite(overlaySegment.speed)
+      ? Math.max(0.0625, Math.min(16, overlaySegment.speed))
       : 1;
     if (Math.abs(v.playbackRate - speed) > 0.001) v.playbackRate = speed;
     if (isPlaying && v.paused) {
@@ -681,9 +689,9 @@ function TimelineTransitionOverlay({
     } else if (!isPlaying && !v.paused) {
       v.pause();
     }
-  }, [transition, src, timelineTime, isPlaying]);
+  }, [transition, overlaySegment, overlaySide, src, timelineTime, isPlaying]);
 
-  if (!transition || !src) return null;
+  if (!transition || !overlaySegment || !src) return null;
   const progress = transitionProgress(transition, timelineTime);
 
   return (
@@ -695,7 +703,7 @@ function TimelineTransitionOverlay({
       playsInline
       preload="auto"
       style={{
-        opacity: transitionOpacity(transition.kind, progress),
+        opacity: transitionOpacity(transition.kind, progress, overlaySide),
         pointerEvents: "none",
         zIndex: 3,
       }}
@@ -715,18 +723,26 @@ function transitionProgress(
   );
 }
 
-function outgoingTransitionOpacity(kind: string, progress: number): number {
+function baseTransitionOpacity(
+  kind: string,
+  progress: number,
+  side: "outgoing" | "incoming",
+): number {
   if (isFadeThroughBlack(kind)) {
-    return progress < 0.5 ? 1 - progress * 2 : 0;
+    return side === "outgoing"
+      ? Math.max(0, 1 - progress * 2)
+      : Math.max(0, (progress - 0.5) * 2);
   }
-  return 1 - progress;
+  return side === "outgoing" ? 1 - progress : progress;
 }
 
-function transitionOpacity(kind: string, progress: number): number {
-  if (isFadeThroughBlack(kind)) {
-    return progress < 0.5 ? 0 : (progress - 0.5) * 2;
-  }
-  return progress;
+function transitionOpacity(
+  kind: string,
+  progress: number,
+  side: "incoming" | "outgoing",
+): number {
+  if (isFadeThroughBlack(kind)) return 0;
+  return side === "incoming" ? progress : 1 - progress;
 }
 
 function isFadeThroughBlack(kind: string): boolean {
