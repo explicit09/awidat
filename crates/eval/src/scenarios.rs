@@ -18,8 +18,13 @@ use std::time::Instant;
 
 use awidat_core::tool::{ApprovalCache, ApprovalDecision, ApprovalKey, SandboxMode, ToolHandler};
 use awidat_core::tools::{
-    find_beat::FindBeatTool, find_moment::FindMomentTool, list_assets::ListAssetsTool,
-    read_index::ReadIndexTool, view_episode::ViewEpisodeTool, view_timeline::ViewTimelineTool,
+    apply_edl::ApplyEdlTool, find_beat::FindBeatTool, find_moment::FindMomentTool,
+    list_assets::ListAssetsTool, read_index::ReadIndexTool, use_broll::UseBrollTool,
+    view_episode::ViewEpisodeTool, view_timeline::ViewTimelineTool,
+};
+use awidat_proto::otio::{
+    Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Timeline, Track,
+    TrackChild, TrackKind,
 };
 use awidat_proto::project::Project;
 
@@ -42,6 +47,8 @@ pub fn defaults() -> Vec<Box<dyn Scenario>> {
         Box::new(OrchestratorSandboxDenialEscalates),
         Box::new(OrchestratorNoSilentUnsandboxedRetry),
         Box::new(RolloutApprovalDecisionMetadata),
+        Box::new(BrollUseThisConcreteAnchorSequence),
+        Box::new(VeditDiffRestoreIsAudited),
         Box::new(RealProjectViewEpisode),
         Box::new(RealProjectFindMoment),
         Box::new(RealProjectFindBeat),
@@ -75,6 +82,42 @@ pub(crate) fn make_call(name: &str, args: serde_json::Value) -> awidat_core::too
         name: name.into(),
         args,
     }
+}
+
+fn write_single_clip_project(
+    root: &std::path::Path,
+    name: &str,
+    uuid: &str,
+    transcript_snippet: &str,
+) -> Result<()> {
+    let mut project = Project::read(root)?;
+    let mut timeline = Timeline::empty("eval");
+    let mut track = Track::empty("V1", TrackKind::Video);
+    let mut clip = Clip::empty(name.to_string());
+    clip.media_reference = MediaReference::External(ExternalReference::new("raw/main.mp4"));
+    clip.source_range = Some(TimeRange::new(
+        RationalTime::zero(24.0),
+        RationalTime::new(5.0 * 24.0, 24.0),
+    ));
+    let meta = clip.metadata.awidat.get_or_insert_with(Default::default);
+    meta.extra
+        .insert("clip_uuid".into(), serde_json::Value::String(uuid.into()));
+    meta.anchor = Some(awidat_proto::awidat_meta::Anchor {
+        transcript_snippet: Some(transcript_snippet.into()),
+        ..Default::default()
+    });
+    track.children.push(TrackChild::Clip(clip));
+    timeline.tracks.children.push(StackChild::Track(track));
+    project.timeline = timeline;
+    project.write(root)?;
+    Ok(())
+}
+
+fn write_named_empty_timeline(root: &std::path::Path, name: &str) -> Result<()> {
+    let mut project = Project::read(root)?;
+    project.timeline = Timeline::empty(name);
+    project.write(root)?;
+    Ok(())
 }
 
 // ---------- scenarios ----------
@@ -223,6 +266,156 @@ impl Scenario for EmptyTimelineViewTimeline {
             },
         };
         Ok(outcome)
+    }
+}
+
+/// B-roll "Use this" flow should carry a concrete anchor through
+/// `use_broll` and produce an `apply_edl`-valid fragment.
+struct BrollUseThisConcreteAnchorSequence;
+
+#[async_trait]
+impl Scenario for BrollUseThisConcreteAnchorSequence {
+    fn id(&self) -> &'static str {
+        "product::broll_use_this_concrete_anchor_sequence"
+    }
+    fn description(&self) -> &'static str {
+        "use_broll with a concrete note anchor returns a non-placeholder EDL fragment that apply_edl validates."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        Project::init(dir.path())?;
+        write_single_clip_project(dir.path(), "clip-0", "clip-0", "the city skyline")?;
+        let broll_path = dir.path().join("raw/broll/pexels-42.mp4");
+        std::fs::create_dir_all(
+            broll_path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("broll path has no parent"))?,
+        )?;
+        std::fs::write(&broll_path, b"placeholder")?;
+
+        let out = UseBrollTool
+            .handle(
+                make_call(
+                    "use_broll",
+                    serde_json::json!({
+                        "pexels_id": 42,
+                        "anchor": { "transcript_snippet": "the city skyline" },
+                        "duration_s": 2.0,
+                        "position": "overlay"
+                    }),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        let Ok(output) = out else {
+            return Ok(ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("use_broll errored: {:?}", out.err()),
+            });
+        };
+        let body: serde_json::Value = serde_json::from_str(&output.content)?;
+        let Some(edl) = body["edl_fragment"].as_str() else {
+            return Ok(ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: "use_broll did not return edl_fragment".into(),
+            });
+        };
+        if edl.contains("...") || !edl.contains("transcript_snippet=\"the city skyline\"") {
+            return Ok(ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("EDL fragment did not carry concrete anchor: {edl}"),
+            });
+        }
+        let apply = ApplyEdlTool
+            .handle(
+                make_call(
+                    "apply_edl",
+                    serde_json::json!({"edl": edl, "dry_run": true}),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await;
+        Ok(match apply {
+            Ok(t) if t.content.contains("Validated 1 op") => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Pass,
+                elapsed,
+                message: "concrete anchor fragment validated through apply_edl".into(),
+            },
+            Ok(t) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("unexpected apply_edl output: {}", t.content),
+            },
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("apply_edl errored: {e:?}"),
+            },
+        })
+    }
+}
+
+struct VeditDiffRestoreIsAudited;
+
+#[async_trait]
+impl Scenario for VeditDiffRestoreIsAudited {
+    fn id(&self) -> &'static str {
+        "product::vedit_diff_restore_is_audited"
+    }
+    fn description(&self) -> &'static str {
+        "vedit diff sees a timeline change and restore writes a prior snapshot with a new audit commit."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        Project::init(dir.path())?;
+        write_named_empty_timeline(dir.path(), "v1")?;
+        let repo = awidat_core::vc::open_or_init(dir.path())?;
+        let first = awidat_core::vc::commit_current_timeline(&repo, "v1", None)?;
+        write_single_clip_project(dir.path(), "clip-0", "clip-0", "restore eval")?;
+        awidat_core::vc::commit_current_timeline(&repo, "v2", None)?;
+        let diff = awidat_core::vc::diff_refs(&repo, Some(&first.commit_hash), Some("HEAD"))?;
+        let restored = awidat_core::vc::restore_working_timeline(&repo, &first.commit_hash)?;
+        let audit = awidat_core::vc::commit_current_timeline(&repo, "restore v1", None)?;
+        let elapsed = started.elapsed();
+        let current: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("project.otio.json"))?)?;
+        if diff.is_empty() {
+            return Ok(ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: "diff was empty after adding a clip".into(),
+            });
+        }
+        if current["name"].as_str() == Some("v1") && audit.commit_hash != restored.commit_hash {
+            Ok(ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Pass,
+                elapsed,
+                message: "restore wrote v1 and audit commit landed".into(),
+            })
+        } else {
+            Ok(ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: "restore did not write expected snapshot or audit commit".into(),
+            })
+        }
     }
 }
 
