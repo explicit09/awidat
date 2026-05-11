@@ -1499,6 +1499,79 @@ body,
   font: inherit;
 }
 
+.vedit-entry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.vedit-entry-actions button,
+.vedit-restore-confirm button {
+  min-height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.vedit-entry-actions button:disabled,
+.vedit-restore-confirm button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.vedit-restore-button {
+  border-color: rgba(248, 81, 73, 0.45) !important;
+  color: #ffb4ad !important;
+}
+
+.vedit-diff,
+.vedit-restore-confirm {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  padding: 8px;
+}
+
+.vedit-diff-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.vedit-diff pre {
+  max-height: 180px;
+  overflow: auto;
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.vedit-restore-confirm {
+  border-color: rgba(248, 81, 73, 0.35);
+}
+
+.vedit-restore-confirm strong {
+  display: block;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.vedit-restore-confirm p {
+  margin: 6px 0 8px;
+}
+
+.vedit-restore-confirm div {
+  display: flex;
+  gap: 6px;
+}
+
 .workspace-media {
   display: flex;
   flex-direction: column;
