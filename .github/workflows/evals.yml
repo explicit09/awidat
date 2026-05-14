@@ -1,0 +1,90 @@
+name: Evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_stress:
+        description: Run slow Rust stress evals
+        type: boolean
+        default: true
+      run_audio_energy:
+        description: Run real audio-energy Python MCP smoke
+        type: boolean
+        default: false
+      run_live_agent:
+        description: Run ignored live/API agent tests using ANTHROPIC_API_KEY
+        type: boolean
+        default: false
+      run_real_corpus:
+        description: Run awidat-eval --live against AWIDAT_REAL_CORPUS on the runner
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 9 * * 1"
+
+jobs:
+  eval-suite:
+    name: Product and golden evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev
+      - uses: Swatinem/rust-cache@v2
+      - name: Fast, product, and golden evals
+        run: cargo run -p awidat-eval -- --ci --product --golden --json
+      - name: Stress evals
+        if: github.event_name == 'schedule' || inputs.run_stress
+        run: cargo run -p awidat-eval -- --stress --json
+      - name: Python safe smoke
+        run: python3 python/scripts/smoke_indexers.py --safe
+
+  python-audio-energy:
+    name: Python audio-energy MCP smoke
+    if: github.event_name == 'workflow_dispatch' && inputs.run_audio_energy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: Run real audio-energy sidecar smoke
+        run: python3 python/scripts/smoke_indexers.py --safe --audio-energy
+
+  live-agent:
+    name: Live/API agent tests
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_agent
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Refuse missing API key
+        run: test -n "$ANTHROPIC_API_KEY"
+      - name: Run ignored live/API tests
+        run: cargo test --workspace live_ -- --ignored --nocapture
+
+  real-corpus:
+    name: Real corpus evals
+    if: github.event_name == 'workflow_dispatch' && inputs.run_real_corpus
+    runs-on: [self-hosted, awidat-real-corpus]
+    env:
+      AWIDAT_REAL_CORPUS: ${{ vars.AWIDAT_REAL_CORPUS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run real corpus evals
+        run: cargo run -p awidat-eval -- --live --json --fail-on-skip

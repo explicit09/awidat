@@ -130,7 +130,7 @@ async fn audio_energy_indexer_writes_sidecar() {
         "expected ≥15 windows for a 2s file at 100ms windows"
     );
     let sr = body["data"]["sample_rate"].as_u64().expect("sample_rate");
-    assert_eq!(sr, 16000);
+    assert_eq!(sr, 48_000);
 
     // Manifest was updated.
     let manifest_path = project_root.join("index").join("manifest.json");

@@ -1,5 +1,41 @@
 # Indexer smoke tests
 
+## Safe metadata smoke
+
+The deterministic, no-download smoke check is:
+
+```bash
+python3 python/scripts/smoke_indexers.py --safe
+```
+
+It validates the `uv` workspace member list, package layout, indexer
+schema/version markers, and the common sidecar header shape. It does not
+import heavy indexer modules, run ffmpeg, download models, or touch gated
+Hugging Face flows. This is the subset that is safe for CI-style use.
+
+## Safe real-indexer smoke
+
+The lowest-cost real sidecar smoke runs the `audio-energy-mcp` indexer
+through the Rust index dispatcher against a tiny checked-in WAV fixture:
+
+```bash
+python3 python/scripts/smoke_indexers.py --safe --audio-energy
+```
+
+This may install Python package dependencies through `uv`, but it does not
+download model weights or require API keys. It is available as an opt-in
+job in `.github/workflows/evals.yml`.
+
+The guarded full setup command is:
+
+```bash
+AWIDAT_RUN_FULL_INDEXER_SMOKE=1 python3 python/scripts/smoke_indexers.py --full
+```
+
+That only syncs the full Python dependency workspace. Use the manual
+real-asset commands below for model-backed indexers after accepting any
+required model gates.
+
 The `cargo test -p awidat-index --test end_to_end -- --ignored` test exercises
 `audio-energy-mcp` only, because it has no model downloads and no API keys —
 which means it's the only indexer cheap enough to run on every commit.

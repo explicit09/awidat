@@ -18,8 +18,10 @@ use std::time::Instant;
 
 use awidat_core::tool::{ApprovalCache, ApprovalDecision, ApprovalKey, SandboxMode, ToolHandler};
 use awidat_core::tools::{
-    apply_edl::ApplyEdlTool, find_beat::FindBeatTool, find_moment::FindMomentTool,
-    list_assets::ListAssetsTool, read_index::ReadIndexTool, use_broll::UseBrollTool,
+    apply_edl::ApplyEdlTool, find_beat::FindBeatTool,
+    find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
+    find_moment::FindMomentTool, list_assets::ListAssetsTool, read_index::ReadIndexTool,
+    use_broll::UseBrollTool, vedit_diff::VeditDiffTool, vedit_revert::VeditRevertTool,
     view_episode::ViewEpisodeTool, view_timeline::ViewTimelineTool,
 };
 use awidat_proto::otio::{
@@ -28,6 +30,10 @@ use awidat_proto::otio::{
 };
 use awidat_proto::project::Project;
 
+use crate::fixtures::{
+    ClipSpec, clip_count, clip_range_by_uuid, write_project_with_clips, write_silence_ranges,
+    write_whisper_words,
+};
 use crate::{Scenario, ScenarioOutcome, ScenarioStatus};
 
 /// Build the default V1 scenario list. Add new scenarios here. The
@@ -39,16 +45,44 @@ use crate::{Scenario, ScenarioOutcome, ScenarioStatus};
 /// unset. Used in Week 8 demo bringup against
 /// `/tmp/awidat-real/yt-test` and similar.
 pub fn defaults() -> Vec<Box<dyn Scenario>> {
+    let mut out = fast();
+    out.extend(product());
+    out.extend(real_corpus());
+    out
+}
+
+/// Fast deterministic offline evals for every PR.
+pub fn fast() -> Vec<Box<dyn Scenario>> {
     vec![
         Box::new(FreshProjectViewEpisode),
         Box::new(EmptyProjectListAssets),
         Box::new(EmptyTimelineViewTimeline),
+        Box::new(EdlCoreOpsProposalDiffSurface),
+        Box::new(SamePositionMovePreservesTimeline),
         Box::new(OrchestratorApprovalCacheIsOperationKeyed),
         Box::new(OrchestratorSandboxDenialEscalates),
         Box::new(OrchestratorNoSilentUnsandboxedRetry),
         Box::new(RolloutApprovalDecisionMetadata),
+        Box::new(MinimalIndexerSidecarParsing),
+    ]
+}
+
+/// Product-quality synthetic scenarios. Still offline, but tests
+/// editorial behavior rather than only tool shape.
+pub fn product() -> Vec<Box<dyn Scenario>> {
+    vec![
+        Box::new(DeadAirTrimSuggestionQuality),
+        Box::new(BrollOpportunityTranscriptAnchorQuality),
         Box::new(BrollUseThisConcreteAnchorSequence),
         Box::new(VeditDiffRestoreIsAudited),
+        Box::new(VeditRevertRecoveryFlow),
+    ]
+}
+
+/// Real corpus/API-gated scenarios. These skip unless explicitly
+/// configured by environment.
+pub fn real_corpus() -> Vec<Box<dyn Scenario>> {
+    vec![
         Box::new(RealProjectViewEpisode),
         Box::new(RealProjectFindMoment),
         Box::new(RealProjectFindBeat),
@@ -269,6 +303,441 @@ impl Scenario for EmptyTimelineViewTimeline {
     }
 }
 
+/// Core edit ops should parse/apply and surface structural vedit
+/// changes for the proposal/review path: trim, split, insert, b-roll,
+/// PiP, move, and delete all live in one deterministic envelope.
+struct EdlCoreOpsProposalDiffSurface;
+
+#[async_trait]
+impl Scenario for EdlCoreOpsProposalDiffSurface {
+    fn id(&self) -> &'static str {
+        "ci::edl_core_ops_proposal_diff_surface"
+    }
+
+    fn description(&self) -> &'static str {
+        "EDL trim/delete/split/insert/b-roll/PiP/move apply cleanly and vedit reports structural changes."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        write_project_with_clips(
+            dir.path(),
+            "core-ops",
+            &[
+                ClipSpec::video("intro", "intro", "raw/intro.mp4", 0.0, 10.0)
+                    .with_transcript("welcome back"),
+                ClipSpec::video(
+                    "false-start",
+                    "false-start",
+                    "raw/false-start.mp4",
+                    0.0,
+                    4.0,
+                )
+                .with_transcript("let me start over"),
+                ClipSpec::video("demo", "demo", "raw/demo.mp4", 0.0, 8.0)
+                    .with_transcript("look at the graph"),
+            ],
+        )?;
+        crate::fixtures::write_asset(dir.path(), "raw/insert.mp4")?;
+        crate::fixtures::write_asset(dir.path(), "raw/broll/skyline.mp4")?;
+        crate::fixtures::write_asset(dir.path(), "raw/broll/pip.mp4")?;
+
+        let repo = awidat_core::vc::open_or_init(dir.path())?;
+        let first = awidat_core::vc::commit_current_timeline(&repo, "before core ops", None)?;
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: clip_uuid=intro
++ end: 8
+*** Split Clip
+@@ anchor: clip_uuid=demo
++ at_s: 3
+*** Insert Clip
++ asset: raw/insert.mp4
++ track: V1
++ at_position: 1
++ start: 0
++ end: 2
++ name: inserted-cutaway
+*** Insert BRoll
+@@ anchor: clip_uuid=demo
++ asset: raw/broll/skyline.mp4
++ duration_s: 2
++ position: overlay
+*** Insert PiP
+@@ anchor: clip_uuid=intro
++ asset: raw/broll/pip.mp4
++ duration_s: 1.5
+*** Move Clip
+@@ anchor: clip_uuid=false-start
++ to_position: 0
+*** Delete Clip
+@@ anchor: clip_uuid=false-start
+*** End EDL
+";
+        let apply = ApplyEdlTool
+            .handle(
+                make_call(
+                    "apply_edl",
+                    serde_json::json!({"edl": edl, "dry_run": false, "reasoning": "eval core op coverage"}),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        let Ok(output) = apply else {
+            return Ok(ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("apply_edl errored: {:?}", apply.err()),
+            });
+        };
+        let diff = VeditDiffTool
+            .handle(
+                make_call(
+                    "vedit_diff",
+                    serde_json::json!({"from": first.commit_hash, "to": "HEAD"}),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await;
+        Ok(match diff {
+            Ok(t) => {
+                let body: serde_json::Value =
+                    serde_json::from_str(&t.content).unwrap_or(serde_json::Value::Null);
+                let change_count = body["change_count"].as_u64().unwrap_or(0);
+                if output.content.contains("committed")
+                    && change_count >= 4
+                    && body["changes"].to_string().contains("trimmed")
+                {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Pass,
+                        elapsed,
+                        message: format!(
+                            "applied multi-op proposal; vedit saw {change_count} changes"
+                        ),
+                    }
+                } else {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Fail,
+                        elapsed,
+                        message: format!(
+                            "unexpected output/diff: {} / {}",
+                            output.content, t.content
+                        ),
+                    }
+                }
+            }
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("vedit_diff errored: {e:?}"),
+            },
+        })
+    }
+}
+
+/// Dragging a clip and dropping it in its original position should not
+/// mutate timeline order. This catches a subtle proposal adjustment
+/// regression where same-position moves used to be collapsed wrongly.
+struct SamePositionMovePreservesTimeline;
+
+#[async_trait]
+impl Scenario for SamePositionMovePreservesTimeline {
+    fn id(&self) -> &'static str {
+        "ci::same_position_move_preserves_timeline"
+    }
+
+    fn description(&self) -> &'static str {
+        "Move Clip to its current position preserves clip count and source ranges."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        write_project_with_clips(
+            dir.path(),
+            "same-position-move",
+            &[
+                ClipSpec::video("a", "a", "raw/a.mp4", 0.0, 3.0),
+                ClipSpec::video("b", "b", "raw/b.mp4", 2.0, 4.0),
+            ],
+        )?;
+        let edl = "\
+*** Begin EDL
+*** Move Clip
+@@ anchor: clip_uuid=b
++ to_position: 1
+*** End EDL
+";
+        let apply = ApplyEdlTool
+            .handle(
+                make_call(
+                    "apply_edl",
+                    serde_json::json!({"edl": edl, "dry_run": false}),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        let project = Project::read(dir.path())?;
+        let range = clip_range_by_uuid(&project.timeline, "b");
+        Ok(match apply {
+            Ok(_) if clip_count(&project.timeline) == 2 && range == Some((2.0, 4.0)) => {
+                ScenarioOutcome {
+                    id: self.id().into(),
+                    status: ScenarioStatus::Pass,
+                    elapsed,
+                    message: "same-position move preserved both clips and source range".into(),
+                }
+            }
+            Ok(t) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!(
+                    "unexpected timeline after move: {} range={range:?}",
+                    t.content
+                ),
+            },
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("apply_edl errored: {e:?}"),
+            },
+        })
+    }
+}
+
+/// Safe sidecar parsing: no model downloads, just the on-disk schema
+/// the indexer sidecars promise to write.
+struct MinimalIndexerSidecarParsing;
+
+#[async_trait]
+impl Scenario for MinimalIndexerSidecarParsing {
+    fn id(&self) -> &'static str {
+        "ci::minimal_indexer_sidecar_parsing"
+    }
+
+    fn description(&self) -> &'static str {
+        "read_index parses a tiny synthetic whisper sidecar without invoking Python/model downloads."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        write_project_with_clips(
+            dir.path(),
+            "sidecar",
+            &[ClipSpec::video("clip", "clip", "raw/clip.mp4", 0.0, 2.0)],
+        )?;
+        write_whisper_words(
+            dir.path(),
+            "raw/clip.mp4",
+            &[("hello", 0.0, 0.4), ("world", 0.5, 1.0)],
+        )?;
+        let out = ReadIndexTool
+            .handle(
+                make_call(
+                    "read_index",
+                    serde_json::json!({"asset_id": "raw/clip.mp4", "channel": "transcript", "limit": 2}),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        Ok(match out {
+            Ok(t) if t.content.contains("hello") && t.content.contains("world") => {
+                ScenarioOutcome {
+                    id: self.id().into(),
+                    status: ScenarioStatus::Pass,
+                    elapsed,
+                    message: "synthetic transcript sidecar parsed".into(),
+                }
+            }
+            Ok(t) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("unexpected read_index output: {}", t.content),
+            },
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("read_index errored: {e:?}"),
+            },
+        })
+    }
+}
+
+/// Product scenario: a real dead-air finder should identify only the
+/// long pause, preserve surrounding transcript context, and provide a
+/// timeline/source anchor an agent can turn into a trim proposal.
+struct DeadAirTrimSuggestionQuality;
+
+#[async_trait]
+impl Scenario for DeadAirTrimSuggestionQuality {
+    fn id(&self) -> &'static str {
+        "product::dead_air_trim_suggestion_quality"
+    }
+
+    fn description(&self) -> &'static str {
+        "find_dead_air surfaces a long silence with transcript context and ignores breath beats."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        write_project_with_clips(
+            dir.path(),
+            "dead-air",
+            &[ClipSpec::video("host", "host", "raw/host.mp4", 0.0, 12.0)],
+        )?;
+        write_silence_ranges(dir.path(), "raw/host.mp4", &[(1.0, 1.4), (5.0, 7.4)])?;
+        write_whisper_words(
+            dir.path(),
+            "raw/host.mp4",
+            &[
+                ("before", 3.8, 4.1),
+                ("pause", 4.2, 4.6),
+                ("after", 7.5, 7.9),
+                ("resume", 8.0, 8.4),
+            ],
+        )?;
+        let out = FindDeadAirTool
+            .handle(
+                make_call("find_dead_air", serde_json::json!({"min_duration_s": 1.5})),
+                ctx_at(dir.path()),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        Ok(match out {
+            Ok(t) => {
+                let body: serde_json::Value =
+                    serde_json::from_str(&t.content).unwrap_or(serde_json::Value::Null);
+                let findings = body["findings"].as_array().cloned().unwrap_or_default();
+                let first = findings.first().cloned().unwrap_or(serde_json::Value::Null);
+                let duration_ok = first["duration_s"].as_f64().is_some_and(|d| d > 2.3);
+                let context_ok = first["transcript_before"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("pause")
+                    && first["transcript_after"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("after");
+                if findings.len() == 1 && duration_ok && context_ok {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Pass,
+                        elapsed,
+                        message: "surfaced one actionable long silence with context".into(),
+                    }
+                } else {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Fail,
+                        elapsed,
+                        message: format!("unexpected dead-air findings: {}", t.content),
+                    }
+                }
+            }
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("find_dead_air errored: {e:?}"),
+            },
+        })
+    }
+}
+
+/// Product scenario: transcript-aware b-roll suggestions should point
+/// to concrete visual language instead of generic filler.
+struct BrollOpportunityTranscriptAnchorQuality;
+
+#[async_trait]
+impl Scenario for BrollOpportunityTranscriptAnchorQuality {
+    fn id(&self) -> &'static str {
+        "product::broll_opportunity_transcript_anchor_quality"
+    }
+
+    fn description(&self) -> &'static str {
+        "find_broll_opportunities emits a concrete query and transcript excerpt for a visual reference."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        write_project_with_clips(
+            dir.path(),
+            "broll-opportunity",
+            &[ClipSpec::video("host", "host", "raw/host.mp4", 0.0, 10.0)],
+        )?;
+        write_whisper_words(
+            dir.path(),
+            "raw/host.mp4",
+            &[
+                ("now", 0.0, 0.2),
+                ("imagine", 1.0, 1.3),
+                ("a", 1.3, 1.4),
+                ("busy", 1.5, 1.8),
+                ("office", 1.9, 2.2),
+                ("meeting", 2.3, 2.8),
+            ],
+        )?;
+        let out = FindBrollOpportunitiesTool
+            .handle(
+                make_call("find_broll_opportunities", serde_json::json!({})),
+                ctx_at(dir.path()),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        Ok(match out {
+            Ok(t) => {
+                let body: serde_json::Value =
+                    serde_json::from_str(&t.content).unwrap_or(serde_json::Value::Null);
+                let findings = body["findings"].as_array().cloned().unwrap_or_default();
+                let first = findings.first().cloned().unwrap_or(serde_json::Value::Null);
+                let query = first["pexels_query"].as_str().unwrap_or("");
+                let reason = first["reason"].as_str().unwrap_or("");
+                if findings.len() == 1
+                    && query.contains("office")
+                    && reason.contains("imagine")
+                    && first["timeline_start_s"].as_f64().is_some()
+                {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Pass,
+                        elapsed,
+                        message: format!("generated concrete b-roll query '{query}'"),
+                    }
+                } else {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Fail,
+                        elapsed,
+                        message: format!("unexpected b-roll findings: {}", t.content),
+                    }
+                }
+            }
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("find_broll_opportunities errored: {e:?}"),
+            },
+        })
+    }
+}
+
 /// B-roll "Use this" flow should carry a concrete anchor through
 /// `use_broll` and produce an `apply_edl`-valid fragment.
 struct BrollUseThisConcreteAnchorSequence;
@@ -416,6 +885,110 @@ impl Scenario for VeditDiffRestoreIsAudited {
                 message: "restore did not write expected snapshot or audit commit".into(),
             })
         }
+    }
+}
+
+struct VeditRevertRecoveryFlow;
+
+#[async_trait]
+impl Scenario for VeditRevertRecoveryFlow {
+    fn id(&self) -> &'static str {
+        "product::vedit_revert_recovery_flow"
+    }
+
+    fn description(&self) -> &'static str {
+        "A bad edit can be inspected with vedit_diff and recovered through vedit_revert with an audit commit."
+    }
+
+    async fn run(&self) -> Result<ScenarioOutcome> {
+        let started = Instant::now();
+        let dir = tempfile::tempdir()?;
+        write_project_with_clips(
+            dir.path(),
+            "recover",
+            &[
+                ClipSpec::video("keeper", "keeper", "raw/keeper.mp4", 0.0, 5.0),
+                ClipSpec::video("target", "target", "raw/target.mp4", 0.0, 5.0),
+            ],
+        )?;
+        let repo = awidat_core::vc::open_or_init(dir.path())?;
+        let clean = awidat_core::vc::commit_current_timeline(&repo, "clean cut", None)?;
+
+        let bad_edl = "\
+*** Begin EDL
+*** Delete Clip
+@@ anchor: clip_uuid=target
+*** End EDL
+";
+        ApplyEdlTool
+            .handle(
+                make_call(
+                    "apply_edl",
+                    serde_json::json!({"edl": bad_edl, "dry_run": false, "reasoning": "eval bad edit"}),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let diff = VeditDiffTool
+            .handle(
+                make_call(
+                    "vedit_diff",
+                    serde_json::json!({"from": clean.commit_hash, "to": "HEAD"}),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        let revert = VeditRevertTool
+            .handle(
+                make_call(
+                    "vedit_revert",
+                    serde_json::json!({"refstr": clean.commit_hash, "commit": true, "reasoning": "eval recovery"}),
+                ),
+                ctx_at(dir.path()),
+            )
+            .await;
+        let elapsed = started.elapsed();
+        let project = Project::read(dir.path())?;
+        Ok(match revert {
+            Ok(t) => {
+                let diff_body: serde_json::Value =
+                    serde_json::from_str(&diff.content).unwrap_or(serde_json::Value::Null);
+                let revert_body: serde_json::Value =
+                    serde_json::from_str(&t.content).unwrap_or(serde_json::Value::Null);
+                if diff_body["change_count"].as_u64().unwrap_or(0) > 0
+                    && revert_body["audit_commit"]["commit_hash"]
+                        .as_str()
+                        .is_some()
+                    && clip_count(&project.timeline) == 2
+                {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Pass,
+                        elapsed,
+                        message: "bad delete diffed and clean cut restored with audit commit"
+                            .into(),
+                    }
+                } else {
+                    ScenarioOutcome {
+                        id: self.id().into(),
+                        status: ScenarioStatus::Fail,
+                        elapsed,
+                        message: format!(
+                            "unexpected diff/revert state: {} / {}",
+                            diff.content, t.content
+                        ),
+                    }
+                }
+            }
+            Err(e) => ScenarioOutcome {
+                id: self.id().into(),
+                status: ScenarioStatus::Fail,
+                elapsed,
+                message: format!("vedit_revert errored: {e:?}"),
+            },
+        })
     }
 }
 
@@ -782,6 +1355,7 @@ impl Scenario for RolloutApprovalDecisionMetadata {
 
 fn real_project_root() -> Option<std::path::PathBuf> {
     std::env::var("AWIDAT_REAL_PROJECT")
+        .or_else(|_| std::env::var("AWIDAT_REAL_CORPUS"))
         .ok()
         .filter(|s| !s.is_empty())
         .map(std::path::PathBuf::from)
@@ -793,7 +1367,7 @@ fn skip_no_real_project(id: &str, started: Instant) -> ScenarioOutcome {
         id: id.into(),
         status: ScenarioStatus::Skipped,
         elapsed: started.elapsed(),
-        message: "AWIDAT_REAL_PROJECT not set or not a dir; skipping".into(),
+        message: "AWIDAT_REAL_PROJECT/AWIDAT_REAL_CORPUS not set to an indexed project; skipping live corpus eval".into(),
     }
 }
 
@@ -985,14 +1559,28 @@ impl Scenario for RealProjectReadIndexTranscript {
         let Some(root) = real_project_root() else {
             return Ok(skip_no_real_project(self.id(), started));
         };
-        // Find an asset id from the project's manifest by scanning raw/.
+        // Pick a raw asset that actually has a transcript sidecar. `read_dir`
+        // order is not stable, and real projects often keep scratch media in
+        // raw/ that was not indexed.
         let raw_dir = root.join("raw");
         let asset_id = match std::fs::read_dir(&raw_dir) {
-            Ok(entries) => entries.filter_map(|e| e.ok()).find_map(|e| {
-                e.path()
-                    .file_name()
-                    .map(|n| format!("raw/{}", n.to_string_lossy()))
-            }),
+            Ok(entries) => {
+                let mut assets = entries
+                    .filter_map(|e| e.ok())
+                    .filter_map(|e| {
+                        e.path()
+                            .file_name()
+                            .map(|n| format!("raw/{}", n.to_string_lossy()))
+                    })
+                    .collect::<Vec<_>>();
+                assets.sort();
+                assets.into_iter().find(|asset| {
+                    root.join("index")
+                        .join("whisper")
+                        .join(format!("{asset}.json"))
+                        .is_file()
+                })
+            }
             Err(_) => None,
         };
         let Some(asset_id) = asset_id else {
@@ -1000,7 +1588,7 @@ impl Scenario for RealProjectReadIndexTranscript {
                 id: self.id().into(),
                 status: ScenarioStatus::Fail,
                 elapsed: started.elapsed(),
-                message: "no raw/ assets found in real project".into(),
+                message: "no raw/ assets with transcript sidecars found in real project".into(),
             });
         };
         let out = ReadIndexTool

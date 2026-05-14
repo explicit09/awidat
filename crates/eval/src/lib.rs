@@ -25,14 +25,17 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::Serialize;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+pub mod fixtures;
+pub mod golden;
 pub mod scenarios;
 pub mod stress;
 
 /// Outcome of one scenario run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ScenarioOutcome {
     /// Stable id (matches `Scenario::id`).
     pub id: String,
@@ -40,6 +43,7 @@ pub struct ScenarioOutcome {
     pub status: ScenarioStatus,
     /// Wall-clock duration. Surfaced in the report so a slow scenario
     /// that's also passing still gets visibility.
+    #[serde(serialize_with = "serialize_duration_ms")]
     pub elapsed: Duration,
     /// One-line message — the failure cause, or a checkmark phrase
     /// for passes.
@@ -49,7 +53,8 @@ pub struct ScenarioOutcome {
 /// Pass/fail/skip per scenario. Skipped is for scenarios whose
 /// preconditions weren't met (e.g. agent-eval with no API key) — they
 /// shouldn't fail the suite.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ScenarioStatus {
     /// All assertions passed.
     Pass,
@@ -120,10 +125,32 @@ pub async fn run_all(scenarios: &[Box<dyn Scenario>]) -> Vec<ScenarioOutcome> {
     out
 }
 
+fn serialize_duration_ms<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_u128(duration.as_millis())
+}
+
 /// Format a scenario list as a one-line-per-row report with a summary.
 /// Returns the formatted text + an exit-code hint (0 if all pass-or-
 /// skip, 1 if any fail).
 pub fn format_report(outcomes: &[ScenarioOutcome]) -> (String, i32) {
+    format_report_with_options(outcomes, ReportOptions::default())
+}
+
+/// Report formatting knobs for CI and local strictness.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReportOptions {
+    /// Treat skipped scenarios as failures.
+    pub fail_on_skip: bool,
+}
+
+/// Format a scenario report with explicit skip behavior.
+pub fn format_report_with_options(
+    outcomes: &[ScenarioOutcome],
+    options: ReportOptions,
+) -> (String, i32) {
     use std::fmt::Write as _;
     let mut s = String::new();
     let pass = outcomes
@@ -158,8 +185,49 @@ pub fn format_report(outcomes: &[ScenarioOutcome]) -> (String, i32) {
         "\n{pass} passed, {fail} failed, {skip} skipped — total {total}",
         total = outcomes.len()
     );
-    let exit = if fail > 0 { 1 } else { 0 };
+    let exit = if fail > 0 || (options.fail_on_skip && skip > 0) {
+        1
+    } else {
+        0
+    };
     (s, exit)
+}
+
+/// JSON report suitable for CI artifact ingestion.
+#[derive(Debug, Serialize)]
+pub struct JsonReport<'a> {
+    /// Selected eval tier labels.
+    pub tiers: Vec<&'a str>,
+    /// Per-scenario outcomes.
+    pub outcomes: &'a [ScenarioOutcome],
+    /// Number of passing scenarios.
+    pub passed: usize,
+    /// Number of failing scenarios.
+    pub failed: usize,
+    /// Number of skipped scenarios.
+    pub skipped: usize,
+}
+
+impl<'a> JsonReport<'a> {
+    /// Build a report from outcomes and selected tiers.
+    pub fn new(tiers: Vec<&'a str>, outcomes: &'a [ScenarioOutcome]) -> Self {
+        Self {
+            tiers,
+            outcomes,
+            passed: outcomes
+                .iter()
+                .filter(|o| o.status == ScenarioStatus::Pass)
+                .count(),
+            failed: outcomes
+                .iter()
+                .filter(|o| o.status == ScenarioStatus::Fail)
+                .count(),
+            skipped: outcomes
+                .iter()
+                .filter(|o| o.status == ScenarioStatus::Skipped)
+                .count(),
+        }
+    }
 }
 
 /// Resolve a tempdir-rooted project relative to its tempdir guard. A

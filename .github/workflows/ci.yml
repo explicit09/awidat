@@ -40,5 +40,34 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Fast evals
+        run: cargo run -p awidat-eval -- --ci --json
       - name: Doc
         run: cargo doc --no-deps --workspace
+      - name: Whitespace
+        run: git diff --check
+
+  desktop:
+    name: Desktop frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm --dir apps/desktop install --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: pnpm --dir apps/desktop exec playwright install --with-deps chromium
+      - name: Build
+        run: pnpm --dir apps/desktop build
+      - name: UI smoke
+        run: pnpm --dir apps/desktop test
+      - name: Python safe smoke
+        run: python3 python/scripts/smoke_safe.py

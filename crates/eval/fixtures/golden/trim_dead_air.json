@@ -1,0 +1,32 @@
+{
+  "id": "golden::trim_dead_air_cut",
+  "objective": "Tighten a speaker clip by trimming the trailing dead air while preserving the spoken setup.",
+  "project": {
+    "name": "golden-trim-dead-air",
+    "assets": [],
+    "clips": [
+      {
+        "name": "host-intro",
+        "uuid": "host-intro",
+        "asset": "raw/host-intro.mp4",
+        "start_s": 0.0,
+        "duration_s": 12.0,
+        "transcript": "welcome back before the long pause"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Trim Clip\n@@ anchor: clip_uuid=host-intro\n- end: 12.0\n+ end: 8.0\n*** End EDL\n",
+  "expect": {
+    "tolerance_s": 0.01,
+    "clip_count": 1,
+    "clip_ranges": [
+      {
+        "uuid": "host-intro",
+        "start_s": 0.0,
+        "duration_s": 8.0
+      }
+    ],
+    "applied_contains": ["trimmed"],
+    "forbidden_ops": ["Delete Clip", "Insert Clip", "Insert BRoll", "Insert PiP", "Move Clip"]
+  }
+}
