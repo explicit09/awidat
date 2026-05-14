@@ -32,7 +32,14 @@
 // Boundary detection is requestVideoFrameCallback (Step 9.4) when
 // available; timeupdate fallback otherwise.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
@@ -575,6 +582,10 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           timelineTime={timelineTime}
           isPlaying={isPlaying}
         />
+        <TimelineTransitionColorOverlay
+          transition={activeTransition}
+          timelineTime={timelineTime}
+        />
         <TimelineTitleOverlays
           overlays={activeTitles}
           timelineTime={timelineTime}
@@ -693,6 +704,7 @@ function TimelineTransitionOverlay({
 
   if (!transition || !overlaySegment || !src) return null;
   const progress = transitionProgress(transition, timelineTime);
+  const visualStyle = transitionVisualStyle(transition, progress, overlaySide);
 
   return (
     <video
@@ -704,8 +716,40 @@ function TimelineTransitionOverlay({
       preload="auto"
       style={{
         opacity: transitionOpacity(transition.kind, progress, overlaySide),
+        ...visualStyle,
         pointerEvents: "none",
         zIndex: 3,
+      }}
+      aria-hidden="true"
+    />
+  );
+}
+
+function TimelineTransitionColorOverlay({
+  transition,
+  timelineTime,
+}: {
+  transition: PreviewTransition | null;
+  timelineTime: number;
+}) {
+  if (!transition || !isFlashWhite(transition.kind)) return null;
+  const progress = transitionProgress(transition, timelineTime);
+  const cutProgress =
+    transition.duration <= 0
+      ? 0.5
+      : Math.max(0, Math.min(1, transition.inOffset / transition.duration));
+  const falloff = Math.max(cutProgress, 1 - cutProgress, 0.001);
+  const opacity = Math.max(0, 1 - Math.abs(progress - cutProgress) / falloff);
+  return (
+    <div
+      className="timeline-transition-color-overlay"
+      style={{
+        background: "#fff",
+        opacity,
+        pointerEvents: "none",
+        position: "absolute",
+        inset: 0,
+        zIndex: 4,
       }}
       aria-hidden="true"
     />
@@ -733,6 +777,7 @@ function baseTransitionOpacity(
       ? Math.max(0, 1 - progress * 2)
       : Math.max(0, (progress - 0.5) * 2);
   }
+  if (!isDissolveTransition(kind)) return 1;
   return side === "outgoing" ? 1 - progress : progress;
 }
 
@@ -742,11 +787,121 @@ function transitionOpacity(
   side: "incoming" | "outgoing",
 ): number {
   if (isFadeThroughBlack(kind)) return 0;
+  if (!isDissolveTransition(kind)) return 1;
   return side === "incoming" ? progress : 1 - progress;
 }
 
+function transitionVisualStyle(
+  transition: PreviewTransition,
+  progress: number,
+  side: "incoming" | "outgoing",
+): CSSProperties {
+  const sideProgress = transitionSideProgress(transition, progress, side);
+  if (isSlideLeft(transition.kind)) {
+    return {
+      transform:
+        side === "incoming"
+          ? `translateX(${(1 - sideProgress) * 100}%)`
+          : `translateX(${-sideProgress * 100}%)`,
+    };
+  }
+  if (isSlideRight(transition.kind)) {
+    return {
+      transform:
+        side === "incoming"
+          ? `translateX(${-(1 - sideProgress) * 100}%)`
+          : `translateX(${sideProgress * 100}%)`,
+    };
+  }
+  if (isWipeLeft(transition.kind)) {
+    const pct = side === "incoming" ? sideProgress * 100 : (1 - sideProgress) * 100;
+    return { clipPath: `inset(0 ${100 - pct}% 0 0)` };
+  }
+  if (isWipeRight(transition.kind)) {
+    const pct = side === "incoming" ? sideProgress * 100 : (1 - sideProgress) * 100;
+    return { clipPath: `inset(0 0 0 ${100 - pct}%)` };
+  }
+  if (isZoomIn(transition.kind) && side === "incoming") {
+    return { transform: `scale(${0.86 + sideProgress * 0.14})` };
+  }
+  if (isRadial(transition.kind)) {
+    const radius = side === "incoming" ? sideProgress * 75 : (1 - sideProgress) * 75;
+    return { clipPath: `circle(${radius}% at 50% 50%)` };
+  }
+  if (isPixelize(transition.kind)) {
+    const blur = side === "incoming" ? (1 - sideProgress) * 8 : sideProgress * 8;
+    return {
+      filter: `blur(${blur}px) contrast(${1 + Math.max(0, blur - 2) * 0.08})`,
+      imageRendering: blur > 1 ? "pixelated" : "auto",
+    };
+  }
+  return {};
+}
+
+function transitionSideProgress(
+  transition: PreviewTransition,
+  progress: number,
+  side: "incoming" | "outgoing",
+): number {
+  const inShare =
+    transition.duration <= 0
+      ? 0.5
+      : Math.max(0, Math.min(1, transition.inOffset / transition.duration));
+  if (side === "incoming") {
+    return inShare <= 0 ? 1 : Math.max(0, Math.min(1, progress / inShare));
+  }
+  const outShare = Math.max(0.0001, 1 - inShare);
+  return Math.max(0, Math.min(1, (progress - inShare) / outShare));
+}
+
+function isDissolveTransition(kind: string): boolean {
+  return kind === "SMPTE_Dissolve" || kind === "awidat.cross_dissolve" || kind === "fade";
+}
+
 function isFadeThroughBlack(kind: string): boolean {
-  return kind === "awidat.fade_in" || kind === "awidat.fade_out";
+  return (
+    kind === "awidat.fade_black" ||
+    kind === "fadeblack" ||
+    kind === "awidat.fade_in" ||
+    kind === "awidat.fade_out"
+  );
+}
+
+function isFlashWhite(kind: string): boolean {
+  return kind === "awidat.flash_white" || kind === "fadewhite";
+}
+
+function isSlideLeft(kind: string): boolean {
+  return (
+    kind === "awidat.slide_left" ||
+    kind === "awidat.smooth_push_left" ||
+    kind === "slideleft" ||
+    kind === "smoothleft"
+  );
+}
+
+function isSlideRight(kind: string): boolean {
+  return kind === "awidat.slide_right" || kind === "slideright" || kind === "smoothright";
+}
+
+function isWipeLeft(kind: string): boolean {
+  return kind === "awidat.wipe_left" || kind === "wipeleft";
+}
+
+function isWipeRight(kind: string): boolean {
+  return kind === "awidat.wipe_right" || kind === "wiperight";
+}
+
+function isZoomIn(kind: string): boolean {
+  return kind === "awidat.zoom_in" || kind === "zoomin";
+}
+
+function isRadial(kind: string): boolean {
+  return kind === "awidat.radial" || kind === "radial";
+}
+
+function isPixelize(kind: string): boolean {
+  return kind === "awidat.pixelize" || kind === "pixelize";
 }
 
 function TimelineVideoOverlays({

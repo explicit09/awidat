@@ -31,7 +31,7 @@ use thiserror::Error;
 
 use super::op::{
     Anchor, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand, InsertTrackKind, PiPCorner,
-    TitleAnimation, TitlePosition, TitleWeight, TransitionBetween,
+    TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -47,7 +47,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Set Volume, Set Audio Fade, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Volume, Set Audio Fade, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
     )]
     UnknownOp {
         /// Line number.
@@ -220,6 +220,7 @@ enum OpKind {
     InsertPiP,
     MoveClip,
     InsertTransition,
+    DeleteTransition,
     SetVolume,
     SetAudioFade,
     SetTrackAudio,
@@ -252,6 +253,7 @@ impl OpBuilder {
             "Insert PiP" => OpKind::InsertPiP,
             "Move Clip" => OpKind::MoveClip,
             "Insert Transition" => OpKind::InsertTransition,
+            "Delete Transition" => OpKind::DeleteTransition,
             "Set Volume" => OpKind::SetVolume,
             "Set Audio Fade" => OpKind::SetAudioFade,
             "Set Track Audio" => OpKind::SetTrackAudio,
@@ -479,6 +481,12 @@ impl OpBuilder {
                         field: "duration_s".into(),
                     }
                 })?;
+                let alignment = take_field_string(&mut fields, "alignment")
+                    .as_deref()
+                    .map(|raw| parse_transition_alignment(raw, head))
+                    .transpose()?;
+                let in_offset_s = take_field_f64(&mut fields, "in_offset_s");
+                let out_offset_s = take_field_f64(&mut fields, "out_offset_s");
                 let family = take_field_string(&mut fields, "family");
                 let intent = take_field_string(&mut fields, "intent");
                 let energy = take_field_f64(&mut fields, "energy");
@@ -497,8 +505,18 @@ impl OpBuilder {
                     between,
                     kind,
                     duration_s,
+                    alignment,
+                    in_offset_s,
+                    out_offset_s,
                     spec,
                 })
+            }
+            OpKind::DeleteTransition => {
+                let between = self.between.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "between".into(),
+                })?;
+                Ok(EdlOp::DeleteTransition { between })
             }
             OpKind::SetVolume => {
                 let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
@@ -1015,6 +1033,22 @@ fn parse_title_animation(
     }
 }
 
+fn parse_transition_alignment(
+    raw: &str,
+    line: usize,
+) -> Result<TransitionAlignment, EdlParseError> {
+    match raw {
+        "center" => Ok(TransitionAlignment::Center),
+        "start_at_cut" => Ok(TransitionAlignment::StartAtCut),
+        "end_at_cut" => Ok(TransitionAlignment::EndAtCut),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("alignment: {other}"),
+            message: "must be 'center', 'start_at_cut', or 'end_at_cut'".into(),
+        }),
+    }
+}
+
 fn parse_pip_corner(raw: &str, line: usize) -> Result<PiPCorner, EdlParseError> {
     match raw {
         "top_left" => Ok(PiPCorner::TopLeft),
@@ -1484,6 +1518,7 @@ mod tests {
                 kind,
                 duration_s,
                 spec,
+                ..
             } => {
                 assert_eq!(kind, "SMPTE_Dissolve");
                 assert_eq!(*duration_s, 0.3);
@@ -1532,6 +1567,53 @@ mod tests {
                 assert_eq!(spec.params.get("blur").and_then(|v| v.as_f64()), Some(0.25));
             }
             other => panic!("want semantic InsertTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_transition_alignment_and_offsets() {
+        let text = "\
+*** Begin EDL
+*** Insert Transition
+@@ between: clip_uuid=clip-a and clip_uuid=clip-b
++ kind: SMPTE_Dissolve
++ duration_s: 1.0
++ alignment: end_at_cut
++ in_offset_s: 0.8
++ out_offset_s: 0.2
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTransition {
+                alignment,
+                in_offset_s,
+                out_offset_s,
+                ..
+            } => {
+                assert_eq!(*alignment, Some(TransitionAlignment::EndAtCut));
+                assert_eq!(*in_offset_s, Some(0.8));
+                assert_eq!(*out_offset_s, Some(0.2));
+            }
+            other => panic!("want InsertTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_delete_transition() {
+        let text = "\
+*** Begin EDL
+*** Delete Transition
+@@ between: clip_uuid=clip-a and clip_uuid=clip-b
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::DeleteTransition { between } => {
+                assert!(matches!(&between.from, Anchor::ClipUuid { uuid } if uuid == "clip-a"));
+                assert!(matches!(&between.to, Anchor::ClipUuid { uuid } if uuid == "clip-b"));
+            }
+            other => panic!("want DeleteTransition, got {other:?}"),
         }
     }
 

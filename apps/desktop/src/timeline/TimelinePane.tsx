@@ -18,8 +18,8 @@ import { TIMELINE_CHANGED_EVENT, type AppliedDiff } from "../protocol";
 import { serializeEdl } from "./edlBuilder";
 import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 import {
-  hitTestClipBody,
   hitTestEdge,
+  hitTestSelectableBody,
   pxDeltaToSourceDelta,
   type EdgeHit,
 } from "./hitDetect";
@@ -395,7 +395,34 @@ function TimelineCanvas({
     const selectedItem = selectedTrack?.items.find(
       (it) => it.index === selectedClipKey.clipIndex,
     );
-    if (!selectedItem || selectedItem.kind !== "clip") return;
+    if (!selectedItem) return;
+
+    if (selectedItem.kind === "transition") {
+      const position = selectedTrack.items.findIndex(
+        (item) => item.index === selectedItem.index,
+      );
+      const from = selectedTrack.items[position - 1];
+      const to = selectedTrack.items[position + 1];
+      if (from?.kind !== "clip" || to?.kind !== "clip") return;
+      try {
+        await invoke<string>("propose_user_edit", {
+          edlText: serializeEdl([
+            {
+              kind: "delete_transition",
+              from: { kind: "clip_uuid", uuid: from.clip_uuid },
+              to: { kind: "clip_uuid", uuid: to.clip_uuid },
+            },
+          ]),
+        });
+        clearSelection();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("propose_user_edit (delete transition) failed", err);
+      }
+      return;
+    }
+
+    if (selectedItem.kind !== "clip") return;
 
     const clips =
       selectedItem.link_group_id !== null
@@ -480,7 +507,7 @@ function TimelineCanvas({
     // under the pointer = select; empty space = clear. Either way
     // the click also scrubs the playhead (preserving the existing
     // seek-on-click behaviour).
-    const body = hitTestClipBody(x, y, snapshot, ppsRef.current);
+    const body = hitTestSelectableBody(x, y, snapshot, ppsRef.current);
     if (body) {
       selectClip(body);
       const item = snapshot.tracks[body.trackIndex]?.items.find(
@@ -1044,6 +1071,64 @@ function drawItem(
     fillRoundedRect(ctx, x, y, w, h, radius);
     ctx.strokeStyle = "#78b8ff";
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+    if (w > 30) {
+      ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#c9e7ff";
+      const label = truncateToWidth(
+        ctx,
+        `${transitionLabel(item.effect_name)} ${item.duration_s.toFixed(2)}s`,
+        w - 2 * CLIP_PADDING_X,
+      );
+      ctx.fillText(label, x + CLIP_PADDING_X, y + h / 2);
+    }
+    if (selected) {
+      ctx.strokeStyle = "#91d7ff";
+      ctx.lineWidth = 2;
+      strokeRoundedRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, radius + 1);
+      ctx.lineWidth = 1;
+    }
+  }
+}
+
+function transitionLabel(effectName: string): string {
+  switch (effectName) {
+    case "SMPTE_Dissolve":
+    case "awidat.cross_dissolve":
+    case "fade":
+      return "Dissolve";
+    case "awidat.fade_black":
+    case "fadeblack":
+      return "Fade Black";
+    case "awidat.flash_white":
+    case "fadewhite":
+      return "Flash";
+    case "awidat.slide_left":
+    case "slideleft":
+      return "Slide L";
+    case "awidat.slide_right":
+    case "slideright":
+      return "Slide R";
+    case "awidat.smooth_push_left":
+    case "smoothleft":
+      return "Push L";
+    case "awidat.wipe_left":
+    case "wipeleft":
+      return "Wipe L";
+    case "awidat.wipe_right":
+    case "wiperight":
+      return "Wipe R";
+    case "awidat.zoom_in":
+    case "zoomin":
+      return "Zoom In";
+    case "awidat.pixelize":
+    case "pixelize":
+      return "Pixelize";
+    case "awidat.radial":
+    case "radial":
+      return "Radial";
+    default:
+      return effectName.replace(/^awidat\./, "").replace(/_/g, " ");
   }
 }
 

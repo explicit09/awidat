@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Awidat Desktop UI Harness</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from "react";
+      import { createRoot } from "react-dom/client";
+      import {
+        mockConvertFileSrc,
+        mockIPC,
+        mockWindows,
+      } from "@tauri-apps/api/mocks";
+      import App from "/src/App.tsx";
+      import { useAgentStore } from "/src/agent/store.ts";
+      import { useTimelineSelectionStore } from "/src/properties/store.ts";
+      import { useProposalStore } from "/src/timeline/proposal.ts";
+
+      const params = new URLSearchParams(window.location.search);
+      const projectLoaded = params.get("project") === "1";
+      const scenario = params.get("scenario") || "shell";
+      const projectRoot = "/tmp/awidat-ui-eval";
+
+      const timeline = {
+        duration_s: 12,
+        broadcast_overlay: null,
+        tracks: [
+          {
+            name: "V1",
+            kind: "video",
+            role: null,
+            audio: null,
+            items: [
+              {
+                kind: "clip",
+                index: 0,
+                name: "Intro",
+                clip_uuid: "clip-1",
+                track_start_s: 0,
+                duration_s: 8,
+                asset_id: "raw/intro.mp4",
+                source_start_s: 0,
+                proxy_path: null,
+                thumbnail_dir: null,
+                waveform_path: null,
+                volume: null,
+                speed: null,
+                fade_in_s: null,
+                fade_out_s: null,
+                link_group_id: null,
+                has_video: true,
+                has_audio: true,
+                color_correction: null,
+                lut_path: null,
+                title: null,
+                video_overlay: null,
+              },
+              {
+                kind: "transition",
+                index: 1,
+                track_start_s: 5.75,
+                duration_s: 0.5,
+                in_offset_s: 0.25,
+                out_offset_s: 0.25,
+                effect_name: "awidat.cross_dissolve",
+              },
+              {
+                kind: "clip",
+                index: 2,
+                name: "Outro",
+                clip_uuid: "clip-2",
+                track_start_s: 6,
+                duration_s: 6,
+                asset_id: "raw/outro.mp4",
+                source_start_s: 1,
+                proxy_path: null,
+                thumbnail_dir: null,
+                waveform_path: null,
+                volume: null,
+                speed: null,
+                fade_in_s: null,
+                fade_out_s: null,
+                link_group_id: null,
+                has_video: true,
+                has_audio: true,
+                color_correction: null,
+                lut_path: null,
+                title: null,
+                video_overlay: null,
+              },
+            ],
+          },
+        ],
+      };
+
+      const notes = {
+        version: 1,
+        notes: [
+          {
+            id: "broll-1",
+            kind: "broll_suggestion",
+            status: "open",
+            anchor_at_s: 3.2,
+            summary: "Add city skyline cutaway",
+            broll_query: "city skyline",
+            broll_anchor: { kind: "clip_uuid", uuid: "clip-1" },
+            broll_previews: [
+              {
+                pexels_id: 42,
+                thumbnail_url:
+                  "data:image/gif;base64,R0lGODlhAQABAAAAACw=",
+                pexels_page: "https://example.invalid/pexels/42",
+                attribution: "Pexels",
+                duration_s: 3,
+              },
+            ],
+          },
+        ],
+      };
+
+      const commits = [
+        {
+          commitHash: "sha256:bbbbbbbbbbbbbbbb",
+          timelineHash: "sha256:timeline2",
+          timestamp: "2026-05-11T12:05:00Z",
+          header: "Tighten intro",
+          fullMessage: "Tighten intro\n\nAgent reasoning: remove dead air",
+          parents: ["sha256:aaaaaaaaaaaaaaaa"],
+        },
+        {
+          commitHash: "sha256:aaaaaaaaaaaaaaaa",
+          timelineHash: "sha256:timeline1",
+          timestamp: "2026-05-11T12:00:00Z",
+          header: "Clean starting cut",
+          fullMessage: "Clean starting cut",
+          parents: [],
+        },
+      ];
+
+      mockWindows("main");
+      mockConvertFileSrc("macos");
+      window.__lastEdlText = "";
+      mockIPC((cmd, args) => {
+        switch (cmd) {
+          case "current_project_root":
+            return projectLoaded ? projectRoot : null;
+          case "recent_projects":
+            return projectLoaded ? [projectRoot] : [];
+          case "read_timeline":
+            return timeline;
+          case "list_notes":
+            return notes;
+          case "list_proxies":
+            return [];
+          case "read_transcript":
+            return null;
+          case "list_chat_sessions":
+            return [];
+          case "load_chat_history":
+            return { items: [] };
+          case "list_vedit_commits":
+            return commits;
+          case "diff_vedit_refs":
+            return {
+              fromRef: "sha256:aaaaaaaaaaaaaaaa",
+              toRef: "sha256:bbbbbbbbbbbbbbbb",
+              changeCount: 1,
+              changes: [{ kind: "Trimmed", clip_uuid: "clip-1" }],
+            };
+          case "restore_vedit_ref":
+          case "set_menu_item_enabled":
+          case "set_view_state":
+          case "start_turn":
+          case "accept_proposal":
+          case "reject_proposal":
+            return null;
+          case "propose_user_edit":
+            window.__lastEdlText = args?.edlText ?? "";
+            return "proposal-ui-test";
+          case "get_permission_mode":
+            return "ask";
+          case "get_project_type":
+            return "editorial";
+          default:
+            return null;
+        }
+      }, { shouldMockEvents: true });
+
+      function seedProposal() {
+        useProposalStore.getState().ingest({
+          kind: "proposed_edit",
+          id: "proposal-1",
+          phase: "started",
+          source: { source: "agent", tool_name: "apply_edl" },
+          edl_text: "*** Begin EDL\n*** Trim Clip\n*** End EDL\n",
+          snapshot: timeline,
+          diff_hints: [{ kind: "trim_edge", op_index: 0, track_index: 0, item_index: 0, side: "right", delta_s: 1 }],
+          summary: "Trim intro",
+          revision: 0,
+        });
+        useAgentStore.getState().upsert({
+          kind: "proposed_edit",
+          id: "proposal-1",
+          phase: "started",
+          source: { source: "agent", tool_name: "apply_edl" },
+          edl_text: "*** Begin EDL\n*** Trim Clip\n*** End EDL\n",
+          snapshot: timeline,
+          diff_hints: [],
+          summary: "Trim intro",
+          revision: 0,
+        });
+      }
+
+      createRoot(document.getElementById("root")).render(React.createElement(App));
+      if (scenario === "proposal") {
+        window.setTimeout(seedProposal, 250);
+      } else if (scenario === "transition") {
+        window.setTimeout(() => {
+          useTimelineSelectionStore.getState().select({ trackIndex: 0, clipIndex: 1 });
+        }, 250);
+      }
+    </script>
+  </body>
+</html>

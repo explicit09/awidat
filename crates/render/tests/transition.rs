@@ -150,6 +150,32 @@ fn project_with_transition_emits_xfade_in_argv() {
 }
 
 #[test]
+fn project_with_asymmetric_transition_uses_otio_offset_handles() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition(dir.path());
+    let otio_path = dir.path().join(files::OTIO);
+    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+        panic!("expected track");
+    };
+    let TrackChild::Transition(t) = &mut track.children[1] else {
+        panic!("expected transition");
+    };
+    // OTIO semantics: in_offset consumes incoming pre-roll before the cut;
+    // out_offset consumes outgoing post-roll after the cut.
+    t.in_offset = RationalTime::new(0.25 * 24.0, 24.0);
+    t.out_offset = RationalTime::new(0.75 * 24.0, 24.0);
+    fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("-ss 1 -t 2.75") && cmd.contains("-ss 0.75 -t 2.25"),
+        "expected outgoing post-handle and incoming pre-handle in argv, got: {cmd}",
+    );
+}
+
+#[test]
 fn project_with_transition_fails_when_incoming_handle_is_missing() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition(dir.path());
@@ -171,6 +197,53 @@ fn project_with_transition_fails_when_incoming_handle_is_missing() {
     assert!(
         err.to_string().contains("incoming handle"),
         "expected clear missing-handle error, got: {err}",
+    );
+}
+
+#[test]
+fn project_with_duplicate_transition_nodes_fails_before_ffmpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition(dir.path());
+    let otio_path = dir.path().join(files::OTIO);
+    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+        panic!("expected track");
+    };
+    track.children.insert(
+        2,
+        TrackChild::Transition(Transition::symmetric("SMPTE_Dissolve", 0.5, 24.0)),
+    );
+    fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+    let err = build_timeline_render_spec(dir.path()).unwrap_err();
+    assert!(
+        err.to_string().contains("invalid transition placement"),
+        "expected placement error, got: {err}",
+    );
+}
+
+#[test]
+fn project_with_trailing_transition_node_fails_before_ffmpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition(dir.path());
+    let otio_path = dir.path().join(files::OTIO);
+    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+        panic!("expected track");
+    };
+    track
+        .children
+        .push(TrackChild::Transition(Transition::symmetric(
+            "SMPTE_Dissolve",
+            0.5,
+            24.0,
+        )));
+    fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+    let err = build_timeline_render_spec(dir.path()).unwrap_err();
+    assert!(
+        err.to_string().contains("no incoming clip"),
+        "expected trailing transition error, got: {err}",
     );
 }
 
@@ -208,6 +281,34 @@ fn project_with_awidat_transition_id_maps_to_xfade() {
 }
 
 #[test]
+fn project_with_imported_cross_dissolve_downgrades_to_supported_xfade() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "Cross Dissolve");
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("xfade=transition=fade"),
+        "expected imported dissolve to downgrade to xfade fade, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("acrossfade=d=1"),
+        "expected imported dissolve to keep crossfade audio, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_imported_dip_to_black_downgrades_to_fade_black() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "Dip To Black");
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("xfade=transition=fadeblack"),
+        "expected imported black dip to downgrade to fadeblack, got: {cmd}",
+    );
+}
+
+#[test]
 fn project_with_unknown_awidat_transition_fails_before_ffmpeg() {
     let dir = tempfile::tempdir().unwrap();
     write_two_clip_project_with_transition_kind(dir.path(), "awidat.not_registered");
@@ -215,6 +316,18 @@ fn project_with_unknown_awidat_transition_fails_before_ffmpeg() {
     assert!(
         err.to_string().contains("unsupported"),
         "expected clear unsupported transition error, got: {err}",
+    );
+}
+
+#[test]
+fn project_with_unknown_imported_transition_fails_before_ffmpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "ThirdPartyFancySpin");
+    let err = build_timeline_render_spec(dir.path()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("unsupported transition kind \"ThirdPartyFancySpin\""),
+        "expected clear unsupported imported-transition error, got: {err}",
     );
 }
 

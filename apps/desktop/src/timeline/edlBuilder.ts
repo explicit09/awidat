@@ -57,12 +57,16 @@ export type EdlOp =
       transitionId?: string;
       transitionKind?: string;
       durationS: number;
+      alignment?: "center" | "start_at_cut" | "end_at_cut";
+      inOffsetS?: number;
+      outOffsetS?: number;
       family?: string;
       intent?: string;
       energy?: number;
       direction?: "left" | "right" | "up" | "down" | "in" | "out";
       params?: Record<string, unknown>;
     }
+  | { kind: "delete_transition"; from: EdlAnchor; to: EdlAnchor }
   | { kind: "set_volume"; anchor: EdlAnchor; value: number }
   | {
       kind: "set_audio_fade";
@@ -196,6 +200,14 @@ function appendOp(lines: string[], op: EdlOp): void {
       if (op.params !== undefined)
         lines.push(`+ params_json: ${JSON.stringify(op.params)}`);
       lines.push(`+ duration_s: ${formatTime(op.durationS)}`);
+      if (op.alignment !== undefined) lines.push(`+ alignment: ${op.alignment}`);
+      if (op.inOffsetS !== undefined) lines.push(`+ in_offset_s: ${formatTime(op.inOffsetS)}`);
+      if (op.outOffsetS !== undefined)
+        lines.push(`+ out_offset_s: ${formatTime(op.outOffsetS)}`);
+      break;
+    case "delete_transition":
+      lines.push("*** Delete Transition");
+      lines.push(`@@ between: ${formatAnchor(op.from)} and ${formatAnchor(op.to)}`);
       break;
     case "set_volume":
       lines.push("*** Set Volume");

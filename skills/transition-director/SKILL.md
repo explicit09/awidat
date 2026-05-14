@@ -41,6 +41,8 @@ Use these stable ids in `Insert Transition`:
 
 Use `SMPTE_Dissolve` only for older/simple EDL compatibility. Use no
 transition for `awidat.hard_cut`; just leave the cut as-is.
+Do not author raw FFmpeg transition names such as `fadeblack`,
+`slideleft`, or `wipeleft`; use registered `awidat.*` ids instead.
 
 ## Selection Rules
 
@@ -49,7 +51,7 @@ transition for `awidat.hard_cut`; just leave the cut as-is.
 - Motion mismatch or camera direction: choose slide/wipe direction that follows existing motion.
 - Topic/chapter boundary: `awidat.cross_dissolve` for soft, `awidat.fade_black` for strong.
 - Tech/product/glitch context: `awidat.pixelize`, short duration only.
-- If neither clip has extra handles for overlap, avoid a transition.
+- If neither clip has extra handles for overlap, avoid a transition or repair handles first.
 
 ## Durations
 
@@ -57,6 +59,19 @@ transition for `awidat.hard_cut`; just leave the cut as-is.
 - 0.22-0.35s: normal motivated transition.
 - 0.40-0.70s: deliberate chapter/time passage.
 - Longer than 0.70s usually feels slow unless the user asks for it.
+
+## Handles And Alignment
+
+By default, transitions are centered on the cut. In OTIO/Awidat terms:
+
+- `in_offset_s` consumes incoming pre-roll from the next clip before the cut.
+- `out_offset_s` consumes outgoing post-roll from the previous clip after the cut.
+- `alignment: start_at_cut` means `in_offset_s = 0`, `out_offset_s = duration_s`.
+- `alignment: end_at_cut` means `in_offset_s = duration_s`, `out_offset_s = 0`.
+
+If apply or render reports a missing handle, repair by shortening the
+transition, choosing a different alignment, or applying `Untrim Clip`
+to widen the source range. Do not keep retrying the same transition.
 
 ## EDL Shape
 
@@ -72,6 +87,7 @@ transition for `awidat.hard_cut`; just leave the cut as-is.
 + direction: left
 + params_json: {"blur":0.2}
 + duration_s: 0.280
++ alignment: center
 *** End EDL
 ```
 

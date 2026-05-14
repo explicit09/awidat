@@ -166,11 +166,28 @@ pub enum EdlOp {
         kind: String,
         /// Duration in seconds.
         duration_s: f64,
+        /// Transition alignment when explicit offsets are not supplied.
+        /// `None` means centered on the cut.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        alignment: Option<TransitionAlignment>,
+        /// Amount of the incoming clip used before the cut, in seconds.
+        /// When set, this overrides `alignment`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        in_offset_s: Option<f64>,
+        /// Amount of the outgoing clip used after the cut, in seconds.
+        /// When set, this overrides `alignment`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        out_offset_s: Option<f64>,
         /// Optional Awidat semantic transition metadata. When present,
         /// this is persisted on the OTIO transition's metadata so the
         /// agent's editorial intent survives render/export round trips.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         spec: Option<SemanticTransitionSpec>,
+    },
+    /// Remove an existing transition between two adjacent clips.
+    DeleteTransition {
+        /// Anchor pair identifying the two clips around the transition.
+        between: TransitionBetween,
     },
     /// Set per-clip audio volume. `value` is a linear gain multiplier
     /// where `0.0` mutes the clip, `1.0` is unity (no change), and
@@ -629,6 +646,18 @@ pub struct TransitionBetween {
     pub from: Anchor,
     /// Incoming clip anchor.
     pub to: Anchor,
+}
+
+/// Placement of a transition relative to the edit point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionAlignment {
+    /// Transition straddles the cut evenly.
+    Center,
+    /// Transition begins at the cut and consumes outgoing post-roll.
+    StartAtCut,
+    /// Transition ends at the cut and consumes incoming pre-roll.
+    EndAtCut,
 }
 
 /// One parsed EDL envelope (Begin EDL ... End EDL block).

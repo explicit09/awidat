@@ -46,6 +46,9 @@ pub fn bundle_with_dissolve(
         between: TransitionBetween { from, to },
         kind: "SMPTE_Dissolve".to_string(),
         duration_s: duration_s.unwrap_or(DEFAULT_DISSOLVE_S),
+        alignment: None,
+        in_offset_s: None,
+        out_offset_s: None,
         spec: None,
     });
     EdlEnvelope { ops }

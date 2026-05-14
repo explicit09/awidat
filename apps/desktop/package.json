@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "node tests/desktop-ui-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

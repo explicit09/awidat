@@ -16,8 +16,9 @@
 //! so the concat filter pulls each input's audio stream alongside
 //! its video stream.
 //!
-//! Gaps and Transitions are skipped in v1; they land when the EDL
-//! grows transition / gap awareness on the render side.
+//! Video transitions are planned explicitly from adjacent OTIO
+//! `Transition.1` nodes; unsupported or invalid placements fail before
+//! FFmpeg is invoked.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -93,6 +94,12 @@ pub enum RenderTimelineError {
         /// Transition kind or Awidat id from OTIO.
         kind: String,
         /// Detailed registry/lookup message.
+        message: String,
+    },
+    /// A transition node is not placed between exactly two clips.
+    #[error("invalid transition placement: {message}")]
+    InvalidTransitionPlacement {
+        /// Detailed placement failure.
         message: String,
     },
     /// Browser-backed broadcast overlay generation failed before the
@@ -531,6 +538,7 @@ pub fn collect_timeline_full_plan(
         // Other children (Gap, Stack) reset the pending state — they
         // can't sit between clips that share a transition in v1.
         let mut pending_transition: Option<(String, f64, f64)> = None;
+        let mut saw_clip_on_track = false;
         for tc in &track.children {
             match tc {
                 TrackChild::Clip(clip) => {
@@ -540,6 +548,7 @@ pub fn collect_timeline_full_plan(
                     };
                     let new_index = segs.len();
                     segs.push(segment);
+                    saw_clip_on_track = true;
                     if let Some((kind, in_offset_s, out_offset_s)) = pending_transition.take()
                         && new_index > 0
                     {
@@ -575,6 +584,22 @@ pub fn collect_timeline_full_plan(
                             message: "semantic-only transition cannot be exported".into(),
                         });
                     }
+                    if !saw_clip_on_track {
+                        return Err(RenderTimelineError::InvalidTransitionPlacement {
+                            message: format!(
+                                "transition {:?} appears before any renderable clip",
+                                t.transition_type
+                            ),
+                        });
+                    }
+                    if pending_transition.is_some() {
+                        return Err(RenderTimelineError::InvalidTransitionPlacement {
+                            message: format!(
+                                "transition {:?} follows another transition before an incoming clip",
+                                t.transition_type
+                            ),
+                        });
+                    }
                     pending_transition = Some((
                         t.transition_type.clone(),
                         t.in_offset.to_seconds(),
@@ -585,6 +610,11 @@ pub fn collect_timeline_full_plan(
                     pending_transition = None;
                 }
             }
+        }
+        if let Some((kind, _, _)) = pending_transition {
+            return Err(RenderTimelineError::InvalidTransitionPlacement {
+                message: format!("transition {kind:?} has no incoming clip"),
+            });
         }
     }
     let broadcast_overlay = timeline
@@ -1355,12 +1385,11 @@ impl<'a> FilterPlanner<'a> {
                     off = offset,
                     out = v_label,
                 ));
-                filter.push_str(&format!(
-                    "{from_a}{to_a}acrossfade=d={dur}{out};",
-                    from_a = current_a,
-                    to_a = inputs[next].1,
-                    dur = t.duration_s,
-                    out = a_label,
+                filter.push_str(&format_audio_transition_filter(
+                    &current_a,
+                    &inputs[next].1,
+                    &a_label,
+                    t,
                 ));
                 current_v = v_label;
                 current_a = a_label;
@@ -1407,6 +1436,26 @@ fn reset_segment_pts(
     ));
     filter.push_str(&format!("{audio_label}asetpts=PTS-STARTPTS{audio_out};"));
     (video_out, audio_out)
+}
+
+fn format_audio_transition_filter(
+    from_a: &str,
+    to_a: &str,
+    out: &str,
+    transition: &TransitionPlan,
+) -> String {
+    match transitions::resolve_audio_policy(&transition.kind)
+        .unwrap_or(transitions::TransitionAudioPolicy::Crossfade)
+    {
+        transitions::TransitionAudioPolicy::Crossfade => format!(
+            "{from_a}{to_a}acrossfade=d={dur}{out};",
+            dur = transition.duration_s,
+        ),
+        transitions::TransitionAudioPolicy::Cut => format!(
+            "{from_a}{to_a}acrossfade=d={dur}:c1=nofade:c2=nofade{out};",
+            dur = transition.duration_s,
+        ),
+    }
 }
 
 fn append_video_overlays(
@@ -3815,6 +3864,55 @@ mod tests {
     }
 
     #[test]
+    fn explicit_audio_tracks_preserve_visual_transitions_without_acrossfade() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 0.0, 2.0)];
+        let transitions = vec![trans(0, 1, 0.5)];
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "A1".into(),
+            role: "dialogue".into(),
+            volume: 1.0,
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: PathBuf::from("/tmp/a.wav"),
+                start_s: 0.0,
+                duration_s: 4.0,
+                volume: None,
+                speed: None,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_fx: None,
+            })],
+        }];
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &transitions,
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(
+            filter.contains("xfade=transition=fade:duration=0.5"),
+            "filter graph: {filter}",
+        );
+        assert!(
+            !filter.contains("acrossfade"),
+            "explicit audio tracks should own audio transitions: {filter}",
+        );
+        assert!(filter.contains("amix=inputs=1"), "filter graph: {filter}");
+    }
+
+    #[test]
     fn timeline_loudness_target_appends_final_audio_loudnorm() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
         let argv = build_timeline_argv_full(
@@ -3880,6 +3978,26 @@ mod tests {
         assert!(
             plan.filter_complex
                 .contains("concat=n=1:v=1:a=1[outv][outa]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_uses_cut_audio_policy_for_motion_transitions() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 5.0), seg("/tmp/b.mp4", 0.0, 4.0)];
+        let trans = vec![TransitionPlan {
+            from_segment_index: 0,
+            to_segment_index: 1,
+            kind: "awidat.slide_left".into(),
+            in_offset_s: 0.5,
+            out_offset_s: 0.5,
+            duration_s: 1.0,
+        }];
+        let plan = FilterPlanner::new(&segs, &trans).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[apts0][apts1]acrossfade=d=1:c1=nofade:c2=nofade[xa0]"),
             "filter graph: {}",
             plan.filter_complex,
         );

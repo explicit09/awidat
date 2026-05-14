@@ -182,12 +182,16 @@ impl ToolHandler for StartRenderTool {
                         } => format!(
                             "start_render: transition {kind:?} around clip '{clip_name}' needs \
                          {needed_s:.3}s {side} handle, but only {available_s:.3}s is available. \
-                         Shorten the transition or widen the clip source range before rendering."
+                         Shorten the transition, choose a different alignment, or apply Untrim Clip \
+                         to widen the source range before rendering."
                         ),
                         RenderTimelineError::UnsupportedTransition { kind, message } => format!(
                             "start_render: timeline transition {kind:?} cannot be exported: \
                          {message}"
                         ),
+                        RenderTimelineError::InvalidTransitionPlacement { message } => {
+                            format!("start_render: timeline has an invalid transition: {message}")
+                        }
                         RenderTimelineError::BroadcastOverlayRender(message) => {
                             format!("start_render: broadcast overlay render failed: {message}")
                         }

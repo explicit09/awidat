@@ -151,3 +151,31 @@ export function hitTestClipBody(
   }
   return null;
 }
+
+/**
+ * Find a selectable timeline item under `(canvasX, canvasY)`.
+ * Clips and transitions are selectable; gaps remain passive timeline space.
+ */
+export function hitTestSelectableBody(
+  canvasX: number,
+  canvasY: number,
+  snapshot: TimelineSnapshot,
+  pps: number,
+): { trackIndex: number; clipIndex: number } | null {
+  if (canvasY < RULER_HEIGHT) return null;
+  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / LANE_HEIGHT);
+  if (trackIndex < 0 || trackIndex >= snapshot.tracks.length) return null;
+  const track = snapshot.tracks[trackIndex];
+  for (const item of track.items) {
+    if (item.kind === "gap") continue;
+    const startX = item.track_start_s * pps;
+    const endX = Math.max(
+      startX + 2,
+      (item.track_start_s + item.duration_s) * pps,
+    );
+    if (canvasX >= startX && canvasX <= endX) {
+      return { trackIndex, clipIndex: item.index };
+    }
+  }
+  return null;
+}

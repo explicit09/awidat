@@ -461,11 +461,17 @@ clip from a raw asset and inserts it on the named track (track is \
 created Video-kind if missing). The ONLY op that doesn't take an \
 `@@ anchor:` line — it builds a clip rather than locating one.\
 \n  - **Insert Transition**: `+ kind: <name>` and `+ duration_s: \
-<seconds>` (required). Anchored via `@@ between: ANCHOR_A and \
+<seconds>` (required). Optional `+ alignment: <center|start_at_cut|\
+end_at_cut>` (default `center`), or explicit `+ in_offset_s: <seconds>` \
+and/or `+ out_offset_s: <seconds>` for asymmetric placement. Anchored via `@@ between: ANCHOR_A and \
 ANCHOR_B` where the two anchors identify ADJACENT clips on the \
 same track. The transition is centered on the cut: half of \
-`duration_s` reaches into the outgoing clip, half reaches into the \
-incoming clip. Prefer `awidat.cross_dissolve` or `SMPTE_Dissolve` \
+`duration_s` uses incoming pre-roll before the cut, half uses outgoing \
+post-roll after the cut. In OTIO terms, `in_offset_s` is incoming pre-roll before \
+the cut and `out_offset_s` is outgoing post-roll after the cut. Awidat \
+validates source handles before inserting. New EDLs must use a registered \
+`awidat.*` transition id or `SMPTE_Dissolve`; raw FFmpeg transition names \
+are render-legacy only. Prefer `awidat.cross_dissolve` or `SMPTE_Dissolve` \
 for interview/dialogue smoothing. Use `awidat.fade_black` only for \
 intentional chapter resets or endings; it is a fade-through-black, \
 not a normal dissolve. Do not use legacy `awidat.fade_in` / \
@@ -473,6 +479,9 @@ not a normal dissolve. Do not use legacy `awidat.fade_in` / \
 explicitly asks for a black dip. Transitions may be chained across \
 adjacent clips; transitions still cannot cross gaps or non-adjacent \
 anchors.\
+\n  - **Delete Transition**: no fields. Anchored via `@@ between: \
+ANCHOR_A and ANCHOR_B` where the two anchors identify the clips \
+immediately before and after an existing transition on the same track.\
 \n  - **Move Clip**: `+ to_position: <index>` (required). Moves \
 the anchored clip to a new position within its current track \
 (no cross-track moves in v1). Index is the clip's slot in the \
