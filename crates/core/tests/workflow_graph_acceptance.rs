@@ -171,6 +171,7 @@ fn bundled_workflows_can_land_as_edit_graph_ops() {
 *** Insert Transition
 @@ between: transcript_snippet="alpha hook" and transcript_snippet="bravo setup"
 + kind: SMPTE_Dissolve
++ alignment: start_at_cut
 + duration_s: 0.25
 *** Set Speed
 @@ anchor: transcript_snippet="charlie payoff"

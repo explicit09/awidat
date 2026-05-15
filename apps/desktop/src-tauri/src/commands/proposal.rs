@@ -559,6 +559,7 @@ fn build_diff_hints(
                 }
             }
             EdlOp::InsertTransition { .. }
+            | EdlOp::DeleteTransition { .. }
             | EdlOp::SetVolume { .. }
             | EdlOp::SetAudioFade { .. }
             | EdlOp::SetTrackAudio { .. }
@@ -748,6 +749,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::InsertPiP { .. } => "InsertPiP",
         EdlOp::MoveClip { .. } => "MoveClip",
         EdlOp::InsertTransition { .. } => "InsertTransition",
+        EdlOp::DeleteTransition { .. } => "DeleteTransition",
         EdlOp::SetVolume { .. } => "SetVolume",
         EdlOp::SetAudioFade { .. } => "SetAudioFade",
         EdlOp::SetTrackAudio { .. } => "SetTrackAudio",
