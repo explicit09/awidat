@@ -1161,6 +1161,14 @@ fn apply_insert_transition(
             ),
         });
     }
+    if kind == "awidat.composite" && spec.is_none() {
+        return Err(ApplyError::Invalid {
+            index,
+            message:
+                "transition \"awidat.composite\" requires semantic metadata with composition_json"
+                    .into(),
+        });
+    }
     if let Some(spec) = spec {
         if spec.id != kind {
             return Err(ApplyError::Invalid {
@@ -1194,6 +1202,12 @@ fn apply_insert_transition(
             }
         })?;
     }
+    let persisted_spec = spec.cloned().map(|mut spec| {
+        if spec.composition.is_none() {
+            spec.composition = awidat_proto::transitions::builtin_transition_composition(&spec.id);
+        }
+        spec
+    });
     let (in_offset_s, out_offset_s) =
         resolve_transition_offsets(index, duration_s, alignment, in_offset_s, out_offset_s)?;
 
@@ -1271,7 +1285,7 @@ fn apply_insert_transition(
         out_offset: RationalTime::new(out_offset_s * rate, rate),
         metadata: std::collections::HashMap::new(),
     };
-    if let Some(spec) = spec {
+    if let Some(spec) = persisted_spec.as_ref() {
         transition.metadata.insert(
             "awidat_transition".into(),
             serde_json::to_value(spec).map_err(|e| ApplyError::Invalid {
@@ -4976,6 +4990,7 @@ mod tests {
                     energy: Some(0.7),
                     direction: Some("left".into()),
                     params: serde_json::Map::new(),
+                    composition: None,
                 }),
             }],
         };
@@ -4999,6 +5014,123 @@ mod tests {
         assert_eq!(
             meta.get("intent").and_then(|v| v.as_str()),
             Some("hide_motion_jump")
+        );
+        let composition = meta
+            .get("composition")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        let primitives = composition
+            .get("primitives")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+        assert!(matches!(
+            primitives
+                .first()
+                .and_then(|primitive| primitive.get("op"))
+                .and_then(serde_json::Value::as_str),
+            Some("push")
+        ));
+    }
+
+    #[test]
+    fn apply_insert_transition_accepts_agent_composite_recipe() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let composition = awidat_proto::transitions::TransitionComposition {
+            version: 1,
+            primitives: vec![
+                awidat_proto::transitions::TransitionPrimitive {
+                    start: 0.0,
+                    end: 1.0,
+                    easing: awidat_proto::transitions::TransitionEasing::EaseOutExpo,
+                    op: awidat_proto::transitions::TransitionPrimitiveOp::Push {
+                        direction: "left".into(),
+                        distance: 0.9,
+                    },
+                },
+                awidat_proto::transitions::TransitionPrimitive {
+                    start: 0.35,
+                    end: 0.55,
+                    easing: awidat_proto::transitions::TransitionEasing::EaseInOut,
+                    op: awidat_proto::transitions::TransitionPrimitiveOp::Flash {
+                        color: "#ffffff".into(),
+                        peak: 0.25,
+                    },
+                },
+            ],
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "awidat.composite".into(),
+                duration_s: 0.55,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: Some(awidat_proto::transitions::SemanticTransitionSpec {
+                    id: "awidat.composite".into(),
+                    family: Some("custom".into()),
+                    intent: Some("beat_hit_motion_cover".into()),
+                    energy: Some(0.85),
+                    direction: Some("left".into()),
+                    params: serde_json::Map::new(),
+                    composition: Some(composition),
+                }),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Transition(tr) = &t.children[1] else {
+            panic!("expected transition")
+        };
+        assert_eq!(tr.transition_type, "awidat.composite");
+        let meta = tr
+            .metadata
+            .get("awidat_transition")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        assert_eq!(
+            meta.get("intent").and_then(|v| v.as_str()),
+            Some("beat_hit_motion_cover")
+        );
+        assert!(meta.get("composition").is_some());
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_composite_without_recipe() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "awidat.composite".into(),
+                duration_s: 0.55,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("composition_json")),
+            "expected missing composition error, got {err:?}",
         );
     }
 
@@ -5122,6 +5254,7 @@ mod tests {
                     energy: None,
                     direction: None,
                     params: serde_json::Map::new(),
+                    composition: None,
                 }),
             }],
         };

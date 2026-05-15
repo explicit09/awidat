@@ -492,6 +492,9 @@ impl OpBuilder {
                 let energy = take_field_f64(&mut fields, "energy");
                 let direction = take_field_string(&mut fields, "direction");
                 let params = take_field_json_map(&mut fields, "params_json", head)?;
+                let composition = take_field_json::<
+                    awidat_proto::transitions::TransitionComposition,
+                >(&mut fields, "composition_json", head)?;
                 let spec =
                     transition_id.map(|id| awidat_proto::transitions::SemanticTransitionSpec {
                         id,
@@ -500,6 +503,7 @@ impl OpBuilder {
                         energy,
                         direction,
                         params,
+                        composition,
                     });
                 Ok(EdlOp::InsertTransition {
                     between,
@@ -1180,6 +1184,23 @@ fn take_field_json_map(
         })
 }
 
+fn take_field_json<T: serde::de::DeserializeOwned>(
+    fields: &mut Vec<(String, FieldValue)>,
+    key: &str,
+    line: usize,
+) -> Result<Option<T>, EdlParseError> {
+    let Some(raw) = take_field_string(fields, key) else {
+        return Ok(None);
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|e| EdlParseError::BadField {
+            line,
+            raw: format!("{key}: {raw}"),
+            message: format!("must be valid JSON for {key}: {e}"),
+        })
+}
+
 fn parse_insert_track_kind(raw: &str, line: usize) -> Result<InsertTrackKind, EdlParseError> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "video" => Ok(InsertTrackKind::Video),
@@ -1546,6 +1567,7 @@ mod tests {
 + energy: 0.7
 + direction: left
 + params_json: {\"blur\":0.25}
++ composition_json: {\"version\":1,\"primitives\":[{\"op\":\"push\",\"direction\":\"left\",\"distance\":0.9,\"start\":0.0,\"end\":1.0,\"easing\":\"ease_out_expo\"},{\"op\":\"blur\",\"amount\":0.65,\"direction\":\"left\",\"start\":0.1,\"end\":0.7}]}
 + duration_s: 0.28
 *** End EDL
 ";
@@ -1565,6 +1587,15 @@ mod tests {
                 assert_eq!(spec.energy, Some(0.7));
                 assert_eq!(spec.direction.as_deref(), Some("left"));
                 assert_eq!(spec.params.get("blur").and_then(|v| v.as_f64()), Some(0.25));
+                let composition = spec.composition.as_ref().unwrap();
+                assert_eq!(composition.primitives.len(), 2);
+                assert!(matches!(
+                    &composition.primitives[0].op,
+                    awidat_proto::transitions::TransitionPrimitiveOp::Push {
+                        direction,
+                        distance
+                    } if direction == "left" && (*distance - 0.9).abs() < 1e-9
+                ));
             }
             other => panic!("want semantic InsertTransition, got {other:?}"),
         }

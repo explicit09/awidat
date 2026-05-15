@@ -471,7 +471,13 @@ post-roll after the cut. In OTIO terms, `in_offset_s` is incoming pre-roll befor
 the cut and `out_offset_s` is outgoing post-roll after the cut. Awidat \
 validates source handles before inserting. New EDLs must use a registered \
 `awidat.*` transition id or `SMPTE_Dissolve`; raw FFmpeg transition names \
-are render-legacy only. Prefer `awidat.cross_dissolve` or `SMPTE_Dissolve` \
+are render-legacy only. Optional `+ composition_json: {...}` stores a \
+data-only transition recipe over stable primitives (`opacity`, `push`, \
+`wipe`, `zoom`, `blur`, `flash`, `shake`, `chromatic_split`, `pixelize`, \
+or stable `atomic` awidat ids). Do not put raw FFmpeg graphs, GLSL, shell, \
+or plugin code in transition metadata. Use `awidat.composite` for a \
+custom on-the-spot recipe whose `composition_json` defines the actual feel. \
+Prefer `awidat.cross_dissolve` or `SMPTE_Dissolve` \
 for interview/dialogue smoothing. Use `awidat.fade_black` only for \
 intentional chapter resets or endings; it is a fade-through-black, \
 not a normal dissolve. Do not use legacy `awidat.fade_in` / \

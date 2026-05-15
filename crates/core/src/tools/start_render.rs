@@ -192,6 +192,13 @@ impl ToolHandler for StartRenderTool {
                         RenderTimelineError::InvalidTransitionPlacement { message } => {
                             format!("start_render: timeline has an invalid transition: {message}")
                         }
+                        RenderTimelineError::InvalidTransitionMetadata { kind, message } => {
+                            format!(
+                                "start_render: transition {kind:?} has invalid Awidat metadata: \
+                         {message}. Use data-only transition primitives with bounded params; do \
+                         not put raw FFmpeg, GLSL, shell, or plugin code in transition metadata."
+                            )
+                        }
                         RenderTimelineError::BroadcastOverlayRender(message) => {
                             format!("start_render: broadcast overlay render failed: {message}")
                         }

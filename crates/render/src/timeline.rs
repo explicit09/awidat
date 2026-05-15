@@ -27,7 +27,7 @@ use std::process::Command;
 use awidat_proto::awidat_meta::{BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle};
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::project::{files, read_otio_timeline};
-use awidat_proto::transitions;
+use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
@@ -100,6 +100,15 @@ pub enum RenderTimelineError {
     #[error("invalid transition placement: {message}")]
     InvalidTransitionPlacement {
         /// Detailed placement failure.
+        message: String,
+    },
+    /// Awidat transition metadata exists but is malformed or outside
+    /// the supported primitive API.
+    #[error("invalid transition metadata for {kind:?}: {message}")]
+    InvalidTransitionMetadata {
+        /// Transition kind or Awidat id from OTIO.
+        kind: String,
+        /// Detailed metadata failure.
         message: String,
     },
     /// Browser-backed broadcast overlay generation failed before the
@@ -537,7 +546,8 @@ pub fn collect_timeline_full_plan(
         // pointing at the *next* clip we'll see (`pending_transition`).
         // Other children (Gap, Stack) reset the pending state — they
         // can't sit between clips that share a transition in v1.
-        let mut pending_transition: Option<(String, f64, f64)> = None;
+        let mut pending_transition: Option<(String, f64, f64, Option<TransitionComposition>)> =
+            None;
         let mut saw_clip_on_track = false;
         for tc in &track.children {
             match tc {
@@ -549,7 +559,8 @@ pub fn collect_timeline_full_plan(
                     let new_index = segs.len();
                     segs.push(segment);
                     saw_clip_on_track = true;
-                    if let Some((kind, in_offset_s, out_offset_s)) = pending_transition.take()
+                    if let Some((kind, in_offset_s, out_offset_s, composition)) =
+                        pending_transition.take()
                         && new_index > 0
                     {
                         extend_transition_handles(
@@ -567,6 +578,7 @@ pub fn collect_timeline_full_plan(
                             in_offset_s,
                             out_offset_s,
                             duration_s: in_offset_s + out_offset_s,
+                            composition,
                         });
                     }
                 }
@@ -600,10 +612,13 @@ pub fn collect_timeline_full_plan(
                             ),
                         });
                     }
+                    let composition = read_transition_composition(t)?;
+                    validate_renderable_composite_transition(t, composition.as_ref())?;
                     pending_transition = Some((
                         t.transition_type.clone(),
                         t.in_offset.to_seconds(),
                         t.out_offset.to_seconds(),
+                        composition,
                     ));
                 }
                 TrackChild::Gap(_) | TrackChild::Stack(_) => {
@@ -611,7 +626,7 @@ pub fn collect_timeline_full_plan(
                 }
             }
         }
-        if let Some((kind, _, _)) = pending_transition {
+        if let Some((kind, _, _, _)) = pending_transition {
             return Err(RenderTimelineError::InvalidTransitionPlacement {
                 message: format!("transition {kind:?} has no incoming clip"),
             });
@@ -640,6 +655,54 @@ pub fn collect_timeline_full_plan(
         audio_tracks,
         loudness_target,
     ))
+}
+
+fn read_transition_composition(
+    transition: &awidat_proto::otio::Transition,
+) -> Result<Option<TransitionComposition>, RenderTimelineError> {
+    let Some(value) = transition.metadata.get("awidat_transition") else {
+        return Ok(None);
+    };
+    let Some(composition_value) = value.get("composition") else {
+        return Ok(None);
+    };
+    if composition_value.is_null() {
+        return Ok(None);
+    }
+    let composition: TransitionComposition = serde_json::from_value(composition_value.clone())
+        .map_err(|e| RenderTimelineError::InvalidTransitionMetadata {
+            kind: transition.transition_type.clone(),
+            message: format!("composition could not be decoded: {e}"),
+        })?;
+    transitions::validate_transition_composition(&composition).map_err(|e| {
+        RenderTimelineError::InvalidTransitionMetadata {
+            kind: transition.transition_type.clone(),
+            message: e.to_string(),
+        }
+    })?;
+    Ok(Some(composition))
+}
+
+fn validate_renderable_composite_transition(
+    transition: &awidat_proto::otio::Transition,
+    composition: Option<&TransitionComposition>,
+) -> Result<(), RenderTimelineError> {
+    if transition.transition_type != "awidat.composite" {
+        return Ok(());
+    }
+    let Some(composition) = composition else {
+        return Err(RenderTimelineError::InvalidTransitionMetadata {
+            kind: transition.transition_type.clone(),
+            message: "awidat.composite requires metadata.awidat_transition.composition".into(),
+        });
+    };
+    if transitions::resolve_composition_ffmpeg_xfade(composition).is_none() {
+        return Err(RenderTimelineError::InvalidTransitionMetadata {
+            kind: transition.transition_type.clone(),
+            message: "awidat.composite composition has no phase-one FFmpeg lowering".into(),
+        });
+    }
+    Ok(())
 }
 
 fn collect_timeline_segment(
@@ -1100,6 +1163,10 @@ pub struct TransitionPlan {
     pub out_offset_s: f64,
     /// Total transition duration on the timeline, in seconds.
     pub duration_s: f64,
+    /// Optional data-only composition recipe carried from
+    /// `metadata.awidat_transition.composition`. Phase-one FFmpeg still
+    /// exports by `kind`; future backends lower this recipe directly.
+    pub composition: Option<TransitionComposition>,
 }
 
 /// Plans the `-filter_complex` argument + map labels for a render.
@@ -1371,7 +1438,7 @@ impl<'a> FilterPlanner<'a> {
                 let next = group_end + 1;
                 let v_label = format!("[xv{transition_id}]");
                 let a_label = format!("[xa{transition_id}]");
-                let xfade_kind = map_transition_kind(&t.kind);
+                let xfade_kind = map_transition_plan_kind(t);
                 // xfade offset is relative to the first input of the
                 // current operation. For a chain, that first input is
                 // the already-shortened output of previous xfades.
@@ -3039,6 +3106,15 @@ fn map_transition_kind(kind: &str) -> String {
         .to_string()
 }
 
+fn map_transition_plan_kind(transition: &TransitionPlan) -> String {
+    transition
+        .composition
+        .as_ref()
+        .and_then(transitions::resolve_composition_ffmpeg_xfade)
+        .map(str::to_string)
+        .unwrap_or_else(|| map_transition_kind(&transition.kind))
+}
+
 /// Build the ffmpeg argv that concats `segs` into `output_path` with
 /// a single re-encode. The re-encode kills the DTS-seam scratch that
 /// stream-copy concat produces at non-keyframe-aligned cut points.
@@ -3340,7 +3416,7 @@ fn plan_video_only_filter(
                 "{}{}xfade=transition={}:duration={}:offset={}{};",
                 current_v,
                 video_inputs[next],
-                map_transition_kind(&t.kind),
+                map_transition_plan_kind(t),
                 t.duration_s,
                 offset,
                 label
@@ -3812,6 +3888,7 @@ mod tests {
             in_offset_s: duration_s / 2.0,
             out_offset_s: duration_s / 2.0,
             duration_s,
+            composition: None,
         }
     }
 
@@ -3993,6 +4070,7 @@ mod tests {
             in_offset_s: 0.5,
             out_offset_s: 0.5,
             duration_s: 1.0,
+            composition: None,
         }];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         assert!(

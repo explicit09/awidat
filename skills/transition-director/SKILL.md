@@ -38,11 +38,39 @@ Use these stable ids in `Insert Transition`:
 - `awidat.zoom_in` for energetic punch-ins or forward momentum.
 - `awidat.pixelize` for tech/glitch moments only.
 - `awidat.radial` for stylized reveals; use sparingly.
+- `awidat.composite` for an on-the-spot custom recipe expressed with
+  `composition_json`.
 
 Use `SMPTE_Dissolve` only for older/simple EDL compatibility. Use no
 transition for `awidat.hard_cut`; just leave the cut as-is.
 Do not author raw FFmpeg transition names such as `fadeblack`,
 `slideleft`, or `wipeleft`; use registered `awidat.*` ids instead.
+
+## On-The-Spot Compositions
+
+When a cut needs a custom feel, author it as `composition_json`: a
+data-only recipe over stable primitives. This is how Awidat makes
+transitions on the spot without generating arbitrary backend code.
+Use `+ id: awidat.composite` and `+ kind: awidat.composite` for these
+one-off recipes unless the recipe is simply annotating a named preset.
+
+Allowed primitives:
+
+- `opacity`
+- `push`
+- `wipe`
+- `zoom`
+- `blur`
+- `flash`
+- `shake`
+- `chromatic_split`
+- `pixelize`
+- `atomic` with a stable registered `awidat.*` transition id
+
+Do not emit raw FFmpeg filter graphs, GLSL, shell commands, plugin code,
+or generated backend code inside an edit. If the desired transition
+requires new backend implementation, treat that as transition-lab work
+outside the normal editing flow.
 
 ## Selection Rules
 
@@ -79,13 +107,14 @@ to widen the source range. Do not keep retrying the same transition.
 *** Begin EDL
 *** Insert Transition
 @@ between: clip_uuid=clip-a and clip_uuid=clip-b
-+ id: awidat.slide_left
-+ kind: awidat.slide_left
-+ family: slide
++ id: awidat.composite
++ kind: awidat.composite
++ family: custom
 + intent: hide_motion_jump
 + energy: 0.700
 + direction: left
 + params_json: {"blur":0.2}
++ composition_json: {"version":1,"primitives":[{"op":"push","direction":"left","distance":0.9,"start":0.0,"end":1.0,"easing":"ease_out_expo"},{"op":"blur","amount":0.65,"direction":"left","start":0.1,"end":0.7},{"op":"flash","color":"#ffffff","peak":0.25,"start":0.35,"end":0.55}]}
 + duration_s: 0.280
 + alignment: center
 *** End EDL

@@ -10,7 +10,10 @@ use awidat_proto::otio::{
     Track, TrackChild, TrackKind, Transition,
 };
 use awidat_proto::project::files;
-use awidat_render::{build_timeline_render_spec, ffmpeg_path};
+use awidat_proto::transitions::{
+    TransitionComposition, TransitionEasing, TransitionPrimitive, TransitionPrimitiveOp,
+};
+use awidat_render::{build_timeline_render_spec, collect_timeline_plan, ffmpeg_path};
 use std::fs;
 use std::path::Path;
 
@@ -277,6 +280,197 @@ fn project_with_awidat_transition_id_maps_to_xfade() {
     assert!(
         cmd.contains("xfade=transition=slideleft"),
         "expected awidat id to resolve to xfade slideleft, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_transition_composition_carries_recipe_into_render_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "awidat.slide_left");
+    let otio_path = dir.path().join(files::OTIO);
+    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+        panic!("expected track");
+    };
+    let TrackChild::Transition(t) = &mut track.children[1] else {
+        panic!("expected transition");
+    };
+    let composition = TransitionComposition {
+        version: 1,
+        primitives: vec![
+            TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::EaseOutExpo,
+                op: TransitionPrimitiveOp::Push {
+                    direction: "left".into(),
+                    distance: 0.9,
+                },
+            },
+            TransitionPrimitive {
+                start: 0.1,
+                end: 0.7,
+                easing: TransitionEasing::EaseOut,
+                op: TransitionPrimitiveOp::Blur {
+                    amount: 0.65,
+                    direction: Some("left".into()),
+                },
+            },
+        ],
+    };
+    t.metadata.insert(
+        "awidat_transition".into(),
+        serde_json::json!({
+            "id": "awidat.slide_left",
+            "family": "slide",
+            "intent": "beat_hit_motion_cover",
+            "energy": 0.85,
+            "direction": "left",
+            "composition": composition,
+        }),
+    );
+    fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+    let (_, transitions) = collect_timeline_plan(dir.path()).unwrap();
+    let planned = transitions[0].composition.as_ref().unwrap();
+    assert_eq!(planned.primitives.len(), 2);
+    assert!(matches!(
+        &planned.primitives[0].op,
+        TransitionPrimitiveOp::Push {
+            direction,
+            distance
+        } if direction == "left" && (*distance - 0.9).abs() < 1e-9
+    ));
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("xfade=transition=slideleft"),
+        "phase-one export should still use stable xfade fallback, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_agent_composite_lowers_recipe_to_xfade() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "awidat.composite");
+    let otio_path = dir.path().join(files::OTIO);
+    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+        panic!("expected track");
+    };
+    let TrackChild::Transition(t) = &mut track.children[1] else {
+        panic!("expected transition");
+    };
+    t.metadata.insert(
+        "awidat_transition".into(),
+        serde_json::json!({
+            "id": "awidat.composite",
+            "family": "custom",
+            "intent": "beat_hit_motion_cover",
+            "energy": 0.85,
+            "direction": "left",
+            "composition": {
+                "version": 1,
+                "primitives": [
+                    {"op": "blur", "amount": 0.65, "direction": "left", "start": 0.1, "end": 0.7},
+                    {"op": "push", "direction": "left", "distance": 0.9, "start": 0.0, "end": 1.0, "easing": "ease_out_expo"},
+                    {"op": "flash", "color": "#ffffff", "peak": 0.25, "start": 0.35, "end": 0.55}
+                ]
+            }
+        }),
+    );
+    fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+    let (_, transitions) = collect_timeline_plan(dir.path()).unwrap();
+    assert_eq!(transitions[0].kind, "awidat.composite");
+    assert!(transitions[0].composition.is_some());
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("xfade=transition=slideleft"),
+        "expected push primitive to lower to slideleft xfade, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_composite_missing_recipe_fails_before_ffmpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "awidat.composite");
+    let err = build_timeline_render_spec(dir.path()).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("requires metadata.awidat_transition.composition"),
+        "expected missing composite recipe error, got: {err}",
+    );
+}
+
+#[test]
+fn project_with_unlowerable_composite_recipe_fails_before_ffmpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "awidat.composite");
+    let otio_path = dir.path().join(files::OTIO);
+    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+        panic!("expected track");
+    };
+    let TrackChild::Transition(t) = &mut track.children[1] else {
+        panic!("expected transition");
+    };
+    t.metadata.insert(
+        "awidat_transition".into(),
+        serde_json::json!({
+            "id": "awidat.composite",
+            "family": "custom",
+            "composition": {
+                "version": 1,
+                "primitives": [
+                    {"op": "shake", "amount": 0.5, "decay": 0.7}
+                ]
+            }
+        }),
+    );
+    fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+    let err = build_timeline_render_spec(dir.path()).unwrap_err();
+    assert!(
+        err.to_string().contains("no phase-one FFmpeg lowering"),
+        "expected unlowerable composite recipe error, got: {err}",
+    );
+}
+
+#[test]
+fn project_with_invalid_transition_composition_fails_before_ffmpeg() {
+    let dir = tempfile::tempdir().unwrap();
+    write_two_clip_project_with_transition_kind(dir.path(), "awidat.slide_left");
+    let otio_path = dir.path().join(files::OTIO);
+    let mut tl: Timeline = serde_json::from_str(&fs::read_to_string(&otio_path).unwrap()).unwrap();
+    let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+        panic!("expected track");
+    };
+    let TrackChild::Transition(t) = &mut track.children[1] else {
+        panic!("expected transition");
+    };
+    t.metadata.insert(
+        "awidat_transition".into(),
+        serde_json::json!({
+            "id": "awidat.slide_left",
+            "composition": {
+                "version": 1,
+                "primitives": [
+                    {"op": "push", "direction": "diagonal", "distance": 0.9}
+                ]
+            }
+        }),
+    );
+    fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+    let err = build_timeline_render_spec(dir.path()).unwrap_err();
+    assert!(
+        err.to_string().contains("invalid transition metadata")
+            && err.to_string().contains("direction"),
+        "expected invalid composition error, got: {err}",
     );
 }
 
