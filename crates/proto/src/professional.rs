@@ -1149,26 +1149,38 @@ impl DeliveryProfile {
                 ),
             ));
         }
-        if self.preflight_checks.contains(&PreflightCheckKind::Bitrate)
-            && let (Some(actual), Some(target)) =
-                (input.video_bitrate_kbps, self.video_bitrate_kbps)
-            && actual < target / 2
-        {
-            findings.push(PreflightFinding::warning(
-                PreflightCheckKind::Bitrate,
-                format!("bitrate {actual} kbps is far below target {target} kbps"),
-            ));
+        if self.preflight_checks.contains(&PreflightCheckKind::Bitrate) {
+            match (input.video_bitrate_kbps, self.video_bitrate_kbps) {
+                (Some(actual), Some(target)) if actual < target / 2 => {
+                    findings.push(PreflightFinding::warning(
+                        PreflightCheckKind::Bitrate,
+                        format!("bitrate {actual} kbps is far below target {target} kbps"),
+                    ));
+                }
+                (None, Some(_)) => findings.push(PreflightFinding::error(
+                    PreflightCheckKind::Bitrate,
+                    "bitrate measurement is missing",
+                )),
+                _ => {}
+            }
         }
         if self
             .preflight_checks
             .contains(&PreflightCheckKind::Loudness)
-            && let (Some(actual), Some(target)) = (input.integrated_lufs, self.loudness_lufs)
-            && (actual - target).abs() > 2.0
         {
-            findings.push(PreflightFinding::warning(
-                PreflightCheckKind::Loudness,
-                format!("loudness {actual:.1} LUFS is outside target {target:.1} LUFS"),
-            ));
+            match (input.integrated_lufs, self.loudness_lufs) {
+                (Some(actual), Some(target)) if (actual - target).abs() > 2.0 => {
+                    findings.push(PreflightFinding::warning(
+                        PreflightCheckKind::Loudness,
+                        format!("loudness {actual:.1} LUFS is outside target {target:.1} LUFS"),
+                    ));
+                }
+                (None, Some(_)) => findings.push(PreflightFinding::error(
+                    PreflightCheckKind::Loudness,
+                    "loudness measurement is missing",
+                )),
+                _ => {}
+            }
         }
         if self
             .preflight_checks
@@ -1210,16 +1222,23 @@ impl DeliveryProfile {
                 format!("{} safe-area violations found", input.safe_area_violations),
             ));
         }
-        if let Some(duration_s) = input.duration_s
-            && self
-                .preflight_checks
-                .contains(&PreflightCheckKind::Duration)
-            && (!duration_s.is_finite() || duration_s <= 0.0)
+        if self
+            .preflight_checks
+            .contains(&PreflightCheckKind::Duration)
         {
-            findings.push(PreflightFinding::error(
-                PreflightCheckKind::Duration,
-                "duration must be positive and finite",
-            ));
+            match input.duration_s {
+                Some(duration_s) if !duration_s.is_finite() || duration_s <= 0.0 => {
+                    findings.push(PreflightFinding::error(
+                        PreflightCheckKind::Duration,
+                        "duration must be positive and finite",
+                    ));
+                }
+                None => findings.push(PreflightFinding::error(
+                    PreflightCheckKind::Duration,
+                    "duration measurement is missing",
+                )),
+                _ => {}
+            }
         }
         PreflightReport {
             id: format!("preflight-{}", self.id),

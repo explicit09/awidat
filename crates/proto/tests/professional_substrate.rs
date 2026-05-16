@@ -5,9 +5,10 @@ use awidat_proto::professional::{
     AssetCatalog, AssetQuery, AssetReadiness, AssetRecord, AssetRole, AudioBus,
     AudioFinishingState, CapabilityArea, CapabilityRegistry, CapabilityStatus, ColorFinishingState,
     CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
-    DeliveryProfile, GradeStack, Keyframe, MotionGraphicsTemplate, ParameterAnimation,
-    PipelineReadinessReport, ReadinessState, SelectDecision, SourceRange, SourceSelect, Stringout,
-    TemplateSlot, TrackingPackage, WorkflowLens,
+    DeliveryProfile, FindingSeverity, GradeStack, Keyframe, MotionGraphicsTemplate,
+    ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
+    SelectDecision, SourceRange, SourceSelect, Stringout, TemplateSlot, TrackingPackage,
+    WorkflowLens,
 };
 
 #[test]
@@ -304,6 +305,55 @@ fn delivery_profile_preflight_returns_actionable_findings() {
 }
 
 #[test]
+fn delivery_profile_preflight_flags_missing_required_measurements() {
+    let profile = DeliveryProfile {
+        id: "strict".into(),
+        name: "Strict".into(),
+        aspect_ratio: "16:9".into(),
+        width: 1920,
+        height: 1080,
+        video_bitrate_kbps: Some(12_000),
+        loudness_lufs: Some(-14.0),
+        preflight_checks: vec![
+            PreflightCheckKind::Bitrate,
+            PreflightCheckKind::Loudness,
+            PreflightCheckKind::Duration,
+        ],
+        ..DeliveryProfile::default()
+    };
+
+    let report = profile.run_preflight(DeliveryPreflightInput {
+        aspect_ratio: "16:9".into(),
+        ..DeliveryPreflightInput::default()
+    });
+
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.check == PreflightCheckKind::Bitrate
+                && finding.severity == FindingSeverity::Error
+                && finding.message.contains("measurement is missing"))
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.check == PreflightCheckKind::Loudness
+                && finding.severity == FindingSeverity::Error
+                && finding.message.contains("measurement is missing"))
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|finding| finding.check == PreflightCheckKind::Duration
+                && finding.severity == FindingSeverity::Error
+                && finding.message.contains("measurement is missing"))
+    );
+}
+
+#[test]
 fn metadata_builds_readiness_across_all_thirteen_capability_areas() {
     let metadata = AwidatTimelineMetadata {
         asset_catalog: Some(AssetCatalog {
@@ -386,5 +436,62 @@ fn metadata_builds_readiness_across_all_thirteen_capability_areas() {
     assert_eq!(
         report.stage(CapabilityArea::PreAutonomyOrchestrationContract),
         Some(ReadinessState::Ready)
+    );
+}
+
+#[test]
+fn metadata_readiness_blocks_stages_with_validation_errors() {
+    let metadata = AwidatTimelineMetadata {
+        asset_catalog: Some(AssetCatalog {
+            assets: vec![AssetRecord {
+                id: "asset-a".into(),
+                path: "raw/a.mov".into(),
+                ..AssetRecord::default()
+            }],
+            ..AssetCatalog::default()
+        }),
+        selects: vec![SourceSelect {
+            id: "select-bad".into(),
+            asset_id: "missing-asset".into(),
+            range: SourceRange {
+                start_s: 3.0,
+                end_s: 1.0,
+            },
+            ..SourceSelect::default()
+        }],
+        stringouts: vec![Stringout {
+            id: "stringout-a".into(),
+            select_ids: vec!["select-bad".into()],
+            ..Stringout::default()
+        }],
+        parameter_animations: vec![ParameterAnimation {
+            id: "anim-bad".into(),
+            keyframes: vec![Keyframe::linear(2.0, 1.0), Keyframe::linear(1.0, 0.0)],
+            ..ParameterAnimation::default()
+        }],
+        ..AwidatTimelineMetadata::default()
+    };
+
+    let report = metadata.build_professional_readiness_report();
+
+    assert_eq!(
+        report.stage(CapabilityArea::SourceReviewSelects),
+        Some(ReadinessState::Blocked)
+    );
+    assert_eq!(
+        report.stage(CapabilityArea::ParameterAnimation),
+        Some(ReadinessState::Blocked)
+    );
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("missing-asset"))
+    );
+    assert!(
+        report
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("anim-bad"))
     );
 }

@@ -497,9 +497,13 @@ pub enum EdlOp {
         /// Ordered select assemblies.
         stringouts: Vec<Stringout>,
     },
-    /// Apply a professional timeline operation contract.
+    /// Record a professional timeline operation contract for review/planning.
+    ///
+    /// This substrate op is metadata-only today. Concrete timeline mutations
+    /// should use the existing edit ops until these contracts grow lowering
+    /// semantics.
     ProfessionalTimelineEdit {
-        /// Typed edit operation.
+        /// Typed edit operation contract.
         edit: ProfessionalTimelineEdit,
     },
     /// Store a cross-stage proposal package with evidence.
@@ -565,7 +569,7 @@ pub enum EdlOp {
     },
 }
 
-/// Professional timeline operation contracts.
+/// Professional timeline operation contracts recorded for review/planning.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "edit", rename_all = "snake_case")]
 pub enum ProfessionalTimelineEdit {

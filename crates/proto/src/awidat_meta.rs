@@ -18,10 +18,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::professional::{
     AssetCatalog, AudioFinishingState, CapabilityRegistry, ColorFinishingState, CompositionGraph,
-    DeliveryProfile, LearningSignal, MotionGraphicsTemplate, PackageManifest, ParameterAnimation,
-    PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract, PreflightReport,
-    ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect, Stringout,
-    TrackingPackage, WorkflowLens,
+    DeliveryProfile, FindingSeverity, LearningSignal, MotionGraphicsTemplate, PackageManifest,
+    ParameterAnimation, PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract,
+    PreflightReport, ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect,
+    Stringout, TrackingPackage, WorkflowLens,
 };
 
 /// Top-level awidat metadata on a `Timeline.metadata.awidat`.
@@ -193,7 +193,8 @@ impl AwidatTimelineMetadata {
     pub fn build_professional_readiness_report(&self) -> PipelineReadinessReport {
         use crate::professional::CapabilityArea;
 
-        let stages = vec![
+        let diagnostics = self.validate_professional_substrate();
+        let mut stages = vec![
             stage(
                 CapabilityArea::AssetCatalog,
                 self.asset_catalog
@@ -266,10 +267,33 @@ impl AwidatTimelineMetadata {
                 "pre-autonomy registry/readiness/planner contracts are missing",
             ),
         ];
-        let blockers = stages
+        for diagnostic in diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == FindingSeverity::Error)
+        {
+            if let Some(stage) = stages
+                .iter_mut()
+                .find(|stage| stage.area == diagnostic.area)
+            {
+                stage.state = ReadinessState::Blocked;
+                if stage.blocker.is_none() {
+                    stage.blocker = Some(diagnostic.message.clone());
+                }
+            }
+        }
+
+        let mut blockers: Vec<String> = stages
             .iter()
             .filter_map(|stage| stage.blocker.clone())
             .collect();
+        for diagnostic in diagnostics
+            .into_iter()
+            .filter(|diagnostic| diagnostic.severity == FindingSeverity::Error)
+        {
+            if !blockers.contains(&diagnostic.message) {
+                blockers.push(diagnostic.message);
+            }
+        }
         PipelineReadinessReport { stages, blockers }
     }
 

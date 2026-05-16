@@ -140,3 +140,35 @@ fn parsed_professional_substrate_ops_apply_to_timeline_metadata() {
         13
     );
 }
+
+#[test]
+fn professional_timeline_edit_is_record_only_metadata() {
+    let edl = r#"
+*** Begin EDL
+*** Professional Timeline Edit
++ edit_json: {"edit":"ripple_trim","anchor":{"anchor_kind":"clip_uuid","uuid":"clip-a"},"new_end_s":2.0,"ripple_tracks":["V1"]}
+*** End EDL
+"#;
+    let envelope = match parse(edl) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("parse professional timeline edit: {error}"),
+    };
+    let timeline = Timeline::empty("professional-record-only");
+
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(error) => panic!("apply professional timeline edit: {error}"),
+    };
+    let metadata = match timeline.metadata.awidat {
+        Some(metadata) => metadata,
+        None => panic!("timeline metadata missing"),
+    };
+
+    assert_eq!(timeline.tracks.children.len(), 0);
+    assert!(outcome.applied[0].description.contains("recorded"));
+    assert!(
+        metadata
+            .extra
+            .contains_key("last_professional_timeline_edit")
+    );
+}
