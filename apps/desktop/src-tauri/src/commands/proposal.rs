@@ -578,6 +578,20 @@ fn build_diff_hints(
             | EdlOp::ApplyLut { .. }
             | EdlOp::RemoveLut { .. }
             | EdlOp::SetBroadcastOverlay { .. }
+            | EdlOp::SetAssetCatalog { .. }
+            | EdlOp::SetSourceReview { .. }
+            | EdlOp::ProfessionalTimelineEdit { .. }
+            | EdlOp::AddProposalPackage { .. }
+            | EdlOp::SetParameterAnimation { .. }
+            | EdlOp::SetMotionTemplate { .. }
+            | EdlOp::AttachComposition { .. }
+            | EdlOp::SetTrackingPackage { .. }
+            | EdlOp::SetColorFinishing { .. }
+            | EdlOp::SetAudioFinishing { .. }
+            | EdlOp::SelectDeliveryProfile { .. }
+            | EdlOp::AddPreflightReport { .. }
+            | EdlOp::SetWorkflowLens { .. }
+            | EdlOp::SetPipelineReadiness { .. }
             | EdlOp::InsertTitle { .. }
             | EdlOp::SetTitle { .. }
             | EdlOp::InsertCaption { .. }
@@ -772,6 +786,20 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::ApplyLut { .. } => "ApplyLut",
         EdlOp::RemoveLut { .. } => "RemoveLut",
         EdlOp::SetBroadcastOverlay { .. } => "SetBroadcastOverlay",
+        EdlOp::SetAssetCatalog { .. } => "SetAssetCatalog",
+        EdlOp::SetSourceReview { .. } => "SetSourceReview",
+        EdlOp::ProfessionalTimelineEdit { .. } => "ProfessionalTimelineEdit",
+        EdlOp::AddProposalPackage { .. } => "AddProposalPackage",
+        EdlOp::SetParameterAnimation { .. } => "SetParameterAnimation",
+        EdlOp::SetMotionTemplate { .. } => "SetMotionTemplate",
+        EdlOp::AttachComposition { .. } => "AttachComposition",
+        EdlOp::SetTrackingPackage { .. } => "SetTrackingPackage",
+        EdlOp::SetColorFinishing { .. } => "SetColorFinishing",
+        EdlOp::SetAudioFinishing { .. } => "SetAudioFinishing",
+        EdlOp::SelectDeliveryProfile { .. } => "SelectDeliveryProfile",
+        EdlOp::AddPreflightReport { .. } => "AddPreflightReport",
+        EdlOp::SetWorkflowLens { .. } => "SetWorkflowLens",
+        EdlOp::SetPipelineReadiness { .. } => "SetPipelineReadiness",
         EdlOp::InsertTitle { .. } => "InsertTitle",
         EdlOp::SetTitle { .. } => "SetTitle",
         EdlOp::InsertCaption { .. } => "InsertCaption",

@@ -254,6 +254,28 @@ pub enum Item {
         /// "Show in Finder" button on Render's Completed-Ok phase.
         output_path: Option<String>,
     },
+    /// Review package for professional editing substrate artifacts:
+    /// asset catalogs, selects, assembly, VFX, color, audio, delivery,
+    /// preflight, workflow readiness, and autonomy prerequisites.
+    ProfessionalReview {
+        /// Stable id.
+        id: Id,
+        /// Lifecycle phase.
+        phase: ItemLifecycle,
+        /// Capability area this package belongs to.
+        area: ProfessionalCapabilityArea,
+        /// Lens where the package should appear.
+        lens: WorkflowLensTag,
+        /// Readiness state for this package.
+        readiness: ReadinessStateTag,
+        /// User-facing summary.
+        summary: String,
+        /// Evidence, blockers, or review rows.
+        findings: Vec<ProfessionalReviewFinding>,
+        /// Optional opaque payload for specialized inspectors.
+        #[ts(type = "unknown")]
+        payload: Option<serde_json::Value>,
+    },
     /// An editorial finding the agent surfaced — "I noticed this,
     /// you decide." Distinct from [`Self::ProposedEdit`]: a Note is
     /// passive (no pending mutation), and lives in its own UI panel
@@ -326,6 +348,93 @@ pub enum Item {
         #[serde(default)]
         broll_anchor: Option<BrollAnchor>,
     },
+}
+
+/// Professional editing capability area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum ProfessionalCapabilityArea {
+    /// Asset catalog.
+    AssetCatalog,
+    /// Source review/selects.
+    SourceReviewSelects,
+    /// Assembly/timeline operations.
+    AssemblyAndTimelineOperations,
+    /// Editorial intent/review.
+    EditorialIntentAndReview,
+    /// Parameter animation.
+    ParameterAnimation,
+    /// Motion graphics templates.
+    MotionGraphicsTemplates,
+    /// Composition graph.
+    CompositionGraph,
+    /// Tracking, masks, and mattes.
+    TrackingMasksMattes,
+    /// Color finishing.
+    ColorFinishing,
+    /// Audio finishing.
+    AudioFinishing,
+    /// Delivery profiles and preflight.
+    DeliveryProfilesAndPreflight,
+    /// Workflow lenses.
+    WorkflowLenses,
+    /// Pre-autonomy orchestration contracts.
+    PreAutonomyOrchestrationContract,
+}
+
+/// Workflow lens tag for review routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowLensTag {
+    /// Media lens.
+    Media,
+    /// Selects lens.
+    Selects,
+    /// Assembly lens.
+    Assembly,
+    /// Edit review lens.
+    EditReview,
+    /// VFX lens.
+    Vfx,
+    /// Color lens.
+    Color,
+    /// Audio lens.
+    Audio,
+    /// Delivery lens.
+    Delivery,
+    /// Preflight lens.
+    Preflight,
+}
+
+/// Readiness state tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum ReadinessStateTag {
+    /// Ready.
+    Ready,
+    /// Pending.
+    Pending,
+    /// Blocked.
+    Blocked,
+    /// Unavailable.
+    Unavailable,
+}
+
+/// One row in a professional review package.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct ProfessionalReviewFinding {
+    /// Stable kind, for example `missing_proxy` or `loudness_out_of_range`.
+    pub kind: String,
+    /// Severity: info, warning, or error.
+    pub severity: String,
+    /// User-facing message.
+    pub message: String,
+    /// Optional fix proposal reference.
+    pub fix_ref: Option<String>,
 }
 
 /// Discriminator for [`Item::Job`]. The frontend doesn't render

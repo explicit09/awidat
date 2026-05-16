@@ -3,39 +3,39 @@
 /**
  * Timeline-level semantic metadata for one adjacent clip boundary.
  */
-export type TimelineCutBoundary = {
+export type TimelineCutBoundary = { 
 /**
  * Canonical metadata key, usually `from_clip_id::to_clip_id`.
  */
-key: string,
+key: string, 
 /**
  * Outgoing clip id used by the metadata key.
  */
-from_clip_id: string,
+from_clip_id: string, 
 /**
  * Incoming clip id used by the metadata key.
  */
-to_clip_id: string,
+to_clip_id: string, 
 /**
  * Editorial grammar, e.g. `cut_on_action`, `cutaway`, `j_cut`.
  */
-cut_type: string,
+cut_type: string, 
 /**
  * Short machine-readable purpose.
  */
-intent: string,
+intent: string, 
 /**
  * Optional intensity in `[0, 1]`.
  */
-energy: number | null,
+energy: number | null, 
 /**
  * Audio-picture relationship, e.g. `sync` or `audio_leads`.
  */
-audio_relation: string,
+audio_relation: string, 
 /**
  * Optional planner confidence in `[0, 1]`.
  */
-confidence: number | null,
+confidence: number | null, 
 /**
  * Human-readable explanation.
  */
