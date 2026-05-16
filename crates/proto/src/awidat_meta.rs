@@ -12,9 +12,17 @@
 //! - On a [`crate::otio::Marker`]'s `metadata`: see
 //!   [`AwidatMarkerMetadata`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
+
+use crate::professional::{
+    AssetCatalog, AudioFinishingState, CapabilityRegistry, ColorFinishingState, CompositionGraph,
+    DeliveryProfile, FindingSeverity, LearningSignal, MotionGraphicsTemplate, PackageManifest,
+    ParameterAnimation, PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract,
+    PreflightReport, ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect,
+    Stringout, TrackingPackage, WorkflowLens,
+};
 
 /// Top-level awidat metadata on a `Timeline.metadata.awidat`.
 ///
@@ -54,11 +62,269 @@ pub struct AwidatTimelineMetadata {
     /// media files.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub broadcast_overlay: Option<BroadcastOverlayConfig>,
+    /// First-class asset catalog independent of timeline clips.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub asset_catalog: Option<AssetCatalog>,
+    /// Durable source review decisions.
+    #[serde(default)]
+    pub selects: Vec<SourceSelect>,
+    /// Pre-timeline ordered selects.
+    #[serde(default)]
+    pub stringouts: Vec<Stringout>,
+    /// Unified reviewable proposal packages across pipeline stages.
+    #[serde(default)]
+    pub proposal_packages: Vec<ProposalPackage>,
+    /// General keyframe/parameter animation documents.
+    #[serde(default)]
+    pub parameter_animations: Vec<ParameterAnimation>,
+    /// Reusable motion graphics templates.
+    #[serde(default)]
+    pub motion_templates: Vec<MotionGraphicsTemplate>,
+    /// Serializable composition graphs.
+    #[serde(default)]
+    pub composition_graphs: Vec<CompositionGraph>,
+    /// Tracking, mask, and matte sidecar references/contracts.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tracking_package: Option<TrackingPackage>,
+    /// Color finishing workflow state.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub color_finishing: Option<ColorFinishingState>,
+    /// Audio finishing workflow state.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_finishing: Option<AudioFinishingState>,
+    /// Named delivery profiles.
+    #[serde(default)]
+    pub delivery_profiles: Vec<DeliveryProfile>,
+    /// Preflight reports.
+    #[serde(default)]
+    pub preflight_reports: Vec<PreflightReport>,
+    /// Package manifests for render/delivery artifacts.
+    #[serde(default)]
+    pub package_manifests: Vec<PackageManifest>,
+    /// Active or available workflow lenses.
+    #[serde(default)]
+    pub workflow_lenses: Vec<WorkflowLens>,
+    /// Capability registry for pre-autonomy orchestration.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub capability_registry: Option<CapabilityRegistry>,
+    /// Pipeline readiness report.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pipeline_readiness: Option<PipelineReadinessReport>,
+    /// Typed planner pass contracts.
+    #[serde(default)]
+    pub planner_passes: Vec<PlannerPassContract>,
+    /// User acceptance/rejection signals.
+    #[serde(default)]
+    pub learning_signals: Vec<LearningSignal>,
     /// Forward-compat passthrough. Future versions of this metadata can add
     /// fields here without breaking older readers. Engines that don't know
     /// about a field still round-trip it intact.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl AwidatTimelineMetadata {
+    /// Validate professional pipeline substrate references and local invariants.
+    pub fn validate_professional_substrate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let asset_ids = self.asset_ids();
+        let select_ids: HashSet<&str> = self
+            .selects
+            .iter()
+            .map(|select| select.id.as_str())
+            .collect();
+
+        if let Some(catalog) = &self.asset_catalog {
+            diagnostics.extend(catalog.validate());
+        }
+
+        for select in &self.selects {
+            if !asset_ids.contains(select.asset_id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    crate::professional::CapabilityArea::SourceReviewSelects,
+                    format!(
+                        "select {} references missing asset {}",
+                        select.id, select.asset_id
+                    ),
+                ));
+            }
+            if !select.range.is_valid() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    crate::professional::CapabilityArea::SourceReviewSelects,
+                    format!(
+                        "select {} range start_s {} must be before end_s {}",
+                        select.id, select.range.start_s, select.range.end_s
+                    ),
+                ));
+            }
+        }
+
+        for stringout in &self.stringouts {
+            for select_id in &stringout.select_ids {
+                if !select_ids.contains(select_id.as_str()) {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        crate::professional::CapabilityArea::SourceReviewSelects,
+                        format!(
+                            "stringout {} references missing select {}",
+                            stringout.id, select_id
+                        ),
+                    ));
+                }
+            }
+        }
+
+        for animation in &self.parameter_animations {
+            diagnostics.extend(animation.validate());
+        }
+        for template in &self.motion_templates {
+            diagnostics.extend(template.validate());
+        }
+        for graph in &self.composition_graphs {
+            diagnostics.extend(graph.validate());
+        }
+        if let Some(package) = &self.tracking_package {
+            diagnostics.extend(package.validate());
+        }
+
+        diagnostics
+    }
+
+    /// Build a pipeline readiness report covering all 13 professional areas.
+    pub fn build_professional_readiness_report(&self) -> PipelineReadinessReport {
+        use crate::professional::CapabilityArea;
+
+        let diagnostics = self.validate_professional_substrate();
+        let mut stages = vec![
+            stage(
+                CapabilityArea::AssetCatalog,
+                self.asset_catalog
+                    .as_ref()
+                    .is_some_and(|catalog| !catalog.assets.is_empty()),
+                "asset catalog has no assets",
+            ),
+            stage(
+                CapabilityArea::SourceReviewSelects,
+                !self.selects.is_empty() && !self.stringouts.is_empty(),
+                "selects and stringouts are incomplete",
+            ),
+            stage(
+                CapabilityArea::AssemblyAndTimelineOperations,
+                self.extra.contains_key("last_professional_timeline_edit")
+                    || !self.anchors.is_empty()
+                    || !self.source_assets.is_empty(),
+                "assembly state has no professional timeline operation or clip anchors",
+            ),
+            stage(
+                CapabilityArea::EditorialIntentAndReview,
+                !self.cut_boundaries.is_empty() || !self.proposal_packages.is_empty(),
+                "editorial intent and proposal evidence are missing",
+            ),
+            stage(
+                CapabilityArea::ParameterAnimation,
+                !self.parameter_animations.is_empty(),
+                "parameter animations are missing",
+            ),
+            stage(
+                CapabilityArea::MotionGraphicsTemplates,
+                !self.motion_templates.is_empty(),
+                "motion graphics templates are missing",
+            ),
+            stage(
+                CapabilityArea::CompositionGraph,
+                !self.composition_graphs.is_empty(),
+                "composition graphs are missing",
+            ),
+            stage(
+                CapabilityArea::TrackingMasksMattes,
+                self.tracking_package.is_some(),
+                "tracking, mask, and matte package is missing",
+            ),
+            stage(
+                CapabilityArea::ColorFinishing,
+                self.color_finishing.is_some(),
+                "color finishing state is missing",
+            ),
+            stage(
+                CapabilityArea::AudioFinishing,
+                self.audio_finishing.is_some(),
+                "audio finishing state is missing",
+            ),
+            stage(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                !self.delivery_profiles.is_empty() || !self.preflight_reports.is_empty(),
+                "delivery profiles and preflight reports are missing",
+            ),
+            stage(
+                CapabilityArea::WorkflowLenses,
+                !self.workflow_lenses.is_empty(),
+                "workflow lenses are missing",
+            ),
+            stage(
+                CapabilityArea::PreAutonomyOrchestrationContract,
+                self.capability_registry.is_some()
+                    || self.pipeline_readiness.is_some()
+                    || !self.planner_passes.is_empty(),
+                "pre-autonomy registry/readiness/planner contracts are missing",
+            ),
+        ];
+        for diagnostic in diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == FindingSeverity::Error)
+        {
+            if let Some(stage) = stages
+                .iter_mut()
+                .find(|stage| stage.area == diagnostic.area)
+            {
+                stage.state = ReadinessState::Blocked;
+                if stage.blocker.is_none() {
+                    stage.blocker = Some(diagnostic.message.clone());
+                }
+            }
+        }
+
+        let mut blockers: Vec<String> = stages
+            .iter()
+            .filter_map(|stage| stage.blocker.clone())
+            .collect();
+        for diagnostic in diagnostics
+            .into_iter()
+            .filter(|diagnostic| diagnostic.severity == FindingSeverity::Error)
+        {
+            if !blockers.contains(&diagnostic.message) {
+                blockers.push(diagnostic.message);
+            }
+        }
+        PipelineReadinessReport { stages, blockers }
+    }
+
+    fn asset_ids(&self) -> HashSet<&str> {
+        self.asset_catalog
+            .as_ref()
+            .map(|catalog| {
+                catalog
+                    .assets
+                    .iter()
+                    .map(|asset| asset.id.as_str())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+fn stage(
+    area: crate::professional::CapabilityArea,
+    ready: bool,
+    blocker: &str,
+) -> PipelineStageReadiness {
+    PipelineStageReadiness {
+        area,
+        state: if ready {
+            ReadinessState::Ready
+        } else {
+            ReadinessState::Blocked
+        },
+        blocker: if ready { None } else { Some(blocker.into()) },
+    }
 }
 
 /// Reusable timeline-level broadcast overlay configuration.

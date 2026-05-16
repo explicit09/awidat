@@ -474,6 +474,132 @@ fn apply_one(
         EdlOp::SetBroadcastOverlay { config } => {
             apply_set_broadcast_overlay(working, index, config)
         }
+        EdlOp::SetAssetCatalog { catalog } => {
+            let meta = timeline_awidat_metadata(working);
+            meta.asset_catalog = Some(catalog.clone());
+            Ok(format!(
+                "stored asset catalog with {} assets",
+                catalog.assets.len()
+            ))
+        }
+        EdlOp::SetSourceReview {
+            selects,
+            stringouts,
+        } => {
+            let meta = timeline_awidat_metadata(working);
+            meta.selects = selects.clone();
+            meta.stringouts = stringouts.clone();
+            Ok(format!(
+                "stored source review with {} selects and {} stringouts",
+                selects.len(),
+                stringouts.len()
+            ))
+        }
+        EdlOp::ProfessionalTimelineEdit { edit } => {
+            let meta = timeline_awidat_metadata(working);
+            meta.extra.insert(
+                "last_professional_timeline_edit".into(),
+                serde_json::to_value(edit).map_err(|e| ApplyError::Invalid {
+                    index,
+                    message: format!("professional timeline edit could not serialize: {e}"),
+                })?,
+            );
+            Ok(format!("recorded professional timeline edit {edit:?}"))
+        }
+        EdlOp::AddProposalPackage { package } => {
+            let meta = timeline_awidat_metadata(working);
+            replace_by_id(&mut meta.proposal_packages, package.clone(), |item| {
+                &item.id
+            });
+            Ok(format!("stored proposal package {}", package.id))
+        }
+        EdlOp::SetParameterAnimation { animation } => {
+            let meta = timeline_awidat_metadata(working);
+            replace_by_id(&mut meta.parameter_animations, animation.clone(), |item| {
+                &item.id
+            });
+            Ok(format!("stored parameter animation {}", animation.id))
+        }
+        EdlOp::SetMotionTemplate { template } => {
+            let meta = timeline_awidat_metadata(working);
+            replace_by_id(&mut meta.motion_templates, template.clone(), |item| {
+                &item.id
+            });
+            Ok(format!("stored motion template {}", template.id))
+        }
+        EdlOp::AttachComposition { graph, attach_to } => {
+            let meta = timeline_awidat_metadata(working);
+            replace_by_id(&mut meta.composition_graphs, graph.clone(), |item| &item.id);
+            if let Some(range) = attach_to {
+                meta.extra.insert(
+                    format!("composition_attach_{}", graph.id),
+                    serde_json::to_value(range).map_err(|e| ApplyError::Invalid {
+                        index,
+                        message: format!("composition attachment could not serialize: {e}"),
+                    })?,
+                );
+            }
+            Ok(format!("stored composition graph {}", graph.id))
+        }
+        EdlOp::SetTrackingPackage { package } => {
+            let meta = timeline_awidat_metadata(working);
+            meta.tracking_package = Some(package.clone());
+            Ok(format!(
+                "stored tracking package with {} tracks, {} masks, {} mattes",
+                package.tracks.len(),
+                package.masks.len(),
+                package.mattes.len()
+            ))
+        }
+        EdlOp::SetColorFinishing { state } => {
+            let meta = timeline_awidat_metadata(working);
+            meta.color_finishing = Some(state.clone());
+            Ok(format!(
+                "stored color finishing state with {} shot groups",
+                state.shot_groups.len()
+            ))
+        }
+        EdlOp::SetAudioFinishing { state } => {
+            let meta = timeline_awidat_metadata(working);
+            meta.audio_finishing = Some(state.clone());
+            Ok(format!(
+                "stored audio finishing state with {} buses",
+                state.buses.len()
+            ))
+        }
+        EdlOp::SelectDeliveryProfile { profile } => {
+            let meta = timeline_awidat_metadata(working);
+            replace_by_id(&mut meta.delivery_profiles, profile.clone(), |item| {
+                &item.id
+            });
+            Ok(format!("selected delivery profile {}", profile.id))
+        }
+        EdlOp::AddPreflightReport { report } => {
+            let meta = timeline_awidat_metadata(working);
+            replace_by_id(&mut meta.preflight_reports, report.clone(), |item| &item.id);
+            Ok(format!("stored preflight report {}", report.id))
+        }
+        EdlOp::SetWorkflowLens { lens } => {
+            let meta = timeline_awidat_metadata(working);
+            if !meta.workflow_lenses.contains(lens) {
+                meta.workflow_lenses.push(*lens);
+            }
+            meta.extra
+                .insert("active_workflow_lens".into(), serde_json::json!(lens));
+            Ok(format!("set workflow lens to {lens:?}"))
+        }
+        EdlOp::SetPipelineReadiness {
+            readiness,
+            planner_passes,
+        } => {
+            let meta = timeline_awidat_metadata(working);
+            meta.pipeline_readiness = Some(readiness.clone());
+            meta.planner_passes = planner_passes.clone();
+            Ok(format!(
+                "stored pipeline readiness with {} stages",
+                readiness.stages.len()
+            ))
+        }
     }
 }
 
@@ -515,7 +641,21 @@ fn resolve_locator_for_op(
         | EdlOp::SetOutputFormat { .. }
         | EdlOp::SetLoudnessTarget { .. }
         | EdlOp::SetPackageMetadata { .. }
-        | EdlOp::SetBroadcastOverlay { .. } => return Ok(None),
+        | EdlOp::SetBroadcastOverlay { .. }
+        | EdlOp::SetAssetCatalog { .. }
+        | EdlOp::SetSourceReview { .. }
+        | EdlOp::ProfessionalTimelineEdit { .. }
+        | EdlOp::AddProposalPackage { .. }
+        | EdlOp::SetParameterAnimation { .. }
+        | EdlOp::SetMotionTemplate { .. }
+        | EdlOp::AttachComposition { .. }
+        | EdlOp::SetTrackingPackage { .. }
+        | EdlOp::SetColorFinishing { .. }
+        | EdlOp::SetAudioFinishing { .. }
+        | EdlOp::SelectDeliveryProfile { .. }
+        | EdlOp::AddPreflightReport { .. }
+        | EdlOp::SetWorkflowLens { .. }
+        | EdlOp::SetPipelineReadiness { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
         .map(Some)
@@ -3675,6 +3815,18 @@ fn timeline_awidat_metadata(working: &mut Timeline) -> &mut AwidatTimelineMetada
         meta.version = awidat_proto::AWIDAT_PROJECT_VERSION.to_string();
     }
     meta
+}
+
+fn replace_by_id<T, F>(items: &mut Vec<T>, new_item: T, id: F)
+where
+    F: Fn(&T) -> &str,
+{
+    let new_id = id(&new_item).to_string();
+    if let Some(existing) = items.iter_mut().find(|item| id(item) == new_id) {
+        *existing = new_item;
+    } else {
+        items.push(new_item);
+    }
 }
 
 fn apply_set_output_format(

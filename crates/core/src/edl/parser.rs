@@ -28,11 +28,18 @@ use awidat_proto::awidat_meta::{
     AudioRelation, BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry, CutType,
     SemanticCutSpec, SplitEditSpec,
 };
+use awidat_proto::professional::{
+    AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
+    MotionGraphicsTemplate, ParameterAnimation, PipelineReadinessReport, PlannerPassContract,
+    PreflightReport, ProposalPackage, SourceRange, SourceSelect, Stringout, TrackingPackage,
+    WorkflowLens,
+};
 use thiserror::Error;
 
 use super::op::{
     Anchor, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand, InsertTrackKind, PiPCorner,
-    TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
+    ProfessionalTimelineEdit, TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment,
+    TransitionBetween,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -244,6 +251,20 @@ enum OpKind {
     SetLoudnessTarget,
     SetPackageMetadata,
     SetBroadcastOverlay,
+    SetAssetCatalog,
+    SetSourceReview,
+    ProfessionalTimelineEdit,
+    AddProposalPackage,
+    SetParameterAnimation,
+    SetMotionTemplate,
+    AttachComposition,
+    SetTrackingPackage,
+    SetColorFinishing,
+    SetAudioFinishing,
+    SelectDeliveryProfile,
+    AddPreflightReport,
+    SetWorkflowLens,
+    SetPipelineReadiness,
 }
 
 impl OpBuilder {
@@ -281,6 +302,20 @@ impl OpBuilder {
             "Set Loudness Target" => OpKind::SetLoudnessTarget,
             "Set Package Metadata" => OpKind::SetPackageMetadata,
             "Set Broadcast Overlay" => OpKind::SetBroadcastOverlay,
+            "Set Asset Catalog" => OpKind::SetAssetCatalog,
+            "Set Source Review" => OpKind::SetSourceReview,
+            "Professional Timeline Edit" => OpKind::ProfessionalTimelineEdit,
+            "Add Proposal Package" => OpKind::AddProposalPackage,
+            "Set Parameter Animation" => OpKind::SetParameterAnimation,
+            "Set Motion Template" => OpKind::SetMotionTemplate,
+            "Attach Composition" => OpKind::AttachComposition,
+            "Set Tracking Package" => OpKind::SetTrackingPackage,
+            "Set Color Finishing" => OpKind::SetColorFinishing,
+            "Set Audio Finishing" => OpKind::SetAudioFinishing,
+            "Select Delivery Profile" => OpKind::SelectDeliveryProfile,
+            "Add Preflight Report" => OpKind::AddPreflightReport,
+            "Set Workflow Lens" => OpKind::SetWorkflowLens,
+            "Set Pipeline Readiness" => OpKind::SetPipelineReadiness,
             other => {
                 return Err(EdlParseError::UnknownOp {
                     line,
@@ -965,6 +1000,89 @@ impl OpBuilder {
                 let config = parse_broadcast_overlay_config(&mut fields, head)?;
                 Ok(EdlOp::SetBroadcastOverlay { config })
             }
+            OpKind::SetAssetCatalog => Ok(EdlOp::SetAssetCatalog {
+                catalog: take_required_json(&mut fields, "catalog_json", head)?,
+            }),
+            OpKind::SetSourceReview => Ok(EdlOp::SetSourceReview {
+                selects: take_required_json::<Vec<SourceSelect>>(
+                    &mut fields,
+                    "selects_json",
+                    head,
+                )?,
+                stringouts: take_field_json::<Vec<Stringout>>(
+                    &mut fields,
+                    "stringouts_json",
+                    head,
+                )?
+                .unwrap_or_default(),
+            }),
+            OpKind::ProfessionalTimelineEdit => Ok(EdlOp::ProfessionalTimelineEdit {
+                edit: take_required_json::<ProfessionalTimelineEdit>(
+                    &mut fields,
+                    "edit_json",
+                    head,
+                )?,
+            }),
+            OpKind::AddProposalPackage => Ok(EdlOp::AddProposalPackage {
+                package: take_required_json::<ProposalPackage>(&mut fields, "package_json", head)?,
+            }),
+            OpKind::SetParameterAnimation => Ok(EdlOp::SetParameterAnimation {
+                animation: take_required_json::<ParameterAnimation>(
+                    &mut fields,
+                    "animation_json",
+                    head,
+                )?,
+            }),
+            OpKind::SetMotionTemplate => Ok(EdlOp::SetMotionTemplate {
+                template: take_required_json::<MotionGraphicsTemplate>(
+                    &mut fields,
+                    "template_json",
+                    head,
+                )?,
+            }),
+            OpKind::AttachComposition => Ok(EdlOp::AttachComposition {
+                graph: take_required_json::<CompositionGraph>(&mut fields, "graph_json", head)?,
+                attach_to: take_field_json::<SourceRange>(&mut fields, "attach_to_json", head)?,
+            }),
+            OpKind::SetTrackingPackage => Ok(EdlOp::SetTrackingPackage {
+                package: take_required_json::<TrackingPackage>(&mut fields, "package_json", head)?,
+            }),
+            OpKind::SetColorFinishing => Ok(EdlOp::SetColorFinishing {
+                state: take_required_json::<ColorFinishingState>(&mut fields, "state_json", head)?,
+            }),
+            OpKind::SetAudioFinishing => Ok(EdlOp::SetAudioFinishing {
+                state: take_required_json::<AudioFinishingState>(&mut fields, "state_json", head)?,
+            }),
+            OpKind::SelectDeliveryProfile => Ok(EdlOp::SelectDeliveryProfile {
+                profile: take_required_json::<DeliveryProfile>(&mut fields, "profile_json", head)?,
+            }),
+            OpKind::AddPreflightReport => Ok(EdlOp::AddPreflightReport {
+                report: take_required_json::<PreflightReport>(&mut fields, "report_json", head)?,
+            }),
+            OpKind::SetWorkflowLens => Ok(EdlOp::SetWorkflowLens {
+                lens: parse_workflow_lens(
+                    take_field_string(&mut fields, "lens")
+                        .as_deref()
+                        .ok_or_else(|| EdlParseError::MissingField {
+                            line: head,
+                            field: "lens".into(),
+                        })?,
+                    head,
+                )?,
+            }),
+            OpKind::SetPipelineReadiness => Ok(EdlOp::SetPipelineReadiness {
+                readiness: take_required_json::<PipelineReadinessReport>(
+                    &mut fields,
+                    "readiness_json",
+                    head,
+                )?,
+                planner_passes: take_field_json::<Vec<PlannerPassContract>>(
+                    &mut fields,
+                    "planner_passes_json",
+                    head,
+                )?
+                .unwrap_or_default(),
+            }),
         }
     }
 }
@@ -1354,6 +1472,36 @@ fn take_field_json<T: serde::de::DeserializeOwned>(
             raw: format!("{key}: {raw}"),
             message: format!("must be valid JSON for {key}: {e}"),
         })
+}
+
+fn take_required_json<T: serde::de::DeserializeOwned>(
+    fields: &mut Vec<(String, FieldValue)>,
+    key: &str,
+    line: usize,
+) -> Result<T, EdlParseError> {
+    take_field_json(fields, key, line)?.ok_or_else(|| EdlParseError::MissingField {
+        line,
+        field: key.into(),
+    })
+}
+
+fn parse_workflow_lens(raw: &str, line: usize) -> Result<WorkflowLens, EdlParseError> {
+    match raw {
+        "media" => Ok(WorkflowLens::Media),
+        "selects" => Ok(WorkflowLens::Selects),
+        "assembly" => Ok(WorkflowLens::Assembly),
+        "edit_review" => Ok(WorkflowLens::EditReview),
+        "vfx" => Ok(WorkflowLens::Vfx),
+        "color" => Ok(WorkflowLens::Color),
+        "audio" => Ok(WorkflowLens::Audio),
+        "delivery" => Ok(WorkflowLens::Delivery),
+        "preflight" => Ok(WorkflowLens::Preflight),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("lens: {other}"),
+            message: "must be one of: media, selects, assembly, edit_review, vfx, color, audio, delivery, preflight".into(),
+        }),
+    }
 }
 
 fn parse_insert_track_kind(raw: &str, line: usize) -> Result<InsertTrackKind, EdlParseError> {

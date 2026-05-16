@@ -10,8 +10,12 @@ import type { ItemLifecycle } from "./ItemLifecycle";
 import type { JobKind } from "./JobKind";
 import type { JobResult } from "./JobResult";
 import type { PlanStep } from "./PlanStep";
+import type { ProfessionalCapabilityArea } from "./ProfessionalCapabilityArea";
+import type { ProfessionalReviewFinding } from "./ProfessionalReviewFinding";
 import type { ProposalSource } from "./ProposalSource";
+import type { ReadinessStateTag } from "./ReadinessStateTag";
 import type { TimelineSnapshot } from "./TimelineSnapshot";
+import type { WorkflowLensTag } from "./WorkflowLensTag";
 
 /**
  * One addressable thing the agent emitted during a Turn. Every Item
@@ -212,7 +216,39 @@ result: JobResult | null,
  * proxy mp4); `None` otherwise. Frontend uses it for the
  * "Show in Finder" button on Render's Completed-Ok phase.
  */
-output_path: string | null, } | { "kind": "editorial_note",
+output_path: string | null, } | { "kind": "professional_review",
+/**
+ * Stable id.
+ */
+id: Id,
+/**
+ * Lifecycle phase.
+ */
+phase: ItemLifecycle,
+/**
+ * Capability area this package belongs to.
+ */
+area: ProfessionalCapabilityArea,
+/**
+ * Lens where the package should appear.
+ */
+lens: WorkflowLensTag,
+/**
+ * Readiness state for this package.
+ */
+readiness: ReadinessStateTag,
+/**
+ * User-facing summary.
+ */
+summary: string,
+/**
+ * Evidence, blockers, or review rows.
+ */
+findings: Array<ProfessionalReviewFinding>,
+/**
+ * Optional opaque payload for specialized inspectors.
+ */
+payload: unknown, } | { "kind": "editorial_note",
 /**
  * Stable id (matches the underlying Note record so dismiss /
  * resolve commands can find it).
