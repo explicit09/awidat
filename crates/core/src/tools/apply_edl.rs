@@ -24,6 +24,7 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
+use crate::edl::op::{BRollPosition, EdlOp};
 use crate::edl::{
     AnchorContext, ApplyError, EdlParseError, apply as edl_apply, parse as edl_parse,
 };
@@ -109,6 +110,15 @@ impl ToolHandler for ApplyEdlTool {
                 short_sha256(normalize_edl_for_approval(edl).as_bytes())
             ),
         )]
+    }
+
+    fn editorial_decision_tags(&self, invocation: &ToolInvocation) -> Vec<String> {
+        let Some(edl) = invocation.args.get("edl").and_then(|v| v.as_str()) else {
+            return Vec::new();
+        };
+        edl_parse(edl)
+            .map(|envelope| editorial_tags_for_envelope(&envelope))
+            .unwrap_or_default()
     }
 
     async fn handle(
@@ -281,6 +291,143 @@ fn normalize_edl_for_approval(edl: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn editorial_tags_for_envelope(envelope: &crate::edl::EdlEnvelope) -> Vec<String> {
+    let mut tags = Vec::new();
+    let mut transition_count = 0_usize;
+    for op in &envelope.ops {
+        match op {
+            EdlOp::SetCutIntent { spec, .. } => {
+                push_tag_owned(&mut tags, "cut_type", serde_tag(&spec.cut_type));
+                push_tag(&mut tags, "cut_intent", Some(spec.intent.as_str()));
+                push_tag_owned(&mut tags, "audio_relation", serde_tag(&spec.audio_relation));
+                if spec.intent == "thematic_montage" {
+                    tags.push("broll_mode:thematic_montage".into());
+                }
+            }
+            EdlOp::InsertTransition { kind, spec, .. } => {
+                transition_count += 1;
+                tags.push(format!("transition_id:{}", normalize_tag_value(kind)));
+                if let Some(family) = spec
+                    .as_ref()
+                    .and_then(|spec| spec.family.as_deref())
+                    .or_else(|| {
+                        awidat_proto::transitions::lookup_builtin_transition(kind)
+                            .map(|transition| transition.family)
+                    })
+                {
+                    push_tag(&mut tags, "transition_family", Some(family));
+                }
+                if let Some(intent) = spec.as_ref().and_then(|spec| spec.intent.as_deref()) {
+                    push_tag(&mut tags, "transition_intent", Some(intent));
+                }
+            }
+            EdlOp::SetAudioLead { lead_s, .. } => {
+                tags.push("split_edit:j_cut".into());
+                tags.push(format!("audio_lead_range:{}", split_lead_bucket(*lead_s)));
+            }
+            EdlOp::SetAudioTrail { trail_s, .. } => {
+                tags.push("split_edit:l_cut".into());
+                tags.push(format!(
+                    "audio_trail_range:{}",
+                    split_trail_bucket(*trail_s)
+                ));
+            }
+            EdlOp::InsertBRoll { position, .. } => {
+                tags.push("broll_mode:literal_cover".into());
+                tags.push(format!(
+                    "broll_position:{}",
+                    match position {
+                        BRollPosition::Overlay => "overlay",
+                        BRollPosition::Replace => "replace",
+                    }
+                ));
+            }
+            EdlOp::SetOutputFormat {
+                aspect_ratio,
+                platform,
+                safe_area,
+            } => {
+                push_tag(&mut tags, "format_aspect", Some(aspect_ratio.as_str()));
+                push_tag(&mut tags, "format_platform", platform.as_deref());
+                push_tag(&mut tags, "format_safe_area", safe_area.as_deref());
+            }
+            _ => {}
+        }
+    }
+    if transition_count > 0 {
+        tags.push(format!(
+            "transition_density:{}",
+            transition_density_bucket(transition_count)
+        ));
+    }
+    tags.sort();
+    tags.dedup();
+    if tags.contains(&"broll_mode:thematic_montage".to_string()) {
+        tags.retain(|tag| tag != "broll_mode:literal_cover");
+    }
+    tags
+}
+
+fn transition_density_bucket(transition_count: usize) -> &'static str {
+    match transition_count {
+        0 => "none",
+        1 => "single",
+        2 => "moderate",
+        _ => "high",
+    }
+}
+
+fn push_tag(tags: &mut Vec<String>, key: &str, value: Option<&str>) {
+    if let Some(value) = value {
+        let value = normalize_tag_value(value);
+        if !value.is_empty() {
+            tags.push(format!("{key}:{value}"));
+        }
+    }
+}
+
+fn push_tag_owned(tags: &mut Vec<String>, key: &str, value: Option<String>) {
+    if let Some(value) = value {
+        push_tag(tags, key, Some(&value));
+    }
+}
+
+fn serde_tag<T: serde::Serialize>(value: &T) -> Option<String> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+}
+
+fn normalize_tag_value(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c == ':' { 'x' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        .collect()
+}
+
+fn split_lead_bucket(seconds: f64) -> &'static str {
+    if seconds < 0.25 {
+        "under_0_25"
+    } else if seconds <= 0.60 {
+        "0_25_to_0_60"
+    } else {
+        "over_0_60"
+    }
+}
+
+fn split_trail_bucket(seconds: f64) -> &'static str {
+    if seconds < 0.25 {
+        "under_0_25"
+    } else if seconds <= 0.80 {
+        "0_25_to_0_80"
+    } else {
+        "over_0_80"
+    }
 }
 
 fn format_parse_error(e: &EdlParseError) -> String {
@@ -461,15 +608,33 @@ clip from a raw asset and inserts it on the named track (track is \
 created Video-kind if missing). The ONLY op that doesn't take an \
 `@@ anchor:` line — it builds a clip rather than locating one.\
 \n  - **Insert Transition**: `+ kind: <name>` and `+ duration_s: \
-<seconds>` (required). Anchored via `@@ between: ANCHOR_A and \
+<seconds>` (required). Optional `+ alignment: <center|start_at_cut|\
+end_at_cut>` (default `center`), or explicit `+ in_offset_s: <seconds>` \
+and/or `+ out_offset_s: <seconds>` for asymmetric placement. Anchored via `@@ between: ANCHOR_A and \
 ANCHOR_B` where the two anchors identify ADJACENT clips on the \
-same track (the transition sits between them at the cut). Common \
-kinds: `SMPTE_Dissolve` (cross-fade), `awidat.fade_in`, \
-`awidat.fade_out`. The render pipeline maps these to ffmpeg's \
-xfade transition names. duration_s applies symmetrically — half \
-reaches into the outgoing clip, half into the incoming. Transitions \
-may be chained across adjacent clips; transitions still cannot cross \
-gaps or non-adjacent anchors.\
+same track. The transition is centered on the cut: half of \
+`duration_s` uses incoming pre-roll before the cut, half uses outgoing \
+post-roll after the cut. In OTIO terms, `in_offset_s` is incoming pre-roll before \
+the cut and `out_offset_s` is outgoing post-roll after the cut. Awidat \
+validates source handles before inserting. New EDLs must use a registered \
+`awidat.*` transition id or `SMPTE_Dissolve`; raw FFmpeg transition names \
+are render-legacy only. Optional `+ composition_json: {...}` stores a \
+data-only transition recipe over stable primitives (`opacity`, `push`, \
+`wipe`, `zoom`, `blur`, `flash`, `shake`, `chromatic_split`, `pixelize`, \
+or stable `atomic` awidat ids). Do not put raw FFmpeg graphs, GLSL, shell, \
+or plugin code in transition metadata. Use `awidat.composite` for a \
+custom on-the-spot recipe whose `composition_json` defines the actual feel. \
+Prefer `awidat.cross_dissolve` or `SMPTE_Dissolve` \
+for interview/dialogue smoothing. Use `awidat.fade_black` only for \
+intentional chapter resets or endings; it is a fade-through-black, \
+not a normal dissolve. Do not use legacy `awidat.fade_in` / \
+`awidat.fade_out` between ordinary adjacent clips unless the user \
+explicitly asks for a black dip. Transitions may be chained across \
+adjacent clips; transitions still cannot cross gaps or non-adjacent \
+anchors.\
+\n  - **Delete Transition**: no fields. Anchored via `@@ between: \
+ANCHOR_A and ANCHOR_B` where the two anchors identify the clips \
+immediately before and after an existing transition on the same track.\
 \n  - **Move Clip**: `+ to_position: <index>` (required). Moves \
 the anchored clip to a new position within its current track \
 (no cross-track moves in v1). Index is the clip's slot in the \
@@ -524,11 +689,16 @@ correction rather than stacking. Render maps these controls to FFmpeg \
 color filters before speed, concat, transitions, and title overlays. \
 Ranges: exposure_ev `[-4,4]`, contrast/saturation `[0,3]`, all other \
 controls `[-1,1]`.\
-\n  - **Apply LUT**: `+ lut_path: <project-relative-path>` (required). \
+\n  - **Apply LUT**: `+ lut_path: <project-relative-path>` (required), \
+optional `+ interpolation: <nearest|trilinear|tetrahedral|pyramid|prism>`. \
 Anchored to a clip. Stamps an `awidat.lut` Effect with a project-relative \
-LUT path; paths must be non-empty, non-absolute, and must not contain \
-`..`. Render emits `lut3d` for this segment before speed, concat, \
-transitions, and title overlays.\
+LUT path; paths must be non-empty, non-absolute, must not contain `.`, \
+`..`, or backslashes, and must end in `.3dl`, `.cube`, `.dat`, `.m3d`, \
+or `.csp`. Re-applying replaces the prior LUT. Render emits `lut3d` \
+for this segment before speed, concat, transitions, and title overlays.\
+\n  - **Remove LUT**: no fields besides the anchor. Clears `awidat.lut` \
+from the clip while leaving color correction, speed, audio, and title \
+effects intact.\
 \n  - **Insert Title**: `+ start_s: <seconds>`, `+ end_s: <seconds>`, \
 `+ text: \"<string>\"` (required). Optional `+ position: <top|center\
 |bottom>` (default `center`), `+ font_size: <px>` (default 64), \
@@ -942,5 +1112,112 @@ mod tests {
             "edl": "*** Begin EDL\n*** End EDL\n",
         }));
         assert!(ApplyEdlTool.is_mutating(&inv));
+    }
+
+    #[test]
+    fn approval_learning_tags_capture_editorial_dimensions() {
+        let edl = "\
+*** Begin EDL
+*** Set Cut Intent
+@@ between: clip_uuid=a and clip_uuid=b
++ cut_type: jump_cut
++ intent: thematic_montage
++ audio_relation: sync
+
+*** Insert Transition
+@@ between: clip_uuid=b and clip_uuid=c
++ kind: awidat.whip_pan_right
++ duration_s: 0.180
++ intent: hide_motion_jump
+
+*** Set Audio Lead
+@@ anchor: clip_uuid=c
++ lead_s: 0.450
++ reason: speaker handoff
+
+*** Insert BRoll
+@@ anchor: clip_uuid=c
++ asset: raw/montage/factory.mp4
++ duration_s: 2.000
++ position: overlay
+*** End EDL
+";
+        let inv = invoke(serde_json::json!({ "edl": edl }));
+        let tags = crate::tool::ToolHandler::editorial_decision_tags(&ApplyEdlTool, &inv);
+
+        for expected in [
+            "cut_type:jump_cut",
+            "cut_intent:thematic_montage",
+            "audio_relation:sync",
+            "transition_family:motion_blur",
+            "transition_intent:hide_motion_jump",
+            "split_edit:j_cut",
+            "audio_lead_range:0_25_to_0_60",
+            "broll_mode:thematic_montage",
+            "broll_position:overlay",
+        ] {
+            assert!(
+                tags.iter().any(|tag| tag == expected),
+                "missing {expected}: {tags:?}"
+            );
+        }
+        assert!(!tags.iter().any(|tag| tag == "broll_mode:literal_cover"));
+    }
+
+    #[test]
+    fn approval_learning_tags_capture_transition_density() {
+        let edl = "\
+*** Begin EDL
+*** Insert Transition
+@@ between: clip_uuid=a and clip_uuid=b
++ kind: awidat.flash_white
++ duration_s: 0.120
++ intent: beat_hit
+
+*** Insert Transition
+@@ between: clip_uuid=b and clip_uuid=c
++ kind: awidat.whip_pan_right
++ duration_s: 0.180
++ intent: hide_motion_jump
+
+*** Insert Transition
+@@ between: clip_uuid=c and clip_uuid=d
++ kind: awidat.zoom_in
++ duration_s: 0.160
++ intent: emphasis
+*** End EDL
+";
+        let inv = invoke(serde_json::json!({ "edl": edl }));
+        let tags = crate::tool::ToolHandler::editorial_decision_tags(&ApplyEdlTool, &inv);
+
+        assert!(
+            tags.iter().any(|tag| tag == "transition_density:high"),
+            "missing transition density tag: {tags:?}"
+        );
+    }
+
+    #[test]
+    fn approval_learning_tags_capture_project_format_defaults() {
+        let edl = "\
+*** Begin EDL
+*** Set Output Format
++ aspect_ratio: 9:16
++ platform: youtube_shorts
++ safe_area: mobile
+*** End EDL
+";
+        let inv = invoke(serde_json::json!({ "edl": edl }));
+        let tags = crate::tool::ToolHandler::editorial_decision_tags(&ApplyEdlTool, &inv);
+
+        for expected in [
+            "format_aspect:9x16",
+            "format_platform:youtube_shorts",
+            "format_safe_area:mobile",
+        ] {
+            assert!(
+                tags.iter().any(|tag| tag == expected),
+                "missing {expected}: {tags:?}"
+            );
+        }
     }
 }

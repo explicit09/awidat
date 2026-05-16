@@ -43,7 +43,7 @@ def main() -> None:
                 "target_s": round(t, 3),
                 "beat_index": i,
                 "near_motion": motion_near(shot, t),
-                "transition": "none" if i else "awidat.fade_in",
+                "transition": "none",
                 "tolerance_ms": 50,
             })
     print(json.dumps({"cut_every": args.cut_every, "cuts": cuts}, indent=2))

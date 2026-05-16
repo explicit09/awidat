@@ -12,7 +12,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useAgentStore } from "../agent/store";
 import { useTimelineStore } from "../timeline/store";
+import { useProposalStore } from "../timeline/proposal";
 import { useProjectStore } from "./state";
+import { useNotesStore } from "../notes/store";
 import { useExportJob } from "./useExportJob";
 import type { PermissionMode } from "../protocol";
 import { MENU_COMMANDS, onMenuCommand } from "./menuCommands";
@@ -21,6 +23,8 @@ export function ActionBar() {
   const items = useAgentStore((s) => s.items);
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const projectRoot = useProjectStore((s) => s.current);
+  const activeProposal = useProposalStore((s) => s.active);
+  const notes = useNotesStore((s) => s.notes);
   const { start: startExport } = useExportJob();
   const [showUrl, setShowUrl] = useState(false);
   const [urlInput, setUrlInput] = useState("");
@@ -61,6 +65,11 @@ export function ActionBar() {
   const indexBusy = runningKinds.includes("indexing");
   const exportBusy = runningKinds.includes("render");
   const exportDisabled = exportBusy || timelineDuration === 0;
+  const runningJobs = items.filter(
+    (it): it is Extract<typeof items[number], { kind: "job" }> =>
+      it.kind === "job" && it.phase !== "completed",
+  );
+  const openNotes = notes.filter((note) => note.status === "open").length;
 
   async function importLocal() {
     setError(null);
@@ -129,31 +138,54 @@ export function ActionBar() {
   return (
     <>
       <div className="action-bar">
-        <button onClick={importLocal} disabled={importBusy}>
-          Import files…
-        </button>
-        <button onClick={() => setShowUrl(true)} disabled={importBusy}>
-          Import URL…
-        </button>
+        <div className="command-group command-group-primary">
+          <button onClick={importLocal} disabled={importBusy}>
+            Import files…
+          </button>
+          <button onClick={() => setShowUrl(true)} disabled={importBusy}>
+            Import URL…
+          </button>
+        </div>
         <span className="action-bar-divider" aria-hidden="true" />
-        <button onClick={runIndex} disabled={indexBusy || transcodeBusy}>
-          Run indexers
-        </button>
-        <span className="action-bar-divider" aria-hidden="true" />
-        <button
-          onClick={runExport}
-          disabled={exportDisabled}
-          title={
-            timelineDuration === 0
-              ? "Add clips to the timeline before exporting"
-              : exportBusy
-              ? "Export in progress"
-              : "Render the timeline to mp4"
-          }
-        >
-          Export…
-        </button>
+        <div className="command-group">
+          <button onClick={runIndex} disabled={indexBusy || transcodeBusy}>
+            Run indexers
+          </button>
+          <button
+            onClick={runExport}
+            disabled={exportDisabled}
+            title={
+              timelineDuration === 0
+                ? "Add clips to the timeline before exporting"
+                : exportBusy
+                ? "Export in progress"
+                : "Render the timeline to mp4"
+            }
+          >
+            Export…
+          </button>
+        </div>
         <span className="action-bar-spacer" aria-hidden="true" />
+        <div className="global-status-strip" aria-label="Workspace status">
+          {activeProposal && (
+            <span className="status-pill status-pill-proposal" title={activeProposal.summary}>
+              proposal open
+            </span>
+          )}
+          {runningJobs.length > 0 && (
+            <span className="status-pill status-pill-running">
+              {runningJobs.length} job{runningJobs.length === 1 ? "" : "s"}
+            </span>
+          )}
+          {openNotes > 0 && (
+            <span className="status-pill status-pill-notes">
+              {openNotes} note{openNotes === 1 ? "" : "s"}
+            </span>
+          )}
+          <span className="status-pill status-pill-timeline">
+            {timelineDuration > 0 ? `${timelineDuration.toFixed(1)}s cut` : "empty cut"}
+          </span>
+        </div>
         <label
           className="permission-mode"
           title={permissionModeTitle(mode)}
@@ -228,6 +260,6 @@ function permissionModeTitle(mode: PermissionMode): string {
     case "copilot":
       return "Copilot: agent surfaces editorial notes; you ask it to act on them.";
     case "autopilot":
-      return "Autopilot: agent applies editing/index/render tool calls without approval cards; shell still asks.";
+      return "Autopilot: agent applies editing, indexing, render, and shell tool calls without approval cards.";
   }
 }

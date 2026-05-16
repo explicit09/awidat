@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a before/after contact sheet from rendered videos.
+"""Create a rendered contact sheet from one or two videos.
 
 This is a verification helper, not an editor. It reads final rendered
 artifacts and writes a simple binary PPM sheet so it does not need Pillow.
@@ -36,7 +36,10 @@ def probe_size(path: Path) -> tuple[int, int]:
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip())
-    w, h = (int(part) for part in proc.stdout.strip().split(","))
+    dims = [int(part) for part in proc.stdout.replace("\n", ",").split(",") if part.strip()]
+    if len(dims) < 2:
+        raise RuntimeError(f"ffprobe did not report width/height for {path}")
+    w, h = dims[:2]
     return w, h
 
 
@@ -88,26 +91,31 @@ def paste(canvas: bytearray, canvas_w: int, tile: bytes, tile_w: int, tile_h: in
         canvas[dst_start : dst_start + row_bytes] = tile[src_start : src_start + row_bytes]
 
 
-def make_sheet(before: Path, after: Path, output: Path, times: list[float], width: int) -> dict:
-    before_h = scaled_height(before, width)
+def make_sheet(before: Path | None, after: Path, output: Path, times: list[float], width: int) -> dict:
     after_h = scaled_height(after, width)
+    before_h = scaled_height(before, width) if before else after_h
     tile_h = max(before_h, after_h)
-    sheet_w = width * 2
+    columns = 2 if before else 1
+    sheet_w = width * columns
     sheet_h = tile_h * len(times)
     canvas = bytearray([24, 24, 24] * sheet_w * sheet_h)
 
     for idx, t_s in enumerate(times):
         row_y = idx * tile_h
-        before_rgb = extract_rgb(before, t_s, width, before_h)
         after_rgb = extract_rgb(after, t_s, width, after_h)
-        paste(canvas, sheet_w, before_rgb, width, before_h, 0, row_y)
-        paste(canvas, sheet_w, after_rgb, width, after_h, width, row_y)
+        if before:
+            before_rgb = extract_rgb(before, t_s, width, before_h)
+            paste(canvas, sheet_w, before_rgb, width, before_h, 0, row_y)
+            paste(canvas, sheet_w, after_rgb, width, after_h, width, row_y)
+        else:
+            paste(canvas, sheet_w, after_rgb, width, after_h, 0, row_y)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as fh:
         fh.write(f"P6\n{sheet_w} {sheet_h}\n255\n".encode("ascii"))
         fh.write(canvas)
-    return {"ok": True, "output": str(output), "width": sheet_w, "height": sheet_h, "times_s": times}
+    mode = "before_after" if before else "after_only"
+    return {"ok": True, "output": str(output), "width": sheet_w, "height": sheet_h, "times_s": times, "mode": mode}
 
 
 def parse_times(raw: str) -> list[float]:
@@ -116,17 +124,17 @@ def parse_times(raw: str) -> list[float]:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--before-render", required=True)
+    parser.add_argument("--before-render")
     parser.add_argument("--after-render", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--times", default="0,5,10")
     parser.add_argument("--tile-width", type=int, default=320)
     args = parser.parse_args()
 
-    before = Path(args.before_render)
+    before = Path(args.before_render) if args.before_render else None
     after = Path(args.after_render)
     errors = []
-    if not before.exists():
+    if before and not before.exists():
         errors.append(f"before render not found: {before}")
     if not after.exists():
         errors.append(f"after render not found: {after}")

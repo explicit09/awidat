@@ -27,7 +27,7 @@
 // not double with the first-class mix used by export.
 
 import { useMemo } from "react";
-import { useTimelineStore } from "./store";
+import { useTimelineStore, type TimelineSnapshot } from "./store";
 
 export type PlaySegment = {
   /** Absolute path to the proxy mp4 — pass to convertFileSrc(). */
@@ -59,6 +59,24 @@ export type VideoOverlaySegment = PlaySegment & {
   zIndex: number;
 };
 
+export type PreviewTransition = {
+  kind: string;
+  cutTime: number;
+  inOffset: number;
+  outOffset: number;
+  timelineStart: number;
+  timelineEnd: number;
+  duration: number;
+  from: PlaySegment;
+  to: PlaySegment;
+};
+
+type PreviewPlan = {
+  segments: PlaySegment[];
+  transitions: PreviewTransition[];
+  duration: number;
+};
+
 /**
  * Walk the snapshot's first video track and produce the playable
  * segments. Empty array when:
@@ -72,41 +90,17 @@ export type VideoOverlaySegment = PlaySegment & {
  */
 export function usePlaySegments(): PlaySegment[] {
   const snapshot = useTimelineStore((s) => s.snapshot);
-  return useMemo(() => {
-    const videoTrack = snapshot.tracks.find(
-      (t) => t.kind === "video" && t.role !== "titles",
-    );
-    if (!videoTrack) return [];
-    const hasExplicitAudio = snapshot.tracks.some((t) => t.kind === "audio");
+  return useMemo(() => derivePreviewPlan(snapshot).segments, [snapshot]);
+}
 
-    const segments: PlaySegment[] = [];
-    for (const item of videoTrack.items) {
-      if (item.kind !== "clip") continue;
-      // Skip clips with no proxy yet — the segmented player would
-      // hit a 404 on the asset: protocol. Once the transcoder
-      // finishes and read_timeline returns, the segment shows up.
-      if (item.proxy_path === null) continue;
-      // Defensive: a clip with no source range is a 0-second item;
-      // skip it to avoid emitting a zero-duration segment.
-      if (item.duration_s <= 0) continue;
-      const sourceStart = item.source_start_s ?? 0;
-      segments.push({
-        proxyPath: item.proxy_path,
-        proxyStem: stemFromProxyPath(item.proxy_path),
-        sourceStart,
-        sourceEnd: sourceStart + item.duration_s,
-        timelineStart: item.track_start_s,
-        timelineEnd: item.track_start_s + item.duration_s,
-        volume: hasExplicitAudio ? 0 : item.volume ?? 1,
-        speed: item.speed ?? 1,
-        clipIndex: item.index,
-      });
-    }
-    // The OTIO walk already produces them in track order, but sort
-    // defensively in case a future flattener change reorders.
-    segments.sort((a, b) => a.timelineStart - b.timelineStart);
-    return segments;
-  }, [snapshot]);
+export function usePreviewTransitions(): PreviewTransition[] {
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  return useMemo(() => derivePreviewPlan(snapshot).transitions, [snapshot]);
+}
+
+export function usePreviewDuration(): number {
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  return useMemo(() => derivePreviewPlan(snapshot).duration, [snapshot]);
 }
 
 /**
@@ -183,6 +177,94 @@ function clampNumber(
   return Math.max(min, Math.min(max, value as number));
 }
 
+function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
+  const videoTrack = snapshot.tracks.find(
+    (t) => t.kind === "video" && t.role !== "titles",
+  );
+  if (!videoTrack) return { segments: [], transitions: [], duration: 0 };
+  const hasExplicitAudio = snapshot.tracks.some((t) => t.kind === "audio");
+
+  const segments: PlaySegment[] = [];
+  const transitions: PreviewTransition[] = [];
+  let pendingTransition: {
+    kind: string;
+    duration: number;
+    inOffset: number;
+    outOffset: number;
+  } | null = null;
+
+  for (const item of videoTrack.items) {
+    if (item.kind === "gap") {
+      pendingTransition = null;
+      continue;
+    }
+    if (item.kind === "transition") {
+      pendingTransition = {
+        kind: item.effect_name,
+        duration: Math.max(0, item.duration_s),
+        inOffset: Math.max(0, item.in_offset_s),
+        outOffset: Math.max(0, item.out_offset_s),
+      };
+      continue;
+    }
+    if (item.kind !== "clip") continue;
+    if (item.proxy_path === null || item.duration_s <= 0) {
+      pendingTransition = null;
+      continue;
+    }
+
+    const originalSourceStart = item.source_start_s ?? 0;
+    const segment: PlaySegment = {
+      proxyPath: item.proxy_path,
+      proxyStem: stemFromProxyPath(item.proxy_path),
+      sourceStart: originalSourceStart,
+      sourceEnd: originalSourceStart + item.duration_s,
+      timelineStart: item.track_start_s,
+      timelineEnd: item.track_start_s + item.duration_s,
+      volume: hasExplicitAudio ? 0 : item.volume ?? 1,
+      speed: item.speed ?? 1,
+      clipIndex: item.index,
+    };
+
+    const previous = segments[segments.length - 1];
+    if (pendingTransition && previous && pendingTransition.duration > 0) {
+      const duration = Math.min(
+        pendingTransition.duration,
+        Math.max(0, previous.timelineEnd - previous.timelineStart),
+        Math.max(0, segment.timelineEnd - segment.timelineStart),
+      );
+      if (duration > 0) {
+        const inOffset = Math.min(pendingTransition.inOffset, duration);
+        const outOffset = Math.min(
+          pendingTransition.outOffset,
+          Math.max(0, duration - inOffset),
+        );
+        const cutTime = segment.timelineStart;
+        transitions.push({
+          kind: pendingTransition.kind,
+          cutTime,
+          inOffset,
+          outOffset,
+          timelineStart: cutTime - inOffset,
+          timelineEnd: cutTime + outOffset,
+          duration,
+          from: previous,
+          to: segment,
+        });
+      }
+    }
+
+    segments.push(segment);
+    pendingTransition = null;
+  }
+
+  return {
+    segments,
+    transitions,
+    duration: snapshot.duration_s,
+  };
+}
+
 /**
  * Map a `(stem, source-time)` pair to its timeline-time, if the
  * stem appears as a segment whose source range covers the time.
@@ -201,6 +283,33 @@ export function timelineTimeForSource(
     return seg.timelineStart + (sourceTime - seg.sourceStart);
   }
   return null;
+}
+
+/**
+ * Best-effort variant for transcript clicks outside the current cut.
+ * When the exact source time is trimmed out, jump to the closest
+ * timeline occurrence for the same asset instead of falling back to
+ * source-preview seeking while the timeline monitor is active.
+ */
+export function nearestTimelineTimeForSource(
+  segments: PlaySegment[],
+  stem: string,
+  sourceTime: number,
+): number | null {
+  let best: { distance: number; timelineTime: number } | null = null;
+  for (const seg of segments) {
+    if (seg.proxyStem !== stem) continue;
+    const clampedSource = Math.max(
+      seg.sourceStart,
+      Math.min(sourceTime, seg.sourceEnd),
+    );
+    const distance = Math.abs(sourceTime - clampedSource);
+    const timelineTime = seg.timelineStart + (clampedSource - seg.sourceStart);
+    if (!best || distance < best.distance) {
+      best = { distance, timelineTime };
+    }
+  }
+  return best?.timelineTime ?? null;
 }
 
 /**

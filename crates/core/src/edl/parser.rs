@@ -25,13 +25,14 @@
 //! and `+ end: <new>` are accepted; we use the `+` value as authoritative.
 
 use awidat_proto::awidat_meta::{
-    BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry,
+    AudioRelation, BroadcastOverlayConfig, BroadcastOverlayStyle, BroadcastTimedEntry, CutType,
+    SemanticCutSpec, SplitEditSpec,
 };
 use thiserror::Error;
 
 use super::op::{
     Anchor, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand, InsertTrackKind, PiPCorner,
-    TitleAnimation, TitlePosition, TitleWeight, TransitionBetween,
+    TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -47,7 +48,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Set Volume, Set Audio Fade, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
     )]
     UnknownOp {
         /// Line number.
@@ -220,8 +221,12 @@ enum OpKind {
     InsertPiP,
     MoveClip,
     InsertTransition,
+    DeleteTransition,
+    SetCutIntent,
     SetVolume,
     SetAudioFade,
+    SetAudioLead,
+    SetAudioTrail,
     SetTrackAudio,
     SetDucking,
     SetSyncGroup,
@@ -231,6 +236,7 @@ enum OpKind {
     SetSpeed,
     SetColorCorrection,
     ApplyLut,
+    RemoveLut,
     InsertTitle,
     SetTitle,
     InsertCaption,
@@ -252,8 +258,12 @@ impl OpBuilder {
             "Insert PiP" => OpKind::InsertPiP,
             "Move Clip" => OpKind::MoveClip,
             "Insert Transition" => OpKind::InsertTransition,
+            "Delete Transition" => OpKind::DeleteTransition,
+            "Set Cut Intent" => OpKind::SetCutIntent,
             "Set Volume" => OpKind::SetVolume,
             "Set Audio Fade" => OpKind::SetAudioFade,
+            "Set Audio Lead" => OpKind::SetAudioLead,
+            "Set Audio Trail" => OpKind::SetAudioTrail,
             "Set Track Audio" => OpKind::SetTrackAudio,
             "Set Ducking" => OpKind::SetDucking,
             "Set Sync Group" => OpKind::SetSyncGroup,
@@ -263,6 +273,7 @@ impl OpBuilder {
             "Set Speed" => OpKind::SetSpeed,
             "Set Color Correction" => OpKind::SetColorCorrection,
             "Apply LUT" => OpKind::ApplyLut,
+            "Remove LUT" => OpKind::RemoveLut,
             "Insert Title" => OpKind::InsertTitle,
             "Set Title" => OpKind::SetTitle,
             "Insert Caption" => OpKind::InsertCaption,
@@ -479,25 +490,90 @@ impl OpBuilder {
                         field: "duration_s".into(),
                     }
                 })?;
+                let alignment = take_field_string(&mut fields, "alignment")
+                    .as_deref()
+                    .map(|raw| parse_transition_alignment(raw, head))
+                    .transpose()?;
+                let in_offset_s = take_field_f64(&mut fields, "in_offset_s");
+                let out_offset_s = take_field_f64(&mut fields, "out_offset_s");
                 let family = take_field_string(&mut fields, "family");
                 let intent = take_field_string(&mut fields, "intent");
                 let energy = take_field_f64(&mut fields, "energy");
                 let direction = take_field_string(&mut fields, "direction");
                 let params = take_field_json_map(&mut fields, "params_json", head)?;
+                let composition = take_field_json::<
+                    awidat_proto::transitions::TransitionComposition,
+                >(&mut fields, "composition_json", head)?;
+                let has_semantic_fields = family.is_some()
+                    || intent.is_some()
+                    || energy.is_some()
+                    || direction.is_some()
+                    || !params.is_empty()
+                    || composition.is_some();
+                let semantic_id =
+                    transition_id.or_else(|| has_semantic_fields.then(|| kind.clone()));
                 let spec =
-                    transition_id.map(|id| awidat_proto::transitions::SemanticTransitionSpec {
+                    semantic_id.map(|id| awidat_proto::transitions::SemanticTransitionSpec {
                         id,
                         family,
                         intent,
                         energy,
                         direction,
                         params,
+                        composition,
                     });
                 Ok(EdlOp::InsertTransition {
                     between,
                     kind,
                     duration_s,
+                    alignment,
+                    in_offset_s,
+                    out_offset_s,
                     spec,
+                })
+            }
+            OpKind::DeleteTransition => {
+                let between = self.between.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "between".into(),
+                })?;
+                Ok(EdlOp::DeleteTransition { between })
+            }
+            OpKind::SetCutIntent => {
+                let between = self.between.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "between".into(),
+                })?;
+                let cut_type = take_field_string(&mut fields, "cut_type")
+                    .as_deref()
+                    .map(|raw| parse_cut_type(raw, head))
+                    .transpose()?
+                    .ok_or_else(|| EdlParseError::MissingField {
+                        line: head,
+                        field: "cut_type".into(),
+                    })?;
+                let intent = take_field_string(&mut fields, "intent").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "intent".into(),
+                    }
+                })?;
+                let audio_relation = take_field_string(&mut fields, "audio_relation")
+                    .as_deref()
+                    .map(|raw| parse_audio_relation(raw, head))
+                    .transpose()?
+                    .unwrap_or_default();
+                Ok(EdlOp::SetCutIntent {
+                    between,
+                    spec: SemanticCutSpec {
+                        cut_type,
+                        intent,
+                        energy: take_field_f64(&mut fields, "energy"),
+                        audio_relation,
+                        confidence: take_field_f64(&mut fields, "confidence"),
+                        reason: take_field_string(&mut fields, "reason"),
+                        extra: Default::default(),
+                    },
                 })
             }
             OpKind::SetVolume => {
@@ -522,6 +598,58 @@ impl OpBuilder {
                     anchor,
                     fade_in_s: take_field_f64(&mut fields, "fade_in_s"),
                     fade_out_s: take_field_f64(&mut fields, "fade_out_s"),
+                })
+            }
+            OpKind::SetAudioLead => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let lead_s = take_field_f64(&mut fields, "lead_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "lead_s".into(),
+                    }
+                })?;
+                let reason = take_field_string(&mut fields, "reason");
+                let confidence = take_field_f64(&mut fields, "confidence");
+                Ok(EdlOp::SetAudioLead {
+                    anchor,
+                    lead_s,
+                    split_edit: Some(SplitEditSpec {
+                        audio_lead_s: Some(lead_s),
+                        audio_lead_from_clip_id: None,
+                        audio_trail_s: None,
+                        audio_trail_to_clip_id: None,
+                        reason,
+                        confidence,
+                    }),
+                })
+            }
+            OpKind::SetAudioTrail => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let trail_s = take_field_f64(&mut fields, "trail_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "trail_s".into(),
+                    }
+                })?;
+                let reason = take_field_string(&mut fields, "reason");
+                let confidence = take_field_f64(&mut fields, "confidence");
+                Ok(EdlOp::SetAudioTrail {
+                    anchor,
+                    trail_s,
+                    split_edit: Some(SplitEditSpec {
+                        audio_lead_s: None,
+                        audio_lead_from_clip_id: None,
+                        audio_trail_s: Some(trail_s),
+                        audio_trail_to_clip_id: None,
+                        reason,
+                        confidence,
+                    }),
                 })
             }
             OpKind::SetTrackAudio => {
@@ -661,7 +789,19 @@ impl OpBuilder {
                         field: "lut_path".into(),
                     }
                 })?;
-                Ok(EdlOp::ApplyLut { anchor, lut_path })
+                let interpolation = take_field_string(&mut fields, "interpolation");
+                Ok(EdlOp::ApplyLut {
+                    anchor,
+                    lut_path,
+                    interpolation,
+                })
+            }
+            OpKind::RemoveLut => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                Ok(EdlOp::RemoveLut { anchor })
             }
             OpKind::InsertTitle => {
                 let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
@@ -1015,6 +1155,59 @@ fn parse_title_animation(
     }
 }
 
+fn parse_transition_alignment(
+    raw: &str,
+    line: usize,
+) -> Result<TransitionAlignment, EdlParseError> {
+    match raw {
+        "center" => Ok(TransitionAlignment::Center),
+        "start_at_cut" => Ok(TransitionAlignment::StartAtCut),
+        "end_at_cut" => Ok(TransitionAlignment::EndAtCut),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("alignment: {other}"),
+            message: "must be 'center', 'start_at_cut', or 'end_at_cut'".into(),
+        }),
+    }
+}
+
+fn parse_cut_type(raw: &str, line: usize) -> Result<CutType, EdlParseError> {
+    match raw {
+        "hard_cut" => Ok(CutType::HardCut),
+        "cut_on_action" => Ok(CutType::CutOnAction),
+        "cutaway" => Ok(CutType::Cutaway),
+        "insert" => Ok(CutType::Insert),
+        "eyeline_match" => Ok(CutType::EyelineMatch),
+        "shot_reverse_shot" => Ok(CutType::ShotReverseShot),
+        "match_cut" => Ok(CutType::MatchCut),
+        "smash_cut" => Ok(CutType::SmashCut),
+        "jump_cut" => Ok(CutType::JumpCut),
+        "cross_cut" => Ok(CutType::CrossCut),
+        "j_cut" => Ok(CutType::JCut),
+        "l_cut" => Ok(CutType::LCut),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("cut_type: {other}"),
+            message: "must be one of: hard_cut, cut_on_action, cutaway, insert, eyeline_match, shot_reverse_shot, match_cut, smash_cut, jump_cut, cross_cut, j_cut, l_cut".into(),
+        }),
+    }
+}
+
+fn parse_audio_relation(raw: &str, line: usize) -> Result<AudioRelation, EdlParseError> {
+    match raw {
+        "sync" => Ok(AudioRelation::Sync),
+        "audio_leads" => Ok(AudioRelation::AudioLeads),
+        "audio_trails" => Ok(AudioRelation::AudioTrails),
+        "overlap" => Ok(AudioRelation::Overlap),
+        "audio_cut" => Ok(AudioRelation::AudioCut),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("audio_relation: {other}"),
+            message: "must be one of: sync, audio_leads, audio_trails, overlap, audio_cut".into(),
+        }),
+    }
+}
+
 fn parse_pip_corner(raw: &str, line: usize) -> Result<PiPCorner, EdlParseError> {
     match raw {
         "top_left" => Ok(PiPCorner::TopLeft),
@@ -1143,6 +1336,23 @@ fn take_field_json_map(
             line,
             raw: format!("{key}: {raw}"),
             message: "must be a JSON object".into(),
+        })
+}
+
+fn take_field_json<T: serde::de::DeserializeOwned>(
+    fields: &mut Vec<(String, FieldValue)>,
+    key: &str,
+    line: usize,
+) -> Result<Option<T>, EdlParseError> {
+    let Some(raw) = take_field_string(fields, key) else {
+        return Ok(None);
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(|e| EdlParseError::BadField {
+            line,
+            raw: format!("{key}: {raw}"),
+            message: format!("must be valid JSON for {key}: {e}"),
         })
 }
 
@@ -1484,6 +1694,7 @@ mod tests {
                 kind,
                 duration_s,
                 spec,
+                ..
             } => {
                 assert_eq!(kind, "SMPTE_Dissolve");
                 assert_eq!(*duration_s, 0.3);
@@ -1511,6 +1722,7 @@ mod tests {
 + energy: 0.7
 + direction: left
 + params_json: {\"blur\":0.25}
++ composition_json: {\"version\":1,\"primitives\":[{\"op\":\"push\",\"direction\":\"left\",\"distance\":0.9,\"start\":0.0,\"end\":1.0,\"easing\":\"ease_out_expo\"},{\"op\":\"blur\",\"amount\":0.65,\"direction\":\"left\",\"start\":0.1,\"end\":0.7}]}
 + duration_s: 0.28
 *** End EDL
 ";
@@ -1530,8 +1742,123 @@ mod tests {
                 assert_eq!(spec.energy, Some(0.7));
                 assert_eq!(spec.direction.as_deref(), Some("left"));
                 assert_eq!(spec.params.get("blur").and_then(|v| v.as_f64()), Some(0.25));
+                let composition = spec.composition.as_ref().unwrap();
+                assert_eq!(composition.primitives.len(), 2);
+                assert!(matches!(
+                    &composition.primitives[0].op,
+                    awidat_proto::transitions::TransitionPrimitiveOp::Push {
+                        direction,
+                        distance
+                    } if direction == "left" && (*distance - 0.9).abs() < 1e-9
+                ));
             }
             other => panic!("want semantic InsertTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_transition_semantic_fields_with_kind_id() {
+        let text = "\
+*** Begin EDL
+*** Insert Transition
+@@ between: clip_uuid=clip-a and clip_uuid=clip-b
++ kind: awidat.whip_pan_right
++ intent: hide_motion_jump
++ duration_s: 0.18
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTransition {
+                kind,
+                spec: Some(spec),
+                ..
+            } => {
+                assert_eq!(kind, "awidat.whip_pan_right");
+                assert_eq!(spec.id, "awidat.whip_pan_right");
+                assert_eq!(spec.intent.as_deref(), Some("hide_motion_jump"));
+            }
+            other => panic!("want semantic InsertTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_transition_alignment_and_offsets() {
+        let text = "\
+*** Begin EDL
+*** Insert Transition
+@@ between: clip_uuid=clip-a and clip_uuid=clip-b
++ kind: SMPTE_Dissolve
++ duration_s: 1.0
++ alignment: end_at_cut
++ in_offset_s: 0.8
++ out_offset_s: 0.2
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertTransition {
+                alignment,
+                in_offset_s,
+                out_offset_s,
+                ..
+            } => {
+                assert_eq!(*alignment, Some(TransitionAlignment::EndAtCut));
+                assert_eq!(*in_offset_s, Some(0.8));
+                assert_eq!(*out_offset_s, Some(0.2));
+            }
+            other => panic!("want InsertTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_delete_transition() {
+        let text = "\
+*** Begin EDL
+*** Delete Transition
+@@ between: clip_uuid=clip-a and clip_uuid=clip-b
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::DeleteTransition { between } => {
+                assert!(matches!(&between.from, Anchor::ClipUuid { uuid } if uuid == "clip-a"));
+                assert!(matches!(&between.to, Anchor::ClipUuid { uuid } if uuid == "clip-b"));
+            }
+            other => panic!("want DeleteTransition, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_set_cut_intent() {
+        let text = "\
+*** Begin EDL
+*** Set Cut Intent
+@@ between: clip_uuid=clip-a and clip_uuid=clip-b
++ cut_type: cut_on_action
++ intent: hide_action_continuity
++ energy: 0.72
++ audio_relation: sync
++ confidence: 0.91
++ reason: outgoing hand motion resolves into the next shot
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetCutIntent { between, spec } => {
+                assert!(matches!(&between.from, Anchor::ClipUuid { uuid } if uuid == "clip-a"));
+                assert!(matches!(&between.to, Anchor::ClipUuid { uuid } if uuid == "clip-b"));
+                assert_eq!(spec.cut_type, CutType::CutOnAction);
+                assert_eq!(spec.intent, "hide_action_continuity");
+                assert_eq!(spec.energy, Some(0.72));
+                assert_eq!(spec.audio_relation, AudioRelation::Sync);
+                assert_eq!(spec.confidence, Some(0.91));
+                assert_eq!(
+                    spec.reason.as_deref(),
+                    Some("outgoing hand motion resolves into the next shot")
+                );
+            }
+            other => panic!("want SetCutIntent, got {other:?}"),
         }
     }
 
@@ -1551,6 +1878,57 @@ mod tests {
                 assert!((value - 0.5).abs() < 1e-9);
             }
             other => panic!("want SetVolume, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_audio_lead_and_trail() {
+        let text = "\
+*** Begin EDL
+*** Set Audio Lead
+@@ anchor: clip_uuid=clip-b
++ lead_s: 0.45
++ reason: let next speaker enter before picture
++ confidence: 0.87
+*** Set Audio Trail
+@@ anchor: clip_uuid=clip-a
++ trail_s: 0.60
++ reason: hold outgoing answer under reaction
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetAudioLead {
+                anchor,
+                lead_s,
+                split_edit: Some(split_edit),
+            } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-b"));
+                assert_eq!(*lead_s, 0.45);
+                assert_eq!(split_edit.audio_lead_s, Some(0.45));
+                assert_eq!(
+                    split_edit.reason.as_deref(),
+                    Some("let next speaker enter before picture")
+                );
+                assert_eq!(split_edit.confidence, Some(0.87));
+            }
+            other => panic!("want SetAudioLead, got {other:?}"),
+        }
+        match &env.ops[1] {
+            EdlOp::SetAudioTrail {
+                anchor,
+                trail_s,
+                split_edit: Some(split_edit),
+            } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-a"));
+                assert_eq!(*trail_s, 0.60);
+                assert_eq!(split_edit.audio_trail_s, Some(0.60));
+                assert_eq!(
+                    split_edit.reason.as_deref(),
+                    Some("hold outgoing answer under reaction")
+                );
+            }
+            other => panic!("want SetAudioTrail, got {other:?}"),
         }
     }
 
@@ -1678,15 +2056,38 @@ mod tests {
 *** Apply LUT
 @@ anchor: clip_uuid=clip-4
 + lut_path: luts/show-look.cube
++ interpolation: tetrahedral
 *** End EDL
 ";
         let env = parse(text).unwrap();
         match &env.ops[0] {
-            EdlOp::ApplyLut { anchor, lut_path } => {
+            EdlOp::ApplyLut {
+                anchor,
+                lut_path,
+                interpolation,
+            } => {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-4"));
                 assert_eq!(lut_path, "luts/show-look.cube");
+                assert_eq!(interpolation.as_deref(), Some("tetrahedral"));
             }
             other => panic!("want ApplyLut, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_remove_lut() {
+        let text = "\
+*** Begin EDL
+*** Remove LUT
+@@ anchor: clip_uuid=clip-4
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::RemoveLut { anchor } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-4"));
+            }
+            other => panic!("want RemoveLut, got {other:?}"),
         }
     }
 

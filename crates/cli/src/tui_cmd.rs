@@ -15,22 +15,25 @@ use awidat_core::anthropic::{Client, ClientConfig, models};
 use awidat_core::subagent::SubAgentRegistry;
 use awidat_core::tools::{
     analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
-    assess_continuity::AssessContinuityTool, bash::BashTool, broll_candidates::BrollCandidatesTool,
-    clip_search::ClipSearchTool, delegate::DelegateTool, delegate_all::DelegateAllTool,
-    download_yt_clip::DownloadYtClipTool, export_package::ExportPackageTool,
-    find_beat::FindBeatTool, find_broll_opportunities::FindBrollOpportunitiesTool,
-    find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
-    find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
-    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
-    plan_multicam::PlanMulticamTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
+    bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
+    delegate::DelegateTool, delegate_all::DelegateAllTool, download_yt_clip::DownloadYtClipTool,
+    export_package::ExportPackageTool, find_beat::FindBeatTool,
+    find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
+    find_episode_start::FindEpisodeStartTool, find_eye_contact::FindEyeContactTool,
+    find_false_starts::FindFalseStartsTool, find_filler_words::FindFillerWordsTool,
+    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
+    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
+    load_skill::LoadSkillTool, plan_look_regions::PlanLookRegionsTool,
+    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
+    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
+    poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
-    start_render::StartRenderTool, update_plan::UpdatePlanTool, use_broll::UseBrollTool,
-    vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
-    vedit_revert::VeditRevertTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
-    view_timeline::ViewTimelineTool,
+    start_render::StartRenderTool, transition_context::TransitionContextTool,
+    update_plan::UpdatePlanTool, use_broll::UseBrollTool, vedit_commit::VeditCommitTool,
+    vedit_diff::VeditDiffTool, vedit_log::VeditLogTool, vedit_revert::VeditRevertTool,
+    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use awidat_tui::{App, AppConfig};
@@ -67,6 +70,7 @@ visible — needs whisper diarization + face), find_eye_contact \
 \n  - **Raw lookup**: find_moment (transcript substring), read_index \
 (any indexer channel), inspect_clip (one clip's metadata), \
 view_frame (extract a frame at a timestamp).\
+\n  - **Edit quality**: assess_edit_quality before risky trims/splits; it recommends hard cut, recut, J/L split edit, b-roll, or motivated transition. transition_context assembles handles, transcript, frames, and continuity context before choosing a visible transition; plan_transition turns that packet into a hard-cut or visible-transition proposal. assess_continuity is the lower-level rule breakdown.\
 \n  - **Editing**: apply_edl (commit edits — Trim, Untrim, Delete, \
 Split, Insert, Insert PiP). For `@@ anchor: clip_uuid=...`, use the clip \
 anchor shown by view_timeline, usually the clip name like `clip-0`; \
@@ -86,6 +90,10 @@ timeline* (what the user sees as 'the edit'), use scope='timeline' — \
 that walks the OTIO and concats every clip's source_range with \
 re-encode at boundaries. Use scope='preview'/'segment'/'full' only \
 when the user wants a raw asset dumped, not the edit.\
+\n  - **Finishing**: start_look_region_pass runs the LUT plan -> \
+apply_edl -> timeline render sequence; plan_look_regions drafts only \
+the generated LUT EDL; review_look_regions turns a completed render \
+into contact-sheet/JSON/Markdown proof.\
 \n  - **Plan / collab**: update_plan, request_user_input, bash. \
 \n  - **Skills**: load_skill — load a named editorial workflow's full \
 playbook into the current turn. Check the per-turn skills catalog for \
@@ -169,6 +177,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(FindFillerWordsTool));
     registry.register(Arc::new(FindFalseStartsTool));
     registry.register(Arc::new(AssessContinuityTool));
+    registry.register(Arc::new(AssessEditQualityTool));
     registry.register(Arc::new(InspectClipTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(PollRenderTool));
@@ -176,8 +185,13 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(StartRenderTool));
     registry.register(Arc::new(ExportPackageTool));
+    registry.register(Arc::new(StartLookRegionPassTool));
+    registry.register(Arc::new(PlanLookRegionsTool));
+    registry.register(Arc::new(ReviewLookRegionsTool));
     registry.register(Arc::new(PlanMulticamTool));
+    registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(StartIndexingTool));
+    registry.register(Arc::new(TransitionContextTool));
     registry.register(Arc::new(UpdatePlanTool));
     registry.register(Arc::new(FindBeatTool));
     registry.register(Arc::new(InspectMomentTool));

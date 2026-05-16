@@ -320,6 +320,11 @@ pub enum Item {
         /// alongside a "Search Pexels" affordance.
         #[serde(default)]
         broll_previews: Option<Vec<BrollPreview>>,
+        /// For `broll_suggestion` notes: exact anchor to pass to
+        /// `use_broll`. The UI must not ask the agent to infer this
+        /// from prose because placement needs to survive handoff.
+        #[serde(default)]
+        broll_anchor: Option<BrollAnchor>,
     },
 }
 
@@ -436,6 +441,23 @@ pub struct BrollPreview {
     pub pexels_page: String,
 }
 
+/// Exact anchor carried by a b-roll note for `use_broll`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BrollAnchor {
+    /// Match by transcript snippet.
+    TranscriptSnippet {
+        /// Snippet text.
+        text: String,
+    },
+    /// Match by stable clip UUID.
+    ClipUuid {
+        /// Clip UUID.
+        uuid: String,
+    },
+}
+
 /// What kind of editorial finding an [`Item::EditorialNote`] holds.
 /// The dismissal-pattern matcher buckets by this so the user can
 /// dismiss (e.g.) "all silence_trim notes" without having to dismiss
@@ -550,9 +572,51 @@ pub struct TimelineSnapshot {
     /// the desktop preview draws the same title card / lower-third /
     /// ticker layers that the timeline render path will burn in.
     pub broadcast_overlay: Option<BroadcastOverlayConfig>,
+    /// Semantic editorial intent attached to hard-cut boundaries. This
+    /// lets the UI inspect why a boundary is a cut on action, cutaway,
+    /// match cut, J-cut, etc. without requiring a visible transition item.
+    pub cut_boundaries: Vec<TimelineCutBoundary>,
+    /// Known places where live desktop preview is less faithful than
+    /// final render. The UI surfaces these as compact caveats instead
+    /// of silently implying perfect preview/render parity.
+    pub preview_limitations: Vec<TimelinePreviewLimitation>,
     /// Tracks in order: video first, then audio. Empty when project
     /// has no clips.
     pub tracks: Vec<TimelineTrack>,
+}
+
+/// One known preview/render parity limitation for the current snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelinePreviewLimitation {
+    /// Stable machine-readable limitation kind.
+    pub kind: String,
+    /// User-facing explanation.
+    pub message: String,
+}
+
+/// Timeline-level semantic metadata for one adjacent clip boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineCutBoundary {
+    /// Canonical metadata key, usually `from_clip_id::to_clip_id`.
+    pub key: String,
+    /// Outgoing clip id used by the metadata key.
+    pub from_clip_id: String,
+    /// Incoming clip id used by the metadata key.
+    pub to_clip_id: String,
+    /// Editorial grammar, e.g. `cut_on_action`, `cutaway`, `j_cut`.
+    pub cut_type: String,
+    /// Short machine-readable purpose.
+    pub intent: String,
+    /// Optional intensity in `[0, 1]`.
+    pub energy: Option<f64>,
+    /// Audio-picture relationship, e.g. `sync` or `audio_leads`.
+    pub audio_relation: String,
+    /// Optional planner confidence in `[0, 1]`.
+    pub confidence: Option<f64>,
+    /// Human-readable explanation.
+    pub reason: Option<String>,
 }
 
 /// Timeline-level broadcast overlay config, stored in OTIO metadata
@@ -772,6 +836,14 @@ pub enum TimelineItem {
         fade_in_s: Option<f64>,
         /// Per-clip audio fade out seconds into clip end.
         fade_out_s: Option<f64>,
+        /// Incoming audio lead for a J-cut, in seconds.
+        audio_lead_s: Option<f64>,
+        /// Outgoing audio trail for an L-cut, in seconds.
+        audio_trail_s: Option<f64>,
+        /// Human-readable split-edit reason.
+        split_edit_reason: Option<String>,
+        /// Optional split-edit planner confidence.
+        split_edit_confidence: Option<f64>,
         /// Link group shared by related video/audio clips imported
         /// from the same source.
         link_group_id: Option<String>,
@@ -812,9 +884,27 @@ pub enum TimelineItem {
         track_start_s: f64,
         /// Cumulative effect duration (in_offset + out_offset).
         duration_s: f64,
+        /// Seconds before the cut occupied by the transition.
+        in_offset_s: f64,
+        /// Seconds after the cut occupied by the transition.
+        out_offset_s: f64,
         /// Effect name from the OTIO transition (e.g.
         /// `"SMPTE_Dissolve"`).
         effect_name: String,
+        /// Stable semantic Awidat transition id, when the transition
+        /// carries `metadata.awidat_transition`.
+        transition_id: Option<String>,
+        /// Semantic transition family, for example `dissolve` or
+        /// `motion_blur`.
+        transition_family: Option<String>,
+        /// Why this visible transition belongs at the cut.
+        transition_intent: Option<String>,
+        /// Optional transition intensity in `[0, 1]`.
+        transition_energy: Option<f64>,
+        /// Optional spatial direction such as `left`, `right`, or `in`.
+        transition_direction: Option<String>,
+        /// Resolved transition audio behavior: `crossfade` or `cut`.
+        audio_policy: Option<String>,
     },
 }
 
@@ -1040,6 +1130,40 @@ pub enum AppliedDiff {
         /// Index of the inserted item within that track.
         item_index: usize,
     },
+    /// A b-roll clip was inserted. Indexes refer to the **proposed**
+    /// snapshot.
+    InsertBRoll {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
+        /// Track index in the proposed snapshot.
+        track_index: usize,
+        /// Index of the inserted b-roll item within that track.
+        item_index: usize,
+    },
+    /// A picture-in-picture clip was inserted. Indexes refer to the
+    /// **proposed** snapshot.
+    InsertPiP {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
+        /// Track index in the proposed snapshot.
+        track_index: usize,
+        /// Index of the inserted PiP item within that track.
+        item_index: usize,
+    },
+    /// A clip moved. `from_*` indexes refer to the original snapshot;
+    /// `to_*` indexes refer to the proposed snapshot.
+    Move {
+        /// Index of the originating op in the EDL envelope.
+        op_index: usize,
+        /// Track index in the original snapshot.
+        from_track_index: usize,
+        /// Item index in the original snapshot.
+        from_item_index: usize,
+        /// Track index in the proposed snapshot.
+        to_track_index: usize,
+        /// Item index in the proposed snapshot.
+        to_item_index: usize,
+    },
 }
 
 /// One adjustment the user applied to a proposed edit before
@@ -1191,6 +1315,8 @@ mod tests {
             snapshot: TimelineSnapshot {
                 duration_s: 12.5,
                 broadcast_overlay: None,
+                cut_boundaries: vec![],
+                preview_limitations: vec![],
                 tracks: vec![],
             },
             diff_hints: vec![AppliedDiff::TrimEdge {
@@ -1241,6 +1367,16 @@ mod tests {
         assert_eq!(back.op_index, 2);
         assert_eq!(back.field, AdjustField::TrimEnd);
         assert!((back.value_s - 4.21).abs() < 1e-9);
+    }
+
+    #[test]
+    fn broll_anchor_roundtrips_json() {
+        let anchor = BrollAnchor::ClipUuid {
+            uuid: "clip-3".into(),
+        };
+        let json = serde_json::to_string(&anchor).unwrap();
+        let back: BrollAnchor = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, anchor);
     }
 
     #[test]

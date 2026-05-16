@@ -1,0 +1,42 @@
+{
+  "id": "golden::cutaway",
+  "objective": "Use related coverage to clarify the spoken point without turning it into a symbolic montage.",
+  "project": {
+    "name": "golden-cutaway",
+    "assets": [],
+    "clips": [
+      {
+        "name": "host-explains",
+        "uuid": "host-explains",
+        "asset": "raw/host-explains.mp4",
+        "start_s": 0.0,
+        "duration_s": 6.0,
+        "transcript": "this is where the battery connector failed"
+      },
+      {
+        "name": "battery-closeup",
+        "uuid": "battery-closeup",
+        "asset": "raw/battery-closeup.mp4",
+        "start_s": 30.0,
+        "duration_s": 4.0,
+        "transcript": "battery connector closeup"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=host-explains and clip_uuid=battery-closeup\n+ cut_type: cutaway\n+ intent: literal_cover\n+ audio_relation: overlap\n+ confidence: 0.83\n+ reason: related battery detail clarifies the spoken connector point\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "host-explains",
+        "to": "battery-closeup",
+        "cut_type": "cutaway",
+        "intent": "literal_cover",
+        "audio_relation": "overlap",
+        "reason_contains": "battery detail"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Delete Clip"]
+  }
+}

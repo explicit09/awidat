@@ -1,0 +1,42 @@
+{
+  "id": "golden::short_form_hook_smash_cut_variant",
+  "objective": "For a short-form hook, use a hard smash cut into the payoff and reject a decorative transition.",
+  "project": {
+    "name": "golden-short-form-hook-smash",
+    "assets": [],
+    "clips": [
+      {
+        "name": "hook-promise",
+        "uuid": "hook-promise",
+        "asset": "raw/hook-promise.mp4",
+        "start_s": 0.0,
+        "duration_s": 2.5,
+        "transcript": "this mistake cost us a week"
+      },
+      {
+        "name": "payoff-proof",
+        "uuid": "payoff-proof",
+        "asset": "raw/payoff-proof.mp4",
+        "start_s": 10.0,
+        "duration_s": 2.0,
+        "transcript": "here is the broken deploy"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=hook-promise and clip_uuid=payoff-proof\n+ cut_type: smash_cut\n+ intent: hook_payoff_contrast\n+ audio_relation: audio_cut\n+ confidence: 0.86\n+ reason: short-form hook needs an abrupt payoff cut, not a visible transition\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "hook-promise",
+        "to": "payoff-proof",
+        "cut_type": "smash_cut",
+        "intent": "hook_payoff_contrast",
+        "audio_relation": "audio_cut",
+        "reason_contains": "abrupt payoff"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Insert BRoll"]
+  }
+}

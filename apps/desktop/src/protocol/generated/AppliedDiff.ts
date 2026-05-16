@@ -14,64 +14,108 @@ import type { Side } from "./Side";
  * op can produce multiple hints (e.g. `TrimClip` with both bounds
  * set emits two `TrimEdge` entries with the same `op_index`).
  */
-export type AppliedDiff = { "kind": "trim_edge", 
+export type AppliedDiff = { "kind": "trim_edge",
 /**
  * Index of the originating op in the EDL envelope.
  */
-op_index: number, 
+op_index: number,
 /**
  * Track index in the proposed snapshot.
  */
-track_index: number, 
+track_index: number,
 /**
  * Item index within that track.
  */
-item_index: number, 
+item_index: number,
 /**
  * Which edge moved.
  */
-side: Side, 
+side: Side,
 /**
  * Signed shift in seconds.
  */
-delta_s: number, } | { "kind": "delete", 
+delta_s: number, } | { "kind": "delete",
 /**
  * Index of the originating op in the EDL envelope.
  */
-op_index: number, 
+op_index: number,
 /**
  * Track index in the original snapshot.
  */
-track_index: number, 
+track_index: number,
 /**
  * Item index within that track.
  */
-item_index: number, } | { "kind": "split", 
+item_index: number, } | { "kind": "split",
 /**
  * Index of the originating op in the EDL envelope.
  */
-op_index: number, 
+op_index: number,
 /**
  * Track index in the proposed snapshot.
  */
-track_index: number, 
+track_index: number,
 /**
  * Index of the left half within that track.
  */
-item_index: number, 
+item_index: number,
 /**
  * Cut point in source-media seconds.
  */
-at_s: number, } | { "kind": "insert", 
+at_s: number, } | { "kind": "insert",
 /**
  * Index of the originating op in the EDL envelope.
  */
-op_index: number, 
+op_index: number,
 /**
  * Track index in the proposed snapshot.
  */
-track_index: number, 
+track_index: number,
 /**
  * Index of the inserted item within that track.
  */
-item_index: number, };
+item_index: number, } | { "kind": "insert_b_roll",
+/**
+ * Index of the originating op in the EDL envelope.
+ */
+op_index: number,
+/**
+ * Track index in the proposed snapshot.
+ */
+track_index: number,
+/**
+ * Index of the inserted b-roll item within that track.
+ */
+item_index: number, } | { "kind": "insert_pi_p",
+/**
+ * Index of the originating op in the EDL envelope.
+ */
+op_index: number,
+/**
+ * Track index in the proposed snapshot.
+ */
+track_index: number,
+/**
+ * Index of the inserted PiP item within that track.
+ */
+item_index: number, } | { "kind": "move",
+/**
+ * Index of the originating op in the EDL envelope.
+ */
+op_index: number,
+/**
+ * Track index in the original snapshot.
+ */
+from_track_index: number,
+/**
+ * Item index in the original snapshot.
+ */
+from_item_index: number,
+/**
+ * Track index in the proposed snapshot.
+ */
+to_track_index: number,
+/**
+ * Item index in the proposed snapshot.
+ */
+to_item_index: number, };

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTimelineStore } from "../timeline/store";
 
 type VeditCommitEntry = {
   commitHash: string;
@@ -10,10 +11,22 @@ type VeditCommitEntry = {
   parents: string[];
 };
 
+type VeditDiffResponse = {
+  fromRef: string;
+  toRef: string;
+  changeCount: number;
+  changes: unknown;
+};
+
 export function VeditPanel() {
   const [entries, setEntries] = useState<VeditCommitEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [diffs, setDiffs] = useState<Record<string, VeditDiffResponse>>({});
+  const [diffLoading, setDiffLoading] = useState<string | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<string | null>(null);
+  const [restoreBusy, setRestoreBusy] = useState<string | null>(null);
+  const refreshTimeline = useTimelineStore((s) => s.refresh);
 
   function load() {
     let cancelled = false;
@@ -41,6 +54,36 @@ export function VeditPanel() {
   }, []);
 
   const latest = entries[0] ?? null;
+
+  async function inspectDiff(entry: VeditCommitEntry) {
+    setDiffLoading(entry.commitHash);
+    try {
+      const diff = await invoke<VeditDiffResponse>("diff_vedit_refs", {
+        fromRef: entry.parents[0] ?? null,
+        toRef: entry.commitHash,
+      });
+      setDiffs((prev) => ({ ...prev, [entry.commitHash]: diff }));
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDiffLoading(null);
+    }
+  }
+
+  async function restore(entry: VeditCommitEntry) {
+    setRestoreBusy(entry.commitHash);
+    try {
+      await invoke("restore_vedit_ref", { refstr: entry.commitHash });
+      setRestoreTarget(null);
+      await refreshTimeline();
+      load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRestoreBusy(null);
+    }
+  }
 
   return (
     <div className="sidebar-pane vedit-panel">
@@ -101,10 +144,109 @@ export function VeditPanel() {
                 )}
               </dl>
               {entry.fullMessage && <pre>{entry.fullMessage}</pre>}
+              <div className="vedit-entry-actions">
+                <button
+                  type="button"
+                  onClick={() => inspectDiff(entry)}
+                  disabled={diffLoading === entry.commitHash}
+                >
+                  {diffLoading === entry.commitHash ? "Inspecting..." : "Inspect diff"}
+                </button>
+                {latest?.commitHash !== entry.commitHash && (
+                  <button
+                    type="button"
+                    className="vedit-restore-button"
+                    onClick={() =>
+                      setRestoreTarget((current) =>
+                        current === entry.commitHash ? null : entry.commitHash,
+                      )
+                    }
+                    disabled={restoreBusy !== null}
+                  >
+                    Restore this cut
+                  </button>
+                )}
+              </div>
+              {diffs[entry.commitHash] && (
+                <section className="vedit-diff">
+                  <div className="vedit-diff-meta">
+                    <span>{diffs[entry.commitHash].changeCount} changes</span>
+                    <code>
+                      {shortHash(diffs[entry.commitHash].fromRef)}...{shortHash(diffs[entry.commitHash].toRef)}
+                    </code>
+                  </div>
+                  <DiffPreview changes={diffs[entry.commitHash].changes} />
+                </section>
+              )}
+              {restoreTarget === entry.commitHash && (
+                <section className="vedit-restore-confirm">
+                  <strong>Restore this timeline state?</strong>
+                  <p>
+                    This writes the selected timeline to the project and records a new history commit.
+                  </p>
+                  <div>
+                    <button
+                      type="button"
+                      className="vedit-restore-button"
+                      onClick={() => restore(entry)}
+                      disabled={restoreBusy !== null}
+                    >
+                      {restoreBusy === entry.commitHash ? "Restoring..." : "Confirm restore"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRestoreTarget(null)}
+                      disabled={restoreBusy !== null}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </section>
+              )}
             </div>
           </details>
         ))}
       </div>
+    </div>
+  );
+}
+
+function DiffPreview({ changes }: { changes: unknown }) {
+  const list = Array.isArray(changes) ? changes : null;
+  if (!list) {
+    return <pre>{JSON.stringify(changes, null, 2)}</pre>;
+  }
+  return (
+    <div className="vedit-diff-list">
+      {list.slice(0, 12).map((change, index) => {
+        const record =
+          change !== null && typeof change === "object"
+            ? (change as Record<string, unknown>)
+            : null;
+        const kind = typeof record?.kind === "string" ? record.kind : "change";
+        const path =
+          typeof record?.path === "string"
+            ? record.path
+            : typeof record?.clip_uuid === "string"
+            ? record.clip_uuid
+            : `entry ${index + 1}`;
+        return (
+          <div key={index} className="vedit-diff-row">
+            <span>{kind.replace(/_/g, " ")}</span>
+            <code>{path}</code>
+          </div>
+        );
+      })}
+      {list.length > 12 && (
+        <div className="vedit-diff-row vedit-diff-row-muted">
+          <span>additional</span>
+          <code>{list.length - 12} more</code>
+        </div>
+      )}
+      <details className="vedit-diff-json">
+        <summary>Raw JSON</summary>
+        <pre>{JSON.stringify(changes, null, 2)}</pre>
+      </details>
     </div>
   );
 }

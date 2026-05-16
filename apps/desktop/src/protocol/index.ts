@@ -16,6 +16,8 @@ export type { Thread } from "./generated/Thread";
 // Timeline shapes — single source of truth for both `read_timeline`
 // responses and the `Item::ProposedEdit.snapshot` field.
 export type { TimelineItem } from "./generated/TimelineItem";
+export type { TimelineCutBoundary } from "./generated/TimelineCutBoundary";
+export type { TimelinePreviewLimitation } from "./generated/TimelinePreviewLimitation";
 export type { TimelineTrack } from "./generated/TimelineTrack";
 export type { TimelineSnapshot } from "./generated/TimelineSnapshot";
 export type { TrackAudioControls } from "./generated/TrackAudioControls";
@@ -47,6 +49,7 @@ export type { PermissionMode } from "./generated/PermissionMode";
 export type { ContinuityVerdictTag } from "./generated/ContinuityVerdictTag";
 // B-roll suggestions (Phase 3).
 export type { BrollPreview } from "./generated/BrollPreview";
+export type { BrollAnchor } from "./generated/BrollAnchor";
 
 // Tauri event channel names. Mirror the constants in
 // `apps/desktop/src-tauri/src/lib.rs` — there is no runtime check.

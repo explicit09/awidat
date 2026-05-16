@@ -37,6 +37,13 @@ pub struct AwidatTimelineMetadata {
     /// position. See `PLAN.md` §3 / §6.2.
     #[serde(default)]
     pub anchors: HashMap<String, Anchor>,
+    /// Editorial intent for hard-cut boundaries, keyed by
+    /// `from_clip_id::to_clip_id`. Transitions already carry their own
+    /// semantic metadata on OTIO `Transition.1` nodes; this map gives hard
+    /// cuts the same durable editorial memory without inventing fake
+    /// transition items.
+    #[serde(default)]
+    pub cut_boundaries: HashMap<String, SemanticCutSpec>,
     /// Most recent `edit-plan.json` item id this timeline applied.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub edit_plan_id: Option<String>,
@@ -269,6 +276,84 @@ fn default_host_strip_height() -> f64 {
     320.0
 }
 
+/// Build the canonical key for timeline-level cut boundary metadata.
+pub fn cut_boundary_key(from_clip_id: &str, to_clip_id: &str) -> String {
+    format!("{from_clip_id}::{to_clip_id}")
+}
+
+/// Semantic editorial metadata for a hard-cut boundary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticCutSpec {
+    /// Editorial grammar for the boundary.
+    pub cut_type: CutType,
+    /// Short machine-readable purpose, for example
+    /// `"hide_action_continuity"` or `"speaker_handoff"`.
+    pub intent: String,
+    /// Optional energy/intensity in `[0, 1]`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub energy: Option<f64>,
+    /// How audio relates to picture at this boundary.
+    #[serde(default)]
+    pub audio_relation: AudioRelation,
+    /// Optional confidence in `[0, 1]` from the planner/tool.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confidence: Option<f64>,
+    /// Human-readable reason suitable for proposal review or UI display.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reason: Option<String>,
+    /// Forward-compat passthrough for future visual anchors, match
+    /// candidates, or tool traces.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// Editorial grammar classes for hard cuts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CutType {
+    /// Plain hard cut; usually the best choice when story/rhythm are clean.
+    HardCut,
+    /// Cut while motion/action carries through the boundary.
+    CutOnAction,
+    /// Cut to related coverage that hides or clarifies the main action.
+    Cutaway,
+    /// Detail shot inserted into an otherwise continuous scene.
+    Insert,
+    /// Cut following a subject's look or implied sightline.
+    EyelineMatch,
+    /// Dialogue grammar alternating complementary angles.
+    ShotReverseShot,
+    /// Graphic/action/composition match across two shots.
+    MatchCut,
+    /// Abrupt high-contrast cut for impact.
+    SmashCut,
+    /// Deliberate discontinuity or time compression.
+    JumpCut,
+    /// Alternating simultaneous or related action lines.
+    CrossCut,
+    /// Incoming audio leads picture.
+    JCut,
+    /// Outgoing audio trails picture.
+    LCut,
+}
+
+/// Audio-picture relationship at a cut boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioRelation {
+    /// Audio and picture cut together.
+    #[default]
+    Sync,
+    /// Incoming audio starts before incoming picture.
+    AudioLeads,
+    /// Outgoing audio continues after outgoing picture.
+    AudioTrails,
+    /// Both sides overlap intentionally.
+    Overlap,
+    /// Audio cuts sharply as a deliberate effect.
+    AudioCut,
+}
+
 /// Content anchor for a clip. Used by `apply_edl` to relocate a clip after
 /// upstream edits drift its absolute timeline position.
 ///
@@ -308,9 +393,41 @@ pub struct AwidatClipMetadata {
     /// location is allowed; tools should check both.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub anchor: Option<Anchor>,
+    /// Intentional audio-picture offset for J-cuts and L-cuts.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub split_edit: Option<SplitEditSpec>,
     /// Forward-compat passthrough.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// Per-clip split-edit metadata.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SplitEditSpec {
+    /// Incoming audio starts this many seconds before picture. This is
+    /// normally stamped on the incoming clip for a J-cut.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_lead_s: Option<f64>,
+    /// Clip id whose outgoing picture boundary this incoming lead was
+    /// authored against. Used to drop stale J-cut offsets after deletes
+    /// or moves change the neighboring boundary.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_lead_from_clip_id: Option<String>,
+    /// Outgoing audio continues this many seconds after picture. This is
+    /// normally stamped on the outgoing clip for an L-cut.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_trail_s: Option<f64>,
+    /// Clip id whose incoming picture boundary this outgoing trail was
+    /// authored against. Used to drop stale L-cut offsets after deletes
+    /// or moves change the neighboring boundary.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_trail_to_clip_id: Option<String>,
+    /// Human-readable reason suitable for proposal review or UI display.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reason: Option<String>,
+    /// Optional planner confidence in `[0, 1]`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confidence: Option<f64>,
 }
 
 /// Per-marker awidat metadata on a `Marker.metadata.awidat`.
@@ -346,15 +463,33 @@ mod tests {
 
     #[test]
     fn timeline_metadata_roundtrip() {
-        let m = AwidatTimelineMetadata {
+        let mut m = AwidatTimelineMetadata {
             version: "0.1".into(),
             source_assets: vec!["raw/foo.mp4".into()],
             ..AwidatTimelineMetadata::default()
         };
+        m.cut_boundaries.insert(
+            cut_boundary_key("clip-a", "clip-b"),
+            SemanticCutSpec {
+                cut_type: CutType::Cutaway,
+                intent: "hide_visual_jump".into(),
+                energy: Some(0.4),
+                audio_relation: AudioRelation::Sync,
+                confidence: Some(0.8),
+                reason: Some("b-roll clarifies the sentence".into()),
+                extra: HashMap::new(),
+            },
+        );
         let s = serde_json::to_string(&m).unwrap();
         let back: AwidatTimelineMetadata = serde_json::from_str(&s).unwrap();
         assert_eq!(back.version, "0.1");
         assert_eq!(back.source_assets.len(), 1);
+        let spec = back
+            .cut_boundaries
+            .get("clip-a::clip-b")
+            .expect("cut boundary metadata should round-trip");
+        assert_eq!(spec.cut_type, CutType::Cutaway);
+        assert_eq!(spec.intent, "hide_visual_jump");
     }
 
     #[test]
@@ -377,5 +512,28 @@ mod tests {
         let out = serde_json::to_value(&m).unwrap();
         assert_eq!(out["taste_profile_id"], "tp-001");
         assert_eq!(out["fancy_new_field"]["nested"], true);
+    }
+
+    #[test]
+    fn clip_split_edit_roundtrip() {
+        let m = AwidatClipMetadata {
+            split_edit: Some(SplitEditSpec {
+                audio_lead_s: Some(0.35),
+                audio_lead_from_clip_id: Some("clip-a".into()),
+                audio_trail_s: Some(0.5),
+                audio_trail_to_clip_id: Some("clip-b".into()),
+                reason: Some("smooth speaker handoff".into()),
+                confidence: Some(0.9),
+            }),
+            ..AwidatClipMetadata::default()
+        };
+        let s = serde_json::to_string(&m).unwrap();
+        let back: AwidatClipMetadata = serde_json::from_str(&s).unwrap();
+        let split = back.split_edit.expect("split edit");
+        assert_eq!(split.audio_lead_s, Some(0.35));
+        assert_eq!(split.audio_lead_from_clip_id.as_deref(), Some("clip-a"));
+        assert_eq!(split.audio_trail_s, Some(0.5));
+        assert_eq!(split.audio_trail_to_clip_id.as_deref(), Some("clip-b"));
+        assert_eq!(split.reason.as_deref(), Some("smooth speaker handoff"));
     }
 }

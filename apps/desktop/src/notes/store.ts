@@ -16,6 +16,7 @@ import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   BrollPreview,
+  BrollAnchor,
   ContinuityVerdictTag,
   EditorialNoteKind,
   EditorialNoteStatus,
@@ -47,6 +48,8 @@ export type Note = {
    *  thumbnail row with click-to-place. `undefined` when the agent
    *  hasn't searched yet. */
   brollPreviews?: BrollPreview[];
+  /** Exact anchor to pass to `use_broll` from a b-roll suggestion. */
+  brollAnchor?: BrollAnchor;
 };
 
 /** Disk shape — must match crates/core/src/notes.rs::NotesFile. */
@@ -63,6 +66,7 @@ type NotesFile = {
     continuity_reasons?: string[];
     broll_query?: string;
     broll_previews?: BrollPreview[];
+    broll_anchor?: BrollAnchor;
   }>;
 };
 
@@ -109,6 +113,7 @@ function deserialize(file: NotesFile): Note[] {
     continuityReasons: n.continuity_reasons,
     brollQuery: n.broll_query,
     brollPreviews: n.broll_previews,
+    brollAnchor: n.broll_anchor,
   }));
 }
 
@@ -143,6 +148,7 @@ export const useNotesStore = create<State>((set, get) => ({
           continuity_reasons: item.continuity_reasons ?? null,
           broll_query: item.broll_query ?? null,
           broll_previews: item.broll_previews ?? null,
+          broll_anchor: item.broll_anchor ?? null,
         },
       });
       await get().refresh();

@@ -58,7 +58,10 @@ def _probe_dims(asset_path: str) -> tuple[int, int]:
         capture_output=True,
         text=True,
     )
-    w, h = (int(x) for x in out.stdout.strip().split(","))
+    dims = [int(x) for x in out.stdout.replace("\n", ",").split(",") if x.strip()]
+    if len(dims) < 2:
+        raise RuntimeError(f"ffprobe did not report width/height for {asset_path!r}")
+    w, h = dims[:2]
     return w, h
 
 

@@ -1,0 +1,42 @@
+{
+  "id": "golden::smash_cut",
+  "objective": "Use an abrupt high-contrast cut for comedic impact.",
+  "project": {
+    "name": "golden-smash-cut",
+    "assets": [],
+    "clips": [
+      {
+        "name": "calm-setup",
+        "uuid": "calm-setup",
+        "asset": "raw/calm-setup.mp4",
+        "start_s": 0.0,
+        "duration_s": 4.0,
+        "transcript": "nothing could possibly go wrong"
+      },
+      {
+        "name": "chaos-payoff",
+        "uuid": "chaos-payoff",
+        "asset": "raw/chaos-payoff.mp4",
+        "start_s": 30.0,
+        "duration_s": 3.0,
+        "transcript": "everything goes wrong immediately"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=calm-setup and clip_uuid=chaos-payoff\n+ cut_type: smash_cut\n+ intent: comedic_contrast\n+ audio_relation: audio_cut\n+ confidence: 0.84\n+ reason: abrupt contrast is the joke\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "calm-setup",
+        "to": "chaos-payoff",
+        "cut_type": "smash_cut",
+        "intent": "comedic_contrast",
+        "audio_relation": "audio_cut",
+        "reason_contains": "contrast"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Insert BRoll"]
+  }
+}

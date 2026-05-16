@@ -18,14 +18,15 @@ import { TIMELINE_CHANGED_EVENT, type AppliedDiff } from "../protocol";
 import { serializeEdl } from "./edlBuilder";
 import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 import {
-  hitTestClipBody,
   hitTestEdge,
+  hitTestSelectableBody,
   pxDeltaToSourceDelta,
   type EdgeHit,
 } from "./hitDetect";
 import { getStrip, onThumbnailDecoded } from "./thumbnailCache";
 import { getBuckets, onWaveformDecoded } from "./waveformCache";
 import { useTimelineSelectionStore } from "../properties/store";
+import { shouldKeepMoveDraft } from "./moveDraft";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -155,8 +156,56 @@ function TimelineSurface({
         zoom={zoom}
         onLayout={handleLayout}
       />
+      <TimelineEditorialOverlay
+        snapshot={snapshot}
+        containerWidth={layout.width}
+        pps={layout.pps}
+      />
       <ProposalHandles containerWidth={layout.width} pps={layout.pps} />
     </>
+  );
+}
+
+function TimelineEditorialOverlay({
+  snapshot,
+  containerWidth,
+  pps,
+}: {
+  snapshot: TimelineSnapshot;
+  containerWidth: number;
+  pps: number;
+}) {
+  if (containerWidth <= 0 || snapshot.tracks.length === 0) return null;
+  const cutBadges = buildCutBadges(snapshot, pps);
+  const splitOffsets = buildSplitOffsets(snapshot, pps);
+  if (cutBadges.length === 0 && splitOffsets.length === 0) return null;
+  return (
+    <div
+      className="timeline-editorial-overlay"
+      style={{ width: containerWidth }}
+      aria-label="Timeline editorial metadata"
+    >
+      {cutBadges.map((badge) => (
+        <span
+          key={badge.key}
+          className="timeline-cut-badge"
+          style={{ left: badge.x, top: badge.y }}
+          title={badge.title}
+        >
+          {badge.label}
+        </span>
+      ))}
+      {splitOffsets.map((marker) => (
+        <span
+          key={marker.key}
+          className="timeline-split-offset"
+          style={{ left: marker.x, top: marker.y }}
+          title={marker.title}
+        >
+          {marker.label}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -310,7 +359,7 @@ function TimelineCanvas({
               ? item.track_start_s * pps
               : (item.track_start_s + item.duration_s) * pps;
           const yTop = RULER_HEIGHT + edgeHover.trackIndex * LANE_HEIGHT + 4;
-          ctx.fillStyle = "rgba(245, 158, 11, 0.55)";
+          ctx.fillStyle = "rgba(120, 184, 255, 0.62)";
           ctx.fillRect(edgeX - 1, yTop, 2, LANE_HEIGHT - 8);
         }
       }
@@ -321,7 +370,7 @@ function TimelineCanvas({
         const x = userTrim.currentX;
         const yTop = RULER_HEIGHT;
         const yBot = RULER_HEIGHT + LANE_HEIGHT * snapshot.tracks.length;
-        ctx.fillStyle = "#f59e0b";
+        ctx.fillStyle = "#78b8ff";
         ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
       }
 
@@ -394,7 +443,34 @@ function TimelineCanvas({
     const selectedItem = selectedTrack?.items.find(
       (it) => it.index === selectedClipKey.clipIndex,
     );
-    if (!selectedItem || selectedItem.kind !== "clip") return;
+    if (!selectedItem) return;
+
+    if (selectedItem.kind === "transition") {
+      const position = selectedTrack.items.findIndex(
+        (item) => item.index === selectedItem.index,
+      );
+      const from = selectedTrack.items[position - 1];
+      const to = selectedTrack.items[position + 1];
+      if (from?.kind !== "clip" || to?.kind !== "clip") return;
+      try {
+        await invoke<string>("propose_user_edit", {
+          edlText: serializeEdl([
+            {
+              kind: "delete_transition",
+              from: { kind: "clip_uuid", uuid: from.clip_uuid },
+              to: { kind: "clip_uuid", uuid: to.clip_uuid },
+            },
+          ]),
+        });
+        clearSelection();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("propose_user_edit (delete transition) failed", err);
+      }
+      return;
+    }
+
+    if (selectedItem.kind !== "clip") return;
 
     const clips =
       selectedItem.link_group_id !== null
@@ -479,7 +555,7 @@ function TimelineCanvas({
     // under the pointer = select; empty space = clear. Either way
     // the click also scrubs the playhead (preserving the existing
     // seek-on-click behaviour).
-    const body = hitTestClipBody(x, y, snapshot, ppsRef.current);
+    const body = hitTestSelectableBody(x, y, snapshot, ppsRef.current);
     if (body) {
       selectClip(body);
       const item = snapshot.tracks[body.trackIndex]?.items.find(
@@ -629,10 +705,11 @@ function TimelineCanvas({
           toPosition,
           atS: Math.max(0, item.track_start_s + dxS),
           fromPosition: item.index,
+          fromAtS: item.track_start_s,
         };
       })
-      .filter((op) => op.toPosition !== op.fromPosition)
-      .map(({ fromPosition: _fromPosition, ...op }) => op);
+      .filter(shouldKeepMoveDraft)
+      .map(({ fromPosition: _fromPosition, fromAtS: _fromAtS, ...op }) => op);
 
     if (ops.length === 0) return;
 
@@ -789,7 +866,7 @@ function drawMoveGhost(
     const h = LANE_HEIGHT - 8;
     ctx.save();
     ctx.setLineDash([5, 4]);
-    ctx.strokeStyle = "#f59e0b";
+    ctx.strokeStyle = "#78b8ff";
     ctx.lineWidth = 2;
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 4);
     ctx.restore();
@@ -823,9 +900,9 @@ function drawRuler(
   duration: number,
   pps: number,
 ) {
-  ctx.fillStyle = "#161b22";
+  ctx.fillStyle = "#151711";
   ctx.fillRect(0, 0, width, RULER_HEIGHT);
-  ctx.strokeStyle = "#30363d";
+  ctx.strokeStyle = "#30352d";
   ctx.beginPath();
   ctx.moveTo(0, RULER_HEIGHT - 0.5);
   ctx.lineTo(width, RULER_HEIGHT - 0.5);
@@ -837,7 +914,7 @@ function drawRuler(
   let interval =
     candidates.find((c) => c * pps >= desiredPx) ?? candidates[candidates.length - 1];
 
-  ctx.fillStyle = "#8b949e";
+  ctx.fillStyle = "#a49f91";
   ctx.font =
     "11px ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace";
   ctx.textBaseline = "middle";
@@ -845,7 +922,7 @@ function drawRuler(
   for (let t = 0; t <= duration + interval; t += interval) {
     const x = Math.round(t * pps) + 0.5;
     if (x > width) break;
-    ctx.strokeStyle = "#30363d";
+    ctx.strokeStyle = "#30352d";
     ctx.beginPath();
     ctx.moveTo(x, RULER_HEIGHT - 8);
     ctx.lineTo(x, RULER_HEIGHT);
@@ -879,14 +956,14 @@ function drawTracks(
     // so it reads as a different kind of layer; audio is the
     // existing dark-green ish; video lanes keep their default tint.
     if (isTitlesRow) {
-      ctx.fillStyle = "#0a0a0a";
+      ctx.fillStyle = "#070b10";
     } else if (track.kind === "audio") {
-      ctx.fillStyle = "#0d1117";
+      ctx.fillStyle = "#0b100d";
     } else {
-      ctx.fillStyle = "#0f141b";
+      ctx.fillStyle = "#0d0f0d";
     }
     ctx.fillRect(0, y, width, LANE_HEIGHT);
-    ctx.strokeStyle = "#30363d";
+    ctx.strokeStyle = "#30352d";
     ctx.beginPath();
     ctx.moveTo(0, y + LANE_HEIGHT - 0.5);
     ctx.lineTo(width, y + LANE_HEIGHT - 0.5);
@@ -939,9 +1016,9 @@ function drawItem(
     // with inline text rather than the regular media-clip styling.
     const isTitleClip = isTitlesRow && item.title !== null && item.title !== undefined;
     if (isTitleClip) {
-      ctx.fillStyle = "#1a1207"; // dark amber-tinted background
+      ctx.fillStyle = "#0a1622";
     } else {
-      ctx.fillStyle = trackKind === "audio" ? "#1f4d3f" : "#1f3d5d";
+      ctx.fillStyle = trackKind === "audio" ? "#1b4a39" : "#263b48";
     }
     fillRoundedRect(ctx, x, y, w, h, radius);
     // Filmstrip / waveform: drawn on top of the coloured fill, under
@@ -964,14 +1041,14 @@ function drawItem(
     // border to match their warm fill.
     const stroke =
       flag === "deleted"
-        ? "#f85149"
+        ? "#ef7168"
         : flag === "highlight"
-        ? "#d29922"
+        ? "#78b8ff"
         : isTitleClip
-        ? "#f59e0b"
+        ? "#e4ae52"
         : trackKind === "audio"
-        ? "#3fb950"
-        : "#58a6ff";
+        ? "#71c587"
+        : "#71b7a6";
     ctx.strokeStyle = stroke;
     ctx.lineWidth = flag === "normal" ? 1 : 2;
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
@@ -988,7 +1065,7 @@ function drawItem(
       const labelY = y + h / 2;
       if (drewOverlay) {
         const metrics = ctx.measureText(label);
-        ctx.fillStyle = "rgba(13, 17, 23, 0.7)";
+        ctx.fillStyle = "rgba(5, 6, 5, 0.74)";
         ctx.fillRect(
           x + CLIP_PADDING_X - 2,
           labelY - 7,
@@ -996,7 +1073,7 @@ function drawItem(
           14,
         );
       }
-      ctx.fillStyle = "#e6edf3";
+      ctx.fillStyle = "#eee8d7";
       ctx.fillText(label, x + CLIP_PADDING_X, labelY);
     }
     // Volume / speed badges — painted in the top-right corner so they
@@ -1008,7 +1085,7 @@ function drawItem(
     if (flag === "deleted") {
       // Strike-through line so the "before" is visually marked
       // for deletion even at low contrast.
-      ctx.strokeStyle = "#f85149";
+      ctx.strokeStyle = "#ef7168";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(x + 2, y + h / 2);
@@ -1023,26 +1100,202 @@ function drawItem(
       // proposal highlight (amber over amber is still distinct
       // because the proposal stroke is inside the rect, this
       // one straddles it).
-      ctx.strokeStyle = "#f59e0b";
+      ctx.strokeStyle = "#91d7ff";
       ctx.lineWidth = 2;
       strokeRoundedRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, radius + 1);
       ctx.lineWidth = 1;
     }
   } else if (item.kind === "gap") {
-    ctx.fillStyle = "rgba(139, 148, 158, 0.12)";
+    ctx.fillStyle = "rgba(164, 159, 145, 0.12)";
     fillRoundedRect(ctx, x, y, w, h, radius);
     // Cross-hatch pattern feel via dashed border so gaps stand out.
-    ctx.strokeStyle = "#30363d";
+    ctx.strokeStyle = "#30352d";
     ctx.setLineDash([3, 3]);
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
     ctx.setLineDash([]);
   } else {
     // transition
-    ctx.fillStyle = "rgba(210, 153, 34, 0.18)";
+    ctx.fillStyle = "rgba(120, 184, 255, 0.18)";
     fillRoundedRect(ctx, x, y, w, h, radius);
-    ctx.strokeStyle = "#d29922";
+    ctx.strokeStyle = "#78b8ff";
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
+    if (w > 30) {
+      ctx.font = "10px ui-sans-serif, system-ui, sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.fillStyle = "#c9e7ff";
+      const label = truncateToWidth(
+        ctx,
+        `${transitionLabel(item.effect_name)} ${item.duration_s.toFixed(2)}s`,
+        w - 2 * CLIP_PADDING_X,
+      );
+      ctx.fillText(label, x + CLIP_PADDING_X, y + h / 2);
+    }
+    if (selected) {
+      ctx.strokeStyle = "#91d7ff";
+      ctx.lineWidth = 2;
+      strokeRoundedRect(ctx, x - 0.5, y - 0.5, w + 1, h + 1, radius + 1);
+      ctx.lineWidth = 1;
+    }
   }
+}
+
+function transitionLabel(effectName: string): string {
+  switch (effectName) {
+    case "SMPTE_Dissolve":
+    case "awidat.cross_dissolve":
+    case "fade":
+      return "Dissolve";
+    case "awidat.fade_black":
+    case "fadeblack":
+      return "Fade Black";
+    case "awidat.flash_white":
+    case "fadewhite":
+      return "Flash";
+    case "awidat.slide_left":
+    case "slideleft":
+      return "Slide L";
+    case "awidat.slide_right":
+    case "slideright":
+      return "Slide R";
+    case "awidat.smooth_push_left":
+    case "smoothleft":
+      return "Push L";
+    case "awidat.wipe_left":
+    case "wipeleft":
+      return "Wipe L";
+    case "awidat.wipe_right":
+    case "wiperight":
+      return "Wipe R";
+    case "awidat.zoom_in":
+    case "zoomin":
+      return "Zoom In";
+    case "awidat.pixelize":
+    case "pixelize":
+      return "Pixelize";
+    case "awidat.radial":
+    case "radial":
+      return "Radial";
+    default:
+      return effectName.replace(/^awidat\./, "").replace(/_/g, " ");
+  }
+}
+
+type EditorialMarker = {
+  key: string;
+  x: number;
+  y: number;
+  label: string;
+  title: string;
+};
+
+function buildCutBadges(snapshot: TimelineSnapshot, pps: number): EditorialMarker[] {
+  const out: EditorialMarker[] = [];
+  for (const boundary of snapshot.cut_boundaries) {
+    const located = locateClipByUuid(snapshot, boundary.to_clip_id);
+    if (!located) continue;
+    out.push({
+      key: `cut-${boundary.key}`,
+      x: Math.max(2, located.item.track_start_s * pps - 10),
+      y: RULER_HEIGHT + located.trackIndex * LANE_HEIGHT + 2,
+      label: shortCutLabel(boundary.cut_type),
+      title: [
+        formatEditorialLabel(boundary.cut_type),
+        boundary.intent ? `intent: ${boundary.intent}` : null,
+        boundary.audio_relation ? `audio: ${boundary.audio_relation}` : null,
+        boundary.reason,
+      ]
+        .filter(Boolean)
+        .join(" - "),
+    });
+  }
+  return out;
+}
+
+function buildSplitOffsets(snapshot: TimelineSnapshot, pps: number): EditorialMarker[] {
+  const out: EditorialMarker[] = [];
+  for (let trackIndex = 0; trackIndex < snapshot.tracks.length; trackIndex += 1) {
+    const track = snapshot.tracks[trackIndex];
+    for (const item of track.items) {
+      if (item.kind !== "clip") continue;
+      const y = RULER_HEIGHT + trackIndex * LANE_HEIGHT + LANE_HEIGHT - 18;
+      if (item.audio_lead_s !== null && item.audio_lead_s > 0) {
+        out.push({
+          key: `lead-${item.clip_uuid}`,
+          x: Math.max(2, item.track_start_s * pps + 4),
+          y,
+          label: `J +${formatMarkerSeconds(item.audio_lead_s)}`,
+          title: splitOffsetTitle("Audio lead", item.audio_lead_s, item),
+        });
+      }
+      if (item.audio_trail_s !== null && item.audio_trail_s > 0) {
+        out.push({
+          key: `trail-${item.clip_uuid}`,
+          x: Math.max(2, (item.track_start_s + item.duration_s) * pps - 50),
+          y,
+          label: `L +${formatMarkerSeconds(item.audio_trail_s)}`,
+          title: splitOffsetTitle("Audio trail", item.audio_trail_s, item),
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function locateClipByUuid(snapshot: TimelineSnapshot, clipUuid: string) {
+  for (let trackIndex = 0; trackIndex < snapshot.tracks.length; trackIndex += 1) {
+    const item = snapshot.tracks[trackIndex].items.find(
+      (candidate) => candidate.kind === "clip" && candidate.clip_uuid === clipUuid,
+    );
+    if (item?.kind === "clip") return { trackIndex, item };
+  }
+  return null;
+}
+
+function shortCutLabel(cutType: string): string {
+  switch (cutType) {
+    case "cut_on_action":
+      return "Action";
+    case "shot_reverse_shot":
+      return "S/RS";
+    case "eyeline_match_cut":
+      return "Eye";
+    case "match_cut":
+      return "Match";
+    case "smash_cut":
+      return "Smash";
+    case "cross_cut":
+      return "Cross";
+    default:
+      return formatEditorialLabel(cutType);
+  }
+}
+
+function formatEditorialLabel(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatMarkerSeconds(value: number): string {
+  return `${value.toFixed(2).replace(/\.?0+$/, "")}s`;
+}
+
+function splitOffsetTitle(
+  label: string,
+  seconds: number,
+  item: Extract<TimelineItem, { kind: "clip" }>,
+): string {
+  return [
+    `${label}: ${formatMarkerSeconds(seconds)}`,
+    item.split_edit_reason,
+    item.split_edit_confidence !== null
+      ? `confidence ${Math.round(item.split_edit_confidence * 100)}%`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" - ");
 }
 
 /** Tile filmstrip JPEGs across a video clip's pixel area.
@@ -1176,7 +1429,7 @@ function drawClipWaveform(
 
   // Stroke the upper envelope as a single path.
   ctx.beginPath();
-  ctx.strokeStyle = "rgba(63, 185, 80, 0.85)";
+  ctx.strokeStyle = "rgba(113, 197, 135, 0.86)";
   ctx.lineWidth = 1;
   for (let i = 0; i < w; i++) {
     // Pick the bucket(s) that map to this pixel column.
@@ -1238,7 +1491,7 @@ function drawClipTitleText(
   ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
   ctx.textBaseline = "middle";
   const label = truncateToWidth(ctx, styling.text, w - 2 * CLIP_PADDING_X);
-  ctx.fillStyle = "#f59e0b";
+  ctx.fillStyle = "#91d7ff";
   ctx.fillText(label, x + CLIP_PADDING_X, y + h / 2);
 }
 
@@ -1282,9 +1535,9 @@ function drawClipBadges(
     const boxX = cursorX - boxW;
     const boxY = y + 3;
     if (boxX < x + 4) break; // Out of room — drop later badges.
-    ctx.fillStyle = "rgba(13, 17, 23, 0.78)";
+    ctx.fillStyle = "rgba(5, 6, 5, 0.78)";
     ctx.fillRect(boxX, boxY, boxW, boxH);
-    ctx.fillStyle = "#f59e0b";
+    ctx.fillStyle = "#91d7ff";
     ctx.fillText(text, boxX + padX, boxY + padY);
     cursorX = boxX - 4;
   }
@@ -1320,8 +1573,14 @@ function collectHighlightKeys(diffs: AppliedDiff[]): Set<string> {
       // Both halves of a split are "new" relative to the original.
       out.add(`${d.track_index}:${d.item_index}`);
       out.add(`${d.track_index}:${d.item_index + 1}`);
-    } else if (d.kind === "insert") {
+    } else if (
+      d.kind === "insert" ||
+      d.kind === "insert_b_roll" ||
+      d.kind === "insert_pi_p"
+    ) {
       out.add(`${d.track_index}:${d.item_index}`);
+    } else if (d.kind === "move") {
+      out.add(`${d.to_track_index}:${d.to_item_index}`);
     }
   }
   return out;
@@ -1336,14 +1595,14 @@ function drawPlayhead(
 ) {
   const x = Math.round(currentTime * pps) + 0.5;
   if (x < 0 || x > width) return;
-  ctx.strokeStyle = "#f85149";
+  ctx.strokeStyle = "#ef7168";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   ctx.moveTo(x, 0);
   ctx.lineTo(x, height);
   ctx.stroke();
   // Triangle handle at top.
-  ctx.fillStyle = "#f85149";
+  ctx.fillStyle = "#ef7168";
   ctx.beginPath();
   ctx.moveTo(x - 5, 0);
   ctx.lineTo(x + 5, 0);

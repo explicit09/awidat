@@ -97,17 +97,20 @@ export function ProjectBanner({ onChange }: Props) {
 
   return (
     <div className="project-banner" ref={popRef}>
-      <span className="project-label">project:</span>
-      <code className="project-path">
-        {current ?? "(none — open or create one to start)"}
-      </code>
+      <span className="project-label">Project</span>
+      <div className="project-path-group">
+        <strong className="project-name">{current ? basename(current) : "No project"}</strong>
+        <code className="project-path">
+          {current ?? "Open or create an Awidat project"}
+        </code>
+      </div>
       {projectType && current && (
         <span className="project-type-badge" title={projectTypeTitle(projectType)}>
           {projectTypeLabel(projectType)}
         </span>
       )}
-      <button onClick={() => setOpen((v) => !v)}>
-        {current ? "Change" : "Open…"}
+      <button className="project-switch-button" onClick={() => setOpen((v) => !v)}>
+        {current ? "Switch" : "Open"}
       </button>
       {open && (
         <div className="project-popover" role="menu">

@@ -5,18 +5,18 @@
 export function EmptyState() {
   return (
     <div className="empty-state">
-      <h2>Drop media in to get started</h2>
+      <span className="empty-kicker">Ready for media</span>
+      <h2>Build the cut from source, transcript, or agent proposal.</h2>
+      <div className="empty-steps" aria-label="Startup workflow">
+        <span>Import</span>
+        <span>Index</span>
+        <span>Ask</span>
+        <span>Review</span>
+        <span>Export</span>
+      </div>
       <p className="empty-hint">
-        Use the bar above to <strong>Import files…</strong>,{" "}
-        <strong>Import URL…</strong>, or <strong>Run indexers</strong> on
-        media you've already dropped into <code>raw/</code>. Imports
-        auto-chain through proxy transcoding and indexing — three job
-        cards stream in here as the work progresses.
-      </p>
-      <p className="empty-hint">
-        Once indexing is done, ask the agent anything: "what's the
-        funniest line?", "cut the first 30 seconds", "find the call
-        to action".
+        Use the command bar to import local files or a URL. Awidat will create
+        proxies, run indexers, and stream the job state into the copilot rail.
       </p>
     </div>
   );

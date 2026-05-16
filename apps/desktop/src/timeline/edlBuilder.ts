@@ -57,11 +57,26 @@ export type EdlOp =
       transitionId?: string;
       transitionKind?: string;
       durationS: number;
+      alignment?: "center" | "start_at_cut" | "end_at_cut";
+      inOffsetS?: number;
+      outOffsetS?: number;
       family?: string;
       intent?: string;
       energy?: number;
       direction?: "left" | "right" | "up" | "down" | "in" | "out";
       params?: Record<string, unknown>;
+    }
+  | { kind: "delete_transition"; from: EdlAnchor; to: EdlAnchor }
+  | {
+      kind: "set_cut_intent";
+      from: EdlAnchor;
+      to: EdlAnchor;
+      cutType: string;
+      intent: string;
+      audioRelation?: string;
+      energy?: number;
+      confidence?: number;
+      reason?: string;
     }
   | { kind: "set_volume"; anchor: EdlAnchor; value: number }
   | {
@@ -69,6 +84,20 @@ export type EdlOp =
       anchor: EdlAnchor;
       fadeInS?: number;
       fadeOutS?: number;
+    }
+  | {
+      kind: "set_audio_lead";
+      anchor: EdlAnchor;
+      leadS: number;
+      reason?: string;
+      confidence?: number;
+    }
+  | {
+      kind: "set_audio_trail";
+      anchor: EdlAnchor;
+      trailS: number;
+      reason?: string;
+      confidence?: number;
     }
   | {
       kind: "set_track_audio";
@@ -108,7 +137,13 @@ export type EdlOp =
       shadows?: number;
       highlights?: number;
     }
-  | { kind: "apply_lut"; anchor: EdlAnchor; lutPath: string }
+  | {
+      kind: "apply_lut";
+      anchor: EdlAnchor;
+      lutPath: string;
+      interpolation?: "nearest" | "trilinear" | "tetrahedral" | "pyramid" | "prism";
+    }
+  | { kind: "remove_lut"; anchor: EdlAnchor }
   | {
       kind: "insert_title";
       startS: number;
@@ -196,6 +231,26 @@ function appendOp(lines: string[], op: EdlOp): void {
       if (op.params !== undefined)
         lines.push(`+ params_json: ${JSON.stringify(op.params)}`);
       lines.push(`+ duration_s: ${formatTime(op.durationS)}`);
+      if (op.alignment !== undefined) lines.push(`+ alignment: ${op.alignment}`);
+      if (op.inOffsetS !== undefined) lines.push(`+ in_offset_s: ${formatTime(op.inOffsetS)}`);
+      if (op.outOffsetS !== undefined)
+        lines.push(`+ out_offset_s: ${formatTime(op.outOffsetS)}`);
+      break;
+    case "delete_transition":
+      lines.push("*** Delete Transition");
+      lines.push(`@@ between: ${formatAnchor(op.from)} and ${formatAnchor(op.to)}`);
+      break;
+    case "set_cut_intent":
+      lines.push("*** Set Cut Intent");
+      lines.push(`@@ between: ${formatAnchor(op.from)} and ${formatAnchor(op.to)}`);
+      lines.push(`+ cut_type: ${op.cutType}`);
+      lines.push(`+ intent: ${op.intent.replace(/"/g, "")}`);
+      if (op.energy !== undefined) lines.push(`+ energy: ${formatFloat(op.energy)}`);
+      if (op.audioRelation !== undefined)
+        lines.push(`+ audio_relation: ${op.audioRelation.replace(/"/g, "")}`);
+      if (op.confidence !== undefined)
+        lines.push(`+ confidence: ${formatFloat(op.confidence)}`);
+      if (op.reason !== undefined) lines.push(`+ reason: "${escapeEdlText(op.reason)}"`);
       break;
     case "set_volume":
       lines.push("*** Set Volume");
@@ -207,6 +262,22 @@ function appendOp(lines: string[], op: EdlOp): void {
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       if (op.fadeInS !== undefined) lines.push(`+ fade_in_s: ${formatTime(op.fadeInS)}`);
       if (op.fadeOutS !== undefined) lines.push(`+ fade_out_s: ${formatTime(op.fadeOutS)}`);
+      break;
+    case "set_audio_lead":
+      lines.push("*** Set Audio Lead");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      lines.push(`+ lead_s: ${formatTime(op.leadS)}`);
+      if (op.reason !== undefined) lines.push(`+ reason: "${escapeEdlText(op.reason)}"`);
+      if (op.confidence !== undefined)
+        lines.push(`+ confidence: ${formatFloat(op.confidence)}`);
+      break;
+    case "set_audio_trail":
+      lines.push("*** Set Audio Trail");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      lines.push(`+ trail_s: ${formatTime(op.trailS)}`);
+      if (op.reason !== undefined) lines.push(`+ reason: "${escapeEdlText(op.reason)}"`);
+      if (op.confidence !== undefined)
+        lines.push(`+ confidence: ${formatFloat(op.confidence)}`);
       break;
     case "set_track_audio":
       lines.push("*** Set Track Audio");
@@ -270,6 +341,12 @@ function appendOp(lines: string[], op: EdlOp): void {
       lines.push("*** Apply LUT");
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       lines.push(`+ lut_path: ${op.lutPath.replace(/"/g, "")}`);
+      if (op.interpolation !== undefined)
+        lines.push(`+ interpolation: ${op.interpolation}`);
+      break;
+    case "remove_lut":
+      lines.push("*** Remove LUT");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       break;
     case "insert_title":
       lines.push("*** Insert Title");
@@ -332,6 +409,10 @@ function appendAudioFx(lines: string[], fx: EdlAudioFx): void {
  *  define an escape sequence; v1 just disallows quotes inside
  *  titles. */
 function escapeTitleText(s: string): string {
+  return s.replace(/"/g, "");
+}
+
+function escapeEdlText(s: string): string {
   return s.replace(/"/g, "");
 }
 

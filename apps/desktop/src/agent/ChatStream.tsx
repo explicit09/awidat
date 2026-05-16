@@ -3,7 +3,8 @@
 // App.tsx so toolbar-triggered jobs are heard even when this pane
 // remounts during project changes.
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Item } from "../protocol";
@@ -12,7 +13,9 @@ import { ApprovalCard } from "./ApprovalCard";
 import { UserInputCard } from "./UserInputCard";
 import { JobCard } from "./JobCard";
 import { useProjectStore } from "../app/state";
-import { useTimelineStore } from "../timeline/store";
+import { EmptyState } from "../app/EmptyState";
+import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "../timeline/store";
+import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 
 export function ChatStream() {
   const items = useAgentStore((s) => s.items);
@@ -61,13 +64,15 @@ export function ChatStream() {
         !running &&
         !turnError &&
         projectReady && (
-          <p className="chat-empty chat-empty-loaded">
-            {timelineRefreshing
-              ? "Loading project..."
-              : hasTimelineClips
-                ? "Timeline loaded. Ask Awidat for an edit, or select a clip below to inspect it."
-                : "No chat history yet. Import media or ask Awidat to get started."}
-          </p>
+          hasTimelineClips ? (
+            <p className="chat-empty chat-empty-loaded">
+              Timeline loaded. Ask Awidat for an edit, or select a clip below to inspect it.
+            </p>
+          ) : timelineRefreshing ? (
+            <p className="chat-empty chat-empty-loaded">Loading project...</p>
+          ) : (
+            <EmptyState />
+          )
         )}
       {items.length === 0 && !running && !turnError && !projectReady && (
         <p className="chat-empty">
@@ -187,15 +192,34 @@ function ToolCallItem({
 }: {
   item: Extract<Item, { kind: "tool_call" }>;
 }) {
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  const [proposalBusy, setProposalBusy] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
   const hasError = item.result !== null && "Err" in item.result;
   const isRunning = item.phase !== "completed";
   const status = hasError ? "error" : isRunning ? item.phase : "done";
+  const assessment = parseAssessEditQualityResult(item);
   const resultSummary =
     item.result === null
       ? ""
       : "Ok" in item.result
         ? summarizeText(item.result.Ok)
         : summarizeText(item.result.Err);
+  const assessmentEdl =
+    assessment === null ? null : buildAssessmentProposalEdl(assessment, snapshot);
+
+  async function proposeAssessmentRecommendation() {
+    if (!assessmentEdl) return;
+    setProposalBusy(true);
+    setProposalError(null);
+    try {
+      await invoke<string>("propose_user_edit", { edlText: assessmentEdl });
+    } catch (e) {
+      setProposalError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProposalBusy(false);
+    }
+  }
 
   return (
     <article
@@ -218,7 +242,18 @@ function ToolCallItem({
           {item.result !== null && (
             <div className="item-result">
               {"Ok" in item.result ? (
-                <pre className="result-ok">{item.result.Ok}</pre>
+                <>
+                  <pre className="result-ok">{item.result.Ok}</pre>
+                  {assessment && (
+                    <AssessmentRecommendationAction
+                      assessment={assessment}
+                      edlText={assessmentEdl}
+                      busy={proposalBusy}
+                      error={proposalError}
+                      onPropose={proposeAssessmentRecommendation}
+                    />
+                  )}
+                </>
               ) : (
                 <pre className="result-err">{item.result.Err}</pre>
               )}
@@ -228,6 +263,209 @@ function ToolCallItem({
       </details>
     </article>
   );
+}
+
+type AssessEditQualityReport = {
+  atS: number;
+  kind: string;
+  recommendation: {
+    action: string;
+    cutType: string;
+    intent: string;
+    edlOp: string | null;
+    reason: string;
+  };
+  edlGuidance: string | null;
+};
+
+function AssessmentRecommendationAction({
+  assessment,
+  edlText,
+  busy,
+  error,
+  onPropose,
+}: {
+  assessment: AssessEditQualityReport;
+  edlText: string | null;
+  busy: boolean;
+  error: string | null;
+  onPropose: () => void;
+}) {
+  const { recommendation } = assessment;
+  return (
+    <div className="tool-recommendation">
+      <div className="tool-recommendation-copy">
+        <span className="tool-recommendation-label">recommendation</span>
+        <strong>{labelForRecommendation(recommendation)}</strong>
+        <span>{recommendation.reason}</span>
+      </div>
+      {recommendation.edlOp ? (
+        <button
+          className="tool-recommendation-action"
+          onClick={onPropose}
+          disabled={busy || edlText === null}
+          title={
+            edlText === null
+              ? "No nearby cut boundary found in the current timeline"
+              : "Open this as a timeline proposal"
+          }
+        >
+          {busy ? "…" : "Propose"}
+        </button>
+      ) : null}
+      {error && <div className="tool-recommendation-error">{error}</div>}
+    </div>
+  );
+}
+
+function parseAssessEditQualityResult(
+  item: Extract<Item, { kind: "tool_call" }>,
+): AssessEditQualityReport | null {
+  if (item.name !== "assess_edit_quality" || item.result === null || !("Ok" in item.result)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(item.result.Ok) as Record<string, unknown>;
+    const recommendation = parsed.recommendation as Record<string, unknown> | undefined;
+    if (!recommendation) return null;
+    const atS = typeof parsed.at_s === "number" ? parsed.at_s : NaN;
+    const edlOp =
+      typeof recommendation.edl_op === "string" ? recommendation.edl_op : null;
+    return {
+      atS,
+      kind: typeof parsed.kind === "string" ? parsed.kind : "cut",
+      edlGuidance:
+        typeof parsed.edl_guidance === "string" ? parsed.edl_guidance : null,
+      recommendation: {
+        action:
+          typeof recommendation.action === "string"
+            ? recommendation.action
+            : "review",
+        cutType:
+          typeof recommendation.cut_type === "string"
+            ? recommendation.cut_type
+            : "hard_cut",
+        intent:
+          typeof recommendation.intent === "string"
+            ? recommendation.intent
+            : "low_attention_edit",
+        edlOp,
+        reason:
+          typeof recommendation.reason === "string"
+            ? recommendation.reason
+            : "Review this edit before committing.",
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildAssessmentProposalEdl(
+  assessment: AssessEditQualityReport,
+  snapshot: TimelineSnapshot,
+): string | null {
+  if (!isFinite(assessment.atS)) return null;
+  const boundary = findNearestClipBoundary(snapshot, assessment.atS);
+  if (!boundary) return null;
+  const { recommendation } = assessment;
+  const reason = recommendation.reason;
+  const confidence = 0.8;
+  const cutIntent: EdlOp = {
+    kind: "set_cut_intent",
+    from: { kind: "clip_uuid", uuid: boundary.from.clip_uuid },
+    to: { kind: "clip_uuid", uuid: boundary.to.clip_uuid },
+    cutType: recommendation.cutType,
+    intent: recommendation.intent,
+    audioRelation: audioRelationForCut(recommendation.cutType),
+    confidence,
+    reason,
+  };
+  const ops: EdlOp[] = [];
+  if (recommendation.edlOp === "Set Audio Lead") {
+    ops.push({
+      kind: "set_audio_lead",
+      anchor: { kind: "clip_uuid", uuid: boundary.to.clip_uuid },
+      leadS: splitOffsetFromGuidance(assessment.edlGuidance, 0.35),
+      confidence,
+      reason,
+    });
+    ops.push(cutIntent);
+  } else if (recommendation.edlOp === "Set Audio Trail") {
+    ops.push({
+      kind: "set_audio_trail",
+      anchor: { kind: "clip_uuid", uuid: boundary.from.clip_uuid },
+      trailS: splitOffsetFromGuidance(assessment.edlGuidance, 0.25),
+      confidence,
+      reason,
+    });
+    ops.push(cutIntent);
+  } else if (recommendation.edlOp === "Set Cut Intent") {
+    ops.push(cutIntent);
+  } else {
+    return null;
+  }
+  return serializeEdl(ops);
+}
+
+function findNearestClipBoundary(snapshot: TimelineSnapshot, atS: number): {
+  from: Extract<TimelineItem, { kind: "clip" }>;
+  to: Extract<TimelineItem, { kind: "clip" }>;
+} | null {
+  let best:
+    | {
+        score: number;
+        from: Extract<TimelineItem, { kind: "clip" }>;
+        to: Extract<TimelineItem, { kind: "clip" }>;
+      }
+    | null = null;
+  for (const track of snapshot.tracks) {
+    if (track.kind === "audio") continue;
+    const clips = track.items
+      .filter((item): item is Extract<TimelineItem, { kind: "clip" }> => item.kind === "clip")
+      .sort((a, b) => a.track_start_s - b.track_start_s);
+    for (let i = 0; i < clips.length - 1; i += 1) {
+      const from = clips[i];
+      const to = clips[i + 1];
+      const outgoingBoundary = from.track_start_s + from.duration_s;
+      const incomingBoundary = to.track_start_s;
+      const midpoint = (outgoingBoundary + incomingBoundary) / 2;
+      const score = Math.min(
+        Math.abs(outgoingBoundary - atS),
+        Math.abs(incomingBoundary - atS),
+        Math.abs(midpoint - atS),
+      );
+      if (best === null || score < best.score) {
+        best = { score, from, to };
+      }
+    }
+  }
+  return best && best.score <= 3 ? { from: best.from, to: best.to } : null;
+}
+
+function audioRelationForCut(cutType: string): string {
+  if (cutType === "j_cut") return "audio_leads";
+  if (cutType === "l_cut") return "audio_trails";
+  return "sync";
+}
+
+function splitOffsetFromGuidance(guidance: string | null, fallback: number): number {
+  if (!guidance) return fallback;
+  const match = guidance.match(/(?:lead_s|trail_s)\D+([0-9]+(?:\.[0-9]+)?)/);
+  if (!match) return fallback;
+  const value = Number.parseFloat(match[1]);
+  return isFinite(value) && value >= 0 ? value : fallback;
+}
+
+function labelForRecommendation(
+  recommendation: AssessEditQualityReport["recommendation"],
+): string {
+  if (recommendation.edlOp === "Set Audio Lead") return "Use J-cut";
+  if (recommendation.edlOp === "Set Audio Trail") return "Use L-cut";
+  if (recommendation.edlOp === "Set Cut Intent") {
+    return recommendation.cutType.replace(/_/g, " ");
+  }
+  return recommendation.action.replace(/_/g, " ");
 }
 
 function summarizeToolCall(item: Extract<Item, { kind: "tool_call" }>): string {

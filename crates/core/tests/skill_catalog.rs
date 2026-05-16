@@ -34,6 +34,7 @@ fn bundled_output_workflow_skills_load() {
         "beat-sync-editor",
         "b-roll-suggester",
         "color-corrector",
+        "cut-director",
         "interview-tightener",
         "meeting-highlights",
         "pacing-optimizer",
@@ -42,6 +43,8 @@ fn bundled_output_workflow_skills_load() {
         "rough-cut-assembler",
         "short-form",
         "stock-broll",
+        "split-edit-director",
+        "thematic-montage-director",
         "tutorial",
         "version-control",
         "viral-clip-extractor",
@@ -62,6 +65,80 @@ fn bundled_output_workflow_skills_load() {
 }
 
 #[test]
+fn cut_and_split_directors_expose_first_class_edit_grammar() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    let cut = registry.get("cut-director").expect("cut-director exists");
+    for tool in [
+        "view_timeline",
+        "inspect_clip",
+        "view_frame",
+        "assess_edit_quality",
+        "apply_edl",
+        "vedit_diff",
+    ] {
+        assert!(
+            cut.meta.tools_allowlist.iter().any(|t| t == tool),
+            "cut-director must allow {tool}"
+        );
+    }
+    for required in [
+        "hard cut is the default",
+        "cut_on_action",
+        "eyeline_match",
+        "match_cut",
+        "smash_cut",
+        "jump_cut",
+        "Set Cut Intent",
+        "assess_edit_quality",
+        "visible transition",
+        "transition-director",
+    ] {
+        assert!(
+            cut.body.contains(required),
+            "cut-director must mention {required:?}"
+        );
+    }
+
+    let split = registry
+        .get("split-edit-director")
+        .expect("split-edit-director exists");
+    for tool in [
+        "view_timeline",
+        "inspect_clip",
+        "assess_edit_quality",
+        "apply_edl",
+        "vedit_diff",
+        "start_render",
+        "poll_render",
+    ] {
+        assert!(
+            split.meta.tools_allowlist.iter().any(|t| t == tool),
+            "split-edit-director must allow {tool}"
+        );
+    }
+    for required in [
+        "J-cut",
+        "L-cut",
+        "Set Audio Lead",
+        "Set Audio Trail",
+        "lead_s",
+        "trail_s",
+        "learned",
+        "preview-limited",
+        "review by ear",
+        "visible transition",
+    ] {
+        assert!(
+            split.body.contains(required),
+            "split-edit-director must mention {required:?}"
+        );
+    }
+}
+
+#[test]
 fn color_corrector_skill_is_graph_native() {
     let root = workspace_root().join("skills");
     let (registry, errors) = SkillRegistry::discover(Some(&root), None);
@@ -74,9 +151,12 @@ fn color_corrector_skill_is_graph_native() {
         "read_index",
         "view_frame",
         "view_timeline",
+        "start_look_region_pass",
+        "plan_look_regions",
         "apply_edl",
         "vedit_diff",
         "start_render",
+        "review_look_regions",
     ] {
         assert!(
             skill.meta.tools_allowlist.iter().any(|t| t == tool),
@@ -93,6 +173,8 @@ fn color_corrector_skill_is_graph_native() {
         "auto_correct_safe",
         "color_apply_plan.py",
         "camera_match_plan.py",
+        "look_region_plan.py",
+        "look_region_review_package.py",
         "color_review_package.py",
         "rendered contact sheet",
         "vedit_diff",
@@ -121,16 +203,141 @@ fn auto_cutter_and_podcast_use_semantic_retake_planning() {
                 .any(|tool| tool == "assess_continuity"),
             "{name} must allow assess_continuity for risky retake cuts"
         );
+        assert!(
+            skill
+                .meta
+                .tools_allowlist
+                .iter()
+                .any(|tool| tool == "assess_edit_quality"),
+            "{name} must allow assess_edit_quality for editorial cut repair"
+        );
         for required in [
             "episode_span_plan.py",
             "retake_plan.py",
-            "assess_continuity",
+            "assess_edit_quality",
+            "Set Cut Intent",
+            "Set Audio Lead",
+            "Set Audio Trail",
         ] {
             assert!(
                 skill.body.contains(required),
                 "{name} must mention {required:?}"
             );
         }
+    }
+}
+
+#[test]
+fn transition_and_broll_skills_use_edit_quality_layer() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    for name in ["transition-director", "stock-broll"] {
+        let skill = registry.get(name).expect("skill exists");
+        assert!(
+            skill
+                .meta
+                .tools_allowlist
+                .iter()
+                .any(|tool| tool == "assess_edit_quality"),
+            "{name} must allow assess_edit_quality"
+        );
+    }
+
+    let transition = registry
+        .get("transition-director")
+        .expect("transition-director skill exists");
+    for tool in ["transition_context", "plan_transition"] {
+        assert!(
+            transition.meta.tools_allowlist.iter().any(|t| t == tool),
+            "transition-director must allow {tool}"
+        );
+    }
+    for required in [
+        "assess_edit_quality",
+        "transition_context",
+        "plan_transition",
+        "style_context.transition_density_last_30s",
+        "Set Audio Lead",
+        "Set Audio Trail",
+        "Set Cut Intent",
+        "Respect",
+    ] {
+        assert!(
+            transition.body.contains(required),
+            "transition-director must mention {required:?}"
+        );
+    }
+
+    let stock = registry
+        .get("stock-broll")
+        .expect("stock-broll skill exists");
+    for required in [
+        "assess_edit_quality",
+        "recommendation.broll=true",
+        "style_context.transition_density_last_30s",
+        "Set Audio Lead",
+        "Set Audio Trail",
+    ] {
+        assert!(
+            stock.body.contains(required),
+            "stock-broll must mention {required:?}"
+        );
+    }
+}
+
+#[test]
+fn thematic_montage_is_separate_from_literal_broll() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    let montage = registry
+        .get("thematic-montage-director")
+        .expect("thematic-montage-director skill exists");
+    for tool in [
+        "read_index",
+        "find_beat",
+        "find_moment",
+        "clip_search",
+        "view_timeline",
+        "apply_edl",
+        "vedit_diff",
+    ] {
+        assert!(
+            montage.meta.tools_allowlist.iter().any(|t| t == tool),
+            "thematic montage skill must allow {tool}"
+        );
+    }
+    for required in [
+        "not a continuity cover",
+        "opt-in",
+        "associative",
+        "literal b-roll",
+        "Set Cut Intent",
+        "Insert BRoll",
+        "view_timeline",
+        "vedit_diff",
+    ] {
+        assert!(
+            montage.body.contains(required),
+            "thematic montage skill must mention {required:?}"
+        );
+    }
+
+    let broll = registry
+        .get("b-roll-suggester")
+        .expect("b-roll-suggester skill exists");
+    for required in [
+        "literal continuity cover",
+        "thematic-montage-director",
+        "not a symbolic montage",
+    ] {
+        assert!(
+            broll.body.contains(required),
+            "b-roll-suggester must keep literal cover separate via {required:?}"
+        );
     }
 }
 
@@ -306,6 +513,17 @@ fn skill_tool_allowlists_match_graph_native_instructions() {
                     .iter()
                     .any(|tool| tool == "vedit_diff"),
                 "{} body references vedit_diff but frontmatter does not allow it",
+                skill.meta.name
+            );
+        }
+        if skill.body.contains("assess_edit_quality") {
+            assert!(
+                skill
+                    .meta
+                    .tools_allowlist
+                    .iter()
+                    .any(|tool| tool == "assess_edit_quality"),
+                "{} body references assess_edit_quality but frontmatter does not allow it",
                 skill.meta.name
             );
         }
@@ -560,6 +778,37 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
     let missing_sheet = fixtures.path().join("sheet.ppm");
     let review_report = fixtures.path().join("color-review.md");
     let review_json = fixtures.path().join("color-review.json");
+    let look_plan = write_json(
+        fixtures.path().join("look-plan.json"),
+        serde_json::json!({
+            "version": 1,
+            "status": "planned",
+            "regions": [{
+                "clip_name": "clip-a",
+                "clip_anchor": "clip-a",
+                "asset_id": "raw/source.mp4",
+                "scene_id": "color_scene_1",
+                "source_start_s": 0.0,
+                "source_end_s": 2.0,
+                "timeline_start_s": 10.0,
+                "timeline_end_s": 12.0,
+                "sample_times_s": [10.1, 11.0, 11.9],
+                "source_sample_times_s": [0.1, 1.0, 1.9],
+                "issue_tags": ["underexposed"],
+                "policy": {"recommended_action": "auto_correct", "confidence": 0.9},
+                "correction": {"exposure_ev": 0.4},
+                "consistency_group": "raw-source.mp4:shadow_lift:underexposed",
+                "look_id": "shadow_lift",
+                "lut_path": "luts/generated/cinematic-shadow_lift.cube",
+                "score": 0.76,
+                "rationale": "fixture"
+            }],
+            "generated_luts": ["luts/generated/cinematic-shadow_lift.cube"]
+        }),
+    )?;
+    let look_review_sheet = fixtures.path().join("look-review.ppm");
+    let look_review_report = fixtures.path().join("look-review.md");
+    let look_review_json = fixtures.path().join("look-review.json");
 
     run_script(
         &python,
@@ -829,6 +1078,23 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
             path(&review_report),
             "--benchmark-json",
             path(&review_json),
+        ],
+        "status",
+    )?;
+    run_script(
+        &python,
+        root.join("skills/color-corrector/scripts/look_region_review_package.py"),
+        &[
+            "--look-plan",
+            path(&look_plan),
+            "--after-render",
+            path(&missing_render),
+            "--contact-sheet",
+            path(&look_review_sheet),
+            "--report-md",
+            path(&look_review_report),
+            "--package-json",
+            path(&look_review_json),
         ],
         "status",
     )?;

@@ -32,6 +32,7 @@ members = [
     "packages/gaze-mcp",
     "packages/frame-quality-mcp",
     "packages/color-analysis-mcp",
+    "packages/composition-mcp",
 ]
 
 [tool.uv.sources]

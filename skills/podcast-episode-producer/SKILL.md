@@ -9,6 +9,7 @@ tools_allowlist:
   - read_index
   - find_episode_start
   - assess_continuity
+  - assess_edit_quality
   - shot_summary
   - find_beat
   - inspect_moment
@@ -146,7 +147,12 @@ For every meaningful removal, check continuity: question still matches
 answer, setup still exists for payoff, emotional tone does not jump, and
 references like "as I said earlier" still point to something visible.
 For retake candidates with `requires_review=true` or any
-`continuity_risks`, call `assess_continuity` before applying edits.
+`continuity_risks`, call `assess_edit_quality` before applying edits.
+Route dirty cuts through the recommendation: recut to a sentence/word
+boundary, stamp `Set Cut Intent` for a clean hard cut, use
+`Set Audio Lead` / `Set Audio Trail` for J/L speaker handoffs, or cover
+the visual discontinuity with b-roll. Do not hide mid-sentence or
+mid-motion problems with a decorative dissolve.
 
 ### 6. Draft the timeline
 
@@ -182,6 +188,9 @@ Once the conversation flow is locked, make visual decisions:
 - Hide jump cuts with angle changes, b-roll, title overlays, or
   chapter cards. Prefer motivated visual changes: speaker switch,
   motion, laughter, topic shift, or a concrete referenced object.
+- Use visible transitions only when they have an explicit job and recent
+  transition density is low. If `assess_edit_quality` reports high
+  transition density, prefer b-roll, cut-on-action, or a split edit.
 - Use `find_broll_opportunities` and the b-roll skills for products,
   locations, websites, screenshots, charts, logos, photos, and demos.
   B-roll should support the sentence; random b-roll is worse than none.
@@ -305,8 +314,10 @@ or the source material genuinely demands it.
 - **Dead air**: anything > 1.0s outside a deliberate dramatic pause.
 - **False starts**: remove the bad attempt and keep the corrected
   version when breath/tonality still sounds natural.
-- **J/L-cut intent**: if a hard cut would be visible, hide it with a
-  motivated angle change, b-roll cover, title/card, or short transition.
+- **J/L-cut intent**: if a dialogue cut would be visible, prefer
+  `Set Audio Lead` / `Set Audio Trail` before reaching for a visible
+  transition. If a hard cut works, stamp `Set Cut Intent` so the edit
+  graph preserves why it stays hard.
 - **Render scope**: ALWAYS `scope="timeline"`. Never `scope="preview"`
   for the final cut — preview gives you the raw asset, not the edit.
 - **Lower thirds and chapters**: use `Set Broadcast Overlay` for show

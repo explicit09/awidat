@@ -16,8 +16,9 @@
 //! so the concat filter pulls each input's audio stream alongside
 //! its video stream.
 //!
-//! Gaps and Transitions are skipped in v1; they land when the EDL
-//! grows transition / gap awareness on the render side.
+//! Video transitions are planned explicitly from adjacent OTIO
+//! `Transition.1` nodes; unsupported or invalid placements fail before
+//! FFmpeg is invoked.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,7 +27,7 @@ use std::process::Command;
 use awidat_proto::awidat_meta::{BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle};
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::project::{files, read_otio_timeline};
-use awidat_proto::transitions;
+use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
@@ -59,6 +60,23 @@ pub enum RenderTimelineError {
         /// Clip name from the OTIO.
         clip_name: String,
     },
+    /// A centered transition needs source media outside the visible
+    /// edit range, but that handle is not available.
+    #[error(
+        "transition {kind:?} around clip '{clip_name}' needs {needed_s:.3}s {side} handle, but only {available_s:.3}s is available"
+    )]
+    TransitionHandleUnavailable {
+        /// Transition kind or Awidat id from OTIO.
+        kind: String,
+        /// Clip whose source range lacks the requested handle.
+        clip_name: String,
+        /// "incoming" for pre-roll, "outgoing" for post-roll.
+        side: &'static str,
+        /// Timeline seconds requested by the transition.
+        needed_s: f64,
+        /// Timeline seconds available in the source media.
+        available_s: f64,
+    },
     /// A clip referenced a LUT path that isn't on disk.
     #[error("clip '{clip_name}' references missing LUT {missing}")]
     MissingLut {
@@ -76,6 +94,21 @@ pub enum RenderTimelineError {
         /// Transition kind or Awidat id from OTIO.
         kind: String,
         /// Detailed registry/lookup message.
+        message: String,
+    },
+    /// A transition node is not placed between exactly two clips.
+    #[error("invalid transition placement: {message}")]
+    InvalidTransitionPlacement {
+        /// Detailed placement failure.
+        message: String,
+    },
+    /// Awidat transition metadata exists but is malformed or outside
+    /// the supported primitive API.
+    #[error("invalid transition metadata for {kind:?}: {message}")]
+    InvalidTransitionMetadata {
+        /// Transition kind or Awidat id from OTIO.
+        kind: String,
+        /// Detailed metadata failure.
         message: String,
     },
     /// Browser-backed broadcast overlay generation failed before the
@@ -108,12 +141,24 @@ pub struct LoudnessTargetPlan {
 /// before kicking off ffmpeg.
 #[derive(Debug, Clone, Default)]
 pub struct TimelineSegment {
+    /// Clip display name from OTIO, used for diagnostics.
+    pub clip_name: String,
     /// Absolute path to the source media.
     pub asset_path: PathBuf,
     /// Seconds into the source media where the cut starts.
     pub start_s: f64,
     /// Seconds of duration to take from the source.
     pub duration_s: f64,
+    /// Extra timeline seconds included before the visible edit-in so
+    /// a centered incoming transition has media to fade up from.
+    pub pre_handle_s: f64,
+    /// Extra timeline seconds included after the visible edit-out so
+    /// a centered outgoing transition has media to fade down through.
+    pub post_handle_s: f64,
+    /// Optional source-media lower bound from OTIO available_range.
+    pub source_available_start_s: Option<f64>,
+    /// Optional source-media upper bound from OTIO available_range.
+    pub source_available_end_s: Option<f64>,
     /// Linear gain multiplier for this segment's audio. `None` means
     /// no `awidat.volume` effect is on the underlying clip — the
     /// FilterPlanner skips emitting a `volume=` filter and the audio
@@ -131,8 +176,14 @@ pub struct TimelineSegment {
     pub color_correction: Option<ColorCorrectionPlan>,
     /// Optional absolute LUT path, read from the `awidat.lut` effect.
     pub lut_path: Option<PathBuf>,
+    /// Optional FFmpeg `lut3d` interpolation mode.
+    pub lut_interpolation: Option<String>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
+    /// Incoming audio lead for J-cut export, in seconds.
+    pub audio_lead_s: Option<f64>,
+    /// Outgoing audio trail for L-cut export, in seconds.
+    pub audio_trail_s: Option<f64>,
 }
 
 /// Render-time media overlay extracted from an upper video track.
@@ -337,6 +388,16 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
     Some(plan)
 }
 
+fn read_lut_interpolation(clip: &awidat_proto::otio::Clip) -> Option<String> {
+    let raw = read_effect_string(clip, "awidat.lut", "interpolation")?;
+    let value = raw.trim().to_ascii_lowercase();
+    matches!(
+        value.as_str(),
+        "nearest" | "trilinear" | "tetrahedral" | "pyramid" | "prism"
+    )
+    .then_some(value)
+}
+
 fn read_audio_fade(clip: &awidat_proto::otio::Clip) -> (Option<f64>, Option<f64>) {
     let Some(effect) = clip
         .effects
@@ -501,7 +562,9 @@ pub fn collect_timeline_full_plan(
         // pointing at the *next* clip we'll see (`pending_transition`).
         // Other children (Gap, Stack) reset the pending state — they
         // can't sit between clips that share a transition in v1.
-        let mut pending_transition: Option<(String, f64)> = None;
+        let mut pending_transition: Option<(String, f64, f64, Option<TransitionComposition>)> =
+            None;
+        let mut saw_clip_on_track = false;
         for tc in &track.children {
             match tc {
                 TrackChild::Clip(clip) => {
@@ -511,14 +574,27 @@ pub fn collect_timeline_full_plan(
                     };
                     let new_index = segs.len();
                     segs.push(segment);
-                    if let Some((kind, duration_s)) = pending_transition.take()
+                    saw_clip_on_track = true;
+                    if let Some((kind, in_offset_s, out_offset_s, composition)) =
+                        pending_transition.take()
                         && new_index > 0
                     {
+                        extend_transition_handles(
+                            &mut segs,
+                            new_index - 1,
+                            new_index,
+                            &kind,
+                            in_offset_s,
+                            out_offset_s,
+                        )?;
                         transitions.push(TransitionPlan {
                             from_segment_index: new_index - 1,
                             to_segment_index: new_index,
                             kind,
-                            duration_s,
+                            in_offset_s,
+                            out_offset_s,
+                            duration_s: in_offset_s + out_offset_s,
+                            composition,
                         });
                     }
                 }
@@ -536,13 +612,40 @@ pub fn collect_timeline_full_plan(
                             message: "semantic-only transition cannot be exported".into(),
                         });
                     }
-                    let total = t.in_offset.to_seconds() + t.out_offset.to_seconds();
-                    pending_transition = Some((t.transition_type.clone(), total));
+                    if !saw_clip_on_track {
+                        return Err(RenderTimelineError::InvalidTransitionPlacement {
+                            message: format!(
+                                "transition {:?} appears before any renderable clip",
+                                t.transition_type
+                            ),
+                        });
+                    }
+                    if pending_transition.is_some() {
+                        return Err(RenderTimelineError::InvalidTransitionPlacement {
+                            message: format!(
+                                "transition {:?} follows another transition before an incoming clip",
+                                t.transition_type
+                            ),
+                        });
+                    }
+                    let composition = read_transition_composition(t)?;
+                    validate_renderable_composite_transition(t, composition.as_ref())?;
+                    pending_transition = Some((
+                        t.transition_type.clone(),
+                        t.in_offset.to_seconds(),
+                        t.out_offset.to_seconds(),
+                        composition,
+                    ));
                 }
                 TrackChild::Gap(_) | TrackChild::Stack(_) => {
                     pending_transition = None;
                 }
             }
+        }
+        if let Some((kind, _, _, _)) = pending_transition {
+            return Err(RenderTimelineError::InvalidTransitionPlacement {
+                message: format!("transition {kind:?} has no incoming clip"),
+            });
         }
     }
     let broadcast_overlay = timeline
@@ -559,6 +662,9 @@ pub fn collect_timeline_full_plan(
         .awidat
         .as_ref()
         .and_then(read_timeline_loudness_target);
+    if audio_tracks.is_empty() {
+        audio_tracks = synthesize_split_edit_audio_tracks(&segs)?;
+    }
     Ok((
         segs,
         transitions,
@@ -568,6 +674,54 @@ pub fn collect_timeline_full_plan(
         audio_tracks,
         loudness_target,
     ))
+}
+
+fn read_transition_composition(
+    transition: &awidat_proto::otio::Transition,
+) -> Result<Option<TransitionComposition>, RenderTimelineError> {
+    let Some(value) = transition.metadata.get("awidat_transition") else {
+        return Ok(None);
+    };
+    let Some(composition_value) = value.get("composition") else {
+        return Ok(None);
+    };
+    if composition_value.is_null() {
+        return Ok(None);
+    }
+    let composition: TransitionComposition = serde_json::from_value(composition_value.clone())
+        .map_err(|e| RenderTimelineError::InvalidTransitionMetadata {
+            kind: transition.transition_type.clone(),
+            message: format!("composition could not be decoded: {e}"),
+        })?;
+    transitions::validate_transition_composition(&composition).map_err(|e| {
+        RenderTimelineError::InvalidTransitionMetadata {
+            kind: transition.transition_type.clone(),
+            message: e.to_string(),
+        }
+    })?;
+    Ok(Some(composition))
+}
+
+fn validate_renderable_composite_transition(
+    transition: &awidat_proto::otio::Transition,
+    composition: Option<&TransitionComposition>,
+) -> Result<(), RenderTimelineError> {
+    if transition.transition_type != "awidat.composite" {
+        return Ok(());
+    }
+    let Some(composition) = composition else {
+        return Err(RenderTimelineError::InvalidTransitionMetadata {
+            kind: transition.transition_type.clone(),
+            message: "awidat.composite requires metadata.awidat_transition.composition".into(),
+        });
+    };
+    if transitions::resolve_composition_ffmpeg_xfade(composition).is_none() {
+        return Err(RenderTimelineError::InvalidTransitionMetadata {
+            kind: transition.transition_type.clone(),
+            message: "awidat.composite composition has no phase-one FFmpeg lowering".into(),
+        });
+    }
+    Ok(())
 }
 
 fn collect_timeline_segment(
@@ -599,16 +753,111 @@ fn collect_timeline_segment(
             missing: lut_path.clone(),
         });
     }
+    let lut_interpolation = read_lut_interpolation(clip);
     Ok(Some(TimelineSegment {
         asset_path,
+        clip_name: clip.name.clone(),
         start_s: range.start_time.to_seconds(),
         duration_s: range.duration.to_seconds(),
+        pre_handle_s: 0.0,
+        post_handle_s: 0.0,
+        source_available_start_s: ext
+            .available_range
+            .as_ref()
+            .map(|r| r.start_time.to_seconds()),
+        source_available_end_s: ext
+            .available_range
+            .as_ref()
+            .map(|r| r.start_time.to_seconds() + r.duration.to_seconds()),
         volume: read_effect_number(clip, "awidat.volume", "value"),
         speed: read_effect_number(clip, "awidat.speed", "factor"),
         color_correction: read_color_correction(clip),
         lut_path,
+        lut_interpolation,
         audio_fx: read_clip_audio_fx(clip),
+        audio_lead_s: clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.split_edit.as_ref())
+            .and_then(|s| s.audio_lead_s),
+        audio_trail_s: clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.split_edit.as_ref())
+            .and_then(|s| s.audio_trail_s),
     }))
+}
+
+fn extend_transition_handles(
+    segs: &mut [TimelineSegment],
+    outgoing_index: usize,
+    incoming_index: usize,
+    kind: &str,
+    in_offset_s: f64,
+    out_offset_s: f64,
+) -> Result<(), RenderTimelineError> {
+    if in_offset_s > 0.0 {
+        add_pre_handle(&mut segs[incoming_index], kind, in_offset_s)?;
+    }
+    if out_offset_s > 0.0 {
+        add_post_handle(&mut segs[outgoing_index], kind, out_offset_s)?;
+    }
+    Ok(())
+}
+
+fn add_pre_handle(
+    seg: &mut TimelineSegment,
+    kind: &str,
+    handle_timeline_s: f64,
+) -> Result<(), RenderTimelineError> {
+    let speed = segment_speed(seg);
+    let handle_source_s = handle_timeline_s * speed;
+    let available_source_s = seg
+        .source_available_start_s
+        .map(|start| (seg.start_s - start).max(0.0))
+        .unwrap_or(seg.start_s.max(0.0));
+    let available_timeline_s = available_source_s / speed;
+    if available_timeline_s + 1e-6 < handle_timeline_s {
+        return Err(RenderTimelineError::TransitionHandleUnavailable {
+            kind: kind.to_string(),
+            clip_name: seg.clip_name.clone(),
+            side: "incoming",
+            needed_s: handle_timeline_s,
+            available_s: available_timeline_s,
+        });
+    }
+    seg.start_s -= handle_source_s;
+    seg.duration_s += handle_source_s;
+    seg.pre_handle_s += handle_timeline_s;
+    Ok(())
+}
+
+fn add_post_handle(
+    seg: &mut TimelineSegment,
+    kind: &str,
+    handle_timeline_s: f64,
+) -> Result<(), RenderTimelineError> {
+    let speed = segment_speed(seg);
+    let handle_source_s = handle_timeline_s * speed;
+    if let Some(end) = seg.source_available_end_s {
+        let visible_end = seg.start_s + seg.duration_s;
+        let available_source_s = (end - visible_end).max(0.0);
+        let available_timeline_s = available_source_s / speed;
+        if available_timeline_s + 1e-6 < handle_timeline_s {
+            return Err(RenderTimelineError::TransitionHandleUnavailable {
+                kind: kind.to_string(),
+                clip_name: seg.clip_name.clone(),
+                side: "outgoing",
+                needed_s: handle_timeline_s,
+                available_s: available_timeline_s,
+            });
+        }
+    }
+    seg.duration_s += handle_source_s;
+    seg.post_handle_s += handle_timeline_s;
+    Ok(())
 }
 
 fn read_video_overlay_mode(clip: &awidat_proto::otio::Clip) -> VideoOverlayMode {
@@ -697,6 +946,101 @@ fn collect_audio_track_plan(
         audio_fx: settings.audio_fx,
         items,
     })
+}
+
+fn synthesize_split_edit_audio_tracks(
+    segments: &[TimelineSegment],
+) -> Result<Vec<AudioTrackPlan>, RenderTimelineError> {
+    if !segments.iter().any(segment_has_split_edit_audio) {
+        return Ok(Vec::new());
+    }
+    let mut tracks = Vec::new();
+    let mut picture_start_s = 0.0_f64;
+    for (idx, segment) in segments.iter().enumerate() {
+        let lead_s = normalized_split_offset(segment.audio_lead_s);
+        let trail_s = normalized_split_offset(segment.audio_trail_s);
+        validate_split_edit_handles(segment, lead_s, trail_s)?;
+        let source_start_s = segment.start_s - lead_s * segment_speed(segment);
+        let duration_s = segment.duration_s + (lead_s + trail_s) * segment_speed(segment);
+        let audio_start_s = (picture_start_s - lead_s).max(0.0);
+        let mut items = Vec::new();
+        if audio_start_s > 0.0 {
+            items.push(AudioTrackItemPlan::Gap {
+                duration_s: audio_start_s,
+            });
+        }
+        items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
+            asset_path: segment.asset_path.clone(),
+            start_s: source_start_s,
+            duration_s,
+            volume: segment.volume,
+            speed: segment.speed,
+            fade_in_s: None,
+            fade_out_s: None,
+            audio_fx: segment.audio_fx.clone(),
+        }));
+        tracks.push(AudioTrackPlan {
+            name: format!("split-edit-a{}", idx + 1),
+            role: "dialogue".into(),
+            volume: 1.0,
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items,
+        });
+        picture_start_s += visible_effective_duration(segment);
+    }
+    Ok(tracks)
+}
+
+fn segment_has_split_edit_audio(segment: &TimelineSegment) -> bool {
+    normalized_split_offset(segment.audio_lead_s) > 0.0
+        || normalized_split_offset(segment.audio_trail_s) > 0.0
+}
+
+fn normalized_split_offset(value: Option<f64>) -> f64 {
+    value.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0)
+}
+
+fn validate_split_edit_handles(
+    segment: &TimelineSegment,
+    lead_s: f64,
+    trail_s: f64,
+) -> Result<(), RenderTimelineError> {
+    if lead_s > 0.0 {
+        let needed_source_s = lead_s * segment_speed(segment);
+        let available_source_s = segment
+            .source_available_start_s
+            .map(|start| (segment.start_s - start).max(0.0))
+            .unwrap_or(segment.start_s.max(0.0));
+        if available_source_s + 1e-6 < needed_source_s {
+            return Err(RenderTimelineError::TransitionHandleUnavailable {
+                kind: "split_edit_audio_lead".into(),
+                clip_name: segment.clip_name.clone(),
+                side: "incoming",
+                needed_s: lead_s,
+                available_s: available_source_s / segment_speed(segment),
+            });
+        }
+    }
+    if trail_s > 0.0
+        && let Some(end_s) = segment.source_available_end_s
+    {
+        let needed_source_s = trail_s * segment_speed(segment);
+        let visible_end_s = segment.start_s + segment.duration_s;
+        let available_source_s = (end_s - visible_end_s).max(0.0);
+        if available_source_s + 1e-6 < needed_source_s {
+            return Err(RenderTimelineError::TransitionHandleUnavailable {
+                kind: "split_edit_audio_trail".into(),
+                clip_name: segment.clip_name.clone(),
+                side: "outgoing",
+                needed_s: trail_s,
+                available_s: available_source_s / segment_speed(segment),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn parse_audio_track_settings(track: &awidat_proto::otio::Track) -> AudioTrackPlan {
@@ -941,8 +1285,16 @@ pub struct TransitionPlan {
     /// Transition kind (`"SMPTE_Dissolve"`, `"awidat.fade_in"`, etc).
     /// Mapped to ffmpeg's xfade transition names by the planner.
     pub kind: String,
+    /// Timeline seconds before the cut occupied by the transition.
+    pub in_offset_s: f64,
+    /// Timeline seconds after the cut occupied by the transition.
+    pub out_offset_s: f64,
     /// Total transition duration on the timeline, in seconds.
     pub duration_s: f64,
+    /// Optional data-only composition recipe carried from
+    /// `metadata.awidat_transition.composition`. Phase-one FFmpeg still
+    /// exports by `kind`; future backends lower this recipe directly.
+    pub composition: Option<TransitionComposition>,
 }
 
 /// Plans the `-filter_complex` argument + map labels for a render.
@@ -1214,7 +1566,7 @@ impl<'a> FilterPlanner<'a> {
                 let next = group_end + 1;
                 let v_label = format!("[xv{transition_id}]");
                 let a_label = format!("[xa{transition_id}]");
-                let xfade_kind = map_transition_kind(&t.kind);
+                let xfade_kind = map_transition_plan_kind(t);
                 // xfade offset is relative to the first input of the
                 // current operation. For a chain, that first input is
                 // the already-shortened output of previous xfades.
@@ -1228,12 +1580,11 @@ impl<'a> FilterPlanner<'a> {
                     off = offset,
                     out = v_label,
                 ));
-                filter.push_str(&format!(
-                    "{from_a}{to_a}acrossfade=d={dur}{out};",
-                    from_a = current_a,
-                    to_a = inputs[next].1,
-                    dur = t.duration_s,
-                    out = a_label,
+                filter.push_str(&format_audio_transition_filter(
+                    &current_a,
+                    &inputs[next].1,
+                    &a_label,
+                    t,
                 ));
                 current_v = v_label;
                 current_a = a_label;
@@ -1280,6 +1631,26 @@ fn reset_segment_pts(
     ));
     filter.push_str(&format!("{audio_label}asetpts=PTS-STARTPTS{audio_out};"));
     (video_out, audio_out)
+}
+
+fn format_audio_transition_filter(
+    from_a: &str,
+    to_a: &str,
+    out: &str,
+    transition: &TransitionPlan,
+) -> String {
+    match transitions::resolve_audio_policy(&transition.kind)
+        .unwrap_or(transitions::TransitionAudioPolicy::Crossfade)
+    {
+        transitions::TransitionAudioPolicy::Crossfade => format!(
+            "{from_a}{to_a}acrossfade=d={dur}{out};",
+            dur = transition.duration_s,
+        ),
+        transitions::TransitionAudioPolicy::Cut => format!(
+            "{from_a}{to_a}acrossfade=d={dur}:c1=nofade:c2=nofade{out};",
+            dur = transition.duration_s,
+        ),
+    }
 }
 
 fn append_video_overlays(
@@ -1383,9 +1754,11 @@ fn stage_overlay_video_input(
     }
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[media_overlay_lv{input_idx}]");
-        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
         filter.push(';');
-        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv}"));
+        filter.push_str(&format!(
+            "{video_label}{}{lv}",
+            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        ));
         video_label = lv;
     }
     if let Some(factor) = seg.speed
@@ -1429,8 +1802,10 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
 
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[lv{i}]");
-        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
-        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv};"));
+        filter.push_str(&format!(
+            "{video_label}{}{lv};",
+            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        ));
         video_label = lv;
     }
 
@@ -1644,6 +2019,14 @@ fn filter_escape_single_quoted(s: &str) -> String {
             other => vec![other],
         })
         .collect()
+}
+
+fn lut3d_filter(lut_path: &Path, interpolation: Option<&str>) -> String {
+    let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
+    match interpolation {
+        Some(interpolation) => format!("lut3d=file='{path}':interp={interpolation}"),
+        None => format!("lut3d=file='{path}'"),
+    }
 }
 
 /// Length of the alpha / slide ramp for fade and slide animations,
@@ -2801,9 +3184,17 @@ fn pick_sponsor_fontfile_attr() -> String {
 /// raw `duration_s` otherwise. A 4s clip at 2× plays in 2s; at 0.5×
 /// it plays in 8s.
 fn effective_duration(seg: &TimelineSegment) -> f64 {
+    seg.duration_s / segment_speed(seg)
+}
+
+fn visible_effective_duration(seg: &TimelineSegment) -> f64 {
+    (effective_duration(seg) - seg.pre_handle_s - seg.post_handle_s).max(0.0)
+}
+
+fn segment_speed(seg: &TimelineSegment) -> f64 {
     match seg.speed {
-        Some(f) if f > 0.0 => seg.duration_s / f,
-        _ => seg.duration_s,
+        Some(f) if f > 0.0 => f,
+        _ => 1.0,
     }
 }
 
@@ -2853,6 +3244,15 @@ fn map_transition_kind(kind: &str) -> String {
         .flatten()
         .unwrap_or("__unsupported_awidat_transition__")
         .to_string()
+}
+
+fn map_transition_plan_kind(transition: &TransitionPlan) -> String {
+    transition
+        .composition
+        .as_ref()
+        .and_then(transitions::resolve_composition_ffmpeg_xfade)
+        .map(str::to_string)
+        .unwrap_or_else(|| map_transition_kind(&transition.kind))
 }
 
 /// Build the ffmpeg argv that concats `segs` into `output_path` with
@@ -3156,7 +3556,7 @@ fn plan_video_only_filter(
                 "{}{}xfade=transition={}:duration={}:offset={}{};",
                 current_v,
                 video_inputs[next],
-                map_transition_kind(&t.kind),
+                map_transition_plan_kind(t),
                 t.duration_s,
                 offset,
                 label
@@ -3205,8 +3605,10 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
     }
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[lv{i}]");
-        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
-        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv};"));
+        filter.push_str(&format!(
+            "{video_label}{}{lv};",
+            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        ));
         video_label = lv;
     }
     if let Some(factor) = seg.speed
@@ -3413,21 +3815,18 @@ pub fn build_timeline_render_spec(
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
     }
-    // Total duration is the sum of each segment's *effective*
-    // duration (post-speed) minus the cumulative transition
-    // overlap. A 4s clip at 2× contributes 2s; a 0.5s transition
-    // overlaps two effective durations by 0.5s. Titles are
-    // overlays — they don't add to the master timeline length.
-    let raw_total: f64 = if segs.is_empty() {
+    // Total duration is the sum of each segment's visible effective
+    // duration. Centered transitions extend source handles before
+    // and after clips for xfade inputs, but they do not shorten the
+    // master timeline the way the old phase-one overlap model did.
+    let total_duration_s: f64 = if segs.is_empty() {
         audio_tracks
             .iter()
             .map(audio_track_duration)
             .fold(0.0_f64, f64::max)
     } else {
-        segs.iter().map(effective_duration).sum()
+        segs.iter().map(visible_effective_duration).sum()
     };
-    let trans_total: f64 = transitions.iter().map(|t| t.duration_s).sum();
-    let total_duration_s = (raw_total - trans_total).max(0.0);
     let renders_dir = project_root.join("renders");
     fs::create_dir_all(&renders_dir)
         .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
@@ -3623,6 +4022,18 @@ mod tests {
         }
     }
 
+    fn trans(from: usize, to: usize, duration_s: f64) -> TransitionPlan {
+        TransitionPlan {
+            from_segment_index: from,
+            to_segment_index: to,
+            kind: "SMPTE_Dissolve".into(),
+            in_offset_s: duration_s / 2.0,
+            out_offset_s: duration_s / 2.0,
+            duration_s,
+            composition: None,
+        }
+    }
+
     #[test]
     fn explicit_audio_tracks_use_video_only_concat_and_amix() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
@@ -3672,6 +4083,120 @@ mod tests {
     }
 
     #[test]
+    fn split_edit_metadata_synthesizes_overlapping_audio_tracks() {
+        let mut a = seg("/tmp/a.mp4", 10.0, 5.0);
+        a.clip_name = "a".into();
+        a.source_available_start_s = Some(10.0);
+        a.source_available_end_s = Some(20.0);
+        a.audio_trail_s = Some(0.75);
+        let mut b = seg("/tmp/b.mp4", 20.0, 5.0);
+        b.clip_name = "b".into();
+        b.source_available_start_s = Some(19.0);
+        b.source_available_end_s = Some(30.0);
+        b.audio_lead_s = Some(0.5);
+
+        let tracks = synthesize_split_edit_audio_tracks(&[a, b]).unwrap();
+        assert_eq!(tracks.len(), 2);
+        let AudioTrackItemPlan::Clip(first) = &tracks[0].items[0] else {
+            panic!("expected first clip")
+        };
+        assert_eq!(first.start_s, 10.0);
+        assert_eq!(first.duration_s, 5.75);
+        let AudioTrackItemPlan::Gap { duration_s } = tracks[1].items[0] else {
+            panic!("expected J-cut lead gap")
+        };
+        assert!((duration_s - 4.5).abs() < 1e-9);
+        let AudioTrackItemPlan::Clip(second) = &tracks[1].items[1] else {
+            panic!("expected second clip")
+        };
+        assert_eq!(second.start_s, 19.5);
+        assert_eq!(second.duration_s, 5.5);
+    }
+
+    #[test]
+    fn split_edit_audio_tracks_use_video_only_render_path() {
+        let mut a = seg("/tmp/a.mp4", 10.0, 5.0);
+        a.source_available_start_s = Some(10.0);
+        a.source_available_end_s = Some(20.0);
+        a.audio_trail_s = Some(0.75);
+        let mut b = seg("/tmp/b.mp4", 20.0, 5.0);
+        b.source_available_start_s = Some(19.0);
+        b.source_available_end_s = Some(30.0);
+        b.audio_lead_s = Some(0.5);
+        let segs = vec![a, b];
+        let audio_tracks = synthesize_split_edit_audio_tracks(&segs).unwrap();
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(filter.contains("concat=n=2:v=1:a=0[vonly]"));
+        assert!(filter.contains("atrim=10:15.75"));
+        assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=4.5"));
+        assert!(filter.contains("atrim=19.5:25"));
+        assert!(filter.contains("amix=inputs=2"));
+    }
+
+    #[test]
+    fn explicit_audio_tracks_preserve_visual_transitions_without_acrossfade() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 0.0, 2.0)];
+        let transitions = vec![trans(0, 1, 0.5)];
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "A1".into(),
+            role: "dialogue".into(),
+            volume: 1.0,
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: PathBuf::from("/tmp/a.wav"),
+                start_s: 0.0,
+                duration_s: 4.0,
+                volume: None,
+                speed: None,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_fx: None,
+            })],
+        }];
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &transitions,
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(
+            filter.contains("xfade=transition=fade:duration=0.5"),
+            "filter graph: {filter}",
+        );
+        assert!(
+            !filter.contains("acrossfade"),
+            "explicit audio tracks should own audio transitions: {filter}",
+        );
+        assert!(filter.contains("amix=inputs=1"), "filter graph: {filter}");
+    }
+
+    #[test]
     fn timeline_loudness_target_appends_final_audio_loudnorm() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
         let argv = build_timeline_argv_full(
@@ -3716,12 +4241,7 @@ mod tests {
     #[test]
     fn filter_planner_with_one_transition_emits_xfade_pair() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 5.0), seg("/tmp/b.mp4", 0.0, 4.0)];
-        let trans = vec![TransitionPlan {
-            from_segment_index: 0,
-            to_segment_index: 1,
-            kind: "SMPTE_Dissolve".into(),
-            duration_s: 1.0,
-        }];
+        let trans = vec![trans(0, 1, 1.0)];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         // xfade with kind=fade (mapped from SMPTE_Dissolve), offset =
         // from.duration - transition.duration = 4.0.
@@ -3748,6 +4268,27 @@ mod tests {
     }
 
     #[test]
+    fn filter_planner_uses_cut_audio_policy_for_motion_transitions() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 5.0), seg("/tmp/b.mp4", 0.0, 4.0)];
+        let trans = vec![TransitionPlan {
+            from_segment_index: 0,
+            to_segment_index: 1,
+            kind: "awidat.slide_left".into(),
+            in_offset_s: 0.5,
+            out_offset_s: 0.5,
+            duration_s: 1.0,
+            composition: None,
+        }];
+        let plan = FilterPlanner::new(&segs, &trans).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[apts0][apts1]acrossfade=d=1:c1=nofade:c2=nofade[xa0]"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
     fn filter_planner_with_transition_in_middle_of_three_segments() {
         // [A, B, C] with a transition between A and B → concat n=2:
         // input 1 = xfade(A, B), input 2 = C alone.
@@ -3756,12 +4297,7 @@ mod tests {
             seg("/tmp/b.mp4", 0.0, 4.0),
             seg("/tmp/c.mp4", 0.0, 2.0),
         ];
-        let trans = vec![TransitionPlan {
-            from_segment_index: 0,
-            to_segment_index: 1,
-            kind: "SMPTE_Dissolve".into(),
-            duration_s: 0.5,
-        }];
+        let trans = vec![trans(0, 1, 0.5)];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         assert!(plan.filter_complex.contains("xfade="));
         // Concat takes 2 inputs: chunk(A,B) + raw C.
@@ -3783,20 +4319,7 @@ mod tests {
             seg("/tmp/b.mp4", 0.0, 4.0),
             seg("/tmp/c.mp4", 0.0, 2.0),
         ];
-        let trans = vec![
-            TransitionPlan {
-                from_segment_index: 0,
-                to_segment_index: 1,
-                kind: "SMPTE_Dissolve".into(),
-                duration_s: 0.5,
-            },
-            TransitionPlan {
-                from_segment_index: 1,
-                to_segment_index: 2,
-                kind: "SMPTE_Dissolve".into(),
-                duration_s: 0.5,
-            },
-        ];
+        let trans = vec![trans(0, 1, 0.5), trans(1, 2, 0.5)];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         let xfade_count = plan.filter_complex.matches("xfade=").count();
         assert_eq!(xfade_count, 2, "filter graph: {}", plan.filter_complex);
@@ -3840,20 +4363,7 @@ mod tests {
             seg("/tmp/c.mp4", 0.0, 2.0),
             seg("/tmp/d.mp4", 0.0, 5.0),
         ];
-        let trans = vec![
-            TransitionPlan {
-                from_segment_index: 0,
-                to_segment_index: 1,
-                kind: "SMPTE_Dissolve".into(),
-                duration_s: 0.5,
-            },
-            TransitionPlan {
-                from_segment_index: 2,
-                to_segment_index: 3,
-                kind: "SMPTE_Dissolve".into(),
-                duration_s: 0.25,
-            },
-        ];
+        let trans = vec![trans(0, 1, 0.5), trans(2, 3, 0.25)];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         let xfade_count = plan.filter_complex.matches("xfade=").count();
         assert_eq!(xfade_count, 2, "filter graph: {}", plan.filter_complex);
@@ -3910,12 +4420,7 @@ mod tests {
         let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
         let mut s1 = seg("/tmp/b.mp4", 0.0, 4.0);
         s1.volume = Some(0.3);
-        let trans = vec![TransitionPlan {
-            from_segment_index: 0,
-            to_segment_index: 1,
-            kind: "SMPTE_Dissolve".into(),
-            duration_s: 1.0,
-        }];
+        let trans = vec![trans(0, 1, 1.0)];
         let plan = FilterPlanner::new(&[s0, s1], &trans).plan();
         assert!(
             plan.filter_complex.contains("[1:a:0]volume=0.3[av1]"),
@@ -4016,12 +4521,7 @@ mod tests {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
         s0.speed = Some(2.0);
         let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
-        let trans = vec![TransitionPlan {
-            from_segment_index: 0,
-            to_segment_index: 1,
-            kind: "SMPTE_Dissolve".into(),
-            duration_s: 0.5,
-        }];
+        let trans = vec![trans(0, 1, 0.5)];
         let plan = FilterPlanner::new(&[s0, s1], &trans).plan();
         assert!(
             plan.filter_complex.contains("offset=1.5"),
@@ -4088,11 +4588,12 @@ mod tests {
     fn filter_planner_emits_lut3d_before_speed_and_concat() {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
         s0.lut_path = Some(PathBuf::from("/tmp/luts/show-look.cube"));
+        s0.lut_interpolation = Some("tetrahedral".into());
         s0.speed = Some(2.0);
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
-                .contains("[0:v:0]lut3d=file='/tmp/luts/show-look.cube'[lv0]"),
+                .contains("[0:v:0]lut3d=file='/tmp/luts/show-look.cube':interp=tetrahedral[lv0]"),
             "filter graph: {}",
             plan.filter_complex,
         );

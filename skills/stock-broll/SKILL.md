@@ -4,6 +4,7 @@ description: Fetch and place stock B-roll from Pexels for moments where the spea
 version: 0.1.0
 tier: editorial
 tools_allowlist:
+  - assess_edit_quality
   - find_broll_opportunities
   - search_broll
   - use_broll
@@ -163,9 +164,11 @@ to `apply_edl` to actually place the cutaway.
 
 ## Phase 3.7 reactive variant
 
-When `assess_continuity` returns `dirty` for a proposed cut AND
-`find_broll_opportunities` surfaced a candidate at the same anchor,
-prefer bundling `*** Insert BRoll` (via `bundle_with_broll_cover`)
-over a `*** Insert Transition` SMPTE_Dissolve. The b-roll cover
-hides the visual jar without altering the audio. See the dirty-
-verdict guidance in the base prompt for the full decision flow.
+When `assess_edit_quality` returns a dirty visual cut with
+`recommendation.broll=true`, prefer bundling `*** Insert BRoll` over
+`*** Insert Transition`. This is especially important when
+`style_context.transition_density_last_30s` is high: the b-roll cover
+hides the visual jar without adding another visible transition or
+altering the dialogue audio. If the recommendation says `recut`,
+`Set Audio Lead`, or `Set Audio Trail`, follow that instead of forcing a
+stock cutaway.

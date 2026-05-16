@@ -17,6 +17,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "../media/store";
 import type { Note, DismissalBucket } from "./store";
+import type { BrollAnchor } from "../protocol";
 
 export function BrollNoteCard({
   note,
@@ -59,6 +60,8 @@ export function BrollNoteCard({
   }
 
   async function useThis(pexelsId: bigint, durationS: number) {
+    const anchorArg = formatUseBrollAnchor(note.brollAnchor);
+    if (!anchorArg) return;
     setBusy(true);
     try {
       // The cutaway duration: prefer the note's source-range length
@@ -68,7 +71,7 @@ export function BrollNoteCard({
       const directive =
         `For the b-roll note at ${note.anchorAtS.toFixed(2)}s ("${note.summary}"), ` +
         `call use_broll(pexels_id=${pexelsId.toString()}, ` +
-        `anchor={"transcript_snippet": "..."} — use the note's transcript context — ` +
+        `anchor=${anchorArg}, ` +
         `duration_s=${dur.toFixed(1)}, position="overlay"). ` +
         `Then hand the returned edl_fragment to apply_edl to place the cutaway.`;
       await invoke("start_turn", { input: directive });
@@ -137,12 +140,16 @@ export function BrollNoteCard({
               {note.status === "open" && (
                 <button
                   className="note-broll-use"
-                  disabled={busy}
+                  disabled={busy || !note.brollAnchor}
                   onClick={(e) => {
                     e.stopPropagation();
                     useThis(p.pexels_id, p.duration_s);
                   }}
-                  title="Download this clip and place it on the timeline"
+                  title={
+                    note.brollAnchor
+                      ? "Download this clip and place it on the timeline"
+                      : "This note is missing a concrete b-roll anchor"
+                  }
                 >
                   {busy ? "…" : "Use this"}
                 </button>
@@ -177,6 +184,16 @@ export function BrollNoteCard({
       )}
     </article>
   );
+}
+
+export function formatUseBrollAnchor(anchor: BrollAnchor | undefined): string | null {
+  if (!anchor) return null;
+  switch (anchor.kind) {
+    case "clip_uuid":
+      return JSON.stringify({ clip_uuid: anchor.uuid });
+    case "transcript_snippet":
+      return JSON.stringify({ transcript_snippet: anchor.text });
+  }
 }
 
 function formatTime(s: number): string {

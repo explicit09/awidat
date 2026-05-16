@@ -133,6 +133,8 @@ pub fn run() {
             commands::proposal::propose_user_edit,
             commands::transcript::read_transcript,
             commands::vedit::list_vedit_commits,
+            commands::vedit::diff_vedit_refs,
+            commands::vedit::restore_vedit_ref,
         ])
         .run(tauri::generate_context!());
 

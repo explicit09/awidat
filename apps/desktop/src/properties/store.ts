@@ -1,7 +1,9 @@
 // Zustand store for the third-pane properties inspector. Holds a
 // single nullable selection key — `{ trackIndex, clipIndex }` — that
 // the TimelinePane writes on click and PropertiesPane reads to
-// resolve which clip's metadata to show.
+// resolve which timeline item to show. The `clipIndex` name is kept
+// for compatibility, but it is the selected TimelineItem.index and
+// can identify clips or transitions.
 //
 // Stored as timeline item indices (not as the clip's uuid) so the
 // canvas can use the same key for hit testing and selection paint.

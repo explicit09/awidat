@@ -22,14 +22,15 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use awidat_effects::StackPolicy;
 use awidat_proto::awidat_meta::{
-    AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig, BroadcastOverlayStyle,
-    BroadcastTimedEntry,
+    AudioRelation, AwidatClipMetadata, AwidatTimelineMetadata, BroadcastOverlayConfig,
+    BroadcastOverlayStyle, BroadcastTimedEntry, CutType, SemanticCutSpec, SplitEditSpec,
+    cut_boundary_key,
 };
 use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
 use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
-use super::op::{Anchor, AudioFxConfig, EdlEnvelope, EdlOp, InsertTrackKind};
+use super::op::{Anchor, AudioFxConfig, EdlEnvelope, EdlOp, InsertTrackKind, TransitionAlignment};
 
 /// One record of what was applied. Surfaced back to the model + the TUI.
 #[derive(Debug, Clone)]
@@ -108,6 +109,8 @@ pub fn apply(
     for (index, op) in envelope.ops.iter().enumerate() {
         let locator = resolve_locator_for_op(&working, index, op, ctx)?;
         let description = apply_one(&mut working, index, op, ctx, locator)?;
+        prune_stale_cut_boundaries(&mut working);
+        prune_stale_split_edits(&mut working);
         applied.push(AppliedOp {
             index,
             description,
@@ -213,6 +216,9 @@ fn apply_one(
             between,
             kind,
             duration_s,
+            alignment,
+            in_offset_s,
+            out_offset_s,
             spec,
         } => apply_insert_transition(
             working,
@@ -220,9 +226,18 @@ fn apply_one(
             between,
             kind,
             *duration_s,
+            *alignment,
+            *in_offset_s,
+            *out_offset_s,
             spec.as_ref(),
             ctx,
         ),
+        EdlOp::DeleteTransition { between } => {
+            apply_delete_transition(working, index, between, ctx)
+        }
+        EdlOp::SetCutIntent { between, spec } => {
+            apply_set_cut_intent(working, index, between, spec, ctx)
+        }
         EdlOp::SetVolume { anchor, value } => {
             apply_set_volume(working, index, anchor, *value, ctx, locator)
         }
@@ -236,6 +251,32 @@ fn apply_one(
             anchor,
             *fade_in_s,
             *fade_out_s,
+            ctx,
+            locator,
+        ),
+        EdlOp::SetAudioLead {
+            anchor,
+            lead_s,
+            split_edit,
+        } => apply_set_audio_lead(
+            working,
+            index,
+            anchor,
+            *lead_s,
+            split_edit.as_ref(),
+            ctx,
+            locator,
+        ),
+        EdlOp::SetAudioTrail {
+            anchor,
+            trail_s,
+            split_edit,
+        } => apply_set_audio_trail(
+            working,
+            index,
+            anchor,
+            *trail_s,
+            split_edit.as_ref(),
             ctx,
             locator,
         ),
@@ -331,9 +372,20 @@ fn apply_one(
             ctx,
             locator,
         ),
-        EdlOp::ApplyLut { anchor, lut_path } => {
-            apply_lut(working, index, anchor, lut_path, ctx, locator)
-        }
+        EdlOp::ApplyLut {
+            anchor,
+            lut_path,
+            interpolation,
+        } => apply_lut(
+            working,
+            index,
+            anchor,
+            lut_path,
+            interpolation.as_deref(),
+            ctx,
+            locator,
+        ),
+        EdlOp::RemoveLut { anchor } => apply_remove_lut(working, index, anchor, ctx, locator),
         EdlOp::InsertTitle {
             start_s,
             end_s,
@@ -441,15 +493,20 @@ fn resolve_locator_for_op(
         | EdlOp::InsertPiP { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
         | EdlOp::SetAudioFade { anchor, .. }
+        | EdlOp::SetAudioLead { anchor, .. }
+        | EdlOp::SetAudioTrail { anchor, .. }
         | EdlOp::SetSyncGroup { anchor, .. }
         | EdlOp::SetClipAudioFx { anchor, .. }
         | EdlOp::SetEffect { anchor, .. }
         | EdlOp::SetSpeed { anchor, .. }
         | EdlOp::SetColorCorrection { anchor, .. }
         | EdlOp::ApplyLut { anchor, .. }
+        | EdlOp::RemoveLut { anchor }
         | EdlOp::SetTitle { anchor, .. } => anchor,
         EdlOp::InsertClip { .. }
         | EdlOp::InsertTransition { .. }
+        | EdlOp::DeleteTransition { .. }
+        | EdlOp::SetCutIntent { .. }
         | EdlOp::SetTrackAudio { .. }
         | EdlOp::SetDucking { .. }
         | EdlOp::SetTrackAudioFx { .. }
@@ -887,6 +944,34 @@ fn stamp_link_group_id(clip: &mut Clip, link_group_id: &str) {
     );
 }
 
+fn keep_only_split_edit_lead(clip: &mut Clip) {
+    let Some(awidat) = clip.metadata.awidat.as_mut() else {
+        return;
+    };
+    let Some(split_edit) = awidat.split_edit.as_mut() else {
+        return;
+    };
+    split_edit.audio_trail_s = None;
+    split_edit.audio_trail_to_clip_id = None;
+    if split_edit.audio_lead_s.is_none() {
+        awidat.split_edit = None;
+    }
+}
+
+fn keep_only_split_edit_trail(clip: &mut Clip) {
+    let Some(awidat) = clip.metadata.awidat.as_mut() else {
+        return;
+    };
+    let Some(split_edit) = awidat.split_edit.as_mut() else {
+        return;
+    };
+    split_edit.audio_lead_s = None;
+    split_edit.audio_lead_from_clip_id = None;
+    if split_edit.audio_trail_s.is_none() {
+        awidat.split_edit = None;
+    }
+}
+
 fn linked_clip_track_time(
     timeline: &Timeline,
     link_group_id: &str,
@@ -999,12 +1084,14 @@ fn apply_split(
     // place, so we still have access to the original media ref +
     // metadata).
     let original_name = clip.name.clone();
+    let original_clip_id = clip_uuid(clip).unwrap_or(clip.name.as_str()).to_string();
     let mut right = clip.clone();
     right.name = format!("{original_name}-b");
     right.source_range = Some(awidat_proto::otio::TimeRange::new(
         awidat_proto::otio::RationalTime::new(at_s * rate, rate),
         awidat_proto::otio::RationalTime::new((end_s - at_s) * rate, rate),
     ));
+    keep_only_split_edit_trail(&mut right);
     // The clip.clone() above also cloned the parent's clip_uuid —
     // which would mean two clips share the same anchor uuid after
     // this op. Stamp a fresh one so Anchor::ClipUuid resolves
@@ -1024,11 +1111,15 @@ fn apply_split(
         awidat_proto::otio::RationalTime::new(start_s * rate, rate),
         awidat_proto::otio::RationalTime::new((at_s - start_s) * rate, rate),
     ));
+    keep_only_split_edit_lead(left);
 
     // Insert the right piece directly after the left.
     track
         .children
         .insert(locator.child_index + 1, TrackChild::Clip(right));
+    if let Some(right_uuid) = right_uuid.as_deref() {
+        transfer_outgoing_cut_boundary_to_split_right(working, &original_clip_id, right_uuid);
+    }
 
     let right_name = format!("{original_name}-b");
     let right_anchor = right_uuid
@@ -1059,11 +1150,17 @@ fn apply_delete(
         });
     };
     let removed = track.children.remove(locator.child_index);
-    let name = match &removed {
-        TrackChild::Clip(c) => c.name.clone(),
-        _ => "<non-clip>".to_string(),
+    let (name, removed_clip_id) = match &removed {
+        TrackChild::Clip(c) => (
+            c.name.clone(),
+            Some(clip_uuid(c).unwrap_or(c.name.as_str()).to_string()),
+        ),
+        _ => ("<non-clip>".to_string(), None),
     };
     let removed_transitions = remove_transitions_around_deleted_child(track, locator.child_index);
+    if let Some(removed_clip_id) = removed_clip_id {
+        remove_cut_boundaries_for_clip(working, &removed_clip_id);
+    }
     if let Some((cut_point, duration)) = overlay_shift {
         shift_broadcast_overlay_timestamps(working, cut_point, duration);
     }
@@ -1097,6 +1194,140 @@ fn remove_transitions_around_deleted_child(
     removed
 }
 
+fn remove_cut_boundaries_for_clip(timeline: &mut Timeline, clip_id: &str) {
+    let Some(meta) = timeline.metadata.awidat.as_mut() else {
+        return;
+    };
+    meta.cut_boundaries
+        .retain(|key, _| !cut_boundary_key_references_clip(key, clip_id));
+}
+
+fn cut_boundary_key_references_clip(key: &str, clip_id: &str) -> bool {
+    let Some((from, to)) = key.split_once("::") else {
+        return false;
+    };
+    from == clip_id || to == clip_id
+}
+
+fn transfer_outgoing_cut_boundary_to_split_right(
+    timeline: &mut Timeline,
+    original_clip_id: &str,
+    right_clip_id: &str,
+) {
+    let Some(meta) = timeline.metadata.awidat.as_mut() else {
+        return;
+    };
+    let transfers = meta
+        .cut_boundaries
+        .iter()
+        .filter_map(|(key, spec)| {
+            let (from_id, to_id) = key.split_once("::")?;
+            (from_id == original_clip_id).then(|| {
+                (
+                    key.clone(),
+                    cut_boundary_key(right_clip_id, to_id),
+                    spec.clone(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    for (old_key, new_key, spec) in transfers {
+        meta.cut_boundaries.remove(&old_key);
+        meta.cut_boundaries.insert(new_key, spec);
+    }
+}
+
+fn prune_stale_cut_boundaries(timeline: &mut Timeline) {
+    let valid_boundaries = current_cut_boundary_keys(timeline);
+    let Some(meta) = timeline.metadata.awidat.as_mut() else {
+        return;
+    };
+    meta.cut_boundaries
+        .retain(|key, _| valid_boundaries.contains(key));
+}
+
+fn current_cut_boundary_keys(timeline: &Timeline) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    for stack_child in &timeline.tracks.children {
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
+        for (index, child) in track.children.iter().enumerate() {
+            let Some(from_id) = track_child_clip_id(child) else {
+                continue;
+            };
+            match track.children.get(index + 1) {
+                Some(next @ TrackChild::Clip(_)) => {
+                    if let Some(to_id) = track_child_clip_id(next) {
+                        keys.insert(cut_boundary_key(&from_id, &to_id));
+                    }
+                }
+                Some(TrackChild::Transition(_)) => {
+                    if let Some(to_id) = track.children.get(index + 2).and_then(track_child_clip_id)
+                    {
+                        keys.insert(cut_boundary_key(&from_id, &to_id));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    keys
+}
+
+fn prune_stale_split_edits(timeline: &mut Timeline) {
+    for stack_child in &mut timeline.tracks.children {
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
+        for index in 0..track.children.len() {
+            let previous_id = previous_clip_id(track, index);
+            let next_id = next_clip_id(track, index);
+            let Some(TrackChild::Clip(clip)) = track.children.get_mut(index) else {
+                continue;
+            };
+            prune_split_edit_for_clip(clip, previous_id.as_deref(), next_id.as_deref());
+        }
+    }
+}
+
+fn prune_split_edit_for_clip(clip: &mut Clip, previous_id: Option<&str>, next_id: Option<&str>) {
+    let Some(awidat) = clip.metadata.awidat.as_mut() else {
+        return;
+    };
+    let Some(split_edit) = awidat.split_edit.as_mut() else {
+        return;
+    };
+
+    if split_edit.audio_lead_s.is_some() {
+        let lead_still_matches = split_edit
+            .audio_lead_from_clip_id
+            .as_deref()
+            .map_or(previous_id.is_some(), |expected| {
+                previous_id == Some(expected)
+            });
+        if !lead_still_matches {
+            split_edit.audio_lead_s = None;
+            split_edit.audio_lead_from_clip_id = None;
+        }
+    }
+
+    if split_edit.audio_trail_s.is_some() {
+        let trail_still_matches = split_edit
+            .audio_trail_to_clip_id
+            .as_deref()
+            .map_or(next_id.is_some(), |expected| next_id == Some(expected));
+        if !trail_still_matches {
+            split_edit.audio_trail_s = None;
+            split_edit.audio_trail_to_clip_id = None;
+        }
+    }
+
+    if split_edit.audio_lead_s.is_none() && split_edit.audio_trail_s.is_none() {
+        awidat.split_edit = None;
+    }
+}
+
 /// Insert a `Transition` node between two adjacent clips on the same
 /// track. The transition straddles the cut at `from`'s end /
 /// `to`'s start; the render pipeline interprets this as an xfade-style
@@ -1105,9 +1336,8 @@ fn remove_transitions_around_deleted_child(
 /// Validation:
 /// - both anchors must resolve
 /// - both must be on the *same* track
-/// - they must be at *adjacent* indices (`to.child_index ==
-///   from.child_index + 1`); we don't support transitions that cross
-///   a gap or another transition in v1
+/// - they must be adjacent clips, or separated only by an existing
+///   transition node that this operation replaces
 /// - `duration_s > 0`
 fn apply_insert_transition(
     working: &mut Timeline,
@@ -1115,10 +1345,13 @@ fn apply_insert_transition(
     between: &super::op::TransitionBetween,
     kind: &str,
     duration_s: f64,
+    alignment: Option<TransitionAlignment>,
+    in_offset_s: Option<f64>,
+    out_offset_s: Option<f64>,
     spec: Option<&awidat_proto::transitions::SemanticTransitionSpec>,
     ctx: &AnchorContext,
 ) -> Result<String, ApplyError> {
-    use awidat_proto::otio::Transition;
+    use awidat_proto::otio::{RationalTime, Transition};
 
     if !duration_s.is_finite() || duration_s <= 0.0 {
         return Err(ApplyError::Invalid {
@@ -1126,7 +1359,13 @@ fn apply_insert_transition(
             message: format!("transition duration {duration_s} must be > 0"),
         });
     }
-    awidat_proto::transitions::resolve_ffmpeg_xfade(kind)
+    awidat_proto::transitions::validate_transition_duration(kind, duration_s).map_err(|e| {
+        ApplyError::Invalid {
+            index,
+            message: e.to_string(),
+        }
+    })?;
+    let xfade = awidat_proto::transitions::resolve_ffmpeg_xfade(kind)
         .map_err(|e| ApplyError::Invalid {
             index,
             message: format!("transition {kind:?} is not supported by the phase-one renderer: {e}"),
@@ -1135,7 +1374,48 @@ fn apply_insert_transition(
             index,
             message: format!("transition {kind:?} is semantic-only and cannot be inserted"),
         })?;
+    if !is_authorable_transition_kind(kind) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "transition {kind:?} is a raw FFmpeg transition name. New EDLs must use a registered awidat.* transition id or SMPTE_Dissolve."
+            ),
+        });
+    }
+    if kind == "awidat.composite" && spec.is_none() {
+        return Err(ApplyError::Invalid {
+            index,
+            message:
+                "transition \"awidat.composite\" requires semantic metadata with composition_json"
+                    .into(),
+        });
+    }
     if let Some(spec) = spec {
+        if spec.id != kind {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "transition spec id {:?} must match kind {:?}; use one stable transition id",
+                    spec.id, kind
+                ),
+            });
+        }
+        let spec_xfade =
+            awidat_proto::transitions::resolve_ffmpeg_xfade(&spec.id).map_err(|e| {
+                ApplyError::Invalid {
+                    index,
+                    message: format!("transition spec for {:?} is invalid: {e}", spec.id),
+                }
+            })?;
+        if spec_xfade != Some(xfade) {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "transition spec id {:?} resolves to {:?}, but kind {:?} resolves to {:?}",
+                    spec.id, spec_xfade, kind, xfade
+                ),
+            });
+        }
         awidat_proto::transitions::validate_semantic_transition_spec(spec).map_err(|e| {
             ApplyError::Invalid {
                 index,
@@ -1143,6 +1423,14 @@ fn apply_insert_transition(
             }
         })?;
     }
+    let persisted_spec = spec.cloned().map(|mut spec| {
+        if spec.composition.is_none() {
+            spec.composition = awidat_proto::transitions::builtin_transition_composition(&spec.id);
+        }
+        spec
+    });
+    let (in_offset_s, out_offset_s) =
+        resolve_transition_offsets(index, duration_s, alignment, in_offset_s, out_offset_s)?;
 
     let from_loc = resolve(working, &between.from, ctx)
         .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
@@ -1159,22 +1447,29 @@ fn apply_insert_transition(
             ),
         });
     }
-    if to_loc.child_index != from_loc.child_index + 1 {
+    let replaces_existing_transition = to_loc.child_index == from_loc.child_index + 2
+        && matches!(
+            working.tracks.children.get(from_loc.track_index),
+            Some(StackChild::Track(track))
+                if matches!(
+                    track.children.get(from_loc.child_index + 1),
+                    Some(TrackChild::Transition(_))
+                )
+        );
+    if to_loc.child_index != from_loc.child_index + 1 && !replaces_existing_transition {
         return Err(ApplyError::Invalid {
             index,
             message: format!(
                 "transition: anchors are not adjacent (from at \
-                 index {}, to at index {}). Transitions only insert \
-                 between consecutive clips in v1.",
+                 index {}, to at index {}). Transitions insert between \
+                 consecutive clips, or replace an existing transition \
+                 between the same clips.",
                 from_loc.child_index, to_loc.child_index,
             ),
         });
     }
 
-    // Pull the rate off the from-clip's source_range so the transition's
-    // RationalTime offsets share a denominator with the surrounding
-    // clips (avoids round-trip drift on save).
-    let StackChild::Track(track) = &mut working.tracks.children[from_loc.track_index] else {
+    let StackChild::Track(track) = &working.tracks.children[from_loc.track_index] else {
         return Err(ApplyError::Invalid {
             index,
             message: "transition: anchor resolved to a non-track stack child".into(),
@@ -1186,14 +1481,32 @@ fn apply_insert_transition(
             message: "transition: from anchor resolved to a non-clip child".into(),
         });
     };
+    let TrackChild::Clip(to_clip) = &track.children[to_loc.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "transition: to anchor resolved to a non-clip child".into(),
+        });
+    };
+    validate_transition_handle(index, kind, from_clip, "outgoing", out_offset_s)?;
+    validate_transition_handle(index, kind, to_clip, "incoming", in_offset_s)?;
+
+    // Pull the rate off the from-clip's source_range so the transition's
+    // RationalTime offsets share a denominator with the surrounding
+    // clips (avoids round-trip drift on save).
     let rate = from_clip
         .source_range
         .as_ref()
         .map(|r| r.start_time.rate)
         .unwrap_or(24.0);
 
-    let mut transition = Transition::symmetric(kind, duration_s, rate);
-    if let Some(spec) = spec {
+    let mut transition = Transition {
+        name: String::new(),
+        transition_type: kind.to_string(),
+        in_offset: RationalTime::new(in_offset_s * rate, rate),
+        out_offset: RationalTime::new(out_offset_s * rate, rate),
+        metadata: std::collections::HashMap::new(),
+    };
+    if let Some(spec) = persisted_spec.as_ref() {
         transition.metadata.insert(
             "awidat_transition".into(),
             serde_json::to_value(spec).map_err(|e| ApplyError::Invalid {
@@ -1202,17 +1515,284 @@ fn apply_insert_transition(
             })?,
         );
     }
+
+    let StackChild::Track(track) = &mut working.tracks.children[from_loc.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "transition: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    if replaces_existing_transition {
+        track.children.remove(from_loc.child_index + 1);
+    }
     track
         .children
         .insert(from_loc.child_index + 1, TrackChild::Transition(transition));
 
+    let action = if replaces_existing_transition {
+        "replaced"
+    } else {
+        "inserted"
+    };
     Ok(format!(
-        "inserted transition {kind:?} ({duration_s:.3}s) between \
+        "{action} transition {kind:?} ({duration_s:.3}s, in={in_offset_s:.3}s, out={out_offset_s:.3}s) between \
          clips at indices {} and {} on track {}",
         from_loc.child_index,
         from_loc.child_index + 2, // shifted by the insert
         from_loc.track_index,
     ))
+}
+
+fn is_authorable_transition_kind(kind: &str) -> bool {
+    kind == "SMPTE_Dissolve" || kind.starts_with("awidat.")
+}
+
+fn apply_delete_transition(
+    working: &mut Timeline,
+    index: usize,
+    between: &super::op::TransitionBetween,
+    ctx: &AnchorContext,
+) -> Result<String, ApplyError> {
+    let from_loc = resolve(working, &between.from, ctx)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    let to_loc = resolve(working, &between.to, ctx)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    if from_loc.track_index != to_loc.track_index {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "delete_transition: anchors resolve to different tracks ({} vs {})",
+                from_loc.track_index, to_loc.track_index
+            ),
+        });
+    }
+    if to_loc.child_index != from_loc.child_index + 2 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "delete_transition: expected clips separated by one transition, got indices {} and {}",
+                from_loc.child_index, to_loc.child_index
+            ),
+        });
+    }
+    let StackChild::Track(track) = &mut working.tracks.children[from_loc.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "delete_transition: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    if !matches!(
+        track.children.get(from_loc.child_index + 1),
+        Some(TrackChild::Transition(_))
+    ) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "delete_transition: no transition exists between those clips".into(),
+        });
+    }
+    track.children.remove(from_loc.child_index + 1);
+    Ok(format!(
+        "deleted transition between clips at indices {} and {} on track {}",
+        from_loc.child_index,
+        from_loc.child_index + 2,
+        from_loc.track_index
+    ))
+}
+
+fn apply_set_cut_intent(
+    working: &mut Timeline,
+    index: usize,
+    between: &super::op::TransitionBetween,
+    spec: &SemanticCutSpec,
+    ctx: &AnchorContext,
+) -> Result<String, ApplyError> {
+    validate_semantic_cut_spec(index, spec)?;
+    let from_loc = resolve(working, &between.from, ctx)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    let to_loc = resolve(working, &between.to, ctx)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    if from_loc.track_index != to_loc.track_index {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_cut_intent: anchors resolve to different tracks ({} vs {})",
+                from_loc.track_index, to_loc.track_index
+            ),
+        });
+    }
+    let separated_by_transition = to_loc.child_index == from_loc.child_index + 2
+        && matches!(
+            working.tracks.children.get(from_loc.track_index),
+            Some(StackChild::Track(track))
+                if matches!(
+                    track.children.get(from_loc.child_index + 1),
+                    Some(TrackChild::Transition(_))
+                )
+        );
+    if to_loc.child_index != from_loc.child_index + 1 && !separated_by_transition {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_cut_intent: anchors are not adjacent boundary clips (from at index {}, to at index {})",
+                from_loc.child_index, to_loc.child_index
+            ),
+        });
+    }
+
+    let StackChild::Track(track) = &working.tracks.children[from_loc.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_cut_intent: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(from_clip) = &track.children[from_loc.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_cut_intent: from anchor resolved to a non-clip child".into(),
+        });
+    };
+    let TrackChild::Clip(to_clip) = &track.children[to_loc.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_cut_intent: to anchor resolved to a non-clip child".into(),
+        });
+    };
+    let from_id = clip_uuid(from_clip)
+        .unwrap_or(from_clip.name.as_str())
+        .to_string();
+    let to_id = clip_uuid(to_clip)
+        .unwrap_or(to_clip.name.as_str())
+        .to_string();
+    let key = cut_boundary_key(&from_id, &to_id);
+    timeline_awidat_metadata(working)
+        .cut_boundaries
+        .insert(key.clone(), spec.clone());
+    Ok(format!(
+        "set cut intent {:?} ({:?}) for boundary {key}",
+        spec.cut_type, spec.audio_relation
+    ))
+}
+
+fn validate_semantic_cut_spec(index: usize, spec: &SemanticCutSpec) -> Result<(), ApplyError> {
+    if spec.intent.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_cut_intent: intent must be non-empty".into(),
+        });
+    }
+    if let Some(energy) = spec.energy
+        && (!energy.is_finite() || !(0.0..=1.0).contains(&energy))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_cut_intent: energy {energy} must be in [0, 1]"),
+        });
+    }
+    if let Some(confidence) = spec.confidence
+        && (!confidence.is_finite() || !(0.0..=1.0).contains(&confidence))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("set_cut_intent: confidence {confidence} must be in [0, 1]"),
+        });
+    }
+    Ok(())
+}
+
+fn resolve_transition_offsets(
+    index: usize,
+    duration_s: f64,
+    alignment: Option<TransitionAlignment>,
+    in_offset_s: Option<f64>,
+    out_offset_s: Option<f64>,
+) -> Result<(f64, f64), ApplyError> {
+    let validate = |name: &str, value: f64| {
+        if !value.is_finite() || value < 0.0 {
+            Err(ApplyError::Invalid {
+                index,
+                message: format!("transition {name} {value} must be finite and >= 0"),
+            })
+        } else {
+            Ok(())
+        }
+    };
+    if let Some(v) = in_offset_s {
+        validate("in_offset_s", v)?;
+    }
+    if let Some(v) = out_offset_s {
+        validate("out_offset_s", v)?;
+    }
+    let (in_s, out_s) = match (in_offset_s, out_offset_s) {
+        (Some(in_s), Some(out_s)) => (in_s, out_s),
+        (Some(in_s), None) => (in_s, duration_s - in_s),
+        (None, Some(out_s)) => (duration_s - out_s, out_s),
+        (None, None) => match alignment.unwrap_or(TransitionAlignment::Center) {
+            TransitionAlignment::Center => (duration_s / 2.0, duration_s / 2.0),
+            TransitionAlignment::StartAtCut => (0.0, duration_s),
+            TransitionAlignment::EndAtCut => (duration_s, 0.0),
+        },
+    };
+    validate("in_offset_s", in_s)?;
+    validate("out_offset_s", out_s)?;
+    if (in_s + out_s - duration_s).abs() > 1e-6 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "transition offsets must sum to duration_s ({duration_s:.3}); got in_offset_s={in_s:.3}, out_offset_s={out_s:.3}"
+            ),
+        });
+    }
+    Ok((in_s, out_s))
+}
+
+fn validate_transition_handle(
+    index: usize,
+    kind: &str,
+    clip: &Clip,
+    side: &'static str,
+    needed_s: f64,
+) -> Result<(), ApplyError> {
+    use awidat_proto::otio::{ExternalReference, MediaReference};
+    if needed_s <= 0.0 {
+        return Ok(());
+    }
+    let Some(range) = clip.source_range.as_ref() else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "transition {kind:?} around clip {:?} needs {needed_s:.3}s {side} handle, but the clip has no source_range",
+                clip.name
+            ),
+        });
+    };
+    let start_s = range.start_time.to_seconds();
+    let end_s = start_s + range.duration.to_seconds();
+    let available = match &clip.media_reference {
+        MediaReference::External(ExternalReference {
+            available_range, ..
+        }) => available_range.as_ref(),
+        _ => None,
+    };
+    let available_s = match (side, available) {
+        ("incoming", Some(r)) => (start_s - r.start_time.to_seconds()).max(0.0),
+        ("incoming", None) => start_s.max(0.0),
+        ("outgoing", Some(r)) => {
+            let avail_end_s = r.start_time.to_seconds() + r.duration.to_seconds();
+            (avail_end_s - end_s).max(0.0)
+        }
+        ("outgoing", None) => f64::INFINITY,
+        _ => 0.0,
+    };
+    if available_s + 1e-6 < needed_s {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "transition {kind:?} around clip {:?} needs {needed_s:.3}s {side} handle, but only {available_s:.3}s is available. Repair by shortening the transition, choosing a different alignment, or applying Untrim Clip to widen the source range before inserting it.",
+                clip.name
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Move an anchored clip to a different position within its track.
@@ -1790,6 +2370,9 @@ const COLOR_CORRECTION_EFFECT_NAME: &str = awidat_effects::COLOR_CORRECTION;
 /// Effect name used for clip-level LUT application. Render maps the
 /// project-relative `lut_path` to FFmpeg's `lut3d` filter.
 const LUT_EFFECT_NAME: &str = awidat_effects::LUT;
+const SUPPORTED_LUT_EXTENSIONS: &[&str] = &["3dl", "cube", "dat", "m3d", "csp"];
+const SUPPORTED_LUT_INTERPOLATIONS: &[&str] =
+    &["nearest", "trilinear", "tetrahedral", "pyramid", "prism"];
 
 /// Effect name stamped on title-clip synthesized clips. The metadata
 /// holds text/position/font_size/color/font_weight/animation; render
@@ -1909,6 +2492,228 @@ fn apply_set_audio_fade(
     Ok(format!(
         "set audio fade on clip {clip_name:?}: in={fade_in:.3}s out={fade_out:.3}s"
     ))
+}
+
+fn apply_set_audio_lead(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    lead_s: f64,
+    split_edit: Option<&SplitEditSpec>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    apply_split_edit_offset(
+        working,
+        index,
+        anchor,
+        locator,
+        lead_s,
+        SplitEditKind::AudioLead,
+        split_edit,
+        ctx,
+    )
+}
+
+fn apply_set_audio_trail(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    trail_s: f64,
+    split_edit: Option<&SplitEditSpec>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    apply_split_edit_offset(
+        working,
+        index,
+        anchor,
+        locator,
+        trail_s,
+        SplitEditKind::AudioTrail,
+        split_edit,
+        ctx,
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SplitEditKind {
+    AudioLead,
+    AudioTrail,
+}
+
+fn apply_split_edit_offset(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    locator: Option<ClipLocator>,
+    offset_s: f64,
+    kind: SplitEditKind,
+    split_edit: Option<&SplitEditSpec>,
+    ctx: &AnchorContext,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    if !offset_s.is_finite() || offset_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("split edit offset {offset_s} must be finite and >= 0.0"),
+        });
+    }
+    if let Some(confidence) = split_edit.and_then(|spec| spec.confidence)
+        && (!confidence.is_finite() || !(0.0..=1.0).contains(&confidence))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("split edit confidence {confidence} must be in [0, 1]"),
+        });
+    }
+    let locator = required_locator(index, locator)?;
+    let (clip_name, clip_id) =
+        stamp_split_edit_on_clip(working, index, locator, kind, offset_s, split_edit)?;
+    stamp_split_edit_cut_boundary(working, locator, &clip_id, kind, offset_s, split_edit);
+    let label = match kind {
+        SplitEditKind::AudioLead => "audio lead",
+        SplitEditKind::AudioTrail => "audio trail",
+    };
+    Ok(format!("set {label} on clip {clip_name:?}: {offset_s:.3}s"))
+}
+
+fn stamp_split_edit_on_clip(
+    working: &mut Timeline,
+    index: usize,
+    locator: ClipLocator,
+    kind: SplitEditKind,
+    offset_s: f64,
+    split_edit: Option<&SplitEditSpec>,
+) -> Result<(String, String), ApplyError> {
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "split edit: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let audio_lead_from_clip_id = previous_clip_id(track, locator.child_index);
+    let audio_trail_to_clip_id = next_clip_id(track, locator.child_index);
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "split edit: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    let clip_name = clip.name.clone();
+    let clip_id = clip_uuid(clip).unwrap_or(clip.name.as_str()).to_string();
+    let awidat = clip
+        .metadata
+        .awidat
+        .get_or_insert_with(AwidatClipMetadata::default);
+    let mut spec = awidat.split_edit.clone().unwrap_or_default();
+    match kind {
+        SplitEditKind::AudioLead => {
+            spec.audio_lead_s = Some(offset_s);
+            spec.audio_lead_from_clip_id = audio_lead_from_clip_id;
+            if split_edit.and_then(|s| s.audio_trail_s).is_some() {
+                spec.audio_trail_s = split_edit.and_then(|s| s.audio_trail_s);
+                spec.audio_trail_to_clip_id = audio_trail_to_clip_id;
+            }
+        }
+        SplitEditKind::AudioTrail => {
+            spec.audio_trail_s = Some(offset_s);
+            spec.audio_trail_to_clip_id = audio_trail_to_clip_id;
+            if split_edit.and_then(|s| s.audio_lead_s).is_some() {
+                spec.audio_lead_s = split_edit.and_then(|s| s.audio_lead_s);
+                spec.audio_lead_from_clip_id = audio_lead_from_clip_id;
+            }
+        }
+    }
+    if let Some(reason) = split_edit.and_then(|s| s.reason.clone()) {
+        spec.reason = Some(reason);
+    }
+    if let Some(confidence) = split_edit.and_then(|s| s.confidence) {
+        spec.confidence = Some(confidence);
+    }
+    awidat.split_edit = Some(spec);
+    Ok((clip_name, clip_id))
+}
+
+fn stamp_split_edit_cut_boundary(
+    working: &mut Timeline,
+    locator: ClipLocator,
+    clip_id: &str,
+    kind: SplitEditKind,
+    offset_s: f64,
+    split_edit: Option<&SplitEditSpec>,
+) {
+    let Some((from_id, to_id)) = neighboring_boundary_ids(working, locator, clip_id, kind) else {
+        return;
+    };
+    let key = cut_boundary_key(&from_id, &to_id);
+    let (cut_type, audio_relation, intent) = match kind {
+        SplitEditKind::AudioLead => (CutType::JCut, AudioRelation::AudioLeads, "audio_lead"),
+        SplitEditKind::AudioTrail => (CutType::LCut, AudioRelation::AudioTrails, "audio_trail"),
+    };
+    timeline_awidat_metadata(working).cut_boundaries.insert(
+        key,
+        SemanticCutSpec {
+            cut_type,
+            intent: intent.into(),
+            energy: None,
+            audio_relation,
+            confidence: split_edit.and_then(|s| s.confidence),
+            reason: split_edit.and_then(|s| s.reason.clone()).or_else(|| {
+                Some(format!(
+                    "{} {offset_s:.3}s",
+                    match kind {
+                        SplitEditKind::AudioLead => "Incoming audio leads picture by",
+                        SplitEditKind::AudioTrail => "Outgoing audio trails picture by",
+                    }
+                ))
+            }),
+            extra: Default::default(),
+        },
+    );
+}
+
+fn neighboring_boundary_ids(
+    timeline: &Timeline,
+    locator: ClipLocator,
+    clip_id: &str,
+    kind: SplitEditKind,
+) -> Option<(String, String)> {
+    let StackChild::Track(track) = &timeline.tracks.children.get(locator.track_index)? else {
+        return None;
+    };
+    match kind {
+        SplitEditKind::AudioLead => {
+            let prev = previous_clip_id(track, locator.child_index)?;
+            Some((prev, clip_id.to_string()))
+        }
+        SplitEditKind::AudioTrail => {
+            let next = next_clip_id(track, locator.child_index)?;
+            Some((clip_id.to_string(), next))
+        }
+    }
+}
+
+fn previous_clip_id(track: &awidat_proto::otio::Track, before_index: usize) -> Option<String> {
+    track.children[..before_index]
+        .iter()
+        .rev()
+        .find_map(track_child_clip_id)
+}
+
+fn next_clip_id(track: &awidat_proto::otio::Track, after_index: usize) -> Option<String> {
+    track
+        .children
+        .iter()
+        .skip(after_index + 1)
+        .find_map(track_child_clip_id)
+}
+
+fn track_child_clip_id(child: &TrackChild) -> Option<String> {
+    let TrackChild::Clip(clip) = child else {
+        return None;
+    };
+    Some(clip_uuid(clip).unwrap_or(clip.name.as_str()).to_string())
 }
 
 fn apply_set_track_audio(
@@ -2279,6 +3084,9 @@ fn apply_set_effect(
             index,
             message: format!("set_effect: {e}"),
         })?;
+    if definition.id == LUT_EFFECT_NAME {
+        normalize_lut_metadata(index, &mut metadata)?;
+    }
     if !matches!(definition.scope, awidat_effects::EffectScope::Clip) {
         return Err(ApplyError::Invalid {
             index,
@@ -2451,11 +3259,13 @@ fn apply_lut(
     index: usize,
     anchor: &Anchor,
     lut_path: &str,
+    interpolation: Option<&str>,
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
     let _ = (anchor, ctx);
-    validate_lut_path(index, lut_path)?;
+    let lut_path = normalize_lut_path(index, lut_path)?;
+    let interpolation = normalize_lut_interpolation(index, interpolation)?;
     let locator = required_locator(index, locator)?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
@@ -2474,26 +3284,138 @@ fn apply_lut(
     effect
         .metadata
         .insert("lut_path".to_string(), serde_json::json!(lut_path));
+    if let Some(interpolation) = interpolation {
+        effect.metadata.insert(
+            "interpolation".to_string(),
+            serde_json::json!(interpolation),
+        );
+    }
     let clip_name = clip.name.clone();
     clip.effects.push(effect);
     Ok(format!("applied LUT {lut_path:?} to clip {clip_name:?}"))
 }
 
-fn validate_lut_path(index: usize, lut_path: &str) -> Result<(), ApplyError> {
-    let path = std::path::Path::new(lut_path);
-    if lut_path.trim().is_empty()
+fn apply_remove_lut(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "remove_lut: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "remove_lut: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    let before = clip.effects.len();
+    clip.effects.retain(|e| e.effect_name != LUT_EFFECT_NAME);
+    let clip_name = clip.name.clone();
+    if clip.effects.len() == before {
+        Ok(format!("clip {clip_name:?} had no LUT effect"))
+    } else {
+        Ok(format!("removed LUT from clip {clip_name:?}"))
+    }
+}
+
+fn normalize_lut_metadata(
+    index: usize,
+    metadata: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), ApplyError> {
+    let lut_path = metadata
+        .get("lut_path")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: "set_effect: awidat.lut requires string lut_path".into(),
+        })?;
+    let normalized_path = normalize_lut_path(index, lut_path)?;
+    metadata.insert(
+        "lut_path".to_string(),
+        serde_json::Value::String(normalized_path),
+    );
+    let interpolation = metadata
+        .get("interpolation")
+        .and_then(serde_json::Value::as_str);
+    match normalize_lut_interpolation(index, interpolation)? {
+        Some(value) => {
+            metadata.insert(
+                "interpolation".to_string(),
+                serde_json::Value::String(value),
+            );
+        }
+        None => {
+            metadata.remove("interpolation");
+        }
+    }
+    Ok(())
+}
+
+fn normalize_lut_path(index: usize, lut_path: &str) -> Result<String, ApplyError> {
+    let trimmed = lut_path.trim();
+    let path = std::path::Path::new(trimmed);
+    if trimmed.is_empty()
+        || trimmed.contains('\\')
         || path.is_absolute()
         || path
             .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
     {
         return Err(ApplyError::Invalid {
             index,
-            message: "apply_lut: lut_path must be a non-empty project-relative path without '..'"
-                .into(),
+            message:
+                "apply_lut: lut_path must be a non-empty project-relative path without '.', '..', absolute prefixes, or backslashes"
+                    .into(),
         });
     }
-    Ok(())
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    if !extension
+        .as_deref()
+        .is_some_and(|ext| SUPPORTED_LUT_EXTENSIONS.contains(&ext))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "apply_lut: lut_path must end in one of: {}",
+                SUPPORTED_LUT_EXTENSIONS.join(", ")
+            ),
+        });
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_lut_interpolation(
+    index: usize,
+    interpolation: Option<&str>,
+) -> Result<Option<String>, ApplyError> {
+    let Some(interpolation) = interpolation else {
+        return Ok(None);
+    };
+    let interpolation = interpolation.trim().to_ascii_lowercase();
+    if interpolation.is_empty() {
+        return Ok(None);
+    }
+    if !SUPPORTED_LUT_INTERPOLATIONS.contains(&interpolation.as_str()) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "apply_lut: interpolation must be one of: {}",
+                SUPPORTED_LUT_INTERPOLATIONS.join(", ")
+            ),
+        });
+    }
+    Ok(Some(interpolation))
 }
 
 fn validate_project_relative_asset(
@@ -3378,7 +4300,9 @@ impl ValidateForApply for Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
+    use awidat_proto::awidat_meta::{
+        Anchor as AwAnchor, AudioRelation, AwidatClipMetadata, CutType, cut_boundary_key,
+    };
     use awidat_proto::otio::{
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
         Track, TrackChild, TrackKind,
@@ -3412,6 +4336,32 @@ mod tests {
         }
         tl.tracks.children.push(StackChild::Track(track));
         tl
+    }
+
+    fn add_one_second_handles(tl: &mut Timeline) {
+        let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        for child in &mut track.children {
+            let TrackChild::Clip(clip) = child else {
+                continue;
+            };
+            clip.media_reference =
+                MediaReference::External(external_ref_with_available("raw/handled.mp4", 7.0));
+            clip.source_range = Some(TimeRange::new(
+                RationalTime::new(1.0 * 24.0, 24.0),
+                RationalTime::new(5.0 * 24.0, 24.0),
+            ));
+        }
+    }
+
+    fn external_ref_with_available(asset: &str, duration_s: f64) -> ExternalReference {
+        let mut ext = ExternalReference::new(asset.to_string());
+        ext.available_range = Some(TimeRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(duration_s * 24.0, 24.0),
+        ));
+        ext
     }
 
     #[test]
@@ -3524,8 +4474,98 @@ mod tests {
     }
 
     #[test]
-    fn apply_delete_removes_adjacent_transitions() {
+    fn apply_delete_removes_cut_boundary_metadata_for_deleted_clip() {
         let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetCutIntent {
+                    between: super::super::op::TransitionBetween {
+                        from: Anchor::ClipUuid {
+                            uuid: "clip-0".into(),
+                        },
+                        to: Anchor::ClipUuid {
+                            uuid: "clip-1".into(),
+                        },
+                    },
+                    spec: SemanticCutSpec {
+                        cut_type: CutType::CutOnAction,
+                        intent: "hide_action_continuity".into(),
+                        energy: None,
+                        audio_relation: AudioRelation::Sync,
+                        confidence: Some(0.9),
+                        reason: Some("motion carries through the boundary".into()),
+                        extra: Default::default(),
+                    },
+                },
+                EdlOp::DeleteClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                },
+            ],
+        };
+
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        assert!(
+            meta.cut_boundaries.is_empty(),
+            "cut metadata referring to deleted clips must not remain: {:?}",
+            meta.cut_boundaries
+        );
+    }
+
+    #[test]
+    fn apply_delete_removes_audio_lead_when_source_boundary_is_removed() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetAudioLead {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-2".into(),
+                    },
+                    lead_s: 0.35,
+                    split_edit: Some(SplitEditSpec {
+                        audio_lead_s: Some(0.35),
+                        audio_lead_from_clip_id: None,
+                        audio_trail_s: None,
+                        audio_trail_to_clip_id: None,
+                        reason: Some("let clip two lead under clip one".into()),
+                        confidence: Some(0.86),
+                    }),
+                },
+                EdlOp::DeleteClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                },
+            ],
+        };
+
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected video track");
+        };
+        let TrackChild::Clip(clip_two) = &track.children[1] else {
+            panic!("expected clip two after delete");
+        };
+
+        assert!(
+            clip_two
+                .metadata
+                .awidat
+                .as_ref()
+                .and_then(|metadata| metadata.split_edit.as_ref())
+                .and_then(|split| split.audio_lead_s)
+                .is_none(),
+            "audio lead should not survive after its source boundary was removed"
+        );
+    }
+
+    #[test]
+    fn apply_delete_removes_adjacent_transitions() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
         let env = EdlEnvelope {
             ops: vec![
                 EdlOp::InsertTransition {
@@ -3539,6 +4579,9 @@ mod tests {
                     },
                     kind: "SMPTE_Dissolve".into(),
                     duration_s: 0.3,
+                    alignment: None,
+                    in_offset_s: None,
+                    out_offset_s: None,
                     spec: None,
                 },
                 EdlOp::InsertTransition {
@@ -3552,6 +4595,9 @@ mod tests {
                     },
                     kind: "SMPTE_Dissolve".into(),
                     duration_s: 0.3,
+                    alignment: None,
+                    in_offset_s: None,
+                    out_offset_s: None,
                     spec: None,
                 },
             ],
@@ -3681,6 +4727,135 @@ mod tests {
         assert!(right_uuid.starts_with("c-"));
         assert!(outcome.applied[0].description.contains(&right_uuid));
         assert!(outcome.applied[0].description.contains("anchor=clip_uuid="));
+    }
+
+    #[test]
+    fn apply_split_transfers_outgoing_cut_boundary_metadata_to_right_piece() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetCutIntent {
+                    between: super::super::op::TransitionBetween {
+                        from: Anchor::ClipUuid {
+                            uuid: "clip-1".into(),
+                        },
+                        to: Anchor::ClipUuid {
+                            uuid: "clip-2".into(),
+                        },
+                    },
+                    spec: SemanticCutSpec {
+                        cut_type: CutType::LCut,
+                        intent: "hold_expert_thought".into(),
+                        energy: None,
+                        audio_relation: AudioRelation::AudioTrails,
+                        confidence: Some(0.88),
+                        reason: Some("hold the answer under the reaction".into()),
+                        extra: Default::default(),
+                    },
+                },
+                EdlOp::SplitClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    at_s: 2.5,
+                },
+            ],
+        };
+
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected video track");
+        };
+        let TrackChild::Clip(right_piece) = &track.children[2] else {
+            panic!("expected split right piece");
+        };
+        let right_uuid = extract_clip_uuid(right_piece).expect("right piece uuid");
+        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let key = cut_boundary_key(&right_uuid, "clip-2");
+        let spec = meta
+            .cut_boundaries
+            .get(&key)
+            .expect("outgoing cut intent should follow the right split piece");
+
+        assert_eq!(spec.cut_type, CutType::LCut);
+        assert_eq!(spec.intent, "hold_expert_thought");
+        assert_eq!(spec.audio_relation, AudioRelation::AudioTrails);
+        assert!(!meta.cut_boundaries.contains_key("clip-1::clip-2"));
+    }
+
+    #[test]
+    fn apply_split_keeps_split_edit_offsets_on_the_boundary_pieces() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetAudioLead {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    lead_s: 0.35,
+                    split_edit: Some(SplitEditSpec {
+                        audio_lead_s: Some(0.35),
+                        audio_lead_from_clip_id: None,
+                        audio_trail_s: None,
+                        audio_trail_to_clip_id: None,
+                        reason: Some("incoming audio leads the picture".into()),
+                        confidence: Some(0.86),
+                    }),
+                },
+                EdlOp::SetAudioTrail {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    trail_s: 0.55,
+                    split_edit: Some(SplitEditSpec {
+                        audio_lead_s: None,
+                        audio_lead_from_clip_id: None,
+                        audio_trail_s: Some(0.55),
+                        audio_trail_to_clip_id: None,
+                        reason: Some("outgoing audio trails into the reaction".into()),
+                        confidence: Some(0.82),
+                    }),
+                },
+                EdlOp::SplitClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    at_s: 2.5,
+                },
+            ],
+        };
+
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected video track");
+        };
+        let TrackChild::Clip(left_piece) = &track.children[1] else {
+            panic!("expected split left piece");
+        };
+        let TrackChild::Clip(right_piece) = &track.children[2] else {
+            panic!("expected split right piece");
+        };
+        let left_split = left_piece
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|metadata| metadata.split_edit.as_ref())
+            .expect("left piece split edit");
+        let right_split = right_piece
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|metadata| metadata.split_edit.as_ref())
+            .expect("right piece split edit");
+
+        assert_eq!(left_split.audio_lead_s, Some(0.35));
+        assert_eq!(left_split.audio_trail_s, None);
+        assert_eq!(right_split.audio_lead_s, None);
+        assert_eq!(right_split.audio_trail_s, Some(0.55));
+        assert_eq!(
+            right_split.reason.as_deref(),
+            Some("outgoing audio trails into the reaction")
+        );
     }
 
     #[test]
@@ -4512,7 +5687,8 @@ mod tests {
 
     #[test]
     fn apply_insert_transition_lands_between_adjacent_clips() {
-        let tl = timeline_with_three_clips();
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
         let env = EdlEnvelope {
             ops: vec![EdlOp::InsertTransition {
                 between: super::super::op::TransitionBetween {
@@ -4525,6 +5701,9 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 1.0,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
                 spec: None,
             }],
         };
@@ -4548,8 +5727,245 @@ mod tests {
     }
 
     #[test]
-    fn apply_insert_transition_persists_semantic_metadata() {
+    fn apply_set_cut_intent_persists_boundary_metadata() {
         let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetCutIntent {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                spec: SemanticCutSpec {
+                    cut_type: CutType::CutOnAction,
+                    intent: "hide_action_continuity".into(),
+                    energy: Some(0.7),
+                    audio_relation: AudioRelation::Sync,
+                    confidence: Some(0.9),
+                    reason: Some("motion carries across the boundary".into()),
+                    extra: Default::default(),
+                },
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0].description.contains("set cut intent"),
+            "unexpected outcome: {:?}",
+            outcome.applied
+        );
+        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let key = cut_boundary_key("clip-0", "clip-1");
+        let spec = meta
+            .cut_boundaries
+            .get(&key)
+            .expect("stored cut boundary spec");
+        assert_eq!(spec.cut_type, CutType::CutOnAction);
+        assert_eq!(spec.intent, "hide_action_continuity");
+        assert_eq!(spec.audio_relation, AudioRelation::Sync);
+        assert_eq!(
+            spec.reason.as_deref(),
+            Some("motion carries across the boundary")
+        );
+    }
+
+    #[test]
+    fn apply_audio_lead_and_trail_stamp_split_edit_metadata() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetAudioLead {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    lead_s: 0.45,
+                    split_edit: Some(SplitEditSpec {
+                        audio_lead_s: Some(0.45),
+                        audio_lead_from_clip_id: None,
+                        audio_trail_s: None,
+                        audio_trail_to_clip_id: None,
+                        reason: Some("let next speaker enter before picture".into()),
+                        confidence: Some(0.87),
+                    }),
+                },
+                EdlOp::SetAudioTrail {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    trail_s: 0.60,
+                    split_edit: Some(SplitEditSpec {
+                        audio_lead_s: None,
+                        audio_lead_from_clip_id: None,
+                        audio_trail_s: Some(0.60),
+                        audio_trail_to_clip_id: None,
+                        reason: Some("hold answer under reaction".into()),
+                        confidence: Some(0.82),
+                    }),
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let split = clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.split_edit.as_ref())
+            .expect("split edit metadata");
+        assert_eq!(split.audio_lead_s, Some(0.45));
+        assert_eq!(split.audio_trail_s, Some(0.60));
+        assert_eq!(split.reason.as_deref(), Some("hold answer under reaction"));
+        assert_eq!(split.confidence, Some(0.82));
+
+        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let j_key = cut_boundary_key("clip-0", "clip-1");
+        assert_eq!(
+            meta.cut_boundaries
+                .get(&j_key)
+                .map(|spec| (spec.cut_type, spec.audio_relation)),
+            Some((CutType::JCut, AudioRelation::AudioLeads))
+        );
+        let l_key = cut_boundary_key("clip-1", "clip-2");
+        assert_eq!(
+            meta.cut_boundaries
+                .get(&l_key)
+                .map(|spec| (spec.cut_type, spec.audio_relation)),
+            Some((CutType::LCut, AudioRelation::AudioTrails))
+        );
+    }
+
+    #[test]
+    fn apply_insert_transition_replaces_existing_transition_between_same_clips() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let insert_env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.3,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let (tl_with_transition, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
+
+        let replace_env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 2.0,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let (new_tl, outcome) =
+            apply(&tl_with_transition, &replace_env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("replaced transition"),
+            "expected replacement outcome, got {:?}",
+            outcome.applied,
+        );
+
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.children.len(), 4);
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-0"));
+        let TrackChild::Transition(tr) = &t.children[1] else {
+            panic!("expected transition at index 1, got {:?}", t.children[1])
+        };
+        assert_eq!(tr.transition_type, "SMPTE_Dissolve");
+        assert!((tr.in_offset.to_seconds() - 1.0).abs() < 1e-9);
+        assert!((tr.out_offset.to_seconds() - 1.0).abs() < 1e-9);
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(matches!(&t.children[3], TrackChild::Clip(c) if c.name == "clip-2"));
+    }
+
+    #[test]
+    fn apply_delete_transition_removes_existing_transition() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let insert_env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.3,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let (tl_with_transition, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
+
+        let delete_env = EdlEnvelope {
+            ops: vec![EdlOp::DeleteTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+            }],
+        };
+        let (new_tl, outcome) =
+            apply(&tl_with_transition, &delete_env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("deleted transition"),
+            "expected delete outcome, got {:?}",
+            outcome.applied,
+        );
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.children.len(), 3);
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-0"));
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-2"));
+    }
+
+    #[test]
+    fn apply_insert_transition_persists_semantic_metadata() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
         let env = EdlEnvelope {
             ops: vec![EdlOp::InsertTransition {
                 between: super::super::op::TransitionBetween {
@@ -4562,6 +5978,9 @@ mod tests {
                 },
                 kind: "awidat.slide_left".into(),
                 duration_s: 0.28,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
                 spec: Some(awidat_proto::transitions::SemanticTransitionSpec {
                     id: "awidat.slide_left".into(),
                     family: Some("slide".into()),
@@ -4569,6 +5988,7 @@ mod tests {
                     energy: Some(0.7),
                     direction: Some("left".into()),
                     params: serde_json::Map::new(),
+                    composition: None,
                 }),
             }],
         };
@@ -4593,6 +6013,283 @@ mod tests {
             meta.get("intent").and_then(|v| v.as_str()),
             Some("hide_motion_jump")
         );
+        let composition = meta
+            .get("composition")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        let primitives = composition
+            .get("primitives")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+        assert!(matches!(
+            primitives
+                .first()
+                .and_then(|primitive| primitive.get("op"))
+                .and_then(serde_json::Value::as_str),
+            Some("push")
+        ));
+    }
+
+    #[test]
+    fn apply_insert_transition_accepts_agent_composite_recipe() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let composition = awidat_proto::transitions::TransitionComposition {
+            version: 1,
+            primitives: vec![
+                awidat_proto::transitions::TransitionPrimitive {
+                    start: 0.0,
+                    end: 1.0,
+                    easing: awidat_proto::transitions::TransitionEasing::EaseOutExpo,
+                    op: awidat_proto::transitions::TransitionPrimitiveOp::Push {
+                        direction: "left".into(),
+                        distance: 0.9,
+                    },
+                },
+                awidat_proto::transitions::TransitionPrimitive {
+                    start: 0.35,
+                    end: 0.55,
+                    easing: awidat_proto::transitions::TransitionEasing::EaseInOut,
+                    op: awidat_proto::transitions::TransitionPrimitiveOp::Flash {
+                        color: "#ffffff".into(),
+                        peak: 0.25,
+                    },
+                },
+            ],
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "awidat.composite".into(),
+                duration_s: 0.55,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: Some(awidat_proto::transitions::SemanticTransitionSpec {
+                    id: "awidat.composite".into(),
+                    family: Some("custom".into()),
+                    intent: Some("beat_hit_motion_cover".into()),
+                    energy: Some(0.85),
+                    direction: Some("left".into()),
+                    params: serde_json::Map::new(),
+                    composition: Some(composition),
+                }),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Transition(tr) = &t.children[1] else {
+            panic!("expected transition")
+        };
+        assert_eq!(tr.transition_type, "awidat.composite");
+        let meta = tr
+            .metadata
+            .get("awidat_transition")
+            .and_then(serde_json::Value::as_object)
+            .unwrap();
+        assert_eq!(
+            meta.get("intent").and_then(|v| v.as_str()),
+            Some("beat_hit_motion_cover")
+        );
+        assert!(meta.get("composition").is_some());
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_composite_without_recipe() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "awidat.composite".into(),
+                duration_s: 0.55,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("composition_json")),
+            "expected missing composition error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_missing_handles_before_render() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 1.0,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("incoming handle") && message.contains("Untrim Clip")),
+            "expected apply-time handle error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_insert_transition_persists_asymmetric_offsets() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 1.0,
+                alignment: None,
+                in_offset_s: Some(0.25),
+                out_offset_s: Some(0.75),
+                spec: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Transition(tr) = &t.children[1] else {
+            panic!("expected transition")
+        };
+        assert!((tr.in_offset.to_seconds() - 0.25).abs() < 1e-9);
+        assert!((tr.out_offset.to_seconds() - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_insert_transition_alignment_maps_to_offsets() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "SMPTE_Dissolve".into(),
+                duration_s: 0.75,
+                alignment: Some(TransitionAlignment::StartAtCut),
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Transition(tr) = &t.children[1] else {
+            panic!("expected transition")
+        };
+        assert!((tr.in_offset.to_seconds() - 0.0).abs() < 1e-9);
+        assert!((tr.out_offset.to_seconds() - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_id_kind_mismatch() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "awidat.cross_dissolve".into(),
+                duration_s: 0.3,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: Some(awidat_proto::transitions::SemanticTransitionSpec {
+                    id: "awidat.slide_left".into(),
+                    family: Some("slide".into()),
+                    intent: None,
+                    energy: None,
+                    direction: None,
+                    params: serde_json::Map::new(),
+                    composition: None,
+                }),
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("must match kind")),
+            "expected id/kind mismatch error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_raw_ffmpeg_kind() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "slideleft".into(),
+                duration_s: 0.3,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("raw FFmpeg")),
+            "expected raw transition rejection, got {err:?}",
+        );
     }
 
     #[test]
@@ -4611,6 +6308,9 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 1.0,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
                 spec: None,
             }],
         };
@@ -4659,6 +6359,9 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 1.0,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
                 spec: None,
             }],
         };
@@ -4684,6 +6387,9 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 0.0,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
                 spec: None,
             }],
         };
@@ -4691,6 +6397,35 @@ mod tests {
         assert!(
             matches!(&err, ApplyError::Invalid { message, .. } if message.contains("must be > 0")),
             "expected duration error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_insert_transition_rejects_duration_outside_registry_bounds() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTransition {
+                between: super::super::op::TransitionBetween {
+                    from: Anchor::TranscriptSnippet {
+                        text: "alpha snippet".into(),
+                    },
+                    to: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+                kind: "awidat.flash_white".into(),
+                duration_s: 1.0,
+                alignment: Some(TransitionAlignment::EndAtCut),
+                in_offset_s: None,
+                out_offset_s: None,
+                spec: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(&err, ApplyError::Invalid { message, .. } if message.contains("outside supported range")),
+            "expected duration bounds error, got {err:?}",
         );
     }
 
@@ -4713,6 +6448,50 @@ mod tests {
         assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-2"));
         assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-0"));
         assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-1"));
+    }
+
+    #[test]
+    fn apply_move_removes_cut_boundary_metadata_when_boundary_changes() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::SetCutIntent {
+                    between: super::super::op::TransitionBetween {
+                        from: Anchor::ClipUuid {
+                            uuid: "clip-0".into(),
+                        },
+                        to: Anchor::ClipUuid {
+                            uuid: "clip-1".into(),
+                        },
+                    },
+                    spec: SemanticCutSpec {
+                        cut_type: CutType::CutOnAction,
+                        intent: "hide_action_continuity".into(),
+                        energy: None,
+                        audio_relation: AudioRelation::Sync,
+                        confidence: Some(0.9),
+                        reason: Some("motion carries through the boundary".into()),
+                        extra: Default::default(),
+                    },
+                },
+                EdlOp::MoveClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    to_position: 2,
+                    at_s: None,
+                },
+            ],
+        };
+
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        assert!(
+            meta.cut_boundaries.is_empty(),
+            "cut metadata for changed boundaries must not remain: {:?}",
+            meta.cut_boundaries
+        );
     }
 
     #[test]
@@ -4805,6 +6584,9 @@ mod tests {
                 },
                 kind: "SMPTE_Dissolve".into(),
                 duration_s: 1.0,
+                alignment: None,
+                in_offset_s: None,
+                out_offset_s: None,
                 spec: None,
             }],
         };
@@ -5264,7 +7046,8 @@ mod tests {
                 anchor: Anchor::TranscriptSnippet {
                     text: "bravo snippet".into(),
                 },
-                lut_path: "luts/show-look.cube".into(),
+                lut_path: " luts/show-look.cube ".into(),
+                interpolation: Some("TETRAHEDRAL".into()),
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -5283,6 +7066,13 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("luts/show-look.cube")
         );
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("interpolation")
+                .and_then(|v| v.as_str()),
+            Some("tetrahedral")
+        );
 
         let err = apply(
             &tl,
@@ -5292,6 +7082,7 @@ mod tests {
                         text: "bravo snippet".into(),
                     },
                     lut_path: "../secret.cube".into(),
+                    interpolation: None,
                 }],
             },
             &AnchorContext::empty(),
@@ -5300,6 +7091,140 @@ mod tests {
         assert!(
             matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("project-relative")),
             "expected unsafe path validation error, got {err:?}",
+        );
+
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::ApplyLut {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    lut_path: "luts/show-look.txt".into(),
+                    interpolation: None,
+                }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("must end in one of")),
+            "expected LUT extension validation error, got {err:?}",
+        );
+
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::ApplyLut {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    lut_path: "luts/show-look.cube".into(),
+                    interpolation: Some("magic".into()),
+                }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("interpolation")),
+            "expected interpolation validation error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn remove_lut_clears_only_lut_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::ApplyLut {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    lut_path: "luts/show-look.cube".into(),
+                    interpolation: None,
+                },
+                EdlOp::SetVolume {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    value: 0.8,
+                },
+                EdlOp::RemoveLut {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert!(
+            clip.effects
+                .iter()
+                .all(|e| e.effect_name != LUT_EFFECT_NAME),
+            "LUT effect should have been removed: {:?}",
+            clip.effects,
+        );
+        assert!(
+            clip.effects
+                .iter()
+                .any(|e| e.effect_name == VOLUME_EFFECT_NAME),
+            "non-LUT effects should remain: {:?}",
+            clip.effects,
+        );
+    }
+
+    #[test]
+    fn set_effect_normalizes_lut_metadata() {
+        let tl = timeline_with_three_clips();
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "lut_path".to_string(),
+            serde_json::json!(" luts/generated-look.CUBE "),
+        );
+        params.insert("interpolation".to_string(), serde_json::json!("PRISM"));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: LUT_EFFECT_NAME.into(),
+                params,
+                rationale: Some("generated test look".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let effect = clip
+            .effects
+            .iter()
+            .find(|effect| effect.effect_name == LUT_EFFECT_NAME)
+            .expect("lut effect");
+        assert_eq!(
+            effect.metadata.get("lut_path").and_then(|v| v.as_str()),
+            Some("luts/generated-look.CUBE")
+        );
+        assert_eq!(
+            effect
+                .metadata
+                .get("interpolation")
+                .and_then(|v| v.as_str()),
+            Some("prism")
+        );
+        assert_eq!(
+            effect.metadata.get("rationale").and_then(|v| v.as_str()),
+            Some("generated test look")
         );
     }
 

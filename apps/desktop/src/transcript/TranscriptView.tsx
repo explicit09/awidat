@@ -25,6 +25,7 @@ import { useMediaStore } from "../media/store";
 import { useTimelineStore, type TimelineSnapshot } from "../timeline/store";
 import {
   findActiveSegment,
+  nearestTimelineTimeForSource,
   timelineTimeForSource,
   usePlaySegments,
 } from "../timeline/usePlaySegments";
@@ -149,6 +150,7 @@ function LoadedTranscript({
   const tlSegments = segments;
   const activeWordIdxRef = useRef<number>(-1);
   const lastScrolledSegmentRef = useRef<number>(-1);
+  const activeSourceTimeRef = useRef<number | null>(null);
   // Pre-build a sorted array of word start-times for binary search.
   const wordStarts = useMemo(
     () => t.words.map((w) => w.start_s),
@@ -169,6 +171,7 @@ function LoadedTranscript({
       return;
     }
     const sourceTime = seg.sourceStart + (timelineTime - seg.timelineStart);
+    activeSourceTimeRef.current = sourceTime;
     // Find the word whose [start_s, end_s] covers sourceTime via
     // binary search on the pre-built starts array.
     const wordIdx = findWordAt(wordStarts, t.words, sourceTime);
@@ -189,10 +192,7 @@ function LoadedTranscript({
         newSegmentIdx !== lastScrolledSegmentRef.current
       ) {
         lastScrolledSegmentRef.current = newSegmentIdx;
-        virtualizer.scrollToIndex(newSegmentIdx, {
-          align: "center",
-          behavior: "smooth",
-        });
+        scrollTranscriptToIndex(virtualizer, newSegmentIdx);
       }
     } else {
       const nearestSegmentIdx = findSegmentAtOrAfter(rows, sourceTime);
@@ -201,10 +201,7 @@ function LoadedTranscript({
         nearestSegmentIdx !== lastScrolledSegmentRef.current
       ) {
         lastScrolledSegmentRef.current = nearestSegmentIdx;
-        virtualizer.scrollToIndex(nearestSegmentIdx, {
-          align: "center",
-          behavior: "smooth",
-        });
+        scrollTranscriptToIndex(virtualizer, nearestSegmentIdx);
       }
     }
   }, [
@@ -216,6 +213,21 @@ function LoadedTranscript({
     rows,
     virtualizer,
   ]);
+
+  useEffect(() => {
+    lastScrolledSegmentRef.current = -1;
+    activeWordIdxRef.current = -1;
+  }, [stem, t]);
+
+  useEffect(() => {
+    const sourceTime = activeSourceTimeRef.current;
+    if (sourceTime === null) return;
+    const nearestSegmentIdx = findSegmentAtOrAfter(rows, sourceTime);
+    if (nearestSegmentIdx >= 0) {
+      scrollTranscriptToIndex(virtualizer, nearestSegmentIdx);
+      lastScrolledSegmentRef.current = nearestSegmentIdx;
+    }
+  }, [stem, rows, virtualizer]);
 
   // Pointer handling — supports both click-to-seek (no drag) and
   // drag-to-select (extends a word range). Event delegation off
@@ -271,7 +283,9 @@ function LoadedTranscript({
     if (!Number.isFinite(sourceTime)) return;
     // A click clears any prior selection (Descript behavior).
     setSelection(null);
-    const tlTime = timelineTimeForSource(segments, stem, sourceTime);
+    const tlTime =
+      timelineTimeForSource(segments, stem, sourceTime) ??
+      nearestTimelineTimeForSource(segments, stem, sourceTime);
     if (tlTime !== null) {
       requestTimelineSeek(tlTime);
     } else {
@@ -400,6 +414,18 @@ function LoadedTranscript({
       </div>
     </div>
   );
+}
+
+function scrollTranscriptToIndex(
+  virtualizer: ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>,
+  index: number,
+): void {
+  requestAnimationFrame(() => {
+    virtualizer.scrollToIndex(index, {
+      align: "center",
+      behavior: "auto",
+    });
+  });
 }
 
 /** Render a segment's words as inline spans when alignment exists,

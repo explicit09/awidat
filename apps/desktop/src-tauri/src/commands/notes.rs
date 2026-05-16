@@ -13,6 +13,8 @@ use awidat_core::dismissal::{
     DismissalBucket, DismissalFile, dismissal_file_path, load_dismissals, save_dismissals,
 };
 use awidat_core::notes::{NotesFile, PersistedNote, load_notes, save_notes};
+use awidat_proto::otio::{StackChild, Timeline, TrackChild, TrackKind};
+use awidat_proto::project::Project;
 use serde::Deserialize;
 use tauri::State;
 
@@ -27,7 +29,11 @@ pub async fn list_notes(state: State<'_, AwidatState>) -> Result<NotesFile, Stri
         Some(p) => p,
         None => return Ok(NotesFile::empty()),
     };
-    Ok(load_notes(&project_root))
+    let mut file = load_notes(&project_root);
+    if hydrate_missing_broll_anchors_from_project(&project_root, &mut file)? {
+        save_notes(&project_root, &file)?;
+    }
+    Ok(file)
 }
 
 /// Append-or-replace a single note. Idempotent: same id → in-place
@@ -46,6 +52,7 @@ pub async fn upsert_note(
         .ok_or_else(|| "no project loaded".to_string())?;
     let mut file = load_notes(&project_root);
     file.upsert(note);
+    hydrate_missing_broll_anchors_from_project(&project_root, &mut file)?;
     save_notes(&project_root, &file)?;
     Ok(file)
 }
@@ -134,4 +141,189 @@ pub async fn dismissals_path(state: State<'_, AwidatState>) -> Result<Option<Str
         .await
         .as_ref()
         .map(|p| dismissal_file_path(p).to_string_lossy().into_owned()))
+}
+
+fn hydrate_missing_broll_anchors_from_project(
+    project_root: &std::path::Path,
+    file: &mut NotesFile,
+) -> Result<bool, String> {
+    if !file.notes.iter().any(needs_broll_anchor_hydration) {
+        return Ok(false);
+    }
+    let project = Project::read(project_root).map_err(|e| format!("read project: {e}"))?;
+    Ok(hydrate_missing_broll_anchors(
+        &project.timeline,
+        &mut file.notes,
+    ))
+}
+
+fn hydrate_missing_broll_anchors(timeline: &Timeline, notes: &mut [PersistedNote]) -> bool {
+    let mut changed = false;
+    for note in notes {
+        if !needs_broll_anchor_hydration(note) {
+            continue;
+        }
+        if let Some(uuid) = clip_uuid_at_timeline_time(timeline, note.anchor_at_s) {
+            note.broll_anchor = Some(serde_json::json!({
+                "kind": "clip_uuid",
+                "uuid": uuid,
+            }));
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn needs_broll_anchor_hydration(note: &PersistedNote) -> bool {
+    note.kind == "broll_suggestion" && note.broll_anchor.is_none()
+}
+
+fn clip_uuid_at_timeline_time(timeline: &Timeline, at_s: f64) -> Option<String> {
+    if !at_s.is_finite() || at_s < 0.0 {
+        return None;
+    }
+
+    for stack_child in &timeline.tracks.children {
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
+        if !matches!(track.kind, TrackKind::Video) {
+            continue;
+        }
+        if track
+            .metadata
+            .get("awidat_track_role")
+            .and_then(|v| v.as_str())
+            == Some("titles")
+        {
+            continue;
+        }
+
+        let mut cursor_s = 0.0;
+        for child in &track.children {
+            let duration_s = match child {
+                TrackChild::Clip(clip) => clip
+                    .source_range
+                    .as_ref()
+                    .map(|r| r.duration.to_seconds())
+                    .unwrap_or(0.0),
+                TrackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
+                TrackChild::Transition(_) | TrackChild::Stack(_) => 0.0,
+            };
+            let end_s = cursor_s + duration_s;
+            if at_s >= cursor_s
+                && at_s < end_s
+                && let TrackChild::Clip(clip) = child
+            {
+                return Some(clip_uuid_or_name(clip));
+            }
+            cursor_s = end_s;
+        }
+    }
+    None
+}
+
+fn clip_uuid_or_name(clip: &awidat_proto::otio::Clip) -> String {
+    clip.metadata
+        .awidat
+        .as_ref()
+        .and_then(|m| m.extra.get("clip_uuid"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| clip.name.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use awidat_proto::otio::{
+        Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track,
+    };
+
+    fn note(id: &str, kind: &str, anchor_at_s: f64) -> PersistedNote {
+        PersistedNote {
+            id: id.into(),
+            kind: kind.into(),
+            status: "open".into(),
+            anchor_at_s,
+            summary: "test".into(),
+            suggested_proposal: None,
+            continuity_verdict: None,
+            continuity_reasons: None,
+            broll_query: None,
+            broll_previews: None,
+            broll_anchor: None,
+        }
+    }
+
+    fn clip(name: &str, uuid: &str, duration_s: f64) -> Clip {
+        let mut clip = Clip::empty(name.to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/a.mp4"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(duration_s * 24.0, 24.0),
+        ));
+        clip.metadata
+            .awidat
+            .get_or_insert_with(Default::default)
+            .extra
+            .insert("clip_uuid".into(), serde_json::Value::String(uuid.into()));
+        clip
+    }
+
+    fn timeline_with_two_clips() -> Timeline {
+        let mut timeline = Timeline::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track
+            .children
+            .push(TrackChild::Clip(clip("clip-0", "u0", 5.0)));
+        track
+            .children
+            .push(TrackChild::Clip(clip("clip-1", "u1", 5.0)));
+        timeline.tracks.children.push(StackChild::Track(track));
+        timeline
+    }
+
+    #[test]
+    fn hydrates_legacy_broll_note_anchor_from_timeline_time() {
+        let timeline = timeline_with_two_clips();
+        let mut notes = vec![note("n1", "broll_suggestion", 6.0)];
+
+        assert!(hydrate_missing_broll_anchors(&timeline, &mut notes));
+        assert_eq!(
+            notes[0].broll_anchor,
+            Some(serde_json::json!({"kind": "clip_uuid", "uuid": "u1"}))
+        );
+    }
+
+    #[test]
+    fn leaves_non_broll_and_unmatched_notes_unchanged() {
+        let timeline = timeline_with_two_clips();
+        let mut notes = vec![
+            note("n1", "silence_trim", 1.0),
+            note("n2", "broll_suggestion", 99.0),
+        ];
+
+        assert!(!hydrate_missing_broll_anchors(&timeline, &mut notes));
+        assert!(notes.iter().all(|note| note.broll_anchor.is_none()));
+    }
+
+    #[test]
+    fn preserves_existing_broll_anchor() {
+        let timeline = timeline_with_two_clips();
+        let mut notes = vec![note("n1", "broll_suggestion", 6.0)];
+        notes[0].broll_anchor = Some(serde_json::json!({
+            "kind": "transcript_snippet",
+            "text": "already anchored",
+        }));
+
+        assert!(!hydrate_missing_broll_anchors(&timeline, &mut notes));
+        assert_eq!(
+            notes[0].broll_anchor,
+            Some(serde_json::json!({
+                "kind": "transcript_snippet",
+                "text": "already anchored",
+            }))
+        );
+    }
 }

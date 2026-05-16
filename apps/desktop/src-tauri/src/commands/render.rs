@@ -51,11 +51,13 @@ pub async fn start_timeline_render(state: State<'_, AwidatState>) -> Result<Rend
     // build_timeline_render_spec is sync (reads OTIO from disk + walks).
     // Wrap in spawn_blocking to keep the runtime free.
     let project_root_for_spec = project_root.clone();
-    let spec =
-        tokio::task::spawn_blocking(move || build_timeline_render_spec(&project_root_for_spec))
-            .await
-            .map_err(|e| format!("plan join: {e}"))?
-            .map_err(|e| format!("plan: {e}"))?;
+    let spec = tokio::task::spawn_blocking(move || {
+        awidat_core::lessons::apply_learned_project_format_defaults(&project_root_for_spec)
+            .map_err(|e| format!("learned defaults: {e}"))?;
+        build_timeline_render_spec(&project_root_for_spec).map_err(|e| format!("plan: {e}"))
+    })
+    .await
+    .map_err(|e| format!("plan join: {e}"))??;
 
     // Make sure renders/ exists before ffmpeg tries to write into it.
     if let Some(parent) = spec.output_path.parent() {

@@ -237,10 +237,14 @@ fn format_line(
             g.name
         ),
         TrackChild::Transition(t) => {
-            let visual_duration_s = t.in_offset.to_seconds() + t.out_offset.to_seconds();
+            let in_offset_s = t.in_offset.to_seconds();
+            let out_offset_s = t.out_offset.to_seconds();
+            let visual_duration_s = in_offset_s + out_offset_s;
+            let visual_start_s = (start_s - in_offset_s).max(0.0);
+            let visual_end_s = start_s + out_offset_s;
             format!(
-                "[{kind} {:>7.3}s visual={visual_duration_s:.3}s] transition {:?} ({})",
-                start_s, t.name, t.transition_type
+                "[{kind} {:>7.3}-{:>7.3}s visual={visual_duration_s:.3}s cut={start_s:.3}s] transition {:?} ({})",
+                visual_start_s, visual_end_s, t.name, t.transition_type
             )
         }
         TrackChild::Stack(_) => format!("[{kind} {:>7.3}-{:>7.3}s] nested-stack", start_s, end_s),
@@ -294,7 +298,8 @@ const DESCRIPTION: &str = "\
 Show clips in the project timeline within a time window. Each line is \
 one clip/gap/transition: track-kind, timeline time range, duration, name, \
 the exact `anchor=clip_uuid=<clip name>` value to use in apply_edl, \
-current `source=[start..end]` bounds, and media reference. For a user \
+current `source=[start..end]` bounds, and media reference. Transition \
+lines show the visual range and the centered cut time (`cut=<seconds>`). For a user \
 request like \"trim the first N seconds\" of an existing clip, set Trim \
 Clip `start` to current source start + N; for \"trim the last N seconds\", \
 set `end` to current source end - N. Default window 60s starting at 0. \

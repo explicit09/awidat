@@ -139,6 +139,8 @@ impl ToolHandler for StartRenderTool {
         // produce identical specs. The asset-based scopes keep their
         // original path-validation flow.
         let (argv, total_duration_s, asset_label, output_path) = if args.scope == "timeline" {
+            crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
+                .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
             let spec =
                 awidat_render::build_timeline_render_spec(&ctx.project_root).map_err(|e| {
                     use awidat_render::RenderTimelineError;
@@ -173,10 +175,32 @@ impl ToolHandler for StartRenderTool {
                             "start_render: clip '{clip_name}' has no source_range — \
                          can't extract a renderable segment."
                         ),
+                        RenderTimelineError::TransitionHandleUnavailable {
+                            kind,
+                            clip_name,
+                            side,
+                            needed_s,
+                            available_s,
+                        } => format!(
+                            "start_render: transition {kind:?} around clip '{clip_name}' needs \
+                         {needed_s:.3}s {side} handle, but only {available_s:.3}s is available. \
+                         Shorten the transition, choose a different alignment, or apply Untrim Clip \
+                         to widen the source range before rendering."
+                        ),
                         RenderTimelineError::UnsupportedTransition { kind, message } => format!(
                             "start_render: timeline transition {kind:?} cannot be exported: \
                          {message}"
                         ),
+                        RenderTimelineError::InvalidTransitionPlacement { message } => {
+                            format!("start_render: timeline has an invalid transition: {message}")
+                        }
+                        RenderTimelineError::InvalidTransitionMetadata { kind, message } => {
+                            format!(
+                                "start_render: transition {kind:?} has invalid Awidat metadata: \
+                         {message}. Use data-only transition primitives with bounded params; do \
+                         not put raw FFmpeg, GLSL, shell, or plugin code in transition metadata."
+                            )
+                        }
                         RenderTimelineError::BroadcastOverlayRender(message) => {
                             format!("start_render: broadcast overlay render failed: {message}")
                         }

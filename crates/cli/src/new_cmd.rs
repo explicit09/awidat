@@ -64,6 +64,20 @@ pub fn run(args: NewArgs) -> Result<()> {
     let project = Project::init(&project_dir)
         .with_context(|| format!("failed to init project at {}", project_dir.display()))?;
     println!("  ✓ Initialized OTIO timeline, edit-plan, manifest, raw/, renders/, .awidat/");
+    let learned_format = awidat_core::lessons::apply_learned_project_format_defaults(&project_dir)
+        .map_err(|e| {
+            anyhow!(
+                "failed to apply learned project-format defaults at {}: {e}",
+                project_dir.display()
+            )
+        })?;
+    if let Some(aspect_ratio) = learned_format.aspect_ratio.as_deref() {
+        println!(
+            "  ✓ Applied learned output format defaults: aspect_ratio={aspect_ratio}, platform={}, safe_area={}",
+            learned_format.platform.as_deref().unwrap_or("none"),
+            learned_format.safe_area.as_deref().unwrap_or("none")
+        );
+    }
 
     if !args.no_md {
         let md_path = project_dir.join("AWIDAT.md");

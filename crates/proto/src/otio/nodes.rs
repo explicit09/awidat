@@ -558,10 +558,10 @@ impl Effect {
 /// [`TrackChild::Transition`] envelope's tag, so it owns no inline schema
 /// field.
 ///
-/// `in_offset` is the duration into the *previous* clip the transition
-/// reaches back; `out_offset` is the duration into the *next* clip it
-/// extends. The two offsets together define the transition's overlap range.
-/// Both are required by the OTIO spec.
+/// `in_offset` is the amount of the *next* clip used before the cut;
+/// `out_offset` is the amount of the *previous* clip used after the cut.
+/// The two offsets together define the transition's overlap range. Both are
+/// required by the OTIO spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transition {
     /// Display name.
@@ -571,9 +571,9 @@ pub struct Transition {
     /// crossfade tag), `"awidat.fade_in"`, etc.
     #[serde(default)]
     pub transition_type: String,
-    /// Duration into the previous clip the transition reaches.
+    /// Amount of the next clip used before the cut.
     pub in_offset: RationalTime,
-    /// Duration into the next clip the transition extends.
+    /// Amount of the previous clip used after the cut.
     pub out_offset: RationalTime,
     /// Free metadata.
     #[serde(default)]
@@ -582,8 +582,8 @@ pub struct Transition {
 
 impl Transition {
     /// Construct a symmetric transition of the given total duration centered
-    /// on the cut point. Half goes into the outgoing clip (`in_offset`) and
-    /// half into the incoming clip (`out_offset`).
+    /// on the cut point. Half uses incoming pre-roll (`in_offset`) and half
+    /// uses outgoing post-roll (`out_offset`).
     pub fn symmetric(transition_type: impl Into<String>, duration_seconds: f64, rate: f64) -> Self {
         let half = RationalTime::new((duration_seconds / 2.0) * rate, rate);
         Self {

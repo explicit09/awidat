@@ -318,6 +318,8 @@ pub async fn reject_proposal(
             snapshot: TimelineSnapshot {
                 duration_s: 0.0,
                 broadcast_overlay: None,
+                cut_boundaries: Vec::new(),
+                preview_limitations: Vec::new(),
                 tracks: Vec::new(),
             },
             diff_hints: Vec::new(),
@@ -520,16 +522,51 @@ fn build_diff_hints(
                     });
                 }
             }
-            // F2 ops; not rendered in v1. SetVolume/SetSpeed/SetTitle
-            // mutate effect metadata only — the ghost overlay re-renders
-            // the same clip rect. InsertTitle adds a synthesized clip
-            // on the Titles track; v1 emits no hint for it either.
-            EdlOp::InsertBRoll { .. }
-            | EdlOp::InsertPiP { .. }
-            | EdlOp::MoveClip { .. }
-            | EdlOp::InsertTransition { .. }
+            EdlOp::InsertBRoll { .. } => {
+                if let Some((track_index, item_index)) =
+                    find_inserted_clip_by_prefix(proposed, "broll-from-")
+                {
+                    hints.push(AppliedDiff::InsertBRoll {
+                        op_index,
+                        track_index,
+                        item_index,
+                    });
+                }
+            }
+            // Metadata/effect-only ops are left to the post-state
+            // snapshot; they don't have a dedicated visual hint yet.
+            EdlOp::InsertPiP { .. } => {
+                if let Some((track_index, item_index)) =
+                    find_inserted_clip_by_prefix(proposed, "pip-from-")
+                {
+                    hints.push(AppliedDiff::InsertPiP {
+                        op_index,
+                        track_index,
+                        item_index,
+                    });
+                }
+            }
+            EdlOp::MoveClip { .. } => {
+                if let Some(loc) = locator
+                    && let Some((to_track_index, to_item_index)) =
+                        find_moved_clip_position(original, proposed, loc)
+                {
+                    hints.push(AppliedDiff::Move {
+                        op_index,
+                        from_track_index: loc.track_index,
+                        from_item_index: loc.child_index,
+                        to_track_index,
+                        to_item_index,
+                    });
+                }
+            }
+            EdlOp::InsertTransition { .. }
+            | EdlOp::DeleteTransition { .. }
+            | EdlOp::SetCutIntent { .. }
             | EdlOp::SetVolume { .. }
             | EdlOp::SetAudioFade { .. }
+            | EdlOp::SetAudioLead { .. }
+            | EdlOp::SetAudioTrail { .. }
             | EdlOp::SetTrackAudio { .. }
             | EdlOp::SetDucking { .. }
             | EdlOp::SetSyncGroup { .. }
@@ -539,6 +576,7 @@ fn build_diff_hints(
             | EdlOp::SetSpeed { .. }
             | EdlOp::SetColorCorrection { .. }
             | EdlOp::ApplyLut { .. }
+            | EdlOp::RemoveLut { .. }
             | EdlOp::SetBroadcastOverlay { .. }
             | EdlOp::InsertTitle { .. }
             | EdlOp::SetTitle { .. }
@@ -613,6 +651,60 @@ fn find_inserted_position(
     None
 }
 
+fn find_inserted_clip_by_prefix(timeline: &Timeline, name_prefix: &str) -> Option<(usize, usize)> {
+    use awidat_proto::otio::{StackChild, TrackChild};
+    for (track_index, child) in timeline.tracks.children.iter().enumerate() {
+        let StackChild::Track(track) = child else {
+            continue;
+        };
+        for (item_index, item) in track.children.iter().enumerate() {
+            if matches!(item, TrackChild::Clip(c) if c.name.starts_with(name_prefix)) {
+                return Some((track_index, item_index));
+            }
+        }
+    }
+    None
+}
+
+fn find_moved_clip_position(
+    original: &Timeline,
+    proposed: &Timeline,
+    loc: awidat_core::edl::ClipLocator,
+) -> Option<(usize, usize)> {
+    use awidat_proto::otio::{StackChild, TrackChild};
+    let StackChild::Track(original_track) = original.tracks.children.get(loc.track_index)? else {
+        return None;
+    };
+    let TrackChild::Clip(original_clip) = original_track.children.get(loc.child_index)? else {
+        return None;
+    };
+    let uuid = clip_uuid_or_name(original_clip);
+    for (track_index, child) in proposed.tracks.children.iter().enumerate() {
+        let StackChild::Track(track) = child else {
+            continue;
+        };
+        for (item_index, item) in track.children.iter().enumerate() {
+            let TrackChild::Clip(clip) = item else {
+                continue;
+            };
+            if clip_uuid_or_name(clip) == uuid {
+                return Some((track_index, item_index));
+            }
+        }
+    }
+    None
+}
+
+fn clip_uuid_or_name(clip: &awidat_proto::otio::Clip) -> String {
+    clip.metadata
+        .awidat
+        .as_ref()
+        .and_then(|m| m.extra.get("clip_uuid"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| clip.name.clone())
+}
+
 /// Apply one EditAdjustment to the envelope by mutating the op at
 /// `op_index`. Errors on out-of-range indexes or field/op
 /// mismatches (e.g. SplitAt against a TrimClip).
@@ -663,8 +755,12 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::InsertPiP { .. } => "InsertPiP",
         EdlOp::MoveClip { .. } => "MoveClip",
         EdlOp::InsertTransition { .. } => "InsertTransition",
+        EdlOp::DeleteTransition { .. } => "DeleteTransition",
+        EdlOp::SetCutIntent { .. } => "SetCutIntent",
         EdlOp::SetVolume { .. } => "SetVolume",
         EdlOp::SetAudioFade { .. } => "SetAudioFade",
+        EdlOp::SetAudioLead { .. } => "SetAudioLead",
+        EdlOp::SetAudioTrail { .. } => "SetAudioTrail",
         EdlOp::SetTrackAudio { .. } => "SetTrackAudio",
         EdlOp::SetDucking { .. } => "SetDucking",
         EdlOp::SetSyncGroup { .. } => "SetSyncGroup",
@@ -674,6 +770,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetSpeed { .. } => "SetSpeed",
         EdlOp::SetColorCorrection { .. } => "SetColorCorrection",
         EdlOp::ApplyLut { .. } => "ApplyLut",
+        EdlOp::RemoveLut { .. } => "RemoveLut",
         EdlOp::SetBroadcastOverlay { .. } => "SetBroadcastOverlay",
         EdlOp::InsertTitle { .. } => "InsertTitle",
         EdlOp::SetTitle { .. } => "SetTitle",
@@ -864,5 +961,142 @@ mod tests {
                 delta_s
             }] if (*delta_s - 5.0).abs() < 1e-9
         ));
+    }
+
+    #[test]
+    fn broll_diff_hint_highlights_inserted_broll_clip() {
+        let original = one_track_timeline(vec![clip("clip-0", "u0", 0.0, 5.0)]);
+        let mut proposed = original.clone();
+        let mut overlay = Track::empty("V2", TrackKind::Video);
+        overlay.children.push(TrackChild::Clip(clip(
+            "broll-from-clip-0",
+            "broll-u0",
+            0.0,
+            2.0,
+        )));
+        proposed.tracks.children.push(StackChild::Track(overlay));
+        let envelope = EdlEnvelope {
+            ops: vec![EdlOp::InsertBRoll {
+                anchor: Anchor::ClipUuid { uuid: "u0".into() },
+                asset: "raw/broll.mp4".into(),
+                duration_s: 2.0,
+                position: awidat_core::edl::BRollPosition::Overlay,
+            }],
+        };
+        let applied = vec![applied_at(0, 0)];
+
+        let hints = build_diff_hints(&envelope, &applied, &original, &proposed);
+        assert!(matches!(
+            hints.as_slice(),
+            [AppliedDiff::InsertBRoll {
+                op_index: 0,
+                track_index: 1,
+                item_index: 0
+            }]
+        ));
+    }
+
+    #[test]
+    fn pip_diff_hint_highlights_inserted_pip_clip() {
+        let original = one_track_timeline(vec![clip("clip-0", "u0", 0.0, 5.0)]);
+        let mut proposed = original.clone();
+        let mut overlay = Track::empty("V2", TrackKind::Video);
+        overlay.children.push(TrackChild::Clip(clip(
+            "pip-from-clip-0",
+            "pip-u0",
+            0.0,
+            2.0,
+        )));
+        proposed.tracks.children.push(StackChild::Track(overlay));
+        let envelope = EdlEnvelope {
+            ops: vec![EdlOp::InsertPiP {
+                anchor: Anchor::ClipUuid { uuid: "u0".into() },
+                asset: "raw/pip.mp4".into(),
+                duration_s: 2.0,
+                source_start_s: 0.0,
+                corner: awidat_core::edl::PiPCorner::BottomRight,
+                scale: 0.28,
+                margin_pct: 0.035,
+            }],
+        };
+        let applied = vec![applied_at(0, 0)];
+
+        let hints = build_diff_hints(&envelope, &applied, &original, &proposed);
+        assert!(matches!(
+            hints.as_slice(),
+            [AppliedDiff::InsertPiP {
+                op_index: 0,
+                track_index: 1,
+                item_index: 0
+            }]
+        ));
+    }
+
+    #[test]
+    fn move_diff_hint_carries_before_and_after_indexes() {
+        let original = one_track_timeline(vec![
+            clip("clip-0", "u0", 0.0, 5.0),
+            clip("clip-1", "u1", 0.0, 5.0),
+        ]);
+        let proposed = one_track_timeline(vec![
+            clip("clip-1", "u1", 0.0, 5.0),
+            clip("clip-0", "u0", 0.0, 5.0),
+        ]);
+        let envelope = EdlEnvelope {
+            ops: vec![EdlOp::MoveClip {
+                anchor: Anchor::ClipUuid { uuid: "u0".into() },
+                to_position: 1,
+                at_s: None,
+            }],
+        };
+        let applied = vec![applied_at(0, 0)];
+
+        let hints = build_diff_hints(&envelope, &applied, &original, &proposed);
+        assert!(matches!(
+            hints.as_slice(),
+            [AppliedDiff::Move {
+                op_index: 0,
+                from_track_index: 0,
+                from_item_index: 0,
+                to_track_index: 0,
+                to_item_index: 1
+            }]
+        ));
+    }
+
+    fn one_track_timeline(children: Vec<Clip>) -> Timeline {
+        let mut timeline = Timeline::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track
+            .children
+            .extend(children.into_iter().map(TrackChild::Clip));
+        timeline.tracks.children.push(StackChild::Track(track));
+        timeline
+    }
+
+    fn clip(name: &str, uuid: &str, start: f64, duration: f64) -> Clip {
+        let mut clip = Clip::empty(name.to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/a.mp4"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(start * 24.0, 24.0),
+            RationalTime::new(duration * 24.0, 24.0),
+        ));
+        clip.metadata
+            .awidat
+            .get_or_insert_with(Default::default)
+            .extra
+            .insert("clip_uuid".into(), serde_json::Value::String(uuid.into()));
+        clip
+    }
+
+    fn applied_at(track_index: usize, child_index: usize) -> AppliedOp {
+        AppliedOp {
+            index: 0,
+            description: "applied".into(),
+            locator: Some(ClipLocator {
+                track_index,
+                child_index,
+            }),
+        }
     }
 }

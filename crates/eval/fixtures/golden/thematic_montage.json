@@ -1,0 +1,42 @@
+{
+  "id": "golden::thematic_montage",
+  "objective": "Mark an associative montage cut as symbolic rather than literal continuity b-roll.",
+  "project": {
+    "name": "golden-thematic-montage",
+    "assets": [],
+    "clips": [
+      {
+        "name": "founder-pressure",
+        "uuid": "founder-pressure",
+        "asset": "raw/founder-pressure.mp4",
+        "start_s": 0.0,
+        "duration_s": 5.0,
+        "transcript": "the pressure kept building"
+      },
+      {
+        "name": "storm-clouds",
+        "uuid": "storm-clouds",
+        "asset": "raw/storm-clouds.mp4",
+        "start_s": 50.0,
+        "duration_s": 5.0,
+        "transcript": "symbolic storm clouds"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=founder-pressure and clip_uuid=storm-clouds\n+ cut_type: cutaway\n+ intent: thematic_montage\n+ audio_relation: overlap\n+ confidence: 0.8\n+ reason: symbolic storm imagery supports the pressure theme\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "founder-pressure",
+        "to": "storm-clouds",
+        "cut_type": "cutaway",
+        "intent": "thematic_montage",
+        "audio_relation": "overlap",
+        "reason_contains": "symbolic"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Delete Clip"]
+  }
+}
