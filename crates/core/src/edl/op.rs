@@ -8,6 +8,12 @@
 use std::fmt;
 
 use awidat_proto::awidat_meta::{BroadcastOverlayConfig, SemanticCutSpec, SplitEditSpec};
+use awidat_proto::professional::{
+    AssetCatalog, AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
+    MotionGraphicsTemplate, ParameterAnimation, PipelineReadinessReport, PlannerPassContract,
+    PreflightReport, ProposalPackage, SourceRange, SourceSelect, Stringout, TrackingPackage,
+    WorkflowLens,
+};
 use awidat_proto::transitions::SemanticTransitionSpec;
 use serde::{Deserialize, Serialize};
 
@@ -478,6 +484,174 @@ pub enum EdlOp {
     SetBroadcastOverlay {
         /// Complete overlay config.
         config: BroadcastOverlayConfig,
+    },
+    /// Store or replace the source asset catalog.
+    SetAssetCatalog {
+        /// Complete asset catalog.
+        catalog: AssetCatalog,
+    },
+    /// Store source review selects and stringouts.
+    SetSourceReview {
+        /// Durable source range decisions.
+        selects: Vec<SourceSelect>,
+        /// Ordered select assemblies.
+        stringouts: Vec<Stringout>,
+    },
+    /// Apply a professional timeline operation contract.
+    ProfessionalTimelineEdit {
+        /// Typed edit operation.
+        edit: ProfessionalTimelineEdit,
+    },
+    /// Store a cross-stage proposal package with evidence.
+    AddProposalPackage {
+        /// Proposal package.
+        package: ProposalPackage,
+    },
+    /// Store or replace a general parameter animation.
+    SetParameterAnimation {
+        /// Animation document.
+        animation: ParameterAnimation,
+    },
+    /// Store or replace a reusable motion graphics template.
+    SetMotionTemplate {
+        /// Template document.
+        template: MotionGraphicsTemplate,
+    },
+    /// Attach a composition graph to a timeline range or keep it reusable.
+    AttachComposition {
+        /// Composition graph.
+        graph: CompositionGraph,
+        /// Optional timeline attachment range.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        attach_to: Option<SourceRange>,
+    },
+    /// Store tracking, mask, and matte contracts.
+    SetTrackingPackage {
+        /// Tracking package.
+        package: TrackingPackage,
+    },
+    /// Store color finishing workflow state.
+    SetColorFinishing {
+        /// Color finishing state.
+        state: ColorFinishingState,
+    },
+    /// Store audio finishing workflow state.
+    SetAudioFinishing {
+        /// Audio finishing state.
+        state: AudioFinishingState,
+    },
+    /// Select and persist a named delivery profile.
+    SelectDeliveryProfile {
+        /// Delivery profile.
+        profile: DeliveryProfile,
+    },
+    /// Store a delivery preflight report.
+    AddPreflightReport {
+        /// Preflight report.
+        report: PreflightReport,
+    },
+    /// Set the active workflow lens.
+    SetWorkflowLens {
+        /// Workflow lens.
+        lens: WorkflowLens,
+    },
+    /// Store pre-autonomy readiness and planner contracts.
+    SetPipelineReadiness {
+        /// Pipeline readiness.
+        readiness: PipelineReadinessReport,
+        /// Planner pass contracts.
+        #[serde(default)]
+        planner_passes: Vec<PlannerPassContract>,
+    },
+}
+
+/// Professional timeline operation contracts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "edit", rename_all = "snake_case")]
+pub enum ProfessionalTimelineEdit {
+    /// Ripple trim a clip and shift downstream material.
+    RippleTrim {
+        /// Target clip.
+        anchor: Anchor,
+        /// New source/timeline end in seconds.
+        new_end_s: f64,
+        /// Tracks affected by the ripple.
+        #[serde(default)]
+        ripple_tracks: Vec<String>,
+    },
+    /// Roll an edit point between adjacent clips.
+    RollEdit {
+        /// Adjacent clips.
+        between: TransitionBetween,
+        /// Delta seconds.
+        delta_s: f64,
+    },
+    /// Slip a clip's source range without moving timeline placement.
+    SlipClip {
+        /// Target clip.
+        anchor: Anchor,
+        /// Source offset delta in seconds.
+        delta_s: f64,
+    },
+    /// Slide a clip's timeline placement while preserving duration.
+    SlideClip {
+        /// Target clip.
+        anchor: Anchor,
+        /// Timeline offset delta in seconds.
+        delta_s: f64,
+    },
+    /// Lift a timeline range, leaving gap.
+    LiftRange {
+        /// Timeline range.
+        range: SourceRange,
+        /// Track names.
+        #[serde(default)]
+        tracks: Vec<String>,
+    },
+    /// Extract a timeline range and close the gap.
+    ExtractRange {
+        /// Timeline range.
+        range: SourceRange,
+        /// Track names.
+        #[serde(default)]
+        tracks: Vec<String>,
+    },
+    /// Replace an anchored clip with a source asset/range.
+    ReplaceClip {
+        /// Target clip.
+        anchor: Anchor,
+        /// Replacement asset id/path.
+        asset: String,
+        /// Replacement source range.
+        range: SourceRange,
+    },
+    /// Overwrite material at a timeline range.
+    Overwrite {
+        /// Destination track.
+        track: String,
+        /// Destination range.
+        range: SourceRange,
+        /// Source asset id/path.
+        asset: String,
+    },
+    /// Append material to a track.
+    Append {
+        /// Destination track.
+        track: String,
+        /// Source asset id/path.
+        asset: String,
+        /// Source range.
+        range: SourceRange,
+    },
+    /// Add a timeline marker.
+    AddMarker {
+        /// Marker time in seconds.
+        at_s: f64,
+        /// Marker label.
+        label: String,
+        /// Optional category.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        category: Option<String>,
     },
 }
 
