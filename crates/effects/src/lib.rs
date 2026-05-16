@@ -45,7 +45,10 @@ const COLOR_PARAMS: &[ParamDef] = &[
     ParamDef::number("highlights", false, Some(-1.0), Some(1.0), None),
 ];
 
-const LUT_PARAMS: &[ParamDef] = &[ParamDef::string("lut_path", true, None)];
+const LUT_PARAMS: &[ParamDef] = &[
+    ParamDef::string("lut_path", true, None),
+    ParamDef::string("interpolation", false, None),
+];
 
 const TITLE_PARAMS: &[ParamDef] = &[
     ParamDef::number("start_s", true, Some(0.0), None, None),

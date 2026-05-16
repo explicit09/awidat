@@ -313,6 +313,16 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         audio_policy: TransitionAudioPolicy::Crossfade,
     },
     BuiltinTransition {
+        id: "awidat.match_dissolve",
+        family: "dissolve",
+        display_name: "Match Dissolve",
+        ffmpeg_xfade: Some("fade"),
+        default_duration_s: 0.45,
+        min_duration_s: 0.12,
+        max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Crossfade,
+    },
+    BuiltinTransition {
         id: "awidat.fade_black",
         family: "fade",
         display_name: "Fade Through Black",
@@ -380,6 +390,86 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         default_duration_s: 0.32,
         min_duration_s: 0.05,
         max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+    },
+    BuiltinTransition {
+        id: "awidat.motion_blur",
+        family: "motion_blur",
+        display_name: "Motion Blur",
+        ffmpeg_xfade: Some("hblur"),
+        default_duration_s: 0.18,
+        min_duration_s: 0.05,
+        max_duration_s: 0.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+    },
+    BuiltinTransition {
+        id: "awidat.whip_pan_left",
+        family: "motion_blur",
+        display_name: "Whip Pan Left",
+        ffmpeg_xfade: Some("hblur"),
+        default_duration_s: 0.18,
+        min_duration_s: 0.05,
+        max_duration_s: 0.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+    },
+    BuiltinTransition {
+        id: "awidat.whip_pan_right",
+        family: "motion_blur",
+        display_name: "Whip Pan Right",
+        ffmpeg_xfade: Some("hblur"),
+        default_duration_s: 0.18,
+        min_duration_s: 0.05,
+        max_duration_s: 0.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+    },
+    BuiltinTransition {
+        id: "awidat.pass_by_left",
+        family: "occlusion",
+        display_name: "Pass-By Left",
+        ffmpeg_xfade: Some("coverleft"),
+        default_duration_s: 0.16,
+        min_duration_s: 0.04,
+        max_duration_s: 0.45,
+        audio_policy: TransitionAudioPolicy::Cut,
+    },
+    BuiltinTransition {
+        id: "awidat.pass_by_right",
+        family: "occlusion",
+        display_name: "Pass-By Right",
+        ffmpeg_xfade: Some("coverright"),
+        default_duration_s: 0.16,
+        min_duration_s: 0.04,
+        max_duration_s: 0.45,
+        audio_policy: TransitionAudioPolicy::Cut,
+    },
+    BuiltinTransition {
+        id: "awidat.iris_open",
+        family: "iris",
+        display_name: "Iris Open",
+        ffmpeg_xfade: Some("circleopen"),
+        default_duration_s: 0.38,
+        min_duration_s: 0.10,
+        max_duration_s: 1.2,
+        audio_policy: TransitionAudioPolicy::Cut,
+    },
+    BuiltinTransition {
+        id: "awidat.iris_close",
+        family: "iris",
+        display_name: "Iris Close",
+        ffmpeg_xfade: Some("circleclose"),
+        default_duration_s: 0.38,
+        min_duration_s: 0.10,
+        max_duration_s: 1.2,
+        audio_policy: TransitionAudioPolicy::Cut,
+    },
+    BuiltinTransition {
+        id: "awidat.invisible_cut",
+        family: "invisible_cut",
+        display_name: "Invisible Cut",
+        ffmpeg_xfade: Some("fadefast"),
+        default_duration_s: 0.08,
+        min_duration_s: 0.03,
+        max_duration_s: 0.18,
         audio_policy: TransitionAudioPolicy::Cut,
     },
     BuiltinTransition {
@@ -529,7 +619,11 @@ fn editorial_metadata(id: &str) -> (Vec<&'static str>, Vec<&'static str>) {
     match id {
         "awidat.cross_dissolve" => (
             vec!["soft_time_passage", "topic_drift", "gentle_emotion"],
-            vec!["hard_beat_hit"],
+            vec!["hard_beat_hit", "dirty_dialogue_repair"],
+        ),
+        "awidat.match_dissolve" => (
+            vec!["visual_echo", "memory_bridge", "graphic_match"],
+            vec!["unrelated_images", "fast_dialogue"],
         ),
         "awidat.fade_black" => (
             vec!["chapter_break", "ending", "heavy_reset"],
@@ -546,6 +640,46 @@ fn editorial_metadata(id: &str) -> (Vec<&'static str>, Vec<&'static str>) {
         "awidat.slide_left" | "awidat.slide_right" | "awidat.smooth_push_left" => (
             vec!["motion_continuity", "screen_direction", "social_push"],
             vec!["static_interview"],
+        ),
+        "awidat.motion_blur" => (
+            vec![
+                "motion_cover",
+                "hide_motion_jump",
+                "screen_direction_unknown",
+            ],
+            vec!["static_dialogue", "slow_emotional_moment", "repeated_use"],
+        ),
+        "awidat.whip_pan_left" | "awidat.whip_pan_right" => (
+            vec![
+                "fast_screen_direction",
+                "pass_by_motion",
+                "hide_motion_jump",
+            ],
+            vec!["static_dialogue", "slow_emotional_moment", "repeated_use"],
+        ),
+        "awidat.pass_by_left" | "awidat.pass_by_right" => (
+            vec!["occlusion_mask", "pass_by_motion", "invisible_scene_move"],
+            vec!["no_occlusion_signal", "static_dialogue", "repeated_use"],
+        ),
+        "awidat.iris_open" => (
+            vec!["stylized_reveal", "vintage_grammar", "comic_reveal"],
+            vec!["documentary_realism", "intimate_dialogue", "repeated_use"],
+        ),
+        "awidat.iris_close" => (
+            vec!["stylized_closure", "vintage_grammar", "comic_button"],
+            vec!["documentary_realism", "intimate_dialogue", "repeated_use"],
+        ),
+        "awidat.invisible_cut" => (
+            vec![
+                "occlusion_or_dark_frame",
+                "hide_camera_reposition",
+                "mask_cut",
+            ],
+            vec![
+                "visible_mismatch",
+                "no_occlusion_signal",
+                "dialogue_emphasis",
+            ],
         ),
         "awidat.zoom_in" => (
             vec!["forward_momentum", "beat_hit", "punch_in"],
@@ -583,6 +717,18 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
         "awidat.cross_dissolve" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Opacity { from: 1.0, to: 1.0 },
         )])),
+        "awidat.match_dissolve" => Some(composition(vec![
+            primitive(TransitionPrimitiveOp::Opacity { from: 1.0, to: 1.0 }),
+            TransitionPrimitive {
+                start: 0.18,
+                end: 0.82,
+                easing: TransitionEasing::EaseInOut,
+                op: TransitionPrimitiveOp::Blur {
+                    amount: 0.18,
+                    direction: None,
+                },
+            },
+        ])),
         "awidat.fade_black" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Atomic {
                 id: "awidat.fade_black".into(),
@@ -615,6 +761,52 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
                 distance: 1.0,
             })
         }])),
+        "awidat.motion_blur" => Some(composition(vec![TransitionPrimitive {
+            easing: TransitionEasing::EaseOutExpo,
+            ..primitive(TransitionPrimitiveOp::Blur {
+                amount: 0.75,
+                direction: None,
+            })
+        }])),
+        "awidat.whip_pan_left" => Some(composition(vec![TransitionPrimitive {
+            easing: TransitionEasing::EaseOutExpo,
+            ..primitive(TransitionPrimitiveOp::Blur {
+                amount: 0.85,
+                direction: Some("left".into()),
+            })
+        }])),
+        "awidat.whip_pan_right" => Some(composition(vec![TransitionPrimitive {
+            easing: TransitionEasing::EaseOutExpo,
+            ..primitive(TransitionPrimitiveOp::Blur {
+                amount: 0.85,
+                direction: Some("right".into()),
+            })
+        }])),
+        "awidat.pass_by_left" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::Atomic {
+                id: "awidat.pass_by_left".into(),
+            },
+        )])),
+        "awidat.pass_by_right" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::Atomic {
+                id: "awidat.pass_by_right".into(),
+            },
+        )])),
+        "awidat.iris_open" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::Atomic {
+                id: "awidat.iris_open".into(),
+            },
+        )])),
+        "awidat.iris_close" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::Atomic {
+                id: "awidat.iris_close".into(),
+            },
+        )])),
+        "awidat.invisible_cut" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::Atomic {
+                id: "awidat.invisible_cut".into(),
+            },
+        )])),
         "awidat.zoom_in" => Some(composition(vec![primitive(TransitionPrimitiveOp::Zoom {
             scale: 1.25,
         })])),
@@ -1313,6 +1505,14 @@ mod tests {
         validate_transition_manifests(&manifests).unwrap();
 
         assert!(manifests.iter().any(|m| m.id == "awidat.cross_dissolve"));
+        assert!(manifests.iter().any(|m| m.id == "awidat.match_dissolve"));
+        assert!(manifests.iter().any(|m| m.id == "awidat.motion_blur"));
+        assert!(manifests.iter().any(|m| m.id == "awidat.whip_pan_left"));
+        assert!(manifests.iter().any(|m| m.id == "awidat.pass_by_left"));
+        assert!(manifests.iter().any(|m| m.id == "awidat.pass_by_right"));
+        assert!(manifests.iter().any(|m| m.id == "awidat.iris_open"));
+        assert!(manifests.iter().any(|m| m.id == "awidat.iris_close"));
+        assert!(manifests.iter().any(|m| m.id == "awidat.invisible_cut"));
         assert!(!manifests.iter().any(|m| m.id == "awidat.hard_cut"));
         assert!(!manifests.iter().any(|m| m.id == "awidat.composite"));
 
@@ -1341,6 +1541,53 @@ mod tests {
             Some("cut")
         );
         assert!(serialized.get("composition").is_some());
+
+        let whip = manifests
+            .iter()
+            .find(|m| m.id == "awidat.whip_pan_left")
+            .unwrap();
+        assert_eq!(whip.ffmpeg_xfade.as_deref(), Some("hblur"));
+        assert!(whip.best_for.iter().any(|tag| tag == "hide_motion_jump"));
+
+        let pass_by = manifests
+            .iter()
+            .find(|m| m.id == "awidat.pass_by_left")
+            .unwrap();
+        assert_eq!(pass_by.ffmpeg_xfade.as_deref(), Some("coverleft"));
+        assert_eq!(
+            resolve_composition_ffmpeg_xfade(pass_by.composition.as_ref().unwrap()),
+            Some("coverleft")
+        );
+        assert!(pass_by.best_for.iter().any(|tag| tag == "occlusion_mask"));
+
+        let iris_open = manifests
+            .iter()
+            .find(|m| m.id == "awidat.iris_open")
+            .unwrap();
+        assert_eq!(iris_open.ffmpeg_xfade.as_deref(), Some("circleopen"));
+        assert!(
+            iris_open
+                .avoid_for
+                .iter()
+                .any(|tag| tag == "documentary_realism")
+        );
+
+        let invisible = manifests
+            .iter()
+            .find(|m| m.id == "awidat.invisible_cut")
+            .unwrap();
+        assert_eq!(invisible.ffmpeg_xfade.as_deref(), Some("fadefast"));
+        assert_eq!(
+            resolve_composition_ffmpeg_xfade(invisible.composition.as_ref().unwrap()),
+            Some("fadefast")
+        );
+        assert_eq!(invisible.audio_policy, TransitionAudioPolicyManifest::Cut);
+        assert!(
+            invisible
+                .best_for
+                .iter()
+                .any(|tag| tag == "occlusion_or_dark_frame")
+        );
     }
 
     #[test]

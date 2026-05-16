@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use awidat_proto::awidat_meta::BroadcastOverlayConfig;
+use awidat_proto::awidat_meta::{BroadcastOverlayConfig, SemanticCutSpec, SplitEditSpec};
 use awidat_proto::transitions::SemanticTransitionSpec;
 use serde::{Deserialize, Serialize};
 
@@ -189,6 +189,14 @@ pub enum EdlOp {
         /// Anchor pair identifying the two clips around the transition.
         between: TransitionBetween,
     },
+    /// Store semantic editorial intent for a hard-cut boundary without
+    /// inserting a visible transition.
+    SetCutIntent {
+        /// Anchor pair identifying the outgoing and incoming clips.
+        between: TransitionBetween,
+        /// Cut grammar, purpose, audio relationship, and explanation.
+        spec: SemanticCutSpec,
+    },
     /// Set per-clip audio volume. `value` is a linear gain multiplier
     /// where `0.0` mutes the clip, `1.0` is unity (no change), and
     /// values above 1.0 amplify (clipping risk). The apply layer
@@ -210,6 +218,26 @@ pub enum EdlOp {
         fade_in_s: Option<f64>,
         /// Fade-out duration into the clip end, seconds.
         fade_out_s: Option<f64>,
+    },
+    /// Mark an incoming clip as a J-cut: its audio should lead picture.
+    SetAudioLead {
+        /// Anchor identifying the incoming clip.
+        anchor: Anchor,
+        /// Lead duration in seconds.
+        lead_s: f64,
+        /// Optional reason/confidence for the split edit.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        split_edit: Option<SplitEditSpec>,
+    },
+    /// Mark an outgoing clip as an L-cut: its audio should trail picture.
+    SetAudioTrail {
+        /// Anchor identifying the outgoing clip.
+        anchor: Anchor,
+        /// Trail duration in seconds.
+        trail_s: f64,
+        /// Optional reason/confidence for the split edit.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        split_edit: Option<SplitEditSpec>,
     },
     /// Set audio controls on a track by name.
     SetTrackAudio {
@@ -324,11 +352,20 @@ pub enum EdlOp {
     },
     /// Apply a 3D LUT to a clip. The LUT path is project-relative and
     /// stored as an `awidat.lut` Effect so render can emit `lut3d`.
+    /// Re-applying replaces the prior LUT, making looks mutable.
     ApplyLut {
         /// Anchor identifying the clip.
         anchor: Anchor,
         /// Project-relative LUT path. Must not be absolute or contain `..`.
         lut_path: String,
+        /// Optional FFmpeg `lut3d` interpolation mode.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        interpolation: Option<String>,
+    },
+    /// Remove the clip-level LUT effect, leaving other effects intact.
+    RemoveLut {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
     },
     /// Insert a title overlay on the project's "Titles" track. The
     /// titles track auto-creates on first insert (Video kind, flagged

@@ -50,6 +50,10 @@ fn write_project_with_color_effect(dir: &Path, include_lut: bool) {
             "lut_path".to_string(),
             serde_json::json!("luts/show-look.cube"),
         );
+        lut.metadata.insert(
+            "interpolation".to_string(),
+            serde_json::json!("tetrahedral"),
+        );
         clip_a.effects.push(lut);
     }
 
@@ -93,6 +97,10 @@ fn project_with_lut_emits_lut3d() {
     assert!(
         cmd.contains("lut3d=file='"),
         "expected lut3d in argv, got: {cmd}"
+    );
+    assert!(
+        cmd.contains(":interp=tetrahedral"),
+        "expected LUT interpolation in argv, got: {cmd}",
     );
     assert!(
         cmd.contains("luts/show-look.cube"),

@@ -176,8 +176,14 @@ pub struct TimelineSegment {
     pub color_correction: Option<ColorCorrectionPlan>,
     /// Optional absolute LUT path, read from the `awidat.lut` effect.
     pub lut_path: Option<PathBuf>,
+    /// Optional FFmpeg `lut3d` interpolation mode.
+    pub lut_interpolation: Option<String>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
+    /// Incoming audio lead for J-cut export, in seconds.
+    pub audio_lead_s: Option<f64>,
+    /// Outgoing audio trail for L-cut export, in seconds.
+    pub audio_trail_s: Option<f64>,
 }
 
 /// Render-time media overlay extracted from an upper video track.
@@ -380,6 +386,16 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
         highlights: m.get("highlights").and_then(serde_json::Value::as_f64),
     };
     Some(plan)
+}
+
+fn read_lut_interpolation(clip: &awidat_proto::otio::Clip) -> Option<String> {
+    let raw = read_effect_string(clip, "awidat.lut", "interpolation")?;
+    let value = raw.trim().to_ascii_lowercase();
+    matches!(
+        value.as_str(),
+        "nearest" | "trilinear" | "tetrahedral" | "pyramid" | "prism"
+    )
+    .then_some(value)
 }
 
 fn read_audio_fade(clip: &awidat_proto::otio::Clip) -> (Option<f64>, Option<f64>) {
@@ -646,6 +662,9 @@ pub fn collect_timeline_full_plan(
         .awidat
         .as_ref()
         .and_then(read_timeline_loudness_target);
+    if audio_tracks.is_empty() {
+        audio_tracks = synthesize_split_edit_audio_tracks(&segs)?;
+    }
     Ok((
         segs,
         transitions,
@@ -734,6 +753,7 @@ fn collect_timeline_segment(
             missing: lut_path.clone(),
         });
     }
+    let lut_interpolation = read_lut_interpolation(clip);
     Ok(Some(TimelineSegment {
         asset_path,
         clip_name: clip.name.clone(),
@@ -753,7 +773,20 @@ fn collect_timeline_segment(
         speed: read_effect_number(clip, "awidat.speed", "factor"),
         color_correction: read_color_correction(clip),
         lut_path,
+        lut_interpolation,
         audio_fx: read_clip_audio_fx(clip),
+        audio_lead_s: clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.split_edit.as_ref())
+            .and_then(|s| s.audio_lead_s),
+        audio_trail_s: clip
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.split_edit.as_ref())
+            .and_then(|s| s.audio_trail_s),
     }))
 }
 
@@ -913,6 +946,101 @@ fn collect_audio_track_plan(
         audio_fx: settings.audio_fx,
         items,
     })
+}
+
+fn synthesize_split_edit_audio_tracks(
+    segments: &[TimelineSegment],
+) -> Result<Vec<AudioTrackPlan>, RenderTimelineError> {
+    if !segments.iter().any(segment_has_split_edit_audio) {
+        return Ok(Vec::new());
+    }
+    let mut tracks = Vec::new();
+    let mut picture_start_s = 0.0_f64;
+    for (idx, segment) in segments.iter().enumerate() {
+        let lead_s = normalized_split_offset(segment.audio_lead_s);
+        let trail_s = normalized_split_offset(segment.audio_trail_s);
+        validate_split_edit_handles(segment, lead_s, trail_s)?;
+        let source_start_s = segment.start_s - lead_s * segment_speed(segment);
+        let duration_s = segment.duration_s + (lead_s + trail_s) * segment_speed(segment);
+        let audio_start_s = (picture_start_s - lead_s).max(0.0);
+        let mut items = Vec::new();
+        if audio_start_s > 0.0 {
+            items.push(AudioTrackItemPlan::Gap {
+                duration_s: audio_start_s,
+            });
+        }
+        items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
+            asset_path: segment.asset_path.clone(),
+            start_s: source_start_s,
+            duration_s,
+            volume: segment.volume,
+            speed: segment.speed,
+            fade_in_s: None,
+            fade_out_s: None,
+            audio_fx: segment.audio_fx.clone(),
+        }));
+        tracks.push(AudioTrackPlan {
+            name: format!("split-edit-a{}", idx + 1),
+            role: "dialogue".into(),
+            volume: 1.0,
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items,
+        });
+        picture_start_s += visible_effective_duration(segment);
+    }
+    Ok(tracks)
+}
+
+fn segment_has_split_edit_audio(segment: &TimelineSegment) -> bool {
+    normalized_split_offset(segment.audio_lead_s) > 0.0
+        || normalized_split_offset(segment.audio_trail_s) > 0.0
+}
+
+fn normalized_split_offset(value: Option<f64>) -> f64 {
+    value.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0)
+}
+
+fn validate_split_edit_handles(
+    segment: &TimelineSegment,
+    lead_s: f64,
+    trail_s: f64,
+) -> Result<(), RenderTimelineError> {
+    if lead_s > 0.0 {
+        let needed_source_s = lead_s * segment_speed(segment);
+        let available_source_s = segment
+            .source_available_start_s
+            .map(|start| (segment.start_s - start).max(0.0))
+            .unwrap_or(segment.start_s.max(0.0));
+        if available_source_s + 1e-6 < needed_source_s {
+            return Err(RenderTimelineError::TransitionHandleUnavailable {
+                kind: "split_edit_audio_lead".into(),
+                clip_name: segment.clip_name.clone(),
+                side: "incoming",
+                needed_s: lead_s,
+                available_s: available_source_s / segment_speed(segment),
+            });
+        }
+    }
+    if trail_s > 0.0
+        && let Some(end_s) = segment.source_available_end_s
+    {
+        let needed_source_s = trail_s * segment_speed(segment);
+        let visible_end_s = segment.start_s + segment.duration_s;
+        let available_source_s = (end_s - visible_end_s).max(0.0);
+        if available_source_s + 1e-6 < needed_source_s {
+            return Err(RenderTimelineError::TransitionHandleUnavailable {
+                kind: "split_edit_audio_trail".into(),
+                clip_name: segment.clip_name.clone(),
+                side: "outgoing",
+                needed_s: trail_s,
+                available_s: available_source_s / segment_speed(segment),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn parse_audio_track_settings(track: &awidat_proto::otio::Track) -> AudioTrackPlan {
@@ -1626,9 +1754,11 @@ fn stage_overlay_video_input(
     }
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[media_overlay_lv{input_idx}]");
-        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
         filter.push(';');
-        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv}"));
+        filter.push_str(&format!(
+            "{video_label}{}{lv}",
+            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        ));
         video_label = lv;
     }
     if let Some(factor) = seg.speed
@@ -1672,8 +1802,10 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
 
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[lv{i}]");
-        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
-        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv};"));
+        filter.push_str(&format!(
+            "{video_label}{}{lv};",
+            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        ));
         video_label = lv;
     }
 
@@ -1887,6 +2019,14 @@ fn filter_escape_single_quoted(s: &str) -> String {
             other => vec![other],
         })
         .collect()
+}
+
+fn lut3d_filter(lut_path: &Path, interpolation: Option<&str>) -> String {
+    let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
+    match interpolation {
+        Some(interpolation) => format!("lut3d=file='{path}':interp={interpolation}"),
+        None => format!("lut3d=file='{path}'"),
+    }
 }
 
 /// Length of the alpha / slide ramp for fade and slide animations,
@@ -3465,8 +3605,10 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
     }
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[lv{i}]");
-        let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
-        filter.push_str(&format!("{video_label}lut3d=file='{path}'{lv};"));
+        filter.push_str(&format!(
+            "{video_label}{}{lv};",
+            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        ));
         video_label = lv;
     }
     if let Some(factor) = seg.speed
@@ -3941,6 +4083,71 @@ mod tests {
     }
 
     #[test]
+    fn split_edit_metadata_synthesizes_overlapping_audio_tracks() {
+        let mut a = seg("/tmp/a.mp4", 10.0, 5.0);
+        a.clip_name = "a".into();
+        a.source_available_start_s = Some(10.0);
+        a.source_available_end_s = Some(20.0);
+        a.audio_trail_s = Some(0.75);
+        let mut b = seg("/tmp/b.mp4", 20.0, 5.0);
+        b.clip_name = "b".into();
+        b.source_available_start_s = Some(19.0);
+        b.source_available_end_s = Some(30.0);
+        b.audio_lead_s = Some(0.5);
+
+        let tracks = synthesize_split_edit_audio_tracks(&[a, b]).unwrap();
+        assert_eq!(tracks.len(), 2);
+        let AudioTrackItemPlan::Clip(first) = &tracks[0].items[0] else {
+            panic!("expected first clip")
+        };
+        assert_eq!(first.start_s, 10.0);
+        assert_eq!(first.duration_s, 5.75);
+        let AudioTrackItemPlan::Gap { duration_s } = tracks[1].items[0] else {
+            panic!("expected J-cut lead gap")
+        };
+        assert!((duration_s - 4.5).abs() < 1e-9);
+        let AudioTrackItemPlan::Clip(second) = &tracks[1].items[1] else {
+            panic!("expected second clip")
+        };
+        assert_eq!(second.start_s, 19.5);
+        assert_eq!(second.duration_s, 5.5);
+    }
+
+    #[test]
+    fn split_edit_audio_tracks_use_video_only_render_path() {
+        let mut a = seg("/tmp/a.mp4", 10.0, 5.0);
+        a.source_available_start_s = Some(10.0);
+        a.source_available_end_s = Some(20.0);
+        a.audio_trail_s = Some(0.75);
+        let mut b = seg("/tmp/b.mp4", 20.0, 5.0);
+        b.source_available_start_s = Some(19.0);
+        b.source_available_end_s = Some(30.0);
+        b.audio_lead_s = Some(0.5);
+        let segs = vec![a, b];
+        let audio_tracks = synthesize_split_edit_audio_tracks(&segs).unwrap();
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+        assert!(filter.contains("concat=n=2:v=1:a=0[vonly]"));
+        assert!(filter.contains("atrim=10:15.75"));
+        assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=4.5"));
+        assert!(filter.contains("atrim=19.5:25"));
+        assert!(filter.contains("amix=inputs=2"));
+    }
+
+    #[test]
     fn explicit_audio_tracks_preserve_visual_transitions_without_acrossfade() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 0.0, 2.0)];
         let transitions = vec![trans(0, 1, 0.5)];
@@ -4381,11 +4588,12 @@ mod tests {
     fn filter_planner_emits_lut3d_before_speed_and_concat() {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
         s0.lut_path = Some(PathBuf::from("/tmp/luts/show-look.cube"));
+        s0.lut_interpolation = Some("tetrahedral".into());
         s0.speed = Some(2.0);
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
-                .contains("[0:v:0]lut3d=file='/tmp/luts/show-look.cube'[lv0]"),
+                .contains("[0:v:0]lut3d=file='/tmp/luts/show-look.cube':interp=tetrahedral[lv0]"),
             "filter graph: {}",
             plan.filter_complex,
         );

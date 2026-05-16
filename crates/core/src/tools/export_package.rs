@@ -78,6 +78,9 @@ impl ToolHandler for ExportPackageTool {
             ))
         })?;
 
+        let applied_format_defaults =
+            crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
+                .map_err(|e| FunctionCallError::RespondToModel(format!("export_package: {e}")))?;
         let project = Project::read(&ctx.project_root).map_err(|e| {
             FunctionCallError::RespondToModel(format!("export_package: project read failed: {e}"))
         })?;
@@ -141,6 +144,8 @@ impl ToolHandler for ExportPackageTool {
             "cue_count": cues.len(),
             "chapter_count": chapters.len(),
             "subtitle_timing": "timeline_relative",
+            "output_format": output_format_metadata(&project),
+            "learned_format_defaults_applied": applied_format_defaults.aspect_ratio.is_some(),
         });
         tokio::fs::write(
             &metadata_path,
@@ -159,6 +164,17 @@ impl ToolHandler for ExportPackageTool {
         });
         Ok(ToolOutput::text(body.to_string()))
     }
+}
+
+fn output_format_metadata(project: &Project) -> Option<serde_json::Value> {
+    project
+        .timeline
+        .metadata
+        .awidat
+        .as_ref()?
+        .extra
+        .get("output_format")
+        .cloned()
 }
 
 #[derive(Debug, Clone)]

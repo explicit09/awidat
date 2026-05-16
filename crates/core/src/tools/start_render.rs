@@ -139,6 +139,8 @@ impl ToolHandler for StartRenderTool {
         // produce identical specs. The asset-based scopes keep their
         // original path-validation flow.
         let (argv, total_duration_s, asset_label, output_path) = if args.scope == "timeline" {
+            crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
+                .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
             let spec =
                 awidat_render::build_timeline_render_spec(&ctx.project_root).map_err(|e| {
                     use awidat_render::RenderTimelineError;
