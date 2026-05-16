@@ -1,0 +1,550 @@
+{
+  "schema": "awidat.professional_editor_substrate_plan.v1",
+  "created_at": "2026-05-16",
+  "status": "planning_only",
+  "implementation_policy": "Do not implement product changes from this artifact without an explicit implementation request.",
+  "north_star": {
+    "goal": "Awidat should become an agent editor that can produce technically clean, intentional, professional-quality edits for users who are not professional editors.",
+    "non_goal": "Do not clone Resolve, Premiere, or Final Cut as interfaces. Use them to identify professional editing substrate and decision coverage.",
+    "sequencing": "Build professional editing substrate first. The autonomous decision layer comes after agents can reliably inspect, plan, mutate, review, and deliver across the full pipeline."
+  },
+  "source_artifacts": [
+    "AGENTS.md",
+    "docs/research/resolve-goal-handoff-context.md",
+    "docs/research/resolve-workflow-analysis.json",
+    "docs/research/resolve-workflow-analysis.html",
+    "docs/editorial-grammar-upgrade-plan.md",
+    "docs/transition-decision-layer.md"
+  ],
+  "codebase_evidence": {
+    "edl_ops": {
+      "path": "crates/core/src/edl/op.rs",
+      "summary": "Typed EDL operations already cover trim, delete, split, untrim, insert, b-roll, PiP, move, transition, cut intent, audio lead/trail, track audio, ducking, sync groups, audio FX, generic effects, speed, color correction, LUTs, titles, captions, output format, loudness, package metadata, and broadcast overlays."
+    },
+    "awidat_metadata": {
+      "path": "crates/proto/src/awidat_meta.rs",
+      "summary": "Timeline and clip metadata already preserve source assets, anchors, hard-cut semantic intent, split edits, broadcast overlay config, and forward-compatible extra fields."
+    },
+    "desktop_protocol": {
+      "path": "crates/desktop-protocol/src/lib.rs",
+      "summary": "Desktop protocol exposes proposed edits, timeline snapshots, cut boundaries, preview limitations, track audio controls, clip effects, titles, overlays, transitions, and editorial notes."
+    },
+    "effect_registry": {
+      "path": "crates/effects/src/lib.rs",
+      "summary": "Stable graph-native effect ids exist for volume, speed, color correction, LUT, title, video overlay, audio fade, and audio FX."
+    },
+    "indexers": {
+      "paths": [
+        "crates/config/src/defaults.rs",
+        "python/packages/*-mcp"
+      ],
+      "summary": "Bundled indexers include audio energy, scene detection, Whisper, topic, editorial moments, CLIP, face, shot, gaze, frame quality, color analysis, and composition."
+    },
+    "desktop_surface": {
+      "paths": [
+        "apps/desktop/src/App.tsx",
+        "apps/desktop/src/app/ActionBar.tsx",
+        "apps/desktop/src/timeline/TimelinePane.tsx",
+        "apps/desktop/src/properties/PropertiesPane.tsx"
+      ],
+      "summary": "Desktop has chat, transcript, edit history, media preview, timeline, properties, notes, proposal approval, import, indexing, export, and permission modes."
+    },
+    "skills": {
+      "path": "skills/",
+      "summary": "Bundled skills already cover rough assembly, cut direction, split edits, transitions, b-roll, thematic montage, color correction, podcast editing, short-form, tutorials, beat sync, and version control."
+    }
+  },
+  "substrate_principles": [
+    "Agent tools are the primary product surface. Manual controls exist where they improve review, correction, trust, or expert override.",
+    "Every professional operation should have a durable data representation before it has a large manual UI.",
+    "Evidence, intent, and review state must persist with edits so future agents can explain and revise work.",
+    "Render and preview parity should be explicit. Known gaps should produce preview limitation or preflight findings instead of silent mismatch.",
+    "Use small, serializable, diffable contracts for substrate. Avoid opaque generated filter graphs in project metadata."
+  ],
+  "capabilities": [
+    {
+      "id": "asset_catalog",
+      "stage": "media_organization",
+      "priority": "p0",
+      "status": "partial",
+      "current": [
+        "Source asset list exists in timeline metadata.",
+        "Import and proxy workflows exist.",
+        "list_assets, inspect_clip, indexing, and desktop proxy selection exist."
+      ],
+      "missing": [
+        "First-class asset catalog separate from timeline clips",
+        "Bins, smart collections, labels, ratings, roles, and user/agent tags",
+        "Offline, relink, proxy, checksum, and index readiness states",
+        "Source provenance and usage status",
+        "Agent-queryable asset selection sets"
+      ],
+      "agent_surface": [
+        "create_bin",
+        "tag_assets",
+        "list_asset_catalog",
+        "create_selection_set",
+        "explain_asset_readiness"
+      ],
+      "manual_surface": [
+        "Media/source review task lens",
+        "Bin/tag/status browser",
+        "Relink/proxy warning cards"
+      ],
+      "phase": "phase_1_foundation_catalog_selects"
+    },
+    {
+      "id": "source_review_selects",
+      "stage": "selects",
+      "priority": "p0",
+      "status": "partial",
+      "current": [
+        "Indexers provide transcript, topics, moments, shots, composition, face, gaze, frame quality, CLIP, and color evidence.",
+        "Rough-cut and clip-extraction skills can select material from evidence."
+      ],
+      "missing": [
+        "Durable selects, rejects, maybe, favorite, and stringout objects",
+        "Take grouping and best-take decisions",
+        "Evidence-backed keep/reject reasons independent of timeline insertion",
+        "Source review notes tied to asset ranges",
+        "Selects review package before assembly"
+      ],
+      "agent_surface": [
+        "propose_selects",
+        "rank_takes",
+        "build_stringout",
+        "compare_candidate_ranges"
+      ],
+      "manual_surface": [
+        "Reviewable selects list",
+        "Accept/reject/rate range actions",
+        "Source-player range chips"
+      ],
+      "phase": "phase_1_foundation_catalog_selects"
+    },
+    {
+      "id": "assembly_and_timeline_operations",
+      "stage": "assembly",
+      "priority": "p0",
+      "status": "partial",
+      "current": [
+        "EDL supports insert, trim, split, untrim, delete, move, transitions, b-roll, PiP, and split edits.",
+        "Desktop timeline supports selection, drag-trim, move proposals, proposal handles, cut badges, and split offset overlays."
+      ],
+      "missing": [
+        "Explicit ripple, roll, slip, slide, lift, extract, replace, overwrite, and append semantics",
+        "Marker and range workflows",
+        "Assembly review mode separate from polished review",
+        "Track targeting and lane-level edit intent",
+        "Nested sequences or reusable stringouts"
+      ],
+      "agent_surface": [
+        "assemble_from_selects",
+        "ripple_trim",
+        "roll_edit",
+        "slip_clip",
+        "slide_clip",
+        "replace_clip",
+        "add_marker"
+      ],
+      "manual_surface": [
+        "Keyboard and command palette actions for common edits",
+        "Marker/range lane",
+        "Track target controls only where they reduce correction friction"
+      ],
+      "phase": "phase_2_editing_surface"
+    },
+    {
+      "id": "editorial_intent_and_review",
+      "stage": "review_trust",
+      "priority": "p0",
+      "status": "strong_partial",
+      "current": [
+        "SemanticCutSpec and SplitEditSpec persist cut grammar and audio-picture intent.",
+        "ProposedEdit carries reviewable timeline snapshots and diff hints.",
+        "Editorial notes persist surfaced findings."
+      ],
+      "missing": [
+        "Unified proposal package format across selects, assembly, color, audio, VFX, and delivery",
+        "A compact operation evidence trail attached to every proposed mutation",
+        "Review status lifecycle for non-timeline artifacts such as color packs and preflight reports"
+      ],
+      "agent_surface": [
+        "propose_pipeline_change",
+        "attach_evidence_trace",
+        "summarize_review_delta"
+      ],
+      "manual_surface": [
+        "Proposal inspector with evidence, before/after, and rollback context"
+      ],
+      "phase": "phase_2_editing_surface"
+    },
+    {
+      "id": "parameter_animation",
+      "stage": "keyframes",
+      "priority": "p0",
+      "status": "missing",
+      "current": [
+        "Title animation is a coarse enum.",
+        "Clip effects are mostly static values."
+      ],
+      "missing": [
+        "General ParameterAnimation schema",
+        "Keyframe points, interpolation, easing, hold/linear/bezier curves",
+        "Per-parameter animation for transform, opacity, volume, text, color, masks, and effect values",
+        "Render lowering and preview approximation for animated properties",
+        "Animation diffs and review UI"
+      ],
+      "agent_surface": [
+        "set_parameter_animation",
+        "retime_animation",
+        "summarize_animation_curve"
+      ],
+      "manual_surface": [
+        "Compact keyframe lane and inspector curve summary",
+        "Direct editing only for correction-critical parameters"
+      ],
+      "phase": "phase_3_keyframes_motion_graphics"
+    },
+    {
+      "id": "motion_graphics_templates",
+      "stage": "motion_graphics",
+      "priority": "p1",
+      "status": "partial",
+      "current": [
+        "InsertTitle, InsertCaption, and BroadcastOverlayConfig exist.",
+        "Title and overlay preview/render are present."
+      ],
+      "missing": [
+        "Reusable parameterized title/lower-third templates",
+        "Template schema with slots, constraints, safe-area rules, and platform variants",
+        "Text animation beyond fixed title animation enum",
+        "Word/character reveal and write-on effects",
+        "Template preview packs and validation"
+      ],
+      "agent_surface": [
+        "choose_motion_template",
+        "fill_template_slots",
+        "validate_template_safe_area"
+      ],
+      "manual_surface": [
+        "Template chooser for review and correction",
+        "Slot editor for text, brand assets, and timing"
+      ],
+      "phase": "phase_3_keyframes_motion_graphics"
+    },
+    {
+      "id": "composition_graph",
+      "stage": "compositing",
+      "priority": "p0",
+      "status": "missing",
+      "current": [
+        "Effect registry is graph-native in naming.",
+        "Video overlay and broadcast overlay cover simple layered cases.",
+        "Transition composition docs and composition indexer exist, but not a project-level compositing DAG."
+      ],
+      "missing": [
+        "Serializable composition graph document model",
+        "Nodes for media input, transform, merge, mask, matte, text, blur, color, tracker bind, and output",
+        "Reusable compositions",
+        "Inspectable intermediate nodes or render diagnostics",
+        "Agent-readable graph diffs",
+        "Lowering strategy to FFmpeg and future render backends"
+      ],
+      "agent_surface": [
+        "create_composition",
+        "patch_composition_graph",
+        "attach_composition_to_timeline",
+        "render_composition_preview"
+      ],
+      "manual_surface": [
+        "Compact graph inspector or stack view",
+        "Before/after composition review",
+        "Node-level controls only where correction needs them"
+      ],
+      "phase": "phase_4_vfx_tracking_compositing"
+    },
+    {
+      "id": "tracking_masks_mattes",
+      "stage": "tracking_masks",
+      "priority": "p0",
+      "status": "missing",
+      "current": [
+        "Shot, face, gaze, motion, and composition evidence exist.",
+        "No reusable point, planar, surface track, mask path, or matte sidecar contract is present."
+      ],
+      "missing": [
+        "Tracker sidecars with coordinate space, frames, points, planes, surfaces, and confidence",
+        "Mask sidecars with keyframed paths, feather, opacity, boolean ops, and confidence",
+        "Matte sidecars with alpha source, confidence, and review thumbnails",
+        "EDL operations to attach overlays/effects/compositions to tracks and masks",
+        "Track quality review reports"
+      ],
+      "agent_surface": [
+        "track_region",
+        "create_mask",
+        "attach_effect_to_track",
+        "review_track_quality"
+      ],
+      "manual_surface": [
+        "Track/mask quality viewer",
+        "Correction handles for failed tracks and mask points"
+      ],
+      "phase": "phase_4_vfx_tracking_compositing"
+    },
+    {
+      "id": "color_finishing",
+      "stage": "color",
+      "priority": "p1",
+      "status": "partial",
+      "current": [
+        "Color-analysis indexer emits correction recommendations.",
+        "EDL supports color correction and LUTs.",
+        "Properties pane exposes clip color controls and LUTs.",
+        "Color-corrector skill scripts produce plans and review packages."
+      ],
+      "missing": [
+        "Reference still/gallery model",
+        "Scene or shot-group grade state",
+        "Grade stack stages rather than one flat correction effect",
+        "Scope metrics and color consistency summaries surfaced in UI",
+        "Before/after contact sheets as first-class review artifacts",
+        "Color management and output color space contract"
+      ],
+      "agent_surface": [
+        "choose_color_reference",
+        "group_shots_for_match",
+        "propose_grade_stack",
+        "generate_color_review_pack"
+      ],
+      "manual_surface": [
+        "Reference still picker",
+        "Contact sheet review",
+        "Limited correction overrides"
+      ],
+      "phase": "phase_5_finishing_workflows"
+    },
+    {
+      "id": "audio_finishing",
+      "stage": "audio",
+      "priority": "p1",
+      "status": "partial",
+      "current": [
+        "EDL supports clip/track volume, fades, split edits, ducking, audio FX, loudness, and sync groups.",
+        "Render has audio track and mix planning.",
+        "Podcast skills provide audio polish and mix planning."
+      ],
+      "missing": [
+        "Mixer-grade bus model and routing",
+        "Dialogue, music, SFX, ambience, VO, and master roles",
+        "Meters, peaks, clipping, noise floor, and loudness analysis as review data",
+        "Automation lanes for gain, pan, mute, send, and effects",
+        "Before/after audition packages",
+        "Reusable audio chain presets with validation"
+      ],
+      "agent_surface": [
+        "classify_audio_roles",
+        "propose_mix",
+        "set_audio_automation",
+        "generate_audio_audition_pack",
+        "run_loudness_preflight"
+      ],
+      "manual_surface": [
+        "Mixer task lens with meters and role controls",
+        "Audition before/after buttons",
+        "Automation correction lane only for selected tracks"
+      ],
+      "phase": "phase_5_finishing_workflows"
+    },
+    {
+      "id": "delivery_profiles_and_preflight",
+      "stage": "delivery",
+      "priority": "p0",
+      "status": "partial",
+      "current": [
+        "EDL stores output format, loudness target, and package metadata.",
+        "Desktop can export a timeline.",
+        "Render jobs and package export tool exist."
+      ],
+      "missing": [
+        "Named delivery profiles and reusable presets",
+        "Render queue and batch targets",
+        "Platform-specific validation for aspect ratio, duration, bitrate, captions, loudness, safe areas, metadata, and thumbnails",
+        "Preflight report before render",
+        "Package manifest of deliverable artifacts",
+        "Post-render validation"
+      ],
+      "agent_surface": [
+        "select_delivery_profile",
+        "run_preflight",
+        "queue_render",
+        "validate_render_artifact",
+        "write_package_manifest"
+      ],
+      "manual_surface": [
+        "Deliver task lens",
+        "Preflight findings with fix proposal buttons",
+        "Render queue status"
+      ],
+      "phase": "phase_1_foundation_catalog_selects"
+    },
+    {
+      "id": "workflow_lenses",
+      "stage": "workflow",
+      "priority": "p1",
+      "status": "missing",
+      "current": [
+        "Desktop uses panes and permission modes.",
+        "ProjectType exists for podcast, shorts, tutorial, and other."
+      ],
+      "missing": [
+        "Agent-native task lenses for media, selects, assembly, edit, VFX, color, audio, delivery, and preflight",
+        "Workflow progress and readiness markers",
+        "Lens-specific prompts, tools, validation checklists, and visible summaries",
+        "Cross-lens artifact handoff contracts"
+      ],
+      "agent_surface": [
+        "set_task_lens",
+        "summarize_lens_readiness",
+        "handoff_between_lenses"
+      ],
+      "manual_surface": [
+        "Mode/lens switcher if it improves trust",
+        "Readiness checklist per lens"
+      ],
+      "phase": "phase_2_editing_surface"
+    },
+    {
+      "id": "pre_autonomy_orchestration_contract",
+      "stage": "decision_layer_prerequisite",
+      "priority": "p0",
+      "status": "missing",
+      "current": [
+        "Individual tools and skills can make local recommendations.",
+        "Transition and editorial grammar documents define narrower decision layers."
+      ],
+      "missing": [
+        "Pipeline-level substrate readiness model",
+        "Typed planner inputs and outputs for each stage",
+        "Capability registry describing which operations are available, previewable, renderable, and preflighted",
+        "Cross-stage conflict detection",
+        "Learning hooks from accepted/rejected proposals"
+      ],
+      "agent_surface": [
+        "inspect_substrate_readiness",
+        "plan_pipeline_passes",
+        "detect_pipeline_conflicts"
+      ],
+      "manual_surface": [
+        "High-level progress and blockers report"
+      ],
+      "phase": "phase_6_autonomy_prerequisites"
+    }
+  ],
+  "implementation_phases": [
+    {
+      "id": "phase_1_foundation_catalog_selects",
+      "name": "Foundation: asset catalog, selects, delivery profile skeleton",
+      "sequence": 1,
+      "rationale": "Professional work starts before the timeline. Agents need organized source assets, range-level selects, and delivery constraints before they can assemble or finish reliably.",
+      "includes": [
+        "asset_catalog",
+        "source_review_selects",
+        "delivery_profiles_and_preflight"
+      ],
+      "exit_criteria": [
+        "Agents can query assets by bin, role, tag, readiness, and evidence state.",
+        "Selects and stringouts persist independently from timeline clips.",
+        "At least one delivery profile can be selected and validated before render."
+      ]
+    },
+    {
+      "id": "phase_2_editing_surface",
+      "name": "Assembly and direct editing substrate",
+      "sequence": 2,
+      "rationale": "Awidat already has broad EDL primitives, but professional correction and trust need richer timeline semantics and review lenses.",
+      "includes": [
+        "assembly_and_timeline_operations",
+        "editorial_intent_and_review",
+        "workflow_lenses"
+      ],
+      "exit_criteria": [
+        "Ripple, roll, slip, slide, lift, extract, replace, append, overwrite, markers, and ranges have typed operations or explicit non-support decisions.",
+        "Assembly proposals can be reviewed separately from finishing proposals.",
+        "Every proposal can carry evidence and intent."
+      ]
+    },
+    {
+      "id": "phase_3_keyframes_motion_graphics",
+      "name": "Keyframes and reusable motion graphics",
+      "sequence": 3,
+      "rationale": "Professional polish depends on animated parameters and reusable graphics, not only static title overlays.",
+      "includes": [
+        "parameter_animation",
+        "motion_graphics_templates"
+      ],
+      "exit_criteria": [
+        "A general keyframe schema exists and is renderable for a small set of high-value parameters.",
+        "Templates are serializable, diffable, previewable, and fillable by agents.",
+        "Preview limitations are explicit when animation cannot be represented exactly."
+      ]
+    },
+    {
+      "id": "phase_4_vfx_tracking_compositing",
+      "name": "Tracking, masks, mattes, and composition graph",
+      "sequence": 4,
+      "rationale": "Tracked overlays, invisible fixes, masks, and compositing need evidence contracts before any large node UI or advanced autonomous VFX behavior.",
+      "includes": [
+        "tracking_masks_mattes",
+        "composition_graph"
+      ],
+      "exit_criteria": [
+        "Tracks, masks, and mattes can be stored as sidecars with confidence and review artifacts.",
+        "A small composition graph can bind media, transform, merge, mask, text, and output nodes.",
+        "Agents can propose tracked inserts and mask-bound effects with reviewable quality checks."
+      ]
+    },
+    {
+      "id": "phase_5_finishing_workflows",
+      "name": "Color, audio, and delivery finishing workflows",
+      "sequence": 5,
+      "rationale": "Finishing must be reviewable as workflows, not only as clip-level knobs.",
+      "includes": [
+        "color_finishing",
+        "audio_finishing",
+        "delivery_profiles_and_preflight"
+      ],
+      "exit_criteria": [
+        "Color match uses reference stills, shot groups, grade stages, and review packs.",
+        "Audio mix uses roles, buses, meters, automation, loudness checks, and audition packs.",
+        "Delivery has queueing, preflight, post-render validation, and package manifests."
+      ]
+    },
+    {
+      "id": "phase_6_autonomy_prerequisites",
+      "name": "Autonomy readiness contracts",
+      "sequence": 6,
+      "rationale": "Only after substrate exists should Awidat build the broad autonomous editor brain. This phase defines the readiness API the decision layer will orchestrate.",
+      "includes": [
+        "pre_autonomy_orchestration_contract"
+      ],
+      "exit_criteria": [
+        "A pipeline readiness report can state which stages are available, incomplete, or blocked.",
+        "The agent can plan multi-pass edits across media, selects, assembly, VFX, color, audio, and delivery using typed substrate.",
+        "Accepted and rejected proposals produce learnable signals without requiring user knowledge of editing terminology."
+      ]
+    }
+  ],
+  "build_first_recommendation": [
+    "Start with phase_1_foundation_catalog_selects because it unlocks durable source organization, selection state, and delivery constraints.",
+    "Do not start with the autonomous decision layer. It would have to infer missing catalog, select, keyframe, tracking, color, audio, and delivery state from weak proxies.",
+    "Keep manual UI thin at first: status browsers, review packs, and correction controls. Put most new capability behind typed agent tools and proposal artifacts."
+  ],
+  "defer_until_substrate_exists": [
+    "Full autonomous multi-stage editor brain",
+    "Large Resolve-like node UI",
+    "Full manual NLE clone controls",
+    "Opaque generated FFmpeg graphs in project metadata",
+    "Advanced 3D/particle systems before basic graph, track, mask, and keyframe contracts"
+  ]
+}
