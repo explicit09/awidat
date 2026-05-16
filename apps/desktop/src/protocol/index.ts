@@ -16,6 +16,9 @@ export type { Thread } from "./generated/Thread";
 // Timeline shapes — single source of truth for both `read_timeline`
 // responses and the `Item::ProposedEdit.snapshot` field.
 export type { TimelineItem } from "./generated/TimelineItem";
+export type { TimelineParameterAnimation } from "./generated/TimelineParameterAnimation";
+export type { TimelineAnimationTarget } from "./generated/TimelineAnimationTarget";
+export type { TimelineKeyframe } from "./generated/TimelineKeyframe";
 export type { TimelineCutBoundary } from "./generated/TimelineCutBoundary";
 export type { TimelinePreviewLimitation } from "./generated/TimelinePreviewLimitation";
 export type { TimelineTrack } from "./generated/TimelineTrack";

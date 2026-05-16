@@ -704,6 +704,44 @@ pub struct TimelinePreviewLimitation {
     pub message: String,
 }
 
+/// Renderable or previewable parameter animation attached to a timeline clip.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineParameterAnimation {
+    /// Stable animation id from the project metadata.
+    pub id: String,
+    /// Clip-local animation target.
+    pub target: TimelineAnimationTarget,
+    /// Ordered keyframes in seconds relative to the clip start.
+    pub keyframes: Vec<TimelineKeyframe>,
+    /// Optional agent/user rationale for review.
+    pub rationale: Option<String>,
+}
+
+/// Clip-local animation target exposed to desktop preview.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineAnimationTarget {
+    /// Target clip id.
+    pub clip_id: String,
+    /// Phase 3A parameter path such as `title.opacity`.
+    pub parameter: String,
+}
+
+/// One keyframe exposed to desktop preview.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineKeyframe {
+    /// Time in seconds relative to the clip start.
+    pub time_s: f64,
+    /// Numeric value.
+    pub value: f64,
+    /// Interpolation name from proto.
+    pub interpolation: String,
+    /// Easing name from proto.
+    pub easing: String,
+}
+
 /// Timeline-level semantic metadata for one adjacent clip boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
@@ -975,6 +1013,8 @@ pub enum TimelineItem {
         /// means a regular full-frame overlay/cutaway when the clip
         /// is on an upper video track.
         video_overlay: Option<VideoOverlayStyling>,
+        /// Supported parameter animations attached to this clip.
+        animations: Vec<TimelineParameterAnimation>,
     },
     /// Empty time on the track (silence / black frames).
     Gap {
@@ -1476,6 +1516,65 @@ mod tests {
         assert_eq!(back.op_index, 2);
         assert_eq!(back.field, AdjustField::TrimEnd);
         assert!((back.value_s - 4.21).abs() < 1e-9);
+    }
+
+    #[test]
+    fn timeline_clip_can_carry_parameter_animations() {
+        let item = TimelineItem::Clip {
+            index: 0,
+            name: "Title".to_string(),
+            clip_uuid: "title-1".to_string(),
+            track_start_s: 0.0,
+            duration_s: 2.0,
+            asset_id: None,
+            source_start_s: Some(0.0),
+            proxy_path: None,
+            thumbnail_dir: None,
+            waveform_path: None,
+            volume: None,
+            speed: None,
+            fade_in_s: None,
+            fade_out_s: None,
+            audio_lead_s: None,
+            audio_trail_s: None,
+            split_edit_reason: None,
+            split_edit_confidence: None,
+            link_group_id: None,
+            has_video: Some(true),
+            has_audio: Some(false),
+            color_correction: None,
+            lut_path: None,
+            title: None,
+            video_overlay: None,
+            animations: vec![TimelineParameterAnimation {
+                id: "anim-title-opacity".to_string(),
+                target: TimelineAnimationTarget {
+                    clip_id: "title-1".to_string(),
+                    parameter: "title.opacity".to_string(),
+                },
+                keyframes: vec![
+                    TimelineKeyframe {
+                        time_s: 0.0,
+                        value: 0.0,
+                        interpolation: "linear".to_string(),
+                        easing: "linear".to_string(),
+                    },
+                    TimelineKeyframe {
+                        time_s: 0.5,
+                        value: 1.0,
+                        interpolation: "linear".to_string(),
+                        easing: "ease_out".to_string(),
+                    },
+                ],
+                rationale: Some("Fade title in".to_string()),
+            }],
+        };
+
+        let json = serde_json::to_value(item).unwrap();
+        assert_eq!(
+            json["animations"][0]["target"]["parameter"],
+            "title.opacity"
+        );
     }
 
     #[test]
