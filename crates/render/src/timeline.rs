@@ -196,6 +196,8 @@ pub struct VideoOverlayPlan {
     pub track_start_s: f64,
     /// Visual layout mode.
     pub mode: VideoOverlayMode,
+    /// Supported Phase 3A parameter animations attached to this overlay.
+    pub animations: Vec<RenderParameterAnimation>,
 }
 
 /// Visual layout mode for upper-track media overlays.
@@ -544,6 +546,7 @@ pub fn collect_timeline_full_plan(
                             segment,
                             track_start_s: track_cursor_s,
                             mode,
+                            animations: Vec::new(),
                         });
                         if let Some(range) = clip.source_range.as_ref() {
                             track_cursor_s += range.duration.to_seconds();
@@ -1685,12 +1688,16 @@ fn append_video_overlays(
         let start = overlay.track_start_s;
         let end = overlay.track_start_s + effective_duration(&overlay.segment);
         let overlay_input = stage_overlay_video_input(&mut filter, input_idx, &overlay.segment);
+        let scale_multiplier = overlay_animation_value_expr(overlay, "overlay.scale", "1");
         let (scale_expr, x_expr, y_expr) = match &overlay.mode {
-            VideoOverlayMode::FullFrame => (
-                "w=main_w:h=main_h".to_string(),
-                "0".to_string(),
-                "0".to_string(),
-            ),
+            VideoOverlayMode::FullFrame => {
+                let scale_expr = if has_overlay_animation(overlay, "overlay.scale") {
+                    format!("w=main_w*({scale_multiplier}):h=main_h*({scale_multiplier})")
+                } else {
+                    "w=main_w:h=main_h".to_string()
+                };
+                (scale_expr, "0".to_string(), "0".to_string())
+            }
             VideoOverlayMode::PiP {
                 corner,
                 scale,
@@ -1706,14 +1713,49 @@ fn append_video_overlays(
                     "top_left" | "top_right" => margin_y,
                     _ => format!("main_h-overlay_h-main_h*{margin_pct}"),
                 };
-                (format!("w=main_w*{scale}:h=-2"), x, y)
+                let scale_expr = if has_overlay_animation(overlay, "overlay.scale") {
+                    format!("w=main_w*{scale}*({scale_multiplier}):h=-2")
+                } else {
+                    format!("w=main_w*{scale}:h=-2")
+                };
+                (scale_expr, x, y)
             }
+        };
+        let x_expr = if has_overlay_animation(overlay, "overlay.x") {
+            format!(
+                "({})+main_w*({})",
+                x_expr,
+                overlay_animation_value_expr(overlay, "overlay.x", "0")
+            )
+        } else {
+            x_expr
+        };
+        let y_expr = if has_overlay_animation(overlay, "overlay.y") {
+            format!(
+                "({})+main_h*({})",
+                y_expr,
+                overlay_animation_value_expr(overlay, "overlay.y", "0")
+            )
+        } else {
+            y_expr
+        };
+        let opacity_filter = if has_overlay_animation(overlay, "overlay.opacity") {
+            let opacity = overlay_animation_value_expr(overlay, "overlay.opacity", "1");
+            let alpha_label = format!("[media_overlay_alpha{idx}]");
+            let filter =
+                format!("{scaled_label}format=rgba,colorchannelmixer=aa={opacity}{alpha_label};");
+            (filter, alpha_label)
+        } else {
+            (String::new(), scaled_label.clone())
         };
         filter.push(';');
         filter.push_str(&format!(
             "{overlay_input}setpts=PTS-STARTPTS+{start}/TB{pts_label};\
              {pts_label}{current}scale2ref={scale_expr}{scaled_label}{ref_label};\
-             {ref_label}{scaled_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
+             {opacity_filter}\
+             {ref_label}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
+            opacity_filter = opacity_filter.0,
+            overlay_video_label = opacity_filter.1,
         ));
         current = next;
     }
@@ -1722,6 +1764,29 @@ fn append_video_overlays(
         video_out_label: current,
         audio_out_label: base.audio_out_label,
     }
+}
+
+fn has_overlay_animation(overlay: &VideoOverlayPlan, parameter: &str) -> bool {
+    overlay
+        .animations
+        .iter()
+        .any(|animation| animation.parameter == parameter)
+}
+
+fn overlay_animation_value_expr(
+    overlay: &VideoOverlayPlan,
+    parameter: &str,
+    fallback: &str,
+) -> String {
+    overlay
+        .animations
+        .iter()
+        .find(|animation| animation.parameter == parameter)
+        .map(|animation| {
+            let local_time_var = format!("(t-{})", overlay.track_start_s);
+            keyframes_to_ffmpeg_expr(&animation.keyframes, &local_time_var)
+        })
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn append_timeline_loudness_filter(
@@ -4891,6 +4956,7 @@ mod tests {
                 scale: 0.28,
                 margin_pct: 0.035,
             },
+            animations: Vec::new(),
         }];
         let argv = build_timeline_argv_full(
             &segs,
@@ -4913,12 +4979,64 @@ mod tests {
     }
 
     #[test]
+    fn overlay_parameter_animation_affects_position_and_scale() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.0,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            animations: vec![
+                RenderParameterAnimation {
+                    parameter: "overlay.x".to_string(),
+                    keyframes: vec![
+                        awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                        awidat_proto::professional::Keyframe::linear(1.0, -0.1),
+                    ],
+                },
+                RenderParameterAnimation {
+                    parameter: "overlay.scale".to_string(),
+                    keyframes: vec![
+                        awidat_proto::professional::Keyframe::linear(0.0, 1.0),
+                        awidat_proto::professional::Keyframe::linear(1.0, 1.2),
+                    ],
+                },
+            ],
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("main_w*("),
+            "overlay x should include normalized motion: {filter}"
+        );
+        assert!(
+            filter.contains("w=main_w*0.3*("),
+            "overlay scale should include multiplier expression: {filter}"
+        );
+    }
+
+    #[test]
     fn timeline_argv_composites_full_frame_overlay_without_base_concat_append() {
         let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
         let overlays = vec![VideoOverlayPlan {
             segment: seg("/tmp/cover.mp4", 0.0, 2.0),
             track_start_s: 1.0,
             mode: VideoOverlayMode::FullFrame,
+            animations: Vec::new(),
         }];
         let argv = build_timeline_argv_full(
             &segs,
