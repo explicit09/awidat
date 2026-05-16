@@ -794,8 +794,9 @@ mod tests {
             rationale: Some("Fade in".to_string()),
         };
 
-        let converted = timeline_animation_for_clip(&animation, "clip-a")
-            .expect("supported title opacity animation should convert");
+        let Some(converted) = timeline_animation_for_clip(&animation, "clip-a") else {
+            panic!("supported title opacity animation should convert");
+        };
         assert_eq!(converted.target.parameter, "title.opacity");
         assert_eq!(converted.keyframes[0].easing, "ease_out");
     }
@@ -840,11 +841,13 @@ mod tests {
         timeline.tracks.children.push(StackChild::Track(track));
 
         let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
-        let title_track = snapshot
+        let Some(title_track) = snapshot
             .tracks
             .iter()
             .find(|track| track.role.as_deref() == Some("titles"))
-            .expect("titles track should be present");
+        else {
+            panic!("titles track should be present");
+        };
         let TimelineItem::Clip { animations, .. } = &title_track.items[0] else {
             panic!("expected title clip");
         };
