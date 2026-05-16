@@ -602,6 +602,21 @@ fn broadcast_style_for_protocol(
     }
 }
 
+/// OTIO `target_url` may be project-relative or absolute. Normalize
+/// to project-relative for the frontend (consistent with
+/// `list_assets`'s output).
+fn project_root_relative(project_root: &Path, target_url: &str) -> String {
+    let p = std::path::PathBuf::from(target_url);
+    if p.is_absolute() {
+        match p.strip_prefix(project_root) {
+            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
+            Err(_) => target_url.to_string(),
+        }
+    } else {
+        target_url.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,20 +675,5 @@ mod tests {
             ..AwidatClipMetadata::default()
         });
         clip
-    }
-}
-
-/// OTIO `target_url` may be project-relative or absolute. Normalize
-/// to project-relative for the frontend (consistent with
-/// `list_assets`'s output).
-fn project_root_relative(project_root: &Path, target_url: &str) -> String {
-    let p = std::path::PathBuf::from(target_url);
-    if p.is_absolute() {
-        match p.strip_prefix(project_root) {
-            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
-            Err(_) => target_url.to_string(),
-        }
-    } else {
-        target_url.to_string()
     }
 }

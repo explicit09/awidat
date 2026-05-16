@@ -178,9 +178,7 @@ fn run_case(case: &GoldenCase) -> Result<String> {
                 let message = format!("{err:#}");
                 if !message.contains(expected_error) {
                     bail!(
-                        "expected golden case failure containing {:?}, got: {}",
-                        expected_error,
-                        message
+                        "expected golden case failure containing {expected_error:?}, got: {message}"
                     );
                 }
                 Ok(format!(
@@ -325,11 +323,7 @@ fn assert_json_string(
         Some(expected) => {
             let got = actual.get(field).and_then(|value| value.as_str());
             if got != Some(expected) {
-                bail!(
-                    "output_format field {field:?} expected {:?}, got {:?}",
-                    expected,
-                    got
-                );
+                bail!("output_format field {field:?} expected {expected:?}, got {got:?}");
             }
         }
         None => {
@@ -369,22 +363,14 @@ fn assert_package_metadata(
     if let Some(needle) = &expected.description_contains {
         let got = actual.get("description").and_then(|value| value.as_str());
         if !got.is_some_and(|text| text.contains(needle)) {
-            bail!(
-                "package_metadata description expected to contain {:?}, got {:?}",
-                needle,
-                got
-            );
+            bail!("package_metadata description expected to contain {needle:?}, got {got:?}");
         }
     }
     if let Some(expected_tags) = &expected.tags_contains {
         let got = actual.get("tags").and_then(|value| value.as_str());
         for expected_tag in expected_tags {
             if !got.is_some_and(|tags| tags.split(',').any(|tag| tag.trim() == expected_tag)) {
-                bail!(
-                    "package_metadata tags expected to contain {:?}, got {:?}",
-                    expected_tag,
-                    got
-                );
+                bail!("package_metadata tags expected to contain {expected_tag:?}, got {got:?}");
             }
         }
     }
@@ -399,11 +385,7 @@ fn assert_timeline_extra_string(
 ) -> Result<()> {
     let got = actual.get(field).and_then(|value| value.as_str());
     if got != Some(expected) {
-        bail!(
-            "{namespace} field {field:?} expected {:?}, got {:?}",
-            expected,
-            got
-        );
+        bail!("{namespace} field {field:?} expected {expected:?}, got {got:?}");
     }
     Ok(())
 }

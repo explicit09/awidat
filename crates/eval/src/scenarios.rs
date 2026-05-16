@@ -2934,11 +2934,7 @@ fn assert_transition_planner_expectations(
             .pointer("/recommended/id")
             .and_then(|value| value.as_str());
         if actual_id != Some(expected_id.as_str()) {
-            bail!(
-                "expected transition id {:?}, got {:?}",
-                expected_id,
-                actual_id
-            );
+            bail!("expected transition id {expected_id:?}, got {actual_id:?}");
         }
     }
     if let Some(expected_intent) = &fixture.expect.intent {
@@ -2946,11 +2942,7 @@ fn assert_transition_planner_expectations(
             .pointer("/recommended/intent")
             .and_then(|value| value.as_str());
         if actual_intent != Some(expected_intent.as_str()) {
-            bail!(
-                "expected intent {:?}, got {:?}",
-                expected_intent,
-                actual_intent
-            );
+            bail!("expected intent {expected_intent:?}, got {actual_intent:?}");
         }
     }
     if let Some(needle) = &fixture.expect.reason_contains {
@@ -2958,11 +2950,7 @@ fn assert_transition_planner_expectations(
             .pointer("/recommended/reason")
             .and_then(|value| value.as_str());
         if !reason.is_some_and(|reason| reason.contains(needle)) {
-            bail!(
-                "expected recommendation reason to contain {:?}, got {:?}",
-                needle,
-                reason
-            );
+            bail!("expected recommendation reason to contain {needle:?}, got {reason:?}");
         }
     }
 
@@ -2975,12 +2963,12 @@ fn assert_transition_planner_expectations(
     }
     for snippet in &fixture.expect.edl_contains {
         if !edl.contains(snippet) {
-            bail!("edl_fragment expected to contain {:?}", snippet);
+            bail!("edl_fragment expected to contain {snippet:?}");
         }
     }
     for snippet in &fixture.expect.edl_must_not_contain {
         if edl.contains(snippet) {
-            bail!("edl_fragment must not contain {:?}", snippet);
+            bail!("edl_fragment must not contain {snippet:?}");
         }
     }
     if fixture.expect.apply_edl_fragment.unwrap_or(true) {
@@ -3096,8 +3084,7 @@ fn validate_transition_planner_expect_contract(fixture: &TransitionPlannerFixtur
                 .any(|snippet| snippet.contains(transition_id))
             {
                 bail!(
-                    "transition planner fixtures with decision transition must include transition_id {:?} in edl_contains",
-                    transition_id
+                    "transition planner fixtures with decision transition must include transition_id {transition_id:?} in edl_contains"
                 );
             }
         }
@@ -3767,22 +3754,14 @@ fn assert_live_package_metadata(
     if let Some(needle) = &expected.description_contains {
         let got = actual.get("description").and_then(|value| value.as_str());
         if !got.is_some_and(|text| text.contains(needle)) {
-            bail!(
-                "package_metadata description expected to contain {:?}, got {:?}",
-                needle,
-                got
-            );
+            bail!("package_metadata description expected to contain {needle:?}, got {got:?}");
         }
     }
     if let Some(expected_tags) = &expected.tags_contains {
         let got = actual.get("tags").and_then(|value| value.as_str());
         for expected_tag in expected_tags {
             if !got.is_some_and(|tags| tags.split(',').any(|tag| tag.trim() == expected_tag)) {
-                bail!(
-                    "package_metadata tags expected to contain {:?}, got {:?}",
-                    expected_tag,
-                    got
-                );
+                bail!("package_metadata tags expected to contain {expected_tag:?}, got {got:?}");
             }
         }
     }
@@ -3799,11 +3778,7 @@ fn assert_live_json_string(
         Some(expected) => {
             let got = actual.get(field).and_then(|value| value.as_str());
             if got != Some(expected) {
-                bail!(
-                    "{namespace} field {field:?} expected {:?}, got {:?}",
-                    expected,
-                    got
-                );
+                bail!("{namespace} field {field:?} expected {expected:?}, got {got:?}");
             }
         }
         None => {
@@ -3921,9 +3896,7 @@ fn validate_proposal_history_edl_lifecycle(
             for snippet in edl_contains {
                 if !final_edl.contains(snippet) {
                     bail!(
-                        "accepted proposal_history entry {} expected final_edl to contain accepted proposal snippet {:?}",
-                        entry_id,
-                        snippet
+                        "accepted proposal_history entry {entry_id} expected final_edl to contain accepted proposal snippet {snippet:?}"
                     );
                 }
             }
@@ -3932,9 +3905,7 @@ fn validate_proposal_history_edl_lifecycle(
             for snippet in edl_contains {
                 if final_edl.contains(snippet) {
                     bail!(
-                        "rejected proposal_history entry {} expected final_edl not to contain rejected proposal snippet {:?}",
-                        entry_id,
-                        snippet
+                        "rejected proposal_history entry {entry_id} expected final_edl not to contain rejected proposal snippet {snippet:?}"
                     );
                 }
             }
@@ -4475,6 +4446,13 @@ mod tests {
     use super::*;
     use crate::run_all;
 
+    fn expect_anyhow_err<T>(result: Result<T>, message: &str) -> anyhow::Error {
+        match result {
+            Ok(_) => panic!("{message}"),
+            Err(err) => err,
+        }
+    }
+
     #[tokio::test]
     async fn defaults_runs_clean_on_fresh_machine() {
         // Real-project scenarios self-skip without `AWIDAT_REAL_PROJECT`,
@@ -4633,12 +4611,14 @@ mod tests {
             "edl_fragment": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=clip-a and clip_uuid=clip-b\n+ cut_type: hard_cut\n*** Insert Transition\n@@ between: clip_uuid=clip-a and clip_uuid=clip-b\n+ id: awidat.motion_blur\n+ duration_s: 0.180\n*** End EDL"
         });
 
-        let err = assert_transition_planner_expectations(
-            std::path::Path::new("/tmp/nonexistent-awidat-fixture"),
-            &fixture,
-            &plan,
-        )
-        .expect_err("forbidden EDL snippet should fail validation");
+        let err = expect_anyhow_err(
+            assert_transition_planner_expectations(
+                std::path::Path::new("/tmp/nonexistent-awidat-fixture"),
+                &fixture,
+                &plan,
+            ),
+            "forbidden EDL snippet should fail validation",
+        );
 
         assert!(
             err.to_string().contains("edl_fragment must not contain"),
@@ -4669,12 +4649,14 @@ mod tests {
             "edl_fragment": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=clip-a and clip_uuid=clip-b\n+ cut_type: hard_cut\n*** End EDL"
         });
 
-        let err = assert_transition_planner_expectations(
-            std::path::Path::new("/tmp/nonexistent-awidat-fixture"),
-            &fixture,
-            &plan,
-        )
-        .expect_err("hard-cut fixtures should require positive and negative EDL proofs");
+        let err = expect_anyhow_err(
+            assert_transition_planner_expectations(
+                std::path::Path::new("/tmp/nonexistent-awidat-fixture"),
+                &fixture,
+                &plan,
+            ),
+            "hard-cut fixtures should require positive and negative EDL proofs",
+        );
 
         assert!(
             err.to_string()
@@ -4709,12 +4691,14 @@ mod tests {
             "edl_fragment": "*** Begin EDL\n*** Insert Transition\n@@ between: clip_uuid=clip-a and clip_uuid=clip-b\n+ id: awidat.whip_pan_left\n*** End EDL"
         });
 
-        let err = assert_transition_planner_expectations(
-            std::path::Path::new("/tmp/nonexistent-awidat-fixture"),
-            &fixture,
-            &plan,
-        )
-        .expect_err("visible transition fixtures should prove their transition id in EDL");
+        let err = expect_anyhow_err(
+            assert_transition_planner_expectations(
+                std::path::Path::new("/tmp/nonexistent-awidat-fixture"),
+                &fixture,
+                &plan,
+            ),
+            "visible transition fixtures should prove their transition id in EDL",
+        );
 
         assert!(
             err.to_string()
@@ -4788,8 +4772,10 @@ mod tests {
         }))
         .unwrap();
 
-        let err = validate_assessor_proposal_fixture(dir.path(), &fixture)
-            .expect_err("assessor proposal fixtures must include rejected and accepted entries");
+        let err = expect_anyhow_err(
+            validate_assessor_proposal_fixture(dir.path(), &fixture),
+            "assessor proposal fixtures must include rejected and accepted entries",
+        );
 
         assert!(
             err.to_string()
@@ -4808,11 +4794,13 @@ mod tests {
         }))
         .unwrap();
 
-        let err = validate_assessor_proposal_history_entry(
-            &entry,
-            "*** Begin EDL\n*** Set Audio Lead\n@@ anchor: clip_uuid=expert\n+ lead_s: 0.4\n*** End EDL\n",
-        )
-        .expect_err("rejected proposal snippets must be absent from final EDL");
+        let err = expect_anyhow_err(
+            validate_assessor_proposal_history_entry(
+                &entry,
+                "*** Begin EDL\n*** Set Audio Lead\n@@ anchor: clip_uuid=expert\n+ lead_s: 0.4\n*** End EDL\n",
+            ),
+            "rejected proposal snippets must be absent from final EDL",
+        );
 
         assert!(err.to_string().contains("rejected proposal"), "{err:#}");
     }
@@ -4827,11 +4815,13 @@ mod tests {
         }))
         .unwrap();
 
-        let err = validate_assessor_proposal_history_entry(
-            &entry,
-            "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=expert and clip_uuid=reaction\n+ cut_type: hard_cut\n*** End EDL\n",
-        )
-        .expect_err("accepted proposal snippets must be present in final EDL");
+        let err = expect_anyhow_err(
+            validate_assessor_proposal_history_entry(
+                &entry,
+                "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=expert and clip_uuid=reaction\n+ cut_type: hard_cut\n*** End EDL\n",
+            ),
+            "accepted proposal snippets must be present in final EDL",
+        );
 
         assert!(err.to_string().contains("accepted proposal"), "{err:#}");
     }
@@ -4845,11 +4835,13 @@ mod tests {
         }))
         .unwrap();
 
-        let err = validate_assessor_proposal_history_entry(
-            &entry,
-            "*** Begin EDL\n*** Set Audio Trail\n@@ anchor: clip_uuid=expert\n+ trail_s: 0.45\n*** End EDL\n",
-        )
-        .expect_err("proposal history without snippets should not validate");
+        let err = expect_anyhow_err(
+            validate_assessor_proposal_history_entry(
+                &entry,
+                "*** Begin EDL\n*** Set Audio Trail\n@@ anchor: clip_uuid=expert\n+ trail_s: 0.45\n*** End EDL\n",
+            ),
+            "proposal history without snippets should not validate",
+        );
 
         assert!(
             err.to_string().contains("at least one edl_contains"),
@@ -4868,11 +4860,13 @@ mod tests {
         }))
         .unwrap();
 
-        let err = validate_assessor_proposal_history_entry(
-            &entry,
-            "*** Begin EDL\n*** Set Audio Trail\n@@ anchor: clip_uuid=expert\n+ trail_s: 0.45\n*** End EDL\n",
-        )
-        .expect_err("empty final_edl assertion snippets should not validate");
+        let err = expect_anyhow_err(
+            validate_assessor_proposal_history_entry(
+                &entry,
+                "*** Begin EDL\n*** Set Audio Trail\n@@ anchor: clip_uuid=expert\n+ trail_s: 0.45\n*** End EDL\n",
+            ),
+            "empty final_edl assertion snippets should not validate",
+        );
 
         assert!(
             err.to_string().contains("empty final_edl_must_contain"),
@@ -5354,11 +5348,13 @@ mod tests {
             }))
             .unwrap();
 
-        let err = validate_rough_assembly_proposal_history_entry(
-            &entry,
-            "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=hook and clip_uuid=guest\n+ cut_type: j_cut\n*** End EDL\n",
-        )
-        .expect_err("empty final_edl assertion snippets should not validate");
+        let err = expect_anyhow_err(
+            validate_rough_assembly_proposal_history_entry(
+                &entry,
+                "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=hook and clip_uuid=guest\n+ cut_type: j_cut\n*** End EDL\n",
+            ),
+            "empty final_edl assertion snippets should not validate",
+        );
 
         assert!(
             err.to_string().contains("empty final_edl_must_not_contain"),
@@ -5506,12 +5502,14 @@ mod tests {
 
     #[test]
     fn live_threshold_integer_parser_rejects_invalid_values() {
-        let err = parse_env_usize(
-            "AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS",
-            Some("many"),
-            0,
-        )
-        .expect_err("invalid threshold integers must fail instead of defaulting");
+        let err = expect_anyhow_err(
+            parse_env_usize(
+                "AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS",
+                Some("many"),
+                0,
+            ),
+            "invalid threshold integers must fail instead of defaulting",
+        );
 
         assert!(
             err.to_string()
@@ -5522,12 +5520,14 @@ mod tests {
 
     #[test]
     fn live_threshold_ratio_parser_rejects_invalid_values() {
-        let err = parse_env_ratio(
-            "AWIDAT_REAL_VISUAL_MIN_METADATA_RATIO",
-            Some("not-a-ratio"),
-            0.25,
-        )
-        .expect_err("invalid threshold ratios must fail instead of defaulting");
+        let err = expect_anyhow_err(
+            parse_env_ratio(
+                "AWIDAT_REAL_VISUAL_MIN_METADATA_RATIO",
+                Some("not-a-ratio"),
+                0.25,
+            ),
+            "invalid threshold ratios must fail instead of defaulting",
+        );
 
         assert!(
             err.to_string()
@@ -5538,8 +5538,10 @@ mod tests {
 
     #[test]
     fn live_threshold_ratio_parser_rejects_out_of_range_values() {
-        let err = parse_env_ratio("AWIDAT_REAL_VISUAL_MIN_METADATA_RATIO", Some("1.25"), 0.25)
-            .expect_err("out-of-range threshold ratios must fail instead of clamping");
+        let err = expect_anyhow_err(
+            parse_env_ratio("AWIDAT_REAL_VISUAL_MIN_METADATA_RATIO", Some("1.25"), 0.25),
+            "out-of-range threshold ratios must fail instead of clamping",
+        );
 
         assert!(err.to_string().contains("in [0, 1]"), "{err:#}");
     }
