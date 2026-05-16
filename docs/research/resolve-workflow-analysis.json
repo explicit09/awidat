@@ -1,0 +1,530 @@
+{
+  "schema": "awidat.resolve_workflow_research.v1",
+  "created_at": "2026-05-16",
+  "scope": "Separate Resolve workflow research pass based on nine DaVinci Resolve tutorial videos. This is not an extension of docs/editorial-grammar-upgrade-plan.md and does not implement product changes.",
+  "north_star": {
+    "goal": "Build an agent editor that can produce edits with the judgment, craft, and technical range of a professional video editor for users who are not professional editors.",
+    "not_the_goal": "Do not clone DaVinci Resolve, Premiere, or Final Cut as UI products. They are references for professional editing capability, task coverage, and decision quality.",
+    "product_thesis": "A user should be able to ask for an outcome in ordinary language and have Awidat inspect the footage, make professional editorial decisions, perform the required technical operations, explain/review the result, and render a deliverable.",
+    "sequencing_principle": "Do not try to build the full autonomous decision layer before the professional editing substrate exists. First map and build the pipeline components professional editors rely on; then the decision layer can orchestrate them with enough tools and evidence.",
+    "reference_editors_are_useful_because": [
+      "They reveal the complete set of tasks professional editors routinely perform.",
+      "They expose workflow categories Awidat must support internally: media organization, assembly, compositing, color, audio, motion graphics, and delivery.",
+      "They show the decision points a professional makes: what to keep, what to remove, when to cut, how to hide problems, how to preserve continuity, how to polish sound/color, and when an effect is justified."
+    ],
+    "agent_requirements": [
+      "Understand editorial goals, audience, format, platform, style, and constraints.",
+      "Inspect source footage and indexed evidence before deciding.",
+      "Plan edits at the level of story, rhythm, continuity, visual clarity, audio polish, color consistency, graphics, and delivery.",
+      "Choose professional operations autonomously, not merely expose manual controls.",
+      "Persist intent and evidence so the user and future agents can understand why an edit was made.",
+      "Present reviewable proposals and final outputs without requiring the user to know professional editing terminology."
+    ],
+    "success_measure": "Awidat is succeeding when a non-editor can request a polished video outcome and get a result that a professional editor would recognize as technically clean, intentional, paced, watchable, and deliverable."
+  },
+  "method": {
+    "video_capture": "Collected YouTube metadata and available English caption tracks with yt-dlp 2026.03.17. Captions were used for notes and theme extraction; full verbatim transcripts are not stored in this artifact.",
+    "codebase_review": "Read Awidat README, desktop README, protocol metadata, EDL operations, effect registry, render planner, indexer defaults, Python indexer docs/tests, desktop timeline, media, properties, transcript, notes, and action bar surfaces.",
+    "evidence_quality": "All listed videos exposed English captions. Some were auto captions and should be treated as high-level evidence rather than exact wording."
+  },
+  "sources": [
+    {
+      "id": "MCDVcQIA3UM",
+      "url": "https://www.youtube.com/watch?v=MCDVcQIA3UM",
+      "title": "Introduction to DaVinci Resolve - [Full Course] for Beginners (2026)",
+      "duration": "5:10:55",
+      "caption_status": "available",
+      "primary_topics": [
+        "Resolve page model",
+        "media page",
+        "edit page",
+        "cut page",
+        "fusion page",
+        "color page",
+        "fairlight page",
+        "deliver page"
+      ],
+      "notes": [
+        "Resolve teaches the editor as a sequence of dedicated pages: Media for import and organization, Cut/Edit for timeline assembly, Fusion for compositing, Color for grading, Fairlight for audio, and Deliver for output.",
+        "The Media Page workflow emphasizes media pool structure, bins, clip metadata, preview, import, organization, and preparing assets before timeline work.",
+        "The Edit Page centers on timeline assembly, trimming, cutting, inspector controls, transitions, effects, sync, and clip properties.",
+        "The Cut Page is positioned as a faster assembly surface, separate from the heavier Edit Page.",
+        "Fusion is presented as node-based compositing with masks, merges, text, tracking, and procedural control.",
+        "Color and Fairlight are full workspaces rather than single controls: color nodes/scopes/grades and audio mixing/repair/export decisions are part of the expected editor mental model.",
+        "Deliver is a named final workflow with export settings and render choices, not just a button."
+      ]
+    },
+    {
+      "id": "RiYHHMJBqtE",
+      "url": "https://www.youtube.com/watch?v=RiYHHMJBqtE",
+      "title": "Intro to VFX for Short Films in Fusion [FULL COURSE - Resolve 19]",
+      "duration": "2:03:32",
+      "caption_status": "available",
+      "primary_topics": [
+        "Fusion VFX",
+        "node graph",
+        "tracking",
+        "masks",
+        "media pool",
+        "compositing workflow"
+      ],
+      "notes": [
+        "Short-film VFX is taught as a graph of nodes, not as a flat list of clip effects.",
+        "Common operations include media import, bins, timeline selection, opening a shot in Fusion, merge nodes, trackers, masks, mattes, and color/grade adjustments for integration.",
+        "Workflow often moves between Edit Page context and Fusion internals: the shot lives on a timeline, but its VFX recipe lives in a node graph.",
+        "The tutorial reinforces that realistic VFX depends on matching motion, masks, color, sharpness, grain, and timing, not just overlaying an asset."
+      ]
+    },
+    {
+      "id": "quS5hX5kn08",
+      "url": "https://www.youtube.com/watch?v=quS5hX5kn08",
+      "title": "The Art of Invisible VFX in DaVinci Resolve - Full Fusion VFX Course for FREE!",
+      "duration": "2:14:38",
+      "caption_status": "available",
+      "primary_topics": [
+        "invisible VFX",
+        "tracking",
+        "masks and mattes",
+        "color matching",
+        "grain",
+        "lens blur",
+        "still-image patches"
+      ],
+      "notes": [
+        "Invisible VFX work repeatedly combines tracking, masking, still-image patches, color matching, haze/rain/texture integration, grain, lens blur, and final detail passes.",
+        "The chapter structure shows an iterative shot-repair loop: set up the project, isolate regions, track movement, build masks/mattes, match the insert, and review the finished shot.",
+        "Color matching is treated as an integration requirement for VFX inserts, not only a final grade.",
+        "Several operations need reusable structured evidence: mask shapes, tracking data, matte behavior, match reference, and integration notes."
+      ]
+    },
+    {
+      "id": "zqq97wWc89w",
+      "url": "https://www.youtube.com/watch?v=zqq97wWc89w",
+      "title": "Make Your Own Motion Graphics in Resolve! - HUGE FREE Workshop for Beginners",
+      "duration": "1:52:15",
+      "caption_status": "available",
+      "primary_topics": [
+        "motion graphics",
+        "titles",
+        "keyframes",
+        "spline editor",
+        "masks",
+        "Fusion comp duplicates",
+        "particles",
+        "3D shapes"
+      ],
+      "notes": [
+        "Motion graphics in Resolve span Edit Page titles plus Fusion compositions with reusable node setups.",
+        "The workflow depends on keyframes, spline/easing control, reusable comp duplicates, masks/alpha channels, parallax, textures, particles, and 3D object animation.",
+        "Resolve gives creators both quick title controls and deeper procedural motion design when needed.",
+        "Reusable graphics behave like editable compositions, not just burned-in media."
+      ]
+    },
+    {
+      "id": "fOKKZKSISQk",
+      "url": "https://www.youtube.com/watch?v=fOKKZKSISQk",
+      "title": "Everything You Need to Start Using Fusion [in 56 Mins] - DaVinci Resolve 19 Beginner Fusion Tutorial",
+      "duration": "55:56",
+      "caption_status": "available",
+      "primary_topics": [
+        "Fusion basics",
+        "nodes",
+        "merge nodes",
+        "masks",
+        "inspector",
+        "media in/out"
+      ],
+      "notes": [
+        "Fusion is introduced around explicit node concepts: media inputs, backgrounds, text, merge nodes, masks, inspector-adjusted parameters, and output nodes.",
+        "The learning burden is not a single effect; it is understanding data flow through the graph.",
+        "A practical editor needs to inspect what each node receives, changes, and sends forward."
+      ]
+    },
+    {
+      "id": "h9MrEaELl2M",
+      "url": "https://www.youtube.com/watch?v=h9MrEaELl2M",
+      "title": "RESOLVE 18 CRASH COURSE - Davinci Resolve 18 Walkthrough [BEGINNER]",
+      "duration": "1:42:30",
+      "caption_status": "available",
+      "primary_topics": [
+        "layout overview",
+        "edit page",
+        "cut page",
+        "media page",
+        "fusion",
+        "color",
+        "fairlight",
+        "deliver"
+      ],
+      "notes": [
+        "A second beginner walkthrough confirms the same page-based mental model from the full course.",
+        "The Media Pool, bins, metadata, inspector, timeline, trim/cut actions, Fusion nodes, Color Page, Fairlight, and Deliver are treated as core editor concepts.",
+        "Resolve beginners are expected to learn where a task belongs, then use the page-specific controls."
+      ]
+    },
+    {
+      "id": "4xbOws9Cnp4",
+      "url": "https://www.youtube.com/watch?v=4xbOws9Cnp4",
+      "title": "Why Your Color Grades Don't MATCH (And How To Fix It)",
+      "duration": "34:43",
+      "caption_status": "available",
+      "primary_topics": [
+        "color management",
+        "grade matching",
+        "node reset",
+        "gallery stills",
+        "reference matching",
+        "LUTs"
+      ],
+      "notes": [
+        "Matching color grades is presented as a workflow problem: color management, reference stills, consistent starting state, shot-to-shot matching, and avoiding late-stage surprises.",
+        "The tutorial emphasizes resetting grades/nodes, comparing references, using stills/presets, and checking whether clips match before render pressure.",
+        "For Awidat this points to reviewable color-match recommendations, visual comparison packs, and grade consistency state, not only per-clip sliders."
+      ]
+    },
+    {
+      "id": "IsnfUkKvRWQ",
+      "url": "https://www.youtube.com/watch?v=IsnfUkKvRWQ",
+      "title": "All the Ways to MOTION TRACK in DaVinci Resolve!",
+      "duration": "20:04",
+      "caption_status": "available",
+      "primary_topics": [
+        "basic tracker",
+        "planar tracker",
+        "surface tracker",
+        "3D tracking",
+        "tracked text",
+        "tracked masks"
+      ],
+      "notes": [
+        "Tracking in Resolve is not one feature; common categories include basic point tracking, planar tracking, surface tracking, and 3D tracking.",
+        "Tracked data is used to attach text or graphics, replace/patch surfaces, drive masks, and align elements to camera or object movement.",
+        "A useful agent-native equivalent needs tracker sidecars, confidence, tracked region identity, and operations that can bind overlays/effects to a track."
+      ]
+    },
+    {
+      "id": "avFY44nhlSo",
+      "url": "https://www.youtube.com/watch?v=avFY44nhlSo",
+      "title": "HOW TO ANIMATE TEXT IN RESOLVE 17 - DaVinci Resolve Basics Tutorial",
+      "duration": "5:35",
+      "caption_status": "available",
+      "primary_topics": [
+        "Edit Page titles",
+        "Text Plus",
+        "inspector",
+        "keyframe controls",
+        "dynamic zoom",
+        "write-on effect"
+      ],
+      "notes": [
+        "Even a short text tutorial expects inspector controls, timeline timing, keyframed properties, tracking/spacing changes, dynamic zoom, and write-on style animation.",
+        "Awidat's title system should eventually separate simple presets from deeper property animation."
+      ]
+    }
+  ],
+  "resolve_workflow_model": [
+    {
+      "id": "rw_media_organization",
+      "label": "Media organization before editing",
+      "resolve_pattern": "Editors import assets into a media pool, organize bins, review metadata, create timelines, and prepare media before detailed timeline work.",
+      "agent_native_interpretation": "Awidat needs source organization metadata that agents can query and mutate: bins, labels, roles, tags, source provenance, proxy state, sync groups, and readiness status."
+    },
+    {
+      "id": "rw_editing_surface",
+      "label": "Timeline assembly and trim surface",
+      "resolve_pattern": "Editors use cut/edit pages for trimming, splitting, moving, ripple behavior, transitions, inspector changes, and fast assembly.",
+      "agent_native_interpretation": "Awidat should preserve its EDL-first model but expose richer trim modes, boundary tools, keyboard-level operations, markers, and clear proposal previews."
+    },
+    {
+      "id": "rw_inspector_keyframes",
+      "label": "Inspector plus keyframes",
+      "resolve_pattern": "Clip, title, transform, text, audio, and effect properties are adjusted in an inspector and animated over time with keyframes/easing.",
+      "agent_native_interpretation": "Awidat needs a general parameter animation model rather than hard-coded title animation enums only."
+    },
+    {
+      "id": "rw_fusion_nodes",
+      "label": "Node-based compositing",
+      "resolve_pattern": "Fusion work is a node graph with media in/out, merges, transforms, masks, mattes, trackers, text, particles, and 3D.",
+      "agent_native_interpretation": "Awidat does not need to copy Fusion immediately, but it needs a graph representation for multi-step visual effects that cannot be represented as one flat FFmpeg effect."
+    },
+    {
+      "id": "rw_tracking_masks",
+      "label": "Tracking, masks, and mattes",
+      "resolve_pattern": "Tracking and masking underpin tracked text, object replacement, invisible VFX, patching, roto, and integration.",
+      "agent_native_interpretation": "Awidat should add sidecars for point/planar/surface tracks, mask regions, matte confidence, and operations that bind overlays/effects to those tracks."
+    },
+    {
+      "id": "rw_color_matching",
+      "label": "Color matching and grade state",
+      "resolve_pattern": "Color workflows use color management, nodes, scopes, reference stills, shot matching, LUTs, and consistency checks.",
+      "agent_native_interpretation": "Awidat should turn color-analysis into reviewable match plans with reference stills, scopes, scene groups, grade stacks, and before/after packs."
+    },
+    {
+      "id": "rw_audio_finishing",
+      "label": "Audio finishing",
+      "resolve_pattern": "Fairlight provides mixer, EQ, compression, noise repair, levels, loudness, and track-focused controls.",
+      "agent_native_interpretation": "Awidat already has strong primitives but needs a mixer-grade UI, automation lanes, meters, bus roles, and audible review packages."
+    },
+    {
+      "id": "rw_delivery",
+      "label": "Delivery as a workflow",
+      "resolve_pattern": "Deliver is a final workspace with presets, render settings, output validation, and render queue expectations.",
+      "agent_native_interpretation": "Awidat's export path should grow into delivery profiles, batch queue, platform presets, validation, and package manifests."
+    }
+  ],
+  "current_awidat_strengths": [
+    {
+      "area": "Agent-native editorial core",
+      "evidence": [
+        "README.md describes terminal-first agent-native video editing with CLI/TUI, desktop, MCP indexers, skills, and rendering.",
+        "crates/core/src/tools/apply_edl.rs provides an approval-gated structured EDL mutation path.",
+        "crates/core/src/edl/op.rs includes trim, split, insert, move, b-roll, PiP, transitions, cut intent, audio, color, LUT, title, caption, output format, loudness, and package metadata operations."
+      ],
+      "assessment": "This is a strong foundation for agent-driven editing and is more structured than a simple timeline toy."
+    },
+    {
+      "area": "Editorial intent preservation",
+      "evidence": [
+        "crates/proto/src/awidat_meta.rs stores timeline cut boundaries with SemanticCutSpec.",
+        "crates/proto/src/awidat_meta.rs stores SplitEditSpec on clip metadata.",
+        "apps/desktop/src/timeline/TimelinePane.tsx overlays cut badges and J/L split offset markers.",
+        "apps/desktop/src/properties/PropertiesPane.tsx shows editorial and split-edit controls."
+      ],
+      "assessment": "Awidat already captures the intent behind cuts and split edits, which many conventional editors do not model explicitly."
+    },
+    {
+      "area": "Effect and render graph primitives",
+      "evidence": [
+        "crates/effects/src/lib.rs defines graph-native Awidat effect ids for volume, speed, color correction, LUT, title, video overlay, audio fade, and audio FX.",
+        "crates/render/src/timeline.rs plans transitions, overlays, titles, audio tracks, ducking, color correction, LUTs, and split-edit audio."
+      ],
+      "assessment": "The system already has a semantic effect registry and FFmpeg-backed lowering path."
+    },
+    {
+      "area": "Indexer and evidence architecture",
+      "evidence": [
+        "crates/config/src/defaults.rs registers audio-energy, scenedetect, whisper, topic, editorial-moments, clip, face, shot, gaze, frame-quality, and color-analysis indexers.",
+        "python/packages/shot-mcp/src/shot_mcp/__init__.py emits edit-aware shot fields including motion, dominant direction, composition, eye trace, action score, whip pan score, occlusion score, and match candidates.",
+        "python/SMOKE.md documents safe and model-backed indexer checks."
+      ],
+      "assessment": "Awidat is well positioned to make edit decisions from indexed evidence rather than only from timeline coordinates."
+    },
+    {
+      "area": "Desktop review surface",
+      "evidence": [
+        "apps/desktop/src/App.tsx provides chat/transcript/edit sidebar tabs plus media, timeline, properties, and notes panes.",
+        "apps/desktop/src/app/ActionBar.tsx exposes import files, import URL, run indexers, export, permission mode, job status, proposal status, note count, and timeline status.",
+        "apps/desktop/src/properties/PropertiesPane.tsx exposes volume, fades, split edits, speed, titles, LUTs, color correction, and track mix controls."
+      ],
+      "assessment": "The app has the right review/proposal shape for collaborative editing, but not yet the full workflow breadth of Resolve."
+    }
+  ],
+  "gaps": [
+    {
+      "id": "gap_001_media_pool_bins",
+      "severity": "high",
+      "resolve_reference": "Media Page, Media Pool, bins, metadata, import preparation",
+      "current_awidat": "Imports local files and URLs, creates proxies, lists assets, stores source assets, and can index media.",
+      "missing": [
+        "First-class bins or smart collections",
+        "Editable asset metadata tags and roles",
+        "Offline/relink/proxy readiness model visible to agents",
+        "Source review workspace for sorting and selecting before timeline insertion"
+      ],
+      "implementation_direction": "Add an asset catalog layer separate from OTIO timeline clips. Include bins, labels, roles, provenance, proxy/indexing status, and agent-queryable selection sets."
+    },
+    {
+      "id": "gap_002_page_workflow_modes",
+      "severity": "medium",
+      "resolve_reference": "Resolve pages: Media, Cut/Edit, Fusion, Color, Fairlight, Deliver",
+      "current_awidat": "Desktop uses panes rather than workflow modes. This fits agent collaboration but makes task context less explicit.",
+      "missing": [
+        "Mode-specific task framing",
+        "Workflow progress markers",
+        "Different defaults for assembly, VFX, color, audio, and delivery sessions"
+      ],
+      "implementation_direction": "Introduce lightweight workspace modes or task lenses without copying Resolve chrome. Modes should change available controls, prompts, and validation checklists."
+    },
+    {
+      "id": "gap_003_general_keyframes",
+      "severity": "high",
+      "resolve_reference": "Inspector keyframe controls, title tracking/spacing animation, dynamic zoom, spline panel",
+      "current_awidat": "Titles have a coarse animation enum. Effects are mostly static per clip. Speed, color, volume, audio fade, and title style are single values.",
+      "missing": [
+        "General keyframe curve schema",
+        "Per-parameter animation across effects",
+        "Easing/spline representation",
+        "Desktop keyframe lane or inspector controls",
+        "Render lowering for animated properties beyond fixed title presets"
+      ],
+      "implementation_direction": "Add a ParameterAnimation schema and support it first for title transform/text, opacity, scale, position, and volume before expanding to arbitrary effects."
+    },
+    {
+      "id": "gap_004_node_compositing_model",
+      "severity": "high",
+      "resolve_reference": "Fusion node graph with MediaIn, Merge, masks, transforms, trackers, MediaOut",
+      "current_awidat": "Effects are graph-native in naming but stored as clip effects or timeline overlays, not as explicit compositing DAGs.",
+      "missing": [
+        "Node graph document model",
+        "Multi-input/multi-output compositing",
+        "Reusable compositions",
+        "Inspectable intermediate nodes",
+        "Desktop node graph or compact node inspector",
+        "Agent-readable graph diffs"
+      ],
+      "implementation_direction": "Start with a small Awidat composition graph for overlays and tracked inserts, not a full Fusion clone. Nodes should be serializable, diffable, and lowerable to FFmpeg where possible."
+    },
+    {
+      "id": "gap_005_tracking_masks_mattes",
+      "severity": "high",
+      "resolve_reference": "Basic tracker, planar tracker, surface tracker, 3D tracking, masks, mattes, magic mask",
+      "current_awidat": "Shot indexer has motion, composition, face, gaze, action, whip pan, occlusion, and match scores. It does not appear to store object/planar/surface track paths or reusable mask shapes.",
+      "missing": [
+        "Tracker sidecars with points/planes/surfaces and confidence",
+        "Mask shape sidecars with keyframed paths",
+        "Matte/mask operations in EDL",
+        "Tracked overlay binding",
+        "VFX review package for track quality"
+      ],
+      "implementation_direction": "Add tracker/mask indexers or sidecar contracts before UI. Then add EDL operations like InsertTrackedOverlay, SetMask, and AttachEffectToTrack."
+    },
+    {
+      "id": "gap_006_color_match_workflow",
+      "severity": "medium_high",
+      "resolve_reference": "Color management, grade matching, gallery stills, reset grades/nodes, LUTs, render-time surprises",
+      "current_awidat": "Has color-analysis indexer, SetColorCorrection, ApplyLut, PropertiesPane color sliders, and color-corrector skill scripts.",
+      "missing": [
+        "Reference still/gallery model",
+        "Shot group color consistency state",
+        "Scopes or scope-derived metrics in UI",
+        "Grade stack or node-like grade stages",
+        "Before/after contact sheets tied to proposed correction"
+      ],
+      "implementation_direction": "Treat color match as a review workflow: choose reference, group shots, produce recommendations, show contact sheets/scopes, then apply graph ops."
+    },
+    {
+      "id": "gap_007_fairlight_mixer_depth",
+      "severity": "medium",
+      "resolve_reference": "Fairlight page, mixer, EQ, compression, audio repair, loudness",
+      "current_awidat": "Has track audio controls, ducking, clip/track audio FX, loudness target, waveforms, and render support.",
+      "missing": [
+        "Mixer-style UI with meters",
+        "Bus routing and roles",
+        "Automation lanes",
+        "Audition/review packages for audio changes",
+        "Preset chains for dialogue/music/SFX"
+      ],
+      "implementation_direction": "Elevate existing audio primitives into a mixer task lens, with dialogue/music/SFX roles and reviewable before/after audio renders."
+    },
+    {
+      "id": "gap_008_delivery_profiles_queue",
+      "severity": "medium",
+      "resolve_reference": "Deliver page, export presets, render settings, render workflow",
+      "current_awidat": "Has export timeline, start_render/poll_render, package metadata, output format, and platform metadata operations.",
+      "missing": [
+        "Named delivery profiles",
+        "Render queue",
+        "Platform-specific validation",
+        "Preflight report before final render",
+        "Artifact/package manifest for downstream upload"
+      ],
+      "implementation_direction": "Add delivery profiles as data and expose preflight checks before render: aspect, loudness, captions, safe area, missing media, render settings, and package metadata."
+    },
+    {
+      "id": "gap_009_fast_editing_ergonomics",
+      "severity": "medium",
+      "resolve_reference": "Cut/Edit pages, trim/blade/ripple, fast assembly",
+      "current_awidat": "EDL operations are broad; desktop supports timeline selection, trim/move interactions, proposals, and agent chat.",
+      "missing": [
+        "Explicit ripple/roll/slip/slide tool modes",
+        "Keyboard-first editing commands",
+        "Marker workflows in UI",
+        "Timeline track controls and lane-level targeting",
+        "Assembly review workflow separate from polished edit review"
+      ],
+      "implementation_direction": "Keep EDL as canonical mutation path, but add direct manipulation and command palette affordances for high-frequency edit operations."
+    },
+    {
+      "id": "gap_010_reusable_motion_graphics",
+      "severity": "medium_high",
+      "resolve_reference": "Text Plus, title templates, Fusion comp duplicates, particles, 3D, write-on effects",
+      "current_awidat": "Supports titles/captions and broadcast overlays; title animation options are limited.",
+      "missing": [
+        "Reusable editable title/motion templates",
+        "Character-level or word-level text animation",
+        "Write-on/reveal effects",
+        "Particle/texture/3D-like generators",
+        "Template parameter schema agents can fill"
+      ],
+      "implementation_direction": "Start with reusable title/lower-third templates and parameterized text animations, then consider deeper generator nodes."
+    }
+  ],
+  "recommended_sequence": [
+    {
+      "phase": "research_discussion",
+      "status": "current",
+      "goal": "Discuss which Resolve/Premiere-class capabilities define the professional editing pipeline Awidat must support before a complete autonomous editor brain can orchestrate it.",
+      "outputs": [
+        "Prioritized gap list",
+        "Definition of professional editor pipeline stages and required tool substrate",
+        "Definition of professional editor decisions the agent will later make autonomously",
+        "Definition of Resolve/Premiere-inspired but Awidat-native workflow modes or task lenses",
+        "Implementation plan boundaries"
+      ]
+    },
+    {
+      "phase": "foundation_metadata",
+      "goal": "Add asset catalog and delivery profile data models before larger orchestration work.",
+      "candidate_gaps": [
+        "gap_001_media_pool_bins",
+        "gap_008_delivery_profiles_queue"
+      ]
+    },
+    {
+      "phase": "inspector_animation",
+      "goal": "Generalize keyframes and animated inspector properties.",
+      "candidate_gaps": [
+        "gap_003_general_keyframes",
+        "gap_010_reusable_motion_graphics"
+      ]
+    },
+    {
+      "phase": "vfx_evidence",
+      "goal": "Introduce tracker and mask sidecar contracts before attempting a node graph UI.",
+      "candidate_gaps": [
+        "gap_005_tracking_masks_mattes",
+        "gap_004_node_compositing_model"
+      ]
+    },
+    {
+      "phase": "finishing_workflows",
+      "goal": "Turn color, audio, and delivery into review workflows with preflight reports.",
+      "candidate_gaps": [
+        "gap_006_color_match_workflow",
+        "gap_007_fairlight_mixer_depth",
+        "gap_008_delivery_profiles_queue"
+      ]
+    },
+    {
+      "phase": "autonomous_decision_layer",
+      "goal": "After the core substrate exists, teach the agent to choose and sequence professional operations across the whole pipeline.",
+      "candidate_capabilities": [
+        "brief understanding",
+        "footage triage and selects",
+        "multi-pass rough-to-finish editing",
+        "style/taste profiles",
+        "evidence-backed edit reasoning",
+        "learning from user approvals"
+      ]
+    }
+  ],
+  "discussion_questions": [
+    "For each Resolve/Premiere capability, should Awidat expose a manual control, an agent tool, or both?",
+    "Which professional editing pipeline components must exist before the autonomous decision layer can be reliable?",
+    "What professional editing decisions should the agent eventually make without requiring the user to know editing terminology?",
+    "Should Awidat expose Resolve-like workflow modes, or keep the current pane layout and use agent task lenses instead?",
+    "Do we want a full node graph eventually, or a smaller composition graph focused on tracked overlays, titles, masks, and reusable effects?",
+    "Should the next implementation plan prioritize media organization and delivery profiles, keyframes and motion graphics, or autonomous edit-decision planning first?",
+    "How much manual direct manipulation should the desktop gain while keeping the agent as the primary editor?"
+  ]
+}
