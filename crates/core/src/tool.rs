@@ -383,6 +383,15 @@ pub trait ToolHandler: Send + Sync {
         summarize_args(&invocation.args)
     }
 
+    /// Structured editorial dimensions attached to an approval
+    /// decision for deterministic style learning. Tools that make
+    /// timeline/editorial choices can override this with stable tags
+    /// such as `cut_type:jump_cut` or
+    /// `transition_family:motion_blur`.
+    fn editorial_decision_tags(&self, _invocation: &ToolInvocation) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Sandbox policy for this invocation.
     fn sandbox_policy(&self, _invocation: &ToolInvocation) -> ToolSandboxPolicy {
         ToolSandboxPolicy::None

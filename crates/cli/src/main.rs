@@ -312,11 +312,25 @@ fn print_version() {
 fn cmd_init(path: &std::path::Path) -> Result<()> {
     let project = Project::init(path)
         .with_context(|| format!("failed to initialize project at {}", path.display()))?;
+    let learned_format = awidat_core::lessons::apply_learned_project_format_defaults(path)
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to apply learned project-format defaults at {}: {e}",
+                path.display()
+            )
+        })?;
     println!("Initialized awidat project at {}", project.root.display());
     println!(
         "  - project.otio.json (Timeline.1, name = {:?})",
         project.timeline.name
     );
+    if let Some(aspect_ratio) = learned_format.aspect_ratio.as_deref() {
+        println!(
+            "  - learned output format defaults: aspect_ratio={aspect_ratio}, platform={}, safe_area={}",
+            learned_format.platform.as_deref().unwrap_or("none"),
+            learned_format.safe_area.as_deref().unwrap_or("none")
+        );
+    }
     println!(
         "  - edit-plan.json    (version {})",
         project.edit_plan.version

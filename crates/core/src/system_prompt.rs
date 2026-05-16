@@ -196,14 +196,11 @@ fn permission_line(mode: PromptPermissionMode) -> &'static str {
         PromptPermissionMode::Autopilot => {
             "**Permission mode: autopilot.** When the user asks for cleanup, scan for findings \
              and bundle them into a single apply_edl envelope rather than emitting them \
-             one-by-one. For dirty continuity verdicts, silently bundle a 0.3s \
-             cross dissolve via the bundle_with_dissolve pattern using \
-             `awidat.cross_dissolve` or `SMPTE_Dissolve` — don't ask, just include the transition \
-             in the envelope. The user reviews the bundle in the ghost overlay and accepts \
-             or rejects as a whole. For dirty cuts that read as visual jar (mid-motion, \
-             speaker-switch mid-utterance), prefer bundling a `*** Insert BRoll` cover when \
-             find_broll_opportunities surfaced a strong candidate at the same anchor — the \
-             cutaway hides the jar without changing the audio at all."
+             one-by-one. For dirty cuts, call `assess_edit_quality` and use its lowest-attention \
+             repair: recut to a cleaner boundary, `*** Set Audio Lead` / `*** Set Audio Trail` \
+             for J/L cuts, a motivated b-roll cover for visual jar, or a visible transition only \
+             when the recommendation names a transition job. The user reviews the bundle in the \
+             ghost overlay and accepts or rejects as a whole."
         }
     }
 }
@@ -231,27 +228,38 @@ this for podcast/interview top trims instead of guessing from the \
 first transcript page.\
 \n- find_dead_air / find_filler_words / find_false_starts: editorial \
 findings the user can review as Notes.\
-\n- assess_continuity(at_s, kind): BEFORE proposing any \
+\n- assess_edit_quality(at_s, kind): BEFORE proposing any risky \
 *** Trim Clip / *** Split Clip via apply_edl, call this with the \
-proposed cut point. It returns `{ verdict, rules: [...] }` where \
-verdict is `clean` / `risky` / `dirty` / `abstain`. Behavior:\
+proposed cut point. It wraps continuity checks and recommends the \
+lowest-attention editorial grammar: hard cut, recut, cut on action, \
+J-cut (`*** Set Audio Lead`), L-cut (`*** Set Audio Trail`), b-roll \
+cover, or a motivated transition. Use this result instead of defaulting \
+dirty cuts to cross dissolves.\
+\n- transition_context(between): BEFORE proposing a visible transition \
+between two clips, call this to assemble adjacent clip metadata, transition \
+handles, transcript context, frame timestamps, continuity verdict, and \
+missing signals. It does not choose or apply the transition.\
+\n- plan_transition(context): after `transition_context`, call this to turn \
+the packet into either a hard-cut intent fragment or a motivated visible \
+transition fragment with safe duration. It is still read-only; apply only \
+through `apply_edl` after review.\
+\n- assess_continuity(at_s, kind): lower-level rule breakdown. It returns \
+`{ verdict, rules: [...] }` where verdict is `clean` / `risky` / `dirty` / `abstain`. Behavior:\
 \n  • `clean`: propose the raw cut.\
 \n  • `risky`: surface the rules array as a Note (kind: \
 continuity_warning) describing the risk; let the user decide.\
-\n  • `dirty`: do NOT propose the raw cut. You have THREE options, \
-in order of preference: (a) bundle a 0.3s *** Insert Transition \
-(`awidat.cross_dissolve` or `SMPTE_Dissolve`) centered on the cut \
-point — works for most dirty cuts; \
-(b) for visually-driven moments (mid-motion or speaker-switch \
-mid-utterance), call `find_broll_opportunities` for the affected \
-range and surface a `broll_suggestion` Note offering a b-roll \
+\n  • `dirty`: do NOT propose the raw cut. Prefer the `assess_edit_quality` \
+recommendation: recut, Set Audio Lead/Trail, cut on action, b-roll, \
+or transition only when it has a named job. For visually-driven moments \
+(mid-motion or speaker-switch mid-utterance), call `find_broll_opportunities` \
+for the affected range and surface a `broll_suggestion` Note offering a b-roll \
 cover instead. The b-roll Note must include a concrete `broll_anchor` \
 object using either `{kind: \"clip_uuid\", uuid: ...}` from \
 view_timeline or `{kind: \"transcript_snippet\", text: ...}` from \
 the matched transcript context; never leave placement for the UI \
 or a later turn to infer from prose. This is the right move when the cut would jar \
-visually but the audio reads fine; (c) surface a continuity_warning \
-Note quoting the rule reasons and let the user decide. Never \
+visually but the audio reads fine. Surface a continuity_warning \
+Note quoting the rule reasons when you are not applying the repair. Never \
 silently emit a dirty cut.\
 \n  • `abstain`: tell the user which sidecars are missing (the \
 rules array shows `verdict: abstain` per missing input) and ask \
@@ -273,6 +281,13 @@ unknown job or the backend likely restarted, verify the output_path \
 before calling the render done; an interrupted MP4 may exist but fail \
 ffprobe with a missing moov atom. If verification fails, call \
 start_render(scope='timeline') again.\
+\n- start_look_region_pass / plan_look_regions / review_look_regions: \
+for color finishing and agent-generated LUT passes. Prefer \
+start_look_region_pass when the user wants the LUT pass executed: it \
+plans from color-analysis sidecars, generates LUTs, applies the EDL, \
+and starts a timeline render. After poll_render reports done, call \
+review_look_regions to build contact-sheet/JSON/Markdown proof from \
+the actual render. Use plan_look_regions alone only when drafting.\
 \n- start_indexing: (re)run the configured indexers on raw/. Use when \
 view_episode shows missing sidecars and the user asked for an \
 operation that needs them. Imports auto-chain through indexing in \
@@ -457,14 +472,19 @@ mod tests {
 
     #[test]
     fn base_prompt_documents_assess_continuity_workflow() {
-        // The agent must know to call assess_continuity before
-        // trims/splits, and must know what each verdict implies.
+        // The agent must know to call assess_edit_quality before
+        // risky trims/splits, and must know dirty cuts should route
+        // through editorial grammar rather than default transitions.
         // This test pins those instructions so future prompt
         // edits don't accidentally drop them.
         let prompt = assemble_system_prompt(&ProjectFormat::Podcast, PromptPermissionMode::Manual);
+        assert!(prompt.contains("assess_edit_quality"));
+        assert!(prompt.contains("transition_context"));
+        assert!(prompt.contains("plan_transition"));
         assert!(prompt.contains("assess_continuity"));
         assert!(prompt.contains("dirty"));
-        assert!(prompt.contains("Insert Transition"));
+        assert!(prompt.contains("Set Audio Lead"));
+        assert!(prompt.contains("defaulting dirty cuts to cross dissolves"));
         assert!(prompt.contains("continuity_warning"));
     }
 

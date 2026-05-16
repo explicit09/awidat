@@ -192,6 +192,7 @@ impl ToolOrchestrator {
             rec.record_decision(
                 invocation.name.clone(),
                 handler.approval_summary(invocation),
+                handler.editorial_decision_tags(invocation),
                 keys.clone(),
                 retry_reason.map(str::to_string),
                 format!("{decision:?}"),

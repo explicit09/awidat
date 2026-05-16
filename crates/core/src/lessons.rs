@@ -168,11 +168,13 @@ pub fn extract_from_decisions(decisions: &[EditorialDecision]) -> Vec<Pattern> {
         if tool_decisions.len() < MIN_EVENTS {
             continue;
         }
-        // Build a candidate snippet pool: tokenize each args_summary,
-        // count how many appear ≥MIN_EVENTS times.
+        // Build a candidate snippet pool from both the human approval
+        // summary and stable editorial tags. Tags carry the meaningful
+        // editing dimensions directly, e.g. `cut_type:j_cut`, instead
+        // of relying on a truncated EDL summary substring.
         let mut snippet_counts: HashMap<String, (usize, usize)> = HashMap::new(); // (allow, deny)
         for d in &tool_decisions {
-            for tok in tokenize(&d.args_summary) {
+            for tok in decision_snippets(d) {
                 if tok.len() < MIN_SNIPPET_LEN {
                     continue;
                 }
@@ -211,11 +213,15 @@ pub fn extract_from_decisions(decisions: &[EditorialDecision]) -> Vec<Pattern> {
                 snippet: Some(snippet.clone()),
                 allow_count: allow,
                 deny_count: deny,
-                rule: format!(
-                    "When `{tool}` args contain `{snippet}`, you {direction} \
-                     {direction_pct:.0}% of the time ({direction_count} of {total}) — \
-                     {dev:+.0}pp vs your overall {baseline_pct:.0}% \
-                     accept rate for `{tool}`."
+                rule: snippet_rule(
+                    tool,
+                    &snippet,
+                    direction,
+                    direction_pct,
+                    direction_count,
+                    total,
+                    dev,
+                    baseline_pct,
                 ),
             });
         }
@@ -244,6 +250,91 @@ fn tokenize(s: &str) -> Vec<String> {
         .map(|t| t.to_lowercase())
         .filter(|t| !t.is_empty())
         .collect()
+}
+
+fn decision_snippets(decision: &EditorialDecision) -> Vec<String> {
+    let mut snippets = tokenize(&decision.args_summary);
+    snippets.extend(
+        decision
+            .editorial_tags
+            .iter()
+            .map(|tag| normalize_editorial_tag(tag))
+            .filter(|tag| !tag.is_empty()),
+    );
+    snippets.sort();
+    snippets.dedup();
+    snippets
+}
+
+fn normalize_editorial_tag(tag: &str) -> String {
+    tag.trim()
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.'))
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn snippet_rule(
+    tool: &str,
+    snippet: &str,
+    direction: &str,
+    direction_pct: f64,
+    direction_count: usize,
+    total: usize,
+    dev: f64,
+    baseline_pct: f64,
+) -> String {
+    if let Some(rule) = editorial_tag_rule(
+        snippet,
+        direction,
+        direction_pct,
+        direction_count,
+        total,
+        dev,
+        baseline_pct,
+        tool,
+    ) {
+        return rule;
+    }
+    let subject = if snippet.contains(':') {
+        format!("editorial tag `{snippet}`")
+    } else {
+        format!("`{tool}` args contain `{snippet}`")
+    };
+    format!(
+        "When {subject}, you {direction} {direction_pct:.0}% of the time \
+         ({direction_count} of {total}) — {dev:+.0}pp vs your overall \
+         {baseline_pct:.0}% accept rate for `{tool}`."
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn editorial_tag_rule(
+    snippet: &str,
+    direction: &str,
+    direction_pct: f64,
+    direction_count: usize,
+    total: usize,
+    dev: f64,
+    baseline_pct: f64,
+    tool: &str,
+) -> Option<String> {
+    let (key, value) = snippet.split_once(':')?;
+    let setting = match key {
+        "format_aspect" => Some(format!(
+            "Set Output Format aspect_ratio={}",
+            value.replace('x', ":")
+        )),
+        "format_platform" => Some(format!("Set Output Format platform={value}")),
+        "format_safe_area" => Some(format!("Set Output Format safe_area={value}")),
+        _ => None,
+    }?;
+    Some(format!(
+        "When {setting}, you {direction} {direction_pct:.0}% of the time \
+         ({direction_count} of {total}) — {dev:+.0}pp vs your overall \
+         {baseline_pct:.0}% accept rate for `{tool}`."
+    ))
 }
 
 /// Render the patterns into a markdown body suitable for splicing
@@ -296,6 +387,152 @@ pub fn read_learned_style(path: &Path) -> Option<String> {
     }
 }
 
+/// Project delivery-format defaults distilled from accepted
+/// `Set Output Format` decisions in `learned-style.md`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LearnedProjectFormatDefaults {
+    /// Preferred timeline aspect ratio, such as `9:16`.
+    pub aspect_ratio: Option<String>,
+    /// Preferred package/export platform, such as `youtube_shorts`.
+    pub platform: Option<String>,
+    /// Preferred safe-area profile, such as `mobile`.
+    pub safe_area: Option<String>,
+}
+
+impl LearnedProjectFormatDefaults {
+    fn has_required_format(&self) -> bool {
+        self.aspect_ratio.is_some()
+    }
+}
+
+/// Parse accepted project-format defaults from rendered learned-style
+/// markdown. Denied rules and unsupported aspect ratios are ignored.
+pub fn project_format_defaults_from_markdown(markdown: &str) -> LearnedProjectFormatDefaults {
+    let mut defaults = LearnedProjectFormatDefaults::default();
+    for line in markdown.lines() {
+        if !line.contains("you accept") {
+            continue;
+        }
+        if defaults.aspect_ratio.is_none()
+            && let Some(value) = extract_format_value(line, "aspect_ratio")
+                .or_else(|| extract_editorial_tag_value(line, "format_aspect"))
+                .and_then(normalize_aspect_ratio)
+        {
+            defaults.aspect_ratio = Some(value);
+        }
+        if defaults.platform.is_none()
+            && let Some(value) = extract_format_value(line, "platform")
+                .or_else(|| extract_editorial_tag_value(line, "format_platform"))
+                .and_then(nonempty_setting)
+        {
+            defaults.platform = Some(value);
+        }
+        if defaults.safe_area.is_none()
+            && let Some(value) = extract_format_value(line, "safe_area")
+                .or_else(|| extract_editorial_tag_value(line, "format_safe_area"))
+                .and_then(nonempty_setting)
+        {
+            defaults.safe_area = Some(value);
+        }
+    }
+    defaults
+}
+
+/// Read the configured learned-style file and return any accepted
+/// project-format defaults it contains.
+pub fn learned_project_format_defaults() -> LearnedProjectFormatDefaults {
+    default_output_path()
+        .and_then(|path| read_learned_style(&path))
+        .map(|markdown| project_format_defaults_from_markdown(&markdown))
+        .unwrap_or_default()
+}
+
+/// Apply learned project-format defaults to a project timeline when it
+/// does not already carry an explicit `output_format` metadata block.
+pub fn apply_learned_project_format_defaults(
+    project_root: &Path,
+) -> Result<LearnedProjectFormatDefaults, String> {
+    let Some(path) = default_output_path() else {
+        return Ok(LearnedProjectFormatDefaults::default());
+    };
+    let Some(markdown) = read_learned_style(&path) else {
+        return Ok(LearnedProjectFormatDefaults::default());
+    };
+    apply_project_format_defaults_from_markdown(project_root, &markdown)
+}
+
+/// Testable variant of [`apply_learned_project_format_defaults`] that
+/// accepts learned-style markdown directly.
+pub fn apply_project_format_defaults_from_markdown(
+    project_root: &Path,
+    markdown: &str,
+) -> Result<LearnedProjectFormatDefaults, String> {
+    let defaults = project_format_defaults_from_markdown(markdown);
+    if !defaults.has_required_format() {
+        return Ok(LearnedProjectFormatDefaults::default());
+    }
+    let mut project = awidat_proto::project::Project::read(project_root)
+        .map_err(|e| format!("read project for learned format defaults: {e}"))?;
+    let meta = project
+        .timeline
+        .metadata
+        .awidat
+        .get_or_insert_with(awidat_proto::awidat_meta::AwidatTimelineMetadata::default);
+    if meta.version.is_empty() {
+        meta.version = awidat_proto::AWIDAT_PROJECT_VERSION.to_string();
+    }
+    if meta.extra.contains_key("output_format") {
+        return Ok(LearnedProjectFormatDefaults::default());
+    }
+    meta.extra.insert(
+        "output_format".to_string(),
+        serde_json::json!({
+            "aspect_ratio": defaults.aspect_ratio.clone(),
+            "platform": defaults.platform.clone(),
+            "safe_area": defaults.safe_area.clone(),
+            "source": "learned_project_format_defaults",
+        }),
+    );
+    project
+        .write(project_root)
+        .map_err(|e| format!("write learned format defaults: {e}"))?;
+    Ok(defaults)
+}
+
+fn extract_format_value(line: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}=");
+    let (_, rest) = line.split_once(&needle)?;
+    let value = rest
+        .split(|c: char| c == ',' || c == ')' || c.is_whitespace())
+        .next()?
+        .trim();
+    nonempty_setting(value.to_string())
+}
+
+fn extract_editorial_tag_value(line: &str, key: &str) -> Option<String> {
+    let needle = format!("`{key}:");
+    let (_, rest) = line.split_once(&needle)?;
+    let (value, _) = rest.split_once('`')?;
+    nonempty_setting(value.to_string())
+}
+
+fn normalize_aspect_ratio(value: String) -> Option<String> {
+    let normalized = value.replace('x', ":");
+    match normalized.as_str() {
+        "16:9" | "9:16" | "1:1" | "4:5" => Some(normalized),
+        _ => None,
+    }
+}
+
+fn nonempty_setting(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +542,19 @@ mod tests {
         EditorialDecision {
             tool: tool.into(),
             args_summary: summary.into(),
+            editorial_tags: vec![],
+            approval_keys: vec![],
+            retry_reason: None,
+            decision: decision.into(),
+            timestamp: Utc::now(),
+        }
+    }
+
+    fn tagged(tool: &str, tag: &str, decision: &str) -> EditorialDecision {
+        EditorialDecision {
+            tool: tool.into(),
+            args_summary: "apply_edl proposal".into(),
+            editorial_tags: vec![tag.into()],
             approval_keys: vec![],
             retry_reason: None,
             decision: decision.into(),
@@ -362,6 +612,137 @@ mod tests {
                 .iter()
                 .any(|p| p.tool == "apply_edl" && p.snippet.as_deref() == Some("tangent")),
             "expected snippet pattern for tangent; got {patterns:#?}"
+        );
+    }
+
+    #[test]
+    fn editorial_tags_surface_cut_and_transition_preferences() {
+        let mut decisions = vec![];
+        for _ in 0..6 {
+            decisions.push(tagged("apply_edl", "cut_type:jump_cut", "Deny"));
+        }
+        for _ in 0..6 {
+            decisions.push(tagged(
+                "apply_edl",
+                "transition_family:motion_blur",
+                "Allow",
+            ));
+        }
+
+        let patterns = extract_from_decisions(&decisions);
+        assert!(
+            patterns.iter().any(|p| {
+                p.tool == "apply_edl" && p.snippet.as_deref() == Some("cut_type:jump_cut")
+            }),
+            "expected cut_type tag preference; got {patterns:#?}"
+        );
+        assert!(
+            patterns.iter().any(|p| {
+                p.tool == "apply_edl"
+                    && p.snippet.as_deref() == Some("transition_family:motion_blur")
+            }),
+            "expected transition_family tag preference; got {patterns:#?}"
+        );
+        let md = render_markdown(&patterns, decisions.len()).unwrap();
+        assert!(md.contains("editorial tag `cut_type:jump_cut`"));
+    }
+
+    #[test]
+    fn format_tags_render_as_output_format_guidance() {
+        let mut decisions = vec![];
+        for _ in 0..6 {
+            decisions.push(tagged("apply_edl", "format_aspect:9x16", "Allow"));
+        }
+        for _ in 0..6 {
+            decisions.push(tagged(
+                "apply_edl",
+                "format_platform:youtube_shorts",
+                "Allow",
+            ));
+        }
+        for _ in 0..6 {
+            decisions.push(tagged("apply_edl", "cut_type:jump_cut", "Deny"));
+        }
+
+        let patterns = extract_from_decisions(&decisions);
+        let md = render_markdown(&patterns, decisions.len()).unwrap();
+        assert!(md.contains("Set Output Format"));
+        assert!(md.contains("aspect_ratio=9:16"));
+        assert!(md.contains("platform=youtube_shorts"));
+    }
+
+    #[test]
+    fn learned_project_format_defaults_parse_from_accepted_guidance() {
+        let markdown = "\
+- When Set Output Format aspect_ratio=9:16, you accept 86% of the time (6 of 7).
+- When Set Output Format platform=youtube_shorts, you accept 83% of the time (5 of 6).
+- When Set Output Format safe_area=mobile, you accept 80% of the time (4 of 5).
+- When Set Output Format aspect_ratio=1:1, you deny 80% of the time (4 of 5).
+";
+
+        let defaults = project_format_defaults_from_markdown(markdown);
+
+        assert_eq!(defaults.aspect_ratio.as_deref(), Some("9:16"));
+        assert_eq!(defaults.platform.as_deref(), Some("youtube_shorts"));
+        assert_eq!(defaults.safe_area.as_deref(), Some("mobile"));
+    }
+
+    #[test]
+    fn learned_project_format_defaults_stamp_fresh_project_without_overriding_existing_format() {
+        let markdown = "\
+- When Set Output Format aspect_ratio=9:16, you accept 86% of the time (6 of 7).
+- When Set Output Format platform=youtube_shorts, you accept 83% of the time (5 of 6).
+- When Set Output Format safe_area=mobile, you accept 80% of the time (4 of 5).
+";
+        let dir = tempfile::tempdir().unwrap();
+        awidat_proto::project::Project::init(dir.path()).unwrap();
+
+        let applied = apply_project_format_defaults_from_markdown(dir.path(), markdown).unwrap();
+
+        assert_eq!(applied.aspect_ratio.as_deref(), Some("9:16"));
+        let project = awidat_proto::project::Project::read(dir.path()).unwrap();
+        let format = project
+            .timeline
+            .metadata
+            .awidat
+            .as_ref()
+            .unwrap()
+            .extra
+            .get("output_format")
+            .unwrap();
+        assert_eq!(
+            format.get("aspect_ratio").and_then(|v| v.as_str()),
+            Some("9:16")
+        );
+        assert_eq!(
+            format.get("platform").and_then(|v| v.as_str()),
+            Some("youtube_shorts")
+        );
+        assert_eq!(
+            format.get("safe_area").and_then(|v| v.as_str()),
+            Some("mobile")
+        );
+
+        let second = apply_project_format_defaults_from_markdown(
+            dir.path(),
+            "- When Set Output Format aspect_ratio=1:1, you accept 90% of the time (9 of 10).",
+        )
+        .unwrap();
+
+        assert_eq!(second, LearnedProjectFormatDefaults::default());
+        let project = awidat_proto::project::Project::read(dir.path()).unwrap();
+        let format = project
+            .timeline
+            .metadata
+            .awidat
+            .as_ref()
+            .unwrap()
+            .extra
+            .get("output_format")
+            .unwrap();
+        assert_eq!(
+            format.get("aspect_ratio").and_then(|v| v.as_str()),
+            Some("9:16")
         );
     }
 

@@ -154,7 +154,7 @@ impl ToolHandler for AssessContinuityTool {
 /// the requested timeline `at_s`. Returns `(asset_id, source_at_s,
 /// source_clip_end_s)`. Source-time = clip's source_range.start +
 /// (timeline_at - clip's track_start).
-fn resolve_asset_at(
+pub(crate) fn resolve_asset_at(
     timeline: &awidat_proto::otio::Timeline,
     at_s: f64,
 ) -> Option<(String, f64, f64)> {
@@ -198,7 +198,7 @@ fn resolve_asset_at(
 /// Assemble [`ContinuityInputs`] for the engine: load all the
 /// sidecars + pre-filter nearby cuts. Each loader tolerates
 /// missing files — the rule that needs that input will abstain.
-fn build_inputs(
+pub(crate) fn build_inputs(
     project_root: &Path,
     timeline: &awidat_proto::otio::Timeline,
     asset_id: &str,
@@ -218,7 +218,7 @@ fn build_inputs(
 /// Walk the timeline and collect any clip-boundary times within
 /// ±5 seconds of `at_s`. Each clip's start (other than 0) is a
 /// cut point on the track. Used by the rhythm rule.
-fn collect_nearby_cuts(timeline: &awidat_proto::otio::Timeline, at_s: f64) -> Vec<f64> {
+pub(crate) fn collect_nearby_cuts(timeline: &awidat_proto::otio::Timeline, at_s: f64) -> Vec<f64> {
     let mut out = Vec::new();
     for stack_child in &timeline.tracks.children {
         let StackChild::Track(track) = stack_child else {

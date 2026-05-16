@@ -71,6 +71,13 @@ pub struct EditorialDecision {
     /// ops, score=0.72, kind=hook`). Caller-supplied — `Session`
     /// builds it from the args + tool-specific summarizer.
     pub args_summary: String,
+    /// Stable editorial dimensions extracted from the tool call. These
+    /// are deterministic learning inputs, not prose, so lesson
+    /// extraction can learn accepted/rejected cut types, transition
+    /// families, split-edit ranges, and b-roll/montage mode without
+    /// relying on fragile summary substrings.
+    #[serde(default)]
+    pub editorial_tags: Vec<String>,
     /// Operation-scoped approval keys considered by the orchestrator.
     /// Used to debug why an AllowForSession did or did not cover a
     /// later request.
@@ -341,6 +348,7 @@ impl Recorder {
         &self,
         tool: String,
         args_summary: String,
+        editorial_tags: Vec<String>,
         approval_keys: Vec<crate::tool::ApprovalKey>,
         retry_reason: Option<String>,
         decision: String,
@@ -349,6 +357,7 @@ impl Recorder {
             EditorialDecision {
                 tool,
                 args_summary,
+                editorial_tags,
                 approval_keys,
                 retry_reason,
                 decision,
@@ -737,6 +746,7 @@ mod tests {
         rec.record_decision(
             "apply_edl".into(),
             "3 ops, kind=hook".into(),
+            vec!["cut_type:hard_cut".into()],
             vec![crate::tool::ApprovalKey::new("apply_edl", "edl:abc")],
             None,
             "Allow".into(),
@@ -753,6 +763,7 @@ mod tests {
                 assert_eq!(d.tool, "apply_edl");
                 assert_eq!(d.decision, "Allow");
                 assert!(d.args_summary.contains("kind=hook"));
+                assert_eq!(d.editorial_tags, vec!["cut_type:hard_cut"]);
                 assert_eq!(d.approval_keys[0].operation, "edl:abc");
             }
             _ => panic!("expected EditorialDecision"),
@@ -785,6 +796,7 @@ mod tests {
             "apply_edl".into(),
             "op A".into(),
             vec![],
+            vec![],
             None,
             "Allow".into(),
         );
@@ -795,6 +807,7 @@ mod tests {
         r2.record_decision(
             "apply_edl".into(),
             "op B".into(),
+            vec![],
             vec![],
             None,
             "Deny".into(),
