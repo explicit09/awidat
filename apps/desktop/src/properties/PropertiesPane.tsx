@@ -28,6 +28,20 @@ const DEFAULT_COLOR = {
   shadows: 0,
   highlights: 0,
 };
+const SUPPORTED_LUT_EXTENSIONS = new Set(["3dl", "cube", "dat", "m3d", "csp"]);
+const CUT_TYPE_OPTIONS = [
+  { value: "hard_cut", label: "Hard Cut" },
+  { value: "cut_on_action", label: "Cut On Action" },
+  { value: "cutaway", label: "Cutaway" },
+  { value: "insert", label: "Insert" },
+  { value: "eyeline_match_cut", label: "Eyeline Match" },
+  { value: "shot_reverse_shot", label: "Shot Reverse Shot" },
+  { value: "match_cut", label: "Match Cut" },
+  { value: "smash_cut", label: "Smash Cut" },
+  { value: "cross_cut", label: "Cross Cut" },
+  { value: "j_cut", label: "J-Cut" },
+  { value: "l_cut", label: "L-Cut" },
+];
 
 /** Debounce window before pushing a slider/input change through
  *  propose_user_edit. Long enough to coalesce a rapid drag; short
@@ -105,6 +119,12 @@ export function PropertiesPane() {
   const trackEnd = trackStart + item.duration_s;
   const trackName = track?.name ?? "?";
   const trackKind = track?.kind ?? "?";
+  const incomingCut = snapshot.cut_boundaries.find(
+    (boundary) => boundary.to_clip_id === item.clip_uuid,
+  );
+  const outgoingCut = snapshot.cut_boundaries.find(
+    (boundary) => boundary.from_clip_id === item.clip_uuid,
+  );
   const deleteClip = async () => {
     const clips =
       item.link_group_id !== null
@@ -186,10 +206,27 @@ export function PropertiesPane() {
                 fadeInS={item.fade_in_s}
                 fadeOutS={item.fade_out_s}
               />
+              <SplitEditControl
+                clipUuid={item.clip_uuid}
+                audioLeadS={item.audio_lead_s}
+                audioTrailS={item.audio_trail_s}
+                reason={item.split_edit_reason}
+                confidence={item.split_edit_confidence}
+              />
             </PanelSection>
             <PanelSection title="Timing">
               <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
             </PanelSection>
+            {(incomingCut || outgoingCut || item.split_edit_reason) && (
+              <PanelSection title="Editorial">
+                <EditorialIntent
+                  incomingCut={incomingCut}
+                  outgoingCut={outgoingCut}
+                  splitEditReason={item.split_edit_reason}
+                  splitEditConfidence={item.split_edit_confidence}
+                />
+              </PanelSection>
+            )}
           </>
         )}
         {track?.audio && (
@@ -264,9 +301,11 @@ type TitleAnimation =
   | "fade_in_out"
   | "slide_in"
   | "slide_out";
+type TimelineCutBoundary = import("../protocol").TimelineCutBoundary;
 
 const TRANSITION_KIND_OPTIONS = [
   { value: "awidat.cross_dissolve", label: "Cross Dissolve" },
+  { value: "awidat.match_dissolve", label: "Match Dissolve" },
   { value: "SMPTE_Dissolve", label: "SMPTE Dissolve" },
   { value: "awidat.fade_black", label: "Fade Black" },
   { value: "awidat.flash_white", label: "Flash White" },
@@ -275,10 +314,31 @@ const TRANSITION_KIND_OPTIONS = [
   { value: "awidat.slide_left", label: "Slide Left" },
   { value: "awidat.slide_right", label: "Slide Right" },
   { value: "awidat.smooth_push_left", label: "Smooth Push Left" },
+  { value: "awidat.motion_blur", label: "Motion Blur" },
+  { value: "awidat.whip_pan_left", label: "Whip Pan Left" },
+  { value: "awidat.whip_pan_right", label: "Whip Pan Right" },
+  { value: "awidat.pass_by_left", label: "Pass-By Left" },
+  { value: "awidat.pass_by_right", label: "Pass-By Right" },
+  { value: "awidat.iris_open", label: "Iris Open" },
+  { value: "awidat.iris_close", label: "Iris Close" },
+  { value: "awidat.invisible_cut", label: "Invisible Cut" },
   { value: "awidat.zoom_in", label: "Zoom In" },
   { value: "awidat.pixelize", label: "Pixelize" },
   { value: "awidat.radial", label: "Radial" },
 ];
+const HIGH_ATTENTION_TRANSITIONS = new Set([
+  "awidat.flash_white",
+  "awidat.motion_blur",
+  "awidat.whip_pan_left",
+  "awidat.whip_pan_right",
+  "awidat.pass_by_left",
+  "awidat.pass_by_right",
+  "awidat.iris_open",
+  "awidat.iris_close",
+  "awidat.zoom_in",
+  "awidat.pixelize",
+  "awidat.radial",
+]);
 
 function TransitionEditor({
   track,
@@ -290,6 +350,11 @@ function TransitionEditor({
   clearSelection: () => void;
 }) {
   const adjacent = track ? adjacentTransitionClips(track, transition.index) : null;
+  const transitionDensity = track ? recentTransitionDensity(track, transition) : null;
+  const repeatedHighAttention =
+    track && HIGH_ATTENTION_TRANSITIONS.has(transition.effect_name)
+      ? recentSameTransitionCount(track, transition)
+      : 0;
   const [kind, setKind] = useState(transition.effect_name);
   const [duration, setDuration] = useState(transition.duration_s);
   const [inOffset, setInOffset] = useState(transition.in_offset_s);
@@ -364,6 +429,19 @@ function TransitionEditor({
             Adjacent clips could not be resolved for this transition.
           </div>
         )}
+        {transitionDensity !== null && transitionDensity >= 3 && (
+          <div className="properties-warning">
+            {transitionDensity} visible transitions land within this 30s window. Review
+            whether this one still has a job.
+          </div>
+        )}
+        {repeatedHighAttention >= 2 && (
+          <div className="properties-warning">
+            {formatIntentLabel(transition.effect_name.replace(/^awidat\./, ""))} appears{" "}
+            {repeatedHighAttention} times in this 30s window. Repeated high-attention
+            transitions can read as style drift.
+          </div>
+        )}
         <Field label="Kind">
           <select
             className="properties-select"
@@ -380,6 +458,43 @@ function TransitionEditor({
             ))}
           </select>
         </Field>
+        {transition.transition_id && (
+          <Field label="Intent">
+            <div className="properties-intent-stack">
+              <span className="properties-intent-chip">
+                {formatIntentLabel(transition.transition_intent ?? "semantic_transition")}
+              </span>
+              <span className="properties-intent-meta">
+                {[
+                  transition.transition_id,
+                  transition.transition_family,
+                  transition.transition_direction
+                    ? `direction ${transition.transition_direction}`
+                    : null,
+                  transition.transition_energy !== null
+                    ? `energy ${transition.transition_energy.toFixed(2)}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </div>
+          </Field>
+        )}
+        {transition.audio_policy && (
+          <Field label="Audio">
+            <div className="properties-intent-stack">
+              <span className="properties-intent-chip">
+                {transition.audio_policy === "crossfade" ? "Crossfade" : "Cut"}
+              </span>
+              <span className="properties-intent-meta">
+                {transition.audio_policy === "crossfade"
+                  ? "Adjacent source audio overlaps through the transition."
+                  : "Picture overlaps, but dialogue/audio stays cut-style."}
+              </span>
+            </div>
+          </Field>
+        )}
         <Field label="Duration">
           <input
             type="number"
@@ -448,6 +563,35 @@ function adjacentTransitionClips(track: TimelineTrack, transitionIndex: number) 
   const to = track.items[position + 1];
   if (from?.kind !== "clip" || to?.kind !== "clip") return null;
   return { from, to };
+}
+
+function recentTransitionDensity(
+  track: TimelineTrack,
+  transition: Extract<TimelineItem, { kind: "transition" }>,
+) {
+  const cutS = transitionCutS(transition);
+  return track.items.filter((item) => {
+    if (item.kind !== "transition") return false;
+    const candidateCutS = transitionCutS(item);
+    return candidateCutS >= cutS - 30 && candidateCutS <= cutS;
+  }).length;
+}
+
+function recentSameTransitionCount(
+  track: TimelineTrack,
+  transition: Extract<TimelineItem, { kind: "transition" }>,
+) {
+  const cutS = transitionCutS(transition);
+  return track.items.filter((item) => {
+    if (item.kind !== "transition") return false;
+    if (item.effect_name !== transition.effect_name) return false;
+    const candidateCutS = transitionCutS(item);
+    return candidateCutS >= cutS - 30 && candidateCutS <= cutS;
+  }).length;
+}
+
+function transitionCutS(transition: Extract<TimelineItem, { kind: "transition" }>) {
+  return transition.track_start_s + transition.in_offset_s;
 }
 
 function TitleEditor({
@@ -626,6 +770,262 @@ function TitleEditor({
       </Field>
     </>
   );
+}
+
+function EditorialIntent({
+  incomingCut,
+  outgoingCut,
+  splitEditReason,
+  splitEditConfidence,
+}: {
+  incomingCut: TimelineCutBoundary | undefined;
+  outgoingCut: TimelineCutBoundary | undefined;
+  splitEditReason: string | null;
+  splitEditConfidence: number | null;
+}) {
+  return (
+    <>
+      {incomingCut && <CutBoundaryField label="Incoming" boundary={incomingCut} />}
+      {outgoingCut && <CutBoundaryField label="Outgoing" boundary={outgoingCut} />}
+      {splitEditReason && (
+        <Field label="Split edit">
+          <div className="properties-intent-stack">
+            <span className="properties-value">{splitEditReason}</span>
+            {splitEditConfidence !== null && (
+              <span className="properties-intent-meta">
+                Confidence {Math.round(splitEditConfidence * 100)}%
+              </span>
+            )}
+          </div>
+        </Field>
+      )}
+    </>
+  );
+}
+
+function CutBoundaryField({
+  label,
+  boundary,
+}: {
+  label: string;
+  boundary: TimelineCutBoundary;
+}) {
+  const [cutType, setCutType] = useState(boundary.cut_type);
+  const [intent, setIntent] = useState(boundary.intent);
+
+  useEffect(() => {
+    setCutType(boundary.cut_type);
+    setIntent(boundary.intent);
+  }, [boundary.key, boundary.cut_type, boundary.intent]);
+
+  const from = { kind: "clip_uuid" as const, uuid: boundary.from_clip_id };
+  const to = { kind: "clip_uuid" as const, uuid: boundary.to_clip_id };
+  const reason =
+    boundary.reason ??
+    `Inspector update for ${formatIntentLabel(cutType).toLowerCase()} boundary.`;
+
+  function applyCutIntent(nextCutType = cutType, nextIntent = intent) {
+    const op: EdlOp = {
+      kind: "set_cut_intent",
+      from,
+      to,
+      cutType: nextCutType,
+      intent: nextIntent || "manual_editorial_intent",
+      audioRelation: boundary.audio_relation,
+      energy: boundary.energy ?? undefined,
+      confidence: boundary.confidence ?? 1,
+      reason,
+    };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (cut intent) failed", err);
+    });
+  }
+
+  function applySplitAlternative(kind: "j" | "l") {
+    const op: EdlOp =
+      kind === "j"
+        ? {
+            kind: "set_audio_lead",
+            anchor: to,
+            leadS: 0.35,
+            reason: "inspector alternative: use a J-cut instead of a visible transition",
+            confidence: boundary.confidence ?? 1,
+          }
+        : {
+            kind: "set_audio_trail",
+            anchor: from,
+            trailS: 0.35,
+            reason: "inspector alternative: use an L-cut instead of a visible transition",
+            confidence: boundary.confidence ?? 1,
+          };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (split alternative) failed", err);
+    });
+  }
+
+  const detail = [
+    boundary.intent,
+    boundary.audio_relation,
+    boundary.energy !== null ? `energy ${boundary.energy.toFixed(2)}` : null,
+    boundary.confidence !== null
+      ? `confidence ${Math.round(boundary.confidence * 100)}%`
+      : null,
+  ].filter(Boolean);
+  return (
+    <Field label={label}>
+      <div className="properties-intent-stack">
+        <span className="properties-intent-chip">{formatIntentLabel(boundary.cut_type)}</span>
+        <span className="properties-intent-meta">{detail.join(" · ")}</span>
+        {boundary.reason && <span className="properties-value">{boundary.reason}</span>}
+        <label className="properties-mini-field properties-cut-field">
+          <span>Type</span>
+          <select
+            className="properties-select properties-cut-type-select"
+            value={cutType}
+            onChange={(e) => setCutType(e.target.value)}
+          >
+            {!CUT_TYPE_OPTIONS.some((option) => option.value === cutType) && (
+              <option value={cutType}>{formatIntentLabel(cutType)}</option>
+            )}
+            {CUT_TYPE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="properties-mini-field properties-cut-field">
+          <span>Intent</span>
+          <input
+            className="properties-text-input"
+            value={intent}
+            onChange={(e) => setIntent(e.target.value)}
+          />
+        </label>
+        <div className="properties-action-row properties-alternative-row">
+          <button
+            className="properties-apply"
+            type="button"
+            onClick={() => applyCutIntent()}
+          >
+            Apply cut intent
+          </button>
+          <button
+            className="properties-secondary"
+            type="button"
+            onClick={() => applyCutIntent("hard_cut", "low_attention_edit")}
+          >
+            Use hard cut
+          </button>
+          <button
+            className="properties-secondary"
+            type="button"
+            onClick={() => applySplitAlternative("j")}
+          >
+            Use J-cut
+          </button>
+          <button
+            className="properties-secondary"
+            type="button"
+            onClick={() => applySplitAlternative("l")}
+          >
+            Use L-cut
+          </button>
+        </div>
+      </div>
+    </Field>
+  );
+}
+
+function SplitEditControl({
+  clipUuid,
+  audioLeadS,
+  audioTrailS,
+  reason,
+  confidence,
+}: {
+  clipUuid: string;
+  audioLeadS: number | null;
+  audioTrailS: number | null;
+  reason: string | null;
+  confidence: number | null;
+}) {
+  const [lead, setLead] = useState(audioLeadS ?? 0);
+  const [trail, setTrail] = useState(audioTrailS ?? 0);
+
+  useEffect(() => {
+    setLead(audioLeadS ?? 0);
+    setTrail(audioTrailS ?? 0);
+  }, [clipUuid, audioLeadS, audioTrailS]);
+
+  function apply(kind: "lead" | "trail") {
+    const value = kind === "lead" ? lead : trail;
+    if (!Number.isFinite(value) || value < 0) return;
+    const shared = {
+      anchor: { kind: "clip_uuid", uuid: clipUuid } as const,
+      reason: reason ?? "manual split edit",
+      confidence: confidence ?? 1,
+    };
+    const op: EdlOp =
+      kind === "lead"
+        ? { kind: "set_audio_lead", leadS: value, ...shared }
+        : { kind: "set_audio_trail", trailS: value, ...shared };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (split edit) failed", err);
+    });
+  }
+
+  return (
+    <Field label="Split edit">
+      <div className="properties-split-edit">
+        <label className="properties-mini-field">
+          <span>Lead</span>
+          <input
+            type="number"
+            className="properties-number-input"
+            min={0}
+            step={0.01}
+            value={lead}
+            onChange={(e) => setLead(parseFloat(e.target.value))}
+          />
+          <button className="properties-apply" type="button" onClick={() => apply("lead")}>
+            Apply
+          </button>
+        </label>
+        <label className="properties-mini-field">
+          <span>Trail</span>
+          <input
+            type="number"
+            className="properties-number-input"
+            min={0}
+            step={0.01}
+            value={trail}
+            onChange={(e) => setTrail(parseFloat(e.target.value))}
+          />
+          <button className="properties-apply" type="button" onClick={() => apply("trail")}>
+            Apply
+          </button>
+        </label>
+      </div>
+    </Field>
+  );
+}
+
+function formatIntentLabel(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 /** Build a stable signature string for the title styling so the
@@ -1193,25 +1593,45 @@ function LutControl({
   }, [clipUuid, initial]);
 
   const dirty = local !== lastCommittedRef.current;
+  const trimmed = local.trim();
+  const lutExtension = trimmed.split(".").pop()?.toLowerCase() ?? "";
   const canApply =
     dirty &&
-    local.trim().length > 0 &&
-    !local.startsWith("/") &&
-    !local.split(/[\\/]/).includes("..");
+    trimmed.length > 0 &&
+    !trimmed.startsWith("/") &&
+    !trimmed.includes("\\") &&
+    !trimmed.split("/").some((part) => part === "." || part === ".." || part === "") &&
+    SUPPORTED_LUT_EXTENSIONS.has(lutExtension);
+  const canRemove = lastCommittedRef.current.length > 0;
 
   function apply() {
     if (!canApply) return;
-    lastCommittedRef.current = local;
+    lastCommittedRef.current = trimmed;
     const op: EdlOp = {
       kind: "apply_lut",
       anchor: { kind: "clip_uuid", uuid: clipUuid },
-      lutPath: local.trim(),
+      lutPath: trimmed,
     };
     invoke<string>("propose_user_edit", {
       edlText: serializeEdl([op]),
     }).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (apply_lut) failed", err);
+    });
+  }
+
+  function remove() {
+    lastCommittedRef.current = "";
+    setLocal("");
+    const op: EdlOp = {
+      kind: "remove_lut",
+      anchor: { kind: "clip_uuid", uuid: clipUuid },
+    };
+    invoke<string>("propose_user_edit", {
+      edlText: serializeEdl([op]),
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (remove_lut) failed", err);
     });
   }
 
@@ -1233,6 +1653,11 @@ function LutControl({
             disabled={!canApply}
           >
             Apply
+          </button>
+        )}
+        {canRemove && (
+          <button className="properties-apply" type="button" onClick={remove}>
+            Clear
           </button>
         )}
       </div>

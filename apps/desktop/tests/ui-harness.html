@@ -26,8 +26,38 @@
       const projectRoot = "/tmp/awidat-ui-eval";
 
       const timeline = {
-        duration_s: 12,
+        duration_s: 18,
         broadcast_overlay: null,
+        cut_boundaries: [
+          {
+            key: "clip-1::clip-2",
+            from_clip_id: "clip-1",
+            to_clip_id: "clip-2",
+            cut_type: "cut_on_action",
+            intent: "hide_jump",
+            energy: 0.72,
+            audio_relation: "audio_leads",
+            confidence: 0.91,
+            reason: "Outgoing hand motion masks the picture cut.",
+          },
+          {
+            key: "clip-2::clip-3",
+            from_clip_id: "clip-2",
+            to_clip_id: "clip-3",
+            cut_type: "cutaway",
+            intent: "cover_context",
+            energy: 0.44,
+            audio_relation: "sync",
+            confidence: 0.82,
+            reason: "Cutaway gives the viewer spatial context.",
+          },
+        ],
+        preview_limitations: [
+          {
+            kind: "split_edit_audio_preview",
+            message: "Split-edit offsets are shown in the timeline but approximated in preview audio.",
+          },
+        ],
         tracks: [
           {
             name: "V1",
@@ -58,6 +88,10 @@
                 lut_path: null,
                 title: null,
                 video_overlay: null,
+                audio_lead_s: 0.35,
+                audio_trail_s: null,
+                split_edit_reason: "Let the room tone lead the visual cut.",
+                split_edit_confidence: 0.87,
               },
               {
                 kind: "transition",
@@ -67,14 +101,106 @@
                 in_offset_s: 0.25,
                 out_offset_s: 0.25,
                 effect_name: "awidat.cross_dissolve",
+                transition_id: "awidat.cross_dissolve",
+                transition_family: "dissolve",
+                transition_intent: "soften_time_shift",
+                transition_direction: null,
+                transition_energy: 0.22,
+                audio_policy: "crossfade",
               },
               {
                 kind: "clip",
                 index: 2,
-                name: "Outro",
+                name: "Context",
                 clip_uuid: "clip-2",
                 track_start_s: 6,
-                duration_s: 6,
+                duration_s: 4,
+                asset_id: "raw/context.mp4",
+                source_start_s: 1,
+                proxy_path: null,
+                thumbnail_dir: null,
+                waveform_path: null,
+                volume: null,
+                speed: null,
+                fade_in_s: null,
+                fade_out_s: null,
+                link_group_id: null,
+                has_video: true,
+                has_audio: true,
+                color_correction: null,
+                lut_path: null,
+                title: null,
+                video_overlay: null,
+                audio_lead_s: null,
+                audio_trail_s: 0.2,
+                split_edit_reason: "Hold dialogue under the incoming reaction.",
+                split_edit_confidence: 0.78,
+              },
+              {
+                kind: "transition",
+                index: 3,
+                track_start_s: 9.75,
+                duration_s: 0.5,
+                in_offset_s: 0.25,
+                out_offset_s: 0.25,
+                effect_name: "awidat.fade_black",
+                transition_id: "awidat.fade_black",
+                transition_family: "fade",
+                transition_intent: "chapter_break",
+                transition_direction: null,
+                transition_energy: 0.5,
+                audio_policy: "cut",
+              },
+              {
+                kind: "clip",
+                index: 4,
+                name: "Reaction",
+                clip_uuid: "clip-3",
+                track_start_s: 10,
+                duration_s: 4,
+                asset_id: "raw/reaction.mp4",
+                source_start_s: 2,
+                proxy_path: null,
+                thumbnail_dir: null,
+                waveform_path: null,
+                volume: null,
+                speed: null,
+                fade_in_s: null,
+                fade_out_s: null,
+                link_group_id: null,
+                has_video: true,
+                has_audio: true,
+                color_correction: null,
+                lut_path: null,
+                title: null,
+                video_overlay: null,
+                audio_lead_s: null,
+                audio_trail_s: null,
+                split_edit_reason: null,
+                split_edit_confidence: null,
+              },
+              {
+                kind: "transition",
+                index: 5,
+                track_start_s: 13.75,
+                duration_s: 0.5,
+                in_offset_s: 0.25,
+                out_offset_s: 0.25,
+                effect_name: "awidat.flash_white",
+                transition_id: "awidat.flash_white",
+                transition_family: "flash",
+                transition_intent: "heighten_impact",
+                transition_direction: null,
+                transition_energy: 0.9,
+                audio_policy: "cut",
+              },
+              {
+                kind: "clip",
+                index: 6,
+                name: "Outro",
+                clip_uuid: "clip-4",
+                track_start_s: 14,
+                duration_s: 4,
                 asset_id: "raw/outro.mp4",
                 source_start_s: 1,
                 proxy_path: null,
@@ -91,6 +217,10 @@
                 lut_path: null,
                 title: null,
                 video_overlay: null,
+                audio_lead_s: null,
+                audio_trail_s: null,
+                split_edit_reason: null,
+                split_edit_confidence: null,
               },
             ],
           },
@@ -144,6 +274,7 @@
       mockWindows("main");
       mockConvertFileSrc("macos");
       window.__lastEdlText = "";
+      let proposalCounter = 0;
       mockIPC((cmd, args) => {
         switch (cmd) {
           case "current_project_root":
@@ -175,12 +306,27 @@
           case "set_menu_item_enabled":
           case "set_view_state":
           case "start_turn":
+            return null;
           case "accept_proposal":
           case "reject_proposal":
+            useProposalStore.getState().clear();
             return null;
           case "propose_user_edit":
             window.__lastEdlText = args?.edlText ?? "";
-            return "proposal-ui-test";
+            proposalCounter += 1;
+            const proposalId = `proposal-ui-test-${proposalCounter}`;
+            useProposalStore.getState().ingest({
+              kind: "proposed_edit",
+              id: proposalId,
+              phase: "started",
+              source: { source: "user" },
+              edl_text: window.__lastEdlText,
+              snapshot: timeline,
+              diff_hints: [],
+              summary: "Assessor recommendation",
+              revision: 0,
+            });
+            return proposalId;
           case "get_permission_mode":
             return "ask";
           case "get_project_type":
@@ -215,12 +361,58 @@
         });
       }
 
+      function seedAssessorRecommendation(overrides = {}) {
+        const atS = overrides.atS ?? 8;
+        useAgentStore.getState().upsert({
+          kind: "tool_call",
+          id: overrides.id ?? "assess-edit-quality-1",
+          phase: "completed",
+          name: "assess_edit_quality",
+          args: { at_s: atS, kind: "cut", objective: overrides.intent ?? "speaker_handoff" },
+          result: {
+            Ok: JSON.stringify({
+              at_s: atS,
+              source_at_s: atS,
+              kind: "cut",
+              objective: overrides.intent ?? "speaker_handoff",
+              asset_id: "raw/intro.mp4",
+              continuity: {
+                verdict: "risky",
+                rules: [],
+              },
+              recommendation: {
+                action: overrides.action ?? "use_j_cut",
+                cut_type: overrides.cutType ?? "j_cut",
+                intent: overrides.intent ?? "speaker_handoff",
+                edl_op: overrides.edlOp ?? "Set Audio Lead",
+                transition: null,
+                broll: false,
+                reason: overrides.reason ?? "Use a J-cut so incoming dialogue starts before picture.",
+              },
+              edl_guidance:
+                overrides.edlGuidance ?? "*** Set Audio Lead with lead_s 0.35, then review by ear",
+            }),
+          },
+        });
+      }
+      window.__seedAssessorRecommendation = seedAssessorRecommendation;
+
       createRoot(document.getElementById("root")).render(React.createElement(App));
       if (scenario === "proposal") {
         window.setTimeout(seedProposal, 250);
+      } else if (scenario === "assessor") {
+        window.setTimeout(seedAssessorRecommendation, 250);
       } else if (scenario === "transition") {
         window.setTimeout(() => {
           useTimelineSelectionStore.getState().select({ trackIndex: 0, clipIndex: 1 });
+        }, 250);
+      } else if (scenario === "editorial") {
+        window.setTimeout(() => {
+          useTimelineSelectionStore.getState().select({ trackIndex: 0, clipIndex: 2 });
+        }, 250);
+      } else if (scenario === "density") {
+        window.setTimeout(() => {
+          useTimelineSelectionStore.getState().select({ trackIndex: 0, clipIndex: 5 });
         }, 250);
       }
     </script>

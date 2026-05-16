@@ -9,10 +9,15 @@
 
 use std::path::Path;
 
-use awidat_desktop_protocol::{TimelineItem, TimelineSnapshot, TimelineTrack};
+use awidat_desktop_protocol::{
+    TimelineCutBoundary, TimelineItem, TimelinePreviewLimitation, TimelineSnapshot, TimelineTrack,
+};
 use awidat_proto::awidat_meta;
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::project::Project;
+use awidat_proto::transitions::{
+    SemanticTransitionSpec, TransitionAudioPolicy, resolve_audio_policy,
+};
 use tauri::State;
 
 use crate::state::AwidatState;
@@ -41,6 +46,8 @@ fn empty_snapshot() -> TimelineSnapshot {
     TimelineSnapshot {
         duration_s: 0.0,
         broadcast_overlay: None,
+        cut_boundaries: Vec::new(),
+        preview_limitations: Vec::new(),
         tracks: Vec::new(),
     }
 }
@@ -150,6 +157,11 @@ pub fn flatten_timeline_public(
                             )
                         })
                         .unwrap_or((None, None));
+                    let split_edit = clip
+                        .metadata
+                        .awidat
+                        .as_ref()
+                        .and_then(|m| m.split_edit.as_ref());
                     let link_group_id = clip
                         .metadata
                         .awidat
@@ -263,6 +275,10 @@ pub fn flatten_timeline_public(
                         speed,
                         fade_in_s,
                         fade_out_s,
+                        audio_lead_s: split_edit.and_then(|s| s.audio_lead_s),
+                        audio_trail_s: split_edit.and_then(|s| s.audio_trail_s),
+                        split_edit_reason: split_edit.and_then(|s| s.reason.clone()),
+                        split_edit_confidence: split_edit.and_then(|s| s.confidence),
                         link_group_id,
                         has_video: Some(matches!(track.kind, TrackKind::Video)),
                         has_audio: Some(matches!(track.kind, TrackKind::Audio)),
@@ -288,6 +304,9 @@ pub fn flatten_timeline_public(
                     let duration_s = t.in_offset.to_seconds() + t.out_offset.to_seconds();
                     let in_offset_s = t.in_offset.to_seconds();
                     let out_offset_s = t.out_offset.to_seconds();
+                    let transition_spec = t.metadata.get("awidat_transition").and_then(|value| {
+                        serde_json::from_value::<SemanticTransitionSpec>(value.clone()).ok()
+                    });
                     items.push(TimelineItem::Transition {
                         index: i,
                         // Transition straddles the cut between
@@ -299,6 +318,16 @@ pub fn flatten_timeline_public(
                         in_offset_s,
                         out_offset_s,
                         effect_name: t.transition_type.clone(),
+                        transition_id: transition_spec.as_ref().map(|spec| spec.id.clone()),
+                        transition_family: transition_spec
+                            .as_ref()
+                            .and_then(|spec| spec.family.clone()),
+                        transition_intent: transition_spec
+                            .as_ref()
+                            .and_then(|spec| spec.intent.clone()),
+                        transition_energy: transition_spec.as_ref().and_then(|spec| spec.energy),
+                        transition_direction: transition_spec.and_then(|spec| spec.direction),
+                        audio_policy: transition_audio_policy_label(&t.transition_type),
                     });
                 }
                 TrackChild::Stack(_) => {
@@ -330,7 +359,120 @@ pub fn flatten_timeline_public(
             .as_ref()
             .and_then(|m| m.broadcast_overlay.as_ref())
             .map(broadcast_overlay_for_protocol),
+        cut_boundaries: cut_boundaries_for_protocol(timeline),
+        preview_limitations: preview_limitations_for_protocol(&tracks),
         tracks,
+    }
+}
+
+fn preview_limitations_for_protocol(tracks: &[TimelineTrack]) -> Vec<TimelinePreviewLimitation> {
+    let has_split_edit_audio = tracks.iter().flat_map(|track| &track.items).any(|item| {
+        matches!(
+            item,
+            TimelineItem::Clip {
+                audio_lead_s: Some(lead_s),
+                ..
+            } if *lead_s > 0.0
+        ) || matches!(
+            item,
+            TimelineItem::Clip {
+                audio_trail_s: Some(trail_s),
+                ..
+            } if *trail_s > 0.0
+        )
+    });
+    let has_transition_audio_policy = tracks.iter().flat_map(|track| &track.items).any(|item| {
+        matches!(
+            item,
+            TimelineItem::Transition {
+                audio_policy: Some(_),
+                ..
+            }
+        )
+    });
+
+    let mut limitations = Vec::new();
+    if has_split_edit_audio {
+        limitations.push(TimelinePreviewLimitation {
+            kind: "split_edit_audio".into(),
+            message: "Live preview shows J/L split-edit intent, but final export is the source of truth for overlapped audio.".into(),
+        });
+    }
+    if has_transition_audio_policy {
+        limitations.push(TimelinePreviewLimitation {
+            kind: "transition_audio_policy".into(),
+            message: "Live preview approximates transition visuals; final export applies the registry audio policy.".into(),
+        });
+    }
+    limitations
+}
+
+fn transition_audio_policy_label(kind: &str) -> Option<String> {
+    match resolve_audio_policy(kind).ok()? {
+        TransitionAudioPolicy::Crossfade => Some("crossfade".into()),
+        TransitionAudioPolicy::Cut => Some("cut".into()),
+    }
+}
+
+fn cut_boundaries_for_protocol(
+    timeline: &awidat_proto::otio::Timeline,
+) -> Vec<TimelineCutBoundary> {
+    let mut boundaries = timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .map(|meta| {
+            meta.cut_boundaries
+                .iter()
+                .map(|(key, spec)| {
+                    let (from_clip_id, to_clip_id) = key
+                        .split_once("::")
+                        .map(|(from, to)| (from.to_string(), to.to_string()))
+                        .unwrap_or_else(|| (String::new(), String::new()));
+                    TimelineCutBoundary {
+                        key: key.clone(),
+                        from_clip_id,
+                        to_clip_id,
+                        cut_type: cut_type_for_protocol(spec.cut_type).to_string(),
+                        intent: spec.intent.clone(),
+                        energy: spec.energy,
+                        audio_relation: audio_relation_for_protocol(spec.audio_relation)
+                            .to_string(),
+                        confidence: spec.confidence,
+                        reason: spec.reason.clone(),
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    boundaries.sort_by(|a, b| a.key.cmp(&b.key));
+    boundaries
+}
+
+fn cut_type_for_protocol(cut_type: awidat_meta::CutType) -> &'static str {
+    match cut_type {
+        awidat_meta::CutType::HardCut => "hard_cut",
+        awidat_meta::CutType::CutOnAction => "cut_on_action",
+        awidat_meta::CutType::Cutaway => "cutaway",
+        awidat_meta::CutType::Insert => "insert",
+        awidat_meta::CutType::EyelineMatch => "eyeline_match",
+        awidat_meta::CutType::ShotReverseShot => "shot_reverse_shot",
+        awidat_meta::CutType::MatchCut => "match_cut",
+        awidat_meta::CutType::SmashCut => "smash_cut",
+        awidat_meta::CutType::JumpCut => "jump_cut",
+        awidat_meta::CutType::CrossCut => "cross_cut",
+        awidat_meta::CutType::JCut => "j_cut",
+        awidat_meta::CutType::LCut => "l_cut",
+    }
+}
+
+fn audio_relation_for_protocol(audio_relation: awidat_meta::AudioRelation) -> &'static str {
+    match audio_relation {
+        awidat_meta::AudioRelation::Sync => "sync",
+        awidat_meta::AudioRelation::AudioLeads => "audio_leads",
+        awidat_meta::AudioRelation::AudioTrails => "audio_trails",
+        awidat_meta::AudioRelation::Overlap => "overlap",
+        awidat_meta::AudioRelation::AudioCut => "audio_cut",
     }
 }
 
@@ -457,6 +599,67 @@ fn broadcast_style_for_protocol(
         name_bar_height: style.name_bar_height,
         ticker_height: style.ticker_height,
         host_strip_height: style.host_strip_height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use awidat_proto::awidat_meta::{AwidatClipMetadata, SplitEditSpec};
+    use awidat_proto::otio::{
+        Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Timeline,
+        Track, TrackChild, TrackKind, Transition,
+    };
+
+    #[test]
+    fn preview_limitations_surface_split_edits_and_transition_audio_policy() {
+        let mut timeline = Timeline::empty("preview-limitations");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track
+            .children
+            .push(TrackChild::Clip(clip_with_split_edit("a", Some(0.4), None)));
+        track
+            .children
+            .push(TrackChild::Transition(Transition::symmetric(
+                "awidat.whip_pan_right",
+                0.18,
+                24.0,
+            )));
+        track
+            .children
+            .push(TrackChild::Clip(clip_with_split_edit("b", None, Some(0.5))));
+        timeline.tracks.children.push(StackChild::Track(track));
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let limitation_kinds = snapshot
+            .preview_limitations
+            .iter()
+            .map(|limitation| limitation.kind.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(limitation_kinds.contains(&"split_edit_audio"));
+        assert!(limitation_kinds.contains(&"transition_audio_policy"));
+    }
+
+    fn clip_with_split_edit(name: &str, lead_s: Option<f64>, trail_s: Option<f64>) -> Clip {
+        let mut clip = Clip::empty(name.to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/a.mp4"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        clip.metadata.awidat = Some(AwidatClipMetadata {
+            split_edit: Some(SplitEditSpec {
+                audio_lead_s: lead_s,
+                audio_lead_from_clip_id: None,
+                audio_trail_s: trail_s,
+                audio_trail_to_clip_id: None,
+                reason: Some("test split edit".into()),
+                confidence: Some(0.9),
+            }),
+            ..AwidatClipMetadata::default()
+        });
+        clip
     }
 }
 

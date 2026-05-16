@@ -99,6 +99,22 @@ fade_in_s: number | null,
  */
 fade_out_s: number | null, 
 /**
+ * Incoming audio lead for a J-cut, in seconds.
+ */
+audio_lead_s: number | null, 
+/**
+ * Outgoing audio trail for an L-cut, in seconds.
+ */
+audio_trail_s: number | null, 
+/**
+ * Human-readable split-edit reason.
+ */
+split_edit_reason: string | null, 
+/**
+ * Optional split-edit planner confidence.
+ */
+split_edit_confidence: number | null, 
+/**
  * Link group shared by related video/audio clips imported
  * from the same source.
  */
@@ -127,13 +143,13 @@ lut_path: string | null,
  * title editor in PropertiesPane when this is `Some` and
  * paints the title text inline on the timeline band.
  */
-title: TitleStyling | null,
+title: TitleStyling | null, 
 /**
  * Video overlay styling for upper-track media clips. `None`
  * means a regular full-frame overlay/cutaway when the clip
  * is on an upper video track.
  */
-video_overlay: VideoOverlayStyling | null, } | { "kind": "gap",
+video_overlay: VideoOverlayStyling | null, } | { "kind": "gap", 
 /**
  * Index of this item within its track.
  */
@@ -161,13 +177,39 @@ duration_s: number,
 /**
  * Seconds before the cut occupied by the transition.
  */
-in_offset_s: number,
+in_offset_s: number, 
 /**
  * Seconds after the cut occupied by the transition.
  */
-out_offset_s: number,
+out_offset_s: number, 
 /**
  * Effect name from the OTIO transition (e.g.
  * `"SMPTE_Dissolve"`).
  */
-effect_name: string, };
+effect_name: string, 
+/**
+ * Stable semantic Awidat transition id, when the transition
+ * carries `metadata.awidat_transition`.
+ */
+transition_id: string | null, 
+/**
+ * Semantic transition family, for example `dissolve` or
+ * `motion_blur`.
+ */
+transition_family: string | null, 
+/**
+ * Why this visible transition belongs at the cut.
+ */
+transition_intent: string | null, 
+/**
+ * Optional transition intensity in `[0, 1]`.
+ */
+transition_energy: number | null, 
+/**
+ * Optional spatial direction such as `left`, `right`, or `in`.
+ */
+transition_direction: string | null, 
+/**
+ * Resolved transition audio behavior: `crossfade` or `cut`.
+ */
+audio_policy: string | null, };

@@ -318,6 +318,8 @@ pub async fn reject_proposal(
             snapshot: TimelineSnapshot {
                 duration_s: 0.0,
                 broadcast_overlay: None,
+                cut_boundaries: Vec::new(),
+                preview_limitations: Vec::new(),
                 tracks: Vec::new(),
             },
             diff_hints: Vec::new(),
@@ -560,8 +562,11 @@ fn build_diff_hints(
             }
             EdlOp::InsertTransition { .. }
             | EdlOp::DeleteTransition { .. }
+            | EdlOp::SetCutIntent { .. }
             | EdlOp::SetVolume { .. }
             | EdlOp::SetAudioFade { .. }
+            | EdlOp::SetAudioLead { .. }
+            | EdlOp::SetAudioTrail { .. }
             | EdlOp::SetTrackAudio { .. }
             | EdlOp::SetDucking { .. }
             | EdlOp::SetSyncGroup { .. }
@@ -571,6 +576,7 @@ fn build_diff_hints(
             | EdlOp::SetSpeed { .. }
             | EdlOp::SetColorCorrection { .. }
             | EdlOp::ApplyLut { .. }
+            | EdlOp::RemoveLut { .. }
             | EdlOp::SetBroadcastOverlay { .. }
             | EdlOp::InsertTitle { .. }
             | EdlOp::SetTitle { .. }
@@ -750,8 +756,11 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::MoveClip { .. } => "MoveClip",
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::DeleteTransition { .. } => "DeleteTransition",
+        EdlOp::SetCutIntent { .. } => "SetCutIntent",
         EdlOp::SetVolume { .. } => "SetVolume",
         EdlOp::SetAudioFade { .. } => "SetAudioFade",
+        EdlOp::SetAudioLead { .. } => "SetAudioLead",
+        EdlOp::SetAudioTrail { .. } => "SetAudioTrail",
         EdlOp::SetTrackAudio { .. } => "SetTrackAudio",
         EdlOp::SetDucking { .. } => "SetDucking",
         EdlOp::SetSyncGroup { .. } => "SetSyncGroup",
@@ -761,6 +770,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetSpeed { .. } => "SetSpeed",
         EdlOp::SetColorCorrection { .. } => "SetColorCorrection",
         EdlOp::ApplyLut { .. } => "ApplyLut",
+        EdlOp::RemoveLut { .. } => "RemoveLut",
         EdlOp::SetBroadcastOverlay { .. } => "SetBroadcastOverlay",
         EdlOp::InsertTitle { .. } => "InsertTitle",
         EdlOp::SetTitle { .. } => "SetTitle",

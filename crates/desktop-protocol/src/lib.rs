@@ -572,9 +572,51 @@ pub struct TimelineSnapshot {
     /// the desktop preview draws the same title card / lower-third /
     /// ticker layers that the timeline render path will burn in.
     pub broadcast_overlay: Option<BroadcastOverlayConfig>,
+    /// Semantic editorial intent attached to hard-cut boundaries. This
+    /// lets the UI inspect why a boundary is a cut on action, cutaway,
+    /// match cut, J-cut, etc. without requiring a visible transition item.
+    pub cut_boundaries: Vec<TimelineCutBoundary>,
+    /// Known places where live desktop preview is less faithful than
+    /// final render. The UI surfaces these as compact caveats instead
+    /// of silently implying perfect preview/render parity.
+    pub preview_limitations: Vec<TimelinePreviewLimitation>,
     /// Tracks in order: video first, then audio. Empty when project
     /// has no clips.
     pub tracks: Vec<TimelineTrack>,
+}
+
+/// One known preview/render parity limitation for the current snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelinePreviewLimitation {
+    /// Stable machine-readable limitation kind.
+    pub kind: String,
+    /// User-facing explanation.
+    pub message: String,
+}
+
+/// Timeline-level semantic metadata for one adjacent clip boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineCutBoundary {
+    /// Canonical metadata key, usually `from_clip_id::to_clip_id`.
+    pub key: String,
+    /// Outgoing clip id used by the metadata key.
+    pub from_clip_id: String,
+    /// Incoming clip id used by the metadata key.
+    pub to_clip_id: String,
+    /// Editorial grammar, e.g. `cut_on_action`, `cutaway`, `j_cut`.
+    pub cut_type: String,
+    /// Short machine-readable purpose.
+    pub intent: String,
+    /// Optional intensity in `[0, 1]`.
+    pub energy: Option<f64>,
+    /// Audio-picture relationship, e.g. `sync` or `audio_leads`.
+    pub audio_relation: String,
+    /// Optional planner confidence in `[0, 1]`.
+    pub confidence: Option<f64>,
+    /// Human-readable explanation.
+    pub reason: Option<String>,
 }
 
 /// Timeline-level broadcast overlay config, stored in OTIO metadata
@@ -794,6 +836,14 @@ pub enum TimelineItem {
         fade_in_s: Option<f64>,
         /// Per-clip audio fade out seconds into clip end.
         fade_out_s: Option<f64>,
+        /// Incoming audio lead for a J-cut, in seconds.
+        audio_lead_s: Option<f64>,
+        /// Outgoing audio trail for an L-cut, in seconds.
+        audio_trail_s: Option<f64>,
+        /// Human-readable split-edit reason.
+        split_edit_reason: Option<String>,
+        /// Optional split-edit planner confidence.
+        split_edit_confidence: Option<f64>,
         /// Link group shared by related video/audio clips imported
         /// from the same source.
         link_group_id: Option<String>,
@@ -841,6 +891,20 @@ pub enum TimelineItem {
         /// Effect name from the OTIO transition (e.g.
         /// `"SMPTE_Dissolve"`).
         effect_name: String,
+        /// Stable semantic Awidat transition id, when the transition
+        /// carries `metadata.awidat_transition`.
+        transition_id: Option<String>,
+        /// Semantic transition family, for example `dissolve` or
+        /// `motion_blur`.
+        transition_family: Option<String>,
+        /// Why this visible transition belongs at the cut.
+        transition_intent: Option<String>,
+        /// Optional transition intensity in `[0, 1]`.
+        transition_energy: Option<f64>,
+        /// Optional spatial direction such as `left`, `right`, or `in`.
+        transition_direction: Option<String>,
+        /// Resolved transition audio behavior: `crossfade` or `cut`.
+        audio_policy: Option<String>,
     },
 }
 
@@ -1251,6 +1315,8 @@ mod tests {
             snapshot: TimelineSnapshot {
                 duration_s: 12.5,
                 broadcast_overlay: None,
+                cut_boundaries: vec![],
+                preview_limitations: vec![],
                 tracks: vec![],
             },
             diff_hints: vec![AppliedDiff::TrimEdge {

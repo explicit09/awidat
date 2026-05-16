@@ -119,6 +119,48 @@ async function run() {
     await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=proposal`);
     await expectVisible(page, ".proposal-actions", "proposal action toolbar");
 
+    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=assessor`);
+    await page.getByText("assess_edit_quality").waitFor({ state: "visible", timeout: 5_000 });
+    await page.locator(".tool-summary-row").click();
+    await expectVisible(page, ".tool-recommendation", "assessor recommendation action");
+    await page.getByRole("button", { name: "Propose" }).click();
+    await expectVisible(page, ".proposal-actions", "assessor-generated proposal toolbar");
+    const assessorEdl = await page.evaluate(() => window.__lastEdlText);
+    if (
+      !assessorEdl.includes("*** Set Audio Lead") ||
+      !assessorEdl.includes("@@ anchor: clip_uuid=clip-2") ||
+      !assessorEdl.includes("+ lead_s: 0.350") ||
+      !assessorEdl.includes("*** Set Cut Intent") ||
+      !assessorEdl.includes("+ cut_type: j_cut")
+    ) {
+      throw new Error(`assessor recommendation did not emit expected EDL: ${assessorEdl}`);
+    }
+    await page.getByRole("button", { name: "Reject" }).click();
+    await page.locator(".proposal-actions").waitFor({ state: "hidden", timeout: 5_000 });
+    await page.evaluate(() =>
+      window.__seedAssessorRecommendation({
+        id: "assess-edit-quality-follow-up",
+        action: "use_l_cut",
+        cutType: "l_cut",
+        intent: "hold_reaction",
+        edlOp: "Set Audio Trail",
+        reason: "Hold the outgoing line under the reaction after rejecting the first J-cut.",
+        edlGuidance: "*** Set Audio Trail with trail_s 0.45, then review by ear",
+      }),
+    );
+    await page.locator(".tool-summary-row").last().click();
+    await page.locator(".tool-recommendation").last().getByRole("button", { name: "Propose" }).click();
+    await expectVisible(page, ".proposal-actions", "follow-up assessor proposal toolbar");
+    const followUpEdl = await page.evaluate(() => window.__lastEdlText);
+    if (
+      !followUpEdl.includes("*** Set Audio Trail") ||
+      !followUpEdl.includes("@@ anchor: clip_uuid=clip-1") ||
+      !followUpEdl.includes("+ trail_s: 0.450") ||
+      !followUpEdl.includes("+ cut_type: l_cut")
+    ) {
+      throw new Error(`follow-up assessor recommendation did not emit expected EDL: ${followUpEdl}`);
+    }
+
     await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=transition`);
     await page.getByText("Selected transition").waitFor({ state: "visible", timeout: 5_000 });
     await expectVisible(page, ".properties-select", "transition kind selector");
@@ -142,6 +184,52 @@ async function run() {
     if (!deleteEdl.includes("*** Delete Transition")) {
       throw new Error(`transition Delete did not emit expected EDL: ${deleteEdl}`);
     }
+
+    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=editorial`);
+    await page.getByText("Selected clip").waitFor({ state: "visible", timeout: 5_000 });
+    await expectVisible(page, ".media-preview-limits", "preview limitation banner");
+    await page
+      .getByText("Split-edit offsets are shown in the timeline but approximated in preview audio.")
+      .waitFor({ state: "visible", timeout: 5_000 });
+    await page
+      .locator(".properties-intent-chip")
+      .filter({ hasText: /^Cut On Action$/ })
+      .waitFor({ state: "visible", timeout: 5_000 });
+    await page
+      .locator(".properties-intent-chip")
+      .filter({ hasText: /^Cutaway$/ })
+      .waitFor({ state: "visible", timeout: 5_000 });
+    await page
+      .getByText("Hold dialogue under the incoming reaction.")
+      .waitFor({ state: "visible", timeout: 5_000 });
+    await expectVisible(page, ".timeline-cut-badge", "timeline cut badge");
+    await expectVisible(page, ".timeline-split-offset", "timeline split-edit offset");
+    await expectVisible(page, ".properties-cut-type-select", "cut intent editor");
+    await page.locator(".properties-cut-type-select").first().selectOption("hard_cut");
+    await page.getByRole("button", { name: "Apply cut intent" }).first().click();
+    const cutIntentEdl = await page.evaluate(() => window.__lastEdlText);
+    if (
+      !cutIntentEdl.includes("*** Set Cut Intent") ||
+      !cutIntentEdl.includes("@@ between: clip_uuid=clip-1 and clip_uuid=clip-2") ||
+      !cutIntentEdl.includes("+ cut_type: hard_cut")
+    ) {
+      throw new Error(`cut intent editor did not emit expected EDL: ${cutIntentEdl}`);
+    }
+    await page.getByRole("button", { name: "Use J-cut" }).first().click();
+    const jCutEdl = await page.evaluate(() => window.__lastEdlText);
+    if (
+      !jCutEdl.includes("*** Set Audio Lead") ||
+      !jCutEdl.includes("@@ anchor: clip_uuid=clip-2") ||
+      !jCutEdl.includes("+ lead_s: 0.350")
+    ) {
+      throw new Error(`J-cut alternative did not emit expected EDL: ${jCutEdl}`);
+    }
+
+    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=density`);
+    await page.getByText("Selected transition").waitFor({ state: "visible", timeout: 5_000 });
+    await page
+      .getByText("3 visible transitions land within this 30s window.")
+      .waitFor({ state: "visible", timeout: 5_000 });
 
     await page.getByRole("tab", { name: "Vedit" }).click();
     await expectVisible(page, ".vedit-panel", "vedit panel");

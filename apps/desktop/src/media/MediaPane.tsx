@@ -42,6 +42,7 @@ export function MediaPane() {
   //   - Empty timeline → source-asset preview (pre-import / pre-
   //     auto-insert window where the user is inspecting raw assets)
   const timelineDurationS = useTimelineStore((s) => s.snapshot.duration_s);
+  const previewLimitations = useTimelineStore((s) => s.snapshot.preview_limitations);
   const showTimelinePreview = timelineDurationS > 0;
 
   const clearTranscriptCache = useTranscriptStore((s) => s.clearCache);
@@ -154,6 +155,9 @@ export function MediaPane() {
         )}
       </header>
       <div className="media-stage">
+        {showTimelinePreview && previewLimitations.length > 0 && (
+          <PreviewLimitationsBanner limitations={previewLimitations} />
+        )}
         {showTimelinePreview ? (
           <SegmentedVideoView />
         ) : src ? (
@@ -163,6 +167,19 @@ export function MediaPane() {
         )}
       </div>
     </aside>
+  );
+}
+
+function PreviewLimitationsBanner({
+  limitations,
+}: {
+  limitations: { kind: string; message: string }[];
+}) {
+  return (
+    <div className="media-preview-limits" role="status" aria-live="polite">
+      <span className="media-preview-limits-label">Preview caveat</span>
+      <span>{limitations.map((limitation) => limitation.message).join(" ")}</span>
+    </div>
   );
 }
 

@@ -770,6 +770,66 @@ button {
   padding: 8px 10px 10px;
 }
 
+.tool-recommendation {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid rgba(115, 183, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(115, 183, 255, 0.08);
+}
+
+.tool-recommendation-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.tool-recommendation-copy strong {
+  color: var(--text);
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.tool-recommendation-label {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tool-recommendation-action {
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: rgba(115, 183, 255, 0.16);
+  color: var(--text);
+  min-height: 30px;
+  padding: 0 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tool-recommendation-action:hover:not(:disabled) {
+  background: rgba(115, 183, 255, 0.24);
+}
+
+.tool-recommendation-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.tool-recommendation-error {
+  grid-column: 1 / -1;
+  color: var(--err);
+  font-size: 12px;
+}
+
 /* Plan card */
 .item-plan {
   border-color: var(--warn);
@@ -1736,6 +1796,47 @@ button {
   touch-action: none; /* don't let the OS hijack drags as scroll/back */
 }
 
+.timeline-editorial-overlay {
+  position: absolute;
+  inset: 0 auto auto 0;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.timeline-cut-badge,
+.timeline-split-offset {
+  position: absolute;
+  display: inline-flex;
+  max-width: 72px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.38);
+}
+
+.timeline-cut-badge {
+  border: 1px solid rgba(145, 215, 255, 0.52);
+  background: rgba(8, 16, 24, 0.9);
+  color: #b8dcff;
+  text-transform: uppercase;
+}
+
+.timeline-split-offset {
+  border: 1px solid rgba(232, 174, 82, 0.5);
+  background: rgba(28, 19, 7, 0.92);
+  color: #f1c36f;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
 .timeline-empty {
   position: absolute;
   inset: 0;
@@ -2091,6 +2192,28 @@ button {
   background:
     radial-gradient(circle at center top, rgba(104, 183, 255, 0.055), transparent 280px),
     var(--viewer);
+}
+
+.media-preview-limits {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid rgba(104, 183, 255, 0.26);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(104, 183, 255, 0.08);
+  color: #c6e2ff;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.media-preview-limits-label {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
 .video-wrap {
@@ -3117,12 +3240,80 @@ button {
   line-height: 1.4;
 }
 
+.properties-warning {
+  margin: 2px 0 8px;
+  padding: 9px 10px;
+  border: 1px solid rgba(104, 183, 255, 0.28);
+  border-radius: 7px;
+  background: rgba(104, 183, 255, 0.08);
+  color: #b8dcff;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.properties-intent-stack {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.properties-intent-chip {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  border: 1px solid rgba(104, 183, 255, 0.32);
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: rgba(104, 183, 255, 0.1);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.properties-intent-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.properties-split-edit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.properties-mini-field {
+  display: grid;
+  grid-template-columns: 36px minmax(54px, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.properties-cut-field {
+  width: 100%;
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
 .properties-action-row {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 7px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.properties-alternative-row {
+  padding: 0;
+  border-bottom: 0;
+  flex-wrap: wrap;
 }
 
 .properties-danger {
@@ -3188,6 +3379,24 @@ button {
 .properties-apply:hover {
   background: rgba(104, 183, 255, 0.18);
   border-color: var(--accent);
+}
+
+.properties-secondary {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 4px 7px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.properties-secondary:hover {
+  border-color: rgba(104, 183, 255, 0.35);
+  background: rgba(104, 183, 255, 0.09);
+  color: var(--accent);
 }
 
 /* Step 16.5 — title editor inputs. Text + select + color. */

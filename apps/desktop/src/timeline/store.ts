@@ -29,7 +29,13 @@ type State = {
 };
 
 export const useTimelineStore = create<State>((set) => ({
-  snapshot: { duration_s: 0, broadcast_overlay: null, tracks: [] },
+  snapshot: {
+    duration_s: 0,
+    broadcast_overlay: null,
+    cut_boundaries: [],
+    preview_limitations: [],
+    tracks: [],
+  },
   refreshing: false,
   zoom: 1,
   refresh: async () => {

@@ -146,10 +146,15 @@ pub async fn init_project(
     }
 
     let project_dir_for_init = project_dir.clone();
-    tokio::task::spawn_blocking(move || Project::init(&project_dir_for_init))
-        .await
-        .map_err(|e| format!("init join: {e}"))?
-        .map_err(|e| format!("init: {e}"))?;
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        Project::init(&project_dir_for_init).map_err(|e| e.to_string())?;
+        awidat_core::lessons::apply_learned_project_format_defaults(&project_dir_for_init)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("init join: {e}"))?
+    .map_err(|e| format!("init: {e}"))?;
 
     // Starter AWIDAT.md so the project is "ready" with no extra
     // hand-holding from the user. The CLI's `--no-md` flag isn't
