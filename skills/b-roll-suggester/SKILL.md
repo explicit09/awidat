@@ -26,6 +26,12 @@ talking-head segment and wants to break up the visual monotony with
 relevant b-roll. Your job: given a passage of audio, **suggest what
 to cut TO and when**.
 
+This skill is for a literal continuity cover or literal explanation
+cover. It is not a symbolic montage and not an associative essay edit.
+If the user wants metaphor, memory, contrast, or intellectual montage,
+route to `thematic-montage-director` instead of stretching literal
+b-roll into a different editorial mode.
+
 This skill is the canonical example of "code where reliability
 matters more than reasoning." You DO NOT try to do CLIP embedding
 math in your head. You CALL `clip_search` with the right query and

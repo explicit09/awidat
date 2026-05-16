@@ -7,6 +7,7 @@ tools_allowlist:
   - view_episode
   - find_episode_start
   - assess_continuity
+  - assess_edit_quality
   - find_dead_air
   - find_filler_words
   - find_false_starts
@@ -71,8 +72,12 @@ python3 <skill-root>/scripts/retake_plan.py \
 ```
 
 Review every candidate. For medium/high-risk retake cuts, call
-`assess_continuity` at the cut boundary before applying. Apply only
-accepted retake cuts through `apply_edl`, then call `view_timeline`.
+`assess_edit_quality` at the cut boundary before applying. Use its
+recommendation rather than defaulting to a dissolve: move the cut to a
+cleaner boundary, stamp `Set Cut Intent`, use `Set Audio Lead` /
+`Set Audio Trail` for J/L repairs, or cover with b-roll when the visual
+cut is dirty. Apply only accepted retake cuts through `apply_edl`, then
+call `view_timeline`.
 
 ### 4. Mechanical cleanup
 
@@ -117,7 +122,9 @@ the audit shows only the intended extraction and cleanup edits.
 
 - The episode start was chosen with `find_episode_start`.
 - `episode_span_plan.py` and `retake_plan.py` were run before mechanical cleanup.
-- Medium/high-risk retake cuts were checked with `assess_continuity`.
+- Medium/high-risk retake cuts were checked with `assess_edit_quality`
+  and any risky hard cuts were annotated with `Set Cut Intent` or
+  repaired with split edits / b-roll instead of decorative dissolves.
 - `vedit_diff` was reviewed before render/report.
 - The final render or render plan was verified.
 - The report separates extraction edits from cleanup edits.

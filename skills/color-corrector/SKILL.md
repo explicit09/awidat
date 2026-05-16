@@ -8,10 +8,13 @@ tools_allowlist:
   - view_frame
   - view_timeline
   - inspect_clip
+  - start_look_region_pass
+  - plan_look_regions
   - apply_edl
   - vedit_diff
   - start_render
   - poll_render
+  - review_look_regions
   - update_plan
   - bash
 ---
@@ -89,6 +92,73 @@ python3 <skill-root>/scripts/color_benchmark.py \
 Datasets are only benchmark inputs. Do not make them runtime
 dependencies and do not treat the benchmark as an alternate editor.
 
+### 1.5. Plan look regions and generated LUTs
+
+When the user asks for an end-to-end look pass, per-timeframe LUTs, or
+agent-generated looks, produce a look-region plan before applying edits.
+Prefer the first-class execution tool when the user wants the pass run:
+
+```json
+start_look_region_pass({"style":"cinematic"})
+```
+
+This tool runs the plan -> `apply_edl` -> `start_render(scope="timeline")`
+sequence and returns the render `job_id`, render path, plan paths, and
+the exact `review_look_regions` call to use after `poll_render` reports
+`state: done`.
+
+Use the planning-only tool when drafting or when the user wants to review
+the EDL before applying it:
+
+```json
+plan_look_regions({"style":"cinematic"})
+```
+
+Both tools auto-discover color-analysis sidecars under
+`index/color-analysis/`, writes `renders/look-plan.edl`,
+`renders/look-plan.json`, `renders/look-plan.md`, and generated `.cube`
+files under `luts/generated/`.
+
+When running the helper directly for debugging, use:
+
+```bash
+python3 <skill-root>/scripts/look_region_plan.py \
+  --project /path/to/project \
+  --color-index /path/to/index/color-analysis/raw/source.mp4.json \
+  --style cinematic \
+  --output-edl /path/to/project/renders/look-plan.edl \
+  --output-json /path/to/project/renders/look-plan.json \
+  --report-md /path/to/project/renders/look-plan.md
+```
+
+Use multiple `--color-index` arguments, or the tool's `color_indexes`
+array, when the timeline uses multiple assets and auto-discovery is not
+enough. The planner reads `project.otio.json`, intersects timeline clips
+with color-analysis scenes, records look-region consistency groups,
+writes generated `.cube` files under `luts/generated/`, and emits
+graph-native EDL using `Split Clip`, `Set Color Correction`, and
+`Apply LUT`. The emitted EDL is still a proposal: apply it through
+`apply_edl`, inspect `vedit_diff`, render, then verify visually.
+
+Planner output fields to review:
+
+- `regions[].timeline_start_s/end_s`: where the look lands in the edit.
+- `regions[].sample_times_s`: timeline frames the agent should inspect
+  in the rendered output with `view_frame` or contact sheets.
+- `regions[].source_sample_times_s`: source-frame samples for checking
+  the underlying media before the timeline render.
+- `regions[].issue_tags`, `policy`, and `correction`: objective color
+  reasoning from color-analysis.
+- `regions[].consistency_group`: regions with the same asset/look/tag
+  signature that should be reviewed for matching.
+- `regions[].look_id`, `lut_path`, `score`, and `rationale`: selected
+  generated look and why it was chosen.
+
+Style presets are `natural`, `cinematic`, `warm`, `cool`, and `punchy`.
+Use `natural` when the user wants correction/matching more than a
+creative grade. Use a style preset only when the user has asked for a
+look or when a finishing pass clearly calls for one.
+
 ### 2. Apply corrections through the graph
 
 For each corrected clip, emit one anchored op:
@@ -121,12 +191,17 @@ use:
 *** Apply LUT
 @@ anchor: clip_uuid=<clip_uuid>
 + lut_path: luts/show-look.cube
++ interpolation: tetrahedral
 *** End EDL
 ```
 
 LUT paths are project-relative. Do not pass absolute paths or paths with
-`..`. If the LUT is missing, report the missing project-relative path
-rather than applying an external render script.
+`.`, `..`, or backslashes. Supported render formats are `.3dl`,
+`.cube`, `.dat`, `.m3d`, and `.csp`. Re-applying `Apply LUT` replaces
+the clip's prior LUT. Use `Remove LUT` to clear the look from a clip
+without touching color correction or audio effects. If the LUT is
+missing, report the missing project-relative path rather than applying an
+external render script.
 
 ### 4. Verify graph and render
 
@@ -157,6 +232,40 @@ python3 <skill-root>/scripts/rendered_contact_sheet.py \
 
 The contact sheet is visual evidence only. The project graph remains the
 source of truth.
+
+For look-region plans, the minimum verification package is:
+
+1. Apply the generated EDL via `apply_edl`.
+2. Review `vedit_diff` and confirm expected `awidat.lut` effects and any
+   split boundaries.
+3. Render `scope="timeline"` or a relevant segment.
+4. Generate a contact sheet at each timeline `regions[].sample_times_s`.
+5. Summarize chosen regions, generated LUT paths, render path, and any
+   low-confidence or `review_only` regions.
+
+Use the first-class review tool for this final package after rendering:
+
+```json
+review_look_regions({
+  "look_plan": "renders/look-plan.json",
+  "after_render": "renders/timeline.mp4"
+})
+```
+
+When running the helper directly for debugging, use:
+
+```bash
+python3 <skill-root>/scripts/look_region_review_package.py \
+  --look-plan /path/to/project/renders/look-plan.json \
+  --after-render /path/to/project/renders/timeline.mp4 \
+  --contact-sheet /path/to/project/renders/look-review.ppm \
+  --report-md /path/to/project/renders/look-review.md \
+  --package-json /path/to/project/renders/look-review.json
+```
+
+Add `--before-render /path/to/baseline.mp4` when a before/after render is
+available. Without it, the helper produces an after-only contact sheet
+from the rendered look pass.
 
 For risky clips, low-confidence clips, or user-facing color decisions,
 generate a full review package:

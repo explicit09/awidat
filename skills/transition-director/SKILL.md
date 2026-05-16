@@ -7,6 +7,9 @@ tools_allowlist:
   - view_timeline
   - inspect_clip
   - assess_continuity
+  - assess_edit_quality
+  - transition_context
+  - plan_transition
   - find_beat
   - apply_edl
   - vedit_diff
@@ -25,16 +28,45 @@ A transition must have a job. Prefer a hard cut unless the transition
 solves continuity, rhythm, tone, or intentional style. Never add a
 transition only because there is a cut.
 
+Before adding a transition to hide or smooth a cut, call
+`assess_edit_quality(at_s, kind="cut")`. If it recommends `recut`,
+`Set Audio Lead`, `Set Audio Trail`, b-roll, or `Set Cut Intent`, follow
+that lower-attention repair instead of forcing a visible transition.
+Respect `style_context.transition_density_last_30s`: at 3+ recent
+transitions, avoid adding another visible transition unless the user
+explicitly asks for a stylized sequence.
+
+When a visible transition still has a named job, call
+`transition_context` for the exact adjacent boundary, then call
+`plan_transition` with that context packet and the job/direction. Use
+the returned EDL fragment only after checking that the recommendation is
+a visible transition with safe handles. If `plan_transition` returns a
+hard-cut fragment, preserve the hard cut and apply `Set Cut Intent`
+instead of forcing an effect.
+
 ## Supported Phase-One IDs
 
 Use these stable ids in `Insert Transition`:
 
 - `awidat.cross_dissolve` for soft time passage, topic drift, or gentle emotional transitions.
+- `awidat.match_dissolve` for visual echo, memory bridge, or a true
+  graphic match between related images.
 - `awidat.fade_black` for a heavier reset, ending, or chapter break.
 - `awidat.flash_white` for a bright beat hit, reveal, or energetic jump.
 - `awidat.wipe_left` / `awidat.wipe_right` for graphic movement between related scenes.
 - `awidat.slide_left` / `awidat.slide_right` for spatial movement or screen-direction continuity.
 - `awidat.smooth_push_left` for a cleaner, less abrupt directional push.
+- `awidat.motion_blur` for a very short motion cover when motion is the
+  problem but screen direction is unknown.
+- `awidat.whip_pan_left` / `awidat.whip_pan_right` for very short
+  motion-blur covers when source footage already has fast lateral
+  motion. Do not use them for static dialogue.
+- `awidat.pass_by_left` / `awidat.pass_by_right` for an occlusion or
+  frame-filling pass-by that naturally masks a scene move.
+- `awidat.iris_open` / `awidat.iris_close` for deliberate vintage,
+  comic, or stylized reveal/closure grammar. Avoid documentary realism.
+- `awidat.invisible_cut` for an occlusion, dark-frame, or mask cut that
+  should hide the edit without reading as a visible effect.
 - `awidat.zoom_in` for energetic punch-ins or forward momentum.
 - `awidat.pixelize` for tech/glitch moments only.
 - `awidat.radial` for stylized reveals; use sparingly.
@@ -75,8 +107,15 @@ outside the normal editing flow.
 ## Selection Rules
 
 - Dialogue, serious emotion, or tight reasoning: hard cut or `awidat.cross_dissolve`.
+- Speaker handoff: prefer `Set Audio Lead` / `Set Audio Trail`; a
+  transition is not an audio continuity repair.
 - Beat hit, laugh, reveal, or high-energy turn: `awidat.flash_white`, `awidat.zoom_in`, or a short slide.
 - Motion mismatch or camera direction: choose slide/wipe direction that follows existing motion.
+- Pass-by object or full-frame occlusion: use `awidat.pass_by_left/right`
+  or `awidat.invisible_cut` only when the indexed/inspected frames show
+  a real mask opportunity.
+- Vintage/comic/stylized reveal: use `awidat.iris_open/close` only when
+  the project style calls for that grammar.
 - Topic/chapter boundary: `awidat.cross_dissolve` for soft, `awidat.fade_black` for strong.
 - Tech/product/glitch context: `awidat.pixelize`, short duration only.
 - If neither clip has extra handles for overlap, avoid a transition or repair handles first.
@@ -122,6 +161,11 @@ to widen the source range. Do not keep retrying the same transition.
 
 Always include `intent`. Keep it short and concrete so future `vedit`
 history explains why the transition exists.
+
+If the best decision is no visible transition, use `*** Set Cut Intent`
+instead of `Insert Transition` so the timeline records the cut grammar
+(`hard_cut`, `cut_on_action`, `match_cut`, `j_cut`, or `l_cut`) without
+adding an effect.
 
 ## Verification
 
