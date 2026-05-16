@@ -32,7 +32,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::animation::keyframes_to_ffmpeg_expr;
+use crate::animation::{is_phase_3a_parameter, keyframes_to_ffmpeg_expr};
 use crate::job::RenderJobSpec;
 
 /// Errors building a timeline-render spec.
@@ -504,6 +504,12 @@ pub fn collect_timeline_full_plan(
             message: e.to_string(),
         }
     })?;
+    let parameter_animations: &[awidat_proto::professional::ParameterAnimation] = timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .map(|metadata| metadata.parameter_animations.as_slice())
+        .unwrap_or(&[]);
 
     let mut segs = Vec::new();
     let mut transitions = Vec::new();
@@ -526,7 +532,7 @@ pub fn collect_timeline_full_plan(
             // Walk titles separately; don't try to read media off it.
             for tc in &track.children {
                 let TrackChild::Clip(clip) = tc else { continue };
-                let Some(plan) = parse_title_plan(clip) else {
+                let Some(plan) = parse_title_plan(clip, parameter_animations) else {
                     continue;
                 };
                 titles.push(plan);
@@ -542,11 +548,16 @@ pub fn collect_timeline_full_plan(
                             continue;
                         };
                         let mode = read_video_overlay_mode(clip);
+                        let clip_id = render_clip_id(clip);
                         video_overlays.push(VideoOverlayPlan {
                             segment,
                             track_start_s: track_cursor_s,
                             mode,
-                            animations: Vec::new(),
+                            animations: render_animations_for_clip(
+                                parameter_animations,
+                                &clip_id,
+                                "overlay",
+                            ),
                         });
                         if let Some(range) = clip.source_range.as_ref() {
                             track_cursor_s += range.duration.to_seconds();
@@ -1131,7 +1142,10 @@ fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
 /// `None` if the clip carries no awidat.title effect or required
 /// metadata is missing — the render walk just skips invalid titles
 /// rather than aborting.
-fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
+fn parse_title_plan(
+    clip: &awidat_proto::otio::Clip,
+    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+) -> Option<TitlePlan> {
     let effect = clip
         .effects
         .iter()
@@ -1191,6 +1205,7 @@ fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
         .get("safe_area")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let clip_id = render_clip_id(clip);
     Some(TitlePlan {
         text,
         start_s,
@@ -1202,8 +1217,18 @@ fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
         animation,
         role,
         safe_area,
-        animations: Vec::new(),
+        animations: render_animations_for_clip(parameter_animations, &clip_id, "title"),
     })
+}
+
+fn render_clip_id(clip: &awidat_proto::otio::Clip) -> String {
+    clip.metadata
+        .awidat
+        .as_ref()
+        .and_then(|metadata| metadata.extra.get("clip_uuid"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| clip.name.clone())
 }
 
 /// Render-time parameter animation attached to a title or media overlay plan.
@@ -1213,6 +1238,47 @@ pub struct RenderParameterAnimation {
     pub parameter: String,
     /// Clip-local keyframes.
     pub keyframes: Vec<awidat_proto::professional::Keyframe>,
+}
+
+fn render_animations_for_clip(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+    surface: &str,
+) -> Vec<RenderParameterAnimation> {
+    animations
+        .iter()
+        .filter_map(|animation| {
+            let awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: target_clip_id,
+                parameter,
+            } = &animation.target
+            else {
+                return None;
+            };
+
+            if target_clip_id != clip_id || !is_phase_3a_parameter(parameter) {
+                return None;
+            }
+            let surface_matches = match surface {
+                "title" => parameter.starts_with("title."),
+                "overlay" => parameter.starts_with("overlay."),
+                _ => false,
+            };
+            if !surface_matches
+                || animation.keyframes.iter().any(|keyframe| {
+                    keyframe.interpolation
+                        == awidat_proto::professional::KeyframeInterpolation::Bezier
+                })
+            {
+                return None;
+            }
+
+            Some(RenderParameterAnimation {
+                parameter: parameter.clone(),
+                keyframes: animation.keyframes.clone(),
+            })
+        })
+        .collect()
 }
 
 /// One title overlay parsed from the project's Titles track. The
@@ -5027,6 +5093,41 @@ mod tests {
             filter.contains("w=main_w*0.3*("),
             "overlay scale should include multiplier expression: {filter}"
         );
+    }
+
+    #[test]
+    fn render_animations_for_clip_selects_supported_title_animation() {
+        let animations = vec![awidat_proto::professional::ParameterAnimation {
+            id: "anim-title-opacity".to_string(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "title-1".to_string(),
+                parameter: "title.opacity".to_string(),
+            },
+            keyframes: vec![awidat_proto::professional::Keyframe::linear(0.0, 0.0)],
+            rationale: None,
+        }];
+
+        let selected = render_animations_for_clip(&animations, "title-1", "title");
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].parameter, "title.opacity");
+    }
+
+    #[test]
+    fn render_animations_for_clip_rejects_overlay_animation_for_title() {
+        let animations = vec![awidat_proto::professional::ParameterAnimation {
+            id: "anim-overlay-x".to_string(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "title-1".to_string(),
+                parameter: "overlay.x".to_string(),
+            },
+            keyframes: vec![awidat_proto::professional::Keyframe::linear(0.0, 0.0)],
+            rationale: None,
+        }];
+
+        let selected = render_animations_for_clip(&animations, "title-1", "title");
+
+        assert!(selected.is_empty());
     }
 
     #[test]
