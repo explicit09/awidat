@@ -34,6 +34,7 @@ pub mod awidat_meta;
 pub mod error;
 pub mod index;
 pub mod otio;
+pub mod professional;
 pub mod project;
 pub mod transitions;
 pub mod validate;
