@@ -3,11 +3,11 @@
 /**
  * One known preview/render parity limitation for the current snapshot.
  */
-export type TimelinePreviewLimitation = { 
+export type TimelinePreviewLimitation = {
 /**
  * Stable machine-readable limitation kind.
  */
-kind: string, 
+kind: string,
 /**
  * User-facing explanation.
  */
