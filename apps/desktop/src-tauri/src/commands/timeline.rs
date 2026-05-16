@@ -14,6 +14,9 @@ use awidat_desktop_protocol::{
 };
 use awidat_proto::awidat_meta;
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
+use awidat_proto::professional::{
+    AnimationTarget, Easing, KeyframeInterpolation, ParameterAnimation,
+};
 use awidat_proto::project::Project;
 use awidat_proto::transitions::{
     SemanticTransitionSpec, TransitionAudioPolicy, resolve_audio_policy,
@@ -63,6 +66,12 @@ pub fn flatten_timeline_public(
 ) -> TimelineSnapshot {
     let mut tracks: Vec<TimelineTrack> = Vec::new();
     let mut max_end_s = 0.0_f64;
+    let parameter_animations: &[ParameterAnimation] = timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .map(|meta| meta.parameter_animations.as_slice())
+        .unwrap_or(&[]);
 
     for stack_child in &timeline.tracks.children {
         let StackChild::Track(track) = stack_child else {
@@ -131,6 +140,10 @@ pub fn flatten_timeline_public(
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| clip.name.clone());
+                    let animations = parameter_animations
+                        .iter()
+                        .filter_map(|animation| timeline_animation_for_clip(animation, &clip_uuid))
+                        .collect();
                     // Per-clip volume/speed live on OTIO Effect nodes
                     // the apply layer stamps. PropertiesPane sliders
                     // and the canvas badge both read these.
@@ -286,6 +299,7 @@ pub fn flatten_timeline_public(
                         lut_path,
                         title,
                         video_overlay,
+                        animations,
                     });
                     if !is_titles_track {
                         track_cursor_s += duration_s;
@@ -360,9 +374,113 @@ pub fn flatten_timeline_public(
             .and_then(|m| m.broadcast_overlay.as_ref())
             .map(broadcast_overlay_for_protocol),
         cut_boundaries: cut_boundaries_for_protocol(timeline),
-        preview_limitations: preview_limitations_for_protocol(&tracks),
+        preview_limitations: {
+            let mut limitations = preview_limitations_for_protocol(&tracks);
+            limitations.extend(animation_preview_limitations_for_protocol(
+                parameter_animations,
+            ));
+            limitations
+        },
         tracks,
     }
+}
+
+fn is_phase_3a_parameter(parameter: &str) -> bool {
+    matches!(
+        parameter,
+        "title.opacity"
+            | "title.x"
+            | "title.y"
+            | "overlay.opacity"
+            | "overlay.x"
+            | "overlay.y"
+            | "overlay.scale"
+    )
+}
+
+fn interpolation_name(value: KeyframeInterpolation) -> &'static str {
+    match value {
+        KeyframeInterpolation::Hold => "hold",
+        KeyframeInterpolation::Linear => "linear",
+        KeyframeInterpolation::Bezier => "bezier",
+    }
+}
+
+fn easing_name(value: Easing) -> &'static str {
+    match value {
+        Easing::Linear => "linear",
+        Easing::EaseIn => "ease_in",
+        Easing::EaseOut => "ease_out",
+        Easing::EaseInOut => "ease_in_out",
+    }
+}
+
+fn timeline_animation_for_clip(
+    animation: &ParameterAnimation,
+    clip_id: &str,
+) -> Option<awidat_desktop_protocol::TimelineParameterAnimation> {
+    let AnimationTarget::ClipParameter {
+        clip_id: target_clip_id,
+        parameter,
+    } = &animation.target
+    else {
+        return None;
+    };
+    if target_clip_id != clip_id || !is_phase_3a_parameter(parameter) {
+        return None;
+    }
+    Some(awidat_desktop_protocol::TimelineParameterAnimation {
+        id: animation.id.clone(),
+        target: awidat_desktop_protocol::TimelineAnimationTarget {
+            clip_id: target_clip_id.clone(),
+            parameter: parameter.clone(),
+        },
+        keyframes: animation
+            .keyframes
+            .iter()
+            .map(|keyframe| awidat_desktop_protocol::TimelineKeyframe {
+                time_s: keyframe.time_s,
+                value: keyframe.value,
+                interpolation: interpolation_name(keyframe.interpolation).to_string(),
+                easing: easing_name(keyframe.easing).to_string(),
+            })
+            .collect(),
+        rationale: animation.rationale.clone(),
+    })
+}
+
+fn animation_preview_limitations_for_protocol(
+    animations: &[ParameterAnimation],
+) -> Vec<TimelinePreviewLimitation> {
+    animations
+        .iter()
+        .filter_map(|animation| match &animation.target {
+            AnimationTarget::ClipParameter { parameter, .. } if is_phase_3a_parameter(parameter) => {
+                if animation
+                    .keyframes
+                    .iter()
+                    .any(|keyframe| keyframe.interpolation == KeyframeInterpolation::Bezier)
+                {
+                    Some(TimelinePreviewLimitation {
+                        kind: "animation_bezier_unsupported".to_string(),
+                        message: format!(
+                            "Animation {} uses bezier keyframes, which are stored but not previewed in Phase 3A.",
+                            animation.id
+                        ),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => Some(TimelinePreviewLimitation {
+                kind: "animation_target_unsupported".to_string(),
+                message: format!(
+                    "Animation {} is stored but not previewed/rendered by the Phase 3A motion runtime.",
+                    animation.id
+                ),
+            }),
+        })
+        .collect()
 }
 
 fn preview_limitations_for_protocol(tracks: &[TimelineTrack]) -> Vec<TimelinePreviewLimitation> {
@@ -625,6 +743,9 @@ mod tests {
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Timeline,
         Track, TrackChild, TrackKind, Transition,
     };
+    use awidat_proto::professional::{
+        AnimationTarget, Easing, Keyframe, KeyframeInterpolation, ParameterAnimation,
+    };
 
     #[test]
     fn preview_limitations_surface_split_edits_and_transition_audio_policy() {
@@ -656,6 +777,106 @@ mod tests {
         assert!(limitation_kinds.contains(&"transition_audio_policy"));
     }
 
+    #[test]
+    fn supported_clip_animation_converts_for_protocol() {
+        let animation = ParameterAnimation {
+            id: "anim-a".to_string(),
+            target: AnimationTarget::ClipParameter {
+                clip_id: "clip-a".to_string(),
+                parameter: "title.opacity".to_string(),
+            },
+            keyframes: vec![Keyframe {
+                time_s: 0.0,
+                value: 0.0,
+                interpolation: KeyframeInterpolation::Linear,
+                easing: Easing::EaseOut,
+            }],
+            rationale: Some("Fade in".to_string()),
+        };
+
+        let converted = timeline_animation_for_clip(&animation, "clip-a")
+            .expect("supported title opacity animation should convert");
+        assert_eq!(converted.target.parameter, "title.opacity");
+        assert_eq!(converted.keyframes[0].easing, "ease_out");
+    }
+
+    #[test]
+    fn unsupported_clip_animation_is_not_converted() {
+        let animation = ParameterAnimation {
+            id: "anim-a".to_string(),
+            target: AnimationTarget::ClipParameter {
+                clip_id: "clip-a".to_string(),
+                parameter: "volume".to_string(),
+            },
+            keyframes: vec![Keyframe::linear(0.0, 1.0)],
+            rationale: None,
+        };
+
+        assert!(timeline_animation_for_clip(&animation, "clip-a").is_none());
+    }
+
+    #[test]
+    fn flatten_timeline_attaches_supported_parameter_animations() {
+        let mut timeline = Timeline::empty("animation-snapshot");
+        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+            parameter_animations: vec![ParameterAnimation {
+                id: "anim-title-opacity".to_string(),
+                target: AnimationTarget::ClipParameter {
+                    clip_id: "title-1".to_string(),
+                    parameter: "title.opacity".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+                rationale: Some("Fade title in".to_string()),
+            }],
+            ..awidat_meta::AwidatTimelineMetadata::default()
+        });
+        let mut track = Track::empty("Titles", TrackKind::Video);
+        track
+            .metadata
+            .insert("awidat_track_role".to_string(), serde_json::json!("titles"));
+        track
+            .children
+            .push(TrackChild::Clip(clip_with_uuid("Title", "title-1")));
+        timeline.tracks.children.push(StackChild::Track(track));
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let title_track = snapshot
+            .tracks
+            .iter()
+            .find(|track| track.role.as_deref() == Some("titles"))
+            .expect("titles track should be present");
+        let TimelineItem::Clip { animations, .. } = &title_track.items[0] else {
+            panic!("expected title clip");
+        };
+
+        assert_eq!(animations.len(), 1);
+        assert_eq!(animations[0].target.parameter, "title.opacity");
+    }
+
+    #[test]
+    fn unsupported_parameter_animation_surfaces_preview_limitation() {
+        let mut timeline = Timeline::empty("animation-limitations");
+        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+            parameter_animations: vec![ParameterAnimation {
+                id: "anim-volume".to_string(),
+                target: AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".to_string(),
+                    parameter: "volume".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 1.0)],
+                rationale: None,
+            }],
+            ..awidat_meta::AwidatTimelineMetadata::default()
+        });
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+
+        assert!(snapshot.preview_limitations.iter().any(|limitation| {
+            limitation.kind == "animation_target_unsupported"
+                && limitation.message.contains("anim-volume")
+        }));
+    }
+
     fn clip_with_split_edit(name: &str, lead_s: Option<f64>, trail_s: Option<f64>) -> Clip {
         let mut clip = Clip::empty(name.to_string());
         clip.media_reference = MediaReference::External(ExternalReference::new("raw/a.mp4"));
@@ -674,6 +895,21 @@ mod tests {
             }),
             ..AwidatClipMetadata::default()
         });
+        clip
+    }
+
+    fn clip_with_uuid(name: &str, uuid: &str) -> Clip {
+        let mut clip = Clip::empty(name.to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/a.mp4"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        let mut metadata = AwidatClipMetadata::default();
+        metadata
+            .extra
+            .insert("clip_uuid".to_string(), serde_json::json!(uuid));
+        clip.metadata.awidat = Some(metadata);
         clip
     }
 }
