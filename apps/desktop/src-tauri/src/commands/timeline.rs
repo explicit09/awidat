@@ -429,6 +429,13 @@ fn timeline_animation_for_clip(
     if target_clip_id != clip_id || !is_phase_3a_parameter(parameter) {
         return None;
     }
+    if animation
+        .keyframes
+        .iter()
+        .any(|keyframe| keyframe.interpolation == KeyframeInterpolation::Bezier)
+    {
+        return None;
+    }
     Some(awidat_desktop_protocol::TimelineParameterAnimation {
         id: animation.id.clone(),
         target: awidat_desktop_protocol::TimelineAnimationTarget {
@@ -799,6 +806,26 @@ mod tests {
         };
         assert_eq!(converted.target.parameter, "title.opacity");
         assert_eq!(converted.keyframes[0].easing, "ease_out");
+    }
+
+    #[test]
+    fn bezier_clip_animation_is_not_converted_for_preview() {
+        let animation = ParameterAnimation {
+            id: "anim-bezier".to_string(),
+            target: AnimationTarget::ClipParameter {
+                clip_id: "clip-a".to_string(),
+                parameter: "title.opacity".to_string(),
+            },
+            keyframes: vec![Keyframe {
+                time_s: 0.0,
+                value: 0.0,
+                interpolation: KeyframeInterpolation::Bezier,
+                easing: Easing::EaseOut,
+            }],
+            rationale: None,
+        };
+
+        assert!(timeline_animation_for_clip(&animation, "clip-a").is_none());
     }
 
     #[test]

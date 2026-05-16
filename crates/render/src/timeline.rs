@@ -1754,11 +1754,13 @@ fn append_video_overlays(
         let start = overlay.track_start_s;
         let end = overlay.track_start_s + effective_duration(&overlay.segment);
         let overlay_input = stage_overlay_video_input(&mut filter, input_idx, &overlay.segment);
-        let scale_multiplier = overlay_animation_value_expr(overlay, "overlay.scale", "1");
+        let scale_multiplier = overlay_animation_value_expr(overlay, "overlay.scale", "1", "t");
         let (scale_expr, x_expr, y_expr) = match &overlay.mode {
             VideoOverlayMode::FullFrame => {
                 let scale_expr = if has_overlay_animation(overlay, "overlay.scale") {
-                    format!("w=main_w*({scale_multiplier}):h=main_h*({scale_multiplier})")
+                    format!(
+                        "w=main_w*({scale_multiplier}):h=main_h*({scale_multiplier}):eval=frame"
+                    )
                 } else {
                     "w=main_w:h=main_h".to_string()
                 };
@@ -1780,7 +1782,7 @@ fn append_video_overlays(
                     _ => format!("main_h-overlay_h-main_h*{margin_pct}"),
                 };
                 let scale_expr = if has_overlay_animation(overlay, "overlay.scale") {
-                    format!("w=main_w*{scale}*({scale_multiplier}):h=-2")
+                    format!("w=main_w*{scale}*({scale_multiplier}):h=-2:eval=frame")
                 } else {
                     format!("w=main_w*{scale}:h=-2")
                 };
@@ -1791,7 +1793,7 @@ fn append_video_overlays(
             format!(
                 "({})+main_w*({})",
                 x_expr,
-                overlay_animation_value_expr(overlay, "overlay.x", "0")
+                overlay_animation_value_expr(overlay, "overlay.x", "0", "t")
             )
         } else {
             x_expr
@@ -1800,16 +1802,17 @@ fn append_video_overlays(
             format!(
                 "({})+main_h*({})",
                 y_expr,
-                overlay_animation_value_expr(overlay, "overlay.y", "0")
+                overlay_animation_value_expr(overlay, "overlay.y", "0", "t")
             )
         } else {
             y_expr
         };
         let opacity_filter = if has_overlay_animation(overlay, "overlay.opacity") {
-            let opacity = overlay_animation_value_expr(overlay, "overlay.opacity", "1");
+            let opacity = overlay_animation_value_expr(overlay, "overlay.opacity", "1", "T");
             let alpha_label = format!("[media_overlay_alpha{idx}]");
-            let filter =
-                format!("{scaled_label}format=rgba,colorchannelmixer=aa={opacity}{alpha_label};");
+            let filter = format!(
+                "{scaled_label}format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({opacity})'{alpha_label};"
+            );
             (filter, alpha_label)
         } else {
             (String::new(), scaled_label.clone())
@@ -1843,13 +1846,14 @@ fn overlay_animation_value_expr(
     overlay: &VideoOverlayPlan,
     parameter: &str,
     fallback: &str,
+    time_var: &str,
 ) -> String {
     overlay
         .animations
         .iter()
         .find(|animation| animation.parameter == parameter)
         .map(|animation| {
-            let local_time_var = format!("(t-{})", overlay.track_start_s);
+            let local_time_var = format!("({time_var}-{})", overlay.track_start_s);
             keyframes_to_ffmpeg_expr(&animation.keyframes, &local_time_var)
         })
         .unwrap_or_else(|| fallback.to_string())
@@ -5092,6 +5096,56 @@ mod tests {
         assert!(
             filter.contains("w=main_w*0.3*("),
             "overlay scale should include multiplier expression: {filter}"
+        );
+        assert!(
+            filter.contains("scale2ref=w=main_w*0.3*(") && filter.contains(":eval=frame"),
+            "animated overlay scale should be evaluated per frame: {filter}"
+        );
+    }
+
+    #[test]
+    fn overlay_opacity_animation_uses_time_aware_alpha_filter() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.5,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            animations: vec![RenderParameterAnimation {
+                parameter: "overlay.opacity".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                    awidat_proto::professional::Keyframe::linear(1.0, 1.0),
+                ],
+            }],
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("geq="),
+            "overlay opacity should use a filter that supports time-varying expressions: {filter}"
+        );
+        assert!(
+            filter.contains("(T-0.5)"),
+            "overlay opacity should evaluate against overlay-local time with FFmpeg's geq T variable: {filter}"
+        );
+        assert!(
+            !filter.contains("colorchannelmixer=aa=if("),
+            "overlay opacity should not put time expressions in colorchannelmixer aa: {filter}"
         );
     }
 
