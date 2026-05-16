@@ -32,6 +32,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::animation::keyframes_to_ffmpeg_expr;
 use crate::job::RenderJobSpec;
 
 /// Errors building a timeline-render spec.
@@ -1198,7 +1199,17 @@ fn parse_title_plan(clip: &awidat_proto::otio::Clip) -> Option<TitlePlan> {
         animation,
         role,
         safe_area,
+        animations: Vec::new(),
     })
+}
+
+/// Render-time parameter animation attached to a title or media overlay plan.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderParameterAnimation {
+    /// Phase 3A parameter path such as `title.opacity`.
+    pub parameter: String,
+    /// Clip-local keyframes.
+    pub keyframes: Vec<awidat_proto::professional::Keyframe>,
 }
 
 /// One title overlay parsed from the project's Titles track. The
@@ -1227,6 +1238,8 @@ pub struct TitlePlan {
     pub role: String,
     /// Optional safe-area profile carried by caption nodes.
     pub safe_area: Option<String>,
+    /// Supported Phase 3A parameter animations attached to this title.
+    pub animations: Vec<RenderParameterAnimation>,
 }
 
 /// Mirrors `awidat_core::edl::op::TitlePosition` to avoid a render
@@ -2073,6 +2086,32 @@ fn format_drawtext_filter(
     };
     let fontfile = pick_fontfile_attr();
     let anim = apply_title_animation(t, &resting_x, &resting_y);
+    let alpha = if has_title_animation(t, "title.opacity") {
+        format!(
+            ":alpha='{}'",
+            title_animation_value_expr(t, "title.opacity", "1")
+        )
+    } else {
+        anim.alpha
+    };
+    let x = if has_title_animation(t, "title.x") {
+        format!(
+            "({})+w*({})",
+            anim.x,
+            title_animation_value_expr(t, "title.x", "0")
+        )
+    } else {
+        anim.x
+    };
+    let y = if has_title_animation(t, "title.y") {
+        format!(
+            "({})+h*({})",
+            anim.y,
+            title_animation_value_expr(t, "title.y", "0")
+        )
+    } else {
+        anim.y
+    };
     format!(
         "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{weight}\
          :x={x}:y={y}{alpha}:enable='between(t\\,{start}\\,{end})'",
@@ -2081,12 +2120,31 @@ fn format_drawtext_filter(
         size = t.font_size,
         color = t.color,
         weight = weight_attr,
-        x = anim.x,
-        y = anim.y,
-        alpha = anim.alpha,
+        x = x,
+        y = y,
+        alpha = alpha,
         start = t.start_s,
         end = t.end_s,
     )
+}
+
+fn has_title_animation(title: &TitlePlan, parameter: &str) -> bool {
+    title
+        .animations
+        .iter()
+        .any(|animation| animation.parameter == parameter)
+}
+
+fn title_animation_value_expr(title: &TitlePlan, parameter: &str, fallback: &str) -> String {
+    title
+        .animations
+        .iter()
+        .find(|animation| animation.parameter == parameter)
+        .map(|animation| {
+            let local_time_var = format!("(t-{})", title.start_s);
+            keyframes_to_ffmpeg_expr(&animation.keyframes, &local_time_var)
+        })
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn title_bottom_y(broadcast_overlay: Option<&BroadcastOverlayPlan>) -> String {
@@ -4623,6 +4681,7 @@ mod tests {
             animation: TitleAnimation::None,
             role: "title".into(),
             safe_area: None,
+            animations: Vec::new(),
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
         assert!(
@@ -4671,6 +4730,7 @@ mod tests {
                 animation: TitleAnimation::None,
                 role: "title".into(),
                 safe_area: None,
+                animations: Vec::new(),
             },
             TitlePlan {
                 text: "Two".into(),
@@ -4683,6 +4743,7 @@ mod tests {
                 animation: TitleAnimation::None,
                 role: "caption".into(),
                 safe_area: Some("mobile".into()),
+                animations: Vec::new(),
             },
         ];
         let plan = FilterPlanner::with_titles(&[s0], &[], &titles).plan();
@@ -4709,6 +4770,7 @@ mod tests {
             animation: TitleAnimation::None,
             role: "title".into(),
             safe_area: None,
+            animations: Vec::new(),
         };
         let overlay = BroadcastOverlayPlan {
             config: BroadcastOverlayConfig {
@@ -4923,6 +4985,81 @@ mod tests {
         assert!(s.contains("\\,"));
     }
 
+    #[test]
+    fn title_parameter_animation_overrides_legacy_opacity() {
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.animations = vec![RenderParameterAnimation {
+            parameter: "title.opacity".to_string(),
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                awidat_proto::professional::Keyframe::linear(1.0, 1.0),
+            ],
+        }];
+
+        let argv = build_timeline_argv_full(
+            &[],
+            &[],
+            &[],
+            &[title],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("alpha="),
+            "filter should include animated alpha: {filter}"
+        );
+        assert!(
+            filter.contains("alpha='if(lt((t-1)"),
+            "animated alpha should evaluate title keyframes in local time: {filter}"
+        );
+    }
+
+    #[test]
+    fn title_parameter_animation_offsets_position() {
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.animations = vec![
+            RenderParameterAnimation {
+                parameter: "title.x".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, -0.1),
+                    awidat_proto::professional::Keyframe::linear(1.0, 0.1),
+                ],
+            },
+            RenderParameterAnimation {
+                parameter: "title.y".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                    awidat_proto::professional::Keyframe::linear(1.0, 0.2),
+                ],
+            },
+        ];
+
+        let argv = build_timeline_argv_full(
+            &[],
+            &[],
+            &[],
+            &[title],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("x=((w-text_w)/2)+w*(if(lt((t-1)"),
+            "title.x animation should offset the resting x expression: {filter}"
+        );
+        assert!(
+            filter.contains("y=((h-text_h)/2)+h*(if(lt((t-1)"),
+            "title.y animation should offset the resting y expression: {filter}"
+        );
+    }
+
     fn title(animation: TitleAnimation, position: TitlePosition) -> TitlePlan {
         TitlePlan {
             text: "Hi".into(),
@@ -4935,6 +5072,7 @@ mod tests {
             animation,
             role: "title".into(),
             safe_area: None,
+            animations: Vec::new(),
         }
     }
 

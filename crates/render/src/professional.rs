@@ -491,6 +491,7 @@ fn title_plan(
         animation,
         role: "motion_template".into(),
         safe_area: Some("title_safe".into()),
+        animations: Vec::new(),
     }
 }
 
