@@ -29,237 +29,237 @@ import type { WorkflowLensTag } from "./WorkflowLensTag";
  * [`ItemLifecycle::Completed`]. The frontend MUST be able to render at
  * any phase — partial text, tool call with no args yet, etc.
  */
-export type Item = { "kind": "user_input", 
+export type Item = { "kind": "user_input",
 /**
  * Stable id (one per send).
  */
-id: Id, 
+id: Id,
 /**
  * What the user typed.
  */
-text: string, } | { "kind": "text", 
+text: string, } | { "kind": "text",
 /**
  * Stable id for upsert.
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase.
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * Cumulative text so far. Always the full text, not just the
  * delta — the frontend doesn't have to splice.
  */
-text: string, } | { "kind": "tool_call", 
+text: string, } | { "kind": "tool_call",
 /**
  * Stable id for upsert.
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase.
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * Tool name (e.g. `apply_edl`, `find_moment`).
  */
-name: string, 
+name: string,
 /**
  * Cumulative args so far, as a JSON value. Empty object until
  * the first delta lands. Typed as `unknown` on the TS side —
  * individual tool argument schemas live in the frontend's
  * per-tool card components.
  */
-args: unknown, 
+args: unknown,
 /**
  * Final result. `None` until Completed. `Ok` is the tool's
  * stringified output; `Err` is the error message the model
  * will see as `is_error: true`.
  */
-result: { Ok : string } | { Err : string } | null, } | { "kind": "plan", 
+result: { Ok : string } | { Err : string } | null, } | { "kind": "plan",
 /**
  * Stable id (one per turn).
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase. Plan emissions are typically Completed
  * since the model writes the full snapshot each time, but the
  * frontend should still tolerate Delta if used.
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * Plan items in display order.
  */
-items: Array<PlanStep>, 
+items: Array<PlanStep>,
 /**
  * Optional one-line note from the model about progress / blockers.
  */
-note: string | null, } | { "kind": "awaiting_user_input", 
+note: string | null, } | { "kind": "awaiting_user_input",
 /**
  * Stable id matching the underlying tool call's `call_id`.
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase.
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * Question text to display.
  */
-question: string, 
+question: string,
 /**
  * Optional choice list. When present, frontend renders as
  * radio / option list; otherwise as a free-form input.
  */
-options: Array<string> | null, } | { "kind": "approval_request", 
+options: Array<string> | null, } | { "kind": "approval_request",
 /**
  * Stable id matching the tool's `call_id`.
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase.
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * Tool name (e.g. `apply_edl`).
  */
-tool_name: string, 
+tool_name: string,
 /**
  * Short caller-built summary of the args. Full args stay on the
  * matching ToolCall item; this is the user-facing one-liner.
  */
-args_summary: string, } | { "kind": "error", 
+args_summary: string, } | { "kind": "error",
 /**
  * Stable id (one per error).
  */
-id: Id, 
+id: Id,
 /**
  * Error message.
  */
-message: string, } | { "kind": "proposed_edit", 
+message: string, } | { "kind": "proposed_edit",
 /**
  * Stable id matching either the agent's `call_id` (Agent
  * source) or a freshly-allocated id (User source).
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase. Started when first emitted; Delta on
  * each adjustment; Completed when accepted or rejected
  * (the frontend uses Completed to fade / collapse the
  * overlay).
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * Where the proposal came from.
  */
-source: ProposalSource, 
+source: ProposalSource,
 /**
  * The full EDL text the user can preview in a "show EDL"
  * toggle. Round-trippable through the awidat-core parser.
  */
-edl_text: string, 
+edl_text: string,
 /**
  * Post-apply snapshot of the timeline. Same shape
  * `read_timeline` returns. The canvas paints this at
  * alpha 1.0 over the current snapshot at alpha 0.45.
  */
-snapshot: TimelineSnapshot, 
+snapshot: TimelineSnapshot,
 /**
  * Per-op coloring metadata. Length matches the op count
  * in the underlying `EdlEnvelope`; ordering is preserved.
  */
-diff_hints: Array<AppliedDiff>, 
+diff_hints: Array<AppliedDiff>,
 /**
  * One-line human summary ("trim 3 clips, insert 1") for
  * the chat-side ProposedEdit reference card.
  */
-summary: string, 
+summary: string,
 /**
  * Monotonic counter bumped on each adjustment. Frontend
  * drops Deltas with older revisions to absorb rapid-drag
  * races.
  */
-revision: number, } | { "kind": "job", 
+revision: number, } | { "kind": "job",
 /**
  * Stable id (one per job invocation, e.g. one yt-dlp run or
  * one indexer dispatch).
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase.
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * Job kind. The frontend keys per-kind UI off this.
  * Renamed from `kind` to avoid clashing with the enum's
  * own serde-tag field.
  */
-job_kind: JobKind, 
+job_kind: JobKind,
 /**
  * 0..=100 if the job has known progress, `None` for
  * indeterminate (e.g. yt-dlp before it parses bitrate).
  */
-percent: number | null, 
+percent: number | null,
 /**
  * One-line status (e.g. "downloading: 45.2 MB / 120 MB",
  * "whisper · ep1.mp4: 12 / 84 pairs").
  */
-status: string, 
+status: string,
 /**
  * On Completed: terminal state. Frontend uses it to color
  * the card and show a retry button on Failed. None during
  * Started / Delta.
  */
-result: JobResult | null, 
+result: JobResult | null,
 /**
  * Absolute path to the artifact this job produced, if any.
  * Set for `Render` (the rendered mp4) and `Transcode` (the
  * proxy mp4); `None` otherwise. Frontend uses it for the
  * "Show in Finder" button on Render's Completed-Ok phase.
  */
-output_path: string | null, } | { "kind": "professional_review", 
+output_path: string | null, } | { "kind": "professional_review",
 /**
  * Stable id.
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase.
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * Capability area this package belongs to.
  */
-area: ProfessionalCapabilityArea, 
+area: ProfessionalCapabilityArea,
 /**
  * Lens where the package should appear.
  */
-lens: WorkflowLensTag, 
+lens: WorkflowLensTag,
 /**
  * Readiness state for this package.
  */
-readiness: ReadinessStateTag, 
+readiness: ReadinessStateTag,
 /**
  * User-facing summary.
  */
-summary: string, 
+summary: string,
 /**
  * Evidence, blockers, or review rows.
  */
-findings: Array<ProfessionalReviewFinding>, 
+findings: Array<ProfessionalReviewFinding>,
 /**
  * Optional opaque payload for specialized inspectors.
  */
-payload: unknown, } | { "kind": "editorial_note", 
+payload: unknown, } | { "kind": "editorial_note",
 /**
  * Stable id (matches the underlying Note record so dismiss /
  * resolve commands can find it).
  */
-id: Id, 
+id: Id,
 /**
  * Lifecycle phase — `Started` on first emission, `Delta`
  * when the lifecycle status changes, `Completed` when the
  * note is fully resolved or dismissed (UI may then fade it).
  */
-phase: ItemLifecycle, 
+phase: ItemLifecycle,
 /**
  * What kind of finding this is. The UI renders an icon
  * per kind and the dismissal pattern matcher buckets by it.
@@ -268,21 +268,21 @@ phase: ItemLifecycle,
  * outer `Item` enum's `#[serde(tag = "kind")]` discriminator —
  * same shape as `EdlOp`'s `op` tag-rename pattern.
  */
-note_kind: EditorialNoteKind, 
+note_kind: EditorialNoteKind,
 /**
  * Open / resolved / dismissed.
  */
-status: EditorialNoteStatus, 
+status: EditorialNoteStatus,
 /**
  * Master-timeline seconds where the finding centers. UI
  * uses this for click-to-seek.
  */
-anchor_at_s: number, 
+anchor_at_s: number,
 /**
  * One-line human summary the panel renders ("dead air at
  * 2:14 — 2.4s of silence").
  */
-summary: string, 
+summary: string,
 /**
  * Optional EDL text the user can apply directly via "Generate
  * Proposal." `None` when the agent hasn't pre-built a fix
@@ -290,7 +290,7 @@ summary: string,
  * chat). When `Some`, the panel's "Generate Proposal" button
  * pipes this through `propose_user_edit`.
  */
-suggested_proposal: string | null, 
+suggested_proposal: string | null,
 /**
  * For `continuity_warning` notes: the rule engine's verdict
  * (`clean` / `risky` / `dirty` / `abstain`) so the panel
@@ -298,7 +298,7 @@ suggested_proposal: string | null,
  * (silence, filler, etc). Dirty cuts render with a red
  * border, risky get amber, abstain reads muted.
  */
-continuity_verdict: ContinuityVerdictTag | null, 
+continuity_verdict: ContinuityVerdictTag | null,
 /**
  * For `continuity_warning` notes: the per-rule reasons the
  * engine produced (only rules whose verdict ≠ `clean` are
@@ -307,7 +307,7 @@ continuity_verdict: ContinuityVerdictTag | null,
  * sees exactly *why* the cut was flagged. `None` for
  * non-continuity kinds.
  */
-continuity_reasons: Array<string> | null, 
+continuity_reasons: Array<string> | null,
 /**
  * For `broll_suggestion` notes: the Pexels search query the
  * agent generated when surfacing the note. Used by the UI's
@@ -315,7 +315,7 @@ continuity_reasons: Array<string> | null,
  * asking the agent to call `search_broll(query)` on the
  * user's behalf). `None` for non-broll kinds.
  */
-broll_query: string | null, 
+broll_query: string | null,
 /**
  * For `broll_suggestion` notes: pre-fetched preview thumbnails
  * (when the agent has already called `search_broll`). When
@@ -323,7 +323,7 @@ broll_query: string | null,
  * click-to-place. When absent, the card shows the query
  * alongside a "Search Pexels" affordance.
  */
-broll_previews: Array<BrollPreview> | null, 
+broll_previews: Array<BrollPreview> | null,
 /**
  * For `broll_suggestion` notes: exact anchor to pass to
  * `use_broll`. The UI must not ask the agent to infer this
