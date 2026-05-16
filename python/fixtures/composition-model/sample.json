@@ -1,0 +1,21 @@
+{
+  "indexer": "composition-model",
+  "indexer_version": "0.1.0",
+  "schema_version": "1",
+  "asset_id": "raw/sample.mp4",
+  "asset_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "produced_at": "2026-05-16T00:00:00Z",
+  "data": {
+    "regions": [
+      {
+        "start_s": 0.0,
+        "end_s": 2.0,
+        "composition_source": "model:composition-v2",
+        "composition_confidence": 0.91,
+        "subject_role": "primary_speaker",
+        "depth_layer": "foreground",
+        "framing": "single_close"
+      }
+    ]
+  }
+}

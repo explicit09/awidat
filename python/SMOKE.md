@@ -9,9 +9,11 @@ python3 python/scripts/smoke_indexers.py --safe
 ```
 
 It validates the `uv` workspace member list, package layout, indexer
-schema/version markers, and the common sidecar header shape. It does not
-import heavy indexer modules, run ffmpeg, download models, or touch gated
-Hugging Face flows. This is the subset that is safe for CI-style use.
+schema/version markers, the common sidecar header shape, and the eval
+workflow contract for real-corpus gate variables and model-sidecar
+preflight. It does not import heavy indexer modules, run ffmpeg,
+download models, or touch gated Hugging Face flows. This is the subset
+that is safe for CI-style use.
 
 ## Safe real-indexer smoke
 
@@ -40,9 +42,9 @@ The `cargo test -p awidat-index --test end_to_end -- --ignored` test exercises
 `audio-energy-mcp` only, because it has no model downloads and no API keys —
 which means it's the only indexer cheap enough to run on every commit.
 
-The other three indexers have nontrivial install and warm-up costs (model
-downloads, GPU detection, HuggingFace gates). Run these manually before
-committing changes that touch their code.
+The model-backed indexers have nontrivial install and warm-up costs
+(model downloads, GPU detection, HuggingFace gates). Run these manually
+before committing changes that touch their code.
 
 ## Setup once
 
@@ -61,7 +63,7 @@ transformers, opencv). On first model use, models also download:
 | topic (`all-MiniLM-L6-v2`) | ~80MB | same |
 | clip (`ViT-B-32` / OpenAI) | ~150MB | `~/.cache/clip/` (open_clip default) |
 | face, gaze (dlib `face_recognition_models`) | ~70MB | bundled in the wheel |
-| scenedetect, audio-energy, shot, frame-quality | none | n/a |
+| scenedetect, audio-energy, shot, composition, frame-quality | none | n/a |
 
 ## Smoke each indexer
 
@@ -72,7 +74,7 @@ PROJ=/tmp/awidat-smoke
 mkdir -p "$PROJ/raw" "$PROJ/.awidat"
 cp ~/Downloads/your-real-asset.wav "$PROJ/raw/"
 
-# Configure all four indexers (substitute your absolute paths).
+# Configure the indexers (substitute your absolute paths).
 cat > "$PROJ/.awidat/config.toml" <<EOF
 [[mcp.servers]]
 name = "audio-energy"
@@ -119,7 +121,8 @@ args = ["run", "--package", "face-mcp", "face-mcp"]
 cwd = "$PWD/python"
 kind = "indexer"
 
-# shot reads scenedetect + face sidecars — run those first.
+# shot reads scenedetect, face, gaze, clip, and composition sidecars when
+# present. For manual single-indexer checks, run those producers first.
 [[mcp.servers]]
 name = "shot"
 command = "$HOME/.local/bin/uv"
@@ -133,6 +136,17 @@ command = "$HOME/.local/bin/uv"
 args = ["run", "--package", "gaze-mcp", "gaze-mcp"]
 cwd = "$PWD/python"
 kind = "indexer"
+
+[[mcp.servers]]
+name = "composition"
+command = "$HOME/.local/bin/uv"
+args = ["run", "--package", "composition-mcp", "composition-mcp"]
+cwd = "$PWD/python"
+kind = "indexer"
+
+# composition reads scenedetect and optional face/gaze sidecars. If a
+# model classifier writes index/composition-model/<asset>.json, matching
+# model:* regions override heuristic labels in index/composition.
 
 [[mcp.servers]]
 name = "frame-quality"
@@ -155,6 +169,78 @@ ls -lah $PROJ/index/*/
 jq . $PROJ/index/audio-energy/raw/your-real-asset.wav.json | head -40
 jq '.data | keys' $PROJ/index/whisper/raw/your-real-asset.wav.json
 ```
+
+## Composition model sidecar contract
+
+`composition-mcp` accepts optional model-backed annotations at
+`index/composition-model/<asset>.json`. The safe smoke validates the
+shape without importing any model code, including the checked-in example
+at `python/fixtures/composition-model/sample.json`. The sidecar `data`
+object must contain non-empty `regions`; each region must include:
+
+- `start_s` and `end_s`, with `end_s > start_s`
+- `composition_source` beginning with `model:`
+- `composition_confidence` from `0.0` to `1.0`
+- controlled-label `subject_role`, `depth_layer`, and `framing`
+
+Accepted `subject_role` values are `environment`,
+`background_person`, `featured_subject`, `primary_speaker`,
+`secondary_subject`, and `object_detail`.
+
+Accepted `depth_layer` values are `foreground`, `midground`,
+`background`, and `mixed_depth`.
+
+Accepted `framing` values are `extreme_close_up`, `single_close`,
+`single_medium`, `wide_context`, `two_shot`, `group`, and `insert`.
+
+Overlapping model regions override the heuristic fields emitted by
+`composition-mcp`, while the heuristic values are retained under
+`heuristic_*` audit keys.
+
+To validate a real indexed project after a model-backed classifier has
+written `index/composition-model` sidecars, point the safe smoke at the
+project root. `AWIDAT_REAL_CORPUS` is accepted as the same project-root
+fallback used by the live eval workflow:
+
+```bash
+AWIDAT_COMPOSITION_MODEL_PROJECT="$PROJ" \
+AWIDAT_COMPOSITION_MODEL_MIN_REGIONS=25 \
+python3 python/scripts/smoke_safe.py
+```
+
+The invalid-region tolerance defaults to zero. Safe smoke accepts
+`AWIDAT_REAL_VISUAL_MIN_COMPOSITION_MODEL_REGIONS` as the fallback for
+`AWIDAT_COMPOSITION_MODEL_MIN_REGIONS`, matching the real-corpus
+workflow mapping; a value of `0` keeps that gate disabled, matching the
+workflow condition. For a temporary rollout window, set
+`AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS` to the same value as
+`AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS`; the
+real-corpus workflow forwards that value automatically. If
+`AWIDAT_COMPOSITION_MODEL_MAX_INVALID_REGIONS` is forwarded as blank but
+`AWIDAT_REAL_VISUAL_MAX_INVALID_COMPOSITION_MODEL_REGIONS` is set, the
+safe smoke uses the real-corpus value as the fallback. Blank optional
+threshold environment variables otherwise use defaults, so unset GitHub
+repository variables do not break the preflight. If any composition-model
+project-tree threshold is set, either `AWIDAT_COMPOSITION_MODEL_PROJECT`
+or `AWIDAT_REAL_CORPUS` must also be set; otherwise the safe smoke fails
+instead of silently skipping the configured gate.
+
+The project-tree check stays schema-only: it reads every
+`index/composition-model/**/*.json` sidecar, validates the same region
+contract as the checked-in sample, and fails if the total model-region
+count is below `AWIDAT_COMPOSITION_MODEL_MIN_REGIONS`. If sidecars are
+present but invalid, the failure summarizes valid and invalid region
+counts and includes sample path/reason diagnostics so model rollouts can
+distinguish missing output from contract-breaking output.
+
+Safe smoke also preflights mounted real-corpus fixture coverage when
+`AWIDAT_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES`,
+`AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES`, or
+`AWIDAT_REAL_MIN_ROUGH_ASSEMBLY_FIXTURES` is non-zero. It requires
+`AWIDAT_REAL_CORPUS` to point at a project directory with
+`project.otio.json`, then counts the default single fixture file and
+`.awidat/eval/<fixture-kind>/*.json` directory layout before Rust parses
+and applies the fixtures.
 
 ## Topic indexer cross-dependency
 

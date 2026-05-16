@@ -17,6 +17,7 @@ members = [
     "awidat-python-workspace",
     "clip-mcp",
     "color-analysis-mcp",
+    "composition-mcp",
     "editorial-moments-mcp",
     "face-mcp",
     "frame-quality-mcp",
@@ -393,6 +394,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/61/f083b5ac52e505dfc
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/c1/e419ef3723a074172b68aaa89c9f3de486ed4c2399e2dbd8113a4fdcaf9e/colorlog-6.10.1-py3-none-any.whl", hash = "sha256:2d7e8348291948af66122cff006c9f8da6255d224e7cf8e37d8de2df3bad8c9c", size = 11743, upload-time = "2025-10-16T16:14:10.512Z" },
 ]
+
+[[package]]
+name = "composition-mcp"
+version = "0.1.0"
+source = { editable = "packages/composition-mcp" }
+dependencies = [
+    { name = "awidat-mcp" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "awidat-mcp", editable = "packages/awidat-mcp" }]
 
 [[package]]
 name = "contourpy"
