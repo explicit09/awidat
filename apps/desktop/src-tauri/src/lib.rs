@@ -109,6 +109,8 @@ pub fn run() {
             commands::notes::dismissals_path,
             commands::permission::get_permission_mode,
             commands::permission::set_permission_mode,
+            commands::professional::read_professional_lenses,
+            commands::professional::read_pre_autonomy_inspection,
             commands::motion::read_motion,
             commands::import::import_local,
             commands::import::import_locals,

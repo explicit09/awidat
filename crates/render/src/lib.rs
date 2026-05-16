@@ -38,6 +38,7 @@
 
 pub mod ffmpeg;
 pub mod job;
+pub mod professional;
 pub mod progress;
 pub mod timeline;
 
