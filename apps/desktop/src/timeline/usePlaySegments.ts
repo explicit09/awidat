@@ -27,6 +27,7 @@
 // not double with the first-class mix used by export.
 
 import { useMemo } from "react";
+import type { TimelineParameterAnimation } from "../protocol";
 import { useTimelineStore, type TimelineSnapshot } from "./store";
 
 export type PlaySegment = {
@@ -57,6 +58,7 @@ export type VideoOverlaySegment = PlaySegment & {
   scale: number;
   marginPct: number;
   zIndex: number;
+  animations: TimelineParameterAnimation[];
 };
 
 export type PreviewTransition = {
@@ -137,6 +139,7 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
           scale: clampNumber(overlay?.scale, 0.28, 0.1, 0.6),
           marginPct: clampNumber(overlay?.margin_pct, 0.035, 0, 0.15),
           zIndex: trackOffset,
+          animations: item.animations ?? [],
         });
       }
     });

@@ -36,6 +36,7 @@
     )
 )]
 
+pub mod animation;
 pub mod ffmpeg;
 pub mod job;
 pub mod professional;
