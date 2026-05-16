@@ -1,0 +1,42 @@
+{
+  "id": "golden::cross_cut",
+  "objective": "Alternate simultaneous action lines to build tension.",
+  "project": {
+    "name": "golden-cross-cut",
+    "assets": [],
+    "clips": [
+      {
+        "name": "team-a-runs",
+        "uuid": "team-a-runs",
+        "asset": "raw/team-a-runs.mp4",
+        "start_s": 0.0,
+        "duration_s": 4.0,
+        "transcript": "team a races toward the door"
+      },
+      {
+        "name": "team-b-waits",
+        "uuid": "team-b-waits",
+        "asset": "raw/team-b-waits.mp4",
+        "start_s": 40.0,
+        "duration_s": 4.0,
+        "transcript": "team b waits inside"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=team-a-runs and clip_uuid=team-b-waits\n+ cut_type: cross_cut\n+ intent: parallel_action_tension\n+ audio_relation: sync\n+ confidence: 0.82\n+ reason: simultaneous action lines build tension\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "team-a-runs",
+        "to": "team-b-waits",
+        "cut_type": "cross_cut",
+        "intent": "parallel_action_tension",
+        "audio_relation": "sync",
+        "reason_contains": "simultaneous action"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Delete Clip"]
+  }
+}

@@ -134,6 +134,41 @@ pub fn write_whisper_words(root: &Path, asset: &str, words: &[(&str, f64, f64)])
     Ok(())
 }
 
+/// Write a whisper sidecar with diarized segment-level timing.
+pub fn write_whisper_segments(
+    root: &Path,
+    asset: &str,
+    segments: &[(&str, f64, f64, &str)],
+) -> Result<()> {
+    let path = root
+        .join("index")
+        .join("whisper")
+        .join(format!("{asset}.json"));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let payload = serde_json::json!({
+        "indexer": "whisper",
+        "asset_id": asset,
+        "data": {
+            "words": [],
+            "segments": segments
+                .iter()
+                .map(|(text, start_s, end_s, speaker_id)| {
+                    serde_json::json!({
+                        "text": text,
+                        "start_s": start_s,
+                        "end_s": end_s,
+                        "speaker_id": speaker_id
+                    })
+                })
+                .collect::<Vec<_>>()
+        }
+    });
+    std::fs::write(path, serde_json::to_vec_pretty(&payload)?)?;
+    Ok(())
+}
+
 /// Write the desktop-compatible silence sidecar for an asset.
 pub fn write_silence_ranges(root: &Path, asset: &str, ranges: &[(f64, f64)]) -> Result<()> {
     let abs = write_asset(root, asset)?;
@@ -153,6 +188,51 @@ pub fn write_silence_ranges(root: &Path, asset: &str, ranges: &[(f64, f64)]) -> 
     });
     std::fs::write(path, serde_json::to_vec_pretty(&payload)?)?;
     Ok(())
+}
+
+/// Write the desktop-compatible motion sidecar for an asset.
+pub fn write_motion_magnitudes(root: &Path, asset: &str, magnitudes: &[f32]) -> Result<()> {
+    let abs = write_asset(root, asset)?;
+    let path = motion_sidecar_path(root, &abs);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let payload = serde_json::json!({
+        "magnitudes": magnitudes,
+    });
+    std::fs::write(path, serde_json::to_vec_pretty(&payload)?)?;
+    Ok(())
+}
+
+/// Write a shot sidecar with one or more shot/motion buckets.
+pub fn write_shot_sidecar(root: &Path, asset: &str, shots: &[serde_json::Value]) -> Result<()> {
+    let path = root
+        .join("index")
+        .join("shot")
+        .join(format!("{asset}.json"));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let payload = serde_json::json!({
+        "indexer": "shot",
+        "asset_id": asset,
+        "data": {
+            "shots": shots,
+        }
+    });
+    std::fs::write(path, serde_json::to_vec_pretty(&payload)?)?;
+    Ok(())
+}
+
+fn motion_sidecar_path(project_root: &Path, asset_abs_path: &Path) -> PathBuf {
+    let stem = asset_abs_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("asset");
+    project_root.join(".awidat").join("motion").join(format!(
+        "{stem}-{:08x}.json",
+        stable_path_hash(asset_abs_path)
+    ))
 }
 
 fn silence_sidecar_path(project_root: &Path, asset_abs_path: &Path) -> PathBuf {

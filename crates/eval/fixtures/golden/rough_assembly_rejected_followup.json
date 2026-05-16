@@ -1,0 +1,124 @@
+{
+  "id": "golden::rough_assembly_rejected_followup",
+  "objective": "Clean a longer interview rough assembly after rejecting an over-eager J-cut, then accept a follow-up L-cut that holds the expert line under the reaction.",
+  "project": {
+    "name": "golden-rough-assembly-rejected-followup",
+    "assets": ["raw/demo-screen.mp4"],
+    "clips": [
+      {
+        "name": "cold-open",
+        "uuid": "cold-open",
+        "asset": "raw/cold-open.mp4",
+        "start_s": 0.0,
+        "duration_s": 7.5,
+        "transcript": "so uh the real mistake happens before anyone opens the timeline"
+      },
+      {
+        "name": "false-start",
+        "uuid": "false-start",
+        "asset": "raw/false-start.mp4",
+        "start_s": 18.0,
+        "duration_s": 5.0,
+        "transcript": "wait no I want to say that again because that sounded backwards"
+      },
+      {
+        "name": "expert-answer",
+        "uuid": "expert-answer",
+        "asset": "raw/expert-answer.mp4",
+        "start_s": 44.0,
+        "duration_s": 11.0,
+        "transcript": "the reliable fix is to let the thought finish while the viewer sees the reaction"
+      },
+      {
+        "name": "reaction",
+        "uuid": "reaction",
+        "asset": "raw/reaction.mp4",
+        "start_s": 64.0,
+        "duration_s": 6.0,
+        "transcript": "listener reaction after the expert finishes the sentence"
+      },
+      {
+        "name": "demo-insert",
+        "uuid": "demo-insert",
+        "asset": "raw/demo-screen.mp4",
+        "start_s": 8.0,
+        "duration_s": 4.0,
+        "transcript": "screen detail showing the safer cut point"
+      },
+      {
+        "name": "wrap",
+        "uuid": "wrap",
+        "asset": "raw/wrap.mp4",
+        "start_s": 90.0,
+        "duration_s": 6.0,
+        "transcript": "use this review pass before you accept the final assembly"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Trim Clip\n@@ anchor: clip_uuid=cold-open\n+ start: 1.2\n+ end: 7.5\n*** Delete Clip\n@@ anchor: clip_uuid=false-start\n*** Set Audio Trail\n@@ anchor: clip_uuid=expert-answer\n+ trail_s: 0.48\n+ reason: rejected the early incoming J-cut and held the expert line under the reaction instead\n+ confidence: 0.88\n*** Set Cut Intent\n@@ between: clip_uuid=expert-answer and clip_uuid=reaction\n+ cut_type: l_cut\n+ intent: hold_expert_thought\n+ audio_relation: audio_trails\n+ confidence: 0.88\n+ reason: user rejected the first J-cut; follow-up L-cut keeps the thought intact under the reaction\n*** Set Cut Intent\n@@ between: clip_uuid=reaction and clip_uuid=demo-insert\n+ cut_type: insert\n+ intent: visual_evidence_cover\n+ confidence: 0.82\n+ reason: demo insert confirms the safer cut point after the reaction\n*** Set Output Format\n+ aspect_ratio: 16:9\n+ platform: youtube\n+ safe_area: standard\n*** Set Package Metadata\n+ platform: youtube\n+ title: Review the cut before accepting\n+ description: Longer rough assembly with a rejected J-cut and accepted L-cut follow-up.\n+ tags: editing,review,l-cut\n*** End EDL\n",
+  "expect": {
+    "clip_count": 5,
+    "clip_ranges": [
+      {
+        "uuid": "cold-open",
+        "start_s": 1.2,
+        "duration_s": 6.3
+      }
+    ],
+    "cut_boundaries": [
+      {
+        "from": "expert-answer",
+        "to": "reaction",
+        "cut_type": "l_cut",
+        "intent": "hold_expert_thought",
+        "audio_relation": "audio_trails",
+        "reason_contains": "follow-up L-cut"
+      },
+      {
+        "from": "reaction",
+        "to": "demo-insert",
+        "cut_type": "insert",
+        "intent": "visual_evidence_cover",
+        "reason_contains": "demo insert"
+      }
+    ],
+    "output_format": {
+      "aspect_ratio": "16:9",
+      "platform": "youtube",
+      "safe_area": "standard"
+    },
+    "package_metadata": {
+      "platform": "youtube",
+      "title": "Review the cut before accepting",
+      "description_contains": "rejected J-cut and accepted L-cut",
+      "tags_contains": ["editing", "review", "l-cut"]
+    },
+    "proposal_history": [
+      {
+        "id": "assessor-j-cut-1",
+        "status": "rejected",
+        "recommendation": "Set Audio Lead",
+        "reason_contains": "too early",
+        "edl_contains": ["*** Set Audio Lead", "+ cut_type: j_cut"],
+        "final_edl_must_not_contain": ["*** Set Audio Lead", "+ cut_type: j_cut"]
+      },
+      {
+        "id": "assessor-l-cut-follow-up",
+        "status": "accepted",
+        "recommendation": "Set Audio Trail",
+        "reason_contains": "hold the expert line",
+        "edl_contains": ["*** Set Audio Trail", "+ cut_type: l_cut"],
+        "final_edl_must_contain": ["*** Set Audio Trail", "+ cut_type: l_cut"]
+      }
+    ],
+    "applied_contains": [
+      "trimmed",
+      "deleted",
+      "set audio trail",
+      "set cut intent",
+      "set output format",
+      "set package metadata"
+    ],
+    "forbidden_ops": ["Insert Transition", "Insert BRoll", "Set Audio Lead", "Move Clip"]
+  }
+}

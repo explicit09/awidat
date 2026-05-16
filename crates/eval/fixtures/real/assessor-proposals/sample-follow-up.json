@@ -1,0 +1,20 @@
+{
+  "id": "real-assessor-proposal-directory-sample",
+  "final_edl": "*** Begin EDL\n*** Set Audio Trail\n@@ anchor: clip_uuid=expert\n+ trail_s: 0.45\n+ reason: accepted follow-up L-cut after rejecting the early J-cut recommendation\n+ confidence: 0.86\n*** Set Cut Intent\n@@ between: clip_uuid=expert and clip_uuid=reaction\n+ cut_type: l_cut\n+ intent: hold_expert_thought\n+ audio_relation: audio_trails\n+ confidence: 0.86\n+ reason: accepted follow-up L-cut after rejecting the early J-cut recommendation\n*** End EDL\n",
+  "proposal_history": [
+    {
+      "id": "assessor-j-cut-1",
+      "status": "rejected",
+      "recommendation": "Set Audio Lead",
+      "edl_contains": ["*** Set Audio Lead", "+ cut_type: j_cut"],
+      "final_edl_must_not_contain": ["*** Set Audio Lead", "+ cut_type: j_cut"]
+    },
+    {
+      "id": "assessor-l-cut-follow-up",
+      "status": "accepted",
+      "recommendation": "Set Audio Trail",
+      "edl_contains": ["*** Set Audio Trail", "+ cut_type: l_cut"],
+      "final_edl_must_contain": ["*** Set Audio Trail", "+ cut_type: l_cut"]
+    }
+  ]
+}

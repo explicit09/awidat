@@ -1,0 +1,42 @@
+{
+  "id": "golden::tutorial_insert_failure_repair",
+  "objective": "When tutorial continuity is unclear, repair with a literal insert of the exact control instead of a transition or symbolic montage.",
+  "project": {
+    "name": "golden-tutorial-insert-failure",
+    "assets": [],
+    "clips": [
+      {
+        "name": "screen-demo",
+        "uuid": "screen-demo",
+        "asset": "raw/screen-demo.mp4",
+        "start_s": 0.0,
+        "duration_s": 5.0,
+        "transcript": "click the export menu and choose package"
+      },
+      {
+        "name": "export-menu-insert",
+        "uuid": "export-menu-insert",
+        "asset": "raw/export-menu-insert.mp4",
+        "start_s": 42.0,
+        "duration_s": 3.0,
+        "transcript": "export menu closeup"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=screen-demo and clip_uuid=export-menu-insert\n+ cut_type: insert\n+ intent: repair_instruction_clarity\n+ audio_relation: overlap\n+ confidence: 0.84\n+ reason: exact export menu insert repairs the unclear tutorial step\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "screen-demo",
+        "to": "export-menu-insert",
+        "cut_type": "insert",
+        "intent": "repair_instruction_clarity",
+        "audio_relation": "overlap",
+        "reason_contains": "repairs the unclear tutorial step"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Insert BRoll", "Delete Clip"]
+  }
+}

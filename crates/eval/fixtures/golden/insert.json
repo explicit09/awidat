@@ -1,0 +1,42 @@
+{
+  "id": "golden::insert",
+  "objective": "Use a detail insert for a specific object mentioned in the main action.",
+  "project": {
+    "name": "golden-insert",
+    "assets": [],
+    "clips": [
+      {
+        "name": "demo-wide",
+        "uuid": "demo-wide",
+        "asset": "raw/demo-wide.mp4",
+        "start_s": 0.0,
+        "duration_s": 5.0,
+        "transcript": "press the small reset button"
+      },
+      {
+        "name": "reset-button",
+        "uuid": "reset-button",
+        "asset": "raw/reset-button.mp4",
+        "start_s": 18.0,
+        "duration_s": 3.0,
+        "transcript": "reset button detail"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=demo-wide and clip_uuid=reset-button\n+ cut_type: insert\n+ intent: clarify_object_detail\n+ audio_relation: overlap\n+ confidence: 0.85\n+ reason: detail insert shows the exact reset button mentioned in dialogue\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "demo-wide",
+        "to": "reset-button",
+        "cut_type": "insert",
+        "intent": "clarify_object_detail",
+        "audio_relation": "overlap",
+        "reason_contains": "detail insert"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Delete Clip"]
+  }
+}

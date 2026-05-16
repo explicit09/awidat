@@ -1,0 +1,42 @@
+{
+  "id": "golden::transition_overuse_rejection",
+  "objective": "Reject another decorative transition and annotate the low-attention repair instead.",
+  "project": {
+    "name": "golden-transition-overuse",
+    "assets": [],
+    "clips": [
+      {
+        "name": "motion-a",
+        "uuid": "motion-a",
+        "asset": "raw/motion-a.mp4",
+        "start_s": 0.0,
+        "duration_s": 4.0,
+        "transcript": "motion begins"
+      },
+      {
+        "name": "motion-b",
+        "uuid": "motion-b",
+        "asset": "raw/motion-b.mp4",
+        "start_s": 8.0,
+        "duration_s": 4.0,
+        "transcript": "motion continues"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=motion-a and clip_uuid=motion-b\n+ cut_type: cut_on_action\n+ intent: hide_motion_jump_without_transition\n+ audio_relation: sync\n+ confidence: 0.81\n+ reason: transition density is already high; keep the repair low-attention\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "motion-a",
+        "to": "motion-b",
+        "cut_type": "cut_on_action",
+        "intent": "hide_motion_jump_without_transition",
+        "audio_relation": "sync",
+        "reason_contains": "density is already high"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Delete Clip", "Insert BRoll"]
+  }
+}

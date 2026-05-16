@@ -1,0 +1,42 @@
+{
+  "id": "golden::podcast_dialogue_j_cut_variant",
+  "objective": "In a podcast handoff, let the guest's answer enter before picture instead of smoothing the speaker change with a dissolve.",
+  "project": {
+    "name": "golden-podcast-dialogue-j-cut",
+    "assets": [],
+    "clips": [
+      {
+        "name": "host-question",
+        "uuid": "host-question",
+        "asset": "raw/host-question.mp4",
+        "start_s": 0.0,
+        "duration_s": 6.0,
+        "transcript": "what changed after the launch"
+      },
+      {
+        "name": "guest-answer",
+        "uuid": "guest-answer",
+        "asset": "raw/guest-answer.mp4",
+        "start_s": 24.0,
+        "duration_s": 7.0,
+        "transcript": "the team finally understood the risk"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Audio Lead\n@@ anchor: clip_uuid=guest-answer\n+ lead_s: 0.38\n+ reason: podcast dialogue handoff should lead with the guest answer before picture\n+ confidence: 0.88\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "host-question",
+        "to": "guest-answer",
+        "cut_type": "j_cut",
+        "intent": "audio_lead",
+        "audio_relation": "audio_leads",
+        "reason_contains": "guest answer"
+      }
+    ],
+    "applied_contains": ["set audio lead"],
+    "forbidden_ops": ["Insert Transition", "Insert BRoll", "Delete Clip"]
+  }
+}

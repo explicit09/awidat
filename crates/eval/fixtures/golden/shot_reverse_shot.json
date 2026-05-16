@@ -1,0 +1,42 @@
+{
+  "id": "golden::shot_reverse_shot",
+  "objective": "Alternate complementary dialogue angles without adding a visible transition.",
+  "project": {
+    "name": "golden-shot-reverse-shot",
+    "assets": [],
+    "clips": [
+      {
+        "name": "speaker-a",
+        "uuid": "speaker-a",
+        "asset": "raw/speaker-a.mp4",
+        "start_s": 0.0,
+        "duration_s": 5.0,
+        "transcript": "speaker a asks the question"
+      },
+      {
+        "name": "speaker-b",
+        "uuid": "speaker-b",
+        "asset": "raw/speaker-b.mp4",
+        "start_s": 10.0,
+        "duration_s": 5.0,
+        "transcript": "speaker b answers"
+      }
+    ]
+  },
+  "edl": "*** Begin EDL\n*** Set Cut Intent\n@@ between: clip_uuid=speaker-a and clip_uuid=speaker-b\n+ cut_type: shot_reverse_shot\n+ intent: dialogue_exchange\n+ audio_relation: sync\n+ confidence: 0.86\n+ reason: preserve conversational screen geography\n*** End EDL\n",
+  "expect": {
+    "clip_count": 2,
+    "cut_boundaries": [
+      {
+        "from": "speaker-a",
+        "to": "speaker-b",
+        "cut_type": "shot_reverse_shot",
+        "intent": "dialogue_exchange",
+        "audio_relation": "sync",
+        "reason_contains": "screen geography"
+      }
+    ],
+    "applied_contains": ["set cut intent"],
+    "forbidden_ops": ["Insert Transition", "Insert BRoll", "Delete Clip"]
+  }
+}
