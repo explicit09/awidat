@@ -1500,6 +1500,12 @@ impl DeliveryProfile {
                         format!("bitrate {actual} kbps is far below target {target} kbps"),
                     ));
                 }
+                (Some(actual), Some(target)) if actual > target => {
+                    findings.push(PreflightFinding::warning(
+                        PreflightCheckKind::Bitrate,
+                        format!("bitrate {actual} kbps is above target {target} kbps"),
+                    ));
+                }
                 (None, Some(_)) => findings.push(PreflightFinding::error(
                     PreflightCheckKind::Bitrate,
                     "bitrate measurement is missing",

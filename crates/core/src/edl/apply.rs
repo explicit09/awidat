@@ -30,7 +30,10 @@ use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
 use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
-use super::op::{Anchor, AudioFxConfig, EdlEnvelope, EdlOp, InsertTrackKind, TransitionAlignment};
+use super::op::{
+    Anchor, AudioFxConfig, EdlEnvelope, EdlOp, InsertTrackKind, ProfessionalTimelineEdit,
+    TransitionAlignment,
+};
 
 /// One record of what was applied. Surfaced back to the model + the TUI.
 #[derive(Debug, Clone)]
@@ -496,15 +499,7 @@ fn apply_one(
             ))
         }
         EdlOp::ProfessionalTimelineEdit { edit } => {
-            let meta = timeline_awidat_metadata(working);
-            meta.extra.insert(
-                "last_professional_timeline_edit".into(),
-                serde_json::to_value(edit).map_err(|e| ApplyError::Invalid {
-                    index,
-                    message: format!("professional timeline edit could not serialize: {e}"),
-                })?,
-            );
-            Ok(format!("recorded professional timeline edit {edit:?}"))
+            apply_professional_timeline_edit(working, index, edit, ctx, locator)
         }
         EdlOp::AddProposalPackage { package } => {
             let meta = timeline_awidat_metadata(working);
@@ -628,7 +623,19 @@ fn resolve_locator_for_op(
         | EdlOp::SetColorCorrection { anchor, .. }
         | EdlOp::ApplyLut { anchor, .. }
         | EdlOp::RemoveLut { anchor }
-        | EdlOp::SetTitle { anchor, .. } => anchor,
+        | EdlOp::SetTitle { anchor, .. }
+        | EdlOp::ProfessionalTimelineEdit {
+            edit: ProfessionalTimelineEdit::RippleTrim { anchor, .. },
+        }
+        | EdlOp::ProfessionalTimelineEdit {
+            edit: ProfessionalTimelineEdit::SlipClip { anchor, .. },
+        }
+        | EdlOp::ProfessionalTimelineEdit {
+            edit: ProfessionalTimelineEdit::SlideClip { anchor, .. },
+        }
+        | EdlOp::ProfessionalTimelineEdit {
+            edit: ProfessionalTimelineEdit::ReplaceClip { anchor, .. },
+        } => anchor,
         EdlOp::InsertClip { .. }
         | EdlOp::InsertTransition { .. }
         | EdlOp::DeleteTransition { .. }
@@ -666,6 +673,1199 @@ fn required_locator(index: usize, locator: Option<ClipLocator>) -> Result<ClipLo
     locator.ok_or_else(|| ApplyError::Invalid {
         index,
         message: "internal error: anchored op applied without a resolved locator".into(),
+    })
+}
+
+fn apply_professional_timeline_edit(
+    working: &mut Timeline,
+    index: usize,
+    edit: &ProfessionalTimelineEdit,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    match edit {
+        ProfessionalTimelineEdit::RippleTrim {
+            anchor,
+            new_end_s,
+            ripple_tracks,
+        } => {
+            let locator = required_locator(index, locator)?;
+            let StackChild::Track(track) = &working.tracks.children[locator.track_index] else {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: "ripple_trim: anchor resolved to a non-track stack child".into(),
+                });
+            };
+            if !ripple_tracks.is_empty() && !ripple_tracks.iter().any(|name| name == &track.name) {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: format!(
+                        "ripple_trim: resolved track {:?} is not included in ripple_tracks {:?}",
+                        track.name, ripple_tracks
+                    ),
+                });
+            }
+            let description = apply_trim(
+                working,
+                index,
+                anchor,
+                None,
+                Some(*new_end_s),
+                ctx,
+                Some(locator),
+            )?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "ripple trimmed via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::SlipClip { anchor, delta_s } => {
+            let description = apply_slip_clip(working, index, anchor, *delta_s, locator)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "slipped via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::AddMarker {
+            at_s,
+            label,
+            category,
+        } => {
+            let description = apply_professional_marker(working, index, *at_s, label, category)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "added marker via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::RollEdit { between, delta_s } => {
+            let description = apply_roll_edit(working, index, between, *delta_s, ctx)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "rolled edit via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::SlideClip { anchor, delta_s } => {
+            let description = apply_slide_clip(working, index, anchor, *delta_s, locator)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "slid clip via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::LiftRange { range, tracks } => {
+            let description = apply_lift_range(working, index, range, tracks)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "lifted range via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::ExtractRange { range, tracks } => {
+            let description = apply_extract_range(working, index, range, tracks)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "extracted range via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::ReplaceClip {
+            anchor,
+            asset,
+            range,
+        } => {
+            let description = apply_replace_clip(working, index, anchor, asset, range, locator)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "replaced clip via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::Append {
+            track,
+            asset,
+            range,
+        } => {
+            let description = apply_append_clip(working, index, track, asset, range)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "appended clip via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::Overwrite {
+            track,
+            range,
+            asset,
+        } => {
+            let description = apply_overwrite_clip(working, index, track, range, asset)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "overwrote range via professional timeline edit: {description}"
+            ))
+        }
+    }
+}
+
+fn apply_roll_edit(
+    working: &mut Timeline,
+    index: usize,
+    between: &super::op::TransitionBetween,
+    delta_s: f64,
+    ctx: &AnchorContext,
+) -> Result<String, ApplyError> {
+    if !delta_s.is_finite() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("roll_edit: delta_s must be finite, got {delta_s}"),
+        });
+    }
+    if delta_s.abs() < 1e-6 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "roll_edit: delta_s is a no-op".into(),
+        });
+    }
+    let from_loc = resolve(working, &between.from, ctx)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    let to_loc = resolve(working, &between.to, ctx)
+        .map_err(|miss| ApplyError::AnchorMiss { index, miss })?;
+    if from_loc.track_index != to_loc.track_index {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "roll_edit: anchors resolve to different tracks ({} vs {})",
+                from_loc.track_index, to_loc.track_index
+            ),
+        });
+    }
+    if to_loc.child_index != from_loc.child_index + 1 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "roll_edit: anchors are not adjacent clips (from at index {}, to at index {})",
+                from_loc.child_index, to_loc.child_index
+            ),
+        });
+    }
+
+    let StackChild::Track(track) = &mut working.tracks.children[from_loc.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "roll_edit: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let (left, right) = track.children.split_at_mut(to_loc.child_index);
+    let TrackChild::Clip(from_clip) = &mut left[from_loc.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "roll_edit: from anchor resolved to a non-clip child".into(),
+        });
+    };
+    let TrackChild::Clip(to_clip) = &mut right[0] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "roll_edit: to anchor resolved to a non-clip child".into(),
+        });
+    };
+
+    let Some(from_range) = from_clip.source_range.as_ref() else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "roll_edit: from clip has no source_range".into(),
+        });
+    };
+    let Some(to_range) = to_clip.source_range.as_ref() else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "roll_edit: to clip has no source_range".into(),
+        });
+    };
+    let from_rate = from_range.start_time.rate;
+    let to_rate = to_range.start_time.rate;
+    let from_start_s = from_range.start_time.to_seconds();
+    let from_end_s = from_start_s + from_range.duration.to_seconds();
+    let to_start_s = to_range.start_time.to_seconds();
+    let to_end_s = to_start_s + to_range.duration.to_seconds();
+    let target_from_end_s = from_end_s + delta_s;
+    let target_to_start_s = to_start_s + delta_s;
+    if target_from_end_s <= from_start_s + 1e-6 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "roll_edit: delta would collapse or invert the outgoing clip".into(),
+        });
+    }
+    if target_to_start_s >= to_end_s - 1e-6 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "roll_edit: delta would collapse or invert the incoming clip".into(),
+        });
+    }
+    validate_available_source_range(
+        index,
+        "roll_edit outgoing",
+        from_clip,
+        from_start_s,
+        target_from_end_s,
+    )?;
+    validate_available_source_range(
+        index,
+        "roll_edit incoming",
+        to_clip,
+        target_to_start_s,
+        to_end_s,
+    )?;
+
+    from_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+        awidat_proto::otio::RationalTime::new(from_start_s * from_rate, from_rate),
+        awidat_proto::otio::RationalTime::new(
+            (target_from_end_s - from_start_s) * from_rate,
+            from_rate,
+        ),
+    ));
+    to_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+        awidat_proto::otio::RationalTime::new(target_to_start_s * to_rate, to_rate),
+        awidat_proto::otio::RationalTime::new((to_end_s - target_to_start_s) * to_rate, to_rate),
+    ));
+    Ok(format!(
+        "rolled edit between {:?} and {:?} by {delta_s:.3}s",
+        from_clip.name, to_clip.name
+    ))
+}
+
+fn apply_slide_clip(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    delta_s: f64,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = anchor;
+    if !delta_s.is_finite() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("slide_clip: delta_s must be finite, got {delta_s}"),
+        });
+    }
+    if delta_s.abs() < 1e-6 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: delta_s is a no-op".into(),
+        });
+    }
+    let locator = required_locator(index, locator)?;
+    if locator.child_index == 0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: target clip has no previous neighbor to absorb the slide".into(),
+        });
+    }
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    if locator.child_index + 1 >= track.children.len() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: target clip has no next neighbor to absorb the slide".into(),
+        });
+    }
+
+    let (before_target, target_and_after) = track.children.split_at_mut(locator.child_index);
+    let previous_child = before_target
+        .last_mut()
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: "slide_clip: target clip has no previous neighbor to absorb the slide".into(),
+        })?;
+    let (target_slice, after_target) = target_and_after.split_at_mut(1);
+    let target_child = &mut target_slice[0];
+    let next_child = after_target
+        .first_mut()
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: "slide_clip: target clip has no next neighbor to absorb the slide".into(),
+        })?;
+    let TrackChild::Clip(previous_clip) = previous_child else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: previous neighbor is not a clip".into(),
+        });
+    };
+    let TrackChild::Clip(target_clip) = target_child else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    let TrackChild::Clip(next_clip) = next_child else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: next neighbor is not a clip".into(),
+        });
+    };
+
+    let Some(previous_range) = previous_clip.source_range.as_ref() else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: previous clip has no source_range".into(),
+        });
+    };
+    let Some(target_range) = target_clip.source_range.as_ref() else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: target clip has no source_range".into(),
+        });
+    };
+    let Some(next_range) = next_clip.source_range.as_ref() else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: next clip has no source_range".into(),
+        });
+    };
+
+    let previous_rate = previous_range.start_time.rate;
+    let next_rate = next_range.start_time.rate;
+    let previous_start_s = previous_range.start_time.to_seconds();
+    let previous_end_s = previous_start_s + previous_range.duration.to_seconds();
+    let next_start_s = next_range.start_time.to_seconds();
+    let next_end_s = next_start_s + next_range.duration.to_seconds();
+    let target_previous_end_s = previous_end_s + delta_s;
+    let target_next_start_s = next_start_s + delta_s;
+
+    if target_previous_end_s <= previous_start_s + 1e-6 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: delta would collapse or invert the previous clip".into(),
+        });
+    }
+    if target_next_start_s >= next_end_s - 1e-6 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slide_clip: delta would collapse or invert the next clip".into(),
+        });
+    }
+    validate_available_source_range(
+        index,
+        "slide_clip previous",
+        previous_clip,
+        previous_start_s,
+        target_previous_end_s,
+    )?;
+    validate_available_source_range(
+        index,
+        "slide_clip next",
+        next_clip,
+        target_next_start_s,
+        next_end_s,
+    )?;
+
+    previous_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+        awidat_proto::otio::RationalTime::new(previous_start_s * previous_rate, previous_rate),
+        awidat_proto::otio::RationalTime::new(
+            (target_previous_end_s - previous_start_s) * previous_rate,
+            previous_rate,
+        ),
+    ));
+    next_clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+        awidat_proto::otio::RationalTime::new(target_next_start_s * next_rate, next_rate),
+        awidat_proto::otio::RationalTime::new(
+            (next_end_s - target_next_start_s) * next_rate,
+            next_rate,
+        ),
+    ));
+    Ok(format!(
+        "slid clip {:?} by {delta_s:.3}s while preserving its {:.3}s duration",
+        target_clip.name,
+        target_range.duration.to_seconds()
+    ))
+}
+
+fn apply_lift_range(
+    working: &mut Timeline,
+    index: usize,
+    range: &awidat_proto::professional::SourceRange,
+    tracks: &[String],
+) -> Result<String, ApplyError> {
+    validate_professional_timeline_range(index, "lift_range", range)?;
+    let mut matched_tracks = 0usize;
+    let mut touched_tracks = 0usize;
+    let mut lifted_s = 0.0_f64;
+    for child in &mut working.tracks.children {
+        let StackChild::Track(track) = child else {
+            continue;
+        };
+        if !tracks.is_empty() && !tracks.iter().any(|name| name == &track.name) {
+            continue;
+        }
+        matched_tracks += 1;
+        let rate = track
+            .children
+            .iter()
+            .find_map(TrackChildClipRate::as_clip_rate)
+            .unwrap_or(24.0);
+        let lifted_on_track = lift_range_on_track(index, track, range.start_s, range.end_s, rate)?;
+        if lifted_on_track > 1e-6 {
+            touched_tracks += 1;
+            lifted_s += lifted_on_track;
+        }
+    }
+    if matched_tracks == 0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("lift_range: no tracks matched {:?}", tracks),
+        });
+    }
+    if touched_tracks == 0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "lift_range: range [{:.3}s..{:.3}s] did not overlap selected tracks",
+                range.start_s, range.end_s
+            ),
+        });
+    }
+    Ok(format!(
+        "lifted range [{:.3}s..{:.3}s] on {touched_tracks} track(s), leaving gaps for {lifted_s:.3}s of selected material",
+        range.start_s, range.end_s
+    ))
+}
+
+fn apply_extract_range(
+    working: &mut Timeline,
+    index: usize,
+    range: &awidat_proto::professional::SourceRange,
+    tracks: &[String],
+) -> Result<String, ApplyError> {
+    validate_professional_timeline_range(index, "extract_range", range)?;
+    let mut matched_tracks = 0usize;
+    let mut touched_tracks = 0usize;
+    let mut extracted_s = 0.0_f64;
+    for child in &mut working.tracks.children {
+        let StackChild::Track(track) = child else {
+            continue;
+        };
+        if !tracks.is_empty() && !tracks.iter().any(|name| name == &track.name) {
+            continue;
+        }
+        matched_tracks += 1;
+        let extracted_on_track = extract_range_on_track(index, track, range.start_s, range.end_s)?;
+        if extracted_on_track > 1e-6 {
+            touched_tracks += 1;
+            extracted_s += extracted_on_track;
+        }
+    }
+    if matched_tracks == 0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("extract_range: no tracks matched {:?}", tracks),
+        });
+    }
+    if touched_tracks == 0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "extract_range: range [{:.3}s..{:.3}s] did not overlap selected tracks",
+                range.start_s, range.end_s
+            ),
+        });
+    }
+    Ok(format!(
+        "extracted range [{:.3}s..{:.3}s] on {touched_tracks} track(s), closing {extracted_s:.3}s of selected material",
+        range.start_s, range.end_s
+    ))
+}
+
+fn apply_replace_clip(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    asset: &str,
+    range: &awidat_proto::professional::SourceRange,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = anchor;
+    validate_professional_timeline_range(index, "replace_clip", range)?;
+    if asset.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "replace_clip: asset must not be empty".into(),
+        });
+    }
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "replace_clip: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "replace_clip: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    let rate = clip
+        .source_range
+        .as_ref()
+        .map(|range| range.start_time.rate)
+        .filter(|rate| *rate > 0.0)
+        .unwrap_or(24.0);
+    let original_name = clip.name.clone();
+    clip.media_reference = awidat_proto::otio::MediaReference::External(
+        awidat_proto::otio::ExternalReference::new(asset.to_string()),
+    );
+    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+        awidat_proto::otio::RationalTime::new(range.start_s * rate, rate),
+        awidat_proto::otio::RationalTime::new((range.end_s - range.start_s) * rate, rate),
+    ));
+    Ok(format!(
+        "replaced clip {original_name:?} with asset {asset:?} source=[{:.3}s..{:.3}s]",
+        range.start_s, range.end_s
+    ))
+}
+
+fn apply_append_clip(
+    working: &mut Timeline,
+    index: usize,
+    track: &str,
+    asset: &str,
+    range: &awidat_proto::professional::SourceRange,
+) -> Result<String, ApplyError> {
+    validate_professional_timeline_range(index, "append", range)?;
+    if track.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "append: track must not be empty".into(),
+        });
+    }
+    if asset.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "append: asset must not be empty".into(),
+        });
+    }
+    apply_insert_clip(
+        working,
+        index,
+        asset,
+        track,
+        Some(InsertTrackKind::Auto),
+        None,
+        Some(range.start_s),
+        Some(range.end_s),
+        None,
+        None,
+    )
+}
+
+fn apply_overwrite_clip(
+    working: &mut Timeline,
+    index: usize,
+    track_name: &str,
+    range: &awidat_proto::professional::SourceRange,
+    asset: &str,
+) -> Result<String, ApplyError> {
+    validate_professional_timeline_range(index, "overwrite", range)?;
+    if track_name.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "overwrite: track must not be empty".into(),
+        });
+    }
+    if asset.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "overwrite: asset must not be empty".into(),
+        });
+    }
+    let track_idx = working
+        .tracks
+        .children
+        .iter()
+        .enumerate()
+        .find_map(|(i, sc)| match sc {
+            StackChild::Track(track) if track.name == track_name => Some(i),
+            _ => None,
+        });
+    let track_idx = match track_idx {
+        Some(i) => i,
+        None => {
+            let kind = infer_insert_track_kind(track_name, Some(InsertTrackKind::Auto));
+            working
+                .tracks
+                .children
+                .push(StackChild::Track(awidat_proto::otio::Track::empty(
+                    track_name.to_string(),
+                    kind,
+                )));
+            working.tracks.children.len() - 1
+        }
+    };
+    let StackChild::Track(track) = &mut working.tracks.children[track_idx] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "overwrite: resolved destination is not a track".into(),
+        });
+    };
+    let rate = track
+        .children
+        .iter()
+        .find_map(TrackChildClipRate::as_clip_rate)
+        .unwrap_or(24.0);
+    let source_duration_s = range.end_s - range.start_s;
+    let overwrite = build_professional_source_clip(
+        track,
+        asset,
+        0.0,
+        source_duration_s,
+        rate,
+        Some("overwrite"),
+    );
+    overwrite_range_on_track(index, track, range.start_s, range.end_s, overwrite, rate)?;
+    Ok(format!(
+        "overwrote range [{:.3}s..{:.3}s] on track {track_name:?} with asset {asset:?}",
+        range.start_s, range.end_s
+    ))
+}
+
+fn build_professional_source_clip(
+    track: &awidat_proto::otio::Track,
+    asset: &str,
+    source_start_s: f64,
+    source_end_s: f64,
+    rate: f64,
+    name_prefix: Option<&str>,
+) -> Clip {
+    let name = name_prefix
+        .map(|prefix| format!("{prefix}-{}", track.children.len()))
+        .unwrap_or_else(|| next_clip_name_in_track(track));
+    let mut clip = Clip::empty(name);
+    clip.media_reference = awidat_proto::otio::MediaReference::External(
+        awidat_proto::otio::ExternalReference::new(asset.to_string()),
+    );
+    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+        awidat_proto::otio::RationalTime::new(source_start_s * rate, rate),
+        awidat_proto::otio::RationalTime::new((source_end_s - source_start_s) * rate, rate),
+    ));
+    stamp_fresh_clip_uuid(&mut clip);
+    clip
+}
+
+fn validate_professional_timeline_range(
+    index: usize,
+    label: &str,
+    range: &awidat_proto::professional::SourceRange,
+) -> Result<(), ApplyError> {
+    if !range.start_s.is_finite() || !range.end_s.is_finite() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "{label}: range bounds must be finite, got [{:?}..{:?}]",
+                range.start_s, range.end_s
+            ),
+        });
+    }
+    if range.start_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "{label}: range start must be >= 0, got {:.3}s",
+                range.start_s
+            ),
+        });
+    }
+    if range.end_s <= range.start_s {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "{label}: range end {:.3}s must be after start {:.3}s",
+                range.end_s, range.start_s
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn lift_range_on_track(
+    index: usize,
+    track: &mut awidat_proto::otio::Track,
+    range_start_s: f64,
+    range_end_s: f64,
+    rate: f64,
+) -> Result<f64, ApplyError> {
+    let mut cursor_s = 0.0_f64;
+    let mut lifted_s = 0.0_f64;
+    let mut replacement = Vec::with_capacity(track.children.len() + 2);
+    for child in std::mem::take(&mut track.children) {
+        let duration_s = child_duration(&child);
+        if duration_s <= 1e-6 {
+            if cursor_s < range_start_s || cursor_s >= range_end_s {
+                replacement.push(child);
+            }
+            continue;
+        }
+        let child_start_s = cursor_s;
+        let child_end_s = child_start_s + duration_s;
+        let overlap_start_s = child_start_s.max(range_start_s);
+        let overlap_end_s = child_end_s.min(range_end_s);
+        if overlap_end_s <= overlap_start_s + 1e-6 {
+            replacement.push(child);
+            cursor_s = child_end_s;
+            continue;
+        }
+
+        let mut emitted_clip_piece = false;
+        if child_start_s < range_start_s {
+            let leading_end_s = range_start_s.min(child_end_s);
+            if let Some(piece) = timeline_child_segment(
+                index,
+                &child,
+                child_start_s,
+                child_start_s,
+                leading_end_s,
+                false,
+            )? {
+                emitted_clip_piece |= matches!(piece, TrackChild::Clip(_));
+                replacement.push(piece);
+            }
+        }
+
+        let overlap_duration_s = overlap_end_s - overlap_start_s;
+        lifted_s += overlap_duration_s;
+        replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            overlap_duration_s,
+            rate,
+        )));
+
+        if range_end_s < child_end_s {
+            let trailing_start_s = range_end_s.max(child_start_s);
+            if let Some(piece) = timeline_child_segment(
+                index,
+                &child,
+                child_start_s,
+                trailing_start_s,
+                child_end_s,
+                emitted_clip_piece,
+            )? {
+                replacement.push(piece);
+            }
+        }
+        cursor_s = child_end_s;
+    }
+    track.children = replacement;
+    merge_adjacent_gaps(&mut track.children, rate);
+    Ok(lifted_s)
+}
+
+fn extract_range_on_track(
+    index: usize,
+    track: &mut awidat_proto::otio::Track,
+    range_start_s: f64,
+    range_end_s: f64,
+) -> Result<f64, ApplyError> {
+    let mut cursor_s = 0.0_f64;
+    let mut extracted_s = 0.0_f64;
+    let mut replacement = Vec::with_capacity(track.children.len());
+    for child in std::mem::take(&mut track.children) {
+        let duration_s = child_duration(&child);
+        if duration_s <= 1e-6 {
+            if cursor_s < range_start_s || cursor_s >= range_end_s {
+                replacement.push(child);
+            }
+            continue;
+        }
+        let child_start_s = cursor_s;
+        let child_end_s = child_start_s + duration_s;
+        let overlap_start_s = child_start_s.max(range_start_s);
+        let overlap_end_s = child_end_s.min(range_end_s);
+        if overlap_end_s <= overlap_start_s + 1e-6 {
+            replacement.push(child);
+            cursor_s = child_end_s;
+            continue;
+        }
+
+        let mut emitted_clip_piece = false;
+        if child_start_s < range_start_s {
+            let leading_end_s = range_start_s.min(child_end_s);
+            if let Some(piece) = timeline_child_segment(
+                index,
+                &child,
+                child_start_s,
+                child_start_s,
+                leading_end_s,
+                false,
+            )? {
+                emitted_clip_piece |= matches!(piece, TrackChild::Clip(_));
+                replacement.push(piece);
+            }
+        }
+
+        extracted_s += overlap_end_s - overlap_start_s;
+
+        if range_end_s < child_end_s {
+            let trailing_start_s = range_end_s.max(child_start_s);
+            if let Some(piece) = timeline_child_segment(
+                index,
+                &child,
+                child_start_s,
+                trailing_start_s,
+                child_end_s,
+                emitted_clip_piece,
+            )? {
+                replacement.push(piece);
+            }
+        }
+        cursor_s = child_end_s;
+    }
+    track.children = replacement;
+    let rate = track
+        .children
+        .iter()
+        .find_map(TrackChildClipRate::as_clip_rate)
+        .unwrap_or(24.0);
+    merge_adjacent_gaps(&mut track.children, rate);
+    Ok(extracted_s)
+}
+
+fn overwrite_range_on_track(
+    index: usize,
+    track: &mut awidat_proto::otio::Track,
+    range_start_s: f64,
+    range_end_s: f64,
+    overwrite: Clip,
+    rate: f64,
+) -> Result<(), ApplyError> {
+    let mut cursor_s = 0.0_f64;
+    let mut pending_overwrite = Some(overwrite);
+    let mut replacement = Vec::with_capacity(track.children.len() + 3);
+    for child in std::mem::take(&mut track.children) {
+        let duration_s = child_duration(&child);
+        if duration_s <= 1e-6 {
+            if cursor_s < range_start_s || cursor_s >= range_end_s {
+                replacement.push(child);
+            }
+            continue;
+        }
+        let child_start_s = cursor_s;
+        let child_end_s = child_start_s + duration_s;
+        if child_end_s <= range_start_s + 1e-6 {
+            replacement.push(child);
+            cursor_s = child_end_s;
+            continue;
+        }
+        if pending_overwrite.is_some() && child_start_s >= range_end_s - 1e-6 {
+            let overwrite = pending_overwrite
+                .take()
+                .ok_or_else(|| ApplyError::Invalid {
+                    index,
+                    message: "overwrite: replacement clip was already inserted".into(),
+                })?;
+            replacement.push(TrackChild::Clip(overwrite));
+            replacement.push(child);
+            cursor_s = child_end_s;
+            continue;
+        }
+
+        let overlap_start_s = child_start_s.max(range_start_s);
+        let overlap_end_s = child_end_s.min(range_end_s);
+        if overlap_end_s <= overlap_start_s + 1e-6 {
+            replacement.push(child);
+            cursor_s = child_end_s;
+            continue;
+        }
+
+        let mut emitted_clip_piece = false;
+        if child_start_s < range_start_s {
+            let leading_end_s = range_start_s.min(child_end_s);
+            if let Some(piece) = timeline_child_segment(
+                index,
+                &child,
+                child_start_s,
+                child_start_s,
+                leading_end_s,
+                false,
+            )? {
+                emitted_clip_piece |= matches!(piece, TrackChild::Clip(_));
+                replacement.push(piece);
+            }
+        }
+
+        if pending_overwrite.is_some() {
+            let overwrite = pending_overwrite
+                .take()
+                .ok_or_else(|| ApplyError::Invalid {
+                    index,
+                    message: "overwrite: replacement clip was already inserted".into(),
+                })?;
+            replacement.push(TrackChild::Clip(overwrite));
+        }
+
+        if range_end_s < child_end_s {
+            let trailing_start_s = range_end_s.max(child_start_s);
+            if let Some(piece) = timeline_child_segment(
+                index,
+                &child,
+                child_start_s,
+                trailing_start_s,
+                child_end_s,
+                emitted_clip_piece,
+            )? {
+                replacement.push(piece);
+            }
+        }
+        cursor_s = child_end_s;
+    }
+    if let Some(overwrite) = pending_overwrite {
+        if cursor_s < range_start_s - 1e-6 {
+            replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                range_start_s - cursor_s,
+                rate,
+            )));
+        }
+        replacement.push(TrackChild::Clip(overwrite));
+    }
+    track.children = replacement;
+    merge_adjacent_gaps(&mut track.children, rate);
+    Ok(())
+}
+
+fn timeline_child_segment(
+    index: usize,
+    child: &TrackChild,
+    child_start_s: f64,
+    segment_start_s: f64,
+    segment_end_s: f64,
+    fresh_clip_uuid: bool,
+) -> Result<Option<TrackChild>, ApplyError> {
+    let duration_s = segment_end_s - segment_start_s;
+    if duration_s <= 1e-6 {
+        return Ok(None);
+    }
+    match child {
+        TrackChild::Clip(clip) => {
+            let Some(range) = clip.source_range.as_ref() else {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: format!(
+                        "lift_range: clip {:?} has no source_range and cannot be segmented",
+                        clip.name
+                    ),
+                });
+            };
+            let mut segment = clip.clone();
+            let rate = range.start_time.rate;
+            let source_start_s = range.start_time.to_seconds() + (segment_start_s - child_start_s);
+            segment.source_range = Some(awidat_proto::otio::TimeRange::new(
+                awidat_proto::otio::RationalTime::new(source_start_s * rate, rate),
+                awidat_proto::otio::RationalTime::new(duration_s * rate, rate),
+            ));
+            if fresh_clip_uuid {
+                segment.name = format!("{}-lift-tail", segment.name);
+                stamp_fresh_clip_uuid(&mut segment);
+            }
+            Ok(Some(TrackChild::Clip(segment)))
+        }
+        TrackChild::Gap(gap) => Ok(Some(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            duration_s,
+            gap.source_range.duration.rate,
+        )))),
+        TrackChild::Transition(_) => Ok(None),
+        TrackChild::Stack(_) => Err(ApplyError::Invalid {
+            index,
+            message: "lift_range: nested stack segmentation is not supported".into(),
+        }),
+    }
+}
+
+fn validate_available_source_range(
+    index: usize,
+    label: &str,
+    clip: &Clip,
+    start_s: f64,
+    end_s: f64,
+) -> Result<(), ApplyError> {
+    if start_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("{label}: target source start {start_s:.3}s is before 0"),
+        });
+    }
+    if let awidat_proto::otio::MediaReference::External(reference) = &clip.media_reference
+        && let Some(available_range) = &reference.available_range
+    {
+        let available_start_s = available_range.start_time.to_seconds();
+        let available_end_s = available_start_s + available_range.duration.to_seconds();
+        if start_s < available_start_s - 1e-6 || end_s > available_end_s + 1e-6 {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "{label}: target source range [{start_s:.3}s..{end_s:.3}s] exceeds \
+                     available media range [{available_start_s:.3}s..{available_end_s:.3}s]"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn record_professional_timeline_edit(
+    working: &mut Timeline,
+    index: usize,
+    edit: &ProfessionalTimelineEdit,
+) -> Result<(), ApplyError> {
+    let meta = timeline_awidat_metadata(working);
+    meta.extra.insert(
+        "last_professional_timeline_edit".into(),
+        serde_json::to_value(edit).map_err(|e| ApplyError::Invalid {
+            index,
+            message: format!("professional timeline edit could not serialize: {e}"),
+        })?,
+    );
+    Ok(())
+}
+
+fn apply_slip_clip(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    delta_s: f64,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = anchor;
+    if !delta_s.is_finite() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("slip_clip: delta_s must be finite, got {delta_s}"),
+        });
+    }
+    if delta_s.abs() < 1e-6 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slip_clip: delta_s is a no-op".into(),
+        });
+    }
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slip_clip: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slip_clip: anchor resolved to a non-clip track child".into(),
+        });
+    };
+    let Some(range) = clip.source_range.as_ref() else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "slip_clip: clip has no source_range".into(),
+        });
+    };
+    let rate = range.start_time.rate;
+    let duration_s = range.duration.to_seconds();
+    let target_start_s = range.start_time.to_seconds() + delta_s;
+    let target_end_s = target_start_s + duration_s;
+    if target_start_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("slip_clip: target source start {target_start_s:.3}s is before 0"),
+        });
+    }
+    if let awidat_proto::otio::MediaReference::External(reference) = &clip.media_reference
+        && let Some(available_range) = &reference.available_range
+    {
+        let available_start_s = available_range.start_time.to_seconds();
+        let available_end_s = available_start_s + available_range.duration.to_seconds();
+        if target_start_s < available_start_s - 1e-6 || target_end_s > available_end_s + 1e-6 {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "slip_clip: target source range [{target_start_s:.3}s..{target_end_s:.3}s] \
+                     exceeds available media range [{available_start_s:.3}s..{available_end_s:.3}s]"
+                ),
+            });
+        }
+    }
+    clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+        awidat_proto::otio::RationalTime::new(target_start_s * rate, rate),
+        awidat_proto::otio::RationalTime::new(duration_s * rate, rate),
+    ));
+    let name = clip.name.clone();
+    Ok(format!(
+        "slipped clip {name:?} source range by {delta_s:.3}s to \
+         [{target_start_s:.3}s..{target_end_s:.3}s]"
+    ))
+}
+
+fn apply_professional_marker(
+    working: &mut Timeline,
+    index: usize,
+    at_s: f64,
+    label: &str,
+    category: &Option<String>,
+) -> Result<String, ApplyError> {
+    if !at_s.is_finite() || at_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("add_marker: at_s must be finite and >= 0, got {at_s}"),
+        });
+    }
+    let label = label.trim();
+    if label.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "add_marker: label must not be empty".into(),
+        });
+    }
+    for child in &mut working.tracks.children {
+        let StackChild::Track(track) = child else {
+            continue;
+        };
+        let mut cursor_s = 0.0;
+        for child in &mut track.children {
+            let duration_s = child_duration(child);
+            let start_s = cursor_s;
+            let end_s = start_s + duration_s;
+            cursor_s = end_s;
+            if at_s < start_s || at_s >= end_s {
+                continue;
+            }
+            let TrackChild::Clip(clip) = child else {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: format!(
+                        "add_marker: timeline time {at_s:.3}s resolves to non-clip item on track {:?}",
+                        track.name
+                    ),
+                });
+            };
+            let rate = clip
+                .source_range
+                .as_ref()
+                .map(|range| range.start_time.rate)
+                .unwrap_or(24.0);
+            let relative_s = at_s - start_s;
+            let mut marker = awidat_proto::otio::Marker::new(
+                label.to_string(),
+                awidat_proto::otio::TimeRange::new(
+                    awidat_proto::otio::RationalTime::new(relative_s * rate, rate),
+                    awidat_proto::otio::RationalTime::new(0.0, rate),
+                ),
+            );
+            marker.metadata.awidat = Some(awidat_proto::awidat_meta::AwidatMarkerMetadata {
+                category: category.clone(),
+                note: Some(label.to_string()),
+                ..awidat_proto::awidat_meta::AwidatMarkerMetadata::default()
+            });
+            clip.markers.push(marker);
+            return Ok(format!(
+                "added marker {label:?} at {at_s:.3}s on clip {:?}",
+                clip.name
+            ));
+        }
+    }
+    Err(ApplyError::Invalid {
+        index,
+        message: format!("add_marker: no clip covers timeline time {at_s:.3}s"),
     })
 }
 
@@ -4452,6 +5652,7 @@ impl ValidateForApply for Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edl::op::ProfessionalTimelineEdit;
     use awidat_proto::awidat_meta::{
         Anchor as AwAnchor, AudioRelation, AwidatClipMetadata, CutType, cut_boundary_key,
     };
@@ -4459,6 +5660,7 @@ mod tests {
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
         Track, TrackChild, TrackKind,
     };
+    use awidat_proto::professional::SourceRange;
 
     fn timeline_with_three_clips() -> Timeline {
         let mut tl = Timeline::empty("test");
@@ -4570,6 +5772,432 @@ mod tests {
         let r = c.source_range.as_ref().unwrap();
         assert!((r.start_time.to_seconds() - 1.0).abs() < 1e-9);
         assert!((r.duration.to_seconds() - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn professional_ripple_trim_lowers_to_real_timeline_trim() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::RippleTrim {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    new_end_s: 3.0,
+                    ripple_tracks: vec!["V1".into()],
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(clip) = &track.children[1] else {
+            panic!("expected clip")
+        };
+        let range = clip.source_range.as_ref().unwrap();
+
+        assert!((range.duration.to_seconds() - 3.0).abs() < 1e-9);
+        assert!(outcome.applied[0].description.contains("ripple trimmed"));
+        assert_eq!(
+            track.children.len(),
+            3,
+            "ripple trim should not insert a gap"
+        );
+    }
+
+    #[test]
+    fn professional_slip_clip_lowers_to_source_range_shift_without_timeline_move() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::SlipClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    delta_s: 1.0,
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(clip) = &track.children[1] else {
+            panic!("expected clip")
+        };
+        let range = clip.source_range.as_ref().unwrap();
+
+        assert_eq!(
+            outcome.applied[0].locator,
+            Some(ClipLocator {
+                track_index: 0,
+                child_index: 1,
+            })
+        );
+        assert!((range.start_time.to_seconds() - 2.0).abs() < 1e-9);
+        assert!((range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        assert_eq!(
+            track.children.len(),
+            3,
+            "slip edit should preserve timeline structure"
+        );
+    }
+
+    #[test]
+    fn professional_add_marker_lowers_to_real_clip_marker() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::AddMarker {
+                    at_s: 6.0,
+                    label: "Review beat".into(),
+                    category: Some("note".into()),
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(clip) = &track.children[1] else {
+            panic!("expected clip")
+        };
+        let marker = clip.markers.first().expect("marker should be attached");
+
+        assert!(outcome.applied[0].description.contains("added marker"));
+        assert_eq!(marker.name, "Review beat");
+        assert!((marker.marked_range.start_time.to_seconds() - 1.0).abs() < 1e-9);
+        assert_eq!(
+            marker.metadata.awidat.as_ref().unwrap().category.as_deref(),
+            Some("note")
+        );
+    }
+
+    #[test]
+    fn professional_roll_edit_lowers_to_adjacent_source_range_shift() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::RollEdit {
+                    between: super::super::op::TransitionBetween {
+                        from: Anchor::ClipUuid {
+                            uuid: "clip-0".into(),
+                        },
+                        to: Anchor::ClipUuid {
+                            uuid: "clip-1".into(),
+                        },
+                    },
+                    delta_s: 1.0,
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(from_clip) = &track.children[0] else {
+            panic!("expected from clip")
+        };
+        let TrackChild::Clip(to_clip) = &track.children[1] else {
+            panic!("expected to clip")
+        };
+        let from_range = from_clip.source_range.as_ref().unwrap();
+        let to_range = to_clip.source_range.as_ref().unwrap();
+
+        assert!(outcome.applied[0].description.contains("rolled edit"));
+        assert!((from_range.start_time.to_seconds() - 1.0).abs() < 1e-9);
+        assert!((from_range.duration.to_seconds() - 6.0).abs() < 1e-9);
+        assert!((to_range.start_time.to_seconds() - 2.0).abs() < 1e-9);
+        assert!((to_range.duration.to_seconds() - 4.0).abs() < 1e-9);
+        assert_eq!(
+            from_range.duration.to_seconds() + to_range.duration.to_seconds(),
+            10.0,
+            "roll edit should preserve combined timeline duration"
+        );
+    }
+
+    #[test]
+    fn professional_slide_clip_lowers_to_neighbor_source_range_shift() {
+        let mut tl = timeline_with_three_clips();
+        add_one_second_handles(&mut tl);
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::SlideClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    delta_s: 1.0,
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(previous_clip) = &track.children[0] else {
+            panic!("expected previous clip")
+        };
+        let TrackChild::Clip(slid_clip) = &track.children[1] else {
+            panic!("expected slid clip")
+        };
+        let TrackChild::Clip(next_clip) = &track.children[2] else {
+            panic!("expected next clip")
+        };
+        let previous_range = previous_clip.source_range.as_ref().unwrap();
+        let slid_range = slid_clip.source_range.as_ref().unwrap();
+        let next_range = next_clip.source_range.as_ref().unwrap();
+
+        assert!(outcome.applied[0].description.contains("slid clip"));
+        assert!((previous_range.start_time.to_seconds() - 1.0).abs() < 1e-9);
+        assert!((previous_range.duration.to_seconds() - 6.0).abs() < 1e-9);
+        assert!((slid_range.start_time.to_seconds() - 1.0).abs() < 1e-9);
+        assert!((slid_range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        assert!((next_range.start_time.to_seconds() - 2.0).abs() < 1e-9);
+        assert!((next_range.duration.to_seconds() - 4.0).abs() < 1e-9);
+        assert_eq!(
+            previous_range.duration.to_seconds()
+                + slid_range.duration.to_seconds()
+                + next_range.duration.to_seconds(),
+            15.0,
+            "slide edit should preserve combined timeline duration"
+        );
+    }
+
+    #[test]
+    fn professional_lift_range_lowers_to_duration_preserving_gap() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::LiftRange {
+                    range: SourceRange {
+                        start_s: 3.0,
+                        end_s: 8.0,
+                    },
+                    tracks: vec!["V1".into()],
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+
+        assert!(outcome.applied[0].description.contains("lifted range"));
+        assert_eq!(track.children.len(), 4);
+        let TrackChild::Clip(left) = &track.children[0] else {
+            panic!("expected leading clip")
+        };
+        let TrackChild::Gap(gap) = &track.children[1] else {
+            panic!("expected lifted gap")
+        };
+        let TrackChild::Clip(tail) = &track.children[2] else {
+            panic!("expected trailing split clip")
+        };
+        let TrackChild::Clip(after) = &track.children[3] else {
+            panic!("expected unaffected clip")
+        };
+        let left_range = left.source_range.as_ref().unwrap();
+        let tail_range = tail.source_range.as_ref().unwrap();
+        let after_range = after.source_range.as_ref().unwrap();
+
+        assert_eq!(left.name, "clip-0");
+        assert!((left_range.start_time.to_seconds() - 0.0).abs() < 1e-9);
+        assert!((left_range.duration.to_seconds() - 3.0).abs() < 1e-9);
+        assert!((gap.source_range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        assert_eq!(tail.name, "clip-1");
+        assert!((tail_range.start_time.to_seconds() - 3.0).abs() < 1e-9);
+        assert!((tail_range.duration.to_seconds() - 2.0).abs() < 1e-9);
+        assert_eq!(after.name, "clip-2");
+        assert!((after_range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        assert!((track_cursor(track) - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn professional_extract_range_lowers_to_close_gap_removal() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::ExtractRange {
+                    range: SourceRange {
+                        start_s: 3.0,
+                        end_s: 8.0,
+                    },
+                    tracks: vec!["V1".into()],
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+
+        assert!(outcome.applied[0].description.contains("extracted range"));
+        assert_eq!(track.children.len(), 3);
+        let TrackChild::Clip(left) = &track.children[0] else {
+            panic!("expected leading clip")
+        };
+        let TrackChild::Clip(tail) = &track.children[1] else {
+            panic!("expected trailing split clip")
+        };
+        let TrackChild::Clip(after) = &track.children[2] else {
+            panic!("expected pulled-up clip")
+        };
+        let left_range = left.source_range.as_ref().unwrap();
+        let tail_range = tail.source_range.as_ref().unwrap();
+        let after_range = after.source_range.as_ref().unwrap();
+
+        assert_eq!(left.name, "clip-0");
+        assert!((left_range.start_time.to_seconds() - 0.0).abs() < 1e-9);
+        assert!((left_range.duration.to_seconds() - 3.0).abs() < 1e-9);
+        assert_eq!(tail.name, "clip-1");
+        assert!((tail_range.start_time.to_seconds() - 3.0).abs() < 1e-9);
+        assert!((tail_range.duration.to_seconds() - 2.0).abs() < 1e-9);
+        assert_eq!(after.name, "clip-2");
+        assert!((after_range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        assert!((track_cursor(track) - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn professional_replace_clip_lowers_to_asset_swap_preserving_slot() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::ReplaceClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                    asset: "raw/replacement.mov".into(),
+                    range: SourceRange {
+                        start_s: 10.0,
+                        end_s: 15.0,
+                    },
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(replacement) = &track.children[1] else {
+            panic!("expected replacement clip")
+        };
+        let range = replacement.source_range.as_ref().unwrap();
+
+        assert!(outcome.applied[0].description.contains("replaced clip"));
+        assert_eq!(track.children.len(), 3);
+        assert_eq!(replacement.name, "clip-1");
+        assert!(matches!(
+            &replacement.media_reference,
+            MediaReference::External(reference) if reference.target_url == "raw/replacement.mov"
+        ));
+        assert!((range.start_time.to_seconds() - 10.0).abs() < 1e-9);
+        assert!((range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        assert!((track_cursor(track) - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn professional_append_lowers_to_track_tail_insert() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::Append {
+                    track: "V1".into(),
+                    asset: "raw/tail.mov".into(),
+                    range: SourceRange {
+                        start_s: 2.0,
+                        end_s: 4.0,
+                    },
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(appended) = &track.children[3] else {
+            panic!("expected appended clip")
+        };
+        let range = appended.source_range.as_ref().unwrap();
+
+        assert!(outcome.applied[0].description.contains("appended clip"));
+        assert_eq!(track.children.len(), 4);
+        assert_eq!(appended.name, "clip-3");
+        assert!(matches!(
+            &appended.media_reference,
+            MediaReference::External(reference) if reference.target_url == "raw/tail.mov"
+        ));
+        assert!((range.start_time.to_seconds() - 2.0).abs() < 1e-9);
+        assert!((range.duration.to_seconds() - 2.0).abs() < 1e-9);
+        assert!((track_cursor(track) - 17.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn professional_overwrite_lowers_to_timeline_range_replacement() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::Overwrite {
+                    track: "V1".into(),
+                    asset: "raw/overwrite.mov".into(),
+                    range: SourceRange {
+                        start_s: 6.0,
+                        end_s: 12.0,
+                    },
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+
+        assert!(outcome.applied[0].description.contains("overwrote range"));
+        assert_eq!(track.children.len(), 4);
+        let TrackChild::Clip(first) = &track.children[0] else {
+            panic!("expected first clip")
+        };
+        let TrackChild::Clip(lead) = &track.children[1] else {
+            panic!("expected retained lead")
+        };
+        let TrackChild::Clip(overwrite) = &track.children[2] else {
+            panic!("expected overwrite clip")
+        };
+        let TrackChild::Clip(tail) = &track.children[3] else {
+            panic!("expected retained tail")
+        };
+        let first_range = first.source_range.as_ref().unwrap();
+        let lead_range = lead.source_range.as_ref().unwrap();
+        let overwrite_range = overwrite.source_range.as_ref().unwrap();
+        let tail_range = tail.source_range.as_ref().unwrap();
+
+        assert_eq!(first.name, "clip-0");
+        assert!((first_range.duration.to_seconds() - 5.0).abs() < 1e-9);
+        assert_eq!(lead.name, "clip-1");
+        assert!((lead_range.start_time.to_seconds() - 0.0).abs() < 1e-9);
+        assert!((lead_range.duration.to_seconds() - 1.0).abs() < 1e-9);
+        assert!(matches!(
+            &overwrite.media_reference,
+            MediaReference::External(reference) if reference.target_url == "raw/overwrite.mov"
+        ));
+        assert!((overwrite_range.start_time.to_seconds() - 0.0).abs() < 1e-9);
+        assert!((overwrite_range.duration.to_seconds() - 6.0).abs() < 1e-9);
+        assert_eq!(tail.name, "clip-2");
+        assert!((tail_range.start_time.to_seconds() - 2.0).abs() < 1e-9);
+        assert!((tail_range.duration.to_seconds() - 3.0).abs() < 1e-9);
+        assert!((track_cursor(track) - 15.0).abs() < 1e-9);
     }
 
     #[test]
