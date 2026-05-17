@@ -2372,9 +2372,9 @@ fn vfx_track_sidecar(shot: &VfxShot) -> TrackSidecar {
         samples: vec![TrackSample {
             frame: 0,
             points: vec![[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]],
-            confidence: Some(0.0),
+            confidence: None,
         }],
-        confidence: Some(0.0),
+        confidence: None,
         ..TrackSidecar::default()
     }
 }
@@ -2382,6 +2382,8 @@ fn vfx_track_sidecar(shot: &VfxShot) -> TrackSidecar {
 fn vfx_mask_sidecar(shot: &VfxShot) -> MaskSidecar {
     MaskSidecar {
         id: format!("mask-{}", shot.clip_id),
+        track_id: Some(format!("track-{}", shot.clip_id)),
+        attached_clip_id: Some(shot.clip_id.clone()),
         operation: MaskOperation::Add,
         keyframes: vec![MaskKeyframe {
             time_s: 0.0,
@@ -2396,7 +2398,7 @@ fn vfx_matte_sidecar(shot: &VfxShot) -> MatteSidecar {
     MatteSidecar {
         id: format!("matte-{}", shot.clip_id),
         alpha_source: shot.asset_id.clone(),
-        confidence: Some(0.0),
+        confidence: None,
         review_thumbnails: vec![format!("vfx-{}", shot.clip_id)],
     }
 }
