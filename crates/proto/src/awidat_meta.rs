@@ -12,16 +12,17 @@
 //! - On a [`crate::otio::Marker`]'s `metadata`: see
 //!   [`AwidatMarkerMetadata`].
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::professional::{
-    AssetCatalog, AudioFinishingState, CapabilityRegistry, ColorFinishingState, CompositionGraph,
-    DeliveryProfile, FindingSeverity, LearningSignal, MotionGraphicsTemplate, PackageManifest,
-    ParameterAnimation, PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract,
-    PreflightReport, ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect,
-    Stringout, TrackingPackage, WorkflowLens,
+    AnimationTarget, AssetCatalog, AudioFinishingState, CapabilityRegistry, ColorFinishingState,
+    CompositionGraph, DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity,
+    LearningSignal, MotionGraphicsTemplate, MotionPackage, PackageManifest, ParameterAnimation,
+    PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract, PreflightReport,
+    ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect, Stringout,
+    TrackingPackage, WorkflowLens,
 };
 
 /// Top-level awidat metadata on a `Timeline.metadata.awidat`.
@@ -80,9 +81,15 @@ pub struct AwidatTimelineMetadata {
     /// Reusable motion graphics templates.
     #[serde(default)]
     pub motion_templates: Vec<MotionGraphicsTemplate>,
+    /// Reviewable motion packages proposed by agents.
+    #[serde(default)]
+    pub motion_packages: Vec<MotionPackage>,
     /// Serializable composition graphs.
     #[serde(default)]
     pub composition_graphs: Vec<CompositionGraph>,
+    /// Explicit procedural expression links.
+    #[serde(default)]
+    pub expression_links: Vec<ExpressionLink>,
     /// Tracking, mask, and matte sidecar references/contracts.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub tracking_package: Option<TrackingPackage>,
@@ -176,12 +183,19 @@ impl AwidatTimelineMetadata {
         for animation in &self.parameter_animations {
             diagnostics.extend(animation.validate());
         }
+        diagnostics.extend(detect_parameter_animation_conflicts(
+            &self.parameter_animations,
+        ));
         for template in &self.motion_templates {
             diagnostics.extend(template.validate());
         }
         for graph in &self.composition_graphs {
             diagnostics.extend(graph.validate());
         }
+        for link in &self.expression_links {
+            diagnostics.extend(link.validate());
+        }
+        diagnostics.extend(detect_expression_link_cycles(&self.expression_links));
         if let Some(package) = &self.tracking_package {
             diagnostics.extend(package.validate());
         }
@@ -221,8 +235,8 @@ impl AwidatTimelineMetadata {
             ),
             stage(
                 CapabilityArea::ParameterAnimation,
-                !self.parameter_animations.is_empty(),
-                "parameter animations are missing",
+                !self.parameter_animations.is_empty() || !self.expression_links.is_empty(),
+                "parameter animations and expression links are missing",
             ),
             stage(
                 CapabilityArea::MotionGraphicsTemplates,
@@ -309,6 +323,105 @@ impl AwidatTimelineMetadata {
             })
             .unwrap_or_default()
     }
+}
+
+fn detect_parameter_animation_conflicts(
+    animations: &[ParameterAnimation],
+) -> Vec<ProfessionalDiagnostic> {
+    type AnimationTimeRange = (f64, f64);
+    type AnimationConflictEntry<'a> = (&'a str, AnimationTimeRange);
+
+    let mut by_target: BTreeMap<String, Vec<AnimationConflictEntry<'_>>> = BTreeMap::new();
+    for animation in animations {
+        let Some((target_key, range)) = animation_clip_parameter_range(animation) else {
+            continue;
+        };
+        by_target
+            .entry(target_key)
+            .or_default()
+            .push((animation.id.as_str(), range));
+    }
+
+    let mut diagnostics = Vec::new();
+    for (target_key, entries) in by_target {
+        let Some((first_id, second_id)) = first_overlapping_animation_pair(&entries) else {
+            continue;
+        };
+        diagnostics.push(ProfessionalDiagnostic::error(
+            crate::professional::CapabilityArea::ParameterAnimation,
+            format!(
+                "animation conflict on {target_key}: {first_id} overlaps {second_id}; only one animation may target a clip parameter over the same time range"
+            ),
+        ));
+    }
+    diagnostics
+}
+
+fn animation_clip_parameter_range(animation: &ParameterAnimation) -> Option<(String, (f64, f64))> {
+    let AnimationTarget::ClipParameter { clip_id, parameter } = &animation.target else {
+        return None;
+    };
+    let mut start_s = f64::INFINITY;
+    let mut end_s = f64::NEG_INFINITY;
+    for keyframe in &animation.keyframes {
+        if !keyframe.time_s.is_finite() {
+            return None;
+        }
+        start_s = start_s.min(keyframe.time_s);
+        end_s = end_s.max(keyframe.time_s);
+    }
+    if start_s == f64::INFINITY || end_s == f64::NEG_INFINITY {
+        return None;
+    }
+    Some((format!("{clip_id}/{parameter}"), (start_s, end_s)))
+}
+
+fn detect_expression_link_cycles(links: &[ExpressionLink]) -> Vec<ProfessionalDiagnostic> {
+    let targets = links
+        .iter()
+        .map(|link| (expression_target_key(link), link))
+        .collect::<BTreeMap<_, _>>();
+
+    for link in links {
+        let mut seen = HashSet::new();
+        let mut current = link;
+        while let ExpressionSource::Parameter { clip_id, parameter } = &current.source {
+            let key = format!("{clip_id}/{parameter}");
+            if !seen.insert(key.clone()) {
+                return vec![ProfessionalDiagnostic::error(
+                    crate::professional::CapabilityArea::ParameterAnimation,
+                    format!("expression link cycle detected at {key}"),
+                )];
+            }
+            let Some(next) = targets.get(&key).copied() else {
+                break;
+            };
+            current = next;
+        }
+    }
+
+    Vec::new()
+}
+
+fn expression_target_key(link: &ExpressionLink) -> String {
+    format!("{}/{}", link.target_clip_id, link.target_parameter)
+}
+
+fn first_overlapping_animation_pair<'a>(
+    entries: &'a [(&'a str, (f64, f64))],
+) -> Option<(&'a str, &'a str)> {
+    for (index, (first_id, first_range)) in entries.iter().enumerate() {
+        for (second_id, second_range) in entries.iter().skip(index + 1) {
+            if ranges_overlap(*first_range, *second_range) {
+                return Some((*first_id, *second_id));
+            }
+        }
+    }
+    None
+}
+
+fn ranges_overlap(first: (f64, f64), second: (f64, f64)) -> bool {
+    first.0 <= second.1 && second.0 <= first.1
 }
 
 fn stage(

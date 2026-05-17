@@ -212,6 +212,7 @@ mod tests {
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: out_path.clone(),
+            limitations: Vec::new(),
         };
         let job_id = manager.start(spec).await.unwrap();
 

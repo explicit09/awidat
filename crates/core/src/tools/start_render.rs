@@ -26,7 +26,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use awidat_render::RenderJobSpec;
+use awidat_render::{RenderJobSpec, RenderPlanLimitation};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -138,7 +138,9 @@ impl ToolHandler for StartRenderTool {
         // shared planner so the agent and the desktop's Export button
         // produce identical specs. The asset-based scopes keep their
         // original path-validation flow.
-        let (argv, total_duration_s, asset_label, output_path) = if args.scope == "timeline" {
+        let (argv, total_duration_s, asset_label, output_path, limitations) = if args.scope
+            == "timeline"
+        {
             crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
                 .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
             let spec =
@@ -212,6 +214,7 @@ impl ToolHandler for StartRenderTool {
                 spec.total_duration_s,
                 "<timeline>".to_string(),
                 spec.output_path,
+                spec.limitations,
             )
         } else {
             // Asset-based scope: preview / segment / full.
@@ -242,6 +245,7 @@ impl ToolHandler for StartRenderTool {
                 range_duration(&args.range),
                 asset.to_string(),
                 output_path,
+                Vec::<RenderPlanLimitation>::new(),
             )
         };
 
@@ -250,6 +254,7 @@ impl ToolHandler for StartRenderTool {
             total_duration_s,
             cwd: Some(ctx.project_root.clone()),
             output_path: output_path.clone(),
+            limitations: limitations.clone(),
         };
         let job_id = ctx.job_manager.start(spec).await.map_err(|e| {
             FunctionCallError::RespondToModel(format!("start_render: failed to start ffmpeg: {e}"))
@@ -261,6 +266,7 @@ impl ToolHandler for StartRenderTool {
             "render_kind": if args.scope == "timeline" { "final_timeline_export" } else { "diagnostic_asset_render" },
             "asset": asset_label,
             "output_path": output_path.display().to_string(),
+            "render_limitations": limitations,
             "started_at": chrono::Utc::now().to_rfc3339(),
             "next_step": if args.scope == "timeline" {
                 format!("Call poll_render(job_id=\"{job_id}\") to track the final timeline export.")

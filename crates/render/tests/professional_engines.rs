@@ -3,17 +3,23 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::professional::{
-    AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState, AudioMeterReading,
-    AudioRole, ColorFinishingState, DeliveryPreflightInput, DeliveryProfile, FindingSeverity,
-    GradeStack, GradeStage, Keyframe, MotionGraphicsTemplate, SafeAreaRule, TemplateSlot,
-    TemplateSlotKind, TrackKind,
+    AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
+    AudioMeterReading, AudioRole, ColorFinishingState, CompositionGraph, CompositionNode,
+    DeliveryPreflightInput, DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity,
+    GradeStack, GradeStage, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
+    MotionGraphicsTemplate, MotionPackage, ParameterAnimation, ReviewStatus, SafeAreaRule,
+    TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar, TrackingPackage,
 };
 use awidat_render::professional::{
-    DeliveryQueueRequest, MotionTemplateTiming, TemplateAnimation, TrackCorrection,
-    TrackingEvidence, apply_delivery_profile_to_spec, fill_motion_template,
-    generate_tracking_package, lower_audio_finishing, lower_composition_graph, lower_grade_stack,
-    lower_motion_template, plan_delivery_queue_item, summarize_color_finishing,
+    DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
+    TrackCorrection, TrackingEvidence, apply_delivery_profile_to_spec, apply_motion_package,
+    built_in_motion_templates, diagnose_effect_parameter_animation,
+    effect_parameter_capability_matrix, evaluate_expression_links, fill_motion_template,
+    generate_tracking_package, inspect_composition_graph, lower_audio_finishing,
+    lower_composition_graph, lower_grade_stack, lower_motion_template, lower_track_bound_overlay,
+    motion_package_summary, plan_delivery_queue_item, summarize_color_finishing,
 };
 use awidat_render::{RenderJobSpec, TitleAnimation, TitlePosition};
 use serde_json::json;
@@ -84,6 +90,174 @@ fn tracking_corrections_replace_samples_and_rescore_quality() {
 }
 
 #[test]
+fn tracking_package_validates_sample_order_and_low_confidence() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "track-a".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Point,
+            samples: vec![
+                TrackSample {
+                    frame: 2,
+                    points: vec![[0.5, 0.5]],
+                    confidence: Some(0.3),
+                },
+                TrackSample {
+                    frame: 1,
+                    points: vec![[0.4, 0.4]],
+                    confidence: Some(0.4),
+                },
+            ],
+            confidence: Some(0.4),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let diagnostics = package.validate();
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == FindingSeverity::Error
+            && diagnostic.message.contains("sample frames must be sorted")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == FindingSeverity::Warning
+            && diagnostic.message.contains("low confidence")
+    }));
+}
+
+#[test]
+fn track_bound_overlay_lowers_only_when_track_exists() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "track-a".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Point,
+            samples: vec![TrackSample {
+                frame: 0,
+                points: vec![[0.25, 0.75]],
+                confidence: Some(0.95),
+            }],
+            confidence: Some(0.95),
+            ..TrackSidecar::default()
+        }],
+        masks: vec![MaskSidecar {
+            id: "mask-a".into(),
+            operation: MaskOperation::Add,
+            track_id: Some("track-a".into()),
+            attached_clip_id: Some("overlay-a".into()),
+            keyframes: vec![MaskKeyframe {
+                time_s: 0.0,
+                points: vec![[0.2, 0.7], [0.3, 0.7], [0.3, 0.8], [0.2, 0.8]],
+                feather: 0.02,
+                opacity: 1.0,
+            }],
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let lowering = match lower_track_bound_overlay(&package, "track-a", "overlay-a") {
+        Ok(lowering) => lowering,
+        Err(err) => panic!("track-bound overlay lowers: {err}"),
+    };
+
+    assert_eq!(lowering.track_id, "track-a");
+    assert_eq!(lowering.overlay_clip_id, "overlay-a");
+    assert!(lowering.expression.contains("x=0.25"));
+    assert!(lowering.expression.contains("y=0.75"));
+    assert!(lowering.expression.contains("mask-a"));
+}
+
+#[test]
+fn track_bound_overlay_fails_loudly_when_track_is_missing() {
+    let package = TrackingPackage::default();
+
+    let err = match lower_track_bound_overlay(&package, "missing-track", "overlay-a") {
+        Ok(_) => panic!("missing track should fail"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.to_string(), "track missing-track not found");
+}
+
+#[test]
+fn expression_link_cycle_is_rejected() {
+    let links = vec![
+        expression_link(
+            "a",
+            "clip-a",
+            "overlay.scale",
+            ExpressionSource::Parameter {
+                clip_id: "clip-a".into(),
+                parameter: "overlay.opacity".into(),
+            },
+            "source",
+        ),
+        expression_link(
+            "b",
+            "clip-a",
+            "overlay.opacity",
+            ExpressionSource::Parameter {
+                clip_id: "clip-a".into(),
+                parameter: "overlay.scale".into(),
+            },
+            "source",
+        ),
+    ];
+
+    let evaluation = evaluate_expression_links(&links, &map([]), &map([]), 0.0);
+
+    assert!(evaluation.values.is_empty());
+    assert!(evaluation.limitations.iter().any(|limitation| {
+        limitation.message.contains("cycle") && limitation.severity == FindingSeverity::Error
+    }));
+}
+
+#[test]
+fn missing_expression_signal_surfaces_limitation() {
+    let links = vec![expression_link(
+        "scale-audio",
+        "clip-a",
+        "overlay.scale",
+        ExpressionSource::Signal {
+            signal: "audio_energy".into(),
+        },
+        "1 + source * 0.5",
+    )];
+
+    let evaluation = evaluate_expression_links(&links, &map([]), &map([]), 0.0);
+
+    assert!(evaluation.values.is_empty());
+    assert!(evaluation.limitations.iter().any(|limitation| {
+        limitation.message.contains("missing signal audio_energy")
+            && limitation.severity == FindingSeverity::Warning
+    }));
+}
+
+#[test]
+fn audio_energy_expression_drives_expected_scale_samples() {
+    let links = vec![expression_link(
+        "scale-audio",
+        "clip-a",
+        "overlay.scale",
+        ExpressionSource::Signal {
+            signal: "audio_energy".into(),
+        },
+        "clamp(1 + source * 0.5, 1, 1.5)",
+    )];
+    let signals = map([("audio_energy", json!(0.8))]);
+
+    let evaluation = evaluate_expression_links(&links, &signals, &map([]), 0.0);
+
+    assert!(
+        evaluation.limitations.is_empty(),
+        "{:?}",
+        evaluation.limitations
+    );
+    assert_eq!(evaluation.values.get("clip-a/overlay.scale"), Some(&1.4));
+}
+
+#[test]
 fn composition_lowering_emits_supported_filters_and_explicit_limitations() {
     let graph = awidat_proto::professional::CompositionGraph {
         id: "comp-1".into(),
@@ -135,6 +309,113 @@ fn composition_lowering_emits_supported_filters_and_explicit_limitations() {
 }
 
 #[test]
+fn composition_graph_cycle_fails_validation() {
+    let graph = awidat_proto::professional::CompositionGraph {
+        id: "cycle-graph".into(),
+        nodes: vec![
+            node("a", "transform", json!({})),
+            node("b", "merge", json!({})),
+            node("output", "output", json!({})),
+        ],
+        edges: vec![edge("a", "b"), edge("b", "a"), edge("b", "output")],
+        output_node_id: Some("output".into()),
+    };
+
+    let diagnostics = graph.validate();
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.severity == FindingSeverity::Error && diagnostic.message.contains("cycle")
+    }));
+}
+
+#[test]
+fn unsupported_composition_node_persists_with_limitation() {
+    let graph = awidat_proto::professional::CompositionGraph {
+        id: "unsupported-graph".into(),
+        nodes: vec![
+            awidat_proto::professional::CompositionNode {
+                id: "plugin-node".into(),
+                node_type: awidat_proto::professional::CompositionNodeType::Unsupported,
+                params: map([("plugin", json!("third-party-glow"))]),
+            },
+            node("output", "output", json!({})),
+        ],
+        edges: vec![edge("plugin-node", "output")],
+        output_node_id: Some("output".into()),
+    };
+
+    let lowering = lower_composition_graph(&graph);
+
+    assert!(lowering.steps.iter().any(|step| step.node_id == "output"));
+    assert!(lowering.limitations.iter().any(|limitation| {
+        limitation.node_id == "plugin-node"
+            && limitation.message.contains("no current render lowering")
+    }));
+}
+
+#[test]
+fn particle_and_scene3d_nodes_persist_with_explicit_limitations() {
+    let graph = CompositionGraph {
+        id: "particles-graph".into(),
+        nodes: vec![
+            CompositionNode {
+                id: "scene".into(),
+                node_type: awidat_proto::professional::CompositionNodeType::Scene3d,
+                ..CompositionNode::default()
+            },
+            CompositionNode {
+                id: "sparks".into(),
+                node_type: awidat_proto::professional::CompositionNodeType::ParticleEmitter,
+                ..CompositionNode::default()
+            },
+            CompositionNode {
+                id: "output".into(),
+                node_type: awidat_proto::professional::CompositionNodeType::Output,
+                ..CompositionNode::default()
+            },
+        ],
+        edges: vec![edge("scene", "sparks"), edge("sparks", "output")],
+        output_node_id: Some("output".into()),
+    };
+
+    let lowering = lower_composition_graph(&graph);
+    let inspection = inspect_composition_graph(&graph);
+
+    assert_eq!(lowering.steps.len(), 1);
+    assert_eq!(lowering.limitations.len(), 2);
+    assert_eq!(inspection.unsupported_nodes, vec!["scene", "sparks"]);
+}
+
+#[test]
+fn composition_graph_inspection_returns_compact_review_summary() {
+    let graph = awidat_proto::professional::CompositionGraph {
+        id: "inspect-graph".into(),
+        nodes: vec![
+            node("input", "media_input", json!({"asset_id": "clip-a"})),
+            awidat_proto::professional::CompositionNode {
+                id: "plugin-node".into(),
+                node_type: awidat_proto::professional::CompositionNodeType::Unsupported,
+                params: map([("plugin", json!("third-party-glow"))]),
+            },
+            node("output", "output", json!({})),
+        ],
+        edges: vec![edge("input", "plugin-node"), edge("plugin-node", "output")],
+        output_node_id: Some("output".into()),
+    };
+
+    let inspection = inspect_composition_graph(&graph);
+
+    assert_eq!(inspection.nodes, vec!["input", "plugin-node", "output"]);
+    assert_eq!(
+        inspection.edges,
+        vec!["input -> plugin-node", "plugin-node -> output"]
+    );
+    assert_eq!(inspection.unsupported_nodes, vec!["plugin-node"]);
+    assert!(inspection.render_plan_summary.contains("2 supported steps"));
+    assert!(inspection.render_plan_summary.contains("1 limitations"));
+}
+
+#[test]
 fn motion_template_fill_validates_slots_and_lowers_text_reveal_titles() {
     let template = MotionGraphicsTemplate {
         id: "lower-third".into(),
@@ -183,6 +464,369 @@ fn motion_template_fill_validates_slots_and_lowers_text_reveal_titles() {
     );
     assert_eq!(render.titles[0].position, TitlePosition::Bottom);
     assert_eq!(render.titles[0].animation, TitleAnimation::None);
+}
+
+#[test]
+fn text_reveal_keeps_combining_mark_graphemes_together() {
+    let template = match built_in_motion_templates()
+        .into_iter()
+        .find(|template| template.id == "title-reveal")
+    {
+        Some(template) => template,
+        None => panic!("title reveal template"),
+    };
+    let mut values = BTreeMap::new();
+    values.insert("text".into(), json!("Cafe\u{301}"));
+    values.insert("target_clip".into(), json!("clip-a"));
+    values.insert("safe_area".into(), json!("16:9"));
+    let filled = match fill_motion_template(&template, values) {
+        Ok(filled) => filled,
+        Err(err) => panic!("filled template: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 0.0,
+            end_s: 1.0,
+            animation: TemplateAnimation::TextReveal,
+        },
+    );
+    let texts = render
+        .titles
+        .iter()
+        .map(|title| title.text.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(texts, vec!["C", "Ca", "Caf", "Cafe\u{301}"]);
+}
+
+#[test]
+fn text_reveal_keeps_zwj_emoji_graphemes_together() {
+    let template = match built_in_motion_templates()
+        .into_iter()
+        .find(|template| template.id == "title-reveal")
+    {
+        Some(template) => template,
+        None => panic!("title reveal template"),
+    };
+    let mut values = BTreeMap::new();
+    values.insert("text".into(), json!("👩\u{200d}💻"));
+    values.insert("target_clip".into(), json!("clip-a"));
+    values.insert("safe_area".into(), json!("16:9"));
+    let filled = match fill_motion_template(&template, values) {
+        Ok(filled) => filled,
+        Err(err) => panic!("filled template: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 0.0,
+            end_s: 1.0,
+            animation: TemplateAnimation::TextReveal,
+        },
+    );
+    let texts = render
+        .titles
+        .iter()
+        .map(|title| title.text.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(texts, vec!["👩\u{200d}💻"]);
+}
+
+#[test]
+fn effect_parameter_registry_reports_units_and_validation() {
+    let matrix = effect_parameter_capability_matrix();
+    let saturation = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.color_correction" && entry.parameter == "saturation")
+    {
+        Some(entry) => entry,
+        None => panic!("saturation capability"),
+    };
+
+    assert_eq!(saturation.unit, "multiplier");
+    assert!(saturation.previewable);
+    assert!(saturation.renderable);
+
+    let invalid = ParameterAnimation {
+        id: "anim-bad-scale".into(),
+        target: AnimationTarget::ClipParameter {
+            clip_id: "clip-a".into(),
+            parameter: "awidat.video_overlay.scale".into(),
+        },
+        keyframes: vec![Keyframe::linear(0.0, 0.0)],
+        rationale: None,
+    };
+    let diagnostic = match diagnose_effect_parameter_animation(&invalid) {
+        Some(diagnostic) => diagnostic,
+        None => panic!("invalid scale should be diagnosed"),
+    };
+
+    assert_eq!(diagnostic.kind, "invalid_effect_parameter_value");
+    assert!(diagnostic.message.contains("awidat.video_overlay.scale"));
+}
+
+#[test]
+fn built_in_motion_template_catalog_covers_phase_3b_templates() {
+    let catalog = built_in_motion_templates();
+    let ids = catalog
+        .iter()
+        .map(|template| template.id.as_str())
+        .collect::<Vec<_>>();
+
+    for expected in [
+        "lower-third",
+        "callout",
+        "punch-in-zoom",
+        "focus-highlight",
+        "title-reveal",
+        "pip-emphasis",
+        "product-insert-emphasis",
+    ] {
+        assert!(ids.contains(&expected), "missing template {expected}");
+    }
+    let Some(lower_third) = catalog.iter().find(|template| template.id == "lower-third") else {
+        panic!("lower-third template");
+    };
+    assert!(
+        lower_third
+            .slots
+            .iter()
+            .any(|slot| slot.kind == TemplateSlotKind::TargetClip && slot.required)
+    );
+    assert!(
+        lower_third
+            .slots
+            .iter()
+            .any(|slot| slot.kind == TemplateSlotKind::SafeAreaProfile)
+    );
+}
+
+#[test]
+fn lower_third_template_lowers_to_title_opacity_and_y_animations() {
+    let template = built_in_template("lower-third");
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("title-clip")),
+            ("text", json!("Ada Lovelace")),
+            ("subtitle", json!("Host")),
+            ("color", json!("#FFFFFF")),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("lower-third fill: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 1.0,
+            end_s: 4.0,
+            animation: TemplateAnimation::Transform,
+        },
+    );
+
+    let parameters = render
+        .parameter_animations
+        .iter()
+        .map(|animation| match &animation.target {
+            awidat_proto::professional::AnimationTarget::ClipParameter { clip_id, parameter } => {
+                format!("{clip_id}/{parameter}")
+            }
+            other => format!("{other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert!(parameters.contains(&"title-clip/title.opacity".to_string()));
+    assert!(parameters.contains(&"title-clip/title.y".to_string()));
+}
+
+#[test]
+fn focus_highlight_template_lowers_to_overlay_scale_and_opacity() {
+    let template = built_in_template("focus-highlight");
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("overlay-clip")),
+            ("intensity", json!(1.2)),
+            ("safe_area", json!("9:16")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("focus highlight fill: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 2.0,
+            end_s: 3.5,
+            animation: TemplateAnimation::Transform,
+        },
+    );
+
+    let parameters = render
+        .parameter_animations
+        .iter()
+        .map(|animation| match &animation.target {
+            awidat_proto::professional::AnimationTarget::ClipParameter { parameter, .. } => {
+                parameter.as_str()
+            }
+            _ => "",
+        })
+        .collect::<Vec<_>>();
+    assert!(parameters.contains(&"overlay.scale"));
+    assert!(parameters.contains(&"overlay.opacity"));
+}
+
+#[test]
+fn missing_required_motion_template_slot_fails() {
+    let template = built_in_template("lower-third");
+
+    let err = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("title-clip")),
+            ("subtitle", json!("Host")),
+        ]),
+    ) {
+        Ok(_) => panic!("missing required text slot should fail"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "motion template lower-third missing required slot text"
+    );
+}
+
+#[test]
+fn motion_template_safe_area_violation_surfaces_diagnostic() {
+    let template = MotionGraphicsTemplate {
+        id: "unsafe-template".into(),
+        name: "Unsafe Template".into(),
+        slots: vec![
+            TemplateSlot {
+                id: "target_clip".into(),
+                kind: TemplateSlotKind::TargetClip,
+                required: true,
+                ..TemplateSlot::default()
+            },
+            TemplateSlot {
+                id: "text".into(),
+                kind: TemplateSlotKind::Text,
+                required: true,
+                ..TemplateSlot::default()
+            },
+        ],
+        safe_areas: vec![SafeAreaRule {
+            profile: "9:16".into(),
+            margin_pct: 0.75,
+        }],
+        platform_variants: vec!["9:16".into()],
+    };
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("title-clip")),
+            ("text", json!("Unsafe")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("template fill: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 0.0,
+            end_s: 2.0,
+            animation: TemplateAnimation::Opacity,
+        },
+    );
+
+    assert_eq!(render.safe_area_violations.len(), 1);
+    assert_eq!(
+        render.safe_area_violations[0].severity,
+        FindingSeverity::Warning
+    );
+    assert!(
+        render.safe_area_violations[0]
+            .message
+            .contains("safe area 9:16")
+    );
+}
+
+#[test]
+fn accepting_motion_package_writes_explicit_animation_records() {
+    let mut metadata = AwidatTimelineMetadata::default();
+    let package = motion_package("motion-pkg-a", "clip-a", ReviewStatus::Proposed);
+
+    match apply_motion_package(&mut metadata, package, MotionPackageDecision::Accept) {
+        Ok(()) => {}
+        Err(err) => panic!("motion package applies: {err}"),
+    }
+
+    assert_eq!(metadata.motion_packages.len(), 1);
+    assert_eq!(metadata.motion_packages[0].status, ReviewStatus::Accepted);
+    assert_eq!(metadata.parameter_animations.len(), 1);
+    assert_eq!(metadata.learning_signals.len(), 1);
+    assert_eq!(metadata.learning_signals[0].status, ReviewStatus::Accepted);
+}
+
+#[test]
+fn rejecting_motion_package_preserves_project_records_and_learning_signal() {
+    let mut metadata = AwidatTimelineMetadata::default();
+    let package = motion_package("motion-pkg-a", "clip-a", ReviewStatus::Proposed);
+
+    match apply_motion_package(&mut metadata, package, MotionPackageDecision::Reject) {
+        Ok(()) => {}
+        Err(err) => panic!("motion package rejects: {err}"),
+    }
+
+    assert_eq!(metadata.motion_packages.len(), 1);
+    assert_eq!(metadata.motion_packages[0].status, ReviewStatus::Rejected);
+    assert!(metadata.parameter_animations.is_empty());
+    assert_eq!(metadata.learning_signals.len(), 1);
+    assert_eq!(metadata.learning_signals[0].status, ReviewStatus::Rejected);
+}
+
+#[test]
+fn motion_package_conflict_is_reported_before_apply() {
+    let mut metadata = AwidatTimelineMetadata {
+        parameter_animations: vec![package_animation("existing", "clip-a", "title.opacity")],
+        ..AwidatTimelineMetadata::default()
+    };
+    let package = motion_package("motion-pkg-a", "clip-a", ReviewStatus::Proposed);
+
+    let err = match apply_motion_package(&mut metadata, package, MotionPackageDecision::Accept) {
+        Ok(()) => panic!("conflicting package should not apply"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string()
+            .contains("motion package motion-pkg-a conflicts")
+    );
+    assert_eq!(metadata.parameter_animations.len(), 1);
+    assert!(metadata.motion_packages.is_empty());
+}
+
+#[test]
+fn motion_package_summary_mentions_generated_changes_and_limitations() {
+    let mut package = motion_package("motion-pkg-a", "clip-a", ReviewStatus::Proposed);
+    package
+        .limitations
+        .push("unsupported Bezier omitted".into());
+
+    let summary = motion_package_summary(&package);
+
+    assert!(summary.contains("adds title.opacity on clip-a"));
+    assert!(summary.contains("unsupported Bezier omitted"));
 }
 
 #[test]
@@ -290,6 +934,43 @@ fn audio_finishing_lowers_buses_chains_and_reports_meter_findings() {
 }
 
 #[test]
+fn audio_volume_automation_lowers_to_expression_and_reports_ducking_conflict() {
+    let state = AudioFinishingState {
+        buses: vec![AudioBus {
+            id: "music".into(),
+            role: AudioRole::Music,
+            inputs: vec!["a2".into()],
+        }],
+        automation: vec![
+            AudioAutomationLane {
+                target: "music".into(),
+                parameter: "volume_db".into(),
+                keyframes: vec![Keyframe::linear(0.0, -12.0), Keyframe::linear(2.0, -6.0)],
+            },
+            AudioAutomationLane {
+                target: "music".into(),
+                parameter: "ducking_db".into(),
+                keyframes: vec![Keyframe::linear(0.0, -9.0), Keyframe::linear(2.0, -3.0)],
+            },
+        ],
+        ..AudioFinishingState::default()
+    };
+
+    let lowering = lower_audio_finishing(&state);
+    let automation = match &lowering.track_plans[0].volume_automation {
+        Some(automation) => automation,
+        None => panic!("volume automation should lower"),
+    };
+
+    assert!(automation.expression.contains("pow(10"));
+    assert!(automation.expression.contains("/20"));
+    assert_eq!(automation.keyframes.len(), 2);
+    assert!(lowering.findings.iter().any(|finding| {
+        finding.kind == "ducking_automation_conflict" && finding.message.contains("music")
+    }));
+}
+
+#[test]
 fn delivery_profile_updates_render_spec_and_queue_manifest() {
     let profile = DeliveryProfile::youtube_1080p();
     let spec = RenderJobSpec {
@@ -297,6 +978,7 @@ fn delivery_profile_updates_render_spec_and_queue_manifest() {
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
     };
     let profiled = apply_delivery_profile_to_spec(spec, &profile);
 
@@ -356,9 +1038,82 @@ fn node(
     }
 }
 
+fn edge(from: &str, to: &str) -> awidat_proto::professional::CompositionEdge {
+    awidat_proto::professional::CompositionEdge {
+        from: from.into(),
+        to: to.into(),
+        input: None,
+    }
+}
+
 fn map<const N: usize>(
     values: [(&str, serde_json::Value); N],
 ) -> std::collections::HashMap<String, serde_json::Value> {
+    values
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect()
+}
+
+fn built_in_template(id: &str) -> MotionGraphicsTemplate {
+    let Some(template) = built_in_motion_templates()
+        .into_iter()
+        .find(|template| template.id == id)
+    else {
+        panic!("built-in template {id}");
+    };
+    template
+}
+
+fn motion_package(id: &str, clip_id: &str, status: ReviewStatus) -> MotionPackage {
+    MotionPackage {
+        id: id.into(),
+        intent: "adds lower-third fade".into(),
+        affected_clips: vec![clip_id.into()],
+        generated_animations: vec![package_animation("pkg-anim", clip_id, "title.opacity")],
+        rationale: Some("introduce speaker".into()),
+        status,
+        ..MotionPackage::default()
+    }
+}
+
+fn package_animation(
+    id: &str,
+    clip_id: &str,
+    parameter: &str,
+) -> awidat_proto::professional::ParameterAnimation {
+    awidat_proto::professional::ParameterAnimation {
+        id: id.into(),
+        target: awidat_proto::professional::AnimationTarget::ClipParameter {
+            clip_id: clip_id.into(),
+            parameter: parameter.into(),
+        },
+        keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+        rationale: None,
+    }
+}
+
+fn expression_link(
+    id: &str,
+    clip_id: &str,
+    parameter: &str,
+    source: ExpressionSource,
+    expression: &str,
+) -> ExpressionLink {
+    ExpressionLink {
+        id: id.into(),
+        target_clip_id: clip_id.into(),
+        target_parameter: parameter.into(),
+        source,
+        expression: expression.into(),
+        enabled: true,
+        clamp: None,
+    }
+}
+
+fn btree_map<const N: usize>(
+    values: [(&str, serde_json::Value); N],
+) -> BTreeMap<String, serde_json::Value> {
     values
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))

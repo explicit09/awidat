@@ -20,6 +20,7 @@
 //! `Transition.1` nodes; unsupported or invalid placements fail before
 //! FFmpeg is invoked.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,7 +34,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::animation::{is_phase_3a_parameter, keyframes_to_ffmpeg_expr};
-use crate::job::RenderJobSpec;
+use crate::job::{RenderJobSpec, RenderPlanLimitation};
 
 /// Errors building a timeline-render spec.
 #[derive(Debug, Error)]
@@ -259,6 +260,8 @@ pub struct AudioTrackPlan {
     pub role: String,
     /// Track gain multiplier.
     pub volume: f64,
+    /// Optional keyframed volume automation for the track.
+    pub volume_automation: Option<AudioAutomationPlan>,
     /// Whether the track is muted.
     pub muted: bool,
     /// Whether the track is soloed.
@@ -269,6 +272,17 @@ pub struct AudioTrackPlan {
     pub audio_fx: Option<AudioFxPlan>,
     /// Ordered audio items on the track.
     pub items: Vec<AudioTrackItemPlan>,
+}
+
+/// FFmpeg-ready audio automation expression.
+#[derive(Debug, Clone)]
+pub struct AudioAutomationPlan {
+    /// Automated parameter name.
+    pub parameter: String,
+    /// FFmpeg expression for the parameter value.
+    pub expression: String,
+    /// Original keyframes in project units.
+    pub keyframes: Vec<awidat_proto::professional::Keyframe>,
 }
 
 /// Audio ducking parameters for music/effects under dialogue.
@@ -455,6 +469,7 @@ type TimelineFullPlan = (
     Option<BroadcastOverlayPlan>,
     Vec<AudioTrackPlan>,
     Option<LoudnessTargetPlan>,
+    Vec<RenderPlanLimitation>,
 );
 
 /// Walk `<project_root>/project.otio.json` and collect every
@@ -466,7 +481,7 @@ type TimelineFullPlan = (
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -482,7 +497,7 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -516,6 +531,8 @@ pub fn collect_timeline_full_plan(
     let mut video_overlays = Vec::new();
     let mut titles = Vec::new();
     let mut audio_tracks = Vec::new();
+    let mut render_limitations = Vec::new();
+    let mut consumed_animation_ids = BTreeSet::new();
     let mut saw_base_video_track = false;
     for child in &timeline.tracks.children {
         let StackChild::Track(track) = child else {
@@ -532,9 +549,13 @@ pub fn collect_timeline_full_plan(
             // Walk titles separately; don't try to read media off it.
             for tc in &track.children {
                 let TrackChild::Clip(clip) = tc else { continue };
-                let Some(plan) = parse_title_plan(clip, parameter_animations) else {
+                let Some((plan, animation_selection)) =
+                    parse_title_plan(clip, parameter_animations)
+                else {
                     continue;
                 };
+                render_limitations.extend(animation_selection.limitations);
+                consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
                 titles.push(plan);
             }
             continue;
@@ -549,15 +570,18 @@ pub fn collect_timeline_full_plan(
                         };
                         let mode = read_video_overlay_mode(clip);
                         let clip_id = render_clip_id(clip);
+                        let animation_selection = render_animations_for_clip_with_limitations(
+                            parameter_animations,
+                            &clip_id,
+                            "overlay",
+                        );
+                        render_limitations.extend(animation_selection.limitations);
+                        consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
                         video_overlays.push(VideoOverlayPlan {
                             segment,
                             track_start_s: track_cursor_s,
                             mode,
-                            animations: render_animations_for_clip(
-                                parameter_animations,
-                                &clip_id,
-                                "overlay",
-                            ),
+                            animations: animation_selection.animations,
                         });
                         if let Some(range) = clip.source_range.as_ref() {
                             track_cursor_s += range.duration.to_seconds();
@@ -680,6 +704,10 @@ pub fn collect_timeline_full_plan(
     if audio_tracks.is_empty() {
         audio_tracks = synthesize_split_edit_audio_tracks(&segs)?;
     }
+    render_limitations.extend(unconsumed_animation_limitations(
+        parameter_animations,
+        &consumed_animation_ids,
+    ));
     Ok((
         segs,
         transitions,
@@ -688,6 +716,7 @@ pub fn collect_timeline_full_plan(
         broadcast_overlay,
         audio_tracks,
         loudness_target,
+        render_limitations,
     ))
 }
 
@@ -955,6 +984,7 @@ fn collect_audio_track_plan(
         name: track.name.clone(),
         role: settings.role,
         volume: settings.volume,
+        volume_automation: None,
         muted: settings.muted,
         solo: settings.solo,
         ducking: settings.ducking,
@@ -998,6 +1028,7 @@ fn synthesize_split_edit_audio_tracks(
             name: format!("split-edit-a{}", idx + 1),
             role: "dialogue".into(),
             volume: 1.0,
+            volume_automation: None,
             muted: false,
             solo: false,
             ducking: None,
@@ -1103,6 +1134,7 @@ fn parse_audio_track_settings(track: &awidat_proto::otio::Track) -> AudioTrackPl
         name: track.name.clone(),
         role,
         volume,
+        volume_automation: None,
         muted,
         solo,
         ducking,
@@ -1145,7 +1177,7 @@ fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
 fn parse_title_plan(
     clip: &awidat_proto::otio::Clip,
     parameter_animations: &[awidat_proto::professional::ParameterAnimation],
-) -> Option<TitlePlan> {
+) -> Option<(TitlePlan, RenderAnimationSelection)> {
     let effect = clip
         .effects
         .iter()
@@ -1206,7 +1238,10 @@ fn parse_title_plan(
         .and_then(|v| v.as_str())
         .map(str::to_string);
     let clip_id = render_clip_id(clip);
-    Some(TitlePlan {
+    let animation_selection =
+        render_animations_for_clip_with_limitations(parameter_animations, &clip_id, "title");
+    let animations = animation_selection.animations.clone();
+    let plan = TitlePlan {
         text,
         start_s,
         end_s,
@@ -1217,8 +1252,9 @@ fn parse_title_plan(
         animation,
         role,
         safe_area,
-        animations: render_animations_for_clip(parameter_animations, &clip_id, "title"),
-    })
+        animations,
+    };
+    Some((plan, animation_selection))
 }
 
 fn render_clip_id(clip: &awidat_proto::otio::Clip) -> String {
@@ -1240,45 +1276,133 @@ pub struct RenderParameterAnimation {
     pub keyframes: Vec<awidat_proto::professional::Keyframe>,
 }
 
+#[derive(Debug, Default)]
+struct RenderAnimationSelection {
+    animations: Vec<RenderParameterAnimation>,
+    limitations: Vec<RenderPlanLimitation>,
+    consumed_animation_ids: BTreeSet<String>,
+}
+
+#[cfg(test)]
 fn render_animations_for_clip(
     animations: &[awidat_proto::professional::ParameterAnimation],
     clip_id: &str,
     surface: &str,
 ) -> Vec<RenderParameterAnimation> {
+    render_animations_for_clip_with_limitations(animations, clip_id, surface).animations
+}
+
+fn render_animations_for_clip_with_limitations(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+    surface: &str,
+) -> RenderAnimationSelection {
+    let mut selection = RenderAnimationSelection::default();
+    animations.iter().for_each(|animation| {
+        let awidat_proto::professional::AnimationTarget::ClipParameter {
+            clip_id: target_clip_id,
+            parameter,
+        } = &animation.target
+        else {
+            return;
+        };
+
+        if target_clip_id != clip_id {
+            return;
+        }
+        selection
+            .consumed_animation_ids
+            .insert(animation.id.clone());
+        if !is_phase_3a_parameter(parameter) {
+            selection.limitations.push(RenderPlanLimitation {
+                kind: "unsupported_parameter".to_string(),
+                animation_id: Some(animation.id.clone()),
+                clip_id: Some(target_clip_id.clone()),
+                parameter: Some(parameter.clone()),
+                message: format!(
+                    "render ignored animation {} targeting unsupported parameter {parameter}",
+                    animation.id
+                ),
+            });
+            return;
+        }
+        let surface_matches = match surface {
+            "title" => parameter.starts_with("title."),
+            "overlay" => parameter.starts_with("overlay."),
+            _ => false,
+        };
+        if !surface_matches {
+            selection.limitations.push(RenderPlanLimitation {
+                kind: "unsupported_animation_surface".to_string(),
+                animation_id: Some(animation.id.clone()),
+                clip_id: Some(target_clip_id.clone()),
+                parameter: Some(parameter.clone()),
+                message: format!(
+                    "render ignored animation {} because {parameter} is not valid for {surface}",
+                    animation.id
+                ),
+            });
+            return;
+        }
+        selection.animations.push(RenderParameterAnimation {
+            parameter: parameter.clone(),
+            keyframes: animation.keyframes.clone(),
+        });
+    });
+    selection
+}
+
+fn unconsumed_animation_limitations(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    consumed_animation_ids: &BTreeSet<String>,
+) -> Vec<RenderPlanLimitation> {
     animations
         .iter()
-        .filter_map(|animation| {
-            let awidat_proto::professional::AnimationTarget::ClipParameter {
-                clip_id: target_clip_id,
-                parameter,
-            } = &animation.target
-            else {
-                return None;
-            };
-
-            if target_clip_id != clip_id || !is_phase_3a_parameter(parameter) {
-                return None;
-            }
-            let surface_matches = match surface {
-                "title" => parameter.starts_with("title."),
-                "overlay" => parameter.starts_with("overlay."),
-                _ => false,
-            };
-            if !surface_matches
-                || animation.keyframes.iter().any(|keyframe| {
-                    keyframe.interpolation
-                        == awidat_proto::professional::KeyframeInterpolation::Bezier
-                })
-            {
-                return None;
-            }
-
-            Some(RenderParameterAnimation {
-                parameter: parameter.clone(),
-                keyframes: animation.keyframes.clone(),
-            })
-        })
+        .filter(|animation| !consumed_animation_ids.contains(&animation.id))
+        .map(render_limitation_for_unconsumed_animation)
         .collect()
+}
+
+fn render_limitation_for_unconsumed_animation(
+    animation: &awidat_proto::professional::ParameterAnimation,
+) -> RenderPlanLimitation {
+    match &animation.target {
+        awidat_proto::professional::AnimationTarget::ClipParameter { clip_id, parameter } => {
+            if !is_phase_3a_parameter(parameter) {
+                RenderPlanLimitation {
+                    kind: "unsupported_parameter".to_string(),
+                    animation_id: Some(animation.id.clone()),
+                    clip_id: Some(clip_id.clone()),
+                    parameter: Some(parameter.clone()),
+                    message: format!(
+                        "render ignored animation {} targeting unsupported parameter {parameter}",
+                        animation.id
+                    ),
+                }
+            } else {
+                RenderPlanLimitation {
+                    kind: "animation_clip_not_rendered".to_string(),
+                    animation_id: Some(animation.id.clone()),
+                    clip_id: Some(clip_id.clone()),
+                    parameter: Some(parameter.clone()),
+                    message: format!(
+                        "render ignored animation {} because target clip {clip_id} was not rendered as a supported title or overlay surface",
+                        animation.id
+                    ),
+                }
+            }
+        }
+        _ => RenderPlanLimitation {
+            kind: "unsupported_animation_target".to_string(),
+            animation_id: Some(animation.id.clone()),
+            clip_id: None,
+            parameter: None,
+            message: format!(
+                "render ignored animation {} because its target is not a clip parameter",
+                animation.id
+            ),
+        },
+    }
 }
 
 /// One title overlay parsed from the project's Titles track. The
@@ -3980,7 +4104,15 @@ fn plan_one_audio_track(
         filter.push_str(&format!("{track_label}{chain}{out};"));
         track_label = out;
     }
-    if (track.volume - 1.0).abs() > 1e-9 {
+    if let Some(automation) = track.volume_automation.as_ref() {
+        let out = format!("[atrackauto{track_index}]");
+        filter.push_str(&format!(
+            "{track_label}volume='{}':eval=frame{out};",
+            automation.expression
+        ));
+        track_label = out;
+    }
+    if track.volume_automation.is_none() && (track.volume - 1.0).abs() > 1e-9 {
         let out = format!("[atrackv{track_index}]");
         filter.push_str(&format!("{track_label}volume={}{};", track.volume, out));
         out
@@ -4004,6 +4136,7 @@ pub fn build_timeline_render_spec(
         broadcast_overlay,
         audio_tracks,
         loudness_target,
+        render_limitations,
     ) = collect_timeline_full_plan(project_root)?;
     if segs.is_empty() && audio_tracks.is_empty() {
         return Err(RenderTimelineError::EmptyTimeline);
@@ -4067,6 +4200,7 @@ pub fn build_timeline_render_spec(
         total_duration_s: Some(total_duration_s),
         cwd: Some(project_root.to_path_buf()),
         output_path,
+        limitations: render_limitations,
     })
 }
 
@@ -4133,6 +4267,9 @@ mod tests {
         Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild,
         TimeRange as OtioRange, Timeline, Track, TrackChild, TrackKind,
     };
+    use awidat_proto::professional::{
+        BezierHandles, Easing, Keyframe, KeyframeInterpolation, ParameterAnimation,
+    };
     use std::fs;
 
     fn write_fixture_project(dir: &Path) -> PathBuf {
@@ -4152,6 +4289,70 @@ mod tests {
         stack.children.push(StackChild::Track(track));
         tl.tracks = stack;
         let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_overlay_animation(
+        dir: &Path,
+        animation: ParameterAnimation,
+    ) -> PathBuf {
+        let base_asset_rel = "raw/base.mp4";
+        let overlay_asset_rel = "raw/overlay.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(base_asset_rel), b"stub").unwrap();
+        fs::write(dir.join(overlay_asset_rel), b"stub").unwrap();
+
+        let mut base_clip = Clip::empty("base".to_string());
+        base_clip.media_reference =
+            MediaReference::External(ExternalReference::new(base_asset_rel));
+        base_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+
+        let mut overlay_clip = Clip::empty("clip-a".to_string());
+        overlay_clip.media_reference =
+            MediaReference::External(ExternalReference::new(overlay_asset_rel));
+        overlay_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+
+        let mut v1 = Track::empty("V1", TrackKind::Video);
+        v1.children.push(TrackChild::Clip(base_clip));
+        let mut v2 = Track::empty("V2", TrackKind::Video);
+        v2.children.push(TrackChild::Clip(overlay_clip));
+
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(v1));
+        stack.children.push(StackChild::Track(v2));
+        tl.tracks = stack;
+        tl.metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .parameter_animations
+            .push(animation);
+
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_base_animation(
+        dir: &Path,
+        animation: ParameterAnimation,
+    ) -> PathBuf {
+        let otio_path = write_fixture_project(dir);
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        tl.metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .parameter_animations
+            .push(animation);
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
         otio_path
     }
@@ -4195,6 +4396,105 @@ mod tests {
     }
 
     #[test]
+    fn bezier_overlay_animation_attaches_to_render_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_overlay_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-bezier-opacity".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".to_string(),
+                    parameter: "overlay.opacity".to_string(),
+                },
+                keyframes: vec![
+                    Keyframe {
+                        time_s: 0.0,
+                        value: 0.0,
+                        interpolation: KeyframeInterpolation::Bezier,
+                        easing: Easing::Linear,
+                        bezier: Some(BezierHandles {
+                            out_x: 0.25,
+                            out_y: 0.1,
+                            in_x: 0.25,
+                            in_y: 1.0,
+                        }),
+                    },
+                    Keyframe::linear(1.0, 1.0),
+                ],
+                rationale: None,
+            },
+        );
+
+        let (_, _, video_overlays, _, _, _, _, limitations) =
+            collect_timeline_full_plan(dir.path()).unwrap();
+
+        assert_eq!(video_overlays.len(), 1);
+        assert_eq!(video_overlays[0].animations.len(), 1);
+        assert!(limitations.is_empty());
+    }
+
+    #[test]
+    fn timeline_render_spec_includes_bezier_animation_without_limitation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_overlay_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-bezier-opacity".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".to_string(),
+                    parameter: "overlay.opacity".to_string(),
+                },
+                keyframes: vec![
+                    Keyframe {
+                        time_s: 0.0,
+                        value: 0.0,
+                        interpolation: KeyframeInterpolation::Bezier,
+                        easing: Easing::Linear,
+                        bezier: Some(BezierHandles {
+                            out_x: 0.25,
+                            out_y: 0.1,
+                            in_x: 0.25,
+                            in_y: 1.0,
+                        }),
+                    },
+                    Keyframe::linear(1.0, 1.0),
+                ],
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+        assert!(spec.limitations.is_empty());
+    }
+
+    #[test]
+    fn base_clip_unsupported_animation_surfaces_render_limitation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-base-brightness".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "awidat.color_correction.brightness".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.2), Keyframe::linear(1.0, 0.4)],
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+        assert_eq!(spec.limitations.len(), 1);
+        assert_eq!(spec.limitations[0].kind, "unsupported_parameter");
+        assert_eq!(
+            spec.limitations[0].animation_id.as_deref(),
+            Some("anim-base-brightness")
+        );
+    }
+
+    #[test]
     fn missing_asset_returns_missing_asset_error() {
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project(dir.path());
@@ -4234,6 +4534,7 @@ mod tests {
             name: "A1".into(),
             role: "dialogue".into(),
             volume: 0.8,
+            volume_automation: None,
             muted: false,
             solo: false,
             ducking: None,
@@ -4348,6 +4649,7 @@ mod tests {
             name: "A1".into(),
             role: "dialogue".into(),
             volume: 1.0,
+            volume_automation: None,
             muted: false,
             solo: false,
             ducking: None,
@@ -4604,6 +4906,56 @@ mod tests {
             "filter graph should skip unity volume: {}",
             plan.filter_complex,
         );
+    }
+
+    #[test]
+    fn explicit_audio_track_emits_volume_automation_filter() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "music".into(),
+            role: "music".into(),
+            volume: 1.0,
+            volume_automation: Some(AudioAutomationPlan {
+                parameter: "volume_db".into(),
+                expression: "pow(10\\,(if(lt(t\\,2)\\,-12+(-6--12)*((t-0)/(2-0))\\,-6))/20)".into(),
+                keyframes: vec![Keyframe::linear(0.0, -12.0), Keyframe::linear(2.0, -6.0)],
+            }),
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: PathBuf::from("/tmp/music.wav"),
+                start_s: 0.0,
+                duration_s: 2.0,
+                volume: None,
+                speed: None,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_fx: None,
+            })],
+        }];
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+
+        assert!(
+            filter.contains("volume='pow(10\\,"),
+            "expected volume automation in filter graph: {filter}"
+        );
+        assert!(filter.contains(":eval=frame[atrackauto0]"));
     }
 
     #[test]
@@ -5146,6 +5498,93 @@ mod tests {
         assert!(
             !filter.contains("colorchannelmixer=aa=if("),
             "overlay opacity should not put time expressions in colorchannelmixer aa: {filter}"
+        );
+    }
+
+    #[test]
+    fn ffmpeg_smoke_renders_animated_overlay_opacity_and_scale() {
+        let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("base.mp4");
+        let overlay_path = dir.path().join("overlay.mp4");
+        let output_path = dir.path().join("out.mp4");
+        write_synthetic_video(&ffmpeg, &base_path, "blue");
+        write_synthetic_video(&ffmpeg, &overlay_path, "red");
+
+        let segs = vec![seg(&base_path.to_string_lossy(), 0.0, 1.0)];
+        let overlay = VideoOverlayPlan {
+            segment: seg(&overlay_path.to_string_lossy(), 0.0, 1.0),
+            track_start_s: 0.0,
+            mode: VideoOverlayMode::PiP {
+                corner: "top_right".into(),
+                scale: 0.35,
+                margin_pct: 0.05,
+            },
+            animations: vec![
+                RenderParameterAnimation {
+                    parameter: "overlay.opacity".into(),
+                    keyframes: vec![
+                        awidat_proto::professional::Keyframe::linear(0.0, 0.2),
+                        awidat_proto::professional::Keyframe::linear(1.0, 0.8),
+                    ],
+                },
+                RenderParameterAnimation {
+                    parameter: "overlay.scale".into(),
+                    keyframes: vec![
+                        awidat_proto::professional::Keyframe::linear(0.0, 0.25),
+                        awidat_proto::professional::Keyframe::linear(1.0, 0.45),
+                    ],
+                },
+            ],
+        };
+        let argv =
+            build_timeline_argv_full(&segs, &[], &[overlay], &[], None, None, None, &output_path);
+
+        let output = std::process::Command::new(ffmpeg)
+            .args(&argv)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "ffmpeg smoke failed\nargv: {}\nstderr:\n{}",
+            argv.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output_path.exists());
+    }
+
+    fn write_synthetic_video(ffmpeg: &Path, path: &Path, color: &str) {
+        let output = std::process::Command::new(ffmpeg)
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("color=c={color}:s=160x120:d=1:r=24"),
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=48000:cl=stereo",
+                "-shortest",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                &path.to_string_lossy(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "failed to synthesize {}:\n{}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 

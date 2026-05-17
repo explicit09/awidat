@@ -141,6 +141,25 @@ pub struct RenderJobSpec {
     /// Output path the model can read after `Done`. Used to resolve frame-
     /// strip extraction at poll time.
     pub output_path: PathBuf,
+    /// Non-fatal render planning limitations. These are explicit records of
+    /// animation/effect metadata that was ignored so export callers can
+    /// report partial parity instead of silently dropping it.
+    pub limitations: Vec<RenderPlanLimitation>,
+}
+
+/// Non-fatal render planning limitation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RenderPlanLimitation {
+    /// Stable machine-readable limitation kind.
+    pub kind: String,
+    /// Stable animation id when the limitation came from an animation record.
+    pub animation_id: Option<String>,
+    /// Target clip id when available.
+    pub clip_id: Option<String>,
+    /// Target parameter path when available.
+    pub parameter: Option<String>,
+    /// User-facing explanation.
+    pub message: String,
 }
 
 /// Cap on the in-memory log buffer per job. Tail-truncated.
@@ -508,6 +527,7 @@ mod tests {
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: out_path.clone(),
+            limitations: Vec::new(),
         };
         let id = m.start(spec).await.unwrap();
         // Poll up to 15s for terminal state.

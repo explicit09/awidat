@@ -7,15 +7,15 @@ import type { Turn } from "./Turn";
  * the unit of save / resume / fork — the frontend identifies a session
  * by its `Thread::id`.
  */
-export type Thread = { 
+export type Thread = {
 /**
  * Stable thread id.
  */
-id: Id, 
+id: Id,
 /**
  * Human-readable title (auto-generated or user-edited).
  */
-title: string, 
+title: string,
 /**
  * Turns in arrival order.
  */

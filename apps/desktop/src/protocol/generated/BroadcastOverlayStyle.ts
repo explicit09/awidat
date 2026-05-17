@@ -5,67 +5,67 @@
  * skills can define their own look without hard-coding branding in
  * Awidat core.
  */
-export type BroadcastOverlayStyle = { 
+export type BroadcastOverlayStyle = {
 /**
  * Primary brand gold colour.
  */
-gold_hex: string, 
+gold_hex: string,
 /**
  * Lighter gold for split host-intro bars.
  */
-gold_light_hex: string, 
+gold_light_hex: string,
 /**
  * Accent cyan for topic badges.
  */
-cyan_hex: string, 
+cyan_hex: string,
 /**
  * Dark lower-third/ticker background colour.
  */
-dark_navy_hex: string, 
+dark_navy_hex: string,
 /**
  * End of title-card fade-in, in seconds.
  */
-title_fade_in_end: number, 
+title_fade_in_end: number,
 /**
  * Start of title-card fade-out, in seconds.
  */
-title_fade_out_start: number, 
+title_fade_out_start: number,
 /**
  * End of title-card visibility, in seconds.
  */
-title_visible_end: number, 
+title_visible_end: number,
 /**
  * Start of host-intro strip, in seconds.
  */
-host_intro_start: number, 
+host_intro_start: number,
 /**
  * End of host-intro strip, in seconds.
  */
-host_intro_end: number, 
+host_intro_end: number,
 /**
  * Sponsor ticker display cadence, in seconds.
  */
-ticker_sponsor_duration: number, 
+ticker_sponsor_duration: number,
 /**
  * Ticker fade duration, in seconds.
  */
-ticker_fade_duration: number, 
+ticker_fade_duration: number,
 /**
  * Topic badge display duration, in seconds.
  */
-ticker_topic_duration: number, 
+ticker_topic_duration: number,
 /**
  * Chapter-card display duration, in seconds.
  */
-chapter_display_duration: number, 
+chapter_display_duration: number,
 /**
  * Host-name bar height, in pixels at 1080p reference.
  */
-name_bar_height: number, 
+name_bar_height: number,
 /**
  * Ticker height, in pixels at 1080p reference.
  */
-ticker_height: number, 
+ticker_height: number,
 /**
  * Host-intro strip height, in pixels at 1080p reference.
  */

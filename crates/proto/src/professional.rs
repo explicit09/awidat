@@ -5,7 +5,7 @@
 //! motion graphics, compositing, tracking, finishing, delivery, workflow lenses,
 //! and pre-autonomy orchestration.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -362,6 +362,58 @@ pub struct ProposalPackage {
     pub rollback_refs: Vec<String>,
 }
 
+/// Agent-authored motion package that reviews coherent motion changes before
+/// applying them as explicit project records.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MotionPackage {
+    /// Stable package id.
+    pub id: String,
+    /// Human-readable intent.
+    pub intent: String,
+    /// Affected clip ids.
+    #[serde(default)]
+    pub affected_clips: Vec<String>,
+    /// Affected clip ranges.
+    #[serde(default)]
+    pub affected_ranges: Vec<MotionPackageRange>,
+    /// Template fills used to generate the package.
+    #[serde(default)]
+    pub template_fills: Vec<MotionTemplateFill>,
+    /// Generated explicit parameter animations.
+    #[serde(default)]
+    pub generated_animations: Vec<ParameterAnimation>,
+    /// Rationale for review.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub rationale: Option<String>,
+    /// Known limitations.
+    #[serde(default)]
+    pub limitations: Vec<String>,
+    /// Review lifecycle.
+    #[serde(default)]
+    pub status: ReviewStatus,
+}
+
+/// One affected clip range in a motion package.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MotionPackageRange {
+    /// Clip id.
+    pub clip_id: String,
+    /// Start time in seconds.
+    pub start_s: f64,
+    /// End time in seconds.
+    pub end_s: f64,
+}
+
+/// Serializable template fill inside a motion package.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MotionTemplateFill {
+    /// Template id.
+    pub template_id: String,
+    /// Slot values keyed by slot id.
+    #[serde(default)]
+    pub slots: BTreeMap<String, serde_json::Value>,
+}
+
 /// Evidence attached to a proposal or decision.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceTrace {
@@ -424,6 +476,10 @@ impl ParameterAnimation {
                 format!("parameter animation {} has no target", self.id),
             ));
         }
+        let parameter = match &self.target {
+            AnimationTarget::ClipParameter { parameter, .. } => Some(parameter.as_str()),
+            _ => None,
+        };
         let mut previous_time = None;
         for keyframe in &self.keyframes {
             if !keyframe.time_s.is_finite() || !keyframe.value.is_finite() {
@@ -431,6 +487,12 @@ impl ParameterAnimation {
                     CapabilityArea::ParameterAnimation,
                     format!("parameter animation {} has a non-finite keyframe", self.id),
                 ));
+            }
+            if let Some(parameter) = parameter {
+                validate_parameter_animation_value(&mut diagnostics, &self.id, parameter, keyframe);
+            }
+            if let Some(handles) = keyframe.bezier {
+                validate_bezier_handles(&mut diagnostics, &self.id, handles);
             }
             if let Some(previous) = previous_time
                 && keyframe.time_s < previous
@@ -446,6 +508,61 @@ impl ParameterAnimation {
             previous_time = Some(keyframe.time_s);
         }
         diagnostics
+    }
+}
+
+fn validate_bezier_handles(
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+    animation_id: &str,
+    handles: BezierHandles,
+) {
+    if !handles.out_x.is_finite()
+        || !handles.out_y.is_finite()
+        || !handles.in_x.is_finite()
+        || !handles.in_y.is_finite()
+    {
+        diagnostics.push(ProfessionalDiagnostic::error(
+            CapabilityArea::ParameterAnimation,
+            format!("parameter animation {animation_id} has non-finite Bezier handles"),
+        ));
+    }
+    if !(0.0..=1.0).contains(&handles.out_x) || !(0.0..=1.0).contains(&handles.in_x) {
+        diagnostics.push(ProfessionalDiagnostic::error(
+            CapabilityArea::ParameterAnimation,
+            format!("parameter animation {animation_id} Bezier handle x values must be in [0, 1]"),
+        ));
+    }
+}
+
+fn validate_parameter_animation_value(
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+    animation_id: &str,
+    parameter: &str,
+    keyframe: &Keyframe,
+) {
+    if !keyframe.value.is_finite() {
+        return;
+    }
+    match parameter {
+        "title.opacity" | "overlay.opacity" if !(0.0..=1.0).contains(&keyframe.value) => {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} target {parameter} value {} must be in [0, 1]",
+                    keyframe.value
+                ),
+            ));
+        }
+        "overlay.scale" if keyframe.value <= 0.0 => {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} target {parameter} value {} must be positive",
+                    keyframe.value
+                ),
+            ));
+        }
+        _ => {}
     }
 }
 
@@ -494,6 +611,9 @@ pub struct Keyframe {
     /// Easing curve.
     #[serde(default)]
     pub easing: Easing,
+    /// Optional normalized cubic Bezier handles for interpolation into the next keyframe.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bezier: Option<BezierHandles>,
 }
 
 impl Keyframe {
@@ -504,8 +624,22 @@ impl Keyframe {
             value,
             interpolation: KeyframeInterpolation::Linear,
             easing: Easing::Linear,
+            bezier: None,
         }
     }
+}
+
+/// Normalized cubic Bezier handles for a keyframe segment.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct BezierHandles {
+    /// Outgoing control point x, normalized to the segment duration.
+    pub out_x: f64,
+    /// Outgoing control point y, normalized to the value delta.
+    pub out_y: f64,
+    /// Incoming control point x, normalized to the segment duration.
+    pub in_x: f64,
+    /// Incoming control point y, normalized to the value delta.
+    pub in_y: f64,
 }
 
 /// Keyframe interpolation mode.
@@ -609,10 +743,16 @@ pub enum TemplateSlotKind {
     Text,
     /// Image/graphic asset.
     Image,
+    /// Video/media asset.
+    Video,
     /// Color value.
     Color,
     /// Numeric value.
     Number,
+    /// Target timeline clip id.
+    TargetClip,
+    /// Safe-area profile id.
+    SafeAreaProfile,
 }
 
 /// Safe-area rule.
@@ -700,8 +840,64 @@ impl CompositionGraph {
                 ));
             }
         }
+        if self.has_cycle(&node_ids) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::CompositionGraph,
+                format!("composition graph {} contains a cycle", self.id),
+            ));
+        }
         diagnostics
     }
+
+    fn has_cycle(&self, node_ids: &HashSet<&str>) -> bool {
+        let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+        for edge in &self.edges {
+            if node_ids.contains(edge.from.as_str()) && node_ids.contains(edge.to.as_str()) {
+                adjacency
+                    .entry(edge.from.clone())
+                    .or_default()
+                    .push(edge.to.clone());
+            }
+        }
+
+        let mut visiting = HashSet::new();
+        let mut visited = HashSet::new();
+        for node in &self.nodes {
+            if composition_visit_has_cycle(
+                node.id.as_str(),
+                &adjacency,
+                &mut visiting,
+                &mut visited,
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+fn composition_visit_has_cycle(
+    node_id: &str,
+    adjacency: &HashMap<String, Vec<String>>,
+    visiting: &mut HashSet<String>,
+    visited: &mut HashSet<String>,
+) -> bool {
+    if visited.contains(node_id) {
+        return false;
+    }
+    if !visiting.insert(node_id.to_string()) {
+        return true;
+    }
+    if let Some(children) = adjacency.get(node_id) {
+        for child in children {
+            if composition_visit_has_cycle(child, adjacency, visiting, visited) {
+                return true;
+            }
+        }
+    }
+    visiting.remove(node_id);
+    visited.insert(node_id.to_string());
+    false
 }
 
 /// Composition node.
@@ -721,6 +917,8 @@ pub struct CompositionNode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompositionNodeType {
+    /// Persisted but unsupported/custom node.
+    Unsupported,
     /// Media input.
     MediaInput,
     /// Transform.
@@ -739,6 +937,10 @@ pub enum CompositionNodeType {
     Color,
     /// Tracker binding.
     TrackerBind,
+    /// 3D scene container.
+    Scene3d,
+    /// Particle emitter.
+    ParticleEmitter,
     /// Graph output.
     #[default]
     Output,
@@ -780,6 +982,19 @@ impl TrackingPackage {
                     CapabilityArea::TrackingMasksMattes,
                     format!("track {} has no samples", track.id),
                 ));
+            }
+            let mut previous_frame = None;
+            for sample in &track.samples {
+                if let Some(previous) = previous_frame
+                    && sample.frame < previous
+                {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!("track {} sample frames must be sorted", track.id),
+                    ));
+                    break;
+                }
+                previous_frame = Some(sample.frame);
             }
             validate_optional_confidence(
                 &mut diagnostics,
@@ -876,6 +1091,12 @@ pub struct TrackSample {
 pub struct MaskSidecar {
     /// Mask id.
     pub id: String,
+    /// Optional track binding.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub track_id: Option<String>,
+    /// Optional clip/range attachment.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub attached_clip_id: Option<String>,
     /// Mask operation.
     #[serde(default)]
     pub operation: MaskOperation,
@@ -1083,6 +1304,128 @@ pub struct AudioMeterReading {
     /// Clipping detected.
     #[serde(default)]
     pub clipping: bool,
+}
+
+/// Explicit procedural link from a source parameter/signal to a target parameter.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExpressionLink {
+    /// Stable link id.
+    pub id: String,
+    /// Target clip id.
+    pub target_clip_id: String,
+    /// Target parameter path.
+    pub target_parameter: String,
+    /// Source parameter or analysis signal.
+    #[serde(default)]
+    pub source: ExpressionSource,
+    /// Deterministic expression subset.
+    pub expression: String,
+    /// Optional output clamp.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub clamp: Option<ExpressionClamp>,
+    /// Enabled flag.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl ExpressionLink {
+    /// Validate expression link shape and supported signal references.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                "expression link has an empty id",
+            ));
+        }
+        if self.target_clip_id.trim().is_empty() || self.target_parameter.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!("expression link {} has an incomplete target", self.id),
+            ));
+        }
+        if self.expression.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!("expression link {} has an empty expression", self.id),
+            ));
+        }
+        match &self.source {
+            ExpressionSource::Unset => diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!("expression link {} has no source", self.id),
+            )),
+            ExpressionSource::Parameter { clip_id, parameter } => {
+                if clip_id.trim().is_empty() || parameter.trim().is_empty() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::ParameterAnimation,
+                        format!(
+                            "expression link {} has an incomplete parameter source",
+                            self.id
+                        ),
+                    ));
+                }
+            }
+            ExpressionSource::Signal { signal } => {
+                if !SUPPORTED_EXPRESSION_SIGNALS.contains(&signal.as_str()) {
+                    diagnostics.push(ProfessionalDiagnostic::warning(
+                        CapabilityArea::ParameterAnimation,
+                        format!(
+                            "expression link {} references unsupported signal {}",
+                            self.id, signal
+                        ),
+                    ));
+                }
+            }
+        }
+        if let Some(clamp) = self.clamp
+            && (!clamp.min.is_finite() || !clamp.max.is_finite() || clamp.min > clamp.max)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!("expression link {} has an invalid clamp", self.id),
+            ));
+        }
+        diagnostics
+    }
+}
+
+const SUPPORTED_EXPRESSION_SIGNALS: &[&str] = &[
+    "audio_energy",
+    "beat_markers",
+    "motion_magnitude",
+    "speaker_emphasis",
+    "cut_proximity",
+];
+
+/// Expression source.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExpressionSource {
+    /// No source.
+    #[default]
+    Unset,
+    /// Another clip parameter.
+    Parameter {
+        /// Clip id.
+        clip_id: String,
+        /// Parameter path.
+        parameter: String,
+    },
+    /// An analyzed signal such as audio energy or beat markers.
+    Signal {
+        /// Signal id.
+        signal: String,
+    },
+}
+
+/// Optional expression output clamp.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExpressionClamp {
+    /// Minimum value.
+    pub min: f64,
+    /// Maximum value.
+    pub max: f64,
 }
 
 /// Named delivery profile.
@@ -1658,9 +2001,20 @@ fn validate_optional_confidence(
             area,
             format!("{label} confidence must be in 0..=1"),
         ));
+    } else if let Some(confidence) = confidence
+        && confidence < 0.5
+    {
+        diagnostics.push(ProfessionalDiagnostic::warning(
+            area,
+            format!("{label} low confidence may drift"),
+        ));
     }
 }
 
 fn default_one() -> f64 {
     1.0
+}
+
+fn default_true() -> bool {
+    true
 }

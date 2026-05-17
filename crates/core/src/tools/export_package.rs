@@ -121,6 +121,7 @@ impl ToolHandler for ExportPackageTool {
                 total_duration_s: spec.total_duration_s,
                 cwd: Some(ctx.project_root.clone()),
                 output_path: mp4_path.clone(),
+                limitations: spec.limitations.clone(),
             })
             .await
             .map_err(|e| {

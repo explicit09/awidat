@@ -429,13 +429,6 @@ fn timeline_animation_for_clip(
     if target_clip_id != clip_id || !is_phase_3a_parameter(parameter) {
         return None;
     }
-    if animation
-        .keyframes
-        .iter()
-        .any(|keyframe| keyframe.interpolation == KeyframeInterpolation::Bezier)
-    {
-        return None;
-    }
     Some(awidat_desktop_protocol::TimelineParameterAnimation {
         id: animation.id.clone(),
         target: awidat_desktop_protocol::TimelineAnimationTarget {
@@ -450,6 +443,14 @@ fn timeline_animation_for_clip(
                 value: keyframe.value,
                 interpolation: interpolation_name(keyframe.interpolation).to_string(),
                 easing: easing_name(keyframe.easing).to_string(),
+                bezier: keyframe.bezier.map(|handles| {
+                    awidat_desktop_protocol::TimelineBezierHandles {
+                        out_x: handles.out_x,
+                        out_y: handles.out_y,
+                        in_x: handles.in_x,
+                        in_y: handles.in_y,
+                    }
+                }),
             })
             .collect(),
         rationale: animation.rationale.clone(),
@@ -462,23 +463,7 @@ fn animation_preview_limitations_for_protocol(
     animations
         .iter()
         .filter_map(|animation| match &animation.target {
-            AnimationTarget::ClipParameter { parameter, .. } if is_phase_3a_parameter(parameter) => {
-                if animation
-                    .keyframes
-                    .iter()
-                    .any(|keyframe| keyframe.interpolation == KeyframeInterpolation::Bezier)
-                {
-                    Some(TimelinePreviewLimitation {
-                        kind: "animation_bezier_unsupported".to_string(),
-                        message: format!(
-                            "Animation {} uses bezier keyframes, which are stored but not previewed in Phase 3A.",
-                            animation.id
-                        ),
-                    })
-                } else {
-                    None
-                }
-            }
+            AnimationTarget::ClipParameter { parameter, .. } if is_phase_3a_parameter(parameter) => None,
             _ => Some(TimelinePreviewLimitation {
                 kind: "animation_target_unsupported".to_string(),
                 message: format!(
@@ -751,7 +736,7 @@ mod tests {
         Track, TrackChild, TrackKind, Transition,
     };
     use awidat_proto::professional::{
-        AnimationTarget, Easing, Keyframe, KeyframeInterpolation, ParameterAnimation,
+        AnimationTarget, BezierHandles, Easing, Keyframe, KeyframeInterpolation, ParameterAnimation,
     };
 
     #[test]
@@ -797,6 +782,7 @@ mod tests {
                 value: 0.0,
                 interpolation: KeyframeInterpolation::Linear,
                 easing: Easing::EaseOut,
+                bezier: None,
             }],
             rationale: Some("Fade in".to_string()),
         };
@@ -809,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn bezier_clip_animation_is_not_converted_for_preview() {
+    fn bezier_clip_animation_converts_for_preview() {
         let animation = ParameterAnimation {
             id: "anim-bezier".to_string(),
             target: AnimationTarget::ClipParameter {
@@ -821,11 +807,24 @@ mod tests {
                 value: 0.0,
                 interpolation: KeyframeInterpolation::Bezier,
                 easing: Easing::EaseOut,
+                bezier: Some(BezierHandles {
+                    out_x: 0.25,
+                    out_y: 0.1,
+                    in_x: 0.25,
+                    in_y: 1.0,
+                }),
             }],
             rationale: None,
         };
 
-        assert!(timeline_animation_for_clip(&animation, "clip-a").is_none());
+        let Some(converted) = timeline_animation_for_clip(&animation, "clip-a") else {
+            panic!("bezier animation should convert");
+        };
+        assert_eq!(converted.keyframes[0].interpolation, "bezier");
+        assert_eq!(
+            converted.keyframes[0].bezier.map(|handles| handles.in_y),
+            Some(1.0)
+        );
     }
 
     #[test]

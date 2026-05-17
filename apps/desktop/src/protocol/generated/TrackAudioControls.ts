@@ -4,23 +4,23 @@ import type { DuckingControls } from "./DuckingControls";
 /**
  * Audio controls surfaced for one timeline audio track.
  */
-export type TrackAudioControls = { 
+export type TrackAudioControls = {
 /**
  * Semantic track role: dialogue, music, or sfx.
  */
-role: string, 
+role: string,
 /**
  * Linear track gain multiplier.
  */
-volume: number, 
+volume: number,
 /**
  * Whether the track is muted.
  */
-muted: boolean, 
+muted: boolean,
 /**
  * Whether the track is soloed.
  */
-solo: boolean, 
+solo: boolean,
 /**
  * Optional ducking settings for this track.
  */
