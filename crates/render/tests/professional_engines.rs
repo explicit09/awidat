@@ -502,6 +502,41 @@ fn text_reveal_keeps_combining_mark_graphemes_together() {
 }
 
 #[test]
+fn text_reveal_keeps_zwj_emoji_graphemes_together() {
+    let template = match built_in_motion_templates()
+        .into_iter()
+        .find(|template| template.id == "title-reveal")
+    {
+        Some(template) => template,
+        None => panic!("title reveal template"),
+    };
+    let mut values = BTreeMap::new();
+    values.insert("text".into(), json!("👩\u{200d}💻"));
+    values.insert("target_clip".into(), json!("clip-a"));
+    values.insert("safe_area".into(), json!("16:9"));
+    let filled = match fill_motion_template(&template, values) {
+        Ok(filled) => filled,
+        Err(err) => panic!("filled template: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 0.0,
+            end_s: 1.0,
+            animation: TemplateAnimation::TextReveal,
+        },
+    );
+    let texts = render
+        .titles
+        .iter()
+        .map(|title| title.text.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(texts, vec!["👩\u{200d}💻"]);
+}
+
+#[test]
 fn effect_parameter_registry_reports_units_and_validation() {
     let matrix = effect_parameter_capability_matrix();
     let saturation = match matrix

@@ -20,6 +20,7 @@
 //! `Transition.1` nodes; unsupported or invalid placements fail before
 //! FFmpeg is invoked.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -531,6 +532,7 @@ pub fn collect_timeline_full_plan(
     let mut titles = Vec::new();
     let mut audio_tracks = Vec::new();
     let mut render_limitations = Vec::new();
+    let mut consumed_animation_ids = BTreeSet::new();
     let mut saw_base_video_track = false;
     for child in &timeline.tracks.children {
         let StackChild::Track(track) = child else {
@@ -547,10 +549,13 @@ pub fn collect_timeline_full_plan(
             // Walk titles separately; don't try to read media off it.
             for tc in &track.children {
                 let TrackChild::Clip(clip) = tc else { continue };
-                let Some((plan, limitations)) = parse_title_plan(clip, parameter_animations) else {
+                let Some((plan, animation_selection)) =
+                    parse_title_plan(clip, parameter_animations)
+                else {
                     continue;
                 };
-                render_limitations.extend(limitations);
+                render_limitations.extend(animation_selection.limitations);
+                consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
                 titles.push(plan);
             }
             continue;
@@ -571,6 +576,7 @@ pub fn collect_timeline_full_plan(
                             "overlay",
                         );
                         render_limitations.extend(animation_selection.limitations);
+                        consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
                         video_overlays.push(VideoOverlayPlan {
                             segment,
                             track_start_s: track_cursor_s,
@@ -698,6 +704,10 @@ pub fn collect_timeline_full_plan(
     if audio_tracks.is_empty() {
         audio_tracks = synthesize_split_edit_audio_tracks(&segs)?;
     }
+    render_limitations.extend(unconsumed_animation_limitations(
+        parameter_animations,
+        &consumed_animation_ids,
+    ));
     Ok((
         segs,
         transitions,
@@ -1167,7 +1177,7 @@ fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
 fn parse_title_plan(
     clip: &awidat_proto::otio::Clip,
     parameter_animations: &[awidat_proto::professional::ParameterAnimation],
-) -> Option<(TitlePlan, Vec<RenderPlanLimitation>)> {
+) -> Option<(TitlePlan, RenderAnimationSelection)> {
     let effect = clip
         .effects
         .iter()
@@ -1230,22 +1240,21 @@ fn parse_title_plan(
     let clip_id = render_clip_id(clip);
     let animation_selection =
         render_animations_for_clip_with_limitations(parameter_animations, &clip_id, "title");
-    Some((
-        TitlePlan {
-            text,
-            start_s,
-            end_s,
-            position,
-            font_size,
-            color,
-            font_weight,
-            animation,
-            role,
-            safe_area,
-            animations: animation_selection.animations,
-        },
-        animation_selection.limitations,
-    ))
+    let animations = animation_selection.animations.clone();
+    let plan = TitlePlan {
+        text,
+        start_s,
+        end_s,
+        position,
+        font_size,
+        color,
+        font_weight,
+        animation,
+        role,
+        safe_area,
+        animations,
+    };
+    Some((plan, animation_selection))
 }
 
 fn render_clip_id(clip: &awidat_proto::otio::Clip) -> String {
@@ -1271,6 +1280,7 @@ pub struct RenderParameterAnimation {
 struct RenderAnimationSelection {
     animations: Vec<RenderParameterAnimation>,
     limitations: Vec<RenderPlanLimitation>,
+    consumed_animation_ids: BTreeSet<String>,
 }
 
 #[cfg(test)]
@@ -1300,6 +1310,9 @@ fn render_animations_for_clip_with_limitations(
         if target_clip_id != clip_id {
             return;
         }
+        selection
+            .consumed_animation_ids
+            .insert(animation.id.clone());
         if !is_phase_3a_parameter(parameter) {
             selection.limitations.push(RenderPlanLimitation {
                 kind: "unsupported_parameter".to_string(),
@@ -1337,6 +1350,59 @@ fn render_animations_for_clip_with_limitations(
         });
     });
     selection
+}
+
+fn unconsumed_animation_limitations(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    consumed_animation_ids: &BTreeSet<String>,
+) -> Vec<RenderPlanLimitation> {
+    animations
+        .iter()
+        .filter(|animation| !consumed_animation_ids.contains(&animation.id))
+        .map(render_limitation_for_unconsumed_animation)
+        .collect()
+}
+
+fn render_limitation_for_unconsumed_animation(
+    animation: &awidat_proto::professional::ParameterAnimation,
+) -> RenderPlanLimitation {
+    match &animation.target {
+        awidat_proto::professional::AnimationTarget::ClipParameter { clip_id, parameter } => {
+            if !is_phase_3a_parameter(parameter) {
+                RenderPlanLimitation {
+                    kind: "unsupported_parameter".to_string(),
+                    animation_id: Some(animation.id.clone()),
+                    clip_id: Some(clip_id.clone()),
+                    parameter: Some(parameter.clone()),
+                    message: format!(
+                        "render ignored animation {} targeting unsupported parameter {parameter}",
+                        animation.id
+                    ),
+                }
+            } else {
+                RenderPlanLimitation {
+                    kind: "animation_clip_not_rendered".to_string(),
+                    animation_id: Some(animation.id.clone()),
+                    clip_id: Some(clip_id.clone()),
+                    parameter: Some(parameter.clone()),
+                    message: format!(
+                        "render ignored animation {} because target clip {clip_id} was not rendered as a supported title or overlay surface",
+                        animation.id
+                    ),
+                }
+            }
+        }
+        _ => RenderPlanLimitation {
+            kind: "unsupported_animation_target".to_string(),
+            animation_id: Some(animation.id.clone()),
+            clip_id: None,
+            parameter: None,
+            message: format!(
+                "render ignored animation {} because its target is not a clip parameter",
+                animation.id
+            ),
+        },
+    }
 }
 
 /// One title overlay parsed from the project's Titles track. The
@@ -4275,6 +4341,22 @@ mod tests {
         otio_path
     }
 
+    fn write_fixture_project_with_base_animation(
+        dir: &Path,
+        animation: ParameterAnimation,
+    ) -> PathBuf {
+        let otio_path = write_fixture_project(dir);
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        tl.metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .parameter_animations
+            .push(animation);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
     #[test]
     fn no_otio_returns_no_otio_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -4384,6 +4466,32 @@ mod tests {
         let spec = build_timeline_render_spec(dir.path()).unwrap();
 
         assert!(spec.limitations.is_empty());
+    }
+
+    #[test]
+    fn base_clip_unsupported_animation_surfaces_render_limitation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-base-brightness".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "awidat.color_correction.brightness".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.2), Keyframe::linear(1.0, 0.4)],
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+        assert_eq!(spec.limitations.len(), 1);
+        assert_eq!(spec.limitations[0].kind, "unsupported_parameter");
+        assert_eq!(
+            spec.limitations[0].animation_id.as_deref(),
+            Some("anim-base-brightness")
+        );
     }
 
     #[test]

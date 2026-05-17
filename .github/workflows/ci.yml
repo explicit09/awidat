@@ -66,6 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
@@ -80,6 +81,10 @@ jobs:
         run: pnpm --dir apps/desktop install --frozen-lockfile
       - name: Install Playwright Chromium
         run: pnpm --dir apps/desktop exec playwright install --with-deps chromium
+      - name: Export protocol bindings
+        run: |
+          AWIDAT_EXPORT_TS=1 cargo test -p awidat-desktop-protocol
+          perl -pi -e 's/[ \t]+$//' apps/desktop/src/protocol/generated/*.ts
       - name: Build
         run: pnpm --dir apps/desktop build
       - name: Generated protocol unchanged

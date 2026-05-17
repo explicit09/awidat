@@ -21,6 +21,7 @@ use awidat_proto::professional::{
 };
 use serde_json::Value;
 use thiserror::Error;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::animation::keyframes_to_ffmpeg_expr;
 use crate::timeline::ColorCorrectionPlan;
@@ -1207,37 +1208,9 @@ fn progressive_titles(text: &str, timing: MotionTemplateTiming) -> Vec<TitlePlan
 }
 
 fn reveal_text_clusters(text: &str) -> Vec<String> {
-    let mut clusters: Vec<String> = Vec::new();
-    let mut join_next = false;
-    for ch in text.chars() {
-        if clusters.is_empty() {
-            clusters.push(ch.to_string());
-            join_next = ch == '\u{200d}';
-            continue;
-        }
-        if join_next || is_grapheme_extend(ch) {
-            if let Some(last) = clusters.last_mut() {
-                last.push(ch);
-            }
-            join_next = ch == '\u{200d}';
-        } else {
-            clusters.push(ch.to_string());
-            join_next = ch == '\u{200d}';
-        }
-    }
-    clusters
-}
-
-fn is_grapheme_extend(ch: char) -> bool {
-    matches!(
-        ch,
-        '\u{0300}'..='\u{036f}'
-            | '\u{1ab0}'..='\u{1aff}'
-            | '\u{1dc0}'..='\u{1dff}'
-            | '\u{20d0}'..='\u{20ff}'
-            | '\u{fe00}'..='\u{fe0f}'
-            | '\u{fe20}'..='\u{fe2f}'
-    )
+    UnicodeSegmentation::graphemes(text, true)
+        .map(str::to_string)
+        .collect()
 }
 
 fn title_plan(
