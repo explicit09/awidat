@@ -142,11 +142,11 @@ fn parsed_professional_substrate_ops_apply_to_timeline_metadata() {
 }
 
 #[test]
-fn professional_timeline_edit_is_record_only_metadata() {
+fn lowered_professional_timeline_edit_records_metadata() {
     let edl = r#"
 *** Begin EDL
 *** Professional Timeline Edit
-+ edit_json: {"edit":"ripple_trim","anchor":{"anchor_kind":"clip_uuid","uuid":"clip-a"},"new_end_s":2.0,"ripple_tracks":["V1"]}
++ edit_json: {"edit":"overwrite","track":"V1","asset":"raw/replacement.mov","range":{"start_s":1.0,"end_s":3.0}}
 *** End EDL
 "#;
     let envelope = match parse(edl) {
@@ -164,8 +164,8 @@ fn professional_timeline_edit_is_record_only_metadata() {
         None => panic!("timeline metadata missing"),
     };
 
-    assert_eq!(timeline.tracks.children.len(), 0);
-    assert!(outcome.applied[0].description.contains("recorded"));
+    assert_eq!(timeline.tracks.children.len(), 1);
+    assert!(outcome.applied[0].description.contains("overwrote range"));
     assert!(
         metadata
             .extra
