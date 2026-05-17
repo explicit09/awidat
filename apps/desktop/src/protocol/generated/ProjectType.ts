@@ -5,7 +5,7 @@
  * defaults and editorial heuristics. `Other` carries a free-text
  * description the agent appends to its system prompt verbatim.
  */
-export type ProjectType = { "kind": "podcast" } | { "kind": "shorts" } | { "kind": "tutorial" } | { "kind": "other", 
+export type ProjectType = { "kind": "podcast" } | { "kind": "shorts" } | { "kind": "tutorial" } | { "kind": "other",
 /**
  * User-provided one-paragraph project description.
  */

@@ -82,6 +82,8 @@ jobs:
         run: pnpm --dir apps/desktop exec playwright install --with-deps chromium
       - name: Build
         run: pnpm --dir apps/desktop build
+      - name: Generated protocol unchanged
+        run: git diff --exit-code -- apps/desktop/src/protocol/generated
       - name: UI smoke
         run: pnpm --dir apps/desktop test
       - name: Python safe smoke

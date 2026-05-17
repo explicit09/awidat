@@ -3,15 +3,15 @@
 /**
  * Host/person data used by broadcast lower thirds.
  */
-export type BroadcastHost = { 
+export type BroadcastHost = {
 /**
  * Display name.
  */
-name: string, 
+name: string,
 /**
  * Role/title text.
  */
-title: string, 
+title: string,
 /**
  * Project-relative optional portrait path.
  */

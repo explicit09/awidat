@@ -18,6 +18,7 @@ export type { Thread } from "./generated/Thread";
 export type { TimelineItem } from "./generated/TimelineItem";
 export type { TimelineParameterAnimation } from "./generated/TimelineParameterAnimation";
 export type { TimelineAnimationTarget } from "./generated/TimelineAnimationTarget";
+export type { TimelineBezierHandles } from "./generated/TimelineBezierHandles";
 export type { TimelineKeyframe } from "./generated/TimelineKeyframe";
 export type { TimelineCutBoundary } from "./generated/TimelineCutBoundary";
 export type { TimelinePreviewLimitation } from "./generated/TimelinePreviewLimitation";

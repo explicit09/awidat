@@ -49,16 +49,18 @@ pub use ffmpeg::{
     generate_silences, generate_thumbnails, generate_waveform, probe_duration_s, probe_media,
     transcode_proxy,
 };
-pub use job::{JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec};
+pub use job::{
+    JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec, RenderPlanLimitation,
+};
 pub use progress::ProgressSnapshot;
 pub use timeline::{
-    AudioClipPlan, AudioFxPlan, AudioTrackItemPlan, AudioTrackPlan, BroadcastOverlayPlan,
-    DuckingPlan, EqBandPlan, FilterPlan, FilterPlanner, LoudnessTargetPlan, RenderTimelineError,
-    TimelineSegment, TitleAnimation, TitlePlan, TitlePosition, TitleWeight, TransitionPlan,
-    VideoOverlayMode, VideoOverlayPlan, build_timeline_argv, build_timeline_argv_full,
-    build_timeline_argv_with_audio_tracks, build_timeline_argv_with_transitions,
-    build_timeline_render_spec, collect_timeline_full_plan, collect_timeline_plan,
-    collect_timeline_segments,
+    AudioAutomationPlan, AudioClipPlan, AudioFxPlan, AudioTrackItemPlan, AudioTrackPlan,
+    BroadcastOverlayPlan, DuckingPlan, EqBandPlan, FilterPlan, FilterPlanner, LoudnessTargetPlan,
+    RenderTimelineError, TimelineSegment, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
+    TransitionPlan, VideoOverlayMode, VideoOverlayPlan, build_timeline_argv,
+    build_timeline_argv_full, build_timeline_argv_with_audio_tracks,
+    build_timeline_argv_with_transitions, build_timeline_render_spec, collect_timeline_full_plan,
+    collect_timeline_plan, collect_timeline_segments,
 };
 
 #[cfg(test)]

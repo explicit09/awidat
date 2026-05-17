@@ -1,0 +1,103 @@
+{
+  "cases": [
+    {
+      "name": "before first keyframe holds first value",
+      "keyframes": [
+        { "time_s": 1.0, "value": 2.0, "interpolation": "linear", "easing": "linear" },
+        { "time_s": 2.0, "value": 4.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.0, "expected": 2.0 },
+        { "time_s": 1.0, "expected": 2.0 }
+      ]
+    },
+    {
+      "name": "after last keyframe holds last value",
+      "keyframes": [
+        { "time_s": 0.0, "value": 2.0, "interpolation": "linear", "easing": "linear" },
+        { "time_s": 1.0, "value": 4.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 1.0, "expected": 4.0 },
+        { "time_s": 2.0, "expected": 4.0 }
+      ]
+    },
+    {
+      "name": "hold interpolation keeps previous value",
+      "keyframes": [
+        { "time_s": 0.0, "value": 2.0, "interpolation": "hold", "easing": "linear" },
+        { "time_s": 1.0, "value": 4.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.5, "expected": 2.0 },
+        { "time_s": 1.0, "expected": 2.0 }
+      ]
+    },
+    {
+      "name": "linear interpolation",
+      "keyframes": [
+        { "time_s": 0.0, "value": 0.0, "interpolation": "linear", "easing": "linear" },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.25, "expected": 0.25 },
+        { "time_s": 0.5, "expected": 0.5 },
+        { "time_s": 0.75, "expected": 0.75 }
+      ]
+    },
+    {
+      "name": "ease in interpolation",
+      "keyframes": [
+        { "time_s": 0.0, "value": 0.0, "interpolation": "linear", "easing": "ease_in" },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.25, "expected": 0.0625 },
+        { "time_s": 0.5, "expected": 0.25 },
+        { "time_s": 0.75, "expected": 0.5625 }
+      ]
+    },
+    {
+      "name": "ease out interpolation",
+      "keyframes": [
+        { "time_s": 0.0, "value": 0.0, "interpolation": "linear", "easing": "ease_out" },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.25, "expected": 0.4375 },
+        { "time_s": 0.5, "expected": 0.75 },
+        { "time_s": 0.75, "expected": 0.9375 }
+      ]
+    },
+    {
+      "name": "ease in out interpolation",
+      "keyframes": [
+        { "time_s": 0.0, "value": 0.0, "interpolation": "linear", "easing": "ease_in_out" },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.25, "expected": 0.125 },
+        { "time_s": 0.5, "expected": 0.5 },
+        { "time_s": 0.75, "expected": 0.875 }
+      ]
+    },
+    {
+      "name": "bezier interpolation with explicit handles",
+      "keyframes": [
+        {
+          "time_s": 0.0,
+          "value": 0.0,
+          "interpolation": "bezier",
+          "easing": "linear",
+          "bezier": { "out_x": 0.25, "out_y": 0.1, "in_x": 0.25, "in_y": 1.0 }
+        },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.25, "expected": 0.40851059135539586 },
+        { "time_s": 0.5, "expected": 0.802403387584857 },
+        { "time_s": 0.75, "expected": 0.9604589783489903 }
+      ]
+    }
+  ]
+}

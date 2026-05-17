@@ -15,7 +15,7 @@
 //! `Item::Job` events into the agent store so JobCard renders the
 //! same UI as imports / indexing without a code path fork.
 
-use awidat_render::{JobStatus, build_timeline_render_spec};
+use awidat_render::{JobStatus, RenderPlanLimitation, build_timeline_render_spec};
 use serde::Serialize;
 use tauri::State;
 
@@ -35,6 +35,8 @@ pub struct RenderJobInfo {
     /// clips. Frontend uses it for "0:23 of 0:56" status text when
     /// JobStatus's own time_done_s arrives.
     pub total_duration_s: Option<f64>,
+    /// Non-fatal planning limitations for metadata the renderer ignored.
+    pub render_limitations: Vec<RenderPlanLimitation>,
 }
 
 /// Plan + start a timeline render. Returns immediately with the
@@ -68,6 +70,7 @@ pub async fn start_timeline_render(state: State<'_, AwidatState>) -> Result<Rend
 
     let output_path = spec.output_path.to_string_lossy().into_owned();
     let total_duration_s = spec.total_duration_s;
+    let render_limitations = spec.limitations.clone();
     let job_id = state
         .render_jobs
         .start(spec)
@@ -78,6 +81,7 @@ pub async fn start_timeline_render(state: State<'_, AwidatState>) -> Result<Rend
         job_id: job_id.to_string(),
         output_path,
         total_duration_s,
+        render_limitations,
     })
 }
 

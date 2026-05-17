@@ -31,9 +31,10 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 //!
-//! Types here `#[derive(TS)]` so `cargo test --features ts-export` writes
-//! `.ts` files into `apps/desktop/src/protocol/generated/`. Hand-edits to
-//! generated files are erased on the next run; edit the Rust source.
+//! Types here `#[derive(TS)]` so
+//! `AWIDAT_EXPORT_TS=1 cargo test -p awidat-desktop-protocol` writes `.ts`
+//! files into `apps/desktop/src/protocol/generated/`. Hand-edits to generated
+//! files are erased on the next export; edit the Rust source.
 //!
 //! # Status
 //!
@@ -740,6 +741,22 @@ pub struct TimelineKeyframe {
     pub interpolation: String,
     /// Easing name from proto.
     pub easing: String,
+    /// Optional normalized cubic Bezier handles.
+    pub bezier: Option<TimelineBezierHandles>,
+}
+
+/// Normalized cubic Bezier handles exposed to desktop preview.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineBezierHandles {
+    /// Outgoing control point x, normalized to the segment duration.
+    pub out_x: f64,
+    /// Outgoing control point y, normalized to the value delta.
+    pub out_y: f64,
+    /// Incoming control point x, normalized to the segment duration.
+    pub in_x: f64,
+    /// Incoming control point y, normalized to the value delta.
+    pub in_y: f64,
 }
 
 /// Timeline-level semantic metadata for one adjacent clip boundary.
@@ -1558,12 +1575,14 @@ mod tests {
                         value: 0.0,
                         interpolation: "linear".to_string(),
                         easing: "linear".to_string(),
+                        bezier: None,
                     },
                     TimelineKeyframe {
                         time_s: 0.5,
                         value: 1.0,
                         interpolation: "linear".to_string(),
                         easing: "ease_out".to_string(),
+                        bezier: None,
                     },
                 ],
                 rationale: Some("Fade title in".to_string()),

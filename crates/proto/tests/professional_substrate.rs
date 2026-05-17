@@ -5,10 +5,10 @@ use awidat_proto::professional::{
     AssetCatalog, AssetQuery, AssetReadiness, AssetRecord, AssetRole, AudioBus,
     AudioFinishingState, CapabilityArea, CapabilityRegistry, CapabilityStatus, ColorFinishingState,
     CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
-    DeliveryProfile, FindingSeverity, GradeStack, Keyframe, MotionGraphicsTemplate,
-    ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
-    SelectDecision, SourceRange, SourceSelect, Stringout, TemplateSlot, TrackingPackage,
-    WorkflowLens,
+    DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity, GradeStack, Keyframe,
+    MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
+    PipelineReadinessReport, PreflightCheckKind, ReadinessState, SelectDecision, SourceRange,
+    SourceSelect, Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
 };
 
 #[test]
@@ -46,6 +46,40 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
             select_ids: vec!["sel-a".into()],
             ..Stringout::default()
         }],
+        motion_packages: vec![MotionPackage {
+            id: "motion-package-a".into(),
+            intent: "adds lower-third fade".into(),
+            affected_clips: vec!["clip-a".into()],
+            generated_animations: vec![ParameterAnimation {
+                id: "motion-package-a-opacity".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "title.opacity".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+                rationale: None,
+            }],
+            ..MotionPackage::default()
+        }],
+        expression_links: vec![ExpressionLink {
+            id: "expr-audio-scale".into(),
+            target_clip_id: "clip-a".into(),
+            target_parameter: "overlay.scale".into(),
+            source: ExpressionSource::Signal {
+                signal: "audio_energy".into(),
+            },
+            expression: "1 + source * 0.2".into(),
+            ..ExpressionLink::default()
+        }],
+        tracking_package: Some(TrackingPackage {
+            masks: vec![MaskSidecar {
+                id: "mask-a".into(),
+                track_id: Some("track-a".into()),
+                attached_clip_id: Some("clip-a".into()),
+                ..MaskSidecar::default()
+            }],
+            ..TrackingPackage::default()
+        }),
         delivery_profiles: vec![DeliveryProfile::youtube_1080p()],
         workflow_lenses: vec![WorkflowLens::Assembly],
         capability_registry: Some(CapabilityRegistry::professional_substrate_v1()),
@@ -76,6 +110,18 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
     assert_eq!(asset.readiness.index, ReadinessState::Blocked);
     assert_eq!(roundtrip.selects[0].decision, SelectDecision::Select);
     assert_eq!(roundtrip.stringouts[0].select_ids, vec!["sel-a"]);
+    assert_eq!(roundtrip.motion_packages[0].id, "motion-package-a");
+    assert_eq!(roundtrip.motion_packages[0].affected_clips, vec!["clip-a"]);
+    assert_eq!(roundtrip.expression_links[0].id, "expr-audio-scale");
+    assert_eq!(roundtrip.expression_links[0].target_clip_id, "clip-a");
+    let tracking_package = match roundtrip.tracking_package {
+        Some(package) => package,
+        None => panic!("tracking package missing"),
+    };
+    assert_eq!(
+        tracking_package.masks[0].track_id.as_deref(),
+        Some("track-a")
+    );
     assert_eq!(
         roundtrip.delivery_profiles[0].platform.as_deref(),
         Some("youtube")
@@ -90,6 +136,49 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
             .capabilities
             .iter()
             .any(|capability| capability.area == CapabilityArea::CompositionGraph)
+    );
+}
+
+#[test]
+fn expression_link_dependency_cycle_is_reported_once() {
+    let metadata = AwidatTimelineMetadata {
+        expression_links: vec![
+            ExpressionLink {
+                id: "expr-a".into(),
+                target_clip_id: "clip-a".into(),
+                target_parameter: "overlay.scale".into(),
+                source: ExpressionSource::Parameter {
+                    clip_id: "clip-b".into(),
+                    parameter: "overlay.opacity".into(),
+                },
+                expression: "source".into(),
+                ..ExpressionLink::default()
+            },
+            ExpressionLink {
+                id: "expr-b".into(),
+                target_clip_id: "clip-b".into(),
+                target_parameter: "overlay.opacity".into(),
+                source: ExpressionSource::Parameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "overlay.scale".into(),
+                },
+                expression: "source".into(),
+                ..ExpressionLink::default()
+            },
+        ],
+        ..AwidatTimelineMetadata::default()
+    };
+
+    let diagnostics = metadata.validate_professional_substrate();
+    let cycle_diagnostics: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("expression link cycle"))
+        .collect();
+
+    assert_eq!(cycle_diagnostics.len(), 1);
+    assert_eq!(
+        cycle_diagnostics[0].area,
+        CapabilityArea::ParameterAnimation
     );
 }
 
@@ -493,5 +582,104 @@ fn metadata_readiness_blocks_stages_with_validation_errors() {
             .blockers
             .iter()
             .any(|blocker| blocker.contains("anim-bad"))
+    );
+}
+
+#[test]
+fn duplicate_parameter_animations_report_one_deterministic_conflict() {
+    let metadata = AwidatTimelineMetadata {
+        parameter_animations: vec![
+            ParameterAnimation {
+                id: "anim-a".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "title.opacity".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+                rationale: None,
+            },
+            ParameterAnimation {
+                id: "anim-b".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "title.opacity".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 0.0)],
+                rationale: None,
+            },
+        ],
+        ..AwidatTimelineMetadata::default()
+    };
+
+    let diagnostics = metadata.validate_professional_substrate();
+    let conflicts: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("animation conflict"))
+        .collect();
+
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].area, CapabilityArea::ParameterAnimation);
+    assert_eq!(conflicts[0].severity, FindingSeverity::Error);
+    assert!(conflicts[0].message.contains("clip-a/title.opacity"));
+    assert!(conflicts[0].message.contains("anim-a"));
+    assert!(conflicts[0].message.contains("anim-b"));
+}
+
+#[test]
+fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
+    let metadata = AwidatTimelineMetadata {
+        parameter_animations: vec![
+            ParameterAnimation {
+                id: "anim-opacity".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "overlay.opacity".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 2.0)],
+                rationale: None,
+            },
+            ParameterAnimation {
+                id: "anim-scale".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "overlay.scale".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0)],
+                rationale: None,
+            },
+            ParameterAnimation {
+                id: "anim-x".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "overlay.x".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, f64::NAN)],
+                rationale: None,
+            },
+        ],
+        ..AwidatTimelineMetadata::default()
+    };
+
+    let diagnostics = metadata.validate_professional_substrate();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("overlay.opacity")
+                && diagnostic.message.contains("[0, 1]")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("overlay.scale")
+                && diagnostic.message.contains("positive")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("anim-x")
+                && diagnostic.message.contains("non-finite keyframe")),
+        "{diagnostics:?}"
     );
 }

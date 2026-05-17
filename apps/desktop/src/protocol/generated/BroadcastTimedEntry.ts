@@ -3,11 +3,11 @@
 /**
  * Timed text used by topic badges and chapter cards.
  */
-export type BroadcastTimedEntry = { 
+export type BroadcastTimedEntry = {
 /**
  * Timeline time, in seconds.
  */
-time_seconds: number, 
+time_seconds: number,
 /**
  * Display text.
  */
