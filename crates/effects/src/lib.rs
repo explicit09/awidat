@@ -20,6 +20,8 @@ pub const LUT: &str = "awidat.lut";
 pub const TITLE: &str = "awidat.title";
 /// Picture-in-picture / cutaway overlay effect id.
 pub const VIDEO_OVERLAY: &str = "awidat.video_overlay";
+/// Clip-level punch-in / reframing effect id.
+pub const REFRAME: &str = "awidat.reframe";
 /// Per-clip audio fade effect id.
 pub const AUDIO_FADE: &str = "awidat.audio_fade";
 /// FFmpeg-native clip/track audio processing effect id.
@@ -74,6 +76,24 @@ const VIDEO_OVERLAY_PARAMS: &[ParamDef] = &[
     ParamDef::string("corner", false, None),
     ParamDef::number("scale", false, Some(0.01), Some(1.0), None),
     ParamDef::number("margin_pct", false, Some(0.0), Some(0.5), None),
+];
+
+const REFRAME_PARAMS: &[ParamDef] = &[
+    ParamDef::number("zoom", true, Some(1.0), Some(3.0), None),
+    ParamDef::number(
+        "x",
+        false,
+        Some(-1.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.0)),
+    ),
+    ParamDef::number(
+        "y",
+        false,
+        Some(-1.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.0)),
+    ),
 ];
 
 const AUDIO_FADE_PARAMS: &[ParamDef] = &[
@@ -169,6 +189,18 @@ pub const EFFECTS: &[EffectDef] = &[
         backend: BackendKind::FfmpegNative,
         min_present_params: 0,
         params: VIDEO_OVERLAY_PARAMS,
+    },
+    EffectDef {
+        id: REFRAME,
+        display_name: "Reframe",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Transform,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: REFRAME_PARAMS,
     },
     EffectDef {
         id: AUDIO_FADE,
@@ -765,6 +797,16 @@ mod tests {
             normalized.get("font_size").and_then(Value::as_i64),
             Some(64)
         );
+    }
+
+    #[test]
+    fn reframe_defaults_position_to_center() {
+        let mut params = Map::new();
+        params.insert("zoom".into(), Value::from(1.08));
+        let (_, normalized) = must_normalize(REFRAME, &params);
+        assert_eq!(normalized.get("zoom").and_then(Value::as_f64), Some(1.08));
+        assert_eq!(normalized.get("x").and_then(Value::as_f64), Some(0.0));
+        assert_eq!(normalized.get("y").and_then(Value::as_f64), Some(0.0));
     }
 
     #[test]

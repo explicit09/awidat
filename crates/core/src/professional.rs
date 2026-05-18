@@ -3671,6 +3671,8 @@ mod tests {
         assert_eq!(package.tracking_package.masks.len(), 1);
         let mask = &package.tracking_package.masks[0];
         assert_eq!(mask.id, "mask-c-phone");
+        assert_eq!(mask.track_id.as_deref(), Some("track-c-phone"));
+        assert_eq!(mask.attached_clip_id.as_deref(), Some("c-phone"));
         assert_eq!(mask.operation, MaskOperation::Add);
         assert_eq!(mask.keyframes.len(), 1);
         assert_eq!(mask.keyframes[0].time_s, 0.0);

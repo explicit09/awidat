@@ -32,6 +32,28 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn make_tiny_mp4(path: &std::path::Path) {
+    let output = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=1:size=160x90:rate=30",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-shortest",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
 #[test]
 fn init_creates_project_and_validate_succeeds() {
     let root = tmp_dir("init-validate");
@@ -50,6 +72,48 @@ fn init_creates_project_and_validate_succeeds() {
     assert!(out.contains("Index:      0 indexer(s), 0 sidecar(s)"));
 
     fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn new_import_places_source_on_timeline() {
+    let parent = tmp_dir("new-import-parent");
+    fs::create_dir_all(&parent).unwrap();
+    let source = parent.join("source.mp4");
+    make_tiny_mp4(&source);
+
+    let parent_arg = parent.to_string_lossy();
+    let source_arg = source.to_string_lossy();
+    let output = run(&[
+        "new",
+        "imported",
+        "--at",
+        &parent_arg,
+        "--import",
+        &source_arg,
+        "--link",
+        "--no-index",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let out = stdout(&output);
+    assert!(out.contains("Added imported source to timeline track V1"));
+
+    let project_root = parent.join("imported");
+    let timeline: serde_json::Value =
+        serde_json::from_slice(&fs::read(project_root.join("project.otio.json")).unwrap()).unwrap();
+    assert_eq!(
+        timeline["metadata"]["awidat"]["source_assets"][0],
+        "raw/source.mp4"
+    );
+    assert_eq!(timeline["tracks"]["children"][0]["name"], "V1");
+    let clip = &timeline["tracks"]["children"][0]["children"][0];
+    assert_eq!(clip["name"], "source");
+    assert_eq!(
+        clip["media_reference"]["target_url"],
+        serde_json::Value::String("raw/source.mp4".to_string())
+    );
+    assert!(clip["source_range"]["duration"]["value"].as_f64().unwrap() > 0.0);
+
+    fs::remove_dir_all(&parent).ok();
 }
 
 #[test]

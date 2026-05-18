@@ -187,6 +187,9 @@ pub struct TimelineSegment {
     pub color_correction: Option<ColorCorrectionPlan>,
     /// Optional HDR transfer metadata, read from `awidat.source_color`.
     pub hdr_transfer: Option<HdrTransfer>,
+    /// Optional clip-level reframe / punch-in controls, read from the
+    /// `awidat.reframe` effect.
+    pub reframe: Option<ReframePlan>,
     /// Optional absolute LUT path, read from the `awidat.lut` effect.
     pub lut_path: Option<PathBuf>,
     /// Optional FFmpeg `lut3d` interpolation mode.
@@ -369,6 +372,17 @@ pub struct ColorCorrectionPlan {
     pub highlights: Option<f64>,
 }
 
+/// Clip-level scale/crop controls for simple punch-ins and reframes.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ReframePlan {
+    /// Scale multiplier. `1.0` is unchanged.
+    pub zoom: f64,
+    /// Horizontal crop bias in `[-1, 1]`: `-1` left, `0` center, `1` right.
+    pub x: f64,
+    /// Vertical crop bias in `[-1, 1]`: `-1` top, `0` center, `1` bottom.
+    pub y: f64,
+}
+
 /// Pull a numeric metadata field off the first effect on `clip` whose
 /// `effect_name` matches. Returns `None` when no such effect exists
 /// or the metadata field is missing / non-numeric. Used to surface
@@ -424,6 +438,29 @@ fn read_hdr_transfer(clip: &awidat_proto::otio::Clip) -> Option<HdrTransfer> {
         "arib-std-b67" | "arib_std_b67" | "hlg" => Some(HdrTransfer::AribStdB67),
         _ => None,
     }
+}
+
+fn read_reframe(clip: &awidat_proto::otio::Clip) -> Option<ReframePlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.reframe")?;
+    let m = &effect.metadata;
+    let zoom = m.get("zoom").and_then(serde_json::Value::as_f64)?;
+    if !zoom.is_finite() || zoom <= 1.0 {
+        return None;
+    }
+    Some(ReframePlan {
+        zoom: zoom.clamp(1.0, 3.0),
+        x: m.get("x")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0)
+            .clamp(-1.0, 1.0),
+        y: m.get("y")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0)
+            .clamp(-1.0, 1.0),
+    })
 }
 
 fn read_lut_interpolation(clip: &awidat_proto::otio::Clip) -> Option<String> {
@@ -838,6 +875,7 @@ fn collect_timeline_segment(
         speed: read_effect_number(clip, "awidat.speed", "factor"),
         color_correction: read_color_correction(clip),
         hdr_transfer: read_hdr_transfer(clip),
+        reframe: read_reframe(clip),
         lut_path,
         lut_interpolation,
         audio_fx: read_clip_audio_fx(clip),
@@ -2140,6 +2178,14 @@ fn stage_overlay_video_input(
         ));
         video_label = lv;
     }
+    if let Some(reframe) = seg.reframe.as_ref()
+        && let Some(chain) = reframe_filter_chain(reframe)
+    {
+        let rv = format!("[media_overlay_rv{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!("{video_label}{chain}{rv}"));
+        video_label = rv;
+    }
     if let Some(factor) = seg.speed
         && (factor - 1.0).abs() > 1e-9
         && factor > 0.0
@@ -2195,6 +2241,14 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
             lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
         ));
         video_label = lv;
+    }
+
+    if let Some(reframe) = seg.reframe.as_ref()
+        && let Some(chain) = reframe_filter_chain(reframe)
+    {
+        let rv = format!("[rv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{rv};"));
+        video_label = rv;
     }
 
     // Audio repair runs before speed/fades/gain/loudness on each clip:
@@ -2395,6 +2449,22 @@ fn fmt_filter_num(value: f64) -> String {
         s.pop();
     }
     if s == "-0" { "0".into() } else { s }
+}
+
+fn reframe_filter_chain(plan: &ReframePlan) -> Option<String> {
+    if !plan.zoom.is_finite() || plan.zoom <= 1.0 {
+        return None;
+    }
+    let zoom = plan.zoom.clamp(1.0, 3.0);
+    let x = ((plan.x.clamp(-1.0, 1.0) + 1.0) / 2.0).clamp(0.0, 1.0);
+    let y = ((plan.y.clamp(-1.0, 1.0) + 1.0) / 2.0).clamp(0.0, 1.0);
+    Some(format!(
+        "scale=ceil(iw*{zoom}/2)*2:ceil(ih*{zoom}/2)*2,\
+         crop=iw/{zoom}:ih/{zoom}:x=(in_w-out_w)*{x}:y=(in_h-out_h)*{y}",
+        zoom = fmt_filter_num(zoom),
+        x = fmt_filter_num(x),
+        y = fmt_filter_num(y),
+    ))
 }
 
 fn filter_escape_single_quoted(s: &str) -> String {
@@ -4051,6 +4121,13 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         ));
         video_label = lv;
     }
+    if let Some(reframe) = seg.reframe.as_ref()
+        && let Some(chain) = reframe_filter_chain(reframe)
+    {
+        let rv = format!("[rv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{rv};"));
+        video_label = rv;
+    }
     if let Some(factor) = seg.speed
         && (factor - 1.0).abs() > 1e-9
         && factor > 0.0
@@ -5335,6 +5412,36 @@ mod tests {
         assert!(
             plan.filter_complex.contains("[sv0][sa0]concat"),
             "post-LUT/post-speed labels should feed concat, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_reframe_before_speed_and_concat() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.reframe = Some(ReframePlan {
+            zoom: 1.08,
+            x: 0.25,
+            y: -0.5,
+        });
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex.contains(
+                "[0:v:0]scale=ceil(iw*1.08/2)*2:ceil(ih*1.08/2)*2,\
+                 crop=iw/1.08:ih/1.08:x=(in_w-out_w)*0.625:y=(in_h-out_h)*0.25[rv0]"
+            ),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[rv0]setpts=0.5*PTS[sv0]"),
+            "reframe should feed speed, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[sv0][sa0]concat"),
+            "post-reframe/post-speed labels should feed concat, got: {}",
             plan.filter_complex,
         );
     }

@@ -19,6 +19,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
+use awidat_proto::awidat_meta::AwidatClipMetadata;
+use awidat_proto::otio::{
+    Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+    Track, TrackChild, TrackKind,
+};
 use awidat_proto::project::Project;
 
 /// CLI args for `awidat new`. Wired into the clap subcommand in
@@ -93,11 +98,13 @@ pub fn run(args: NewArgs) -> Result<()> {
         None => None,
     };
     if let Some(p) = &imported_asset {
+        attach_imported_asset_to_timeline(&project_dir, p)?;
         println!(
             "  ✓ Imported source: {} ({})",
             p.file_name().unwrap_or_default().to_string_lossy(),
             human_size(p)
         );
+        println!("  ✓ Added imported source to timeline track V1");
     }
 
     println!();
@@ -241,6 +248,123 @@ fn import_local(src: &Path, project_dir: &Path, link: bool) -> Result<PathBuf> {
             .with_context(|| format!("copy {} -> {} failed", src.display(), dst.display()))?;
     }
     Ok(dst)
+}
+
+fn attach_imported_asset_to_timeline(project_dir: &Path, imported_asset: &Path) -> Result<()> {
+    let mut project = Project::read(project_dir)
+        .with_context(|| format!("failed to read project at {}", project_dir.display()))?;
+    let asset_id = imported_asset
+        .strip_prefix(project_dir)
+        .with_context(|| {
+            format!(
+                "imported asset {} is not inside project {}",
+                imported_asset.display(),
+                project_dir.display()
+            )
+        })?
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    let duration_s = probe_duration_s(imported_asset)?;
+    let available_range = TimeRange::new(
+        RationalTime::zero(30.0),
+        RationalTime::new(duration_s * 30.0, 30.0),
+    );
+    let mut reference = ExternalReference::new(asset_id.clone());
+    reference.available_range = Some(available_range.clone());
+
+    let clip_name = imported_asset
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("imported-source")
+        .to_string();
+    let mut clip = Clip::empty(clip_name.clone());
+    clip.source_range = Some(available_range);
+    clip.media_reference = MediaReference::External(reference);
+    clip.metadata = ClipMetadata {
+        awidat: Some(AwidatClipMetadata {
+            reasoning: Some("Initial clip created from awidat new --import.".to_string()),
+            extra: [(
+                "clip_uuid".to_string(),
+                serde_json::Value::String(slug_clip_uuid(&clip_name)),
+            )]
+            .into_iter()
+            .collect(),
+            ..AwidatClipMetadata::default()
+        }),
+        ..ClipMetadata::default()
+    };
+
+    let mut track = Track::empty("V1", TrackKind::Video);
+    track.children.push(TrackChild::Clip(clip));
+    project.timeline.tracks.children = vec![StackChild::Track(track)];
+    if let Some(metadata) = project.timeline.metadata.awidat.as_mut()
+        && !metadata
+            .source_assets
+            .iter()
+            .any(|asset| asset == &asset_id)
+    {
+        metadata.source_assets.push(asset_id);
+    }
+    project
+        .write(project_dir)
+        .with_context(|| format!("failed to write project at {}", project_dir.display()))?;
+    Ok(())
+}
+
+fn probe_duration_s(asset: &Path) -> Result<f64> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+        ])
+        .arg(asset)
+        .output()
+        .with_context(|| format!("failed to spawn ffprobe for {}", asset.display()))?;
+    if !output.status.success() {
+        bail!(
+            "ffprobe failed for {}: {}",
+            asset.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let duration_s = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f64>()
+        .with_context(|| format!("ffprobe returned invalid duration for {}", asset.display()))?;
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        bail!(
+            "ffprobe returned unusable duration {duration_s} for {}",
+            asset.display()
+        );
+    }
+    Ok(duration_s)
+}
+
+fn slug_clip_uuid(name: &str) -> String {
+    let slug: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let compact = slug
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if compact.is_empty() {
+        "clip-imported-source".to_string()
+    } else {
+        format!("clip-{compact}")
+    }
 }
 
 fn which_yt_dlp() -> Option<PathBuf> {

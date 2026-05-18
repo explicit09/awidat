@@ -14,10 +14,12 @@ use awidat_proto::project::Project;
 use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
 
+mod apply_edl_cmd;
 mod chat_cmd;
 mod index_cmd;
 mod lessons_cmd;
 mod new_cmd;
+mod render_cmd;
 mod resume_cmd;
 mod skills_cmd;
 mod tui_cmd;
@@ -93,6 +95,18 @@ enum Command {
         /// Maximum concurrent (server × asset) pairs. 0 = unbounded.
         #[arg(long, default_value_t = 2)]
         concurrency: usize,
+    },
+    /// Apply an EDL envelope to `project.otio.json`.
+    ApplyEdl {
+        /// Project directory.
+        path: PathBuf,
+        /// Path to a text EDL envelope.
+        edl: PathBuf,
+    },
+    /// Render the edited OTIO timeline to `<project>/renders/`.
+    Render {
+        /// Project directory.
+        path: PathBuf,
     },
     /// Open a text-only REPL with the agent. Type a prompt; the agent
     /// streams a reply and may call tools (week 3 ships `bash`).
@@ -231,6 +245,8 @@ fn main() -> ExitCode {
             indexers,
             concurrency,
         } => index_cmd::run(&path, assets, indexers, concurrency),
+        Command::ApplyEdl { path, edl } => apply_edl_cmd::run(&path, &edl),
+        Command::Render { path } => render_cmd::run(&path),
         Command::Chat { path, model } => chat_cmd::run(&path, model.as_deref()),
         Command::Tui { path, model } => tui_cmd::run(&path, model.as_deref()),
         Command::SecretsSet { account } => cmd_secrets_set(&account),
