@@ -1,6 +1,7 @@
 target/
 .build-log/
 .DS_Store
+.claude/
 
 # Superpowers brainstorming session artifacts
 .superpowers/
@@ -13,3 +14,4 @@ python/.venv/
 python/**/__pycache__/
 python/**/*.egg-info/
 python/**/.pytest_cache/
+skills/**/__pycache__/

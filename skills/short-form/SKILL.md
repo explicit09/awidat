@@ -112,20 +112,30 @@ user wants Pexels-fetched cutaways.
 read_index(channel="transcript", asset_id=<the trimmed timeline output>)
 ```
 
+For long takes or multi-take projects, first produce a compact transcript
+view for selection and caption planning:
+
+```bash
+python3 <skill-root>/scripts/pack_transcript.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --source-label <asset-name>
+```
+
 Generate phrase groups with the helper:
 
 ```bash
 python3 <skill-root>/scripts/caption_plan.py \
   --transcript index/whisper/raw/<asset>.json \
   --max-words 4 \
+  --max-gap-s 0.5 \
   --hot-start-s <highest-intensity-start> \
   --hot-end-s <highest-intensity-end>
 ```
 
 For each returned phrase, emit `*** Insert Caption` ops with:
 
-- `text`: 2–4 words per title (one phrase per breath group, not the
-  full sentence)
+- `text`: 2–4 words per title, grouped by word timing, punctuation,
+  speaker changes, and breath-length silence gaps
 - `position`: bottom-third
 - `font_size`: 48–64 (large enough on a phone)
 - `color`: white with 80%-alpha background OR black-on-yellow for
@@ -144,14 +154,32 @@ Render, then verify:
 python3 <skill-root>/scripts/render_verify.py \
   --file renders/<output>.mp4 \
   --expected-duration-s 60 \
-  --max-duration-s 90
+  --max-duration-s 90 \
+  --cut-report-dir renders/verify/<output-name> \
+  --cut-s <cut-boundary-1> \
+  --cut-s <cut-boundary-2>
 ```
 
-If verification fails, fix the timeline or report the blocker. Do not
-claim a finished short without a render path or verification result.
-Before the final report, call `vedit_diff` and verify it contains the
-hook-first spine, `Set Output Format`, caption nodes, and intended
-cleanup edits.
+Each `--cut-s` produces a review image centered on a hard cut with a
+filmstrip and waveform. Inspect the generated PNGs for black frames,
+audio discontinuities, caption overlap, and awkward visual timing. If
+verification fails, fix the timeline or report the blocker. Do not claim
+a finished short without a render path or verification result. Before
+the final report, call `vedit_diff` and verify it contains the hook-first
+spine, `Set Output Format`, caption nodes, and intended cleanup edits.
+
+For final publish exports, run measured loudness finalization after the
+timeline render and before the last verification pass:
+
+```bash
+python3 <skill-root>/scripts/final_loudness.py \
+  --file renders/<output>.mp4 \
+  --out renders/<output>-loudness.mp4 \
+  --target-i -14 \
+  --target-tp -1
+```
+
+Use the finalized file for the final verification command.
 
 ## Editorial conventions
 

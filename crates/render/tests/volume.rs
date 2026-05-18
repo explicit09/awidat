@@ -66,10 +66,14 @@ fn project_with_volume_effect_emits_volume_filter() {
         cmd.contains("[0:a:0]volume=0.5[av0]"),
         "expected volume filter in argv, got: {cmd}",
     );
-    // Concat for seg 0 must read the volume-filtered audio label.
+    // Concat for seg 0 must read the smoothed volume-filtered audio label.
     assert!(
-        cmd.contains("[0:v:0][av0]"),
-        "expected concat to consume [av0] for seg 0: {cmd}",
+        cmd.contains("[av0]afade=t=out:st=1.97:d=0.03[bfade0]"),
+        "expected hard-cut smoothing after [av0] for seg 0: {cmd}",
+    );
+    assert!(
+        cmd.contains("[0:v:0][bfade0]"),
+        "expected concat to consume [bfade0] for seg 0: {cmd}",
     );
     // Total duration is unaffected by volume (15.4 wires speed which
     // does affect duration).

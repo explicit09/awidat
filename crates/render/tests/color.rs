@@ -72,6 +72,38 @@ fn write_project_with_color_effect(dir: &Path, include_lut: bool) {
     .unwrap();
 }
 
+fn write_project_with_source_color_effect(dir: &Path) {
+    let asset_a = "raw/a.mp4";
+    fs::create_dir_all(dir.join("raw")).unwrap();
+    fs::write(dir.join(asset_a), b"stub").unwrap();
+
+    let mut clip_a = Clip::empty("clip-a".to_string());
+    clip_a.media_reference = MediaReference::External(ExternalReference::new(asset_a));
+    clip_a.source_range = Some(TimeRange::new(
+        RationalTime::new(0.0, 24.0),
+        RationalTime::new(2.0 * 24.0, 24.0),
+    ));
+    let mut source_color = Effect::new("awidat.source_color");
+    source_color
+        .metadata
+        .insert("transfer".to_string(), serde_json::json!("smpte2084"));
+    clip_a.effects.push(source_color);
+
+    let mut track = Track::empty("V1", TrackKind::Video);
+    track.children.push(TrackChild::Clip(clip_a));
+
+    let mut tl = Timeline::empty("p");
+    let mut stack = Stack::empty("root");
+    stack.children.push(StackChild::Track(track));
+    tl.tracks = stack;
+
+    fs::write(
+        dir.join(files::OTIO),
+        serde_json::to_string_pretty(&tl).unwrap(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn project_with_color_correction_emits_color_filters() {
     let dir = tempfile::tempdir().unwrap();
@@ -85,6 +117,22 @@ fn project_with_color_correction_emits_color_filters() {
     assert!(
         cmd.contains("[cv0][0:a:0]concat"),
         "expected concat to consume corrected video label, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_source_color_emits_hdr_tonemap() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_with_source_color_effect(dir.path());
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("tonemap=tonemap=hable:desat=0"),
+        "expected HDR tone map in argv, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("zscale=transfer=bt709:matrix=bt709:primaries=bt709"),
+        "expected SDR output transfer in argv, got: {cmd}",
     );
 }
 

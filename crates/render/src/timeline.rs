@@ -138,6 +138,15 @@ pub struct LoudnessTargetPlan {
     pub true_peak_db: Option<f64>,
 }
 
+/// Source-media HDR transfer function that needs SDR tone mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HdrTransfer {
+    /// SMPTE ST 2084 / PQ transfer.
+    Smpte2084,
+    /// ARIB STD-B67 / HLG transfer.
+    AribStdB67,
+}
+
 /// One source-media segment to feed into the timeline-render concat.
 /// Public so callers can sum durations or otherwise inspect the plan
 /// before kicking off ffmpeg.
@@ -176,6 +185,8 @@ pub struct TimelineSegment {
     /// Optional clip-level color correction controls, read from the
     /// `awidat.color_correction` effect.
     pub color_correction: Option<ColorCorrectionPlan>,
+    /// Optional HDR transfer metadata, read from `awidat.source_color`.
+    pub hdr_transfer: Option<HdrTransfer>,
     /// Optional absolute LUT path, read from the `awidat.lut` effect.
     pub lut_path: Option<PathBuf>,
     /// Optional FFmpeg `lut3d` interpolation mode.
@@ -403,6 +414,16 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
         highlights: m.get("highlights").and_then(serde_json::Value::as_f64),
     };
     Some(plan)
+}
+
+fn read_hdr_transfer(clip: &awidat_proto::otio::Clip) -> Option<HdrTransfer> {
+    let raw = read_effect_string(clip, "awidat.source_color", "transfer")
+        .or_else(|| read_effect_string(clip, "awidat.source_color", "hdr_transfer"))?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "smpte2084" | "smpte2084-pq" | "pq" | "bt2020-10" => Some(HdrTransfer::Smpte2084),
+        "arib-std-b67" | "arib_std_b67" | "hlg" => Some(HdrTransfer::AribStdB67),
+        _ => None,
+    }
 }
 
 fn read_lut_interpolation(clip: &awidat_proto::otio::Clip) -> Option<String> {
@@ -816,6 +837,7 @@ fn collect_timeline_segment(
         volume: read_effect_number(clip, "awidat.volume", "value"),
         speed: read_effect_number(clip, "awidat.speed", "factor"),
         color_correction: read_color_correction(clip),
+        hdr_transfer: read_hdr_transfer(clip),
         lut_path,
         lut_interpolation,
         audio_fx: read_clip_audio_fx(clip),
@@ -1721,6 +1743,21 @@ impl<'a> FilterPlanner<'a> {
         let inputs: Vec<(String, String)> = (0..n)
             .map(|i| stage_segment_inputs(&mut filter, i, &self.segments[i]))
             .collect();
+        let inputs: Vec<(String, String)> = inputs
+            .into_iter()
+            .enumerate()
+            .map(|(i, (video, audio))| {
+                let audio = apply_hard_cut_audio_fade(
+                    &mut filter,
+                    &audio,
+                    &format!("[bfade{i}]"),
+                    effective_duration(&self.segments[i]),
+                    i > 0,
+                    i + 1 < n,
+                );
+                (video, audio)
+            })
+            .collect();
         for (v, a) in &inputs {
             filter.push_str(v);
             filter.push_str(a);
@@ -1755,7 +1792,7 @@ impl<'a> FilterPlanner<'a> {
 
         // Track the order of hard-cut groups. A group may be one raw
         // segment or a chained transition run.
-        let mut concat_inputs: Vec<(String, String)> = Vec::with_capacity(n);
+        let mut concat_inputs: Vec<(String, String, f64)> = Vec::with_capacity(n);
 
         let mut i = 0;
         let mut transition_id: usize = 0;
@@ -1799,9 +1836,25 @@ impl<'a> FilterPlanner<'a> {
                 transition_id += 1;
                 group_end = next;
             }
-            concat_inputs.push((current_v, current_a));
+            concat_inputs.push((current_v, current_a, current_duration));
             i = group_end + 1;
         }
+        let concat_len = concat_inputs.len();
+        let concat_inputs: Vec<(String, String)> = concat_inputs
+            .into_iter()
+            .enumerate()
+            .map(|(i, (video, audio, duration))| {
+                let audio = apply_hard_cut_audio_fade(
+                    &mut filter,
+                    &audio,
+                    &format!("[hfade{i}]"),
+                    duration,
+                    i > 0,
+                    i + 1 < concat_len,
+                );
+                (video, audio)
+            })
+            .collect();
 
         // Tail: single-input concat would just rename, so when we
         // have one chunk it might be a paired-xfade output already.
@@ -1837,6 +1890,40 @@ fn reset_segment_pts(
     ));
     filter.push_str(&format!("{audio_label}asetpts=PTS-STARTPTS{audio_out};"));
     (video_out, audio_out)
+}
+
+fn apply_hard_cut_audio_fade(
+    filter: &mut String,
+    audio_label: &str,
+    out_label: &str,
+    duration_s: f64,
+    fade_in: bool,
+    fade_out: bool,
+) -> String {
+    if !fade_in && !fade_out {
+        return audio_label.to_string();
+    }
+    let fade_s = HARD_CUT_AUDIO_FADE_S.min((duration_s / 2.0).max(0.0));
+    if fade_s <= 0.0 {
+        return audio_label.to_string();
+    }
+
+    filter.push_str(audio_label);
+    if fade_in {
+        filter.push_str(&format!("afade=t=in:st=0:d={fade_s}"));
+    }
+    if fade_out {
+        if fade_in {
+            filter.push(',');
+        }
+        filter.push_str(&format!(
+            "afade=t=out:st={start_s}:d={fade_s}",
+            start_s = (duration_s - fade_s).max(0.0),
+        ));
+    }
+    filter.push_str(out_label);
+    filter.push(';');
+    out_label.to_string()
 }
 
 fn format_audio_transition_filter(
@@ -2010,12 +2097,32 @@ fn append_timeline_loudness_filter(
     out
 }
 
+fn hdr_tonemap_filter(transfer: HdrTransfer) -> &'static str {
+    match transfer {
+        HdrTransfer::Smpte2084 => {
+            "zscale=t=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=transfer=bt709:matrix=bt709:primaries=bt709,format=yuv420p"
+        }
+        HdrTransfer::AribStdB67 => {
+            "zscale=t=linear:npl=100,format=gbrpf32le,tonemap=tonemap=hable:desat=0,zscale=transfer=bt709:matrix=bt709:primaries=bt709,format=yuv420p"
+        }
+    }
+}
+
 fn stage_overlay_video_input(
     filter: &mut String,
     input_idx: usize,
     seg: &TimelineSegment,
 ) -> String {
     let mut video_label = format!("[{input_idx}:v:0]");
+    if let Some(transfer) = seg.hdr_transfer {
+        let hv = format!("[media_overlay_hdr{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!(
+            "{video_label}{}{hv}",
+            hdr_tonemap_filter(transfer)
+        ));
+        video_label = hv;
+    }
     if let Some(color) = seg.color_correction.as_ref()
         && let Some(chain) = color_filter_chain(color)
     {
@@ -2063,6 +2170,15 @@ fn stage_overlay_video_input(
 fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) -> (String, String) {
     let mut video_label = format!("[{i}:v:0]");
     let mut audio_label = format!("[{i}:a:0]");
+
+    if let Some(transfer) = seg.hdr_transfer {
+        let hv = format!("[hdr{i}]");
+        filter.push_str(&format!(
+            "{video_label}{}{hv};",
+            hdr_tonemap_filter(transfer)
+        ));
+        video_label = hv;
+    }
 
     if let Some(color) = seg.color_correction.as_ref()
         && let Some(chain) = color_filter_chain(color)
@@ -2304,6 +2420,7 @@ fn lut3d_filter(lut_path: &Path, interpolation: Option<&str>) -> String {
 /// Length of the alpha / slide ramp for fade and slide animations,
 /// in seconds. Half a second feels intentional without lingering.
 const ANIMATION_RAMP_S: f64 = 0.5;
+const HARD_CUT_AUDIO_FADE_S: f64 = 0.03;
 
 /// Build one ffmpeg `drawtext=...` filter from a title plan.
 ///
@@ -2331,7 +2448,7 @@ fn format_drawtext_filter(
     let resting_y = match t.position {
         TitlePosition::Top => "h*0.05".to_string(),
         TitlePosition::Center => "(h-text_h)/2".to_string(),
-        TitlePosition::Bottom => title_bottom_y(broadcast_overlay),
+        TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
     };
     let resting_x = "(w-text_w)/2".to_string();
     let weight_attr = match t.font_weight {
@@ -2406,11 +2523,17 @@ fn title_animation_value_expr(title: &TitlePlan, parameter: &str, fallback: &str
         .unwrap_or_else(|| fallback.to_string())
 }
 
-fn title_bottom_y(broadcast_overlay: Option<&BroadcastOverlayPlan>) -> String {
+fn title_bottom_y(title: &TitlePlan, broadcast_overlay: Option<&BroadcastOverlayPlan>) -> String {
     let Some(overlay) = broadcast_overlay else {
+        if title.safe_area.as_deref() == Some("mobile") {
+            return "h*0.75".to_string();
+        }
         return "h*0.85".to_string();
     };
     if !overlay.config.enabled {
+        if title.safe_area.as_deref() == Some("mobile") {
+            return "h*0.75".to_string();
+        }
         return "h*0.85".to_string();
     }
     if overlay.config.short_form_mode {
@@ -4721,13 +4844,13 @@ mod tests {
     }
 
     #[test]
-    fn filter_planner_with_no_transitions_emits_legacy_concat_graph() {
-        // Pins the no-transition graph shape so future changes can't drift it.
+    fn filter_planner_with_no_transitions_emits_smoothed_concat_graph() {
+        // Pins the no-transition graph shape so hard cuts keep micro-fades.
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 1.0, 3.0)];
         let plan = FilterPlanner::new(&segs, &[]).plan();
         assert_eq!(
             plan.filter_complex,
-            "[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa]",
+            "[0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];[1:a:0]afade=t=in:st=0:d=0.03[bfade1];[0:v:0][bfade0][1:v:0][bfade1]concat=n=2:v=1:a=1[outv][outa]",
         );
         assert_eq!(plan.video_out_label, "[outv]");
         assert_eq!(plan.audio_out_label, "[outa]");
@@ -4800,8 +4923,13 @@ mod tests {
             plan.filter_complex
                 .contains("concat=n=2:v=1:a=1[outv][outa]")
         );
-        // C's streams are timestamp-normalized before concat.
-        assert!(plan.filter_complex.contains("[vpts2][apts2]"));
+        // C's streams are timestamp-normalized, then its audio is
+        // smoothed before concat.
+        assert!(
+            plan.filter_complex
+                .contains("[apts2]afade=t=in:st=0:d=0.03[hfade1]")
+        );
+        assert!(plan.filter_complex.contains("[vpts2][hfade1]"));
     }
 
     #[test]
@@ -4864,7 +4992,7 @@ mod tests {
         assert_eq!(xfade_count, 2, "filter graph: {}", plan.filter_complex);
         assert!(
             plan.filter_complex
-                .contains("[xv0][xa0][xv1][xa1]concat=n=2:v=1:a=1[outv][outa]"),
+                .contains("[xv0][hfade0][xv1][hfade1]concat=n=2:v=1:a=1[outv][outa]"),
             "filter graph: {}",
             plan.filter_complex,
         );
@@ -4881,15 +5009,16 @@ mod tests {
             "filter graph: {}",
             plan.filter_complex,
         );
-        // Concat input pair for seg 0 uses [av0] for audio, raw for video.
+        // Concat input pair for seg 0 uses faded post-volume audio.
         assert!(
-            plan.filter_complex.contains("[0:v:0][av0]"),
+            plan.filter_complex
+                .contains("[av0]afade=t=out:st=1.97:d=0.03[bfade0]"),
             "filter graph: {}",
             plan.filter_complex,
         );
-        // Seg 1 has no volume effect — raw labels.
+        // Seg 1 has no volume effect, but fades in after the hard cut.
         assert!(
-            plan.filter_complex.contains("[1:v:0][1:a:0]"),
+            plan.filter_complex.contains("[1:v:0][bfade1]"),
             "filter graph: {}",
             plan.filter_complex,
         );
@@ -5025,10 +5154,37 @@ mod tests {
             "filter graph: {}",
             plan.filter_complex,
         );
-        // Concat for seg 0 reads [sv0][sa0].
+        // Concat for seg 0 reads faded post-speed audio.
         assert!(
-            plan.filter_complex.contains("[sv0][sa0]"),
+            plan.filter_complex
+                .contains("[sa0]afade=t=out:st=1.97:d=0.03[bfade0]"),
             "filter graph: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_adds_micro_fades_at_hard_cut_boundaries() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
+        let plan = FilterPlanner::new(&[s0, s1], &[]).plan();
+
+        assert!(
+            plan.filter_complex
+                .contains("[0:a:0]afade=t=out:st=3.97:d=0.03[bfade0]"),
+            "outgoing segment should fade down before the hard cut: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("[1:a:0]afade=t=in:st=0:d=0.03[bfade1]"),
+            "incoming segment should fade up after the hard cut: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0][bfade0][1:v:0][bfade1]"),
+            "concat should consume smoothed audio labels: {}",
             plan.filter_complex,
         );
     }
@@ -5127,6 +5283,35 @@ mod tests {
             "color correction should feed speed, got: {}",
             plan.filter_complex,
         );
+    }
+
+    #[test]
+    fn filter_planner_tonemaps_hdr_transfer_before_color_correction() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.hdr_transfer = Some(HdrTransfer::Smpte2084);
+        s0.color_correction = Some(ColorCorrectionPlan {
+            exposure_ev: Some(0.25),
+            contrast: Some(1.1),
+            saturation: Some(1.05),
+            temperature: None,
+            tint: None,
+            shadows: None,
+            highlights: None,
+        });
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        let filter = plan.filter_complex;
+        let tonemap_pos = filter.find("zscale=t=linear").unwrap();
+        let color_pos = filter.find("eq=brightness=").unwrap();
+
+        assert!(
+            filter.contains("tonemap=tonemap=hable:desat=0"),
+            "filter graph: {filter}",
+        );
+        assert!(
+            filter.contains("zscale=transfer=bt709:matrix=bt709:primaries=bt709"),
+            "filter graph: {filter}",
+        );
+        assert!(tonemap_pos < color_pos, "filter graph: {filter}");
     }
 
     #[test]
@@ -5239,8 +5424,8 @@ mod tests {
         assert!(plan.filter_complex.contains("text='Two'"));
         // Bold position uses borderw fallback (no bold-fontfile bundle).
         assert!(plan.filter_complex.contains("borderw=2"));
-        // Bottom position uses h*0.85.
-        assert!(plan.filter_complex.contains("y=h*0.85"));
+        // Mobile-safe captions sit higher than generic bottom titles.
+        assert!(plan.filter_complex.contains("y=h*0.75"));
     }
 
     #[test]
@@ -5898,10 +6083,8 @@ mod tests {
 
     #[test]
     fn build_timeline_argv_unchanged_after_extraction() {
-        // Behaviour-preservation guard for 14.4. The argv produced
-        // for a multi-segment fixture must be exactly what the old
-        // monolithic builder produced. If 14.5 changes the
-        // no-transitions graph, this test is the canary.
+        // The argv produced for a multi-segment fixture should retain
+        // the paired concat path while smoothing hard-cut audio joins.
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0), seg("/tmp/b.mp4", 1.0, 3.0)];
         let argv = build_timeline_argv(&segs, Path::new("/tmp/out.mp4"));
         let cmd = argv.join(" ");
@@ -5910,7 +6093,9 @@ mod tests {
             cmd.starts_with("-y -loglevel info -ss 0 -t 2 -i /tmp/a.mp4 -ss 1 -t 3 -i /tmp/b.mp4")
         );
         assert!(cmd.contains(
-            "-filter_complex [0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[outv][outa] \
+            "-filter_complex [0:a:0]afade=t=out:st=1.97:d=0.03[bfade0];\
+             [1:a:0]afade=t=in:st=0:d=0.03[bfade1];\
+             [0:v:0][bfade0][1:v:0][bfade1]concat=n=2:v=1:a=1[outv][outa] \
              -map [outv] -map [outa]",
         ));
         assert!(cmd.ends_with("/tmp/out.mp4"));
