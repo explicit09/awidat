@@ -121,6 +121,21 @@ python3 <skill-root>/scripts/pack_transcript.py \
   --source-label <asset-name>
 ```
 
+When transcript sidecars contain named groups or notes, produce a selection
+pack before assembling the spine:
+
+```bash
+python3 <skill-root>/scripts/transcript_selection_groups.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --source-label <asset-name> \
+  --group <group-name-or-note-fragment> \
+  --format markdown
+```
+
+Use this for story selections, topic groups, note-based review, or query-based
+shortlist building. Treat a `blocked` status as evidence that the selected
+group/note does not exist or does not overlap transcript segments.
+
 Generate phrase groups with the helper:
 
 ```bash
