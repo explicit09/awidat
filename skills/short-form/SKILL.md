@@ -154,6 +154,22 @@ Use this for story selections, topic groups, note-based review, or query-based
 shortlist building. Treat a `blocked` status as evidence that the selected
 group/note does not exist or does not overlap transcript segments.
 
+Before finalizing a dense cut, produce an agent-readable timeline review
+composite that combines source/output filmstrips, waveform evidence, transcript
+word labels, silence bands, and cut markers in one PNG:
+
+```bash
+python3 <skill-root>/scripts/timeline_review_composite.py \
+  --spec renders/verify/<output-name>/timeline-review.json \
+  --out renders/verify/<output-name>/timeline-review.png
+```
+
+The spec JSON must include `duration_s`, `words`, `silences`, and
+`cut_points_s`; add `source_label` and `output_label` when comparing a source
+section with the rendered short. Treat the generated PNG and sidecar JSON as a
+review gate: inspect the artifact for awkward cut timing, long silence bands,
+and word-label/cut mismatches before claiming the edit is ready.
+
 Generate phrase groups with the helper:
 
 ```bash
