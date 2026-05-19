@@ -10,8 +10,9 @@ use awidat_proto::professional::{
     DeliveryPreflightInput, DeliveryProfile, ExportPreset, ExpressionLink, ExpressionSource,
     FindingSeverity, GradeStack, GradeStage, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
     MotionGraphicsTemplate, MotionPackage, ParameterAnimation, ReframeKeyframe, ReframePath,
-    ReframeSmoothing, ReviewStatus, SafeAreaRule, TemplateSlot, TemplateSlotKind, TrackKind,
-    TrackSample, TrackSidecar, TrackingPackage,
+    ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract, StreamExportMode,
+    StreamExportSpec, StreamKind, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample,
+    TrackSidecar, TrackingPackage,
 };
 use awidat_render::professional::{
     DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
@@ -21,7 +22,7 @@ use awidat_render::professional::{
     generate_tracking_package, inspect_composition_graph, lower_audio_finishing,
     lower_composition_graph, lower_grade_stack, lower_motion_template, lower_reframe_path,
     lower_track_bound_overlay, motion_package_summary, plan_delivery_queue_item,
-    summarize_color_finishing,
+    plan_stream_export_args, summarize_color_finishing,
 };
 use awidat_render::{RenderJobSpec, TitleAnimation, TitlePosition};
 use serde_json::json;
@@ -1085,6 +1086,60 @@ fn export_preset_lowers_codecs_container_and_audio_settings() {
     assert!(profiled.args.windows(2).any(|w| w == ["-ar", "48000"]));
     assert!(profiled.args.windows(2).any(|w| w == ["-ac", "2"]));
     assert!(profiled.args.windows(2).any(|w| w == ["-f", "mp4"]));
+}
+
+#[test]
+fn stream_export_contract_lowers_to_ffmpeg_stream_args() {
+    let contract = StreamExportContract {
+        id: "stream-master".into(),
+        container: "mp4".into(),
+        streams: vec![
+            StreamExportSpec {
+                id: "video".into(),
+                kind: StreamKind::Video,
+                source_index: 0,
+                mode: StreamExportMode::Copy,
+                disposition: vec!["default".into()],
+                ..StreamExportSpec::default()
+            },
+            StreamExportSpec {
+                id: "english-audio".into(),
+                kind: StreamKind::Audio,
+                source_index: 1,
+                mode: StreamExportMode::Transcode,
+                codec: Some("aac".into()),
+                language: Some("en".into()),
+                disposition: vec!["default".into()],
+                ..StreamExportSpec::default()
+            },
+        ],
+        ..StreamExportContract::default()
+    };
+
+    let args = match plan_stream_export_args(
+        PathBuf::from("raw/source.mov").as_path(),
+        &contract,
+        PathBuf::from("renders/stream-master.mp4").as_path(),
+    ) {
+        Ok(args) => args,
+        Err(err) => panic!("stream export lowers: {err}"),
+    };
+
+    assert_eq!(args[0], "-y");
+    assert!(args.windows(2).any(|w| w == ["-map", "0:0"]));
+    assert!(args.windows(2).any(|w| w == ["-map", "0:1"]));
+    assert!(args.windows(2).any(|w| w == ["-c:0", "copy"]));
+    assert!(args.windows(2).any(|w| w == ["-c:1", "aac"]));
+    assert!(
+        args.windows(2)
+            .any(|w| w == ["-metadata:s:1", "language=en"])
+    );
+    assert!(args.windows(2).any(|w| w == ["-disposition:0", "default"]));
+    assert!(args.windows(2).any(|w| w == ["-f", "mp4"]));
+    assert_eq!(
+        args.last().map(String::as_str),
+        Some("renders/stream-master.mp4")
+    );
 }
 
 fn node(

@@ -16,8 +16,9 @@ use awidat_proto::professional::{
     PreflightCheckKind, ReadinessState, ReframeKeyframe, ReframePath, ReframeSmoothing,
     SegmentationIntent, SegmentationPrompt, SegmentationPromptKind, SegmentationPromptLabel,
     SegmentationPromptPackage, SegmentationRuntimeStatus, SegmentationSessionOperation,
-    SegmentationSessionOperationKind, SelectDecision, SourceRange, SourceSelect, Stringout,
-    TemplateSlot, TrackingPackage, WorkflowLens,
+    SegmentationSessionOperationKind, SelectDecision, SourceRange, SourceSelect,
+    StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, Stringout, TemplateSlot,
+    TrackingPackage, WorkflowLens,
 };
 
 #[test]
@@ -1504,6 +1505,63 @@ fn export_presets_validate_social_audio_and_image_sequence_targets() {
     assert!(audio.video.is_none());
     assert_eq!(frames.mode, ExportMode::ImageSequence);
     assert!(frames.audio.is_none());
+}
+
+#[test]
+fn stream_export_contract_validates_copy_transcode_and_dispositions() {
+    let contract = StreamExportContract {
+        id: "stream-master".into(),
+        container: "mp4".into(),
+        streams: vec![
+            StreamExportSpec {
+                id: "v-main".into(),
+                kind: StreamKind::Video,
+                source_index: 0,
+                mode: StreamExportMode::Copy,
+                disposition: vec!["default".into()],
+                ..StreamExportSpec::default()
+            },
+            StreamExportSpec {
+                id: "a-main".into(),
+                kind: StreamKind::Audio,
+                source_index: 1,
+                mode: StreamExportMode::Transcode,
+                codec: Some("aac".into()),
+                language: Some("en".into()),
+                disposition: vec!["default".into()],
+                ..StreamExportSpec::default()
+            },
+        ],
+        ..StreamExportContract::default()
+    };
+
+    assert!(contract.validate().is_empty());
+
+    let invalid = StreamExportContract {
+        id: "bad-stream-master".into(),
+        container: "mp4".into(),
+        streams: vec![StreamExportSpec {
+            id: "a-bad".into(),
+            kind: StreamKind::Audio,
+            source_index: 0,
+            mode: StreamExportMode::Transcode,
+            disposition: vec!["loud".into()],
+            ..StreamExportSpec::default()
+        }],
+        ..StreamExportContract::default()
+    };
+
+    let diagnostics = invalid.validate();
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("transcode stream a-bad needs codec")
+    }));
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic
+            .message
+            .contains("stream a-bad has unsupported disposition loud")
+    }));
 }
 
 #[test]

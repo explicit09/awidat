@@ -3195,6 +3195,188 @@ impl ExportMode {
     }
 }
 
+/// Source stream kind in a stream-level export contract.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamKind {
+    /// Video stream.
+    #[default]
+    Video,
+    /// Audio stream.
+    Audio,
+    /// Subtitle stream.
+    Subtitle,
+    /// Data or attachment stream.
+    Data,
+}
+
+/// Handling mode for one output stream.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamExportMode {
+    /// Preserve source packets when the container supports the stream.
+    #[default]
+    Copy,
+    /// Re-encode the stream with the requested codec.
+    Transcode,
+}
+
+/// One mapped stream in a stream-level export contract.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamExportSpec {
+    /// Stable stream id for diagnostics and planner output.
+    pub id: String,
+    /// Media kind of the source stream.
+    #[serde(default)]
+    pub kind: StreamKind,
+    /// Zero-based source stream index as reported by the source container.
+    pub source_index: u32,
+    /// Copy or transcode handling.
+    #[serde(default)]
+    pub mode: StreamExportMode,
+    /// Required when transcoding.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub codec: Option<String>,
+    /// Optional BCP-47/ISO language tag for the output stream.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub language: Option<String>,
+    /// FFmpeg-compatible disposition flags.
+    #[serde(default)]
+    pub disposition: Vec<String>,
+    /// Additional stream metadata.
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Durable stream-level export intent for stream copy/transcode planning.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamExportContract {
+    /// Stable contract id.
+    pub id: String,
+    /// Output container or muxer name.
+    pub container: String,
+    /// Ordered output stream mappings.
+    #[serde(default)]
+    pub streams: Vec<StreamExportSpec>,
+    /// Global output metadata.
+    #[serde(default)]
+    pub metadata: BTreeMap<String, String>,
+}
+
+impl StreamExportContract {
+    /// Validate stream mapping, codec, disposition, and metadata shape.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                "stream export contract has an empty id",
+            ));
+        }
+        if self.container.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("stream export contract {} has an empty container", self.id),
+            ));
+        }
+        if self.streams.is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("stream export contract {} has no streams", self.id),
+            ));
+        }
+
+        let mut stream_ids = HashSet::new();
+        for stream in &self.streams {
+            let stream_label = stream_label(stream);
+            if stream.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    "stream export contract has a stream with an empty id",
+                ));
+            } else if !stream_ids.insert(stream.id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!(
+                        "stream export contract {} duplicates stream id {}",
+                        self.id, stream.id
+                    ),
+                ));
+            }
+            if matches!(stream.mode, StreamExportMode::Transcode)
+                && stream
+                    .codec
+                    .as_ref()
+                    .is_none_or(|codec| codec.trim().is_empty())
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!("transcode stream {stream_label} needs codec"),
+                ));
+            }
+            if let Some(language) = &stream.language
+                && language.trim().is_empty()
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!("stream {stream_label} has an empty language tag"),
+                ));
+            }
+            for disposition in &stream.disposition {
+                if !is_supported_stream_disposition(disposition) {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::DeliveryProfilesAndPreflight,
+                        format!("stream {stream_label} has unsupported disposition {disposition}"),
+                    ));
+                }
+            }
+            for key in stream.metadata.keys() {
+                if key.trim().is_empty() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::DeliveryProfilesAndPreflight,
+                        format!("stream {stream_label} has an empty metadata key"),
+                    ));
+                }
+            }
+        }
+        for key in self.metadata.keys() {
+            if key.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!(
+                        "stream export contract {} has an empty metadata key",
+                        self.id
+                    ),
+                ));
+            }
+        }
+        diagnostics
+    }
+}
+
+fn stream_label(stream: &StreamExportSpec) -> &str {
+    if stream.id.trim().is_empty() {
+        "<unnamed>"
+    } else {
+        stream.id.as_str()
+    }
+}
+
+fn is_supported_stream_disposition(disposition: &str) -> bool {
+    matches!(
+        disposition,
+        "default"
+            | "dub"
+            | "original"
+            | "comment"
+            | "lyrics"
+            | "karaoke"
+            | "forced"
+            | "hearing_impaired"
+            | "visual_impaired"
+    )
+}
+
 /// Container and file-output settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportOutputSettings {

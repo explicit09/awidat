@@ -6,7 +6,7 @@
 //! APIs later without changing callers.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::professional::{
@@ -16,8 +16,9 @@ use awidat_proto::professional::{
     ExportPreset, ExpressionLink, ExpressionSource, FindingSeverity, GradeStack, GradeStage,
     Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar, MotionGraphicsTemplate,
     MotionPackage, PackageManifest, ParameterAnimation, PreflightReport, ProfessionalDiagnostic,
-    ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule, TemplateSlot, TemplateSlotKind,
-    TrackKind, TrackSample, TrackSidecar, TrackingPackage,
+    ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract,
+    StreamExportMode, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar,
+    TrackingPackage,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -65,6 +66,14 @@ pub enum ProfessionalEngineError {
     InvalidExportPreset {
         /// Preset id.
         preset_id: String,
+        /// Validation message.
+        message: String,
+    },
+    /// A stream export contract failed validation before lowering.
+    #[error("stream export contract {contract_id} is invalid: {message}")]
+    InvalidStreamExportContract {
+        /// Contract id.
+        contract_id: String,
         /// Validation message.
         message: String,
     },
@@ -1684,6 +1693,72 @@ pub fn apply_export_preset_to_spec(
     args.extend(["-f".into(), preset.output.container.clone()]);
     spec.args.splice(insertion..insertion, args);
     Ok(spec)
+}
+
+/// Lower a stream-level export contract into deterministic FFmpeg arguments.
+pub fn plan_stream_export_args(
+    input_path: &Path,
+    contract: &StreamExportContract,
+    output_path: &Path,
+) -> Result<Vec<String>, ProfessionalEngineError> {
+    if let Some(diagnostic) = contract
+        .validate()
+        .into_iter()
+        .find(|diagnostic| diagnostic.severity == FindingSeverity::Error)
+    {
+        return Err(ProfessionalEngineError::InvalidStreamExportContract {
+            contract_id: contract.id.clone(),
+            message: diagnostic.message,
+        });
+    }
+
+    let mut args = vec![
+        "-y".into(),
+        "-i".into(),
+        input_path.to_string_lossy().into_owned(),
+    ];
+    for stream in &contract.streams {
+        args.extend(["-map".into(), format!("0:{}", stream.source_index)]);
+    }
+    for (output_index, stream) in contract.streams.iter().enumerate() {
+        match stream.mode {
+            StreamExportMode::Copy => {
+                args.extend([format!("-c:{output_index}"), "copy".into()]);
+            }
+            StreamExportMode::Transcode => {
+                if let Some(codec) = &stream.codec {
+                    args.extend([format!("-c:{output_index}"), codec.clone()]);
+                }
+            }
+        }
+        if let Some(language) = &stream.language {
+            args.extend([
+                format!("-metadata:s:{output_index}"),
+                format!("language={language}"),
+            ]);
+        }
+        for (key, value) in &stream.metadata {
+            args.extend([
+                format!("-metadata:s:{output_index}"),
+                format!("{key}={value}"),
+            ]);
+        }
+        if !stream.disposition.is_empty() {
+            args.extend([
+                format!("-disposition:{output_index}"),
+                stream.disposition.join("+"),
+            ]);
+        }
+    }
+    for (key, value) in &contract.metadata {
+        args.extend(["-metadata".into(), format!("{key}={value}")]);
+    }
+    args.extend([
+        "-f".into(),
+        contract.container.clone(),
+        output_path.to_string_lossy().into_owned(),
+    ]);
+    Ok(args)
 }
 
 /// Build a queued delivery package with actionable fix references.
