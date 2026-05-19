@@ -128,6 +128,17 @@ python3 <skill-root>/scripts/pack_transcript.py \
   --source-label <asset-name>
 ```
 
+For agent handoff, emit the token-bounded JSON packet so the source labels,
+freshness state, and packed markdown travel together:
+
+```bash
+python3 <skill-root>/scripts/pack_transcript.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --source-label <asset-name> \
+  --output-format json \
+  --max-chars 12000
+```
+
 When transcript sidecars contain named groups or notes, produce a selection
 pack before assembling the spine:
 
