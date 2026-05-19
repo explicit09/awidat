@@ -49,12 +49,21 @@ struct StartRenderArgs {
     /// Optional [start_s, end_s) range. Required for `segment`.
     #[serde(default)]
     range: Option<TimeRange>,
+    /// Optional timeline guide marker section. Only used with `scope=timeline`.
+    #[serde(default)]
+    guide: Option<GuideSection>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TimeRange {
     start_s: f64,
     end_s: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GuideSection {
+    track_id: String,
+    marker_id: String,
 }
 
 #[async_trait]
@@ -87,6 +96,15 @@ impl ToolHandler for StartRenderTool {
                         },
                         "required": ["start_s", "end_s"],
                         "description": "[start_s, end_s) time range. Required for scope=segment; ignored otherwise."
+                    },
+                    "guide": {
+                        "type": "object",
+                        "properties": {
+                            "track_id": { "type": "string" },
+                            "marker_id": { "type": "string" }
+                        },
+                        "required": ["track_id", "marker_id"],
+                        "description": "Optional guide-track marker range for scope=timeline section exports. Ignored for preview/segment/full."
                     }
                 },
                 "required": ["scope"]
@@ -115,9 +133,14 @@ impl ToolHandler for StartRenderTool {
             .get("range")
             .map(serde_json::Value::to_string)
             .unwrap_or_else(|| "<full>".to_string());
+        let guide = invocation
+            .args
+            .get("guide")
+            .map(serde_json::Value::to_string)
+            .unwrap_or_else(|| "<full-timeline>".to_string());
         vec![ApprovalKey::new(
             "start_render",
-            format!("{scope}:{asset}:{range}:writes=renders"),
+            format!("{scope}:{asset}:{range}:{guide}:writes=renders"),
         )]
     }
 
@@ -145,8 +168,15 @@ impl ToolHandler for StartRenderTool {
         {
             crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
                 .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
-            let spec =
-                awidat_render::build_timeline_render_spec(&ctx.project_root).map_err(|e| {
+            let spec = match args.guide.as_ref() {
+                Some(guide) => awidat_render::build_timeline_section_render_spec(
+                    &ctx.project_root,
+                    &guide.track_id,
+                    &guide.marker_id,
+                ),
+                None => awidat_render::build_timeline_render_spec(&ctx.project_root),
+            }
+            .map_err(|e| {
                     use awidat_render::RenderTimelineError;
                     let msg = match e {
                         RenderTimelineError::EmptyTimeline => {
@@ -208,6 +238,18 @@ impl ToolHandler for StartRenderTool {
                         RenderTimelineError::BroadcastOverlayRender(message) => {
                             format!("start_render: broadcast overlay render failed: {message}")
                         }
+                        RenderTimelineError::GuideSectionNotFound {
+                            guide_track_id,
+                            marker_id,
+                        } => format!(
+                            "start_render: guide section {guide_track_id}/{marker_id} was not found"
+                        ),
+                        RenderTimelineError::GuideSectionMissingDuration {
+                            guide_track_id,
+                            marker_id,
+                        } => format!(
+                            "start_render: guide section {guide_track_id}/{marker_id} needs a positive duration"
+                        ),
                     };
                     FunctionCallError::RespondToModel(msg)
                 })?;
@@ -277,11 +319,21 @@ impl ToolHandler for StartRenderTool {
         let body = serde_json::json!({
             "job_id": job_id.to_string(),
             "scope": args.scope,
-            "render_kind": if args.scope == "timeline" { "final_timeline_export" } else { "diagnostic_asset_render" },
+            "render_kind": if args.scope == "timeline" && args.guide.is_some() {
+                "timeline_section_export"
+            } else if args.scope == "timeline" {
+                "final_timeline_export"
+            } else {
+                "diagnostic_asset_render"
+            },
             "asset": asset_label,
             "output_path": output_path.display().to_string(),
             "render_limitations": limitations,
             "started_at": chrono::Utc::now().to_rfc3339(),
+            "guide": args.guide.as_ref().map(|guide| serde_json::json!({
+                "track_id": guide.track_id,
+                "marker_id": guide.marker_id,
+            })),
             "next_step": if args.scope == "timeline" {
                 format!("Call poll_render(job_id=\"{job_id}\") to track the final timeline export.")
             } else {
@@ -484,6 +536,7 @@ mod tests {
             scope: "preview".into(),
             asset: Some("raw/x.mp4".into()),
             range: None,
+            guide: None,
         };
         let argv = build_ffmpeg_argv(&args, "raw/x.mp4", asset, out).unwrap();
         assert!(argv.contains(&"libx264".to_string()));
@@ -501,6 +554,7 @@ mod tests {
                 start_s: 1.0,
                 end_s: 3.5,
             }),
+            guide: None,
         };
         let argv = build_ffmpeg_argv(&args, "raw/x.mp4", asset, out).unwrap();
         assert!(argv.iter().any(|a| a == "copy"));
@@ -513,6 +567,25 @@ mod tests {
         assert!(DESCRIPTION.contains("render the *edited timeline*"));
         assert!(DESCRIPTION.contains("not substitutes for graph edits"));
         assert!(DESCRIPTION.contains("final editorial export"));
+    }
+
+    #[test]
+    fn schema_exposes_timeline_guide_section_selection() {
+        let schema = StartRenderTool.schema().input_schema;
+        assert_eq!(
+            schema["properties"]["guide"]["properties"]["track_id"]["type"],
+            "string"
+        );
+        assert_eq!(
+            schema["properties"]["guide"]["properties"]["marker_id"]["type"],
+            "string"
+        );
+        assert!(
+            schema["properties"]["guide"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("scope=timeline")
+        );
     }
 
     // Pure-function tests for the timeline-render planner moved to

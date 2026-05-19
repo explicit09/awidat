@@ -118,6 +118,29 @@ pub enum RenderTimelineError {
     /// final ffmpeg render could start.
     #[error("broadcast overlay render failed: {0}")]
     BroadcastOverlayRender(String),
+    /// Requested guide track marker/range was not found.
+    #[error("guide section {guide_track_id}/{marker_id} was not found")]
+    GuideSectionNotFound {
+        /// Guide track id.
+        guide_track_id: String,
+        /// Marker id inside the guide track.
+        marker_id: String,
+    },
+    /// Requested guide marker exists but cannot define a section.
+    #[error("guide section {guide_track_id}/{marker_id} needs a positive duration")]
+    GuideSectionMissingDuration {
+        /// Guide track id.
+        guide_track_id: String,
+        /// Marker id inside the guide track.
+        marker_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct TimelineSectionRange {
+    marker_id: String,
+    start_s: f64,
+    duration_s: f64,
 }
 
 /// Broadcast overlay config plus project root for resolving optional
@@ -4329,6 +4352,23 @@ fn plan_one_audio_track(
 pub fn build_timeline_render_spec(
     project_root: &Path,
 ) -> Result<RenderJobSpec, RenderTimelineError> {
+    build_timeline_render_spec_inner(project_root, None)
+}
+
+/// Build a timeline render spec clipped to one guide-track marker range.
+pub fn build_timeline_section_render_spec(
+    project_root: &Path,
+    guide_track_id: &str,
+    marker_id: &str,
+) -> Result<RenderJobSpec, RenderTimelineError> {
+    let section = resolve_timeline_section(project_root, guide_track_id, marker_id)?;
+    build_timeline_render_spec_inner(project_root, Some(section))
+}
+
+fn build_timeline_render_spec_inner(
+    project_root: &Path,
+    section: Option<TimelineSectionRange>,
+) -> Result<RenderJobSpec, RenderTimelineError> {
     let (
         segs,
         transitions,
@@ -4358,7 +4398,13 @@ pub fn build_timeline_render_spec(
     fs::create_dir_all(&renders_dir)
         .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
     let timestamp = Utc::now().format("%H%M%S");
-    let output_path = renders_dir.join(format!("timeline-{timestamp}.mp4"));
+    let output_path = match section.as_ref() {
+        Some(section) => renders_dir.join(format!(
+            "timeline-section-{}-{timestamp}.mp4",
+            safe_filename_slug(&section.marker_id)
+        )),
+        None => renders_dir.join(format!("timeline-{timestamp}.mp4")),
+    };
     let input_paths = render_input_paths(&segs, &video_overlays, &audio_tracks);
     validate_render_output_path(
         project_root,
@@ -4383,7 +4429,7 @@ pub fn build_timeline_render_spec(
     } else {
         None
     };
-    let argv = if audio_tracks.is_empty() {
+    let mut argv = if audio_tracks.is_empty() {
         build_timeline_argv_full(
             &segs,
             &transitions,
@@ -4407,6 +4453,16 @@ pub fn build_timeline_render_spec(
             &output_path,
         )
     };
+    if let Some(section) = section {
+        trim_render_argv_to_section(&mut argv, section.start_s, section.duration_s);
+        return Ok(RenderJobSpec {
+            args: argv,
+            total_duration_s: Some(section.duration_s),
+            cwd: Some(project_root.to_path_buf()),
+            output_path,
+            limitations: render_limitations,
+        });
+    }
     Ok(RenderJobSpec {
         args: argv,
         total_duration_s: Some(total_duration_s),
@@ -4414,6 +4470,103 @@ pub fn build_timeline_render_spec(
         output_path,
         limitations: render_limitations,
     })
+}
+
+fn resolve_timeline_section(
+    project_root: &Path,
+    guide_track_id: &str,
+    marker_id: &str,
+) -> Result<TimelineSectionRange, RenderTimelineError> {
+    let otio_path = project_root.join(files::OTIO);
+    if !otio_path.exists() {
+        return Err(RenderTimelineError::NoOtio(otio_path));
+    }
+    let mut warnings = Vec::new();
+    let timeline = read_otio_timeline(&otio_path, &mut warnings).map_err(|e| {
+        RenderTimelineError::OtioParse {
+            message: e.to_string(),
+        }
+    })?;
+    let Some(metadata) = timeline.metadata.awidat.as_ref() else {
+        return Err(RenderTimelineError::GuideSectionNotFound {
+            guide_track_id: guide_track_id.into(),
+            marker_id: marker_id.into(),
+        });
+    };
+    let Some(guide_track) = metadata
+        .guide_tracks
+        .iter()
+        .find(|track| track.id == guide_track_id)
+    else {
+        return Err(RenderTimelineError::GuideSectionNotFound {
+            guide_track_id: guide_track_id.into(),
+            marker_id: marker_id.into(),
+        });
+    };
+    let Some(marker) = guide_track
+        .markers
+        .iter()
+        .find(|marker| marker.id == marker_id)
+    else {
+        return Err(RenderTimelineError::GuideSectionNotFound {
+            guide_track_id: guide_track_id.into(),
+            marker_id: marker_id.into(),
+        });
+    };
+    let Some(duration_s) = marker.duration_s else {
+        return Err(RenderTimelineError::GuideSectionMissingDuration {
+            guide_track_id: guide_track_id.into(),
+            marker_id: marker_id.into(),
+        });
+    };
+    if !marker.time_s.is_finite()
+        || marker.time_s < 0.0
+        || !duration_s.is_finite()
+        || duration_s <= 0.0
+    {
+        return Err(RenderTimelineError::GuideSectionMissingDuration {
+            guide_track_id: guide_track_id.into(),
+            marker_id: marker_id.into(),
+        });
+    }
+
+    Ok(TimelineSectionRange {
+        marker_id: marker_id.into(),
+        start_s: marker.time_s,
+        duration_s,
+    })
+}
+
+fn trim_render_argv_to_section(argv: &mut Vec<String>, start_s: f64, duration_s: f64) {
+    let output_index = argv.len().saturating_sub(1);
+    argv.splice(
+        output_index..output_index,
+        [
+            "-ss".to_string(),
+            format!("{start_s}"),
+            "-t".to_string(),
+            format!("{duration_s}"),
+        ],
+    );
+}
+
+fn safe_filename_slug(value: &str) -> String {
+    let slug: String = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "section".into()
+    } else {
+        slug.into()
+    }
 }
 
 fn render_input_paths(
@@ -4526,6 +4679,29 @@ mod tests {
         otio_path
     }
 
+    fn write_fixture_project_with_guide_section(dir: &Path) -> PathBuf {
+        let otio_path = write_fixture_project(dir);
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        metadata
+            .guide_tracks
+            .push(awidat_proto::awidat_meta::GuideTrack {
+                id: "deliverables".into(),
+                label: "Deliverables".into(),
+                markers: vec![awidat_proto::awidat_meta::TimelineMarker {
+                    id: "cold-open".into(),
+                    label: "Cold open".into(),
+                    time_s: 0.5,
+                    duration_s: Some(1.25),
+                    category: Some(awidat_proto::awidat_meta::TimelineMarkerCategory::ExportRange),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
     fn write_fixture_project_with_overlay_animation(
         dir: &Path,
         animation: ParameterAnimation,
@@ -4626,6 +4802,60 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("timeline-")
         );
+    }
+
+    #[test]
+    fn guide_section_render_spec_trims_timeline_output_to_marker_range() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_guide_section(dir.path());
+
+        let spec =
+            build_timeline_section_render_spec(dir.path(), "deliverables", "cold-open").unwrap();
+        let cmd = spec.args.join(" ");
+
+        assert_eq!(spec.total_duration_s, Some(1.25));
+        assert!(spec.output_path.starts_with(dir.path().join("renders")));
+        assert!(
+            spec.output_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("timeline-section-cold-open-")
+        );
+        assert!(cmd.contains("-ss 0.5"));
+        assert!(cmd.contains("-t 1.25"));
+        assert!(cmd.contains("concat=n=1:v=1:a=1"));
+    }
+
+    #[test]
+    fn guide_section_render_rejects_missing_or_point_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio_path = write_fixture_project_with_guide_section(dir.path());
+
+        let missing =
+            build_timeline_section_render_spec(dir.path(), "deliverables", "missing").unwrap_err();
+        assert!(matches!(
+            missing,
+            RenderTimelineError::GuideSectionNotFound {
+                guide_track_id,
+                marker_id
+            } if guide_track_id == "deliverables" && marker_id == "missing"
+        ));
+
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        tl.metadata.awidat.as_mut().unwrap().guide_tracks[0].markers[0].duration_s = None;
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+        let point_marker =
+            build_timeline_section_render_spec(dir.path(), "deliverables", "cold-open")
+                .unwrap_err();
+        assert!(matches!(
+            point_marker,
+            RenderTimelineError::GuideSectionMissingDuration {
+                guide_track_id,
+                marker_id
+            } if guide_track_id == "deliverables" && marker_id == "cold-open"
+        ));
     }
 
     #[test]

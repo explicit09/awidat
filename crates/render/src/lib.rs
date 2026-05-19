@@ -61,8 +61,9 @@ pub use timeline::{
     RenderTimelineError, TimelineSegment, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
     TransitionPlan, VideoOverlayMode, VideoOverlayPlan, build_timeline_argv,
     build_timeline_argv_full, build_timeline_argv_with_audio_tracks,
-    build_timeline_argv_with_transitions, build_timeline_render_spec, collect_timeline_full_plan,
-    collect_timeline_plan, collect_timeline_segments,
+    build_timeline_argv_with_transitions, build_timeline_render_spec,
+    build_timeline_section_render_spec, collect_timeline_full_plan, collect_timeline_plan,
+    collect_timeline_segments,
 };
 
 #[cfg(test)]
