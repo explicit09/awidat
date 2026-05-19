@@ -4990,6 +4990,12 @@ mod tests {
         }
     }
 
+    fn filter_complex_from_argv(argv: &[String]) -> String {
+        argv.windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap()
+    }
+
     #[test]
     fn explicit_audio_tracks_use_video_only_concat_and_amix() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
@@ -5799,6 +5805,57 @@ mod tests {
     }
 
     #[test]
+    fn media_overlay_is_composited_before_caption_drawtext() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/overlay.mp4", 0.0, 3.0),
+            track_start_s: 1.0,
+            mode: VideoOverlayMode::FullFrame,
+            animations: Vec::new(),
+        }];
+        let captions = vec![TitlePlan {
+            text: "Caption stays visible".into(),
+            start_s: 1.0,
+            end_s: 4.0,
+            position: TitlePosition::Bottom,
+            font_size: 48,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Bold,
+            animation: TitleAnimation::None,
+            role: "caption".into(),
+            safe_area: Some("mobile".into()),
+            animations: Vec::new(),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &overlays,
+            &captions,
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+        let overlay_pos = filter
+            .find("overlay=x=0:y=0:enable='between(t\\,1\\,4)'[media_overlay_v0]")
+            .unwrap();
+        let caption_pos = filter
+            .find("drawtext=text='Caption stays visible'")
+            .unwrap();
+
+        assert!(
+            overlay_pos < caption_pos,
+            "caption drawtext must be appended after media overlays: {filter}"
+        );
+        assert!(
+            filter.contains("[media_overlay_v0]drawtext="),
+            "caption drawtext should consume the composited overlay output: {filter}"
+        );
+    }
+
+    #[test]
     fn long_form_broadcast_overlay_suppresses_generic_titles() {
         let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
         let title = TitlePlan {
@@ -6469,5 +6526,34 @@ mod tests {
              -map [outv] -map [outa]",
         ));
         assert!(cmd.ends_with("/tmp/out.mp4"));
+    }
+
+    #[test]
+    fn default_hard_cut_audio_fades_cover_every_segment_join() {
+        let segs = vec![
+            seg("/tmp/a.mp4", 0.0, 2.0),
+            seg("/tmp/b.mp4", 0.0, 2.0),
+            seg("/tmp/c.mp4", 0.0, 2.0),
+        ];
+
+        let argv = build_timeline_argv(&segs, Path::new("/tmp/out.mp4"));
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("[0:a:0]afade=t=out:st=1.97:d=0.03[bfade0]"),
+            "first segment should fade out at the hard cut: {filter}"
+        );
+        assert!(
+            filter.contains("[1:a:0]afade=t=in:st=0:d=0.03,afade=t=out:st=1.97:d=0.03[bfade1]"),
+            "middle segment should fade both in and out: {filter}"
+        );
+        assert!(
+            filter.contains("[2:a:0]afade=t=in:st=0:d=0.03[bfade2]"),
+            "last segment should fade in at the hard cut: {filter}"
+        );
+        assert!(
+            filter.contains("[0:v:0][bfade0][1:v:0][bfade1][2:v:0][bfade2]concat=n=3:v=1:a=1"),
+            "concat should consume the anti-pop fade labels: {filter}"
+        );
     }
 }
