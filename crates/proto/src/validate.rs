@@ -15,7 +15,7 @@
 //! [`Project::read`]: crate::project::Project::read
 
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use crate::ProtoError;
 use crate::error::JsonPath;
@@ -111,6 +111,20 @@ pub enum ValidationWarning {
         /// Asset id.
         asset: String,
     },
+    /// Timeline media reference is not a safe project-relative path.
+    UnsafeTimelineMediaReference {
+        /// Clip path inside the timeline document.
+        path: String,
+        /// Referenced media path.
+        target_url: String,
+    },
+    /// Timeline media reference points to a project-relative file that is not present.
+    TimelineMediaMissing {
+        /// Clip path inside the timeline document.
+        path: String,
+        /// Referenced media path.
+        target_url: String,
+    },
 }
 
 /// Run all cross-cutting validation against a loaded [`Project`].
@@ -130,6 +144,12 @@ pub fn validate_project(project: &Project) -> Result<ValidationReport, ProtoErro
         &mut s.marker_count,
         &mut s.effect_count,
     );
+    validate_timeline_media_references(
+        &project.timeline.tracks,
+        &project.root,
+        "tracks",
+        &mut report.index_warnings,
+    );
 
     // Index validation.
     let index_dir = project.root.join(files::INDEX_DIR);
@@ -143,6 +163,85 @@ pub fn validate_project(project: &Project) -> Result<ValidationReport, ProtoErro
     }
 
     Ok(report)
+}
+
+fn validate_timeline_media_references(
+    stack: &crate::otio::Stack,
+    project_root: &Path,
+    path: &str,
+    warnings: &mut Vec<ValidationWarning>,
+) {
+    for (index, child) in stack.children.iter().enumerate() {
+        let child_path = format!("{path}.children[{index}]");
+        match child {
+            crate::otio::StackChild::Track(track) => {
+                validate_track_media_references(track, project_root, &child_path, warnings);
+            }
+            crate::otio::StackChild::Stack(stack) => {
+                validate_timeline_media_references(stack, project_root, &child_path, warnings);
+            }
+            crate::otio::StackChild::Clip(clip) => {
+                validate_clip_media_reference(clip, project_root, &child_path, warnings);
+            }
+            crate::otio::StackChild::Gap(_) => {}
+        }
+    }
+}
+
+fn validate_track_media_references(
+    track: &crate::otio::Track,
+    project_root: &Path,
+    path: &str,
+    warnings: &mut Vec<ValidationWarning>,
+) {
+    for (index, child) in track.children.iter().enumerate() {
+        let child_path = format!("{path}.children[{index}]");
+        match child {
+            crate::otio::TrackChild::Clip(clip) => {
+                validate_clip_media_reference(clip, project_root, &child_path, warnings);
+            }
+            crate::otio::TrackChild::Stack(stack) => {
+                validate_timeline_media_references(stack, project_root, &child_path, warnings);
+            }
+            crate::otio::TrackChild::Gap(_) | crate::otio::TrackChild::Transition(_) => {}
+        }
+    }
+}
+
+fn validate_clip_media_reference(
+    clip: &crate::otio::Clip,
+    project_root: &Path,
+    path: &str,
+    warnings: &mut Vec<ValidationWarning>,
+) {
+    let crate::otio::MediaReference::External(reference) = &clip.media_reference else {
+        return;
+    };
+    let target_url = reference.target_url.trim();
+    if !is_safe_project_relative_media_path(target_url) {
+        warnings.push(ValidationWarning::UnsafeTimelineMediaReference {
+            path: path.to_string(),
+            target_url: reference.target_url.clone(),
+        });
+        return;
+    }
+    if !project_root.join(target_url).is_file() {
+        warnings.push(ValidationWarning::TimelineMediaMissing {
+            path: path.to_string(),
+            target_url: reference.target_url.clone(),
+        });
+    }
+}
+
+fn is_safe_project_relative_media_path(target_url: &str) -> bool {
+    if target_url.is_empty() || target_url.contains("://") {
+        return false;
+    }
+    let path = Path::new(target_url);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| !matches!(component, Component::ParentDir))
 }
 
 fn walk_counts(
@@ -665,6 +764,78 @@ mod tests {
             .index_warnings
             .iter()
             .any(|w| matches!(w, ValidationWarning::SidecarPathMismatch { asset, .. } if asset == "raw/foo.mp4")));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn warns_when_timeline_external_media_is_missing() {
+        use crate::otio::{
+            Clip, ExternalReference, MediaReference, StackChild, Track, TrackChild, TrackKind,
+        };
+
+        let root = tmp_dir();
+        let mut project = Project::init(&root).unwrap();
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut clip = Clip::empty("missing media");
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/missing.mp4"));
+        track.children.push(TrackChild::Clip(clip));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
+        project.write(&root).unwrap();
+
+        let project = Project::read(&root).unwrap();
+        let report = validate_project(&project).unwrap();
+
+        assert!(report.index_warnings.iter().any(|warning| matches!(
+            warning,
+            ValidationWarning::TimelineMediaMissing { target_url, .. }
+                if target_url == "raw/missing.mp4"
+        )));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn warns_when_timeline_external_media_path_is_unsafe() {
+        use crate::otio::{
+            Clip, ExternalReference, MediaReference, StackChild, Track, TrackChild, TrackKind,
+        };
+
+        let root = tmp_dir();
+        let mut project = Project::init(&root).unwrap();
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut absolute = Clip::empty("absolute media");
+        absolute.media_reference =
+            MediaReference::External(ExternalReference::new("/tmp/outside.mp4"));
+        let mut traversal = Clip::empty("traversal media");
+        traversal.media_reference =
+            MediaReference::External(ExternalReference::new("../outside.mp4"));
+        track.children.push(TrackChild::Clip(absolute));
+        track.children.push(TrackChild::Clip(traversal));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(track));
+        project.write(&root).unwrap();
+
+        let project = Project::read(&root).unwrap();
+        let report = validate_project(&project).unwrap();
+        let unsafe_targets: Vec<_> = report
+            .index_warnings
+            .iter()
+            .filter_map(|warning| match warning {
+                ValidationWarning::UnsafeTimelineMediaReference { target_url, .. } => {
+                    Some(target_url.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(unsafe_targets.contains(&"/tmp/outside.mp4"));
+        assert!(unsafe_targets.contains(&"../outside.mp4"));
         fs::remove_dir_all(&root).ok();
     }
 }
