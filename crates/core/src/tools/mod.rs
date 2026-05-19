@@ -13,6 +13,7 @@ pub mod broll_candidates;
 pub mod clip_search;
 pub mod delegate;
 pub mod delegate_all;
+pub mod diagnose_project_media;
 pub mod download_yt_clip;
 pub mod export_package;
 pub mod find_beat;

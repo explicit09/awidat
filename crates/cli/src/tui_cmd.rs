@@ -17,7 +17,8 @@ use awidat_core::tools::{
     analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
     assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
     bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    delegate::DelegateTool, delegate_all::DelegateAllTool, download_yt_clip::DownloadYtClipTool,
+    delegate::DelegateTool, delegate_all::DelegateAllTool,
+    diagnose_project_media::DiagnoseProjectMediaTool, download_yt_clip::DownloadYtClipTool,
     export_package::ExportPackageTool, find_beat::FindBeatTool,
     find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
     find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
@@ -171,6 +172,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(ApplyEdlTool));
     registry.register(Arc::new(AnalyzeSyncTool));
     registry.register(Arc::new(BashTool));
+    registry.register(Arc::new(DiagnoseProjectMediaTool));
     registry.register(Arc::new(FindMomentTool));
     registry.register(Arc::new(FindBlackFramesTool));
     registry.register(Arc::new(FindDeadAirTool));
