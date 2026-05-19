@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::professional::{DeliveryPreflightInput, DeliveryProfile, PreflightReport};
 use awidat_proto::project::Project;
-use awidat_render::RenderJobSpec;
+use awidat_render::{OutputPathPolicy, RenderJobSpec, validate_render_output_path};
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
@@ -115,6 +115,19 @@ impl ToolHandler for ExportPackageTool {
         let preflight_path = package_dir.join(format!("{stem}-preflight.json"));
         let recipe_json_path = package_dir.join(format!("{stem}-enhancement-recipe.json"));
         let recipe_md_path = package_dir.join(format!("{stem}-enhancement-recipe.md"));
+
+        validate_render_output_path(
+            &ctx.project_root,
+            &mp4_path,
+            &[],
+            &[],
+            OutputPathPolicy::default(),
+        )
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "export_package: output path preflight failed: {e}"
+            ))
+        })?;
 
         tokio::fs::write(&srt_path, format_srt(&cues))
             .await

@@ -39,6 +39,7 @@
 pub mod animation;
 pub mod ffmpeg;
 pub mod job;
+pub mod output_safety;
 pub mod professional;
 pub mod progress;
 pub mod timeline;
@@ -52,6 +53,7 @@ pub use ffmpeg::{
 pub use job::{
     JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec, RenderPlanLimitation,
 };
+pub use output_safety::{OutputPathPolicy, OutputPathSafetyError, validate_render_output_path};
 pub use progress::ProgressSnapshot;
 pub use timeline::{
     AudioAutomationPlan, AudioClipPlan, AudioFxPlan, AudioTrackItemPlan, AudioTrackPlan,

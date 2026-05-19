@@ -26,7 +26,9 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use awidat_render::{RenderJobSpec, RenderPlanLimitation};
+use awidat_render::{
+    OutputPathPolicy, RenderJobSpec, RenderPlanLimitation, validate_render_output_path,
+};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -239,6 +241,18 @@ impl ToolHandler for StartRenderTool {
             let stem = asset_stem(asset);
             let output_path =
                 renders_dir.join(format!("{}-{}-{}.mp4", args.scope, stem, timestamp));
+            validate_render_output_path(
+                &ctx.project_root,
+                &output_path,
+                std::slice::from_ref(&asset_path),
+                &[],
+                OutputPathPolicy::default(),
+            )
+            .map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "start_render: output path preflight failed: {e}"
+                ))
+            })?;
             let argv = build_ffmpeg_argv(&args, asset, &asset_path, &output_path)?;
             (
                 argv,

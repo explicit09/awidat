@@ -35,6 +35,7 @@ use thiserror::Error;
 
 use crate::animation::{is_phase_3a_parameter, keyframes_to_ffmpeg_expr};
 use crate::job::{RenderJobSpec, RenderPlanLimitation};
+use crate::output_safety::{OutputPathPolicy, validate_render_output_path};
 
 /// Errors building a timeline-render spec.
 #[derive(Debug, Error)]
@@ -4358,6 +4359,17 @@ pub fn build_timeline_render_spec(
         .map_err(|e| RenderTimelineError::BroadcastOverlayRender(e.to_string()))?;
     let timestamp = Utc::now().format("%H%M%S");
     let output_path = renders_dir.join(format!("timeline-{timestamp}.mp4"));
+    let input_paths = render_input_paths(&segs, &video_overlays, &audio_tracks);
+    validate_render_output_path(
+        project_root,
+        &output_path,
+        &input_paths,
+        &[],
+        OutputPathPolicy::default(),
+    )
+    .map_err(|e| {
+        RenderTimelineError::BroadcastOverlayRender(format!("output path preflight failed: {e}"))
+    })?;
     let browser_broadcast_overlay = if let Some(overlay) = broadcast_overlay.as_ref()
         && overlay.config.enabled
         && !overlay.config.short_form_mode
@@ -4402,6 +4414,27 @@ pub fn build_timeline_render_spec(
         output_path,
         limitations: render_limitations,
     })
+}
+
+fn render_input_paths(
+    segs: &[TimelineSegment],
+    video_overlays: &[VideoOverlayPlan],
+    audio_tracks: &[AudioTrackPlan],
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    paths.extend(segs.iter().map(|segment| segment.asset_path.clone()));
+    paths.extend(
+        video_overlays
+            .iter()
+            .map(|overlay| overlay.segment.asset_path.clone()),
+    );
+    for track in audio_tracks {
+        paths.extend(track.items.iter().filter_map(|item| match item {
+            AudioTrackItemPlan::Clip(clip) => Some(clip.asset_path.clone()),
+            AudioTrackItemPlan::Gap { .. } => None,
+        }));
+    }
+    paths
 }
 
 fn prepare_browser_broadcast_overlay_video(
