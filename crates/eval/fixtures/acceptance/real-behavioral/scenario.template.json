@@ -1,0 +1,60 @@
+{
+  "id": "acceptance::real_video_behavior_name",
+  "objective": "Describe the user-visible editing behavior being tested.",
+  "project": {
+    "name": "acceptance-real-video-behavior-name",
+    "source_asset": "raw/source.mp4",
+    "source_path": "/ABSOLUTE/PATH/TO/LOCAL/SOURCE.mp4",
+    "source_start_s": 0.0,
+    "source_duration_s": 30.0
+  },
+  "final_edl": "*** Begin EDL\n*** Trim Clip\n@@ anchor: clip_uuid=source\n+ start: 0.0\n+ end: 30.0\n*** End EDL\n",
+  "expect": {
+    "duration_min_s": 20.0,
+    "duration_max_s": 30.5,
+    "max_long_silence_s": 0.8,
+    "silence_threshold_db": -40.0,
+    "max_black_segment_s": 0.2,
+    "black_min_duration_s": 0.2,
+    "min_clip_count": 1,
+    "edl_must_contain": [
+      "*** Trim Clip"
+    ],
+    "removed_source_ranges": [
+      {
+        "start_s": 1.2,
+        "end_s": 2.5,
+        "reason": "dead air, filler, false start, or other unwanted material",
+        "tolerance_s": 0.15
+      }
+    ],
+    "kept_source_ranges": [
+      {
+        "start_s": 3.0,
+        "end_s": 8.0,
+        "reason": "important spoken content or visual moment",
+        "tolerance_s": 0.15
+      }
+    ],
+    "transcript": {
+      "segments": [
+        {
+          "start_s": 0.0,
+          "end_s": 2.5,
+          "text": "Transcript text that should be removed."
+        },
+        {
+          "start_s": 3.0,
+          "end_s": 8.0,
+          "text": "Transcript text that should remain in the edit."
+        }
+      ],
+      "must_preserve": [
+        "text that should remain"
+      ],
+      "must_remove": [
+        "text that should be removed"
+      ]
+    }
+  }
+}

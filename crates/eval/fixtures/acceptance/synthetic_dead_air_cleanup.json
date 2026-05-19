@@ -1,0 +1,68 @@
+{
+  "id": "acceptance::synthetic_dead_air_cleanup_render",
+  "objective": "Render a synthetic edit that removes a two-second dead-air section while preserving audio and video continuity.",
+  "project": {
+    "name": "acceptance-synthetic-dead-air-cleanup",
+    "source_asset": "raw/source.mp4",
+    "source_duration_s": 4.0
+  },
+  "synthetic_media": {
+    "width": 320,
+    "height": 180,
+    "fps": 24,
+    "segments": [
+      {
+        "kind": "tone",
+        "duration_s": 1.0,
+        "frequency_hz": 440
+      },
+      {
+        "kind": "silence",
+        "duration_s": 2.0
+      },
+      {
+        "kind": "tone",
+        "duration_s": 1.0,
+        "frequency_hz": 660
+      }
+    ]
+  },
+  "final_edl": "*** Begin EDL\n*** Trim Clip\n@@ anchor: clip_uuid=source\n+ end: 1.0\n*** Insert Clip\n+ asset: raw/source.mp4\n+ track: V1\n+ at_position: 1\n+ start: 3.0\n+ end: 4.0\n+ name: source-after-dead-air\n*** End EDL\n",
+  "expect": {
+    "duration_min_s": 1.7,
+    "duration_max_s": 2.5,
+    "max_long_silence_s": 0.8,
+    "silence_threshold_db": -40.0,
+    "max_black_segment_s": 0.2,
+    "black_min_duration_s": 0.2,
+    "min_clip_count": 2,
+    "edl_must_contain": [
+      "*** Trim Clip",
+      "*** Insert Clip",
+      "+ start: 3.0",
+      "+ end: 4.0"
+    ],
+    "removed_source_ranges": [
+      {
+        "start_s": 1.0,
+        "end_s": 3.0,
+        "reason": "synthetic dead air",
+        "tolerance_s": 0.05
+      }
+    ],
+    "kept_source_ranges": [
+      {
+        "start_s": 0.0,
+        "end_s": 1.0,
+        "reason": "pre-silence tone",
+        "tolerance_s": 0.05
+      },
+      {
+        "start_s": 3.0,
+        "end_s": 4.0,
+        "reason": "post-silence tone",
+        "tolerance_s": 0.05
+      }
+    ]
+  }
+}

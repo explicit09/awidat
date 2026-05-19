@@ -25,9 +25,14 @@ stay cheap while the product loop still measures edit quality.
 - `cargo run -p awidat-eval -- --live`
   Real corpus/API-gated checks. These skip unless `AWIDAT_REAL_PROJECT` or
   `AWIDAT_REAL_CORPUS` points at an indexed project.
+- `cargo run -p awidat-eval -- --acceptance`
+  Opt-in rendered-output behavioral checks. These synthesize or mount media,
+  drive the timeline render path, probe the resulting MP4 with deterministic
+  judges, and write scorecards plus media artifacts under
+  `target/awidat-eval/acceptance/` by default.
 
 Default with no tier flags runs `--ci --product --golden`. `--all` runs
-CI, product, golden, and stress; live remains opt-in.
+CI, product, golden, and stress; live and acceptance remain opt-in.
 
 Useful reporting flags:
 
@@ -35,6 +40,7 @@ Useful reporting flags:
 cargo run -p awidat-eval -- --list
 cargo run -p awidat-eval -- --ci --json
 cargo run -p awidat-eval -- --live --fail-on-skip
+cargo run -p awidat-eval -- --acceptance --json
 ```
 
 Make aliases:
@@ -44,6 +50,30 @@ make eval
 make eval-ci
 make eval-stress
 ```
+
+## Rendered-output acceptance
+
+Detailed rendered-output acceptance documentation lives in [ACCEPTANCE.md](ACCEPTANCE.md).
+
+Quick commands:
+
+```bash
+cargo run -p awidat-eval -- --acceptance --json
+
+cargo run -p awidat-eval -- \
+  --acceptance-discover "/Volumes/Explicit's Hard Drive" \
+  --acceptance-discover-write-drafts target/awidat-eval/local-fixtures/discovered-drafts/$(date -u +%Y%m%dT%H%M%SZ) \
+  --json > target/awidat-eval/discovery/latest.json
+
+cargo run -p awidat-eval -- \
+  --acceptance-fixture-manifest target/awidat-eval/local-fixtures/real-behavioral \
+  --json > target/awidat-eval/fixture-manifests/real-behavioral.json
+```
+
+Acceptance fixtures can embed a final EDL or call deterministic planner commands such as
+`awidat plan-dead-air-edl`, `awidat plan-transcript-cleanup-edl`, and
+`awidat plan-false-start-edl`. Local real-video fixtures should stay outside git
+when they contain machine-specific `project.source_path` values.
 
 ## Golden cases
 

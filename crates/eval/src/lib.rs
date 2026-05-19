@@ -29,6 +29,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+pub mod acceptance;
 pub mod fixtures;
 pub mod golden;
 pub mod scenarios;
