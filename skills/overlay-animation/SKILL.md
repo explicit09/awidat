@@ -66,6 +66,18 @@ For each returned slot:
   corner, scale, or margin only if the timeline needs it.
 - Render and verify the slot in context.
 
+Before insertion, verify generated assets:
+
+```bash
+python3 <skill-root>/scripts/overlay_asset_verify.py \
+  --manifest overlay-manifest.json \
+  --project-root .
+```
+
+The verifier must return `status: "ready"`. A `blocked` report means
+the generated overlay, duration contract, project-relative paths, or
+subject matte/cutout artifacts are not ready for timeline insertion.
+
 For text-behind-subject or subject-aware overlay work, set
 `subject_aware: true`, provide `subject_prompt`, and provide or generate
 the `matte_path` artifact named in the manifest. The production contract
@@ -90,5 +102,7 @@ rendered correctly.
 - [ ] Every slot has a brief, generated asset path, and EDL insertion
       hint.
 - [ ] Generated files exist under `generated/overlays/`.
+- [ ] `overlay_asset_verify.py` returns `status: "ready"` for the
+      manifest before timeline insertion.
 - [ ] The overlay assets were inserted as timeline graph nodes.
 - [ ] Render verification includes the affected timing windows.
