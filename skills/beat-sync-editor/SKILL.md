@@ -30,14 +30,17 @@ Use any available beat/energy JSON, or generate one externally through
 ```bash
 python3 <skill-root>/scripts/beat_cut_plan.py \
   --beats beats.json \
+  --audio-energy index/audio-energy/raw/<asset>.json \
   --shot index/shot/raw/<asset>.json \
   --cut-every 4 \
   --duration-s 60
 ```
 
 The script outputs target cut points and transition suggestions. When
-the shot index exists, it marks beats that land during motion-heavy
-shots so you can prefer cut-on-action rather than arbitrary beat cuts.
+audio-energy is available, it favors louder/accented beat candidates
+instead of a rigid cadence. When the shot index exists, it marks beats
+that land during motion-heavy shots so you can prefer cut-on-action
+rather than arbitrary beat cuts.
 
 ### 2. Align cuts
 
