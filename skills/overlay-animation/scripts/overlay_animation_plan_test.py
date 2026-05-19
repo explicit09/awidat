@@ -102,6 +102,88 @@ class OverlayAnimationPlanTests(unittest.TestCase):
         self.assertIn("base video -> overlay asset -> subject matte", slot["brief"])
         self.assertIn("fallback", slot["brief"].lower())
 
+    def test_subject_aware_slots_record_text_layers_detection_and_preview_evidence(self) -> None:
+        planner = load_script("overlay_animation_plan")
+        manifest = planner.build_animation_manifest(
+            [
+                {
+                    "name": "Behind Product Title",
+                    "anchor": "clip_uuid=clip-product",
+                    "duration_s": 1.5,
+                    "subject_aware": True,
+                    "subject_prompt": "main product",
+                    "text_layers": [
+                        {
+                            "text": "LAUNCH",
+                            "font_family": "Inter",
+                            "font_size": 148,
+                            "font_color": "#F8F7F1",
+                            "opacity": 0.92,
+                            "rotation": -8,
+                            "x": 0.5,
+                            "y": 0.42,
+                            "weight": "black",
+                        }
+                    ],
+                    "detection": {
+                        "object_classes": ["person", "product"],
+                        "confidence_threshold": 0.55,
+                        "iou_threshold": 0.7,
+                        "mask_threshold": 0.3,
+                        "preview_frame_path": "generated/previews/product-frame.png",
+                        "occlusion_preview_path": "generated/previews/product-occlusion.png",
+                    },
+                }
+            ],
+            output_root=Path("generated/overlays"),
+        )
+
+        slot = manifest["slots"][0]
+
+        self.assertEqual(slot["text_layers"][0]["text"], "LAUNCH")
+        self.assertEqual(slot["text_layers"][0]["font_color"], "#F8F7F1")
+        self.assertEqual(slot["text_layers"][0]["position"], {"x": 0.5, "y": 0.42})
+        self.assertEqual(slot["detection"]["object_classes"], ["person", "product"])
+        self.assertEqual(slot["detection"]["confidence_threshold"], 0.55)
+        self.assertEqual(slot["detection"]["iou_threshold"], 0.7)
+        self.assertEqual(slot["detection"]["mask_threshold"], 0.3)
+        self.assertEqual(
+            slot["detection"]["occlusion_preview_path"],
+            "generated/previews/product-occlusion.png",
+        )
+        self.assertIn("Text layers:", slot["brief"])
+        self.assertIn("LAUNCH", slot["brief"])
+        self.assertIn("object classes: person, product", slot["brief"])
+
+    def test_rejects_invalid_subject_aware_text_layer_values(self) -> None:
+        planner = load_script("overlay_animation_plan")
+
+        with self.assertRaisesRegex(ValueError, "opacity"):
+            planner.build_animation_manifest(
+                [
+                    {
+                        "name": "Bad Text",
+                        "duration_s": 1.0,
+                        "subject_aware": True,
+                        "text_layers": [{"text": "Bad", "opacity": 1.4}],
+                    }
+                ],
+                output_root=Path("generated/overlays"),
+            )
+
+        with self.assertRaisesRegex(ValueError, "mask_threshold"):
+            planner.build_animation_manifest(
+                [
+                    {
+                        "name": "Bad Detection",
+                        "duration_s": 1.0,
+                        "subject_aware": True,
+                        "detection": {"mask_threshold": -0.1},
+                    }
+                ],
+                output_root=Path("generated/overlays"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

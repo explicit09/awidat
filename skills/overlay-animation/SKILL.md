@@ -44,7 +44,20 @@ Create a slots JSON file with:
       "engine": "canvas",
       "mode": "full_frame",
       "prompt": "Animated product callout synced to the word launch",
-      "subject_aware": false
+      "subject_aware": false,
+      "text_layers": [
+        {
+          "text": "LAUNCH",
+          "font_family": "Inter",
+          "font_size": 120,
+          "font_color": "#FFFFFF",
+          "opacity": 1.0,
+          "rotation": 0,
+          "x": 0.5,
+          "y": 0.42,
+          "weight": "black"
+        }
+      ]
     }
   ]
 }
@@ -84,6 +97,14 @@ the `matte_path` artifact named in the manifest. The production contract
 is base video -> overlay asset -> subject matte/cutout. If the matte is
 unavailable, use the manifest fallback instead of pretending the effect
 rendered correctly.
+
+For subject-aware text, describe each visible text element in
+`text_layers` instead of hiding styling in prose. Include text, font
+family, font size, `#RRGGBB` color, opacity, rotation, normalized `x`
+and `y` placement, and weight. When detection or segmentation still needs
+to be produced, include a `detection` object with `object_classes`,
+`confidence_threshold`, `iou_threshold`, `mask_threshold`, and any
+available `preview_frame_path` or `occlusion_preview_path` evidence.
 
 When a subject matte is not already available, create or request a
 segmentation prompt package in `metadata.awidat.tracking_package`.
