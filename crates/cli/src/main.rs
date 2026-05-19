@@ -19,6 +19,10 @@ mod chat_cmd;
 mod index_cmd;
 mod lessons_cmd;
 mod new_cmd;
+mod plan_clip;
+mod plan_dead_air_edl_cmd;
+mod plan_ranges;
+mod plan_transcript_trim_edl_cmd;
 mod render_cmd;
 mod resume_cmd;
 mod skills_cmd;
@@ -107,6 +111,75 @@ enum Command {
     Render {
         /// Project directory.
         path: PathBuf,
+    },
+    /// Detect long silences in the primary source clip and emit a cleanup EDL.
+    PlanDeadAirEdl {
+        /// Project directory.
+        path: PathBuf,
+        /// Optional asset, clip name, clip uuid, file name, or file stem to plan against.
+        #[arg(long)]
+        asset: Option<String>,
+        /// Minimum silence duration to remove, in seconds.
+        #[arg(long, default_value_t = 0.8)]
+        min_duration_s: f64,
+        /// Silence threshold in dBFS. Must be negative.
+        #[arg(long, default_value_t = -40.0, allow_hyphen_values = true)]
+        silence_threshold_db: f64,
+        /// Seconds to preserve at each side of a detected silence.
+        #[arg(long, default_value_t = 0.0)]
+        keep_padding_s: f64,
+    },
+    /// Find a transcript phrase in the primary source clip and emit a trim EDL.
+    PlanTranscriptTrimEdl {
+        /// Project directory.
+        path: PathBuf,
+        /// Transcript phrase whose segment should become the first kept content.
+        #[arg(long)]
+        keep_from_phrase: String,
+        /// Optional asset, clip name, clip uuid, file name, or file stem to plan against.
+        #[arg(long)]
+        asset: Option<String>,
+    },
+    /// Detect the first actionable transcript segment and emit a leading-trim EDL.
+    PlanTranscriptSetupEdl {
+        /// Project directory.
+        path: PathBuf,
+        /// Optional asset, clip name, clip uuid, file name, or file stem to plan against.
+        #[arg(long)]
+        asset: Option<String>,
+    },
+    /// Remove transcript-marked spans and emit an internal-range EDL.
+    PlanTranscriptRemoveEdl {
+        /// Project directory.
+        path: PathBuf,
+        /// Transcript phrase whose containing span should be removed. Repeatable.
+        #[arg(long = "remove-phrase", required = true)]
+        remove_phrases: Vec<String>,
+        /// Optional asset, clip name, clip uuid, file name, or file stem to plan against.
+        #[arg(long)]
+        asset: Option<String>,
+    },
+    /// Detect filler-heavy transcript spans and emit an internal cleanup EDL.
+    PlanTranscriptCleanupEdl {
+        /// Project directory.
+        path: PathBuf,
+        /// Optional asset, clip name, clip uuid, file name, or file stem to plan against.
+        #[arg(long)]
+        asset: Option<String>,
+        /// Minimum filler/discourse-marker ratio for removing a transcript segment.
+        #[arg(long, default_value_t = 0.35)]
+        min_filler_ratio: f64,
+        /// Minimum filler/discourse-marker token count for removing a transcript segment.
+        #[arg(long, default_value_t = 2)]
+        min_filler_tokens: usize,
+    },
+    /// Detect transcript restart markers and emit a false-start cleanup EDL.
+    PlanFalseStartEdl {
+        /// Project directory.
+        path: PathBuf,
+        /// Optional asset, clip name, clip uuid, file name, or file stem to plan against.
+        #[arg(long)]
+        asset: Option<String>,
     },
     /// Open a text-only REPL with the agent. Type a prompt; the agent
     /// streams a reply and may call tools (week 3 ships `bash`).
@@ -247,6 +320,68 @@ fn main() -> ExitCode {
         } => index_cmd::run(&path, assets, indexers, concurrency),
         Command::ApplyEdl { path, edl } => apply_edl_cmd::run(&path, &edl),
         Command::Render { path } => render_cmd::run(&path),
+        Command::PlanDeadAirEdl {
+            path,
+            asset,
+            min_duration_s,
+            silence_threshold_db,
+            keep_padding_s,
+        } => plan_dead_air_edl_cmd::run(plan_dead_air_edl_cmd::PlanDeadAirEdlArgs {
+            project_root: path,
+            asset,
+            min_duration_s,
+            silence_threshold_db,
+            keep_padding_s,
+        }),
+        Command::PlanTranscriptTrimEdl {
+            path,
+            keep_from_phrase,
+            asset,
+        } => plan_transcript_trim_edl_cmd::run(
+            plan_transcript_trim_edl_cmd::PlanTranscriptTrimEdlArgs {
+                project_root: path,
+                keep_from_phrase,
+                asset,
+            },
+        ),
+        Command::PlanTranscriptSetupEdl { path, asset } => plan_transcript_trim_edl_cmd::run_setup(
+            plan_transcript_trim_edl_cmd::PlanTranscriptSetupEdlArgs {
+                project_root: path,
+                asset,
+            },
+        ),
+        Command::PlanTranscriptRemoveEdl {
+            path,
+            remove_phrases,
+            asset,
+        } => plan_transcript_trim_edl_cmd::run_remove(
+            plan_transcript_trim_edl_cmd::PlanTranscriptRemoveEdlArgs {
+                project_root: path,
+                remove_phrases,
+                asset,
+            },
+        ),
+        Command::PlanTranscriptCleanupEdl {
+            path,
+            asset,
+            min_filler_ratio,
+            min_filler_tokens,
+        } => plan_transcript_trim_edl_cmd::run_cleanup(
+            plan_transcript_trim_edl_cmd::PlanTranscriptCleanupEdlArgs {
+                project_root: path,
+                asset,
+                min_filler_ratio,
+                min_filler_tokens,
+            },
+        ),
+        Command::PlanFalseStartEdl { path, asset } => {
+            plan_transcript_trim_edl_cmd::run_false_start(
+                plan_transcript_trim_edl_cmd::PlanFalseStartEdlArgs {
+                    project_root: path,
+                    asset,
+                },
+            )
+        }
         Command::Chat { path, model } => chat_cmd::run(&path, model.as_deref()),
         Command::Tui { path, model } => tui_cmd::run(&path, model.as_deref()),
         Command::SecretsSet { account } => cmd_secrets_set(&account),

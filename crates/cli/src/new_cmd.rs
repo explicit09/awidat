@@ -270,7 +270,7 @@ fn attach_imported_asset_to_timeline(project_dir: &Path, imported_asset: &Path) 
         RationalTime::new(duration_s * 30.0, 30.0),
     );
     let mut reference = ExternalReference::new(asset_id.clone());
-    reference.available_range = Some(available_range.clone());
+    reference.available_range = Some(available_range);
 
     let clip_name = imported_asset
         .file_stem()

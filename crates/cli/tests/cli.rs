@@ -2,57 +2,11 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod common;
+
 use std::fs;
-use std::path::PathBuf;
-use std::process::{Command, Output};
 
-fn awidat() -> &'static str {
-    env!("CARGO_BIN_EXE_awidat")
-}
-
-fn tmp_dir(name: &str) -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    let mut path = std::env::temp_dir();
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    path.push(format!("awidat-cli-{name}-{}-{n}", std::process::id()));
-    path
-}
-
-fn run(args: &[&str]) -> Output {
-    Command::new(awidat()).args(args).output().unwrap()
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-fn stderr(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-fn make_tiny_mp4(path: &std::path::Path) {
-    let output = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=duration=1:size=160x90:rate=30",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=1",
-            "-shortest",
-            "-pix_fmt",
-            "yuv420p",
-        ])
-        .arg(path)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{}", stderr(&output));
-}
+use common::{make_tiny_mp4, run, stderr, stdout, tmp_dir};
 
 #[test]
 fn init_creates_project_and_validate_succeeds() {
