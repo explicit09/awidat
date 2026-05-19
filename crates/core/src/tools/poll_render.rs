@@ -107,6 +107,7 @@ impl ToolHandler for PollRenderTool {
             "speed": status.speed,
             "eta_s": status.eta_s,
             "exit_code": status.exit_code,
+            "command_argv": status.command_argv,
             "output_path": status.output_path.display().to_string(),
             "started_at": status.started_at.to_rfc3339(),
             "log_excerpt": log_excerpt,
@@ -119,8 +120,8 @@ const DESCRIPTION: &str = "\
 Read the latest status of a render job started by `start_render`. \
 Returns: state (queued|running|done|failed|cancelled), progress_pct, \
 frames_done, time_done_s, speed, eta_s, exit_code (when terminal), \
-output_path, and a tail-truncated ffmpeg log excerpt. Cheap to call \
-repeatedly. Reaped 5 minutes after the job ends.\
+command_argv, output_path, and a tail-truncated ffmpeg log excerpt. \
+Cheap to call repeatedly. Reaped 5 minutes after the job ends.\
 ";
 
 #[cfg(test)]
@@ -256,5 +257,20 @@ mod tests {
         assert_eq!(last["state"], "done", "expected done; got {last}");
         assert_eq!(last["exit_code"], 0);
         assert_eq!(last["progress_pct"], 100.0);
+        let command_argv = last["command_argv"]
+            .as_array()
+            .expect("poll_render should expose the render command argv");
+        assert!(
+            command_argv
+                .iter()
+                .any(|arg| arg.as_str().is_some_and(|arg| arg.contains("ffmpeg"))),
+            "command argv should include the ffmpeg binary path: {command_argv:?}"
+        );
+        assert!(
+            command_argv
+                .iter()
+                .any(|arg| arg.as_str() == Some("libx264")),
+            "command argv should include render arguments: {command_argv:?}"
+        );
     }
 }

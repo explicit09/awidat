@@ -99,6 +99,9 @@ pub struct JobStatus {
     /// Tail-truncated stderr (~16KB cap). Errors live at the end of
     /// ffmpeg's stderr, never the middle.
     pub log_excerpt: String,
+    /// Full command argv used to launch ffmpeg, including the ffmpeg
+    /// binary path as argv[0]. Exposed for reproducible render evidence.
+    pub command_argv: Vec<String>,
     /// Path the output is being written to. Always set.
     pub output_path: PathBuf,
     /// Wall-clock at `start_render` (server-local).
@@ -203,6 +206,9 @@ impl JobManager {
         let bin = ffmpeg_path()?;
         let id = JobId::fresh();
         let started_at = chrono::Utc::now();
+        let command_argv = std::iter::once(bin.to_string_lossy().into_owned())
+            .chain(spec.args.iter().cloned())
+            .collect();
 
         let initial = JobStatus {
             id: id.clone(),
@@ -214,6 +220,7 @@ impl JobManager {
             speed: None,
             eta_s: None,
             log_excerpt: String::new(),
+            command_argv,
             output_path: spec.output_path.clone(),
             started_at,
             exit_code: None,
