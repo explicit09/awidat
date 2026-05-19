@@ -85,6 +85,14 @@ is base video -> overlay asset -> subject matte/cutout. If the matte is
 unavailable, use the manifest fallback instead of pretending the effect
 rendered correctly.
 
+When a subject matte is not already available, create or request a
+segmentation prompt package in `metadata.awidat.tracking_package`.
+Include the target clip/range, target object id, intended output
+(`subject_matte`, `text_behind_subject`, or `background_treatment`),
+and reviewed positive/negative points, boxes, or mask references. Do
+not treat a prose `subject_prompt` as enough evidence for subject-aware
+compositing.
+
 ## Delivery Rules
 
 - Match the exact `duration_s`. Do not make the timeline absorb drift.

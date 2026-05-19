@@ -961,6 +961,9 @@ pub struct CompositionEdge {
 /// Tracking, mask, and matte sidecar contracts.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TrackingPackage {
+    /// Reviewable segmentation prompt/correction packages.
+    #[serde(default)]
+    pub prompt_packages: Vec<SegmentationPromptPackage>,
     /// Point/planar/surface tracks.
     #[serde(default)]
     pub tracks: Vec<TrackSidecar>,
@@ -979,6 +982,9 @@ impl TrackingPackage {
     /// Validate tracking, mask, and matte quality data.
     pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
         let mut diagnostics = Vec::new();
+        for prompt_package in &self.prompt_packages {
+            diagnostics.extend(prompt_package.validate());
+        }
         for track in &self.tracks {
             if track.samples.is_empty() {
                 diagnostics.push(ProfessionalDiagnostic::warning(
@@ -1032,6 +1038,248 @@ impl TrackingPackage {
         }
         diagnostics
     }
+}
+
+/// Reviewable prompt/correction package for subject or object segmentation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SegmentationPromptPackage {
+    /// Stable package id.
+    pub id: String,
+    /// Timeline clip id or source clip id receiving segmentation.
+    pub clip_id: String,
+    /// Optional source/timeline range covered by the prompt package.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub range: Option<SourceRange>,
+    /// Stable object id inside the prompt/tracking session.
+    pub target_object_id: String,
+    /// Human-readable subject/object label.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub subject_label: Option<String>,
+    /// Intended downstream use for generated masks/mattes.
+    #[serde(default)]
+    pub intent: SegmentationIntent,
+    /// Ordered prompts and corrections.
+    #[serde(default)]
+    pub prompts: Vec<SegmentationPrompt>,
+    /// Optional mask id produced from this package.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_mask_id: Option<String>,
+    /// Optional matte id produced from this package.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_matte_id: Option<String>,
+    /// Review lifecycle.
+    #[serde(default)]
+    pub status: ReviewStatus,
+}
+
+impl SegmentationPromptPackage {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                "segmentation prompt package has an empty id",
+            ));
+        }
+        if self.clip_id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {} has an empty clip id",
+                    self.id
+                ),
+            ));
+        }
+        if self.target_object_id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {} has an empty target object id",
+                    self.id
+                ),
+            ));
+        }
+        if let Some(range) = &self.range
+            && (!range.start_s.is_finite()
+                || !range.end_s.is_finite()
+                || range.end_s <= range.start_s)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {} has an invalid range",
+                    self.id
+                ),
+            ));
+        }
+        if self.prompts.is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::TrackingMasksMattes,
+                format!("segmentation prompt package {} has no prompts", self.id),
+            ));
+        }
+        let mut previous_frame = None;
+        let mut reported_unsorted_prompts = false;
+        for prompt in &self.prompts {
+            if let Some(previous) = previous_frame
+                && prompt.frame < previous
+                && !reported_unsorted_prompts
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!(
+                        "segmentation prompt package {} prompts must be sorted by frame",
+                        self.id
+                    ),
+                ));
+                reported_unsorted_prompts = true;
+            }
+            previous_frame = Some(prompt.frame);
+            diagnostics.extend(prompt.validate(&self.id));
+        }
+        diagnostics
+    }
+}
+
+/// Intended use for a segmentation prompt package.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentationIntent {
+    /// General segmentation mask.
+    #[default]
+    Mask,
+    /// Subject alpha matte or cutout.
+    SubjectMatte,
+    /// Text/overlay should appear behind this subject.
+    TextBehindSubject,
+    /// Background blur/removal around this subject.
+    BackgroundTreatment,
+    /// Subject-aware reframe evidence.
+    Reframe,
+}
+
+/// One segmentation prompt or correction.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SegmentationPrompt {
+    /// Frame number for this prompt.
+    pub frame: u64,
+    /// Prompt type.
+    #[serde(default)]
+    pub kind: SegmentationPromptKind,
+    /// Positive/negative label.
+    #[serde(default)]
+    pub label: SegmentationPromptLabel,
+    /// Normalized prompt points as `[x, y]`.
+    #[serde(default)]
+    pub points: Vec<[f64; 2]>,
+    /// Optional normalized `[x0, y0, x1, y1]` box.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub box_xyxy: Option<[f64; 4]>,
+    /// Optional existing mask/matte sidecar id or path.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mask_ref: Option<String>,
+    /// Optional note explaining the prompt/correction.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub note: Option<String>,
+}
+
+impl SegmentationPrompt {
+    fn validate(&self, package_id: &str) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        match self.kind {
+            SegmentationPromptKind::Point => {
+                if self.points.is_empty() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!(
+                            "segmentation prompt package {package_id} point prompt has no points"
+                        ),
+                    ));
+                }
+            }
+            SegmentationPromptKind::Box => {
+                if self.box_xyxy.is_none() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!("segmentation prompt package {package_id} box prompt has no box"),
+                    ));
+                }
+            }
+            SegmentationPromptKind::Mask => {
+                if self
+                    .mask_ref
+                    .as_ref()
+                    .map(|value| value.trim().is_empty())
+                    .unwrap_or(true)
+                {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!(
+                            "segmentation prompt package {package_id} mask prompt has no mask ref"
+                        ),
+                    ));
+                }
+            }
+        }
+        for point in &self.points {
+            if !normalized_pair_is_valid(*point) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!(
+                        "segmentation prompt package {package_id} point coordinates must be in 0..=1"
+                    ),
+                ));
+            }
+        }
+        if let Some(bbox) = self.box_xyxy
+            && !normalized_box_is_valid(bbox)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {package_id} box coordinates must be ordered and in 0..=1"
+                ),
+            ));
+        }
+        diagnostics
+    }
+}
+
+/// Segmentation prompt shape.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentationPromptKind {
+    /// One or more positive/negative point prompts.
+    #[default]
+    Point,
+    /// Bounding box prompt.
+    Box,
+    /// Existing mask/matte prompt or correction.
+    Mask,
+}
+
+/// Segmentation prompt polarity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentationPromptLabel {
+    /// Foreground/positive prompt.
+    #[default]
+    Positive,
+    /// Background/negative prompt.
+    Negative,
+}
+
+fn normalized_pair_is_valid(point: [f64; 2]) -> bool {
+    point
+        .iter()
+        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+}
+
+fn normalized_box_is_valid(bbox: [f64; 4]) -> bool {
+    bbox.iter()
+        .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+        && bbox[0] < bbox[2]
+        && bbox[1] < bbox[3]
 }
 
 /// Subject-aware crop/reframe path for one timeline clip.

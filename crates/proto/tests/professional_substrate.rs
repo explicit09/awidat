@@ -9,8 +9,9 @@ use awidat_proto::professional::{
     ExpressionSource, FindingSeverity, GradeStack, HardwareAccelerationPolicy, Keyframe,
     MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
     PipelineReadinessReport, PreflightCheckKind, ReadinessState, ReframeKeyframe, ReframePath,
-    ReframeSmoothing, SelectDecision, SourceRange, SourceSelect, Stringout, TemplateSlot,
-    TrackingPackage, WorkflowLens,
+    ReframeSmoothing, SegmentationIntent, SegmentationPrompt, SegmentationPromptKind,
+    SegmentationPromptLabel, SegmentationPromptPackage, SelectDecision, SourceRange, SourceSelect,
+    Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
 };
 
 #[test]
@@ -412,6 +413,103 @@ fn tracking_package_validates_reframe_paths() {
             .iter()
             .any(|message| message.contains("confidence"))
     );
+}
+
+#[test]
+fn tracking_package_validates_segmentation_prompt_packages() {
+    let package = TrackingPackage {
+        prompt_packages: vec![SegmentationPromptPackage {
+            id: "seg-main-speaker".into(),
+            clip_id: "clip-a".into(),
+            range: Some(SourceRange {
+                start_s: 2.0,
+                end_s: 5.0,
+            }),
+            target_object_id: "speaker".into(),
+            subject_label: Some("main speaker".into()),
+            intent: SegmentationIntent::SubjectMatte,
+            prompts: vec![
+                SegmentationPrompt {
+                    frame: 12,
+                    kind: SegmentationPromptKind::Point,
+                    label: SegmentationPromptLabel::Positive,
+                    points: vec![[0.42, 0.31]],
+                    ..SegmentationPrompt::default()
+                },
+                SegmentationPrompt {
+                    frame: 12,
+                    kind: SegmentationPromptKind::Box,
+                    label: SegmentationPromptLabel::Positive,
+                    box_xyxy: Some([0.2, 0.1, 0.8, 0.9]),
+                    ..SegmentationPrompt::default()
+                },
+            ],
+            output_mask_id: Some("mask-speaker".into()),
+            output_matte_id: Some("matte-speaker".into()),
+            status: awidat_proto::professional::ReviewStatus::Accepted,
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let json = match serde_json::to_string(&package) {
+        Ok(json) => json,
+        Err(error) => panic!("serialize prompt package: {error}"),
+    };
+    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+        Ok(package) => package,
+        Err(error) => panic!("deserialize prompt package: {error}"),
+    };
+    assert_eq!(roundtrip.prompt_packages[0].target_object_id, "speaker");
+    assert_eq!(roundtrip.prompt_packages[0].prompts.len(), 2);
+
+    assert!(roundtrip.validate().is_empty());
+
+    let invalid = TrackingPackage {
+        prompt_packages: vec![SegmentationPromptPackage {
+            id: "".into(),
+            clip_id: "".into(),
+            target_object_id: "".into(),
+            prompts: vec![
+                SegmentationPrompt {
+                    frame: 3,
+                    kind: SegmentationPromptKind::Point,
+                    label: SegmentationPromptLabel::Positive,
+                    points: vec![[1.4, 0.2]],
+                    ..SegmentationPrompt::default()
+                },
+                SegmentationPrompt {
+                    frame: 2,
+                    kind: SegmentationPromptKind::Box,
+                    label: SegmentationPromptLabel::Negative,
+                    box_xyxy: Some([0.8, 0.1, 0.2, 0.9]),
+                    ..SegmentationPrompt::default()
+                },
+            ],
+            ..SegmentationPromptPackage::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let messages: Vec<String> = invalid
+        .validate()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+
+    assert!(messages.iter().any(|message| message.contains("empty id")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("empty clip id"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("target object"))
+    );
+    assert!(messages.iter().any(|message| message.contains("sorted")));
+    assert!(messages.iter().any(|message| message.contains("point")));
+    assert!(messages.iter().any(|message| message.contains("box")));
 }
 
 #[test]
