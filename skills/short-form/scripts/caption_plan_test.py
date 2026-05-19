@@ -278,6 +278,79 @@ class TranscriptPhraseTests(unittest.TestCase):
         self.assertIn("1\n00:00:00.000 --> 00:00:00.600", result.stdout)
         self.assertIn("One line", result.stdout)
 
+    def test_caption_plan_wraps_caption_text_by_max_characters(self) -> None:
+        caption_plan = load_script("caption_plan")
+
+        wrapped = caption_plan.wrap_caption_text(
+            "Build captions that stay readable on phones",
+            max_chars_per_line=18,
+        )
+
+        self.assertEqual(wrapped, "Build captions\nthat stay readable\non phones")
+        for line in wrapped.splitlines():
+            self.assertLessEqual(len(line), 18)
+
+        with self.assertRaisesRegex(ValueError, "max_chars_per_line"):
+            caption_plan.wrap_caption_text("bad", max_chars_per_line=0)
+
+    def test_caption_plan_applies_wrapping_to_json_srt_and_vtt_outputs(self) -> None:
+        caption_plan = load_script("caption_plan")
+        items = [
+            {"word": "Build", "start_s": 0.0, "end_s": 0.2, "speaker": "A"},
+            {"word": "captions", "start_s": 0.22, "end_s": 0.5, "speaker": "A"},
+            {"word": "that", "start_s": 0.52, "end_s": 0.7, "speaker": "A"},
+            {"word": "stay", "start_s": 0.72, "end_s": 0.9, "speaker": "A"},
+            {"word": "readable", "start_s": 0.92, "end_s": 1.2, "speaker": "A"},
+            {"word": "on", "start_s": 1.22, "end_s": 1.35, "speaker": "A"},
+            {"word": "phones", "start_s": 1.38, "end_s": 1.6, "speaker": "A"},
+        ]
+
+        phrases = caption_plan.build_caption_phrases(
+            items,
+            max_words=8,
+            max_chars_per_line=18,
+        )
+
+        self.assertEqual(phrases[0]["text"], "Build captions\nthat stay readable\non phones")
+        self.assertIn("Build captions\nthat stay readable\non phones", caption_plan.build_srt(phrases))
+        self.assertIn("Build captions\nthat stay readable\non phones", caption_plan.build_vtt(phrases))
+
+    def test_caption_plan_cli_accepts_max_chars_per_line(self) -> None:
+        transcript = {
+            "words": [
+                {"word": "Build", "start_s": 0.0, "end_s": 0.2, "speaker": "A"},
+                {"word": "captions", "start_s": 0.22, "end_s": 0.5, "speaker": "A"},
+                {"word": "that", "start_s": 0.52, "end_s": 0.7, "speaker": "A"},
+                {"word": "stay", "start_s": 0.72, "end_s": 0.9, "speaker": "A"},
+                {"word": "readable", "start_s": 0.92, "end_s": 1.2, "speaker": "A"},
+                {"word": "on", "start_s": 1.22, "end_s": 1.35, "speaker": "A"},
+                {"word": "phones", "start_s": 1.38, "end_s": 1.6, "speaker": "A"},
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:
+            json.dump(transcript, handle)
+            handle.flush()
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "caption_plan.py"),
+                    "--transcript",
+                    handle.name,
+                    "--max-words",
+                    "8",
+                    "--max-chars-per-line",
+                    "18",
+                    "--output-format",
+                    "vtt",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertIn("Build captions\nthat stay readable\non phones", result.stdout)
+
     def test_packed_transcript_markdown_has_source_and_timed_rows(self) -> None:
         pack_transcript = load_script("pack_transcript")
         transcript = {

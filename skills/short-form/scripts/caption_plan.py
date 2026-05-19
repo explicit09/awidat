@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import textwrap
 from pathlib import Path
 
 from transcript_phrases import group_words_into_phrases, normalize_words
@@ -111,6 +112,20 @@ def build_vtt(phrases: list[dict]) -> str:
     )
 
 
+def wrap_caption_text(text: str, *, max_chars_per_line: int | None = None) -> str:
+    normalized = " ".join(str(text).strip().split())
+    if max_chars_per_line is None:
+        return normalized
+    if max_chars_per_line < 1:
+        raise ValueError("max_chars_per_line must be positive")
+    return textwrap.fill(
+        normalized,
+        width=max_chars_per_line,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+
 def load_body(path: str) -> dict:
     raw = json.loads(Path(path).read_text())
     return raw.get("data", raw)
@@ -128,6 +143,7 @@ def build_caption_phrases(
     phrase_preset: str | None = None,
     hot_start_s: float | None = None,
     hot_end_s: float | None = None,
+    max_chars_per_line: int | None = None,
     style: str = "classic",
 ) -> list[dict]:
     phrases = []
@@ -152,7 +168,10 @@ def build_caption_phrases(
             styled["color"] = "#FFD400"
             styled["font_weight"] = "bold"
         phrases.append({
-            "text": str(phrase.get("text", "")).strip(),
+            "text": wrap_caption_text(
+                str(phrase.get("text", "")),
+                max_chars_per_line=max_chars_per_line,
+            ),
             "start_s": round(start, 3),
             "end_s": round(max(end, start + 0.6), 3),
             **styled,
@@ -168,6 +187,7 @@ def main() -> None:
     p.add_argument("--phrase-preset", choices=("short", "medium", "long"))
     p.add_argument("--hot-start-s", type=float)
     p.add_argument("--hot-end-s", type=float)
+    p.add_argument("--max-chars-per-line", type=int)
     p.add_argument("--style", choices=sorted(CAPTION_STYLES), default="classic")
     p.add_argument("--output-format", choices=("json", "srt", "vtt"), default="json")
     args = p.parse_args()
@@ -180,6 +200,7 @@ def main() -> None:
         phrase_preset=args.phrase_preset,
         hot_start_s=args.hot_start_s,
         hot_end_s=args.hot_end_s,
+        max_chars_per_line=args.max_chars_per_line,
         style=args.style,
     )
     if args.output_format == "srt":

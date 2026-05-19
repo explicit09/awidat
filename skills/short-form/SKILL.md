@@ -151,6 +151,7 @@ python3 <skill-root>/scripts/caption_plan.py \
   --phrase-preset short \
   --max-words 4 \
   --max-gap-s 0.5 \
+  --max-chars-per-line 24 \
   --style classic \
   --hot-start-s <highest-intensity-start> \
   --hot-end-s <highest-intensity-end>
@@ -180,7 +181,9 @@ python3 <skill-root>/scripts/caption_plan.py \
 Use `--phrase-preset short` for fast social captions, `medium` for calmer
 talking-head edits, and `long` only when readability matters more than pace.
 The preset considers duration, pauses, punctuation, speaker changes, and word
-count.
+count. Use `--max-chars-per-line` when caption text may be too wide for the
+target frame; it wraps cue text at word boundaries for JSON, SRT, and VTT
+outputs without changing timing.
 
 Use `--style classic` for normal bottom-third captions, `impact` for a
 center punch line, `boxed` when busy footage needs a stronger text
