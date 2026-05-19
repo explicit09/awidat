@@ -1016,6 +1016,9 @@ impl TrackingPackage {
             diagnostics.extend(path.validate());
         }
         for mask in &self.masks {
+            if let Some(quality) = &mask.quality {
+                diagnostics.extend(quality.validate(format!("mask {}", mask.id)));
+            }
             for keyframe in &mask.keyframes {
                 if !keyframe.time_s.is_finite()
                     || !keyframe.feather.is_finite()
@@ -1029,12 +1032,21 @@ impl TrackingPackage {
             }
         }
         for matte in &self.mattes {
+            if matte.alpha_source.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!("matte {} has an empty alpha source", matte.id),
+                ));
+            }
             validate_optional_confidence(
                 &mut diagnostics,
                 CapabilityArea::TrackingMasksMattes,
                 matte.confidence,
                 format!("matte {}", matte.id),
             );
+            if let Some(quality) = &matte.quality {
+                diagnostics.extend(quality.validate(format!("matte {}", matte.id)));
+            }
         }
         diagnostics
     }
@@ -1517,6 +1529,103 @@ pub struct MaskSidecar {
     /// Keyframed paths.
     #[serde(default)]
     pub keyframes: Vec<MaskKeyframe>,
+    /// Quality and review metadata for this mask.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub quality: Option<MaskQualityScorecard>,
+}
+
+/// Quality metadata used to decide whether a mask/matte is usable in a finished edit.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MaskQualityScorecard {
+    /// Normalized `[x0, y0, x1, y1]` bounds for the mask/matte.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bbox_xyxy: Option<[f64; 4]>,
+    /// Approximate foreground area in pixels.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub area_px: Option<u64>,
+    /// Foreground coverage as a normalized fraction of the frame.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub coverage: Option<f64>,
+    /// Stability score in 0..=1.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub stability: Option<f64>,
+    /// Confidence score in 0..=1.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confidence: Option<f64>,
+    /// Whether this mask overlaps another subject/object in a conflicting way.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub overlap_conflict: Option<bool>,
+    /// Fraction of expected frames with usable mask/matte evidence.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frame_coverage: Option<f64>,
+    /// Human/agent review decision.
+    #[serde(default)]
+    pub decision: MaskReviewDecision,
+    /// Review notes.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+impl MaskQualityScorecard {
+    fn validate(&self, label: String) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if let Some(bbox) = self.bbox_xyxy
+            && !normalized_box_is_valid(bbox)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("{label} quality bbox must be ordered and in 0..=1"),
+            ));
+        }
+        if matches!(self.area_px, Some(0)) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("{label} quality area must be greater than zero"),
+            ));
+        }
+        validate_optional_unit_interval(
+            &mut diagnostics,
+            self.coverage,
+            format!("{label} quality coverage"),
+        );
+        validate_optional_unit_interval(
+            &mut diagnostics,
+            self.stability,
+            format!("{label} quality stability"),
+        );
+        validate_optional_unit_interval(
+            &mut diagnostics,
+            self.confidence,
+            format!("{label} quality confidence"),
+        );
+        validate_optional_unit_interval(
+            &mut diagnostics,
+            self.frame_coverage,
+            format!("{label} quality frame coverage"),
+        );
+        if self.overlap_conflict == Some(true) {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::TrackingMasksMattes,
+                format!("{label} quality reports an overlap conflict"),
+            ));
+        }
+        diagnostics
+    }
+}
+
+/// Review decision for mask/matte quality.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaskReviewDecision {
+    /// Proposed and not reviewed yet.
+    #[default]
+    Proposed,
+    /// Accepted for downstream compositing/reframing.
+    Accepted,
+    /// Needs review before use.
+    NeedsReview,
+    /// Rejected for quality or fit.
+    Rejected,
 }
 
 /// Mask boolean operation.
@@ -1561,6 +1670,9 @@ pub struct MatteSidecar {
     /// Review thumbnail paths.
     #[serde(default)]
     pub review_thumbnails: Vec<String>,
+    /// Quality and review metadata for this matte.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub quality: Option<MaskQualityScorecard>,
 }
 
 /// Color finishing workflow state.
@@ -2825,6 +2937,21 @@ fn validate_optional_confidence(
         diagnostics.push(ProfessionalDiagnostic::warning(
             area,
             format!("{label} low confidence may drift"),
+        ));
+    }
+}
+
+fn validate_optional_unit_interval(
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+    value: Option<f64>,
+    label: String,
+) {
+    if let Some(value) = value
+        && (!value.is_finite() || !(0.0..=1.0).contains(&value))
+    {
+        diagnostics.push(ProfessionalDiagnostic::error(
+            CapabilityArea::TrackingMasksMattes,
+            format!("{label} must be in 0..=1"),
         ));
     }
 }

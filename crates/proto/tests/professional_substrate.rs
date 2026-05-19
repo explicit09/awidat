@@ -7,11 +7,11 @@ use awidat_proto::professional::{
     CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
     DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
     ExpressionSource, FindingSeverity, GradeStack, HardwareAccelerationPolicy, Keyframe,
-    MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
-    PipelineReadinessReport, PreflightCheckKind, ReadinessState, ReframeKeyframe, ReframePath,
-    ReframeSmoothing, SegmentationIntent, SegmentationPrompt, SegmentationPromptKind,
-    SegmentationPromptLabel, SegmentationPromptPackage, SelectDecision, SourceRange, SourceSelect,
-    Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
+    MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MotionGraphicsTemplate, MotionPackage,
+    ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
+    ReframeKeyframe, ReframePath, ReframeSmoothing, SegmentationIntent, SegmentationPrompt,
+    SegmentationPromptKind, SegmentationPromptLabel, SegmentationPromptPackage, SelectDecision,
+    SourceRange, SourceSelect, Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
 };
 
 #[test]
@@ -510,6 +510,125 @@ fn tracking_package_validates_segmentation_prompt_packages() {
     assert!(messages.iter().any(|message| message.contains("sorted")));
     assert!(messages.iter().any(|message| message.contains("point")));
     assert!(messages.iter().any(|message| message.contains("box")));
+}
+
+#[test]
+fn tracking_package_validates_mask_quality_scorecards() {
+    let package = TrackingPackage {
+        masks: vec![MaskSidecar {
+            id: "mask-speaker".into(),
+            quality: Some(MaskQualityScorecard {
+                bbox_xyxy: Some([0.2, 0.1, 0.8, 0.9]),
+                area_px: Some(120_000),
+                coverage: Some(0.24),
+                stability: Some(0.92),
+                confidence: Some(0.88),
+                overlap_conflict: Some(false),
+                frame_coverage: Some(0.96),
+                decision: MaskReviewDecision::Accepted,
+                notes: vec!["clean silhouette".into()],
+            }),
+            ..MaskSidecar::default()
+        }],
+        mattes: vec![awidat_proto::professional::MatteSidecar {
+            id: "matte-speaker".into(),
+            alpha_source: "generated/mattes/speaker-alpha.webm".into(),
+            quality: Some(MaskQualityScorecard {
+                bbox_xyxy: Some([0.22, 0.1, 0.79, 0.92]),
+                area_px: Some(118_000),
+                coverage: Some(0.23),
+                stability: Some(0.9),
+                confidence: Some(0.86),
+                overlap_conflict: Some(false),
+                frame_coverage: Some(0.94),
+                decision: MaskReviewDecision::NeedsReview,
+                notes: vec!["minor hair edge shimmer".into()],
+            }),
+            ..awidat_proto::professional::MatteSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let json = match serde_json::to_string(&package) {
+        Ok(json) => json,
+        Err(error) => panic!("serialize mask quality: {error}"),
+    };
+    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+        Ok(package) => package,
+        Err(error) => panic!("deserialize mask quality: {error}"),
+    };
+
+    assert_eq!(
+        roundtrip
+            .masks
+            .first()
+            .and_then(|mask| mask.quality.as_ref())
+            .map(|quality| quality.decision),
+        Some(MaskReviewDecision::Accepted)
+    );
+    assert!(roundtrip.validate().is_empty());
+
+    let invalid = TrackingPackage {
+        masks: vec![MaskSidecar {
+            id: "mask-bad".into(),
+            quality: Some(MaskQualityScorecard {
+                bbox_xyxy: Some([0.8, 0.1, 0.2, 0.9]),
+                area_px: Some(0),
+                coverage: Some(1.4),
+                stability: Some(-0.1),
+                confidence: Some(1.2),
+                overlap_conflict: Some(true),
+                frame_coverage: Some(f64::NAN),
+                decision: MaskReviewDecision::Rejected,
+                notes: Vec::new(),
+            }),
+            ..MaskSidecar::default()
+        }],
+        mattes: vec![awidat_proto::professional::MatteSidecar {
+            id: "matte-bad".into(),
+            alpha_source: "".into(),
+            quality: Some(MaskQualityScorecard {
+                bbox_xyxy: Some([0.0, 0.0, 1.0, 1.0]),
+                area_px: Some(12),
+                coverage: Some(0.2),
+                stability: Some(0.1),
+                confidence: Some(0.2),
+                overlap_conflict: Some(false),
+                frame_coverage: Some(0.0),
+                decision: MaskReviewDecision::Rejected,
+                notes: Vec::new(),
+            }),
+            ..awidat_proto::professional::MatteSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let messages: Vec<String> = invalid
+        .validate()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+
+    assert!(messages.iter().any(|message| message.contains("bbox")));
+    assert!(messages.iter().any(|message| message.contains("area")));
+    assert!(messages.iter().any(|message| message.contains("coverage")));
+    assert!(messages.iter().any(|message| message.contains("stability")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("confidence"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("frame coverage"))
+    );
+    assert!(messages.iter().any(|message| message.contains("conflict")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("alpha source"))
+    );
 }
 
 #[test]
