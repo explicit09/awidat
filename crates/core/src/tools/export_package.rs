@@ -113,6 +113,8 @@ impl ToolHandler for ExportPackageTool {
         let metadata_path = package_dir.join(format!("{stem}-metadata.json"));
         let thumbnail_path = package_dir.join(format!("{stem}-thumbnail-candidates.json"));
         let preflight_path = package_dir.join(format!("{stem}-preflight.json"));
+        let recipe_json_path = package_dir.join(format!("{stem}-enhancement-recipe.json"));
+        let recipe_md_path = package_dir.join(format!("{stem}-enhancement-recipe.md"));
 
         tokio::fs::write(&srt_path, format_srt(&cues))
             .await
@@ -136,6 +138,11 @@ impl ToolHandler for ExportPackageTool {
         let preflight =
             build_package_preflight_report(&project, &args.format, &cues, spec.total_duration_s);
         write_json(&preflight_path, &preflight).await?;
+        let recipe = build_enhancement_recipe_card(&project, &args.format);
+        write_json(&recipe_json_path, &recipe).await?;
+        tokio::fs::write(&recipe_md_path, format_enhancement_recipe_markdown(&recipe))
+            .await
+            .map_err(io_err("write enhancement recipe markdown"))?;
         let job_id = ctx
             .job_manager
             .start(RenderJobSpec {
@@ -164,6 +171,8 @@ impl ToolHandler for ExportPackageTool {
                 "metadata": metadata_path,
                 "thumbnail_candidates": thumbnail_path,
                 "preflight": preflight_path,
+                "enhancement_recipe_json": recipe_json_path,
+                "enhancement_recipe_markdown": recipe_md_path,
             },
             "preflight_profile_id": preflight.profile_id,
             "preflight_finding_count": preflight.findings.len(),
@@ -277,6 +286,197 @@ struct TurnoverMediaFile {
     proxy_path: Option<String>,
     proxy_status: String,
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EnhancementRecipeCard {
+    schema_version: String,
+    format: String,
+    project_name: String,
+    color_grade_count: usize,
+    audio_chain_count: usize,
+    clip_effect_count: usize,
+    summary: Vec<String>,
+    color_grade_stacks: Vec<RecipeGradeStack>,
+    audio_chains: Vec<RecipeAudioChain>,
+    audio_meters: Vec<RecipeAudioMeter>,
+    clip_effects: Vec<RecipeClipEffect>,
+    output_format: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RecipeGradeStack {
+    id: String,
+    stages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RecipeAudioChain {
+    id: String,
+    processors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RecipeAudioMeter {
+    target: String,
+    integrated_lufs: Option<f64>,
+    true_peak_db: Option<f64>,
+    clipping: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RecipeClipEffect {
+    clip_id: String,
+    clip_name: String,
+    track: String,
+    effects: Vec<String>,
+}
+
+fn build_enhancement_recipe_card(project: &Project, format: &str) -> EnhancementRecipeCard {
+    let awidat = project.timeline.metadata.awidat.as_ref();
+    let color_grade_stacks = awidat
+        .and_then(|metadata| metadata.color_finishing.as_ref())
+        .map(|finishing| {
+            finishing
+                .grade_stacks
+                .iter()
+                .map(|stack| RecipeGradeStack {
+                    id: stack.id.clone(),
+                    stages: stack
+                        .stages
+                        .iter()
+                        .map(|stage| format!("{} ({})", stage.id, stage.kind))
+                        .collect(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let audio_chains = awidat
+        .and_then(|metadata| metadata.audio_finishing.as_ref())
+        .map(|finishing| {
+            finishing
+                .chains
+                .iter()
+                .map(|chain| RecipeAudioChain {
+                    id: chain.id.clone(),
+                    processors: chain.processors.clone(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let audio_meters = awidat
+        .and_then(|metadata| metadata.audio_finishing.as_ref())
+        .map(|finishing| {
+            finishing
+                .meters
+                .iter()
+                .map(|meter| RecipeAudioMeter {
+                    target: meter.target.clone(),
+                    integrated_lufs: meter.integrated_lufs,
+                    true_peak_db: meter.true_peak_db,
+                    clipping: meter.clipping,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let clip_effects = collect_turnover_clips(project)
+        .into_iter()
+        .filter(|clip| !clip.effects.is_empty())
+        .map(|clip| RecipeClipEffect {
+            clip_id: clip.clip_id,
+            clip_name: clip.clip_name,
+            track: clip.track,
+            effects: clip.effects,
+        })
+        .collect::<Vec<_>>();
+    let mut summary = Vec::new();
+    summary.extend(
+        color_grade_stacks
+            .iter()
+            .map(|stack| format!("Color grade stack {}", stack.id)),
+    );
+    summary.extend(
+        audio_chains
+            .iter()
+            .map(|chain| format!("Audio chain {}", chain.id)),
+    );
+    summary.extend(
+        clip_effects
+            .iter()
+            .map(|clip| format!("Clip {} effects {}", clip.clip_id, clip.effects.join(", "))),
+    );
+    EnhancementRecipeCard {
+        schema_version: "awidat.enhancement_recipe.v1".into(),
+        format: format.into(),
+        project_name: project.timeline.name.clone(),
+        color_grade_count: color_grade_stacks.len(),
+        audio_chain_count: audio_chains.len(),
+        clip_effect_count: clip_effects.len(),
+        summary,
+        color_grade_stacks,
+        audio_chains,
+        audio_meters,
+        clip_effects,
+        output_format: output_format_metadata(project),
+    }
+}
+
+fn format_enhancement_recipe_markdown(card: &EnhancementRecipeCard) -> String {
+    let mut out = String::new();
+    out.push_str("# Enhancement recipe\n\n");
+    out.push_str(&format!("- Project: {}\n", card.project_name));
+    out.push_str(&format!("- Format: {}\n", card.format));
+    out.push_str(&format!(
+        "- Color grade stacks: {}\n",
+        card.color_grade_count
+    ));
+    out.push_str(&format!("- Audio chains: {}\n", card.audio_chain_count));
+    out.push_str(&format!(
+        "- Clip effect groups: {}\n\n",
+        card.clip_effect_count
+    ));
+    out.push_str("## Summary\n\n");
+    if card.summary.is_empty() {
+        out.push_str("- No finishing recipe metadata found.\n");
+    } else {
+        for item in &card.summary {
+            out.push_str(&format!("- {item}\n"));
+        }
+    }
+    out.push_str("\n## Color\n\n");
+    for stack in &card.color_grade_stacks {
+        out.push_str(&format!("- {}: {}\n", stack.id, stack.stages.join(", ")));
+    }
+    out.push_str("\n## Audio\n\n");
+    for chain in &card.audio_chains {
+        out.push_str(&format!(
+            "- {}: {}\n",
+            chain.id,
+            chain.processors.join(", ")
+        ));
+    }
+    for meter in &card.audio_meters {
+        if let Some(lufs) = meter.integrated_lufs {
+            out.push_str(&format!("- {}: {lufs:.1} LUFS", meter.target));
+            if let Some(peak) = meter.true_peak_db {
+                out.push_str(&format!(", {peak:.1} dBTP"));
+            }
+            if meter.clipping {
+                out.push_str(", clipping detected");
+            }
+            out.push('\n');
+        }
+    }
+    out.push_str("\n## Clip effects\n\n");
+    for clip in &card.clip_effects {
+        out.push_str(&format!(
+            "- {} / {}: {}\n",
+            clip.track,
+            clip.clip_name,
+            clip.effects.join(", ")
+        ));
+    }
+    out
 }
 
 async fn write_turnover_package(
@@ -1326,7 +1526,10 @@ mod tests {
         Clip, Effect, ExternalReference, Gap, MediaReference, RationalTime, StackChild, TimeRange,
         Timeline, Track,
     };
-    use awidat_proto::professional::{FindingSeverity, PreflightCheckKind};
+    use awidat_proto::professional::{
+        AudioBus, AudioChainPreset, AudioFinishingState, AudioMeterReading, AudioRole,
+        ColorFinishingState, FindingSeverity, GradeStack, GradeStage, PreflightCheckKind,
+    };
     use awidat_proto::project::EditPlan;
 
     fn time_range(start_s: f64, duration_s: f64) -> TimeRange {
@@ -1631,6 +1834,71 @@ mod tests {
                 .iter()
                 .any(|finding| finding.check == PreflightCheckKind::Thumbnail)
         );
+    }
+
+    #[test]
+    fn enhancement_recipe_card_summarizes_finishing_state() {
+        let mut timeline = Timeline::empty("recipe-test");
+        let mut v1 = Track::empty("V1", TrackKind::Video);
+        let mut video = clip("hero", "raw/cam-a.mov", 0.0, 4.0, "c-hero");
+        video.effects.push(Effect::new("awidat.reframe"));
+        v1.children.push(TrackChild::Clip(video));
+        timeline.tracks.children.push(StackChild::Track(v1));
+        let awidat = timeline.metadata.awidat.as_mut().unwrap();
+        awidat.color_finishing = Some(ColorFinishingState {
+            grade_stacks: vec![GradeStack {
+                id: "grade-hero".into(),
+                stages: vec![GradeStage {
+                    id: "contrast".into(),
+                    kind: "contrast".into(),
+                    params: [("amount".into(), serde_json::json!(0.12))]
+                        .into_iter()
+                        .collect(),
+                }],
+            }],
+            ..ColorFinishingState::default()
+        });
+        awidat.audio_finishing = Some(AudioFinishingState {
+            buses: vec![AudioBus {
+                id: "dialogue".into(),
+                role: AudioRole::Dialogue,
+                inputs: vec!["A1".into()],
+            }],
+            chains: vec![AudioChainPreset {
+                id: "voice-polish".into(),
+                processors: vec!["noise_reduction".into(), "compressor".into()],
+            }],
+            meters: vec![AudioMeterReading {
+                target: "master".into(),
+                integrated_lufs: Some(-14.1),
+                true_peak_db: Some(-1.0),
+                ..AudioMeterReading::default()
+            }],
+            ..AudioFinishingState::default()
+        });
+        awidat.extra.insert(
+            "output_format".into(),
+            serde_json::json!({"aspect_ratio": "9:16", "safe_area_violations": 0}),
+        );
+        let project = project_with_timeline(timeline);
+
+        let card = build_enhancement_recipe_card(&project, "shorts");
+        let markdown = format_enhancement_recipe_markdown(&card);
+
+        assert_eq!(card.format, "shorts");
+        assert_eq!(card.color_grade_count, 1);
+        assert_eq!(card.audio_chain_count, 1);
+        assert_eq!(card.clip_effect_count, 1);
+        assert!(card.summary.iter().any(|item| item.contains("grade-hero")));
+        assert!(
+            card.summary
+                .iter()
+                .any(|item| item.contains("voice-polish"))
+        );
+        assert!(markdown.contains("# Enhancement recipe"));
+        assert!(markdown.contains("grade-hero"));
+        assert!(markdown.contains("awidat.reframe"));
+        assert!(markdown.contains("-14.1 LUFS"));
     }
 
     #[test]

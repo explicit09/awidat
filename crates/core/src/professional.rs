@@ -2061,6 +2061,7 @@ pub fn derive_vfx_pipeline_package(timeline: &Timeline) -> VfxPipelinePackage {
         composition_graphs,
         tracking_package: TrackingPackage {
             tracks,
+            reframe_paths: Vec::new(),
             masks,
             mattes,
         },
