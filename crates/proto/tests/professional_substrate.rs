@@ -1,5 +1,7 @@
 //! Professional substrate schema acceptance tests.
 
+use std::collections::BTreeMap;
+
 use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::professional::{
     AssetCatalog, AssetQuery, AssetReadiness, AssetRecord, AssetRole, AudioBus,
@@ -8,11 +10,12 @@ use awidat_proto::professional::{
     DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
     ExpressionSource, FindingSeverity, GradeStack, GroundingBoxFormat, GroundingDetection,
     GroundingEvidence, HardwareAccelerationPolicy, Keyframe, MaskQualityScorecard,
-    MaskReviewDecision, MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
-    PipelineReadinessReport, PreflightCheckKind, ReadinessState, ReframeKeyframe, ReframePath,
-    ReframeSmoothing, SegmentationIntent, SegmentationPrompt, SegmentationPromptKind,
-    SegmentationPromptLabel, SegmentationPromptPackage, SelectDecision, SourceRange, SourceSelect,
-    Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
+    MaskReviewDecision, MaskSidecar, MatteGenerationFallback, MatteGenerationOutput,
+    MatteGenerationRecipe, MatteGenerationSettings, MotionGraphicsTemplate, MotionPackage,
+    ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
+    ReframeKeyframe, ReframePath, ReframeSmoothing, SegmentationIntent, SegmentationPrompt,
+    SegmentationPromptKind, SegmentationPromptLabel, SegmentationPromptPackage, SelectDecision,
+    SourceRange, SourceSelect, Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
 };
 
 #[test]
@@ -750,6 +753,108 @@ fn tracking_package_validates_mask_quality_scorecards() {
         messages
             .iter()
             .any(|message| message.contains("alpha source"))
+    );
+}
+
+#[test]
+fn tracking_package_validates_matte_generation_recipe() {
+    let package = TrackingPackage {
+        mattes: vec![awidat_proto::professional::MatteSidecar {
+            id: "matte-speaker".into(),
+            alpha_source: "generated/mattes/speaker-alpha.png".into(),
+            generation: Some(MatteGenerationRecipe {
+                source: "local_matte_tool".into(),
+                model: Some("portrait-v1".into()),
+                output: MatteGenerationOutput::AlphaMatte,
+                settings: MatteGenerationSettings {
+                    alpha_matting: true,
+                    foreground_threshold: Some(240),
+                    background_threshold: Some(10),
+                    erode_size: Some(12),
+                    post_process_mask: true,
+                    background_color_rgba: Some([0, 0, 0, 0]),
+                    fallback: Some(MatteGenerationFallback::SimpleCutout),
+                },
+                options: BTreeMap::from([("sam_prompt".into(), serde_json::json!("speaker"))]),
+            }),
+            ..awidat_proto::professional::MatteSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let json = match serde_json::to_string(&package) {
+        Ok(json) => json,
+        Err(error) => panic!("serialize matte generation: {error}"),
+    };
+    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+        Ok(package) => package,
+        Err(error) => panic!("deserialize matte generation: {error}"),
+    };
+
+    let generation = match roundtrip.mattes[0].generation.as_ref() {
+        Some(generation) => generation,
+        None => panic!("matte generation recipe should roundtrip"),
+    };
+    assert_eq!(generation.model.as_deref(), Some("portrait-v1"));
+    assert_eq!(
+        generation.settings.fallback,
+        Some(MatteGenerationFallback::SimpleCutout)
+    );
+    assert!(roundtrip.validate().is_empty());
+
+    let invalid = TrackingPackage {
+        mattes: vec![awidat_proto::professional::MatteSidecar {
+            id: "matte-bad".into(),
+            alpha_source: "generated/mattes/bad.png".into(),
+            generation: Some(MatteGenerationRecipe {
+                source: "".into(),
+                model: Some(" ".into()),
+                output: MatteGenerationOutput::AlphaMatte,
+                settings: MatteGenerationSettings {
+                    alpha_matting: true,
+                    foreground_threshold: Some(300),
+                    background_threshold: Some(260),
+                    erode_size: Some(0),
+                    post_process_mask: false,
+                    background_color_rgba: Some([0, 0, 0, 300]),
+                    fallback: Some(MatteGenerationFallback::OriginalFrame),
+                },
+                options: BTreeMap::from([(" ".into(), serde_json::json!(true))]),
+            }),
+            ..awidat_proto::professional::MatteSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let messages: Vec<String> = invalid
+        .validate()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+
+    assert!(messages.iter().any(|message| message.contains("source")));
+    assert!(messages.iter().any(|message| message.contains("model")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("foreground threshold"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("background threshold"))
+    );
+    assert!(messages.iter().any(|message| message.contains("erode")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("background color"))
+    );
+    assert!(messages.iter().any(|message| message.contains("fallback")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("option key"))
     );
 }
 

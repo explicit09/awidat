@@ -1038,6 +1038,9 @@ impl TrackingPackage {
                     format!("matte {} has an empty alpha source", matte.id),
                 ));
             }
+            if let Some(generation) = &matte.generation {
+                diagnostics.extend(generation.validate(format!("matte {}", matte.id)));
+            }
             validate_optional_confidence(
                 &mut diagnostics,
                 CapabilityArea::TrackingMasksMattes,
@@ -1880,9 +1883,165 @@ pub struct MatteSidecar {
     /// Review thumbnail paths.
     #[serde(default)]
     pub review_thumbnails: Vec<String>,
+    /// Reproducible generation recipe for this matte.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub generation: Option<MatteGenerationRecipe>,
     /// Quality and review metadata for this matte.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub quality: Option<MaskQualityScorecard>,
+}
+
+/// Model/tool settings that produced a matte or cutout artifact.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MatteGenerationRecipe {
+    /// Tool, adapter, or model provider label.
+    pub source: String,
+    /// Optional model/checkpoint label.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub model: Option<String>,
+    /// Output artifact kind.
+    #[serde(default)]
+    pub output: MatteGenerationOutput,
+    /// Matte processing settings.
+    #[serde(default)]
+    pub settings: MatteGenerationSettings,
+    /// Adapter-specific options that should remain opaque to the core protocol.
+    #[serde(default)]
+    pub options: BTreeMap<String, serde_json::Value>,
+}
+
+impl MatteGenerationRecipe {
+    fn validate(&self, label: String) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.source.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("{label} generation source is empty"),
+            ));
+        }
+        if self
+            .model
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("{label} generation model is empty"),
+            ));
+        }
+        diagnostics.extend(self.settings.validate(label.clone(), self.output));
+        for key in self.options.keys() {
+            if key.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!("{label} generation option key is empty"),
+                ));
+            }
+        }
+        diagnostics
+    }
+}
+
+/// Output kind produced by a matte generation recipe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatteGenerationOutput {
+    /// Binary or grayscale mask only.
+    MaskOnly,
+    /// Alpha matte/cutout with transparency.
+    #[default]
+    AlphaMatte,
+    /// Foreground cutout image.
+    Cutout,
+    /// Foreground composited over a replacement background.
+    BackgroundReplaced,
+}
+
+/// Fallback used when the preferred matte generation mode fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatteGenerationFallback {
+    /// Use a simple binary cutout.
+    SimpleCutout,
+    /// Apply the mask directly as alpha.
+    PutAlpha,
+    /// Keep the original frame without a usable matte.
+    OriginalFrame,
+}
+
+/// Processing settings for a generated matte.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MatteGenerationSettings {
+    /// Whether alpha matting was requested.
+    #[serde(default)]
+    pub alpha_matting: bool,
+    /// Foreground threshold in 0..=255.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub foreground_threshold: Option<u16>,
+    /// Background threshold in 0..=255.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub background_threshold: Option<u16>,
+    /// Erosion structure size in pixels.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub erode_size: Option<u32>,
+    /// Whether mask post-processing was requested.
+    #[serde(default)]
+    pub post_process_mask: bool,
+    /// Optional replacement background color as RGBA values in 0..=255.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub background_color_rgba: Option<[u16; 4]>,
+    /// Fallback behavior when the preferred mode fails.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub fallback: Option<MatteGenerationFallback>,
+}
+
+impl MatteGenerationSettings {
+    fn validate(
+        &self,
+        label: String,
+        output: MatteGenerationOutput,
+    ) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        validate_optional_byte_value(
+            &mut diagnostics,
+            self.foreground_threshold,
+            format!("{label} generation foreground threshold"),
+        );
+        validate_optional_byte_value(
+            &mut diagnostics,
+            self.background_threshold,
+            format!("{label} generation background threshold"),
+        );
+        if let Some(erode_size) = self.erode_size
+            && erode_size == 0
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("{label} generation erode size must be greater than zero"),
+            ));
+        }
+        if let Some(color) = self.background_color_rgba
+            && color.iter().any(|value| *value > 255)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("{label} generation background color must be in 0..=255"),
+            ));
+        }
+        if self.fallback == Some(MatteGenerationFallback::OriginalFrame)
+            && matches!(
+                output,
+                MatteGenerationOutput::MaskOnly | MatteGenerationOutput::AlphaMatte
+            )
+        {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::TrackingMasksMattes,
+                format!("{label} generation fallback cannot preserve a usable matte"),
+            ));
+        }
+        diagnostics
+    }
 }
 
 /// Color finishing workflow state.
@@ -3162,6 +3321,21 @@ fn validate_optional_unit_interval(
         diagnostics.push(ProfessionalDiagnostic::error(
             CapabilityArea::TrackingMasksMattes,
             format!("{label} must be in 0..=1"),
+        ));
+    }
+}
+
+fn validate_optional_byte_value(
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+    value: Option<u16>,
+    label: String,
+) {
+    if let Some(value) = value
+        && value > 255
+    {
+        diagnostics.push(ProfessionalDiagnostic::error(
+            CapabilityArea::TrackingMasksMattes,
+            format!("{label} must be in 0..=255"),
         ));
     }
 }
