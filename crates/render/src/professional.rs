@@ -13,11 +13,11 @@ use awidat_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, CapabilityArea, ColorFinishingState, CompositionGraph,
     CompositionNode, CompositionNodeType, DeliveryPreflightInput, DeliveryProfile, Easing,
-    ExpressionLink, ExpressionSource, FindingSeverity, GradeStack, GradeStage, Keyframe,
-    KeyframeInterpolation, MaskSidecar, MatteSidecar, MotionGraphicsTemplate, MotionPackage,
-    PackageManifest, ParameterAnimation, PreflightReport, ProfessionalDiagnostic, ReframePath,
-    ReframeSmoothing, ReviewStatus, SafeAreaRule, TemplateSlot, TemplateSlotKind, TrackKind,
-    TrackSample, TrackSidecar, TrackingPackage,
+    ExportPreset, ExpressionLink, ExpressionSource, FindingSeverity, GradeStack, GradeStage,
+    Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar, MotionGraphicsTemplate,
+    MotionPackage, PackageManifest, ParameterAnimation, PreflightReport, ProfessionalDiagnostic,
+    ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule, TemplateSlot, TemplateSlotKind,
+    TrackKind, TrackSample, TrackSidecar, TrackingPackage,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -60,6 +60,14 @@ pub enum ProfessionalEngineError {
     /// A grade stack has no supported stages.
     #[error("grade stack {0} has no supported render stages")]
     UnsupportedGradeStack(String),
+    /// An export preset failed validation before lowering.
+    #[error("export preset {preset_id} is invalid: {message}")]
+    InvalidExportPreset {
+        /// Preset id.
+        preset_id: String,
+        /// Validation message.
+        message: String,
+    },
     /// A motion package conflicts with existing explicit animations.
     #[error("motion package {package_id} conflicts with existing animation {animation_id}")]
     MotionPackageConflict {
@@ -1630,6 +1638,51 @@ pub fn apply_delivery_profile_to_spec(
     }
     spec.args.splice(insertion..insertion, args);
     spec
+}
+
+/// Apply a validated export preset to an existing render job spec.
+pub fn apply_export_preset_to_spec(
+    mut spec: RenderJobSpec,
+    preset: &ExportPreset,
+) -> Result<RenderJobSpec, ProfessionalEngineError> {
+    if let Some(diagnostic) = preset
+        .validate()
+        .into_iter()
+        .find(|diagnostic| diagnostic.severity == FindingSeverity::Error)
+    {
+        return Err(ProfessionalEngineError::InvalidExportPreset {
+            preset_id: preset.id.clone(),
+            message: diagnostic.message,
+        });
+    }
+    let insertion = spec.args.len().saturating_sub(1);
+    let mut args = Vec::new();
+    if preset.video.is_some() {
+        args.extend([
+            "-s:v".into(),
+            format!("{}x{}", preset.profile.width, preset.profile.height),
+        ]);
+    }
+    if let Some(video) = &preset.video {
+        args.extend(["-c:v".into(), video.codec.clone()]);
+        if let Some(bitrate) = video.bitrate_kbps.or(preset.profile.video_bitrate_kbps) {
+            args.extend(["-b:v".into(), format!("{bitrate}k")]);
+        }
+        if let Some(frame_rate) = video.frame_rate {
+            args.extend(["-r".into(), format!("{frame_rate}")]);
+        }
+    }
+    if let Some(audio) = &preset.audio {
+        args.extend(["-c:a".into(), audio.codec.clone()]);
+        if let Some(bitrate) = audio.bitrate_kbps {
+            args.extend(["-b:a".into(), format!("{bitrate}k")]);
+        }
+        args.extend(["-ar".into(), audio.sample_rate_hz.to_string()]);
+        args.extend(["-ac".into(), audio.channels.to_string()]);
+    }
+    args.extend(["-f".into(), preset.output.container.clone()]);
+    spec.args.splice(insertion..insertion, args);
+    Ok(spec)
 }
 
 /// Build a queued delivery package with actionable fix references.

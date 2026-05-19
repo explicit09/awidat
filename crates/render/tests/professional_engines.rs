@@ -7,16 +7,16 @@ use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, ColorFinishingState, CompositionGraph, CompositionNode,
-    DeliveryPreflightInput, DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity,
-    GradeStack, GradeStage, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
+    DeliveryPreflightInput, DeliveryProfile, ExportPreset, ExpressionLink, ExpressionSource,
+    FindingSeverity, GradeStack, GradeStage, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
     MotionGraphicsTemplate, MotionPackage, ParameterAnimation, ReframeKeyframe, ReframePath,
     ReframeSmoothing, ReviewStatus, SafeAreaRule, TemplateSlot, TemplateSlotKind, TrackKind,
     TrackSample, TrackSidecar, TrackingPackage,
 };
 use awidat_render::professional::{
     DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
-    TrackCorrection, TrackingEvidence, apply_delivery_profile_to_spec, apply_motion_package,
-    built_in_motion_templates, diagnose_effect_parameter_animation,
+    TrackCorrection, TrackingEvidence, apply_delivery_profile_to_spec, apply_export_preset_to_spec,
+    apply_motion_package, built_in_motion_templates, diagnose_effect_parameter_animation,
     effect_parameter_capability_matrix, evaluate_expression_links, fill_motion_template,
     generate_tracking_package, inspect_composition_graph, lower_audio_finishing,
     lower_composition_graph, lower_grade_stack, lower_motion_template, lower_reframe_path,
@@ -1058,6 +1058,32 @@ fn delivery_profile_updates_render_spec_and_queue_manifest() {
         queued.manifest.validation_reports,
         vec![queued.preflight.id.clone()]
     );
+}
+
+#[test]
+fn export_preset_lowers_codecs_container_and_audio_settings() {
+    let preset = ExportPreset::vertical_short_form();
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let profiled = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(spec) => spec,
+        Err(err) => panic!("preset lowers: {err}"),
+    };
+
+    assert!(profiled.args.windows(2).any(|w| w == ["-s:v", "1080x1920"]));
+    assert!(profiled.args.windows(2).any(|w| w == ["-c:v", "libx264"]));
+    assert!(profiled.args.windows(2).any(|w| w == ["-b:v", "12000k"]));
+    assert!(profiled.args.windows(2).any(|w| w == ["-c:a", "aac"]));
+    assert!(profiled.args.windows(2).any(|w| w == ["-b:a", "192k"]));
+    assert!(profiled.args.windows(2).any(|w| w == ["-ar", "48000"]));
+    assert!(profiled.args.windows(2).any(|w| w == ["-ac", "2"]));
+    assert!(profiled.args.windows(2).any(|w| w == ["-f", "mp4"]));
 }
 
 fn node(
