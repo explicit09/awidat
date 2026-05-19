@@ -238,8 +238,8 @@ async fn editorial_workflow_find_view_inspect_read_apply() {
     assert_eq!(v["total_segments"], 1);
     assert_eq!(v["segments"][0]["text"], snippet_for(0));
 
-    // Step 6: apply_edl deletes the kitchen clip via transcript anchor,
-    // then verifies the timeline shrank from 3 to 2 clips on disk.
+    // Step 6: apply_edl lifts the kitchen clip via transcript anchor,
+    // then verifies a timing-preserving gap replaced it on disk.
     let apply = registry.get("apply_edl").unwrap();
     let edl = "\
 *** Begin EDL
@@ -262,14 +262,18 @@ async fn editorial_workflow_find_view_inspect_read_apply() {
     let StackChild::Track(t) = &after.timeline.tracks.children[0] else {
         panic!("expected track at index 0");
     };
-    assert_eq!(t.children.len(), 2, "kitchen clip removed");
+    assert_eq!(t.children.len(), 3, "kitchen clip replaced by gap");
     let TrackChild::Clip(c0) = &t.children[0] else {
         panic!()
     };
-    let TrackChild::Clip(c1) = &t.children[1] else {
+    let TrackChild::Gap(gap) = &t.children[1] else {
+        panic!("clip-1 slot should be a timing gap")
+    };
+    let TrackChild::Clip(c1) = &t.children[2] else {
         panic!()
     };
     assert_eq!(c0.name, "clip-0");
+    assert!((gap.source_range.duration.to_seconds() - 5.0).abs() < 1e-9);
     assert_eq!(c1.name, "clip-2", "clip-1 (kitchen) was deleted");
 
     // Step 7: re-running view_timeline reflects the new shape.
@@ -286,7 +290,7 @@ async fn editorial_workflow_find_view_inspect_read_apply() {
         !result.content.contains("clip \"clip-1\""),
         "clip-1 must be gone after apply_edl"
     );
-    assert!(result.content.contains("total_duration=10.000s"));
+    assert!(result.content.contains("total_duration=15.000s"));
 }
 
 #[tokio::test]

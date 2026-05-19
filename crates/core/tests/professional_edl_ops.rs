@@ -4,7 +4,11 @@ use awidat_core::edl::anchor::AnchorContext;
 use awidat_core::edl::apply::apply;
 use awidat_core::edl::op::{Anchor, EdlOp, ProfessionalTimelineEdit};
 use awidat_core::edl::parser::parse;
-use awidat_proto::otio::Timeline;
+use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
+use awidat_proto::otio::{
+    Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+    Timeline, Track, TrackChild, TrackKind,
+};
 use awidat_proto::professional::{
     AnimationTarget, CapabilityArea, CompositionGraph, DeliveryProfile, Keyframe,
     ParameterAnimation, SourceRange, WorkflowLens,
@@ -171,4 +175,72 @@ fn lowered_professional_timeline_edit_records_metadata() {
             .extra
             .contains_key("last_professional_timeline_edit")
     );
+}
+
+#[test]
+fn delete_clip_preserves_timeline_timing_with_gap() {
+    let timeline = timeline_with_three_clip_track();
+    let envelope = match parse(
+        r#"
+*** Begin EDL
+*** Delete Clip
+@@ anchor: transcript_snippet="bravo snippet"
+*** End EDL
+"#,
+    ) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("delete clip edl should parse: {error}"),
+    };
+
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(error) => panic!("delete clip should apply: {error}"),
+    };
+    let StackChild::Track(track) = &timeline.tracks.children[0] else {
+        panic!("expected video track");
+    };
+
+    assert_eq!(outcome.applied.len(), 1);
+    assert_eq!(track.children.len(), 3);
+    assert!(matches!(&track.children[0], TrackChild::Clip(clip) if clip.name == "clip-0"));
+    assert!(
+        matches!(&track.children[1], TrackChild::Gap(gap) if (gap.source_range.duration.to_seconds() - 5.0).abs() < 1e-9)
+    );
+    assert!(matches!(&track.children[2], TrackChild::Clip(clip) if clip.name == "clip-2"));
+}
+
+fn timeline_with_three_clip_track() -> Timeline {
+    let mut timeline = Timeline::empty("primitive-fixture");
+    let mut track = Track::empty("V1", TrackKind::Video);
+    for (index, transcript_snippet) in ["alpha snippet", "bravo snippet", "charlie snippet"]
+        .into_iter()
+        .enumerate()
+    {
+        track
+            .children
+            .push(TrackChild::Clip(test_clip(index, transcript_snippet)));
+    }
+    timeline.tracks.children.push(StackChild::Track(track));
+    timeline
+}
+
+fn test_clip(index: usize, transcript_snippet: &str) -> Clip {
+    let mut clip = Clip::empty(format!("clip-{index}"));
+    clip.media_reference =
+        MediaReference::External(ExternalReference::new(format!("raw/{index}.mp4")));
+    clip.source_range = Some(TimeRange::new(
+        RationalTime::new(0.0, 24.0),
+        RationalTime::new(5.0 * 24.0, 24.0),
+    ));
+    clip.metadata = ClipMetadata {
+        awidat: Some(AwidatClipMetadata {
+            anchor: Some(AwAnchor {
+                transcript_snippet: Some(transcript_snippet.to_string()),
+                ..AwAnchor::default()
+            }),
+            ..AwidatClipMetadata::default()
+        }),
+        ..ClipMetadata::default()
+    };
+    clip
 }

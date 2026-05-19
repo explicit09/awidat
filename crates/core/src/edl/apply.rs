@@ -2482,14 +2482,23 @@ fn apply_delete(
 ) -> Result<String, ApplyError> {
     let _ = (anchor, ctx);
     let locator = required_locator(index, locator)?;
-    let overlay_shift = broadcast_overlay_shift_for_delete(working, &locator);
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
             message: "anchor resolved to a non-track stack child".into(),
         });
     };
-    let removed = track.children.remove(locator.child_index);
+    let removed_duration_s = child_duration(&track.children[locator.child_index]);
+    let gap_rate = track.children[locator.child_index]
+        .as_clip_rate()
+        .unwrap_or(24.0);
+    let removed = std::mem::replace(
+        &mut track.children[locator.child_index],
+        TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+            removed_duration_s,
+            gap_rate,
+        )),
+    );
     let (name, removed_clip_id) = match &removed {
         TrackChild::Clip(c) => (
             c.name.clone(),
@@ -2497,12 +2506,10 @@ fn apply_delete(
         ),
         _ => ("<non-clip>".to_string(), None),
     };
-    let removed_transitions = remove_transitions_around_deleted_child(track, locator.child_index);
+    let removed_transitions = remove_transitions_around_child(track, locator.child_index);
+    merge_adjacent_gaps(&mut track.children, gap_rate);
     if let Some(removed_clip_id) = removed_clip_id {
         remove_cut_boundaries_for_clip(working, &removed_clip_id);
-    }
-    if let Some((cut_point, duration)) = overlay_shift {
-        shift_broadcast_overlay_timestamps(working, cut_point, duration);
     }
     if removed_transitions == 0 {
         Ok(format!("deleted clip {name:?}"))
@@ -2513,13 +2520,13 @@ fn apply_delete(
     }
 }
 
-fn remove_transitions_around_deleted_child(
-    track: &mut awidat_proto::otio::Track,
-    index: usize,
-) -> usize {
+fn remove_transitions_around_child(track: &mut awidat_proto::otio::Track, index: usize) -> usize {
     let mut removed = 0;
-    if matches!(track.children.get(index), Some(TrackChild::Transition(_))) {
-        track.children.remove(index);
+    if matches!(
+        track.children.get(index + 1),
+        Some(TrackChild::Transition(_))
+    ) {
+        track.children.remove(index + 1);
         removed += 1;
     }
     if index > 0
@@ -5472,66 +5479,6 @@ fn title_animation_str(a: super::op::TitleAnimation) -> &'static str {
     }
 }
 
-fn primary_content_track_index(timeline: &Timeline) -> Option<usize> {
-    timeline
-        .tracks
-        .children
-        .iter()
-        .enumerate()
-        .find_map(|(i, sc)| match sc {
-            StackChild::Track(track) if !is_titles_track(track) => Some(i),
-            _ => None,
-        })
-}
-
-fn broadcast_overlay_shift_for_delete(
-    timeline: &Timeline,
-    locator: &ClipLocator,
-) -> Option<(f64, f64)> {
-    if primary_content_track_index(timeline) != Some(locator.track_index) {
-        return None;
-    }
-    let StackChild::Track(track) = &timeline.tracks.children[locator.track_index] else {
-        return None;
-    };
-    if is_titles_track(track) {
-        return None;
-    }
-    let child = track.children.get(locator.child_index)?;
-    let duration = child_duration(child);
-    if !duration.is_finite() || duration <= 0.0 {
-        return None;
-    }
-    Some((
-        track_time_at(timeline, locator.track_index, locator.child_index),
-        duration,
-    ))
-}
-
-fn shift_broadcast_overlay_timestamps(timeline: &mut Timeline, cut_point: f64, duration: f64) {
-    if !cut_point.is_finite() || !duration.is_finite() || duration <= 0.0 {
-        return;
-    }
-    let meta = timeline_awidat_metadata(timeline);
-    let Some(overlay) = meta.broadcast_overlay.as_mut() else {
-        return;
-    };
-    shift_broadcast_timed_entries(&mut overlay.topics, cut_point, duration);
-    shift_broadcast_timed_entries(&mut overlay.chapters, cut_point, duration);
-}
-
-fn shift_broadcast_timed_entries(
-    entries: &mut [BroadcastTimedEntry],
-    cut_point: f64,
-    duration: f64,
-) {
-    for entry in entries {
-        if entry.time_seconds > cut_point {
-            entry.time_seconds = (entry.time_seconds - duration).max(0.0);
-        }
-    }
-}
-
 fn find_track_mut<'a>(
     timeline: &'a mut Timeline,
     track_name: &str,
@@ -6245,9 +6192,12 @@ mod tests {
         let StackChild::Track(t) = &new_tl.tracks.children[0] else {
             panic!()
         };
-        assert_eq!(t.children.len(), 2);
-        // Remaining clips: alpha, charlie.
-        let TrackChild::Clip(c1) = &t.children[1] else {
+        assert_eq!(t.children.len(), 3);
+        // Timeline timing is preserved: alpha, lifted gap, charlie.
+        assert!(
+            matches!(&t.children[1], TrackChild::Gap(gap) if (gap.source_range.duration.to_seconds() - 5.0).abs() < 1e-9)
+        );
+        let TrackChild::Clip(c1) = &t.children[2] else {
             panic!()
         };
         assert_eq!(c1.name, "clip-2");
@@ -6326,7 +6276,7 @@ mod tests {
         let StackChild::Track(track) = &new_tl.tracks.children[0] else {
             panic!("expected video track");
         };
-        let TrackChild::Clip(clip_two) = &track.children[1] else {
+        let TrackChild::Clip(clip_two) = &track.children[2] else {
             panic!("expected clip two after delete");
         };
 
@@ -6405,11 +6355,14 @@ mod tests {
         let StackChild::Track(t) = &new_tl.tracks.children[0] else {
             panic!()
         };
-        assert_eq!(t.children.len(), 2);
+        assert_eq!(t.children.len(), 3);
+        assert!(matches!(&t.children[0], TrackChild::Clip(_)));
+        assert!(matches!(&t.children[1], TrackChild::Gap(_)));
+        assert!(matches!(&t.children[2], TrackChild::Clip(_)));
         assert!(
             t.children
                 .iter()
-                .all(|child| matches!(child, TrackChild::Clip(_)))
+                .all(|child| !matches!(child, TrackChild::Transition(_)))
         );
     }
 
@@ -6700,9 +6653,9 @@ mod tests {
     }
 
     #[test]
-    fn split_then_delete_in_one_envelope_cuts_middle_out() {
-        // The headline editorial flow: cut a phrase out of the middle
-        // of a clip by splitting twice and deleting the middle piece.
+    fn split_then_delete_in_one_envelope_lifts_middle_out() {
+        // The headline editorial flow: isolate a phrase in the middle
+        // of a clip by splitting twice and lifting the middle piece.
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
             ops: vec![
@@ -6721,7 +6674,7 @@ mod tests {
                     },
                     at_s: 4.0,
                 },
-                // Delete the now-isolated middle.
+                // Lift the now-isolated middle, leaving timeline timing intact.
                 EdlOp::DeleteClip {
                     anchor: Anchor::ClipUuid {
                         uuid: "clip-1-b".into(),
@@ -6734,8 +6687,11 @@ mod tests {
         let StackChild::Track(t) = &new_tl.tracks.children[0] else {
             panic!()
         };
-        // alpha, bravo[0..2], bravo-b-b[4..5], charlie = 4 clips.
-        assert_eq!(t.children.len(), 4);
+        // alpha, bravo[0..2], lifted gap[2..4], bravo-b-b[4..5], charlie.
+        assert_eq!(t.children.len(), 5);
+        assert!(
+            matches!(&t.children[2], TrackChild::Gap(gap) if (gap.source_range.duration.to_seconds() - 2.0).abs() < 1e-9)
+        );
     }
 
     #[test]
@@ -7269,12 +7225,15 @@ mod tests {
         let StackChild::Track(t) = &new_tl.tracks.children[0] else {
             panic!()
         };
-        // Alpha trimmed, bravo unchanged, charlie gone.
-        assert_eq!(t.children.len(), 2);
+        // Alpha trimmed, bravo unchanged, charlie lifted into a timing gap.
+        assert_eq!(t.children.len(), 3);
         let TrackChild::Clip(alpha) = &t.children[0] else {
             panic!()
         };
         assert!((alpha.source_range.as_ref().unwrap().duration.to_seconds() - 2.0).abs() < 1e-9);
+        assert!(
+            matches!(&t.children[2], TrackChild::Gap(gap) if (gap.source_range.duration.to_seconds() - 5.0).abs() < 1e-9)
+        );
     }
 
     #[test]
@@ -9456,7 +9415,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_primary_clip_shifts_broadcast_overlay_topics_and_chapters() {
+    fn delete_primary_clip_preserves_broadcast_overlay_topics_and_chapters() {
         let mut tl = timeline_with_three_clips();
         let mut config = BroadcastOverlayConfig::default();
         config.topics = vec![
@@ -9498,8 +9457,8 @@ mod tests {
             .and_then(|m| m.broadcast_overlay.as_ref())
             .unwrap();
         assert_eq!(overlay.topics[0].time_seconds, 4.0);
-        assert_eq!(overlay.topics[1].time_seconds, 7.0);
-        assert_eq!(overlay.chapters[0].time_seconds, 9.0);
+        assert_eq!(overlay.topics[1].time_seconds, 12.0);
+        assert_eq!(overlay.chapters[0].time_seconds, 14.0);
     }
 
     #[test]
