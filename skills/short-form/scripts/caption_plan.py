@@ -19,7 +19,9 @@ CAPTION_STYLES = {
         "font_weight": "normal",
         "animation": "fade_in_out",
         "background": "rgba(0,0,0,0.64)",
+        "stroke_width": 3,
         "safe_area": "mobile",
+        "z_index": 80,
     },
     "impact": {
         "position": "center",
@@ -28,7 +30,9 @@ CAPTION_STYLES = {
         "font_weight": "bold",
         "animation": "pop_in",
         "background": "transparent",
+        "stroke_width": 5,
         "safe_area": "mobile",
+        "z_index": 80,
     },
     "boxed": {
         "position": "bottom",
@@ -37,7 +41,9 @@ CAPTION_STYLES = {
         "font_weight": "bold",
         "animation": "reveal",
         "background": "rgba(0,0,0,0.72)",
+        "stroke_width": 2,
         "safe_area": "mobile",
+        "z_index": 80,
     },
     "minimal": {
         "position": "bottom",
@@ -46,7 +52,9 @@ CAPTION_STYLES = {
         "font_weight": "normal",
         "animation": "none",
         "background": "rgba(0,0,0,0.48)",
+        "stroke_width": 2,
         "safe_area": "mobile",
+        "z_index": 80,
     },
 }
 
@@ -56,6 +64,15 @@ READABILITY_DEFAULTS = {
     "max_duration_s": 6.0,
     "max_chars_per_line": 32,
     "max_lines": 2,
+}
+
+GEOMETRY_DEFAULTS = {
+    "frame_width": 1080,
+    "frame_height": 1920,
+    "safe_margin_x": 72,
+    "safe_margin_y": 144,
+    "min_stroke_width": 2,
+    "overlay_z_index": 40,
 }
 
 
@@ -281,6 +298,143 @@ def build_readability_scorecard(
     }
 
 
+def _caption_box(
+    phrase: dict,
+    *,
+    frame_width: int,
+    frame_height: int,
+    safe_margin_y: int,
+) -> dict:
+    text = str(phrase.get("text", "")).strip()
+    lines = _caption_lines(text)
+    font_size = float(phrase.get("font_size", CAPTION_STYLES["classic"]["font_size"]))
+    longest_line = max((len(line) for line in lines), default=0)
+    width = int(round(longest_line * font_size * 0.58 + font_size * 0.72))
+    height = int(round(len(lines) * font_size * 1.2 + font_size * 0.64))
+    x = int(round((frame_width - width) / 2))
+    position = str(phrase.get("position", "bottom"))
+    if position == "top":
+        y = safe_margin_y
+    elif position == "center":
+        y = int(round((frame_height - height) / 2))
+    else:
+        y = frame_height - safe_margin_y - height
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _inside_safe_area(
+    box: dict,
+    *,
+    frame_width: int,
+    frame_height: int,
+    safe_margin_x: int,
+    safe_margin_y: int,
+) -> bool:
+    return (
+        box["x"] >= safe_margin_x
+        and box["y"] >= safe_margin_y
+        and box["x"] + box["width"] <= frame_width - safe_margin_x
+        and box["y"] + box["height"] <= frame_height - safe_margin_y
+    )
+
+
+def _has_visible_caption_backing(phrase: dict, *, min_stroke_width: int) -> bool:
+    background = str(phrase.get("background", "")).strip().lower()
+    stroke_width = float(phrase.get("stroke_width", 0))
+    return stroke_width >= min_stroke_width or background not in {"", "transparent", "none"}
+
+
+def build_geometry_scorecard(
+    phrases: list[dict],
+    *,
+    frame_width: int = GEOMETRY_DEFAULTS["frame_width"],
+    frame_height: int = GEOMETRY_DEFAULTS["frame_height"],
+    safe_margin_x: int = GEOMETRY_DEFAULTS["safe_margin_x"],
+    safe_margin_y: int = GEOMETRY_DEFAULTS["safe_margin_y"],
+    min_stroke_width: int = GEOMETRY_DEFAULTS["min_stroke_width"],
+    overlay_z_index: int = GEOMETRY_DEFAULTS["overlay_z_index"],
+) -> dict:
+    if frame_width <= 0 or frame_height <= 0:
+        raise ValueError("frame dimensions must be positive")
+    if safe_margin_x < 0 or safe_margin_y < 0:
+        raise ValueError("safe margins must be non-negative")
+    if min_stroke_width < 0:
+        raise ValueError("min_stroke_width must be non-negative")
+
+    cue_reports = []
+    all_issues = []
+    for index, phrase in enumerate(phrases, start=1):
+        box = _caption_box(
+            phrase,
+            frame_width=frame_width,
+            frame_height=frame_height,
+            safe_margin_y=safe_margin_y,
+        )
+        inside_safe_area = _inside_safe_area(
+            box,
+            frame_width=frame_width,
+            frame_height=frame_height,
+            safe_margin_x=safe_margin_x,
+            safe_margin_y=safe_margin_y,
+        )
+        has_backing = _has_visible_caption_backing(
+            phrase,
+            min_stroke_width=min_stroke_width,
+        )
+        z_index = int(phrase.get("z_index", 0))
+        issues = []
+
+        def add_issue(code: str, message: str) -> None:
+            issue = {"cue": index, "code": code, "message": message}
+            issues.append(issue)
+            all_issues.append(issue)
+
+        if not inside_safe_area:
+            add_issue("outside_safe_area", "estimated caption box exceeds safe-area bounds")
+        if not has_backing:
+            add_issue(
+                "missing_contrast_support",
+                "caption needs a non-transparent background or sufficient stroke width",
+            )
+        if z_index <= overlay_z_index:
+            add_issue(
+                "caption_below_overlay",
+                f"caption z_index {z_index} must be above overlay z_index {overlay_z_index}",
+            )
+
+        cue_reports.append({
+            "index": index,
+            "text": str(phrase.get("text", "")).strip(),
+            "position": str(phrase.get("position", "bottom")),
+            "font_size": float(phrase.get("font_size", CAPTION_STYLES["classic"]["font_size"])),
+            "background": str(phrase.get("background", "")),
+            "stroke_width": float(phrase.get("stroke_width", 0)),
+            "z_index": z_index,
+            "box": box,
+            "inside_safe_area": inside_safe_area,
+            "has_contrast_support": has_backing,
+            "status": "needs_review" if issues else "ready",
+            "issues": issues,
+        })
+
+    return {
+        "version": 1,
+        "status": "needs_review" if all_issues else "ready",
+        "cue_count": len(cue_reports),
+        "frame": {
+            "width": frame_width,
+            "height": frame_height,
+            "safe_margin_x": safe_margin_x,
+            "safe_margin_y": safe_margin_y,
+            "overlay_z_index": overlay_z_index,
+        },
+        "limits": {"min_stroke_width": min_stroke_width},
+        "issue_count": len(all_issues),
+        "issues": all_issues,
+        "cues": cue_reports,
+    }
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--transcript", required=True)
@@ -307,7 +461,16 @@ def main() -> None:
         type=int,
         default=READABILITY_DEFAULTS["max_lines"],
     )
-    p.add_argument("--output-format", choices=("json", "srt", "vtt", "scorecard"), default="json")
+    p.add_argument("--geometry-frame-width", type=int, default=GEOMETRY_DEFAULTS["frame_width"])
+    p.add_argument("--geometry-frame-height", type=int, default=GEOMETRY_DEFAULTS["frame_height"])
+    p.add_argument("--geometry-safe-margin-x", type=int, default=GEOMETRY_DEFAULTS["safe_margin_x"])
+    p.add_argument("--geometry-safe-margin-y", type=int, default=GEOMETRY_DEFAULTS["safe_margin_y"])
+    p.add_argument("--geometry-overlay-z-index", type=int, default=GEOMETRY_DEFAULTS["overlay_z_index"])
+    p.add_argument(
+        "--output-format",
+        choices=("json", "srt", "vtt", "scorecard", "geometry-scorecard"),
+        default="json",
+    )
     args = p.parse_args()
 
     items = words(load_body(args.transcript))
@@ -335,6 +498,18 @@ def main() -> None:
                 max_chars_per_line=args.max_chars_per_line
                 or READABILITY_DEFAULTS["max_chars_per_line"],
                 max_lines=args.readability_max_lines,
+            ),
+            indent=2,
+        ))
+    elif args.output_format == "geometry-scorecard":
+        print(json.dumps(
+            build_geometry_scorecard(
+                phrases,
+                frame_width=args.geometry_frame_width,
+                frame_height=args.geometry_frame_height,
+                safe_margin_x=args.geometry_safe_margin_x,
+                safe_margin_y=args.geometry_safe_margin_y,
+                overlay_z_index=args.geometry_overlay_z_index,
             ),
             indent=2,
         ))

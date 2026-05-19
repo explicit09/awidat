@@ -191,6 +191,20 @@ python3 <skill-root>/scripts/caption_plan.py \
 Treat `status: "needs_review"` as evidence to revise phrase length,
 line wrapping, cue duration, or caption density before render handoff.
 
+Before claiming caption placement is visually safe, emit geometry evidence:
+
+```bash
+python3 <skill-root>/scripts/caption_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --phrase-preset short \
+  --max-chars-per-line 24 \
+  --output-format geometry-scorecard > caption-geometry.json
+```
+
+Treat `outside_safe_area`, `missing_contrast_support`, or
+`caption_below_overlay` issues as blockers for render handoff until the
+caption style, wrapping, or layer order is revised.
+
 For animated or karaoke-style caption planning, generate word-progress
 evidence before choosing a render preset:
 
