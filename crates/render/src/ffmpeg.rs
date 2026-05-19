@@ -838,6 +838,17 @@ pub struct SilenceRange {
     pub db_floor: f64,
 }
 
+/// One detected black-frame range in source time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlackFrameRange {
+    /// Where the black range began, in source-media seconds.
+    pub start_s: f64,
+    /// Where the black range ended, in source-media seconds.
+    pub end_s: f64,
+    /// Duration of the black range, in seconds.
+    pub duration_s: f64,
+}
+
 /// Detect silence ranges in `asset_path` using ffmpeg's
 /// `silencedetect` filter. Returns ranges where audio level was
 /// below `threshold_db` for at least `min_duration_s` seconds.
@@ -985,6 +996,115 @@ fn parse_silence_ranges(stderr: &str) -> Vec<SilenceRange> {
         }
     }
     out
+}
+
+/// Detect black video ranges with FFmpeg's `blackdetect` filter.
+pub async fn generate_black_frames(
+    asset_path: &Path,
+    picture_black_ratio_th: f64,
+    min_duration_s: f64,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<Vec<BlackFrameRange>, FfmpegError> {
+    if !picture_black_ratio_th.is_finite() || !(0.0..=1.0).contains(&picture_black_ratio_th) {
+        return Err(FfmpegError::Io(std::io::Error::other(format!(
+            "invalid picture_black_ratio_th {picture_black_ratio_th}: must be finite and in 0..=1"
+        ))));
+    }
+    if !min_duration_s.is_finite() || min_duration_s <= 0.0 {
+        return Err(FfmpegError::Io(std::io::Error::other(format!(
+            "invalid min_duration_s {min_duration_s}: must be finite and > 0"
+        ))));
+    }
+    let bin = ffmpeg_path()?;
+    let filter = format!("blackdetect=d={min_duration_s}:pic_th={picture_black_ratio_th}");
+
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-loglevel")
+        .arg("info")
+        .arg("-nostats")
+        .arg("-i")
+        .arg(asset_path)
+        .arg("-map")
+        .arg("0:v:0?")
+        .arg("-vf")
+        .arg(&filter)
+        .arg("-an")
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
+
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf).await;
+        buf
+    });
+
+    let status = tokio::select! {
+        _ = cancel.cancelled() => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(FfmpegError::NonZero {
+                code: -1,
+                stderr_tail: "cancelled".into(),
+            });
+        }
+        st = child.wait() => st.map_err(FfmpegError::Io)?,
+    };
+
+    let stderr_bytes = stderr_task.await.unwrap_or_default();
+
+    if !status.success() {
+        return Err(FfmpegError::NonZero {
+            code: status.code().unwrap_or(-1),
+            stderr_tail: tail_string(&stderr_bytes, STDERR_TAIL_BYTES),
+        });
+    }
+
+    Ok(parse_black_frame_ranges(&String::from_utf8_lossy(
+        &stderr_bytes,
+    )))
+}
+
+fn parse_black_frame_ranges(stderr: &str) -> Vec<BlackFrameRange> {
+    let mut out = Vec::new();
+    for line in stderr.lines() {
+        let Some(start_s) = parse_blackdetect_field(line, "black_start:") else {
+            continue;
+        };
+        let Some(end_s) = parse_blackdetect_field(line, "black_end:") else {
+            continue;
+        };
+        let duration_s =
+            parse_blackdetect_field(line, "black_duration:").unwrap_or(end_s - start_s);
+        if end_s > start_s && duration_s.is_finite() && duration_s > 0.0 {
+            out.push(BlackFrameRange {
+                start_s,
+                end_s,
+                duration_s,
+            });
+        }
+    }
+    out
+}
+
+fn parse_blackdetect_field(line: &str, key: &str) -> Option<f64> {
+    let rest = line.split_once(key)?.1.trim_start();
+    let token = rest.split_whitespace().next()?;
+    let value = token.parse::<f64>().ok()?;
+    value.is_finite().then_some(value)
 }
 
 /// Mean per-second motion magnitude for [`generate_motion_signal`].
@@ -1546,6 +1666,51 @@ mod tests {
     fn parse_scene_scores_empty_input() {
         assert!(parse_scene_scores("").is_empty());
         assert!(parse_scene_scores("frame=0\nframe=1\n").is_empty());
+    }
+
+    #[test]
+    fn parse_black_frame_ranges_pairs_start_end_duration_lines() {
+        let stderr = "\
+[blackdetect @ 0x7fa] black_start:0 black_end:1.24 black_duration:1.24
+[blackdetect @ 0x7fa] black_start:4.5 black_end:6 black_duration:1.5
+";
+
+        let ranges = parse_black_frame_ranges(stderr);
+
+        assert_eq!(
+            ranges,
+            vec![
+                BlackFrameRange {
+                    start_s: 0.0,
+                    end_s: 1.24,
+                    duration_s: 1.24,
+                },
+                BlackFrameRange {
+                    start_s: 4.5,
+                    end_s: 6.0,
+                    duration_s: 1.5,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn generate_black_frames_rejects_invalid_thresholds() {
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                generate_black_frames(
+                    Path::new("/nonexistent.mp4"),
+                    -1.0,
+                    0.5,
+                    tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+            });
+
+        assert!(matches!(result, Err(FfmpegError::Io(_))));
     }
 
     /// End-to-end: synthesize a 3s testsrc clip with motion + run

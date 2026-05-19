@@ -16,6 +16,7 @@ pub mod delegate_all;
 pub mod download_yt_clip;
 pub mod export_package;
 pub mod find_beat;
+pub mod find_black_frames;
 pub mod find_broll_opportunities;
 pub mod find_dead_air;
 pub mod find_episode_start;

@@ -615,5 +615,11 @@ fn print_index_warning(w: &ValidationWarning) {
         } => {
             println!("  - {path}: asset '{asset}' should live at {expected_path}");
         }
+        ValidationWarning::UnsafeTimelineMediaReference { path, target_url } => {
+            println!("  - {path}: timeline media reference '{target_url}' is not project-relative");
+        }
+        ValidationWarning::TimelineMediaMissing { path, target_url } => {
+            println!("  - {path}: timeline media reference '{target_url}' is missing");
+        }
     }
 }

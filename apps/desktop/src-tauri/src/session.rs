@@ -12,15 +12,16 @@ use awidat_core::tools::{
     assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
     bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
     download_yt_clip::DownloadYtClipTool, export_package::ExportPackageTool,
-    find_beat::FindBeatTool, find_broll_opportunities::FindBrollOpportunitiesTool,
-    find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
-    find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
-    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
-    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
-    plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
-    plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    find_beat::FindBeatTool, find_black_frames::FindBlackFramesTool,
+    find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
+    find_episode_start::FindEpisodeStartTool, find_eye_contact::FindEyeContactTool,
+    find_false_starts::FindFalseStartsTool, find_filler_words::FindFillerWordsTool,
+    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
+    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
+    load_skill::LoadSkillTool, plan_look_regions::PlanLookRegionsTool,
+    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
+    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
+    poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transition_context::TransitionContextTool,
@@ -38,6 +39,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(AnalyzeSyncTool));
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(FindMomentTool));
+    registry.register(Arc::new(FindBlackFramesTool));
     registry.register(Arc::new(FindDeadAirTool));
     registry.register(Arc::new(FindEpisodeStartTool));
     registry.register(Arc::new(FindFillerWordsTool));

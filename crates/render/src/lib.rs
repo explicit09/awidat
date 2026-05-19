@@ -45,10 +45,10 @@ pub mod progress;
 pub mod timeline;
 
 pub use ffmpeg::{
-    FfmpegError, MediaProbe, MotionSignal, SilenceRange, TranscodeProgress,
-    TranscodeProgressCallback, extract_frame, ffmpeg_path, ffprobe_path, generate_motion_signal,
-    generate_silences, generate_thumbnails, generate_waveform, probe_duration_s, probe_media,
-    transcode_proxy,
+    BlackFrameRange, FfmpegError, MediaProbe, MotionSignal, SilenceRange, TranscodeProgress,
+    TranscodeProgressCallback, extract_frame, ffmpeg_path, ffprobe_path, generate_black_frames,
+    generate_motion_signal, generate_silences, generate_thumbnails, generate_waveform,
+    probe_duration_s, probe_media, transcode_proxy,
 };
 pub use job::{
     JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec, RenderPlanLimitation,
