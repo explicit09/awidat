@@ -351,6 +351,70 @@ class TranscriptPhraseTests(unittest.TestCase):
 
         self.assertIn("Build captions\nthat stay readable\non phones", result.stdout)
 
+    def test_caption_readability_scorecard_flags_density_and_timing(self) -> None:
+        caption_plan = load_script("caption_plan")
+        phrases = [
+            {
+                "text": "This caption is far too dense for one tiny cue",
+                "start_s": 0.0,
+                "end_s": 0.8,
+            },
+            {
+                "text": "Readable line\nsecond line",
+                "start_s": 1.0,
+                "end_s": 2.8,
+            },
+        ]
+
+        scorecard = caption_plan.build_readability_scorecard(
+            phrases,
+            max_cps=18.0,
+            min_duration_s=0.8,
+            max_duration_s=3.0,
+            max_chars_per_line=24,
+            max_lines=2,
+        )
+
+        self.assertEqual(scorecard["status"], "needs_review")
+        self.assertEqual(scorecard["cue_count"], 2)
+        self.assertGreater(scorecard["max_cps"], 18.0)
+        codes = {issue["code"] for issue in scorecard["issues"]}
+        self.assertIn("cps_too_high", codes)
+        self.assertIn("line_too_long", codes)
+        self.assertEqual(scorecard["cues"][1]["status"], "ready")
+
+    def test_caption_plan_cli_can_emit_readability_scorecard(self) -> None:
+        transcript = {
+            "words": [
+                {"word": "Readable", "start_s": 0.0, "end_s": 0.4, "speaker": "A"},
+                {"word": "caption", "start_s": 0.45, "end_s": 0.9, "speaker": "A"},
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:
+            json.dump(transcript, handle)
+            handle.flush()
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "caption_plan.py"),
+                    "--transcript",
+                    handle.name,
+                    "--max-words",
+                    "2",
+                    "--output-format",
+                    "scorecard",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["cue_count"], 1)
+        self.assertEqual(payload["issues"], [])
+
     def test_packed_transcript_markdown_has_source_and_timed_rows(self) -> None:
         pack_transcript = load_script("pack_transcript")
         transcript = {

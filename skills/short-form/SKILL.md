@@ -178,6 +178,19 @@ python3 <skill-root>/scripts/caption_plan.py \
   --output-format vtt > captions.vtt
 ```
 
+Before claiming captions are readable, emit a scorecard:
+
+```bash
+python3 <skill-root>/scripts/caption_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --phrase-preset short \
+  --max-chars-per-line 24 \
+  --output-format scorecard > caption-readability.json
+```
+
+Treat `status: "needs_review"` as evidence to revise phrase length,
+line wrapping, cue duration, or caption density before render handoff.
+
 Use `--phrase-preset short` for fast social captions, `medium` for calmer
 talking-head edits, and `long` only when readability matters more than pace.
 The preset considers duration, pauses, punctuation, speaker changes, and word
