@@ -102,6 +102,86 @@ class OverlayPreviewEvidenceTests(unittest.TestCase):
         self.assertEqual(report["issue_count"], 1)
         self.assertEqual(report["issues"][0]["code"], "missing_subject_bounds")
 
+    def test_background_replacement_outputs_before_after_and_scorecard(self) -> None:
+        preview = load_script("overlay_preview_evidence")
+        manifest = {
+            "slots": [
+                {
+                    "name": "Background Color Treatment",
+                    "slug": "background-color-treatment",
+                    "subject_aware": True,
+                    "background_treatment": {
+                        "mode": "color",
+                        "color": "#0B1020",
+                    },
+                }
+            ]
+        }
+        fixture = {
+            "slots": {
+                "background-color-treatment": {
+                    "frame": {"width": 160, "height": 90, "background": "#DCE6EC"},
+                    "subject": {
+                        "bbox": {"x": 62, "y": 18, "width": 36, "height": 56},
+                        "color": "#D8B38A",
+                    },
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = preview.build_preview_report(
+                manifest,
+                fixture=fixture,
+                output_root=Path(tmp) / "generated/previews",
+                project_root=Path(tmp),
+            )
+
+            slot = report["slots"][0]
+            self.assertEqual(report["status"], "ready")
+            self.assertEqual(slot["status"], "ready")
+            self.assertEqual(slot["evidence_kind"], "background_replacement_preview")
+            self.assertEqual(slot["background_mode"], "color")
+            self.assertGreater(slot["background_replaced_pixels"], 0)
+            self.assertEqual(slot["subject_changed_pixels"], 0)
+            self.assertTrue(slot["subject_preserved"])
+
+            for key in ("ordinary_preview_path", "background_preview_path", "scorecard_path"):
+                path = Path(tmp) / slot[key]
+                self.assertTrue(path.is_file(), key)
+
+    def test_background_replacement_rejects_unsupported_mode(self) -> None:
+        preview = load_script("overlay_preview_evidence")
+        manifest = {
+            "slots": [
+                {
+                    "name": "Unsupported Background",
+                    "slug": "unsupported-background",
+                    "subject_aware": True,
+                    "background_treatment": {"mode": "video"},
+                }
+            ]
+        }
+        fixture = {
+            "slots": {
+                "unsupported-background": {
+                    "frame": {"width": 160, "height": 90},
+                    "subject": {"bbox": {"x": 62, "y": 18, "width": 36, "height": 56}},
+                }
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = preview.build_preview_report(
+                manifest,
+                fixture=fixture,
+                output_root=Path(tmp) / "generated/previews",
+                project_root=Path(tmp),
+            )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["issues"][0]["code"], "unsupported_background_mode")
+
 
 if __name__ == "__main__":
     unittest.main()

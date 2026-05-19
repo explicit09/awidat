@@ -123,6 +123,120 @@ def _count_color_in_bbox(image: Image, *, bbox: dict[str, int], colors: set[Colo
     return count
 
 
+def _is_inside_bbox(*, row: int, col: int, bbox: dict[str, int]) -> bool:
+    return (
+        bbox["x"] <= col < bbox["x"] + bbox["width"]
+        and bbox["y"] <= row < bbox["y"] + bbox["height"]
+    )
+
+
+def _count_changed_pixels(
+    before: Image,
+    after: Image,
+    *,
+    bbox: dict[str, int],
+    inside_subject: bool,
+) -> int:
+    count = 0
+    for row, before_row in enumerate(before):
+        for col, before_color in enumerate(before_row):
+            if _is_inside_bbox(row=row, col=col, bbox=bbox) != inside_subject:
+                continue
+            if after[row][col] != before_color:
+                count += 1
+    return count
+
+
+def _background_treatment(slot: dict[str, Any]) -> dict[str, Any] | None:
+    treatment = slot.get("background_treatment")
+    if not isinstance(treatment, dict):
+        return None
+    mode = str(treatment.get("mode", "color")).strip().lower()
+    return {**treatment, "mode": mode}
+
+
+def _render_background_replacement_preview(
+    *,
+    slot: dict[str, Any],
+    fixture: dict[str, Any],
+    bbox: dict[str, int],
+    output_root: Path,
+    project_root: Path,
+) -> dict[str, Any]:
+    name = str(slot.get("name", "Overlay")).strip() or "Overlay"
+    slug = str(slot.get("slug", name.lower().replace(" ", "-"))).strip() or "overlay"
+    frame = fixture.get("frame") if isinstance(fixture.get("frame"), dict) else {}
+    width = int(frame.get("width", 1280))
+    height = int(frame.get("height", 720))
+    if width <= 0 or height <= 0:
+        raise ValueError(f"{name}: frame dimensions must be positive")
+    background = _hex_color(frame.get("background"), default="#20242A")
+    subject = fixture.get("subject") if isinstance(fixture.get("subject"), dict) else {}
+    subject_color = _hex_color(subject.get("color"), default="#D8B38A")
+    treatment = _background_treatment(slot) or {}
+    mode = str(treatment.get("mode", "color"))
+    if mode not in {"color", "transparent"}:
+        return {
+            "name": name,
+            "slug": slug,
+            "status": "blocked",
+            "issues": [_issue(name, "unsupported_background_mode", f"unsupported background mode: {mode}")],
+        }
+
+    ordinary = _blank(width, height, background)
+    _rect(ordinary, **bbox, color=subject_color)
+    replacement = (0, 0, 0) if mode == "transparent" else _hex_color(treatment.get("color"), default="#101820")
+    background_preview = _blank(width, height, replacement)
+    _rect(background_preview, **bbox, color=subject_color)
+
+    slot_dir = output_root / slug
+    ordinary_path = slot_dir / "ordinary-background.png"
+    background_path = slot_dir / "background-treatment.png"
+    scorecard_path = slot_dir / "background-scorecard.json"
+    _write_png(ordinary_path, ordinary)
+    _write_png(background_path, background_preview)
+
+    subject_changed = _count_changed_pixels(
+        ordinary,
+        background_preview,
+        bbox=bbox,
+        inside_subject=True,
+    )
+    background_replaced = _count_changed_pixels(
+        ordinary,
+        background_preview,
+        bbox=bbox,
+        inside_subject=False,
+    )
+    scorecard = {
+        "version": 1,
+        "slot": name,
+        "evidence_kind": "background_replacement_preview",
+        "background_mode": mode,
+        "frame": {"width": width, "height": height},
+        "subject_bbox": bbox,
+        "background_replaced_pixels": background_replaced,
+        "subject_changed_pixels": subject_changed,
+        "subject_preserved": subject_changed == 0 and background_replaced > 0,
+    }
+    scorecard_path.write_text(json.dumps(scorecard, indent=2) + "\n")
+
+    return {
+        "name": name,
+        "slug": slug,
+        "status": "ready",
+        "evidence_kind": "background_replacement_preview",
+        "background_mode": mode,
+        "ordinary_preview_path": _project_relative(ordinary_path, project_root=project_root),
+        "background_preview_path": _project_relative(background_path, project_root=project_root),
+        "scorecard_path": _project_relative(scorecard_path, project_root=project_root),
+        "background_replaced_pixels": background_replaced,
+        "subject_changed_pixels": subject_changed,
+        "subject_preserved": subject_changed == 0 and background_replaced > 0,
+        "issues": [],
+    }
+
+
 def render_slot_preview(
     slot: dict[str, Any],
     *,
@@ -143,6 +257,14 @@ def render_slot_preview(
             "status": "blocked",
             "issues": [_issue(name, "missing_subject_bounds", "subject-aware preview requires fixture subject bbox")],
         }
+    if _background_treatment(slot) is not None:
+        return _render_background_replacement_preview(
+            slot=slot,
+            fixture=fixture,
+            bbox=bbox,
+            output_root=output_root,
+            project_root=project_root,
+        )
 
     frame = fixture.get("frame") if isinstance(fixture.get("frame"), dict) else {}
     width = int(frame.get("width", 1280))

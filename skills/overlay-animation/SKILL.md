@@ -108,6 +108,12 @@ subject-safe preview, and a scorecard. Treat the scorecard as ready only
 when ordinary overlay pixels intersect the subject and the subject-safe
 preview has zero overlay pixels inside the subject bounds.
 
+The same evidence helper can validate background treatment slots when a
+slot includes `background_treatment`. Supported deterministic evidence
+modes are `color` and `transparent`; heavier blur, image, or video
+replacement belongs in a renderer or sidecar artifact with separate
+render evidence.
+
 For text-behind-subject or subject-aware overlay work, set
 `subject_aware: true`, provide `subject_prompt`, and provide or generate
 the `matte_path` artifact named in the manifest. The production contract
@@ -130,6 +136,21 @@ Include the target clip/range, target object id, intended output
 and reviewed positive/negative points, boxes, or mask references. Do
 not treat a prose `subject_prompt` as enough evidence for subject-aware
 compositing.
+
+For background treatment planning, keep the creator intent explicit:
+
+```json
+{
+  "background_treatment": {
+    "mode": "color",
+    "color": "#101820"
+  }
+}
+```
+
+Use `mode: "transparent"` only when downstream compositing expects a
+transparent or keyed plate. Do not claim blur, image, or video
+replacement readiness from the deterministic fixture helper alone.
 
 ## Delivery Rules
 
