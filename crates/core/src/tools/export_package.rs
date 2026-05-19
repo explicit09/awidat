@@ -7,6 +7,9 @@ use async_trait::async_trait;
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::professional::{DeliveryPreflightInput, DeliveryProfile, PreflightReport};
 use awidat_proto::project::Project;
+use awidat_proto::subtitle::{
+    SubtitleCue, format_srt as format_subtitle_srt, format_vtt as format_subtitle_vtt,
+};
 use awidat_render::{OutputPathPolicy, RenderJobSpec, validate_render_output_path};
 use serde::{Deserialize, Serialize};
 
@@ -129,10 +132,10 @@ impl ToolHandler for ExportPackageTool {
             ))
         })?;
 
-        tokio::fs::write(&srt_path, format_srt(&cues))
+        tokio::fs::write(&srt_path, format_subtitle_srt(&cues))
             .await
             .map_err(io_err("write srt"))?;
-        tokio::fs::write(&vtt_path, format_vtt(&cues))
+        tokio::fs::write(&vtt_path, format_subtitle_vtt(&cues))
             .await
             .map_err(io_err("write vtt"))?;
         tokio::fs::write(&chapter_path, format_chapters(&chapters))
@@ -1306,17 +1309,17 @@ fn output_format_metadata(project: &Project) -> Option<serde_json::Value> {
         .cloned()
 }
 
-#[derive(Debug, Clone)]
-struct Cue {
-    start_s: f64,
-    end_s: f64,
-    text: String,
-}
+type Cue = SubtitleCue;
 
 fn collect_timeline_cues(
     project_root: &Path,
     project: &Project,
 ) -> Result<Vec<Cue>, FunctionCallError> {
+    let editable_cues = collect_editable_subtitle_cues(project)?;
+    if !editable_cues.is_empty() {
+        return Ok(editable_cues);
+    }
+
     let mut cues = Vec::new();
     for child in &project.timeline.tracks.children {
         let StackChild::Track(track) = child else {
@@ -1347,11 +1350,11 @@ fn collect_timeline_cues(
                     if overlap_end <= overlap_start {
                         continue;
                     }
-                    cues.push(Cue {
-                        start_s: cursor_s + (overlap_start - source_start) / speed,
-                        end_s: cursor_s + (overlap_end - source_start) / speed,
-                        text: seg.text,
-                    });
+                    cues.push(build_cue(
+                        cursor_s + (overlap_start - source_start) / speed,
+                        cursor_s + (overlap_end - source_start) / speed,
+                        seg.text,
+                    )?);
                 }
             }
             cursor_s += dur_s;
@@ -1359,6 +1362,32 @@ fn collect_timeline_cues(
     }
     cues.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
     Ok(cues)
+}
+
+fn collect_editable_subtitle_cues(project: &Project) -> Result<Vec<Cue>, FunctionCallError> {
+    let Some(metadata) = project.timeline.metadata.awidat.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let mut cues = Vec::new();
+    for track in &metadata.subtitle_tracks {
+        track.validate().map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "export_package: subtitle track {} is invalid: {e}",
+                track.id
+            ))
+        })?;
+        cues.extend(track.cues.iter().cloned());
+    }
+    cues.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
+    Ok(cues)
+}
+
+fn build_cue(start_s: f64, end_s: f64, text: String) -> Result<Cue, FunctionCallError> {
+    SubtitleCue::new(start_s, end_s, text).map_err(|e| {
+        FunctionCallError::RespondToModel(format!(
+            "export_package: transcript subtitle cue is invalid: {e}"
+        ))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -1417,54 +1446,6 @@ fn child_duration_s(child: &TrackChild) -> f64 {
         TrackChild::Transition(t) => t.in_offset.to_seconds() + t.out_offset.to_seconds(),
         TrackChild::Stack(_) => 0.0,
     }
-}
-
-fn format_srt(cues: &[Cue]) -> String {
-    let mut out = String::new();
-    for (i, cue) in cues.iter().enumerate() {
-        out.push_str(&(i + 1).to_string());
-        out.push('\n');
-        out.push_str(&format!(
-            "{} --> {}\n{}\n\n",
-            fmt_srt_time(cue.start_s),
-            fmt_srt_time(cue.end_s),
-            cue.text
-        ));
-    }
-    out
-}
-
-fn format_vtt(cues: &[Cue]) -> String {
-    let mut out = String::from("WEBVTT\n\n");
-    for cue in cues {
-        out.push_str(&format!(
-            "{} --> {}\n{}\n\n",
-            fmt_vtt_time(cue.start_s),
-            fmt_vtt_time(cue.end_s),
-            cue.text
-        ));
-    }
-    out
-}
-
-fn fmt_srt_time(t: f64) -> String {
-    fmt_time(t, ',')
-}
-
-fn fmt_vtt_time(t: f64) -> String {
-    fmt_time(t, '.')
-}
-
-fn fmt_time(t: f64, sep: char) -> String {
-    let t = t.max(0.0);
-    let total_ms = (t * 1000.0).round() as u64;
-    let ms = total_ms % 1000;
-    let total_s = total_ms / 1000;
-    let s = total_s % 60;
-    let total_m = total_s / 60;
-    let m = total_m % 60;
-    let h = total_m / 60;
-    format!("{h:02}:{m:02}:{s:02}{sep}{ms:03}")
 }
 
 fn collect_chapters(cues: &[Cue]) -> Vec<(f64, String)> {
@@ -1544,6 +1525,7 @@ mod tests {
         ColorFinishingState, FindingSeverity, GradeStack, GradeStage, PreflightCheckKind,
     };
     use awidat_proto::project::EditPlan;
+    use awidat_proto::subtitle::{SubtitleCue, SubtitleTrack};
 
     fn time_range(start_s: f64, duration_s: f64) -> TimeRange {
         TimeRange::new(
@@ -1572,6 +1554,23 @@ mod tests {
             .insert("clip_uuid".into(), serde_json::json!(uuid));
         clip.metadata.awidat = Some(awidat);
         clip
+    }
+
+    fn write_whisper_sidecar(root: &std::path::Path, asset: &str, segments: serde_json::Value) {
+        let asset_id = awidat_proto::index::AssetId::new(asset.to_string());
+        let path = awidat_index::sidecar_path(root, "whisper", &asset_id).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            path,
+            serde_json::json!({
+                "indexer": "whisper",
+                "data": {
+                    "segments": segments
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1605,6 +1604,86 @@ mod tests {
         assert_eq!(clips[0].handle_in_s, Some(2.0));
         assert_eq!(clips[0].handle_out_s, Some(5.0));
         assert_eq!(clips[0].effects, vec!["awidat.lut"]);
+    }
+
+    #[test]
+    fn collect_timeline_cues_prefers_editable_subtitle_tracks() {
+        let mut timeline = Timeline::empty("subtitle-track-test");
+        timeline
+            .metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .subtitle_tracks
+            .push(SubtitleTrack {
+                id: "captions-en".into(),
+                label: "English captions".into(),
+                language: Some("en".into()),
+                source_format: None,
+                cues: vec![SubtitleCue::new(1.0, 2.5, "Edited caption").unwrap()],
+            });
+        let project = project_with_timeline(timeline);
+
+        let cues = collect_timeline_cues(std::path::Path::new("/unused"), &project).unwrap();
+
+        assert_eq!(cues.len(), 1);
+        assert_eq!(cues[0].start_s, 1.0);
+        assert_eq!(cues[0].end_s, 2.5);
+        assert_eq!(cues[0].text, "Edited caption");
+    }
+
+    #[test]
+    fn collect_timeline_cues_offsets_transcript_segments_across_trimmed_clips() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut timeline = Timeline::empty("subtitle-offset-test");
+        let mut v1 = Track::empty("V1", TrackKind::Video);
+        v1.children.push(TrackChild::Clip(clip(
+            "first",
+            "raw/a.mov",
+            10.0,
+            4.0,
+            "c-a",
+        )));
+        v1.children
+            .push(TrackChild::Gap(Gap::of_duration(1.0, 24.0)));
+        v1.children.push(TrackChild::Clip(clip(
+            "second",
+            "raw/b.mov",
+            3.0,
+            2.0,
+            "c-b",
+        )));
+        timeline.tracks.children.push(StackChild::Track(v1));
+        let project = project_with_timeline(timeline);
+
+        write_whisper_sidecar(
+            dir.path(),
+            "raw/a.mov",
+            serde_json::json!([
+                {"start": 9.0, "end": 10.25, "text": "before trim"},
+                {"start": 10.5, "end": 11.0, "text": "first kept"}
+            ]),
+        );
+        write_whisper_sidecar(
+            dir.path(),
+            "raw/b.mov",
+            serde_json::json!([
+                {"start": 3.25, "end": 4.0, "text": "second kept"}
+            ]),
+        );
+
+        let cues = collect_timeline_cues(dir.path(), &project).unwrap();
+
+        assert_eq!(cues.len(), 3);
+        assert_eq!(cues[0].text, "before trim");
+        assert_eq!(cues[0].start_s, 0.0);
+        assert_eq!(cues[0].end_s, 0.25);
+        assert_eq!(cues[1].text, "first kept");
+        assert_eq!(cues[1].start_s, 0.5);
+        assert_eq!(cues[1].end_s, 1.0);
+        assert_eq!(cues[2].text, "second kept");
+        assert_eq!(cues[2].start_s, 5.25);
+        assert_eq!(cues[2].end_s, 6.0);
     }
 
     #[tokio::test]

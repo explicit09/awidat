@@ -24,6 +24,7 @@ use crate::professional::{
     ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect, Stringout,
     TrackingPackage, WorkflowLens,
 };
+use crate::subtitle::SubtitleTrack;
 
 /// Top-level awidat metadata on a `Timeline.metadata.awidat`.
 ///
@@ -62,6 +63,9 @@ pub struct AwidatTimelineMetadata {
     /// Named guide tracks, each carrying ordered timeline markers/ranges.
     #[serde(default)]
     pub guide_tracks: Vec<GuideTrack>,
+    /// Editable timeline-relative subtitle tracks.
+    #[serde(default)]
+    pub subtitle_tracks: Vec<SubtitleTrack>,
     /// Most recent `edit-plan.json` item id this timeline applied.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub edit_plan_id: Option<String>,
@@ -195,6 +199,14 @@ impl AwidatTimelineMetadata {
             &self.timeline_markers,
         ));
         diagnostics.extend(validate_guide_tracks(&self.guide_tracks));
+        for track in &self.subtitle_tracks {
+            if let Err(error) = track.validate() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    crate::professional::CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!("subtitle track {} is invalid: {error}", track.id),
+                ));
+            }
+        }
 
         for animation in &self.parameter_animations {
             diagnostics.extend(animation.validate());
