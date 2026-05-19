@@ -1654,6 +1654,12 @@ pub struct GroundingEvidence {
     /// Detector text threshold in 0..=1 when applicable.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub text_threshold: Option<f64>,
+    /// Evidence outcome for agent/UI decision-making.
+    #[serde(default)]
+    pub status: GroundingEvidenceStatus,
+    /// Required detail for blocked or degraded grounding outcomes.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub status_reason: Option<String>,
     /// Detections returned by the grounding step.
     #[serde(default)]
     pub detections: Vec<GroundingDetection>,
@@ -1708,6 +1714,75 @@ impl GroundingEvidence {
             self.text_threshold,
             format!("segmentation prompt package {package_id} text threshold"),
         );
+        let status_reason = self
+            .status_reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|reason| !reason.is_empty());
+        match self.status {
+            GroundingEvidenceStatus::NotEvaluated => {}
+            GroundingEvidenceStatus::AcceptedDetections => {
+                if self.detections.is_empty() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!(
+                            "segmentation prompt package {package_id} grounding accepted detections status requires at least one detection"
+                        ),
+                    ));
+                }
+            }
+            GroundingEvidenceStatus::NoDetections => {
+                if !self.detections.is_empty() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!(
+                            "segmentation prompt package {package_id} grounding no detections status cannot include detections"
+                        ),
+                    ));
+                }
+            }
+            GroundingEvidenceStatus::LowConfidence => {
+                if status_reason.is_none() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!(
+                            "segmentation prompt package {package_id} grounding low confidence status requires a reason"
+                        ),
+                    ));
+                }
+            }
+            GroundingEvidenceStatus::MissingRuntimeEvidence => {
+                if status_reason.is_none() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!(
+                            "segmentation prompt package {package_id} grounding missing runtime evidence status requires a reason"
+                        ),
+                    ));
+                }
+                if !self.detections.is_empty() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::TrackingMasksMattes,
+                        format!(
+                            "segmentation prompt package {package_id} grounding missing runtime evidence status cannot include detections"
+                        ),
+                    ));
+                }
+            }
+        }
+        if self
+            .status_reason
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {package_id} grounding status reason is empty"
+                ),
+            ));
+        }
         for detection in &self.detections {
             diagnostics.extend(detection.validate(
                 package_id,
@@ -1718,6 +1793,23 @@ impl GroundingEvidence {
         }
         diagnostics
     }
+}
+
+/// Text-grounding evidence outcome.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroundingEvidenceStatus {
+    /// Grounding was recorded before an outcome was evaluated.
+    #[default]
+    NotEvaluated,
+    /// Runtime produced detections accepted for downstream prompting.
+    AcceptedDetections,
+    /// Runtime completed but produced no detections above threshold.
+    NoDetections,
+    /// Runtime produced detections that require review due low confidence.
+    LowConfidence,
+    /// Grounding could not run or evidence was not captured.
+    MissingRuntimeEvidence,
 }
 
 /// Grounding detection box coordinate format.

@@ -9,15 +9,15 @@ use awidat_proto::professional::{
     CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
     DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
     ExpressionSource, FindingSeverity, GradeStack, GroundingBoxFormat, GroundingDetection,
-    GroundingEvidence, HardwareAccelerationPolicy, Keyframe, MaskArtifactKind, MaskArtifactProfile,
-    MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MatteGenerationFallback,
-    MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings, MotionGraphicsTemplate,
-    MotionPackage, ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
-    ReframeKeyframe, ReframePath, ReframeSmoothing, SegmentationIntent, SegmentationPrompt,
-    SegmentationPromptKind, SegmentationPromptLabel, SegmentationPromptPackage,
-    SegmentationRuntimeStatus, SegmentationSessionOperation, SegmentationSessionOperationKind,
-    SelectDecision, SourceRange, SourceSelect, Stringout, TemplateSlot, TrackingPackage,
-    WorkflowLens,
+    GroundingEvidence, GroundingEvidenceStatus, HardwareAccelerationPolicy, Keyframe,
+    MaskArtifactKind, MaskArtifactProfile, MaskQualityScorecard, MaskReviewDecision, MaskSidecar,
+    MatteGenerationFallback, MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings,
+    MotionGraphicsTemplate, MotionPackage, ParameterAnimation, PipelineReadinessReport,
+    PreflightCheckKind, ReadinessState, ReframeKeyframe, ReframePath, ReframeSmoothing,
+    SegmentationIntent, SegmentationPrompt, SegmentationPromptKind, SegmentationPromptLabel,
+    SegmentationPromptPackage, SegmentationRuntimeStatus, SegmentationSessionOperation,
+    SegmentationSessionOperationKind, SelectDecision, SourceRange, SourceSelect, Stringout,
+    TemplateSlot, TrackingPackage, WorkflowLens,
 };
 
 #[test]
@@ -536,6 +536,8 @@ fn tracking_package_validates_grounding_evidence() {
                 image_height: Some(1080),
                 box_threshold: Some(0.25),
                 text_threshold: Some(0.3),
+                status: GroundingEvidenceStatus::AcceptedDetections,
+                status_reason: None,
                 detections: vec![GroundingDetection {
                     class_name: "main speaker".into(),
                     bbox_xyxy: [240.0, 80.0, 1420.0, 1040.0],
@@ -586,6 +588,8 @@ fn tracking_package_validates_grounding_evidence() {
                 image_height: Some(1080),
                 box_threshold: Some(1.2),
                 text_threshold: Some(f64::NAN),
+                status: GroundingEvidenceStatus::NotEvaluated,
+                status_reason: None,
                 detections: vec![GroundingDetection {
                     class_name: "".into(),
                     bbox_xyxy: [0.8, 0.1, 0.2, 0.9],
@@ -637,6 +641,191 @@ fn tracking_package_validates_grounding_evidence() {
     assert!(messages.iter().any(|message| message.contains("bbox")));
     assert!(messages.iter().any(|message| message.contains("score")));
     assert!(messages.iter().any(|message| message.contains("mask ref")));
+}
+
+#[test]
+fn tracking_package_distinguishes_grounding_evidence_statuses() {
+    let package = TrackingPackage {
+        prompt_packages: vec![
+            SegmentationPromptPackage {
+                id: "seg-accepted".into(),
+                clip_id: "clip-a".into(),
+                target_object_id: "speaker".into(),
+                grounding: Some(GroundingEvidence {
+                    text_query: "main speaker.".into(),
+                    source: "local_detector_v1".into(),
+                    status: GroundingEvidenceStatus::AcceptedDetections,
+                    detections: vec![GroundingDetection {
+                        class_name: "main speaker".into(),
+                        bbox_xyxy: [0.1, 0.1, 0.8, 0.9],
+                        score: Some(0.91),
+                        ..GroundingDetection::default()
+                    }],
+                    ..GroundingEvidence::default()
+                }),
+                prompts: vec![SegmentationPrompt {
+                    frame: 0,
+                    kind: SegmentationPromptKind::Box,
+                    box_xyxy: Some([0.1, 0.1, 0.8, 0.9]),
+                    ..SegmentationPrompt::default()
+                }],
+                ..SegmentationPromptPackage::default()
+            },
+            SegmentationPromptPackage {
+                id: "seg-none".into(),
+                clip_id: "clip-b".into(),
+                target_object_id: "speaker".into(),
+                grounding: Some(GroundingEvidence {
+                    text_query: "main speaker.".into(),
+                    source: "local_detector_v1".into(),
+                    status: GroundingEvidenceStatus::NoDetections,
+                    status_reason: Some("detector returned no boxes above threshold".into()),
+                    detections: Vec::new(),
+                    ..GroundingEvidence::default()
+                }),
+                prompts: vec![SegmentationPrompt {
+                    frame: 0,
+                    kind: SegmentationPromptKind::Box,
+                    box_xyxy: Some([0.1, 0.1, 0.8, 0.9]),
+                    ..SegmentationPrompt::default()
+                }],
+                ..SegmentationPromptPackage::default()
+            },
+            SegmentationPromptPackage {
+                id: "seg-low".into(),
+                clip_id: "clip-c".into(),
+                target_object_id: "speaker".into(),
+                grounding: Some(GroundingEvidence {
+                    text_query: "main speaker.".into(),
+                    source: "local_detector_v1".into(),
+                    status: GroundingEvidenceStatus::LowConfidence,
+                    status_reason: Some("best score 0.18 is below review threshold".into()),
+                    detections: vec![GroundingDetection {
+                        class_name: "main speaker".into(),
+                        bbox_xyxy: [0.1, 0.1, 0.8, 0.9],
+                        score: Some(0.18),
+                        ..GroundingDetection::default()
+                    }],
+                    ..GroundingEvidence::default()
+                }),
+                prompts: vec![SegmentationPrompt {
+                    frame: 0,
+                    kind: SegmentationPromptKind::Box,
+                    box_xyxy: Some([0.1, 0.1, 0.8, 0.9]),
+                    ..SegmentationPrompt::default()
+                }],
+                ..SegmentationPromptPackage::default()
+            },
+            SegmentationPromptPackage {
+                id: "seg-missing".into(),
+                clip_id: "clip-d".into(),
+                target_object_id: "speaker".into(),
+                grounding: Some(GroundingEvidence {
+                    text_query: "main speaker.".into(),
+                    source: "local_detector_v1".into(),
+                    status: GroundingEvidenceStatus::MissingRuntimeEvidence,
+                    status_reason: Some("detector runtime was not available".into()),
+                    detections: Vec::new(),
+                    ..GroundingEvidence::default()
+                }),
+                prompts: vec![SegmentationPrompt {
+                    frame: 0,
+                    kind: SegmentationPromptKind::Box,
+                    box_xyxy: Some([0.1, 0.1, 0.8, 0.9]),
+                    ..SegmentationPrompt::default()
+                }],
+                ..SegmentationPromptPackage::default()
+            },
+        ],
+        ..TrackingPackage::default()
+    };
+
+    let json = match serde_json::to_string(&package) {
+        Ok(json) => json,
+        Err(error) => panic!("serialize grounding statuses: {error}"),
+    };
+    assert!(json.contains("accepted_detections"));
+    assert!(json.contains("no_detections"));
+    assert!(json.contains("low_confidence"));
+    assert!(json.contains("missing_runtime_evidence"));
+
+    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+        Ok(package) => package,
+        Err(error) => panic!("deserialize grounding statuses: {error}"),
+    };
+    assert!(roundtrip.validate().is_empty());
+
+    let invalid = TrackingPackage {
+        prompt_packages: vec![
+            SegmentationPromptPackage {
+                id: "seg-accepted-empty".into(),
+                clip_id: "clip-a".into(),
+                target_object_id: "speaker".into(),
+                grounding: Some(GroundingEvidence {
+                    text_query: "main speaker.".into(),
+                    source: "local_detector_v1".into(),
+                    status: GroundingEvidenceStatus::AcceptedDetections,
+                    detections: Vec::new(),
+                    ..GroundingEvidence::default()
+                }),
+                ..SegmentationPromptPackage::default()
+            },
+            SegmentationPromptPackage {
+                id: "seg-missing-detail".into(),
+                clip_id: "clip-b".into(),
+                target_object_id: "speaker".into(),
+                grounding: Some(GroundingEvidence {
+                    text_query: "main speaker.".into(),
+                    source: "local_detector_v1".into(),
+                    status: GroundingEvidenceStatus::MissingRuntimeEvidence,
+                    detections: Vec::new(),
+                    ..GroundingEvidence::default()
+                }),
+                ..SegmentationPromptPackage::default()
+            },
+            SegmentationPromptPackage {
+                id: "seg-none-with-box".into(),
+                clip_id: "clip-c".into(),
+                target_object_id: "speaker".into(),
+                grounding: Some(GroundingEvidence {
+                    text_query: "main speaker.".into(),
+                    source: "local_detector_v1".into(),
+                    status: GroundingEvidenceStatus::NoDetections,
+                    status_reason: Some("no boxes".into()),
+                    detections: vec![GroundingDetection {
+                        class_name: "main speaker".into(),
+                        bbox_xyxy: [0.1, 0.1, 0.8, 0.9],
+                        ..GroundingDetection::default()
+                    }],
+                    ..GroundingEvidence::default()
+                }),
+                ..SegmentationPromptPackage::default()
+            },
+        ],
+        ..TrackingPackage::default()
+    };
+
+    let messages: Vec<String> = invalid
+        .validate()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("accepted detections"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("missing runtime evidence"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("no detections"))
+    );
 }
 
 #[test]
