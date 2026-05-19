@@ -91,6 +91,23 @@ The verifier must return `status: "ready"`. A `blocked` report means
 the generated overlay, duration contract, project-relative paths, or
 subject matte/cutout artifacts are not ready for timeline insertion.
 
+For text-behind-subject preview evidence, generate a deterministic
+before/after preview scorecard:
+
+```bash
+python3 <skill-root>/scripts/overlay_preview_evidence.py \
+  --manifest overlay-manifest.json \
+  --fixture-json overlay-preview-fixture.json \
+  --output-root generated/previews \
+  --project-root .
+```
+
+The fixture supplies frame dimensions and the subject bounds for each
+subject-aware slot. The report writes an ordinary overlay preview, a
+subject-safe preview, and a scorecard. Treat the scorecard as ready only
+when ordinary overlay pixels intersect the subject and the subject-safe
+preview has zero overlay pixels inside the subject bounds.
+
 For text-behind-subject or subject-aware overlay work, set
 `subject_aware: true`, provide `subject_prompt`, and provide or generate
 the `matte_path` artifact named in the manifest. The production contract
@@ -121,6 +138,8 @@ compositing.
 - Keep important text inside mobile safe areas for vertical output.
 - For subject-aware overlays, verify the matte exists and the subject
   remains visually in front of the overlay in the affected timing window.
+  Include overlay preview evidence or rendered clip evidence before
+  claiming a text-behind-subject effect is ready.
 - Keep generated assets project-relative.
 - Do not paste raw backend filter graphs into EDL. The asset enters
   through `Insert PiP` or overlay `Insert BRoll`.
@@ -133,5 +152,7 @@ compositing.
 - [ ] Generated files exist under `generated/overlays/`.
 - [ ] `overlay_asset_verify.py` returns `status: "ready"` for the
       manifest before timeline insertion.
+- [ ] Subject-aware slots include before/after preview evidence or
+      rendered clip evidence with a passing occlusion scorecard.
 - [ ] The overlay assets were inserted as timeline graph nodes.
 - [ ] Render verification includes the affected timing windows.
