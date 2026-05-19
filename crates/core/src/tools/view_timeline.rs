@@ -152,6 +152,8 @@ fn render(timeline: &Timeline, start_s: f64, end_s: f64, line_cap: usize) -> Str
         }
     }
 
+    append_visible_timeline_markers(timeline, start_s, end_s, &mut lines, line_cap);
+
     let header = format!(
         "timeline name={:?} window=[{:.3}s..{:.3}s) total_duration={:.3}s tracks={}",
         timeline.name,
@@ -184,6 +186,91 @@ fn render(timeline: &Timeline, start_s: f64, end_s: f64, line_cap: usize) -> Str
     }
     out.push_str(&footer);
     out
+}
+
+fn append_visible_timeline_markers(
+    timeline: &Timeline,
+    start_s: f64,
+    end_s: f64,
+    lines: &mut Vec<String>,
+    line_cap: usize,
+) {
+    let Some(metadata) = timeline.metadata.awidat.as_ref() else {
+        return;
+    };
+    for marker in &metadata.timeline_markers {
+        if lines.len() >= line_cap {
+            return;
+        }
+        if marker_overlaps_window(marker.time_s, marker.duration_s, start_s, end_s) {
+            lines.push(truncate(
+                format_timeline_marker("marker", None, marker),
+                MAX_LINE_LENGTH,
+            ));
+        }
+    }
+    for guide_track in &metadata.guide_tracks {
+        for marker in &guide_track.markers {
+            if lines.len() >= line_cap {
+                return;
+            }
+            if marker_overlaps_window(marker.time_s, marker.duration_s, start_s, end_s) {
+                lines.push(truncate(
+                    format_timeline_marker("guide", Some(guide_track.id.as_str()), marker),
+                    MAX_LINE_LENGTH,
+                ));
+            }
+        }
+    }
+}
+
+fn marker_overlaps_window(
+    marker_start_s: f64,
+    marker_duration_s: Option<f64>,
+    window_start_s: f64,
+    window_end_s: f64,
+) -> bool {
+    let marker_end_s = marker_start_s + marker_duration_s.unwrap_or(0.0).max(0.0);
+    if marker_duration_s.unwrap_or(0.0) == 0.0 {
+        marker_start_s >= window_start_s && marker_start_s < window_end_s
+    } else {
+        marker_end_s > window_start_s && marker_start_s < window_end_s
+    }
+}
+
+fn format_timeline_marker(
+    prefix: &str,
+    guide_track_id: Option<&str>,
+    marker: &awidat_proto::awidat_meta::TimelineMarker,
+) -> String {
+    let marker_id = match guide_track_id {
+        Some(track_id) => format!("{track_id}/{}", marker.id),
+        None => marker.id.clone(),
+    };
+    let duration = marker
+        .duration_s
+        .map(|duration| format!(" duration={duration:.3}s"))
+        .unwrap_or_default();
+    let category = marker
+        .category
+        .map(|category| format!(" category={}", timeline_marker_category_label(category)))
+        .unwrap_or_default();
+    format!(
+        "[{:>7.3}s] {prefix} {marker_id} {:?}{duration}{category}",
+        marker.time_s, marker.label
+    )
+}
+
+fn timeline_marker_category_label(
+    category: awidat_proto::awidat_meta::TimelineMarkerCategory,
+) -> &'static str {
+    match category {
+        awidat_proto::awidat_meta::TimelineMarkerCategory::Review => "review",
+        awidat_proto::awidat_meta::TimelineMarkerCategory::Section => "section",
+        awidat_proto::awidat_meta::TimelineMarkerCategory::ExportRange => "export_range",
+        awidat_proto::awidat_meta::TimelineMarkerCategory::Note => "note",
+        awidat_proto::awidat_meta::TimelineMarkerCategory::Guide => "guide",
+    }
 }
 
 fn format_line(
@@ -377,6 +464,43 @@ mod tests {
         dir
     }
 
+    fn project_with_guides() -> tempfile::TempDir {
+        let dir = project_with_three_clips();
+        let mut project = Project::read(dir.path()).unwrap();
+        let metadata = project
+            .timeline
+            .metadata
+            .awidat
+            .get_or_insert_with(Default::default);
+        metadata
+            .timeline_markers
+            .push(awidat_proto::awidat_meta::TimelineMarker {
+                id: "mk-hook".into(),
+                label: "Hook".into(),
+                time_s: 2.0,
+                duration_s: None,
+                category: Some(awidat_proto::awidat_meta::TimelineMarkerCategory::Review),
+                ..Default::default()
+            });
+        metadata
+            .guide_tracks
+            .push(awidat_proto::awidat_meta::GuideTrack {
+                id: "guide-main".into(),
+                label: "Sections".into(),
+                markers: vec![awidat_proto::awidat_meta::TimelineMarker {
+                    id: "section-1".into(),
+                    label: "Section 1".into(),
+                    time_s: 5.0,
+                    duration_s: Some(10.0),
+                    category: Some(awidat_proto::awidat_meta::TimelineMarkerCategory::Section),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        project.write(dir.path()).unwrap();
+        dir
+    }
+
     #[tokio::test]
     async fn default_window_shows_everything_within_60s() {
         let dir = project_with_three_clips();
@@ -390,6 +514,22 @@ mod tests {
         assert!(out.content.contains("clip \"clip-2\""));
         assert!(out.content.contains("source=[0.000..5.000]"));
         assert!(out.content.contains("total_duration=15.000s"));
+    }
+
+    #[tokio::test]
+    async fn timeline_view_includes_visible_markers_and_guides() {
+        let dir = project_with_guides();
+        let out = ViewTimelineTool
+            .handle(
+                invoke(serde_json::json!({"start_s": 0.0, "end_s": 6.0})),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        assert!(out.content.contains("marker mk-hook"));
+        assert!(out.content.contains("guide guide-main/section-1"));
+        assert!(out.content.contains("category=section"));
     }
 
     #[tokio::test]

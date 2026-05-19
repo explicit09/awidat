@@ -56,6 +56,12 @@ pub struct AwidatTimelineMetadata {
     /// Durable beat and accent markers for music-synced edits and pacing.
     #[serde(default)]
     pub beat_markers: Vec<BeatMarker>,
+    /// Timeline-level editorial markers independent of any one clip.
+    #[serde(default)]
+    pub timeline_markers: Vec<TimelineMarker>,
+    /// Named guide tracks, each carrying ordered timeline markers/ranges.
+    #[serde(default)]
+    pub guide_tracks: Vec<GuideTrack>,
     /// Most recent `edit-plan.json` item id this timeline applied.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub edit_plan_id: Option<String>,
@@ -184,6 +190,11 @@ impl AwidatTimelineMetadata {
         }
 
         diagnostics.extend(validate_beat_markers(&self.beat_markers));
+        diagnostics.extend(validate_timeline_markers(
+            "timeline marker",
+            &self.timeline_markers,
+        ));
+        diagnostics.extend(validate_guide_tracks(&self.guide_tracks));
 
         for animation in &self.parameter_animations {
             diagnostics.extend(animation.validate());
@@ -460,6 +471,71 @@ fn validate_beat_markers(markers: &[BeatMarker]) -> Vec<ProfessionalDiagnostic> 
     diagnostics
 }
 
+fn validate_guide_tracks(guide_tracks: &[GuideTrack]) -> Vec<ProfessionalDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut ids = HashSet::new();
+    for track in guide_tracks {
+        if track.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                "guide track id is required",
+            ));
+        } else if !ids.insert(track.id.as_str()) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("duplicate guide track id {}", track.id),
+            ));
+        }
+        if track.label.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("guide track {} label is required", track.id),
+            ));
+        }
+        diagnostics.extend(validate_timeline_markers(
+            &format!("guide track {} marker", track.id),
+            &track.markers,
+        ));
+    }
+    diagnostics
+}
+
+fn validate_timeline_markers(
+    label: &str,
+    markers: &[TimelineMarker],
+) -> Vec<ProfessionalDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut ids = HashSet::new();
+    let mut previous_time_s: Option<f64> = None;
+    for marker in markers {
+        if marker.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("{label} id is required"),
+            ));
+        } else if !ids.insert(marker.id.as_str()) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("duplicate timeline marker id {}", marker.id),
+            ));
+        }
+        diagnostics.extend(marker.validate(label));
+        if let Some(previous) = previous_time_s
+            && marker.time_s.is_finite()
+            && marker.time_s < previous
+        {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("{label} {} time_s is not sorted ascending", marker.id),
+            ));
+        }
+        if marker.time_s.is_finite() {
+            previous_time_s = Some(marker.time_s);
+        }
+    }
+    diagnostics
+}
+
 fn stage(
     area: crate::professional::CapabilityArea,
     ready: bool,
@@ -726,6 +802,103 @@ pub struct BeatMarker {
     /// Optional reason this marker is useful for an edit decision.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub selection_reason: Option<String>,
+}
+
+/// Durable timeline-level editorial marker or range.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TimelineMarker {
+    /// Stable marker id within the owning timeline/guide collection.
+    #[serde(default)]
+    pub id: String,
+    /// Human-readable label.
+    #[serde(default)]
+    pub label: String,
+    /// Timeline start time in seconds.
+    pub time_s: f64,
+    /// Optional marker duration in seconds; omitted means point marker.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub duration_s: Option<f64>,
+    /// Editorial category.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub category: Option<TimelineMarkerCategory>,
+    /// Optional display color.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub color: Option<String>,
+    /// Optional review note.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub note: Option<String>,
+    /// Source system or user that authored the marker.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
+    /// Forward-compatible metadata for future marker fields.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl TimelineMarker {
+    fn validate(&self, label: &str) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let area = crate::professional::CapabilityArea::AssemblyAndTimelineOperations;
+        if self.label.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("{label} {} label is required", self.id),
+            ));
+        }
+        if !self.time_s.is_finite() || self.time_s < 0.0 {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("{label} {} time_s must be finite and non-negative", self.id),
+            ));
+        }
+        if self
+            .duration_s
+            .is_some_and(|duration| !duration.is_finite() || duration < 0.0)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("{label} {} duration_s must be >= 0", self.id),
+            ));
+        }
+        diagnostics
+    }
+}
+
+/// Timeline marker category.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineMarkerCategory {
+    /// General review note.
+    #[default]
+    Review,
+    /// Structural section marker.
+    Section,
+    /// Render/export range marker.
+    ExportRange,
+    /// User or agent editorial note.
+    Note,
+    /// Snap/placement guide.
+    Guide,
+}
+
+/// Named guide track containing timeline-level markers/ranges.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GuideTrack {
+    /// Stable guide track id.
+    #[serde(default)]
+    pub id: String,
+    /// Display label.
+    #[serde(default)]
+    pub label: String,
+    /// Whether editing this guide track should require explicit unlock.
+    #[serde(default)]
+    pub locked: bool,
+    /// Timeline markers/ranges carried by this guide track.
+    #[serde(default)]
+    pub markers: Vec<TimelineMarker>,
+    /// Forward-compatible metadata for future guide fields.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl BeatMarker {
@@ -1026,6 +1199,116 @@ mod tests {
             .expect("cut boundary metadata should round-trip");
         assert_eq!(spec.cut_type, CutType::Cutaway);
         assert_eq!(spec.intent, "hide_visual_jump");
+    }
+
+    #[test]
+    fn timeline_markers_and_guide_tracks_roundtrip() {
+        let m = AwidatTimelineMetadata {
+            timeline_markers: vec![TimelineMarker {
+                id: "mk-act-1".into(),
+                label: "Act 1".into(),
+                time_s: 12.5,
+                duration_s: Some(4.0),
+                category: Some(TimelineMarkerCategory::Section),
+                color: Some("#44aa88".into()),
+                note: Some("intro section".into()),
+                source: Some("agent".into()),
+                extra: HashMap::new(),
+            }],
+            guide_tracks: vec![GuideTrack {
+                id: "guides-main".into(),
+                label: "Main Guides".into(),
+                locked: true,
+                markers: vec![TimelineMarker {
+                    id: "guide-export".into(),
+                    label: "Export range".into(),
+                    time_s: 20.0,
+                    duration_s: Some(8.0),
+                    category: Some(TimelineMarkerCategory::ExportRange),
+                    color: None,
+                    note: None,
+                    source: Some("editor".into()),
+                    extra: HashMap::new(),
+                }],
+                extra: HashMap::new(),
+            }],
+            ..AwidatTimelineMetadata::default()
+        };
+
+        let json = serde_json::to_string(&m).unwrap();
+        let back: AwidatTimelineMetadata = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.timeline_markers[0].label, "Act 1");
+        assert_eq!(
+            back.timeline_markers[0].category,
+            Some(TimelineMarkerCategory::Section)
+        );
+        assert!(back.guide_tracks[0].locked);
+        assert_eq!(
+            back.guide_tracks[0].markers[0].category,
+            Some(TimelineMarkerCategory::ExportRange)
+        );
+    }
+
+    #[test]
+    fn timeline_marker_validation_reports_duplicate_ids_and_bad_ranges() {
+        let m = AwidatTimelineMetadata {
+            timeline_markers: vec![
+                TimelineMarker {
+                    id: "dup".into(),
+                    label: "A".into(),
+                    time_s: 10.0,
+                    duration_s: Some(2.0),
+                    ..TimelineMarker::default()
+                },
+                TimelineMarker {
+                    id: "dup".into(),
+                    label: "B".into(),
+                    time_s: f64::NAN,
+                    duration_s: Some(-1.0),
+                    ..TimelineMarker::default()
+                },
+            ],
+            guide_tracks: vec![GuideTrack {
+                id: String::new(),
+                label: String::new(),
+                markers: vec![TimelineMarker {
+                    id: String::new(),
+                    label: String::new(),
+                    time_s: 0.0,
+                    ..TimelineMarker::default()
+                }],
+                ..GuideTrack::default()
+            }],
+            ..AwidatTimelineMetadata::default()
+        };
+
+        let messages: Vec<_> = m
+            .validate_professional_substrate()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect();
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("duplicate timeline marker id dup"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("time_s must be finite"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("duration_s must be >= 0"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("guide track id is required"))
+        );
     }
 
     #[test]
