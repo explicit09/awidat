@@ -10,11 +10,13 @@
 //! cut" — and sha-of-source on every import would double the
 //! import wait time.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use awidat_desktop_protocol::{Id, JobKind};
 use awidat_render::{TranscodeProgress, TranscodeProgressCallback};
+use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -22,6 +24,78 @@ use tokio_util::sync::CancellationToken;
 use crate::commands::media::proxy_path_for;
 use crate::events::JobEmitter;
 use crate::state::{AwidatState, JobHandle};
+
+/// Proxy cache status for one expected or discovered artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyCacheStatus {
+    /// Proxy exists and is at least as new as the source asset.
+    Fresh,
+    /// Proxy exists but is older than the source asset.
+    Stale,
+    /// Source asset exists but its expected proxy is missing.
+    Missing,
+    /// Proxy file exists without a matching raw asset.
+    Orphan,
+    /// Pending proxy file from an incomplete transcode exists.
+    Pending,
+}
+
+/// One row in the proxy cache lifecycle manifest.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyCacheEntry {
+    /// Source asset path when the entry maps to a raw asset.
+    pub asset_path: Option<String>,
+    /// Proxy or pending-proxy artifact path.
+    pub proxy_path: String,
+    /// Lifecycle status.
+    pub status: ProxyCacheStatus,
+    /// File size when the proxy artifact exists.
+    pub size_bytes: Option<u64>,
+}
+
+/// Auditable proxy cache lifecycle report.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyCacheManifest {
+    /// Project root used for the scan.
+    pub project_root: String,
+    /// Number of media assets under `raw/`.
+    pub asset_count: usize,
+    /// Number of fresh proxies.
+    pub fresh_count: usize,
+    /// Number of stale proxies.
+    pub stale_count: usize,
+    /// Number of missing proxies.
+    pub missing_count: usize,
+    /// Number of orphan proxy files.
+    pub orphan_count: usize,
+    /// Number of pending proxy files.
+    pub pending_count: usize,
+    /// Ordered manifest entries.
+    pub entries: Vec<ProxyCacheEntry>,
+}
+
+/// Dry-run cleanup candidate for proxy cache artifacts.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyCleanupCandidate {
+    /// Artifact path that would be removed.
+    pub path: String,
+    /// Cleanup reason.
+    pub reason: ProxyCacheStatus,
+    /// File size at scan time.
+    pub size_bytes: u64,
+}
+
+/// Dry-run proxy cleanup report.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyCacheCleanupReport {
+    /// Always true; cleanup is currently report-only.
+    pub dry_run: bool,
+    /// Full lifecycle manifest used for the cleanup plan.
+    pub manifest: ProxyCacheManifest,
+    /// Stale, orphan, and pending artifacts that are safe cleanup candidates.
+    pub delete_candidates: Vec<ProxyCleanupCandidate>,
+}
 
 /// Generate (or refresh) proxies for every media file under
 /// `<project>/raw/`. Emits one `Item::Job` (`JobKind::Transcode`)
@@ -69,6 +143,20 @@ pub async fn transcode_project_proxies(
         generated += 1;
     }
     Ok(generated)
+}
+
+/// Return a dry-run proxy lifecycle report for the loaded project.
+#[tauri::command]
+pub async fn proxy_cache_lifecycle_report(
+    state: State<'_, AwidatState>,
+) -> Result<ProxyCacheCleanupReport, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    plan_proxy_cache_cleanup(&project_root)
 }
 
 /// Transcode one asset into the proxy directory for a specific project.
@@ -156,7 +244,9 @@ async fn transcode_one(
         let _ = done_tx.send(emitter_for_task);
     });
 
-    let result = awidat_render::transcode_proxy(asset, proxy_path, Some(cb), cancel.clone()).await;
+    let pending_path = proxy_pending_path(proxy_path);
+    let result =
+        awidat_render::transcode_proxy(asset, &pending_path, Some(cb), cancel.clone()).await;
 
     unregister_job(state, &job_id).await;
     let emitter = done_rx
@@ -165,6 +255,12 @@ async fn transcode_one(
 
     match result {
         Ok(()) => {
+            if proxy_path.is_file() {
+                let _ = tokio::fs::remove_file(proxy_path).await;
+            }
+            tokio::fs::rename(&pending_path, proxy_path)
+                .await
+                .map_err(|e| format!("finalize proxy: {e}"))?;
             emitter.ok(Some(format!(
                 "proxy ready: {}",
                 proxy_path.file_name().unwrap_or_default().to_string_lossy()
@@ -201,6 +297,131 @@ fn proxy_is_fresh(asset: &Path, proxy: &Path) -> bool {
         return false;
     };
     proxy_mtime >= asset_mtime
+}
+
+fn proxy_pending_path(proxy_path: &Path) -> PathBuf {
+    let mut raw = proxy_path.as_os_str().to_os_string();
+    raw.push(".pending");
+    PathBuf::from(raw)
+}
+
+fn is_pending_proxy_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".mp4.pending"))
+}
+
+fn build_proxy_cache_manifest(project_root: &Path) -> Result<ProxyCacheManifest, String> {
+    let raw_dir = project_root.join("raw");
+    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let assets = if raw_dir.is_dir() {
+        collect_media(&raw_dir).map_err(|e| format!("scan raw/: {e}"))?
+    } else {
+        Vec::new()
+    };
+    let mut entries = Vec::new();
+    let mut expected = HashSet::new();
+    let mut fresh_count = 0;
+    let mut stale_count = 0;
+    let mut missing_count = 0;
+    let mut orphan_count = 0;
+    let mut pending_count = 0;
+
+    for asset in &assets {
+        let proxy_path = proxy_path_for(&proxies_dir, asset);
+        expected.insert(proxy_path.clone());
+        let (status, size_bytes) = match std::fs::metadata(&proxy_path) {
+            Ok(meta) if proxy_is_fresh(asset, &proxy_path) => {
+                fresh_count += 1;
+                (ProxyCacheStatus::Fresh, Some(meta.len()))
+            }
+            Ok(meta) => {
+                stale_count += 1;
+                (ProxyCacheStatus::Stale, Some(meta.len()))
+            }
+            Err(_) => {
+                missing_count += 1;
+                (ProxyCacheStatus::Missing, None)
+            }
+        };
+        entries.push(ProxyCacheEntry {
+            asset_path: Some(asset.to_string_lossy().into_owned()),
+            proxy_path: proxy_path.to_string_lossy().into_owned(),
+            status,
+            size_bytes,
+        });
+    }
+
+    if proxies_dir.is_dir() {
+        let proxy_entries =
+            std::fs::read_dir(&proxies_dir).map_err(|e| format!("read proxies dir: {e}"))?;
+        for entry in proxy_entries.flatten() {
+            let path = entry.path();
+            if is_pending_proxy_file(&path) {
+                pending_count += 1;
+                entries.push(ProxyCacheEntry {
+                    asset_path: None,
+                    proxy_path: path.to_string_lossy().into_owned(),
+                    status: ProxyCacheStatus::Pending,
+                    size_bytes: entry.metadata().ok().map(|meta| meta.len()),
+                });
+            } else if path.is_file() && is_proxy_artifact(&path) && !expected.contains(&path) {
+                orphan_count += 1;
+                entries.push(ProxyCacheEntry {
+                    asset_path: None,
+                    proxy_path: path.to_string_lossy().into_owned(),
+                    status: ProxyCacheStatus::Orphan,
+                    size_bytes: entry.metadata().ok().map(|meta| meta.len()),
+                });
+            }
+        }
+    }
+
+    entries.sort_by(|a, b| a.proxy_path.cmp(&b.proxy_path));
+    Ok(ProxyCacheManifest {
+        project_root: project_root.to_string_lossy().into_owned(),
+        asset_count: assets.len(),
+        fresh_count,
+        stale_count,
+        missing_count,
+        orphan_count,
+        pending_count,
+        entries,
+    })
+}
+
+fn plan_proxy_cache_cleanup(project_root: &Path) -> Result<ProxyCacheCleanupReport, String> {
+    let manifest = build_proxy_cache_manifest(project_root)?;
+    let delete_candidates = manifest
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.status,
+                ProxyCacheStatus::Stale | ProxyCacheStatus::Orphan | ProxyCacheStatus::Pending
+            )
+        })
+        .filter_map(|entry| {
+            Some(ProxyCleanupCandidate {
+                path: entry.proxy_path.clone(),
+                reason: entry.status,
+                size_bytes: entry.size_bytes?,
+            })
+        })
+        .collect();
+    Ok(ProxyCacheCleanupReport {
+        dry_run: true,
+        manifest,
+        delete_candidates,
+    })
+}
+
+fn is_proxy_artifact(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
 }
 
 fn collect_media(raw_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
@@ -302,5 +523,111 @@ mod tests {
         assert!(looks_like_media(Path::new("a.webm")));
         assert!(!looks_like_media(Path::new("a.json")));
         assert!(!looks_like_media(Path::new("Makefile")));
+    }
+
+    #[test]
+    fn proxy_cache_manifest_reports_fresh_stale_missing_orphan_and_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let fresh_asset = raw_dir.join("fresh.mov");
+        let stale_asset = raw_dir.join("stale.mov");
+        let missing_asset = raw_dir.join("missing.mov");
+        std::fs::write(&fresh_asset, b"fresh").unwrap();
+        std::fs::write(&stale_asset, b"stale").unwrap();
+        std::fs::write(&missing_asset, b"missing").unwrap();
+
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let fresh_proxy = proxy_path_for(&proxies_dir, &fresh_asset);
+        let stale_proxy = proxy_path_for(&proxies_dir, &stale_asset);
+        std::fs::write(&stale_proxy, b"old").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&fresh_proxy, b"new").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&stale_asset, b"newer-source").unwrap();
+        let orphan_proxy = proxies_dir.join("orphan-00000000.mp4");
+        std::fs::write(&orphan_proxy, b"orphan").unwrap();
+        let pending_proxy = proxies_dir.join("pending-00000000.mp4.pending");
+        std::fs::write(&pending_proxy, b"partial").unwrap();
+
+        let manifest = build_proxy_cache_manifest(dir.path()).unwrap();
+        assert_eq!(manifest.asset_count, 3);
+        assert_eq!(manifest.fresh_count, 1);
+        assert_eq!(manifest.stale_count, 1);
+        assert_eq!(manifest.missing_count, 1);
+        assert_eq!(manifest.orphan_count, 1);
+        assert_eq!(manifest.pending_count, 1);
+        assert!(manifest.entries.iter().any(|entry| {
+            entry
+                .asset_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("fresh.mov"))
+                && entry.status == ProxyCacheStatus::Fresh
+        }));
+        assert!(manifest.entries.iter().any(|entry| {
+            entry
+                .asset_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("stale.mov"))
+                && entry.status == ProxyCacheStatus::Stale
+        }));
+        assert!(manifest.entries.iter().any(|entry| {
+            entry
+                .asset_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("missing.mov"))
+                && entry.status == ProxyCacheStatus::Missing
+        }));
+        assert!(manifest.entries.iter().any(|entry| {
+            entry.proxy_path.ends_with("orphan-00000000.mp4")
+                && entry.status == ProxyCacheStatus::Orphan
+        }));
+        assert!(manifest.entries.iter().any(|entry| {
+            entry.proxy_path.ends_with("pending-00000000.mp4.pending")
+                && entry.status == ProxyCacheStatus::Pending
+        }));
+    }
+
+    #[test]
+    fn proxy_cache_cleanup_dry_run_lists_deletable_stale_orphan_and_pending_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let stale_asset = raw_dir.join("stale.mov");
+        std::fs::write(&stale_asset, b"old-source").unwrap();
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let stale_proxy = proxy_path_for(&proxies_dir, &stale_asset);
+        std::fs::write(&stale_proxy, b"old-proxy").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&stale_asset, b"new-source").unwrap();
+        let orphan_proxy = proxies_dir.join("orphan-00000000.mp4");
+        let pending_proxy = proxy_pending_path(&stale_proxy);
+        std::fs::write(&orphan_proxy, b"orphan").unwrap();
+        std::fs::write(&pending_proxy, b"partial").unwrap();
+
+        let report = plan_proxy_cache_cleanup(dir.path()).unwrap();
+        let paths: Vec<&str> = report
+            .delete_candidates
+            .iter()
+            .map(|candidate| candidate.path.as_str())
+            .collect();
+        assert!(report.dry_run);
+        assert_eq!(report.delete_candidates.len(), 3);
+        let stale_proxy_name = stale_proxy
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        assert!(paths.iter().any(|path| path.ends_with(stale_proxy_name)));
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("orphan-00000000.mp4"))
+        );
+        assert!(paths.iter().any(|path| path.ends_with(".mp4.pending")));
+        assert!(stale_proxy.exists());
+        assert!(orphan_proxy.exists());
+        assert!(pending_proxy.exists());
     }
 }

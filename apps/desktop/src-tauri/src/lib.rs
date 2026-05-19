@@ -117,6 +117,7 @@ pub fn run() {
             commands::import::import_url,
             commands::index::index_project,
             commands::transcode::transcode_project_proxies,
+            commands::transcode::proxy_cache_lifecycle_report,
             commands::media::list_proxies,
             commands::media::media_url_for_path,
             commands::media::proxy_path_for_stem,
