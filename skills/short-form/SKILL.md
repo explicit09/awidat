@@ -191,6 +191,20 @@ python3 <skill-root>/scripts/caption_plan.py \
 Treat `status: "needs_review"` as evidence to revise phrase length,
 line wrapping, cue duration, or caption density before render handoff.
 
+For animated or karaoke-style caption planning, generate word-progress
+evidence before choosing a render preset:
+
+```bash
+python3 <skill-root>/scripts/caption_progress_evidence.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --sample-times 0.0,0.5,1.0 \
+  --style karaoke_fill > caption-progress.json
+```
+
+This is an evidence contract, not a renderer. Treat a blocked report as
+proof that word timings must be repaired before animated captions are
+safe to hand off.
+
 Use `--phrase-preset short` for fast social captions, `medium` for calmer
 talking-head edits, and `long` only when readability matters more than pace.
 The preset considers duration, pauses, punctuation, speaker changes, and word
