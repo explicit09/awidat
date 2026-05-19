@@ -53,6 +53,9 @@ pub struct AwidatTimelineMetadata {
     /// transition items.
     #[serde(default)]
     pub cut_boundaries: HashMap<String, SemanticCutSpec>,
+    /// Durable beat and accent markers for music-synced edits and pacing.
+    #[serde(default)]
+    pub beat_markers: Vec<BeatMarker>,
     /// Most recent `edit-plan.json` item id this timeline applied.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub edit_plan_id: Option<String>,
@@ -180,6 +183,8 @@ impl AwidatTimelineMetadata {
             }
         }
 
+        diagnostics.extend(validate_beat_markers(&self.beat_markers));
+
         for animation in &self.parameter_animations {
             diagnostics.extend(animation.validate());
         }
@@ -225,7 +230,8 @@ impl AwidatTimelineMetadata {
                 CapabilityArea::AssemblyAndTimelineOperations,
                 self.extra.contains_key("last_professional_timeline_edit")
                     || !self.anchors.is_empty()
-                    || !self.source_assets.is_empty(),
+                    || !self.source_assets.is_empty()
+                    || !self.beat_markers.is_empty(),
                 "assembly state has no professional timeline operation or clip anchors",
             ),
             stage(
@@ -422,6 +428,36 @@ fn first_overlapping_animation_pair<'a>(
 
 fn ranges_overlap(first: (f64, f64), second: (f64, f64)) -> bool {
     first.0 <= second.1 && second.0 <= first.1
+}
+
+fn validate_beat_markers(markers: &[BeatMarker]) -> Vec<ProfessionalDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut ids = HashSet::new();
+    let mut previous_time_s = None;
+
+    for marker in markers {
+        if !ids.insert(marker.id.as_str()) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("duplicate beat marker id {}", marker.id),
+            ));
+        }
+        if let Some(previous) = previous_time_s
+            && marker.time_s < previous
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!(
+                    "beat marker {} time_s must be sorted ascending; {} follows {}",
+                    marker.id, marker.time_s, previous
+                ),
+            ));
+        }
+        previous_time_s = Some(marker.time_s);
+        diagnostics.extend(marker.validate());
+    }
+
+    diagnostics
 }
 
 fn stage(
@@ -653,6 +689,127 @@ fn default_ticker_height() -> f64 {
 }
 fn default_host_strip_height() -> f64 {
     320.0
+}
+
+/// Durable beat/accent marker used by beat-aware edit planning.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BeatMarker {
+    /// Stable marker id within the timeline metadata.
+    #[serde(default)]
+    pub id: String,
+    /// Timeline time in seconds.
+    pub time_s: f64,
+    /// Editorial role for this beat marker.
+    #[serde(default)]
+    pub role: BeatMarkerRole,
+    /// Optional one-based musical bar number.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bar: Option<u32>,
+    /// Optional one-based beat number within the bar.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub beat: Option<u32>,
+    /// Optional local tempo estimate.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tempo_bpm: Option<f64>,
+    /// Optional detection confidence in `[0, 1]`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confidence: Option<f64>,
+    /// Optional relative accent strength in `[0, 1]`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub strength: Option<f64>,
+    /// Source system or sidecar that produced the marker.
+    #[serde(default)]
+    pub source: String,
+    /// Optional pointer to the source sidecar record.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_ref: Option<String>,
+    /// Optional reason this marker is useful for an edit decision.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub selection_reason: Option<String>,
+}
+
+impl BeatMarker {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let area = crate::professional::CapabilityArea::AssemblyAndTimelineOperations;
+
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                "beat marker id is required",
+            ));
+        }
+        if !self.time_s.is_finite() || self.time_s < 0.0 {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!(
+                    "beat marker {} time_s must be finite and non-negative",
+                    self.id
+                ),
+            ));
+        }
+        if self.source.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("beat marker {} source is required", self.id),
+            ));
+        }
+        if let Some(confidence) = self.confidence
+            && !(0.0..=1.0).contains(&confidence)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("beat marker {} confidence must be between 0 and 1", self.id),
+            ));
+        }
+        if let Some(strength) = self.strength
+            && !(0.0..=1.0).contains(&strength)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("beat marker {} strength must be between 0 and 1", self.id),
+            ));
+        }
+        if let Some(tempo_bpm) = self.tempo_bpm
+            && (!tempo_bpm.is_finite() || tempo_bpm <= 0.0)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("beat marker {} tempo_bpm must be positive", self.id),
+            ));
+        }
+        if matches!(self.bar, Some(0)) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("beat marker {} bar must be positive", self.id),
+            ));
+        }
+        if matches!(self.beat, Some(0)) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                area,
+                format!("beat marker {} beat must be positive", self.id),
+            ));
+        }
+
+        diagnostics
+    }
+}
+
+/// Editorial role for a durable beat marker.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BeatMarkerRole {
+    /// Regular detected musical beat.
+    #[default]
+    Beat,
+    /// Strong beat at the start of a bar or phrase.
+    Downbeat,
+    /// Accent that may be visually emphasized without cutting.
+    Accent,
+    /// Beat selected as a strong cut target.
+    CutCandidate,
+    /// Structural section or phrase boundary.
+    Section,
 }
 
 /// Build the canonical key for timeline-level cut boundary metadata.

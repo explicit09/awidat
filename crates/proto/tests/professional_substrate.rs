@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
+use awidat_proto::awidat_meta::{AwidatTimelineMetadata, BeatMarker, BeatMarkerRole};
 use awidat_proto::professional::{
     AssetCatalog, AssetQuery, AssetReadiness, AssetRecord, AssetRole, AudioBus,
     AudioFinishingState, CapabilityArea, CapabilityRegistry, CapabilityStatus, ColorFinishingState,
@@ -145,6 +145,139 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
             .capabilities
             .iter()
             .any(|capability| capability.area == CapabilityArea::CompositionGraph)
+    );
+}
+
+#[test]
+fn timeline_metadata_carries_durable_beat_markers() {
+    let metadata = AwidatTimelineMetadata {
+        beat_markers: vec![
+            BeatMarker {
+                id: "beat-001".into(),
+                time_s: 1.25,
+                role: BeatMarkerRole::Downbeat,
+                bar: Some(1),
+                beat: Some(1),
+                tempo_bpm: Some(118.0),
+                confidence: Some(0.92),
+                strength: Some(0.81),
+                source: "audio-energy".into(),
+                source_ref: Some("analysis/audio-energy.json#beats/0".into()),
+                selection_reason: Some("strong opening accent".into()),
+            },
+            BeatMarker {
+                id: "beat-002".into(),
+                time_s: 1.76,
+                role: BeatMarkerRole::CutCandidate,
+                bar: Some(1),
+                beat: Some(2),
+                tempo_bpm: Some(118.0),
+                confidence: Some(0.88),
+                strength: Some(0.76),
+                source: "audio-energy".into(),
+                source_ref: Some("analysis/audio-energy.json#beats/1".into()),
+                selection_reason: Some("keeps cut cadence on musical pulse".into()),
+            },
+        ],
+        ..AwidatTimelineMetadata::default()
+    };
+
+    let json = match serde_json::to_string(&metadata) {
+        Ok(json) => json,
+        Err(error) => panic!("serialize metadata: {error}"),
+    };
+    let roundtrip: AwidatTimelineMetadata = match serde_json::from_str(&json) {
+        Ok(metadata) => metadata,
+        Err(error) => panic!("deserialize metadata: {error}"),
+    };
+
+    assert_eq!(roundtrip.beat_markers.len(), 2);
+    assert_eq!(roundtrip.beat_markers[0].role, BeatMarkerRole::Downbeat);
+    assert_eq!(
+        roundtrip.beat_markers[1].source_ref.as_deref(),
+        Some("analysis/audio-energy.json#beats/1")
+    );
+    assert!(roundtrip.validate_professional_substrate().is_empty());
+}
+
+#[test]
+fn invalid_beat_markers_block_timeline_readiness() {
+    let metadata = AwidatTimelineMetadata {
+        beat_markers: vec![
+            BeatMarker {
+                id: "beat-001".into(),
+                time_s: 2.0,
+                role: BeatMarkerRole::Beat,
+                confidence: Some(1.2),
+                strength: Some(-0.1),
+                source: String::new(),
+                ..BeatMarker::default()
+            },
+            BeatMarker {
+                id: "beat-001".into(),
+                time_s: 1.5,
+                role: BeatMarkerRole::Beat,
+                bar: Some(0),
+                beat: Some(0),
+                tempo_bpm: Some(0.0),
+                source: "audio-energy".into(),
+                ..BeatMarker::default()
+            },
+        ],
+        ..AwidatTimelineMetadata::default()
+    };
+
+    let diagnostics = metadata.validate_professional_substrate();
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.area == CapabilityArea::AssemblyAndTimelineOperations)
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("duplicate beat marker id"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("time_s must be sorted"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("source is required"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("confidence"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("strength"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("tempo_bpm"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("bar must be positive"))
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("beat must be positive"))
+    );
+
+    let report = metadata.build_professional_readiness_report();
+    assert_eq!(
+        report.stage(CapabilityArea::AssemblyAndTimelineOperations),
+        Some(ReadinessState::Blocked)
     );
 }
 
