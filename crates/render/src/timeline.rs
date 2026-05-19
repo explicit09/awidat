@@ -2582,12 +2582,17 @@ fn format_drawtext_filter(
     } else {
         anim.y
     };
+    let size = if has_title_animation(t, "title.font_size") {
+        title_animation_value_expr(t, "title.font_size", &t.font_size.to_string())
+    } else {
+        t.font_size.to_string()
+    };
     format!(
         "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{weight}\
          :x={x}:y={y}{alpha}:enable='between(t\\,{start}\\,{end})'",
         text = escaped_text,
         font = fontfile,
-        size = t.font_size,
+        size = size,
         color = t.color,
         weight = weight_attr,
         x = x,
@@ -6381,6 +6386,39 @@ mod tests {
         assert!(
             filter.contains("y=((h-text_h)/2)+h*(if(lt((t-1)"),
             "title.y animation should offset the resting y expression: {filter}"
+        );
+    }
+
+    #[test]
+    fn title_font_size_animation_modulates_drawtext_size() {
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.animations = vec![RenderParameterAnimation {
+            parameter: "title.font_size".to_string(),
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, 48.0),
+                awidat_proto::professional::Keyframe::linear(1.0, 72.0),
+            ],
+        }];
+
+        let argv = build_timeline_argv_full(
+            &[],
+            &[],
+            &[],
+            &[title],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("fontsize=if(lt((t-1)"),
+            "title.font_size animation should drive drawtext fontsize: {filter}"
+        );
+        assert!(
+            filter.contains("48+(72-48)"),
+            "font size animation should preserve keyframe values: {filter}"
         );
     }
 

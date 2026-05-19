@@ -1770,6 +1770,15 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                 rationale: None,
             },
             ParameterAnimation {
+                id: "anim-font-size".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "title.font_size".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0)],
+                rationale: None,
+            },
+            ParameterAnimation {
                 id: "anim-x".into(),
                 target: awidat_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
@@ -1794,6 +1803,13 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
         diagnostics
             .iter()
             .any(|diagnostic| diagnostic.message.contains("overlay.scale")
+                && diagnostic.message.contains("positive")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("title.font_size")
                 && diagnostic.message.contains("positive")),
         "{diagnostics:?}"
     );

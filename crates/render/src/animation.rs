@@ -9,6 +9,7 @@ pub fn is_phase_3a_parameter(parameter: &str) -> bool {
         "title.opacity"
             | "title.x"
             | "title.y"
+            | "title.font_size"
             | "overlay.opacity"
             | "overlay.x"
             | "overlay.y"

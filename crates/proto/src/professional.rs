@@ -553,7 +553,7 @@ fn validate_parameter_animation_value(
                 ),
             ));
         }
-        "overlay.scale" if keyframe.value <= 0.0 => {
+        "title.font_size" | "overlay.scale" if keyframe.value <= 0.0 => {
             diagnostics.push(ProfessionalDiagnostic::error(
                 CapabilityArea::ParameterAnimation,
                 format!(
