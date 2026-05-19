@@ -6,12 +6,13 @@ use awidat_proto::professional::{
     AudioFinishingState, CapabilityArea, CapabilityRegistry, CapabilityStatus, ColorFinishingState,
     CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
     DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
-    ExpressionSource, FindingSeverity, GradeStack, HardwareAccelerationPolicy, Keyframe,
-    MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MotionGraphicsTemplate, MotionPackage,
-    ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
-    ReframeKeyframe, ReframePath, ReframeSmoothing, SegmentationIntent, SegmentationPrompt,
-    SegmentationPromptKind, SegmentationPromptLabel, SegmentationPromptPackage, SelectDecision,
-    SourceRange, SourceSelect, Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
+    ExpressionSource, FindingSeverity, GradeStack, GroundingBoxFormat, GroundingDetection,
+    GroundingEvidence, HardwareAccelerationPolicy, Keyframe, MaskQualityScorecard,
+    MaskReviewDecision, MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
+    PipelineReadinessReport, PreflightCheckKind, ReadinessState, ReframeKeyframe, ReframePath,
+    ReframeSmoothing, SegmentationIntent, SegmentationPrompt, SegmentationPromptKind,
+    SegmentationPromptLabel, SegmentationPromptPackage, SelectDecision, SourceRange, SourceSelect,
+    Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
 };
 
 #[test]
@@ -444,6 +445,7 @@ fn tracking_package_validates_segmentation_prompt_packages() {
                     ..SegmentationPrompt::default()
                 },
             ],
+            grounding: None,
             output_mask_id: Some("mask-speaker".into()),
             output_matte_id: Some("matte-speaker".into()),
             status: awidat_proto::professional::ReviewStatus::Accepted,
@@ -510,6 +512,126 @@ fn tracking_package_validates_segmentation_prompt_packages() {
     assert!(messages.iter().any(|message| message.contains("sorted")));
     assert!(messages.iter().any(|message| message.contains("point")));
     assert!(messages.iter().any(|message| message.contains("box")));
+}
+
+#[test]
+fn tracking_package_validates_grounding_evidence() {
+    let package = TrackingPackage {
+        prompt_packages: vec![SegmentationPromptPackage {
+            id: "seg-main-speaker".into(),
+            clip_id: "clip-a".into(),
+            target_object_id: "speaker".into(),
+            subject_label: Some("main speaker".into()),
+            intent: SegmentationIntent::TextBehindSubject,
+            grounding: Some(GroundingEvidence {
+                text_query: "main speaker.".into(),
+                source: "local_detector_v1".into(),
+                box_format: GroundingBoxFormat::XyxyPixels,
+                image_width: Some(1920),
+                image_height: Some(1080),
+                box_threshold: Some(0.25),
+                text_threshold: Some(0.3),
+                detections: vec![GroundingDetection {
+                    class_name: "main speaker".into(),
+                    bbox_xyxy: [240.0, 80.0, 1420.0, 1040.0],
+                    score: Some(0.87),
+                    frame: Some(12),
+                    mask_ref: Some("generated/masks/speaker-001.rle".into()),
+                }],
+            }),
+            prompts: vec![SegmentationPrompt {
+                frame: 12,
+                kind: SegmentationPromptKind::Box,
+                label: SegmentationPromptLabel::Positive,
+                box_xyxy: Some([0.125, 0.074, 0.74, 0.963]),
+                ..SegmentationPrompt::default()
+            }],
+            ..SegmentationPromptPackage::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let json = match serde_json::to_string(&package) {
+        Ok(json) => json,
+        Err(error) => panic!("serialize grounding evidence: {error}"),
+    };
+    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+        Ok(package) => package,
+        Err(error) => panic!("deserialize grounding evidence: {error}"),
+    };
+
+    let grounding = match roundtrip.prompt_packages[0].grounding.as_ref() {
+        Some(grounding) => grounding,
+        None => panic!("grounding evidence should roundtrip"),
+    };
+    assert_eq!(grounding.detections[0].class_name, "main speaker");
+    assert_eq!(grounding.detections[0].score, Some(0.87));
+    assert!(roundtrip.validate().is_empty());
+
+    let invalid = TrackingPackage {
+        prompt_packages: vec![SegmentationPromptPackage {
+            id: "seg-bad".into(),
+            clip_id: "clip-a".into(),
+            target_object_id: "speaker".into(),
+            grounding: Some(GroundingEvidence {
+                text_query: "Main Speaker".into(),
+                source: "".into(),
+                box_format: GroundingBoxFormat::XyxyNormalized,
+                image_width: Some(0),
+                image_height: Some(1080),
+                box_threshold: Some(1.2),
+                text_threshold: Some(f64::NAN),
+                detections: vec![GroundingDetection {
+                    class_name: "".into(),
+                    bbox_xyxy: [0.8, 0.1, 0.2, 0.9],
+                    score: Some(-0.1),
+                    frame: None,
+                    mask_ref: Some(" ".into()),
+                }],
+            }),
+            prompts: vec![SegmentationPrompt {
+                frame: 12,
+                kind: SegmentationPromptKind::Box,
+                label: SegmentationPromptLabel::Positive,
+                box_xyxy: Some([0.1, 0.1, 0.4, 0.4]),
+                ..SegmentationPrompt::default()
+            }],
+            ..SegmentationPromptPackage::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let diagnostics = invalid.validate();
+    let messages: Vec<String> = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect();
+
+    assert!(messages.iter().any(|message| message.contains("lowercase")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("empty grounding source"))
+    );
+    assert!(messages.iter().any(|message| message.contains("width")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("box threshold"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("text threshold"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("class name"))
+    );
+    assert!(messages.iter().any(|message| message.contains("bbox")));
+    assert!(messages.iter().any(|message| message.contains("score")));
+    assert!(messages.iter().any(|message| message.contains("mask ref")));
 }
 
 #[test]

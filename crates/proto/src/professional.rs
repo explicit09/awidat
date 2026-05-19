@@ -1073,6 +1073,9 @@ pub struct SegmentationPromptPackage {
     /// Ordered prompts and corrections.
     #[serde(default)]
     pub prompts: Vec<SegmentationPrompt>,
+    /// Optional text-grounding evidence that produced this prompt package.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub grounding: Option<GroundingEvidence>,
     /// Optional mask id produced from this package.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub output_mask_id: Option<String>,
@@ -1148,6 +1151,9 @@ impl SegmentationPromptPackage {
             }
             previous_frame = Some(prompt.frame);
             diagnostics.extend(prompt.validate(&self.id));
+        }
+        if let Some(grounding) = &self.grounding {
+            diagnostics.extend(grounding.validate(&self.id));
         }
         diagnostics
     }
@@ -1281,6 +1287,188 @@ pub enum SegmentationPromptLabel {
     Negative,
 }
 
+/// Text-grounding evidence used to create a segmentation prompt package.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GroundingEvidence {
+    /// Text query sent to a detector or vision-language model.
+    pub text_query: String,
+    /// Model, adapter, or tool source that produced the detections.
+    pub source: String,
+    /// Coordinate system used by detection boxes.
+    #[serde(default)]
+    pub box_format: GroundingBoxFormat,
+    /// Source image width in pixels when known.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub image_width: Option<u32>,
+    /// Source image height in pixels when known.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub image_height: Option<u32>,
+    /// Detector box threshold in 0..=1 when applicable.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub box_threshold: Option<f64>,
+    /// Detector text threshold in 0..=1 when applicable.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub text_threshold: Option<f64>,
+    /// Detections returned by the grounding step.
+    #[serde(default)]
+    pub detections: Vec<GroundingDetection>,
+}
+
+impl GroundingEvidence {
+    fn validate(&self, package_id: &str) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let query = self.text_query.trim();
+        if query.is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("segmentation prompt package {package_id} has an empty grounding query"),
+            ));
+        } else if query != query.to_lowercase() || !query.ends_with('.') {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {package_id} grounding query should be lowercase and end with a period"
+                ),
+            ));
+        }
+        if self.source.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("segmentation prompt package {package_id} has an empty grounding source"),
+            ));
+        }
+        if let Some(width) = self.image_width
+            && width == 0
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("segmentation prompt package {package_id} has invalid image width"),
+            ));
+        }
+        if let Some(height) = self.image_height
+            && height == 0
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("segmentation prompt package {package_id} has invalid image height"),
+            ));
+        }
+        validate_optional_unit_interval(
+            &mut diagnostics,
+            self.box_threshold,
+            format!("segmentation prompt package {package_id} box threshold"),
+        );
+        validate_optional_unit_interval(
+            &mut diagnostics,
+            self.text_threshold,
+            format!("segmentation prompt package {package_id} text threshold"),
+        );
+        for detection in &self.detections {
+            diagnostics.extend(detection.validate(
+                package_id,
+                self.box_format,
+                self.image_width,
+                self.image_height,
+            ));
+        }
+        diagnostics
+    }
+}
+
+/// Grounding detection box coordinate format.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroundingBoxFormat {
+    /// Normalized `[x0, y0, x1, y1]` coordinates in 0..=1.
+    #[default]
+    XyxyNormalized,
+    /// Pixel `[x0, y0, x1, y1]` coordinates.
+    XyxyPixels,
+}
+
+/// One object detection returned by a grounding step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroundingDetection {
+    /// Class/object label returned by the grounding step.
+    pub class_name: String,
+    /// Bounding box in the parent evidence `box_format`.
+    pub bbox_xyxy: [f64; 4],
+    /// Confidence score in 0..=1 when available.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub score: Option<f64>,
+    /// Frame number for video detections when known.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frame: Option<u64>,
+    /// Optional mask sidecar id or artifact path produced by the grounding step.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mask_ref: Option<String>,
+}
+
+impl GroundingDetection {
+    fn validate(
+        &self,
+        package_id: &str,
+        box_format: GroundingBoxFormat,
+        image_width: Option<u32>,
+        image_height: Option<u32>,
+    ) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.class_name.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {package_id} grounding detection has an empty class name"
+                ),
+            ));
+        }
+        let bbox_valid = match box_format {
+            GroundingBoxFormat::XyxyNormalized => normalized_box_is_valid(self.bbox_xyxy),
+            GroundingBoxFormat::XyxyPixels => {
+                pixel_box_is_valid(self.bbox_xyxy, image_width, image_height)
+            }
+        };
+        if !bbox_valid {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {package_id} grounding detection bbox is invalid"
+                ),
+            ));
+        }
+        validate_optional_unit_interval(
+            &mut diagnostics,
+            self.score,
+            format!("segmentation prompt package {package_id} grounding detection score"),
+        );
+        if self
+            .mask_ref
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation prompt package {package_id} grounding detection mask ref is empty"
+                ),
+            ));
+        }
+        diagnostics
+    }
+}
+
+impl Default for GroundingDetection {
+    fn default() -> Self {
+        Self {
+            class_name: String::new(),
+            bbox_xyxy: [0.0, 0.0, 0.0, 0.0],
+            score: None,
+            frame: None,
+            mask_ref: None,
+        }
+    }
+}
+
 fn normalized_pair_is_valid(point: [f64; 2]) -> bool {
     point
         .iter()
@@ -1292,6 +1480,28 @@ fn normalized_box_is_valid(bbox: [f64; 4]) -> bool {
         .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
         && bbox[0] < bbox[2]
         && bbox[1] < bbox[3]
+}
+
+fn pixel_box_is_valid(bbox: [f64; 4], image_width: Option<u32>, image_height: Option<u32>) -> bool {
+    if !bbox.iter().all(|value| value.is_finite() && *value >= 0.0)
+        || bbox[0] >= bbox[2]
+        || bbox[1] >= bbox[3]
+    {
+        return false;
+    }
+    if let Some(width) = image_width
+        && width > 0
+        && bbox[2] > f64::from(width)
+    {
+        return false;
+    }
+    if let Some(height) = image_height
+        && height > 0
+        && bbox[3] > f64::from(height)
+    {
+        return false;
+    }
+    true
 }
 
 /// Subject-aware crop/reframe path for one timeline clip.
