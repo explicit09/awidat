@@ -163,9 +163,12 @@ python3 <skill-root>/scripts/render_verify.py \
 Each `--cut-s` produces a review image centered on a hard cut with a
 filmstrip and waveform. Inspect the generated PNGs for black frames,
 audio discontinuities, caption overlap, and awkward visual timing. If
-verification fails, fix the timeline or report the blocker. Do not claim
-a finished short without a render path or verification result. Before
-the final report, call `vedit_diff` and verify it contains the hook-first
+verification fails, fix the timeline or report the blocker. The JSON
+`review_gate` must be `ready_for_review` before the final report when
+cut boundaries were supplied; if it is `needs_review` or `blocked`,
+generate or repair the cut-window artifacts first. Do not claim a
+finished short without a render path or verification result. Before the
+final report, call `vedit_diff` and verify it contains the hook-first
 spine, `Set Output Format`, caption nodes, and intended cleanup edits.
 
 For final publish exports, run measured loudness finalization after the

@@ -85,8 +85,42 @@ class CutWindowViewTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["checks"]["cut_windows"], "planned")
+        self.assertEqual(report["review_gate"]["status"], "needs_review")
+        self.assertEqual(report["review_gate"]["cut_count"], 1)
+        self.assertTrue(report["review_gate"]["required_before_final_report"])
         self.assertEqual(report["cut_windows"][0]["center_s"], 4.0)
         self.assertEqual(json.loads(json.dumps(report))["status"], "passed")
+
+    def test_verify_render_json_marks_generated_cut_windows_ready_for_review(self) -> None:
+        render_verify = load_script("render_verify")
+        with tempfile.TemporaryDirectory() as tmp:
+            media = Path(tmp) / "final.mp4"
+            media.write_bytes(b"placeholder")
+            probe_result = {
+                "ok": True,
+                "raw": {
+                    "format": {"duration": "12.0"},
+                    "streams": [{"codec_type": "video"}, {"codec_type": "audio"}],
+                },
+            }
+
+            with (
+                mock.patch.object(render_verify, "probe", return_value=probe_result),
+                mock.patch.object(render_verify, "render_cut_window", return_value={"ok": True}),
+            ):
+                report = render_verify.verify_render(
+                    media,
+                    max_duration_s=15.0,
+                    cut_points_s=[4.0, 8.0],
+                    cut_report_dir=Path(tmp) / "verify",
+                )
+
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["checks"]["cut_windows"], "generated")
+        self.assertEqual(report["review_gate"]["status"], "ready_for_review")
+        self.assertEqual(report["review_gate"]["cut_count"], 2)
+        self.assertEqual(len(report["review_gate"]["artifacts"]), 2)
+        self.assertTrue(report["review_gate"]["required_before_final_report"])
 
 
 if __name__ == "__main__":

@@ -6,6 +6,9 @@ target/
 # Superpowers brainstorming session artifacts
 .superpowers/
 
+# Private competitive/reference research artifacts.
+.reference-research/
+
 # Distribution build output (tarballs + staging dirs).
 dist/build/
 

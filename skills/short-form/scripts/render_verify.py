@@ -82,6 +82,36 @@ def generate_cut_windows(
     return errors
 
 
+def build_review_gate(cut_windows: list[dict], cut_window_check: str | None) -> dict:
+    if not cut_windows:
+        return {
+            "status": "not_required",
+            "cut_count": 0,
+            "artifacts": [],
+            "required_before_final_report": False,
+            "message": "no cut boundaries were provided for review",
+        }
+
+    artifacts = [window["file"] for window in cut_windows]
+    if cut_window_check == "generated":
+        status = "ready_for_review"
+        message = "inspect generated cut-window artifacts before final report"
+    elif cut_window_check == "failed":
+        status = "blocked"
+        message = "cut-window artifact generation failed; repair before final report"
+    else:
+        status = "needs_review"
+        message = "generate and inspect cut-window artifacts before final report"
+
+    return {
+        "status": status,
+        "cut_count": len(cut_windows),
+        "artifacts": artifacts,
+        "required_before_final_report": True,
+        "message": message,
+    }
+
+
 def verify_render(
     path: Path,
     *,
@@ -149,6 +179,7 @@ def verify_render(
         "duration_s": duration,
         "checks": checks,
         "cut_windows": cut_windows,
+        "review_gate": build_review_gate(cut_windows, checks["cut_windows"]),
         "errors": errors,
     }
 
