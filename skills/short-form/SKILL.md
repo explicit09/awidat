@@ -156,6 +156,17 @@ python3 <skill-root>/scripts/caption_plan.py \
   --hot-end-s <highest-intensity-end>
 ```
 
+For interchange or review outside Awidat, emit the same phrase plan as
+SRT:
+
+```bash
+python3 <skill-root>/scripts/caption_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --phrase-preset short \
+  --style classic \
+  --output-format srt > captions.srt
+```
+
 Use `--phrase-preset short` for fast social captions, `medium` for calmer
 talking-head edits, and `long` only when readability matters more than pace.
 The preset considers duration, pauses, punctuation, speaker changes, and word

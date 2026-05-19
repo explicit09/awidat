@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -182,6 +185,51 @@ class TranscriptPhraseTests(unittest.TestCase):
         )
 
         self.assertEqual([p["text"] for p in phrases], ["One quick beat", "Next line"])
+
+    def test_caption_plan_exports_srt_with_timestamping_and_sanitized_arrows(self) -> None:
+        caption_plan = load_script("caption_plan")
+        phrases = [
+            {"text": "First --> point", "start_s": 0.0, "end_s": 0.64},
+            {"text": "Past an hour", "start_s": 3661.2, "end_s": 3662.3456},
+        ]
+
+        srt = caption_plan.build_srt(phrases)
+
+        self.assertIn("00:00:00,000 --> 00:00:00,640", srt)
+        self.assertIn("01:01:01,200 --> 01:01:02,346", srt)
+        self.assertIn("First -> point", srt)
+        self.assertTrue(srt.endswith("\n"))
+
+        with self.assertRaisesRegex(ValueError, "end_s"):
+            caption_plan.build_srt([{"text": "bad", "start_s": 2.0, "end_s": 1.0}])
+
+    def test_caption_plan_cli_can_emit_srt(self) -> None:
+        transcript = {
+            "words": [
+                {"word": "One", "start_s": 0.0, "end_s": 0.2, "speaker": "A"},
+                {"word": "line", "start_s": 0.25, "end_s": 0.5, "speaker": "A"},
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:
+            json.dump(transcript, handle)
+            handle.flush()
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "caption_plan.py"),
+                    "--transcript",
+                    handle.name,
+                    "--output-format",
+                    "srt",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertIn("1\n00:00:00,000 --> 00:00:00,600", result.stdout)
+        self.assertIn("One line", result.stdout)
 
     def test_packed_transcript_markdown_has_source_and_timed_rows(self) -> None:
         pack_transcript = load_script("pack_transcript")
