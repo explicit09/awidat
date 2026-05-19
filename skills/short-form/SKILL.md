@@ -148,12 +148,18 @@ Generate phrase groups with the helper:
 ```bash
 python3 <skill-root>/scripts/caption_plan.py \
   --transcript index/whisper/raw/<asset>.json \
+  --phrase-preset short \
   --max-words 4 \
   --max-gap-s 0.5 \
   --style classic \
   --hot-start-s <highest-intensity-start> \
   --hot-end-s <highest-intensity-end>
 ```
+
+Use `--phrase-preset short` for fast social captions, `medium` for calmer
+talking-head edits, and `long` only when readability matters more than pace.
+The preset considers duration, pauses, punctuation, speaker changes, and word
+count.
 
 Use `--style classic` for normal bottom-third captions, `impact` for a
 center punch line, `boxed` when busy footage needs a stronger text

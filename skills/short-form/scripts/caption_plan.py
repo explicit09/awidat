@@ -64,13 +64,19 @@ def build_caption_phrases(
     *,
     max_words: int = 4,
     max_gap_s: float = 0.5,
+    phrase_preset: str | None = None,
     hot_start_s: float | None = None,
     hot_end_s: float | None = None,
     style: str = "classic",
 ) -> list[dict]:
     phrases = []
     preset = CAPTION_STYLES.get(style, CAPTION_STYLES["classic"])
-    for phrase in group_words_into_phrases(items, max_words=max_words, max_gap_s=max_gap_s):
+    for phrase in group_words_into_phrases(
+        items,
+        max_words=max_words,
+        max_gap_s=max_gap_s,
+        phrase_preset=phrase_preset,
+    ):
         start = float(phrase.get("start_s", 0.0))
         end = float(phrase.get("end_s", start))
         hot = (
@@ -98,6 +104,7 @@ def main() -> None:
     p.add_argument("--transcript", required=True)
     p.add_argument("--max-words", type=int, default=4)
     p.add_argument("--max-gap-s", type=float, default=0.5)
+    p.add_argument("--phrase-preset", choices=("short", "medium", "long"))
     p.add_argument("--hot-start-s", type=float)
     p.add_argument("--hot-end-s", type=float)
     p.add_argument("--style", choices=sorted(CAPTION_STYLES), default="classic")
@@ -108,6 +115,7 @@ def main() -> None:
         items,
         max_words=args.max_words,
         max_gap_s=args.max_gap_s,
+        phrase_preset=args.phrase_preset,
         hot_start_s=args.hot_start_s,
         hot_end_s=args.hot_end_s,
         style=args.style,

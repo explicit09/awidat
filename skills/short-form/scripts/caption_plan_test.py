@@ -130,6 +130,59 @@ class TranscriptPhraseTests(unittest.TestCase):
 
         self.assertEqual([p["text"] for p in phrases], ["First point.", "Second point"])
 
+    def test_phrase_preset_breaks_on_duration_before_word_limit(self) -> None:
+        transcript_phrases = load_script("transcript_phrases")
+        items = [
+            {"word": "Slow", "start_s": 0.0, "end_s": 0.7, "speaker": "A"},
+            {"word": "setup", "start_s": 0.75, "end_s": 1.45, "speaker": "A"},
+            {"word": "keeps", "start_s": 1.5, "end_s": 2.2, "speaker": "A"},
+            {"word": "moving", "start_s": 2.25, "end_s": 2.95, "speaker": "A"},
+            {"word": "forward", "start_s": 3.0, "end_s": 3.7, "speaker": "A"},
+        ]
+
+        phrases = transcript_phrases.group_words_into_phrases(
+            items,
+            phrase_preset="short",
+        )
+
+        self.assertEqual(
+            [p["text"] for p in phrases],
+            ["Slow setup keeps", "moving forward"],
+        )
+
+    def test_phrase_preset_breaks_on_soft_punctuation_after_target_duration(self) -> None:
+        transcript_phrases = load_script("transcript_phrases")
+        items = [
+            {"word": "First", "start_s": 0.0, "end_s": 0.5, "speaker": "A"},
+            {"word": "idea,", "start_s": 0.55, "end_s": 1.45, "speaker": "A"},
+            {"word": "second", "start_s": 1.5, "end_s": 1.9, "speaker": "A"},
+            {"word": "lands", "start_s": 1.95, "end_s": 2.25, "speaker": "A"},
+        ]
+
+        phrases = transcript_phrases.group_words_into_phrases(
+            items,
+            phrase_preset="short",
+        )
+
+        self.assertEqual([p["text"] for p in phrases], ["First idea,", "second lands"])
+
+    def test_caption_plan_accepts_phrase_preset(self) -> None:
+        caption_plan = load_script("caption_plan")
+        items = [
+            {"word": "One", "start_s": 0.0, "end_s": 0.25, "speaker": "A"},
+            {"word": "quick", "start_s": 0.3, "end_s": 0.55, "speaker": "A"},
+            {"word": "beat", "start_s": 0.6, "end_s": 0.85, "speaker": "A"},
+            {"word": "Next", "start_s": 1.35, "end_s": 1.55, "speaker": "A"},
+            {"word": "line", "start_s": 1.6, "end_s": 1.9, "speaker": "A"},
+        ]
+
+        phrases = caption_plan.build_caption_phrases(
+            items,
+            phrase_preset="short",
+        )
+
+        self.assertEqual([p["text"] for p in phrases], ["One quick beat", "Next line"])
+
     def test_packed_transcript_markdown_has_source_and_timed_rows(self) -> None:
         pack_transcript = load_script("pack_transcript")
         transcript = {

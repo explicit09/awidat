@@ -9,6 +9,32 @@ from typing import Iterable
 
 WORD_RE = re.compile(r"[A-Za-z0-9']+|[.,!?;:]")
 TERMINAL_RE = re.compile(r"[.!?]$")
+SOFT_PUNCTUATION_RE = re.compile(r"[,;:]$")
+
+
+PHRASE_PRESETS = {
+    "short": {
+        "min_words": 3,
+        "max_words": 4,
+        "target_duration_s": 1.4,
+        "max_duration_s": 2.6,
+        "pause_break_s": 0.26,
+    },
+    "medium": {
+        "min_words": 5,
+        "max_words": 7,
+        "target_duration_s": 2.3,
+        "max_duration_s": 3.9,
+        "pause_break_s": 0.38,
+    },
+    "long": {
+        "min_words": 8,
+        "max_words": 12,
+        "target_duration_s": 3.3,
+        "max_duration_s": 5.6,
+        "pause_break_s": 0.52,
+    },
+}
 
 
 def _float_value(item: dict, *keys: str, default: float = 0.0) -> float:
@@ -77,11 +103,13 @@ def group_words_into_phrases(
     *,
     max_words: int = 4,
     max_gap_s: float = 0.5,
+    phrase_preset: str | None = None,
 ) -> list[dict]:
     """Group transcript words into short readable phrases."""
     words = normalize_words(body_or_words)
     phrases: list[dict] = []
     current: list[dict] = []
+    preset = PHRASE_PRESETS.get(phrase_preset or "")
 
     def flush() -> None:
         if not current:
@@ -96,16 +124,45 @@ def group_words_into_phrases(
         })
         current.clear()
 
+    def should_break_for_preset() -> bool:
+        if not current or not preset:
+            return False
+        count = len(current)
+        start = float(current[0]["start_s"])
+        end = float(current[-1]["end_s"])
+        duration_s = max(0.0, end - start)
+        token = str(current[-1]["word"])
+
+        if TERMINAL_RE.search(token):
+            return True
+        if count >= int(preset["max_words"]):
+            return True
+        if duration_s >= float(preset["max_duration_s"]):
+            return True
+        min_words = int(preset["min_words"])
+        if count >= min_words and duration_s >= float(preset["target_duration_s"]):
+            return True
+        return (
+            SOFT_PUNCTUATION_RE.search(token) is not None
+            and count >= 2
+            and duration_s >= float(preset["target_duration_s"]) * 0.7
+        )
+
     for word in words:
         if current:
             previous = current[-1]
             gap_s = float(word["start_s"]) - float(previous["end_s"])
             speaker_changed = word.get("speaker") != previous.get("speaker")
-            if speaker_changed or gap_s >= max_gap_s or len(current) >= max(1, max_words):
+            gap_limit_s = float(preset["pause_break_s"]) if preset else max_gap_s
+            legacy_word_limit = not preset and len(current) >= max(1, max_words)
+            if speaker_changed or gap_s >= gap_limit_s or legacy_word_limit:
                 flush()
 
         current.append(word)
-        if TERMINAL_RE.search(str(word["word"])):
+        if preset:
+            if should_break_for_preset():
+                flush()
+        elif TERMINAL_RE.search(str(word["word"])):
             flush()
 
     flush()
