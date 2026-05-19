@@ -71,6 +71,37 @@ class OverlayAnimationPlanTests(unittest.TestCase):
         self.assertIn("Deliver: generated/overlays/stat-burst/overlay.webm", brief)
         self.assertIn("transparent or keyed background", brief)
 
+    def test_subject_aware_slots_record_layer_order_and_matte_requirements(self) -> None:
+        planner = load_script("overlay_animation_plan")
+        manifest = planner.build_animation_manifest(
+            [
+                {
+                    "name": "Text Behind Speaker",
+                    "anchor": "clip_uuid=clip-speaker",
+                    "start_s": 1.2,
+                    "duration_s": 2.0,
+                    "engine": "canvas",
+                    "mode": "full_frame",
+                    "prompt": "Large title passes behind the speaker",
+                    "subject_aware": True,
+                    "subject_prompt": "main speaker",
+                    "matte_path": "generated/mattes/speaker-alpha.webm",
+                    "fallback": "render ordinary overlay above video if the matte is unavailable",
+                }
+            ],
+            output_root=Path("generated/overlays"),
+        )
+
+        slot = manifest["slots"][0]
+
+        self.assertTrue(slot["subject_aware"])
+        self.assertEqual(slot["subject_prompt"], "main speaker")
+        self.assertEqual(slot["matte_path"], "generated/mattes/speaker-alpha.webm")
+        self.assertEqual(slot["layer_order"], ["base_video", "overlay_asset", "subject_matte"])
+        self.assertIn("generated/mattes/speaker-alpha.webm", slot["brief"])
+        self.assertIn("base video -> overlay asset -> subject matte", slot["brief"])
+        self.assertIn("fallback", slot["brief"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

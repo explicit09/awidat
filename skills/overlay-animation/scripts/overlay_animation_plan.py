@@ -25,6 +25,10 @@ def normalize_slot(raw: dict, *, output_root: Path) -> dict:
     slot_dir = output_root / slug
     asset_path = slot_dir / "overlay.webm"
     brief_path = slot_dir / "brief.md"
+    subject_aware = bool(raw.get("subject_aware", False))
+    matte_path = str(
+        raw.get("matte_path") or (slot_dir / "subject-matte.webm")
+    ).strip()
     return {
         "name": name,
         "slug": slug,
@@ -36,6 +40,17 @@ def normalize_slot(raw: dict, *, output_root: Path) -> dict:
         "prompt": str(raw.get("prompt", "")).strip(),
         "asset_path": asset_path.as_posix(),
         "brief_path": brief_path.as_posix(),
+        "subject_aware": subject_aware,
+        "subject_prompt": str(raw.get("subject_prompt", "main subject")).strip()
+        or "main subject",
+        "matte_path": matte_path,
+        "layer_order": (
+            ["base_video", "overlay_asset", "subject_matte"]
+            if subject_aware
+            else ["base_video", "overlay_asset"]
+        ),
+        "fallback": str(raw.get("fallback", "")).strip()
+        or "render the overlay as a normal foreground asset if the subject matte is unavailable",
     }
 
 
@@ -56,7 +71,7 @@ def build_edl_hint(slot: dict) -> str:
 
 
 def build_slot_brief(slot: dict) -> str:
-    return "\n".join([
+    lines = [
         f"# {slot['name']}",
         "",
         f"Duration: {slot['duration_s']:.3f}s",
@@ -69,10 +84,21 @@ def build_slot_brief(slot: dict) -> str:
         "- Use a transparent or keyed background unless the slot is intentionally full-frame.",
         "- Keep typography inside mobile safe areas when the target format is vertical.",
         "- Export a web-compatible video asset that Awidat can place as a media overlay.",
+    ]
+    if slot.get("subject_aware"):
+        lines.extend([
+            "- Subject-aware compositing required.",
+            f"- Subject prompt: {slot['subject_prompt']}",
+            f"- Required matte/cutout artifact: {slot['matte_path']}",
+            "- Layer order: base video -> overlay asset -> subject matte.",
+            f"- Fallback: {slot['fallback']}",
+        ])
+    lines.extend([
         "",
         "Creative brief:",
         slot["prompt"] or "Generate a focused motion graphic that supports the edit beat.",
-    ]) + "\n"
+    ])
+    return "\n".join(lines) + "\n"
 
 
 def build_animation_manifest(slots: list[dict], *, output_root: Path) -> dict:

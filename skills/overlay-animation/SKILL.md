@@ -43,7 +43,8 @@ Create a slots JSON file with:
       "duration_s": 1.8,
       "engine": "canvas",
       "mode": "full_frame",
-      "prompt": "Animated product callout synced to the word launch"
+      "prompt": "Animated product callout synced to the word launch",
+      "subject_aware": false
     }
   ]
 }
@@ -65,11 +66,20 @@ For each returned slot:
   corner, scale, or margin only if the timeline needs it.
 - Render and verify the slot in context.
 
+For text-behind-subject or subject-aware overlay work, set
+`subject_aware: true`, provide `subject_prompt`, and provide or generate
+the `matte_path` artifact named in the manifest. The production contract
+is base video -> overlay asset -> subject matte/cutout. If the matte is
+unavailable, use the manifest fallback instead of pretending the effect
+rendered correctly.
+
 ## Delivery Rules
 
 - Match the exact `duration_s`. Do not make the timeline absorb drift.
 - Prefer transparent or keyed backgrounds for overlays.
 - Keep important text inside mobile safe areas for vertical output.
+- For subject-aware overlays, verify the matte exists and the subject
+  remains visually in front of the overlay in the affected timing window.
 - Keep generated assets project-relative.
 - Do not paste raw backend filter graphs into EDL. The asset enters
   through `Insert PiP` or overlay `Insert BRoll`.
