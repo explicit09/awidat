@@ -5,7 +5,8 @@ use awidat_proto::professional::{
     AssetCatalog, AssetQuery, AssetReadiness, AssetRecord, AssetRole, AudioBus,
     AudioFinishingState, CapabilityArea, CapabilityRegistry, CapabilityStatus, ColorFinishingState,
     CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
-    DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity, GradeStack, Keyframe,
+    DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
+    ExpressionSource, FindingSeverity, GradeStack, HardwareAccelerationPolicy, Keyframe,
     MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
     PipelineReadinessReport, PreflightCheckKind, ReadinessState, SelectDecision, SourceRange,
     SourceSelect, Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
@@ -439,6 +440,81 @@ fn delivery_profile_preflight_flags_missing_required_measurements() {
             .any(|finding| finding.check == PreflightCheckKind::Duration
                 && finding.severity == FindingSeverity::Error
                 && finding.message.contains("measurement is missing"))
+    );
+}
+
+#[test]
+fn export_presets_validate_social_audio_and_image_sequence_targets() {
+    let short = ExportPreset::vertical_short_form();
+    let audio = ExportPreset::podcast_audio();
+    let frames = ExportPreset::image_sequence();
+
+    assert!(short.validate().is_empty());
+    assert!(audio.validate().is_empty());
+    assert!(frames.validate().is_empty());
+    assert_eq!(short.profile.aspect_ratio, "9:16");
+    assert_eq!(short.output.extension, "mp4");
+    assert_eq!(audio.mode, ExportMode::AudioOnly);
+    assert!(audio.video.is_none());
+    assert_eq!(frames.mode, ExportMode::ImageSequence);
+    assert!(frames.audio.is_none());
+}
+
+#[test]
+fn export_preset_validation_flags_codec_range_and_ratio_mismatches() {
+    let preset = ExportPreset {
+        id: String::new(),
+        name: "Broken".into(),
+        mode: ExportMode::AudioVideo,
+        profile: DeliveryProfile {
+            id: "bad_profile".into(),
+            name: "Bad Profile".into(),
+            aspect_ratio: "9:16".into(),
+            width: 1920,
+            height: 1080,
+            ..DeliveryProfile::default()
+        },
+        output: ExportOutputSettings {
+            extension: "mov".into(),
+            container: String::new(),
+            hardware_acceleration: HardwareAccelerationPolicy::Auto,
+        },
+        video: None,
+        audio: None,
+        range: ExportRange {
+            start_s: Some(10.0),
+            end_s: Some(4.0),
+            ..ExportRange::default()
+        },
+    };
+
+    let messages: Vec<String> = preset
+        .validate()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+
+    assert!(messages.iter().any(|message| message.contains("empty id")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("aspect ratio"))
+    );
+    assert!(messages.iter().any(|message| message.contains("container")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("video settings"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("audio settings"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("end_s must be greater"))
     );
 }
 

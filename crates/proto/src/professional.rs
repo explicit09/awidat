@@ -1597,6 +1597,404 @@ impl DeliveryProfile {
     }
 }
 
+/// Reusable export preset for rendering and delivery planning.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportPreset {
+    /// Preset id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Export media mode.
+    #[serde(default)]
+    pub mode: ExportMode,
+    /// Delivery profile that describes dimensions, aspect ratio, and checks.
+    pub profile: DeliveryProfile,
+    /// Container/output settings.
+    #[serde(default)]
+    pub output: ExportOutputSettings,
+    /// Optional video settings. Required for video-carrying modes.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub video: Option<VideoExportSettings>,
+    /// Optional audio settings. Required for audio-carrying modes.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio: Option<AudioExportSettings>,
+    /// Optional export range.
+    #[serde(default)]
+    pub range: ExportRange,
+}
+
+impl ExportPreset {
+    /// Vertical short-form social video preset.
+    pub fn vertical_short_form() -> Self {
+        Self {
+            id: "vertical_short_form".into(),
+            name: "Vertical Short Form".into(),
+            mode: ExportMode::AudioVideo,
+            profile: DeliveryProfile {
+                id: "vertical_short_form".into(),
+                name: "Vertical Short Form".into(),
+                platform: Some("social".into()),
+                aspect_ratio: "9:16".into(),
+                width: 1080,
+                height: 1920,
+                video_bitrate_kbps: Some(12_000),
+                loudness_lufs: Some(-14.0),
+                preflight_checks: vec![
+                    PreflightCheckKind::AspectRatio,
+                    PreflightCheckKind::Bitrate,
+                    PreflightCheckKind::Loudness,
+                    PreflightCheckKind::SafeAreas,
+                    PreflightCheckKind::Captions,
+                    PreflightCheckKind::Metadata,
+                ],
+            },
+            output: ExportOutputSettings::mp4(),
+            video: Some(VideoExportSettings::h264(12_000)),
+            audio: Some(AudioExportSettings::aac(192)),
+            range: ExportRange::default(),
+        }
+    }
+
+    /// Audio-only podcast preset.
+    pub fn podcast_audio() -> Self {
+        Self {
+            id: "podcast_audio".into(),
+            name: "Podcast Audio".into(),
+            mode: ExportMode::AudioOnly,
+            profile: DeliveryProfile {
+                id: "podcast_audio".into(),
+                name: "Podcast Audio".into(),
+                platform: Some("podcast".into()),
+                aspect_ratio: "audio".into(),
+                width: 0,
+                height: 0,
+                video_bitrate_kbps: None,
+                loudness_lufs: Some(-16.0),
+                preflight_checks: vec![PreflightCheckKind::Loudness, PreflightCheckKind::Metadata],
+            },
+            output: ExportOutputSettings {
+                extension: "m4a".into(),
+                container: "ipod".into(),
+                hardware_acceleration: HardwareAccelerationPolicy::Off,
+            },
+            video: None,
+            audio: Some(AudioExportSettings::aac(128)),
+            range: ExportRange::default(),
+        }
+    }
+
+    /// Image sequence preset for frame-accurate review or external finishing.
+    pub fn image_sequence() -> Self {
+        Self {
+            id: "image_sequence".into(),
+            name: "Image Sequence".into(),
+            mode: ExportMode::ImageSequence,
+            profile: DeliveryProfile {
+                id: "image_sequence".into(),
+                name: "Image Sequence".into(),
+                platform: Some("finishing".into()),
+                aspect_ratio: "16:9".into(),
+                width: 1920,
+                height: 1080,
+                video_bitrate_kbps: None,
+                loudness_lufs: None,
+                preflight_checks: vec![PreflightCheckKind::AspectRatio],
+            },
+            output: ExportOutputSettings {
+                extension: "png".into(),
+                container: "image2".into(),
+                hardware_acceleration: HardwareAccelerationPolicy::Off,
+            },
+            video: Some(VideoExportSettings {
+                codec: "png".into(),
+                bitrate_kbps: None,
+                frame_rate: None,
+            }),
+            audio: None,
+            range: ExportRange::default(),
+        }
+    }
+
+    /// Validate preset shape and mode-specific settings.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                "export preset has an empty id",
+            ));
+        }
+        if self.name.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("export preset {} has an empty name", self.id),
+            ));
+        }
+        if self.output.container.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("export preset {} has an empty container", self.id),
+            ));
+        }
+        if self.output.extension.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("export preset {} has an empty extension", self.id),
+            ));
+        }
+        if self.mode.carries_video() && self.video.is_none() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("export preset {} is missing video settings", self.id),
+            ));
+        }
+        if self.mode.carries_audio() && self.audio.is_none() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("export preset {} is missing audio settings", self.id),
+            ));
+        }
+        if !self.mode.carries_video() && self.video.is_some() {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("export preset {} ignores video settings", self.id),
+            ));
+        }
+        if !self.mode.carries_audio() && self.audio.is_some() {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!("export preset {} ignores audio settings", self.id),
+            ));
+        }
+        if let Some(video) = &self.video {
+            if video.codec.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!("export preset {} has an empty video codec", self.id),
+                ));
+            }
+            if let Some(frame_rate) = video.frame_rate
+                && (!frame_rate.is_finite() || frame_rate <= 0.0)
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!("export preset {} frame rate must be positive", self.id),
+                ));
+            }
+        }
+        if let Some(audio) = &self.audio {
+            if audio.codec.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!("export preset {} has an empty audio codec", self.id),
+                ));
+            }
+            if audio.sample_rate_hz == 0 {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!(
+                        "export preset {} audio sample rate must be positive",
+                        self.id
+                    ),
+                ));
+            }
+            if audio.channels == 0 {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::DeliveryProfilesAndPreflight,
+                    format!(
+                        "export preset {} audio channel count must be positive",
+                        self.id
+                    ),
+                ));
+            }
+        }
+        if let (Some(start_s), Some(end_s)) = (self.range.start_s, self.range.end_s)
+            && (!start_s.is_finite() || !end_s.is_finite() || end_s <= start_s)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!(
+                    "export preset {} end_s must be greater than start_s",
+                    self.id
+                ),
+            ));
+        }
+        if self.mode.carries_video()
+            && !profile_dimensions_match_aspect_ratio(
+                self.profile.width,
+                self.profile.height,
+                &self.profile.aspect_ratio,
+            )
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::DeliveryProfilesAndPreflight,
+                format!(
+                    "export preset {} dimensions do not match aspect ratio {}",
+                    self.id, self.profile.aspect_ratio
+                ),
+            ));
+        }
+        diagnostics
+    }
+}
+
+/// Export media mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportMode {
+    /// Export video and audio.
+    #[default]
+    AudioVideo,
+    /// Export video without audio.
+    VideoOnly,
+    /// Export audio without video.
+    AudioOnly,
+    /// Export one still image per frame.
+    ImageSequence,
+}
+
+impl ExportMode {
+    fn carries_video(self) -> bool {
+        matches!(
+            self,
+            Self::AudioVideo | Self::VideoOnly | Self::ImageSequence
+        )
+    }
+
+    fn carries_audio(self) -> bool {
+        matches!(self, Self::AudioVideo | Self::AudioOnly)
+    }
+}
+
+/// Container and file-output settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportOutputSettings {
+    /// File extension without dot.
+    pub extension: String,
+    /// FFmpeg container/muxer name.
+    pub container: String,
+    /// Hardware acceleration preference.
+    #[serde(default)]
+    pub hardware_acceleration: HardwareAccelerationPolicy,
+}
+
+impl Default for ExportOutputSettings {
+    fn default() -> Self {
+        Self::mp4()
+    }
+}
+
+impl ExportOutputSettings {
+    /// H.264/AAC MP4 container settings.
+    pub fn mp4() -> Self {
+        Self {
+            extension: "mp4".into(),
+            container: "mp4".into(),
+            hardware_acceleration: HardwareAccelerationPolicy::Off,
+        }
+    }
+}
+
+/// Hardware acceleration preference for export.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HardwareAccelerationPolicy {
+    /// Do not request hardware acceleration.
+    #[default]
+    Off,
+    /// Use hardware acceleration if available and fall back to software.
+    Auto,
+    /// Require hardware acceleration; fail if unavailable.
+    Require,
+}
+
+/// Video codec settings for an export preset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VideoExportSettings {
+    /// FFmpeg video codec name.
+    pub codec: String,
+    /// Target video bitrate in kbps.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bitrate_kbps: Option<u32>,
+    /// Optional frame rate override.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frame_rate: Option<f64>,
+}
+
+impl VideoExportSettings {
+    /// H.264 video settings.
+    pub fn h264(bitrate_kbps: u32) -> Self {
+        Self {
+            codec: "libx264".into(),
+            bitrate_kbps: Some(bitrate_kbps),
+            frame_rate: None,
+        }
+    }
+}
+
+/// Audio codec settings for an export preset.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioExportSettings {
+    /// FFmpeg audio codec name.
+    pub codec: String,
+    /// Audio bitrate in kbps.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bitrate_kbps: Option<u32>,
+    /// Audio sample rate in Hz.
+    pub sample_rate_hz: u32,
+    /// Channel count.
+    pub channels: u8,
+}
+
+impl AudioExportSettings {
+    /// AAC audio settings at 48 kHz stereo.
+    pub fn aac(bitrate_kbps: u32) -> Self {
+        Self {
+            codec: "aac".into(),
+            bitrate_kbps: Some(bitrate_kbps),
+            sample_rate_hz: 48_000,
+            channels: 2,
+        }
+    }
+}
+
+/// Export range and timeline trimming controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExportRange {
+    /// Optional range start in timeline seconds.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub start_s: Option<f64>,
+    /// Optional range end in timeline seconds.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub end_s: Option<f64>,
+    /// Let planner choose the first frame containing media.
+    #[serde(default)]
+    pub start_at_first_clip: bool,
+    /// Let planner choose the last frame containing media.
+    #[serde(default)]
+    pub end_at_last_clip: bool,
+}
+
+fn profile_dimensions_match_aspect_ratio(width: u32, height: u32, aspect_ratio: &str) -> bool {
+    if width == 0 && height == 0 && aspect_ratio == "audio" {
+        return true;
+    }
+    let Some((ratio_width, ratio_height)) = parse_ratio(aspect_ratio) else {
+        return false;
+    };
+    width > 0 && height > 0 && u64::from(width) * ratio_height == u64::from(height) * ratio_width
+}
+
+fn parse_ratio(value: &str) -> Option<(u64, u64)> {
+    let (left, right) = value.split_once(':')?;
+    let width = left.parse::<u64>().ok()?;
+    let height = right.parse::<u64>().ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    Some((width, height))
+}
+
 /// Facts measured before delivery.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DeliveryPreflightInput {
