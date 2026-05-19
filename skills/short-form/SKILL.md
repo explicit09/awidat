@@ -128,9 +128,14 @@ python3 <skill-root>/scripts/caption_plan.py \
   --transcript index/whisper/raw/<asset>.json \
   --max-words 4 \
   --max-gap-s 0.5 \
+  --style classic \
   --hot-start-s <highest-intensity-start> \
   --hot-end-s <highest-intensity-end>
 ```
+
+Use `--style classic` for normal bottom-third captions, `impact` for a
+center punch line, `boxed` when busy footage needs a stronger text
+container, and `minimal` when the picture should stay quiet.
 
 For each returned phrase, emit `*** Insert Caption` ops with:
 

@@ -68,6 +68,51 @@ class TranscriptPhraseTests(unittest.TestCase):
         self.assertEqual(phrases[1]["color"], "#FFD400")
         self.assertEqual(phrases[1]["font_weight"], "bold")
 
+    def test_caption_style_presets_apply_named_visual_contracts(self) -> None:
+        caption_plan = load_script("caption_plan")
+        items = [
+            {"word": "Big", "start_s": 0.0, "end_s": 0.2, "speaker": "A"},
+            {"word": "claim", "start_s": 0.22, "end_s": 0.5, "speaker": "A"},
+        ]
+
+        phrases = caption_plan.build_caption_phrases(
+            items,
+            max_words=4,
+            style="impact",
+        )
+
+        self.assertEqual(phrases[0]["style"], "impact")
+        self.assertEqual(phrases[0]["position"], "center")
+        self.assertEqual(phrases[0]["font_size"], 64)
+        self.assertEqual(phrases[0]["font_weight"], "bold")
+        self.assertEqual(phrases[0]["animation"], "pop_in")
+        self.assertEqual(phrases[0]["background"], "transparent")
+
+    def test_caption_hot_range_overrides_preserve_style_contract(self) -> None:
+        caption_plan = load_script("caption_plan")
+        items = [
+            {"word": "Quiet", "start_s": 0.0, "end_s": 0.2, "speaker": "A"},
+            {"word": "setup", "start_s": 0.22, "end_s": 0.5, "speaker": "A"},
+            {"word": "Big", "start_s": 1.1, "end_s": 1.3, "speaker": "A"},
+            {"word": "payoff", "start_s": 1.35, "end_s": 1.8, "speaker": "A"},
+        ]
+
+        phrases = caption_plan.build_caption_phrases(
+            items,
+            max_words=4,
+            hot_start_s=1.0,
+            hot_end_s=1.9,
+            style="boxed",
+        )
+
+        self.assertEqual(phrases[0]["style"], "boxed")
+        self.assertEqual(phrases[0]["background"], "rgba(0,0,0,0.72)")
+        self.assertEqual(phrases[0]["color"], "#FFFFFF")
+        self.assertEqual(phrases[1]["style"], "boxed")
+        self.assertEqual(phrases[1]["color"], "#FFD400")
+        self.assertEqual(phrases[1]["font_weight"], "bold")
+        self.assertEqual(phrases[1]["background"], "rgba(0,0,0,0.72)")
+
     def test_segment_fallback_preserves_sentence_punctuation(self) -> None:
         transcript_phrases = load_script("transcript_phrases")
         body = {
