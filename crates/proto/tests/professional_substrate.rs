@@ -9,13 +9,15 @@ use awidat_proto::professional::{
     CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
     DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
     ExpressionSource, FindingSeverity, GradeStack, GroundingBoxFormat, GroundingDetection,
-    GroundingEvidence, HardwareAccelerationPolicy, Keyframe, MaskQualityScorecard,
-    MaskReviewDecision, MaskSidecar, MatteGenerationFallback, MatteGenerationOutput,
-    MatteGenerationRecipe, MatteGenerationSettings, MotionGraphicsTemplate, MotionPackage,
-    ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
+    GroundingEvidence, HardwareAccelerationPolicy, Keyframe, MaskArtifactKind, MaskArtifactProfile,
+    MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MatteGenerationFallback,
+    MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings, MotionGraphicsTemplate,
+    MotionPackage, ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
     ReframeKeyframe, ReframePath, ReframeSmoothing, SegmentationIntent, SegmentationPrompt,
-    SegmentationPromptKind, SegmentationPromptLabel, SegmentationPromptPackage, SelectDecision,
-    SourceRange, SourceSelect, Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
+    SegmentationPromptKind, SegmentationPromptLabel, SegmentationPromptPackage,
+    SegmentationRuntimeStatus, SegmentationSessionOperation, SegmentationSessionOperationKind,
+    SelectDecision, SourceRange, SourceSelect, Stringout, TemplateSlot, TrackingPackage,
+    WorkflowLens,
 };
 
 #[test]
@@ -856,6 +858,223 @@ fn tracking_package_validates_matte_generation_recipe() {
             .iter()
             .any(|message| message.contains("option key"))
     );
+}
+
+#[test]
+fn tracking_package_validates_segmentation_session_operations() {
+    let package = TrackingPackage {
+        session_operations: vec![
+            SegmentationSessionOperation {
+                id: "op-start".into(),
+                session_id: "seg-session-1".into(),
+                kind: SegmentationSessionOperationKind::Start,
+                frame: Some(12),
+                target_object_id: Some("speaker".into()),
+                status: SegmentationRuntimeStatus::Ready,
+                message: Some("session initialized on cpu".into()),
+                ..SegmentationSessionOperation::default()
+            },
+            SegmentationSessionOperation {
+                id: "op-prompt".into(),
+                session_id: "seg-session-1".into(),
+                kind: SegmentationSessionOperationKind::AddPrompt,
+                frame: Some(12),
+                target_object_id: Some("speaker".into()),
+                prompt_package_id: Some("seg-main-speaker".into()),
+                status: SegmentationRuntimeStatus::Complete,
+                artifact_refs: vec!["masks/speaker-000012.rle".into()],
+                ..SegmentationSessionOperation::default()
+            },
+            SegmentationSessionOperation {
+                id: "op-persist".into(),
+                session_id: "seg-session-1".into(),
+                kind: SegmentationSessionOperationKind::PersistOutput,
+                output_mask_id: Some("mask-speaker".into()),
+                status: SegmentationRuntimeStatus::Complete,
+                artifact_refs: vec!["masks/speaker-packed.png".into()],
+                ..SegmentationSessionOperation::default()
+            },
+        ],
+        ..TrackingPackage::default()
+    };
+
+    let json = match serde_json::to_string(&package) {
+        Ok(json) => json,
+        Err(error) => panic!("serialize segmentation session operations: {error}"),
+    };
+    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+        Ok(package) => package,
+        Err(error) => panic!("deserialize segmentation session operations: {error}"),
+    };
+    assert_eq!(
+        roundtrip.session_operations[1].kind,
+        SegmentationSessionOperationKind::AddPrompt
+    );
+    assert!(roundtrip.validate().is_empty());
+
+    let invalid = TrackingPackage {
+        session_operations: vec![
+            SegmentationSessionOperation {
+                id: "".into(),
+                session_id: "".into(),
+                kind: SegmentationSessionOperationKind::AddPrompt,
+                status: SegmentationRuntimeStatus::Complete,
+                ..SegmentationSessionOperation::default()
+            },
+            SegmentationSessionOperation {
+                id: "op-remove".into(),
+                session_id: "seg-session-1".into(),
+                kind: SegmentationSessionOperationKind::RemoveObject,
+                status: SegmentationRuntimeStatus::Failed,
+                ..SegmentationSessionOperation::default()
+            },
+            SegmentationSessionOperation {
+                id: "op-persist".into(),
+                session_id: "seg-session-1".into(),
+                kind: SegmentationSessionOperationKind::PersistOutput,
+                status: SegmentationRuntimeStatus::UnsupportedDevice,
+                output_mask_id: Some(" ".into()),
+                artifact_refs: vec![],
+                ..SegmentationSessionOperation::default()
+            },
+        ],
+        ..TrackingPackage::default()
+    };
+
+    let messages: Vec<String> = invalid
+        .validate()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+
+    assert!(messages.iter().any(|message| message.contains("empty id")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("session id"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("prompt package"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("target object"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("diagnostic message"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("output mask"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("artifact ref"))
+    );
+}
+
+#[test]
+fn tracking_package_validates_mask_artifact_profiles() {
+    let package = TrackingPackage {
+        mask_artifacts: vec![
+            MaskArtifactProfile {
+                id: "artifact-packed".into(),
+                kind: MaskArtifactKind::PackedPng,
+                path: "masks/speaker-packed.png".into(),
+                object_ids: vec!["speaker".into()],
+                frame_range: Some(SourceRange {
+                    start_s: 1.0,
+                    end_s: 4.0,
+                }),
+                frame_count: Some(90),
+                width: Some(1920),
+                height: Some(1080),
+                checksum: Some("sha256:abc123".into()),
+            },
+            MaskArtifactProfile {
+                id: "artifact-rle".into(),
+                kind: MaskArtifactKind::Rle,
+                path: "masks/speaker-000012.rle.json".into(),
+                object_ids: vec!["speaker".into()],
+                frame_count: Some(1),
+                width: Some(1920),
+                height: Some(1080),
+                checksum: None,
+                frame_range: None,
+            },
+        ],
+        ..TrackingPackage::default()
+    };
+
+    let json = match serde_json::to_string(&package) {
+        Ok(json) => json,
+        Err(error) => panic!("serialize mask artifact profiles: {error}"),
+    };
+    let roundtrip: TrackingPackage = match serde_json::from_str(&json) {
+        Ok(package) => package,
+        Err(error) => panic!("deserialize mask artifact profiles: {error}"),
+    };
+    assert_eq!(
+        roundtrip.mask_artifacts[0].kind,
+        MaskArtifactKind::PackedPng
+    );
+    assert!(roundtrip.validate().is_empty());
+
+    let invalid = TrackingPackage {
+        mask_artifacts: vec![
+            MaskArtifactProfile {
+                id: "".into(),
+                kind: MaskArtifactKind::PerObjectPng,
+                path: "".into(),
+                object_ids: vec![" ".into()],
+                frame_count: Some(0),
+                width: Some(0),
+                height: Some(1080),
+                checksum: Some(" ".into()),
+                frame_range: Some(SourceRange {
+                    start_s: 4.0,
+                    end_s: 1.0,
+                }),
+            },
+            MaskArtifactProfile {
+                id: "artifact-binary".into(),
+                kind: MaskArtifactKind::BinaryMask,
+                path: "masks/binary.bin".into(),
+                object_ids: vec![],
+                ..MaskArtifactProfile::default()
+            },
+        ],
+        ..TrackingPackage::default()
+    };
+
+    let messages: Vec<String> = invalid
+        .validate()
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("artifact") && message.contains("empty id"))
+    );
+    assert!(messages.iter().any(|message| message.contains("path")));
+    assert!(messages.iter().any(|message| message.contains("object id")));
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("frame count"))
+    );
+    assert!(messages.iter().any(|message| message.contains("width")));
+    assert!(messages.iter().any(|message| message.contains("range")));
+    assert!(messages.iter().any(|message| message.contains("checksum")));
 }
 
 #[test]

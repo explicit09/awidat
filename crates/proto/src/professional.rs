@@ -964,6 +964,12 @@ pub struct TrackingPackage {
     /// Reviewable segmentation prompt/correction packages.
     #[serde(default)]
     pub prompt_packages: Vec<SegmentationPromptPackage>,
+    /// Runtime/session operations used to produce or update segmentation outputs.
+    #[serde(default)]
+    pub session_operations: Vec<SegmentationSessionOperation>,
+    /// Interchange profiles for generated mask artifacts.
+    #[serde(default)]
+    pub mask_artifacts: Vec<MaskArtifactProfile>,
     /// Point/planar/surface tracks.
     #[serde(default)]
     pub tracks: Vec<TrackSidecar>,
@@ -984,6 +990,12 @@ impl TrackingPackage {
         let mut diagnostics = Vec::new();
         for prompt_package in &self.prompt_packages {
             diagnostics.extend(prompt_package.validate());
+        }
+        for operation in &self.session_operations {
+            diagnostics.extend(operation.validate());
+        }
+        for artifact in &self.mask_artifacts {
+            diagnostics.extend(artifact.validate());
         }
         for track in &self.tracks {
             if track.samples.is_empty() {
@@ -1053,6 +1065,336 @@ impl TrackingPackage {
         }
         diagnostics
     }
+}
+
+/// One operation in an optional segmentation runtime session.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SegmentationSessionOperation {
+    /// Stable operation id.
+    pub id: String,
+    /// Stable session id.
+    pub session_id: String,
+    /// Operation kind.
+    #[serde(default)]
+    pub kind: SegmentationSessionOperationKind,
+    /// Optional frame associated with the operation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frame: Option<u64>,
+    /// Optional object id affected by the operation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub target_object_id: Option<String>,
+    /// Optional prompt package consumed by the operation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub prompt_package_id: Option<String>,
+    /// Optional output mask id produced or persisted by the operation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_mask_id: Option<String>,
+    /// Runtime status.
+    #[serde(default)]
+    pub status: SegmentationRuntimeStatus,
+    /// Human-readable diagnostic or status detail.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub message: Option<String>,
+    /// Artifact paths or ids produced/read by this operation.
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+}
+
+impl SegmentationSessionOperation {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                "segmentation session operation has an empty id",
+            ));
+        }
+        if self.session_id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation session operation {} has an empty session id",
+                    self.id
+                ),
+            ));
+        }
+        if matches!(
+            self.kind,
+            SegmentationSessionOperationKind::AddPrompt
+                | SegmentationSessionOperationKind::CorrectPrompt
+        ) && self
+            .prompt_package_id
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation session operation {} requires a prompt package id",
+                    self.id
+                ),
+            ));
+        }
+        if matches!(self.kind, SegmentationSessionOperationKind::RemoveObject)
+            && self
+                .target_object_id
+                .as_ref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation session operation {} requires a target object id",
+                    self.id
+                ),
+            ));
+        }
+        if matches!(self.kind, SegmentationSessionOperationKind::PersistOutput) {
+            if self
+                .output_mask_id
+                .as_ref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!(
+                        "segmentation session operation {} requires an output mask id",
+                        self.id
+                    ),
+                ));
+            }
+            if self
+                .artifact_refs
+                .iter()
+                .all(|value| value.trim().is_empty())
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!(
+                        "segmentation session operation {} requires an artifact ref",
+                        self.id
+                    ),
+                ));
+            }
+        }
+        if self.status.requires_message()
+            && self
+                .message
+                .as_ref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+        {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "segmentation session operation {} status requires a diagnostic message",
+                    self.id
+                ),
+            ));
+        }
+        diagnostics
+    }
+}
+
+/// Segmentation runtime operation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentationSessionOperationKind {
+    /// Start or initialize a segmentation session.
+    #[default]
+    Start,
+    /// Add a prompt to the session.
+    AddPrompt,
+    /// Correct an existing object or frame prompt.
+    CorrectPrompt,
+    /// Clear prompts or outputs for a frame.
+    ClearFrame,
+    /// Clear all prompts or outputs for a video/session.
+    ClearVideo,
+    /// Remove an object id from the session.
+    RemoveObject,
+    /// Propagate masks through time.
+    Propagate,
+    /// Cancel active propagation or processing.
+    Cancel,
+    /// Close the runtime session.
+    Close,
+    /// Persist runtime output into durable artifacts.
+    PersistOutput,
+}
+
+/// Segmentation runtime status.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SegmentationRuntimeStatus {
+    /// Operation is planned but not started.
+    #[default]
+    Planned,
+    /// Runtime is ready.
+    Ready,
+    /// Operation is running.
+    Running,
+    /// Operation produced partial output.
+    Partial,
+    /// Operation completed.
+    Complete,
+    /// Operation was canceled.
+    Canceled,
+    /// Runtime needs prompts before it can proceed.
+    NoPrompts,
+    /// Runtime expected masks that are missing.
+    MissingMasks,
+    /// Runtime expected object ids that are missing.
+    NoObjectIds,
+    /// Selected device or backend is unsupported.
+    UnsupportedDevice,
+    /// Output confidence was too low for automatic use.
+    LowConfidence,
+    /// Operation failed.
+    Failed,
+}
+
+impl SegmentationRuntimeStatus {
+    fn requires_message(self) -> bool {
+        matches!(
+            self,
+            Self::Partial
+                | Self::Canceled
+                | Self::NoPrompts
+                | Self::MissingMasks
+                | Self::NoObjectIds
+                | Self::UnsupportedDevice
+                | Self::LowConfidence
+                | Self::Failed
+        )
+    }
+}
+
+/// Durable description of a generated mask artifact.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MaskArtifactProfile {
+    /// Stable artifact id.
+    pub id: String,
+    /// Artifact encoding kind.
+    #[serde(default)]
+    pub kind: MaskArtifactKind,
+    /// Project-relative artifact path or URI.
+    pub path: String,
+    /// Object ids represented by this artifact.
+    #[serde(default)]
+    pub object_ids: Vec<String>,
+    /// Optional source/timeline range covered by the artifact.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frame_range: Option<SourceRange>,
+    /// Optional number of frames represented by this artifact.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub frame_count: Option<u64>,
+    /// Optional width in pixels.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub width: Option<u32>,
+    /// Optional height in pixels.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub height: Option<u32>,
+    /// Optional checksum for artifact validation.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub checksum: Option<String>,
+}
+
+impl MaskArtifactProfile {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                "mask artifact has an empty id",
+            ));
+        }
+        if self.path.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("mask artifact {} has an empty path", self.id),
+            ));
+        }
+        if self.object_ids.iter().any(|id| id.trim().is_empty()) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("mask artifact {} has an empty object id", self.id),
+            ));
+        }
+        if matches!(
+            self.kind,
+            MaskArtifactKind::PerObjectPng | MaskArtifactKind::BinaryMask
+        ) && self.object_ids.is_empty()
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("mask artifact {} requires at least one object id", self.id),
+            ));
+        }
+        if matches!(self.frame_count, Some(0)) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "mask artifact {} frame count must be greater than zero",
+                    self.id
+                ),
+            ));
+        }
+        if matches!(self.width, Some(0)) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("mask artifact {} width must be greater than zero", self.id),
+            ));
+        }
+        if matches!(self.height, Some(0)) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("mask artifact {} height must be greater than zero", self.id),
+            ));
+        }
+        if let Some(range) = &self.frame_range
+            && !range.is_valid()
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("mask artifact {} has an invalid range", self.id),
+            ));
+        }
+        if self
+            .checksum
+            .as_ref()
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("mask artifact {} has an empty checksum", self.id),
+            ));
+        }
+        diagnostics
+    }
+}
+
+/// Mask artifact interchange encoding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaskArtifactKind {
+    /// Single image packing object/frame mask data.
+    #[default]
+    PackedPng,
+    /// One PNG sequence per object.
+    PerObjectPng,
+    /// Raw or sidecar binary mask.
+    BinaryMask,
+    /// Run-length encoded mask.
+    Rle,
+    /// COCO-compatible run-length encoded mask.
+    CocoRle,
+    /// Video container with alpha channel.
+    VideoAlpha,
 }
 
 /// Reviewable prompt/correction package for subject or object segmentation.
