@@ -43,7 +43,10 @@ they're not options.
 - **B-roll cadence**: proactive, every 2–4 seconds. Visual variety
   is what keeps the scroll-stop.
 - **Aspect**: 9:16. When source is 16:9, use center-crop or smart-crop
-  driven by `find_speaker_oncam`.
+  driven by `find_speaker_oncam`. When `metadata.awidat.tracking_package`
+  includes `reframe_paths`, prefer the reviewed path over a generic
+  center crop and preserve its smoothing, safe-area, and evidence-track
+  metadata through render handoff.
 
 ## The 5-step playbook
 
@@ -82,6 +85,10 @@ waste effort.
 
 Emit `*** Set Output Format` with `aspect_ratio: 9:16`, the target
 platform when known, and `safe_area: mobile` before the caption pass.
+If a subject-aware `reframe_path` exists for the selected clip, attach
+that path as the crop contract instead of describing the crop in prose.
+Reject paths with unsorted keyframes, centers outside 0..=1, scale below
+1.0, or low confidence unless the user explicitly approves manual review.
 
 ### 3. Tighten
 

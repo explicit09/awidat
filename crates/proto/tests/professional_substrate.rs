@@ -8,8 +8,9 @@ use awidat_proto::professional::{
     DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
     ExpressionSource, FindingSeverity, GradeStack, HardwareAccelerationPolicy, Keyframe,
     MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
-    PipelineReadinessReport, PreflightCheckKind, ReadinessState, SelectDecision, SourceRange,
-    SourceSelect, Stringout, TemplateSlot, TrackingPackage, WorkflowLens,
+    PipelineReadinessReport, PreflightCheckKind, ReadinessState, ReframeKeyframe, ReframePath,
+    ReframeSmoothing, SelectDecision, SourceRange, SourceSelect, Stringout, TemplateSlot,
+    TrackingPackage, WorkflowLens,
 };
 
 #[test]
@@ -350,6 +351,66 @@ fn substrate_validation_catches_cross_stage_pipeline_issues() {
         messages
             .iter()
             .any(|message| message.contains("missing-output"))
+    );
+}
+
+#[test]
+fn tracking_package_validates_reframe_paths() {
+    let package = TrackingPackage {
+        reframe_paths: vec![ReframePath {
+            id: "reframe-bad".into(),
+            clip_id: "clip-a".into(),
+            aspect_ratio: "9:16".into(),
+            source_width: 1920,
+            source_height: 1080,
+            target_width: 1080,
+            target_height: 1920,
+            keyframes: vec![
+                ReframeKeyframe {
+                    time_s: 2.0,
+                    center: [0.5, 0.5],
+                    scale: 1.2,
+                    confidence: Some(0.8),
+                },
+                ReframeKeyframe {
+                    time_s: 1.0,
+                    center: [1.2, 0.5],
+                    scale: 0.4,
+                    confidence: Some(1.2),
+                },
+            ],
+            smoothing: ReframeSmoothing::Moderate,
+            evidence_track_id: Some("track-speaker".into()),
+            safe_area: Some("mobile".into()),
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let diagnostics = package.validate();
+    let messages: Vec<&str> = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect();
+
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("reframe-bad") && message.contains("sorted"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("center") && message.contains("0..=1"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("scale") && message.contains(">= 1"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("confidence"))
     );
 }
 

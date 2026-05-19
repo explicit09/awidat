@@ -964,6 +964,9 @@ pub struct TrackingPackage {
     /// Point/planar/surface tracks.
     #[serde(default)]
     pub tracks: Vec<TrackSidecar>,
+    /// Subject-aware crop/reframe paths for vertical, square, or custom output.
+    #[serde(default)]
+    pub reframe_paths: Vec<ReframePath>,
     /// Keyframed masks.
     #[serde(default)]
     pub masks: Vec<MaskSidecar>,
@@ -1003,6 +1006,9 @@ impl TrackingPackage {
                 format!("track {}", track.id),
             );
         }
+        for path in &self.reframe_paths {
+            diagnostics.extend(path.validate());
+        }
         for mask in &self.masks {
             for keyframe in &mask.keyframes {
                 if !keyframe.time_s.is_finite()
@@ -1026,6 +1032,166 @@ impl TrackingPackage {
         }
         diagnostics
     }
+}
+
+/// Subject-aware crop/reframe path for one timeline clip.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReframePath {
+    /// Stable reframe id.
+    pub id: String,
+    /// Timeline clip id that receives the crop path.
+    pub clip_id: String,
+    /// Delivery aspect ratio such as `9:16`, `1:1`, or `16:9`.
+    pub aspect_ratio: String,
+    /// Source media width in pixels.
+    #[serde(default)]
+    pub source_width: u32,
+    /// Source media height in pixels.
+    #[serde(default)]
+    pub source_height: u32,
+    /// Target canvas width in pixels.
+    #[serde(default)]
+    pub target_width: u32,
+    /// Target canvas height in pixels.
+    #[serde(default)]
+    pub target_height: u32,
+    /// Ordered crop center/scale samples in output time.
+    #[serde(default)]
+    pub keyframes: Vec<ReframeKeyframe>,
+    /// Smoothing policy for interpolation between keyframes.
+    #[serde(default)]
+    pub smoothing: ReframeSmoothing,
+    /// Optional evidence track that drove the path.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub evidence_track_id: Option<String>,
+    /// Optional safe-area policy label, e.g. `mobile`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub safe_area: Option<String>,
+}
+
+impl ReframePath {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                "reframe path has an empty id",
+            ));
+        }
+        if self.clip_id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::TrackingMasksMattes,
+                format!("reframe path {} has an empty clip id", self.id),
+            ));
+        }
+        if self.aspect_ratio.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::TrackingMasksMattes,
+                format!("reframe path {} has an empty aspect ratio", self.id),
+            ));
+        }
+        if self.source_width == 0
+            || self.source_height == 0
+            || self.target_width == 0
+            || self.target_height == 0
+        {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::TrackingMasksMattes,
+                format!(
+                    "reframe path {} has incomplete source/target dimensions",
+                    self.id
+                ),
+            ));
+        }
+        if self.keyframes.is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::warning(
+                CapabilityArea::TrackingMasksMattes,
+                format!("reframe path {} has no keyframes", self.id),
+            ));
+        }
+        let mut previous_time = None;
+        for keyframe in &self.keyframes {
+            if let Some(previous) = previous_time
+                && keyframe.time_s < previous
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!("reframe path {} keyframes must be sorted", self.id),
+                ));
+            }
+            previous_time = Some(keyframe.time_s);
+            if !keyframe.time_s.is_finite() {
+                diagnostics.push(ProfessionalDiagnostic::warning(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!("reframe path {} has a non-finite keyframe time", self.id),
+                ));
+            }
+            if !(0.0..=1.0).contains(&keyframe.center[0])
+                || !(0.0..=1.0).contains(&keyframe.center[1])
+            {
+                diagnostics.push(ProfessionalDiagnostic::warning(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!(
+                        "reframe path {} center coordinates must be in 0..=1",
+                        self.id
+                    ),
+                ));
+            }
+            if !keyframe.scale.is_finite() || keyframe.scale < 1.0 {
+                diagnostics.push(ProfessionalDiagnostic::warning(
+                    CapabilityArea::TrackingMasksMattes,
+                    format!("reframe path {} scale must be finite and >= 1", self.id),
+                ));
+            }
+            validate_optional_confidence(
+                &mut diagnostics,
+                CapabilityArea::TrackingMasksMattes,
+                keyframe.confidence,
+                format!("reframe path {}", self.id),
+            );
+        }
+        diagnostics
+    }
+}
+
+/// One crop center/scale sample in a [`ReframePath`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ReframeKeyframe {
+    /// Time in clip/output seconds.
+    pub time_s: f64,
+    /// Normalized crop center `[x, y]`, each 0..=1.
+    pub center: [f64; 2],
+    /// Crop zoom where `1.0` means no extra zoom.
+    pub scale: f64,
+    /// Confidence of the subject/framing evidence.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confidence: Option<f64>,
+}
+
+impl Default for ReframeKeyframe {
+    fn default() -> Self {
+        Self {
+            time_s: 0.0,
+            center: [0.5, 0.5],
+            scale: 1.0,
+            confidence: None,
+        }
+    }
+}
+
+/// Reframe path smoothing policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReframeSmoothing {
+    /// No smoothing; use authored keyframes directly.
+    None,
+    /// Mild interpolation for manual or high-confidence paths.
+    Gentle,
+    /// Default smoothing for automatic subject-follow paths.
+    #[default]
+    Moderate,
+    /// Heavy smoothing for noisy detections.
+    Strong,
 }
 
 /// Track sidecar.

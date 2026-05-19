@@ -9,8 +9,9 @@ use awidat_proto::professional::{
     AudioMeterReading, AudioRole, ColorFinishingState, CompositionGraph, CompositionNode,
     DeliveryPreflightInput, DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity,
     GradeStack, GradeStage, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
-    MotionGraphicsTemplate, MotionPackage, ParameterAnimation, ReviewStatus, SafeAreaRule,
-    TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar, TrackingPackage,
+    MotionGraphicsTemplate, MotionPackage, ParameterAnimation, ReframeKeyframe, ReframePath,
+    ReframeSmoothing, ReviewStatus, SafeAreaRule, TemplateSlot, TemplateSlotKind, TrackKind,
+    TrackSample, TrackSidecar, TrackingPackage,
 };
 use awidat_render::professional::{
     DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
@@ -18,8 +19,9 @@ use awidat_render::professional::{
     built_in_motion_templates, diagnose_effect_parameter_animation,
     effect_parameter_capability_matrix, evaluate_expression_links, fill_motion_template,
     generate_tracking_package, inspect_composition_graph, lower_audio_finishing,
-    lower_composition_graph, lower_grade_stack, lower_motion_template, lower_track_bound_overlay,
-    motion_package_summary, plan_delivery_queue_item, summarize_color_finishing,
+    lower_composition_graph, lower_grade_stack, lower_motion_template, lower_reframe_path,
+    lower_track_bound_overlay, motion_package_summary, plan_delivery_queue_item,
+    summarize_color_finishing,
 };
 use awidat_render::{RenderJobSpec, TitleAnimation, TitlePosition};
 use serde_json::json;
@@ -178,6 +180,53 @@ fn track_bound_overlay_fails_loudly_when_track_is_missing() {
     };
 
     assert_eq!(err.to_string(), "track missing-track not found");
+}
+
+#[test]
+fn reframe_path_lowers_to_deterministic_crop_expression() {
+    let package = TrackingPackage {
+        reframe_paths: vec![ReframePath {
+            id: "vertical-speaker".into(),
+            clip_id: "clip-a".into(),
+            aspect_ratio: "9:16".into(),
+            source_width: 1920,
+            source_height: 1080,
+            target_width: 1080,
+            target_height: 1920,
+            keyframes: vec![
+                ReframeKeyframe {
+                    time_s: 0.0,
+                    center: [0.45, 0.5],
+                    scale: 1.15,
+                    confidence: Some(0.92),
+                },
+                ReframeKeyframe {
+                    time_s: 2.0,
+                    center: [0.55, 0.48],
+                    scale: 1.25,
+                    confidence: Some(0.88),
+                },
+            ],
+            smoothing: ReframeSmoothing::Gentle,
+            evidence_track_id: Some("track-speaker".into()),
+            safe_area: Some("mobile".into()),
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let lowering = match lower_reframe_path(&package, "vertical-speaker") {
+        Ok(lowering) => lowering,
+        Err(err) => panic!("reframe path lowers: {err}"),
+    };
+
+    assert_eq!(lowering.reframe_id, "vertical-speaker");
+    assert_eq!(lowering.clip_id, "clip-a");
+    assert_eq!(lowering.aspect_ratio, "9:16");
+    assert_eq!(lowering.smoothing, ReframeSmoothing::Gentle);
+    assert!(lowering.expression.contains("crop"));
+    assert!(lowering.expression.contains("center=0.45,0.5"));
+    assert!(lowering.expression.contains("scale=1.15"));
+    assert!(lowering.expression.contains("safe_area=mobile"));
 }
 
 #[test]

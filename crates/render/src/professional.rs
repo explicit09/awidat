@@ -15,9 +15,9 @@ use awidat_proto::professional::{
     CompositionNode, CompositionNodeType, DeliveryPreflightInput, DeliveryProfile, Easing,
     ExpressionLink, ExpressionSource, FindingSeverity, GradeStack, GradeStage, Keyframe,
     KeyframeInterpolation, MaskSidecar, MatteSidecar, MotionGraphicsTemplate, MotionPackage,
-    PackageManifest, ParameterAnimation, PreflightReport, ProfessionalDiagnostic, ReviewStatus,
-    SafeAreaRule, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar,
-    TrackingPackage,
+    PackageManifest, ParameterAnimation, PreflightReport, ProfessionalDiagnostic, ReframePath,
+    ReframeSmoothing, ReviewStatus, SafeAreaRule, TemplateSlot, TemplateSlotKind, TrackKind,
+    TrackSample, TrackSidecar, TrackingPackage,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -54,6 +54,9 @@ pub enum ProfessionalEngineError {
     /// A requested track id was not found in the package.
     #[error("track {0} not found")]
     MissingTrack(String),
+    /// A requested reframe path id was not found in the package.
+    #[error("reframe path {0} not found")]
+    MissingReframePath(String),
     /// A grade stack has no supported stages.
     #[error("grade stack {0} has no supported render stages")]
     UnsupportedGradeStack(String),
@@ -92,6 +95,21 @@ pub struct TrackBoundOverlayLowering {
     /// Overlay clip id being driven.
     pub overlay_clip_id: String,
     /// Current render expression/summary.
+    pub expression: String,
+}
+
+/// Deterministic lowering for a subject-aware crop/reframe path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReframePathLowering {
+    /// Reframe path id.
+    pub reframe_id: String,
+    /// Clip receiving the crop.
+    pub clip_id: String,
+    /// Delivery aspect ratio for the crop.
+    pub aspect_ratio: String,
+    /// Smoothing policy attached to the path.
+    pub smoothing: ReframeSmoothing,
+    /// Render expression/summary for deterministic review.
     pub expression: String,
 }
 
@@ -171,6 +189,7 @@ pub fn generate_tracking_package(evidence: TrackingEvidence) -> TrackingPackage 
             confidence,
             ..TrackSidecar::default()
         }],
+        reframe_paths: Vec::<ReframePath>::new(),
         masks: Vec::<MaskSidecar>::new(),
         mattes: Vec::<MatteSidecar>::new(),
     }
@@ -209,6 +228,42 @@ pub fn lower_track_bound_overlay(
         expression: format!(
             "overlay=x={}:y={}:track={track_id}:clip={overlay_clip_id}:masks={mask_ids}",
             point[0], point[1]
+        ),
+    })
+}
+
+/// Lower a reviewed subject-aware reframe path into a deterministic crop expression.
+pub fn lower_reframe_path(
+    package: &TrackingPackage,
+    reframe_id: &str,
+) -> Result<ReframePathLowering, ProfessionalEngineError> {
+    let path = package
+        .reframe_paths
+        .iter()
+        .find(|path| path.id == reframe_id)
+        .ok_or_else(|| ProfessionalEngineError::MissingReframePath(reframe_id.to_string()))?;
+    let keyframe = path
+        .keyframes
+        .first()
+        .ok_or_else(|| ProfessionalEngineError::MissingReframePath(reframe_id.to_string()))?;
+    let safe_area = path.safe_area.as_deref().unwrap_or("none");
+    Ok(ReframePathLowering {
+        reframe_id: path.id.clone(),
+        clip_id: path.clip_id.clone(),
+        aspect_ratio: path.aspect_ratio.clone(),
+        smoothing: path.smoothing,
+        expression: format!(
+            "crop=clip={}:aspect={}:target={}x{}:source={}x{}:center={},{}:scale={}:smoothing={:?}:safe_area={safe_area}",
+            path.clip_id,
+            path.aspect_ratio,
+            path.target_width,
+            path.target_height,
+            path.source_width,
+            path.source_height,
+            keyframe.center[0],
+            keyframe.center[1],
+            keyframe.scale,
+            path.smoothing,
         ),
     })
 }
