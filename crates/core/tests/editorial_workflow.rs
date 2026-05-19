@@ -357,6 +357,42 @@ async fn apply_edl_anchor_miss_doesnt_corrupt_project() {
     assert_eq!(t.children.len(), 3, "no clip removed on anchor miss");
 }
 
+#[tokio::test]
+async fn apply_edl_later_op_failure_rolls_back_prior_successful_ops() {
+    let dir = seed_project();
+    let before = std::fs::read_to_string(dir.path().join(files::OTIO)).unwrap();
+    let edl = "\
+*** Begin EDL
+*** Delete Clip
+@@ anchor: transcript_snippet=\"we went to the kitchen to get coffee\"
+*** Delete Clip
+@@ anchor: transcript_snippet=\"this later clip does not exist\"
+*** End EDL
+";
+
+    let err = ApplyEdlTool
+        .handle(
+            invoke("apply_edl", serde_json::json!({"edl": edl})),
+            ctx_at(dir.path()),
+        )
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("Did you mean"));
+
+    let after = std::fs::read_to_string(dir.path().join(files::OTIO)).unwrap();
+    assert_eq!(
+        after, before,
+        "a failure after an earlier successful op must leave project.otio.json unchanged"
+    );
+
+    let after_project = Project::read(dir.path()).unwrap();
+    let StackChild::Track(track) = &after_project.timeline.tracks.children[0] else {
+        panic!()
+    };
+    assert!(matches!(&track.children[1], TrackChild::Clip(clip) if clip.name == "clip-1"));
+}
+
 fn snippet_for(i: usize) -> &'static str {
     [
         "and that's when she said the thing about Stripe",
