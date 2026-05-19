@@ -44,7 +44,8 @@ python3 <skill-root>/scripts/score_moments.py \
   --gaze index/gaze/raw/<asset>.json \
   --frame-quality index/frame-quality/raw/<asset>.json \
   --topic index/topic/raw/<asset>.json \
-  --limit 8
+  --limit 8 \
+  --max-overlap-ratio 0.5
 ```
 
 Reject moments with weak energy even if the text looks interesting.
@@ -55,6 +56,9 @@ won. Reject candidates whose total score is propped up by text alone
 when the energy, visual, duration, or topic-boundary evidence is weak.
 This is an awidat advantage over workflows that only score transcript
 and energy.
+
+Use `--max-overlap-ratio` when selecting several clips from one source so a
+lower-scored near-duplicate does not crowd out a separate payoff.
 
 ### 2. Build a standalone spine
 

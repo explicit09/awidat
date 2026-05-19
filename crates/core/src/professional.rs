@@ -2064,6 +2064,7 @@ pub fn derive_vfx_pipeline_package(timeline: &Timeline) -> VfxPipelinePackage {
             reframe_paths: Vec::new(),
             masks,
             mattes,
+            ..TrackingPackage::default()
         },
         shot_manifests,
     }
@@ -2392,6 +2393,7 @@ fn vfx_mask_sidecar(shot: &VfxShot) -> MaskSidecar {
             feather: 0.0,
             opacity: 1.0,
         }],
+        ..MaskSidecar::default()
     }
 }
 
@@ -2401,6 +2403,7 @@ fn vfx_matte_sidecar(shot: &VfxShot) -> MatteSidecar {
         alpha_source: shot.asset_id.clone(),
         confidence: None,
         review_thumbnails: vec![format!("vfx-{}", shot.clip_id)],
+        ..MatteSidecar::default()
     }
 }
 

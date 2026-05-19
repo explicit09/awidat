@@ -154,6 +154,7 @@ fn track_bound_overlay_lowers_only_when_track_exists() {
                 feather: 0.02,
                 opacity: 1.0,
             }],
+            ..MaskSidecar::default()
         }],
         ..TrackingPackage::default()
     };

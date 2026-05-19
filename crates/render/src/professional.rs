@@ -200,6 +200,7 @@ pub fn generate_tracking_package(evidence: TrackingEvidence) -> TrackingPackage 
         reframe_paths: Vec::<ReframePath>::new(),
         masks: Vec::<MaskSidecar>::new(),
         mattes: Vec::<MatteSidecar>::new(),
+        ..TrackingPackage::default()
     }
 }
 

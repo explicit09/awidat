@@ -82,6 +82,65 @@ class ScoreMomentsTest(unittest.TestCase):
             candidate["score_breakdown"]["total"],
         )
 
+    def test_score_candidates_can_suppress_overlapping_clips(self) -> None:
+        candidates = score_moments.score_candidates(
+            moments_body={
+                "moments": [
+                    {
+                        "id": "strong",
+                        "kind": "hook",
+                        "start_s": 10.0,
+                        "end_s": 50.0,
+                        "score": 0.9,
+                        "note": "the real hook",
+                    },
+                    {
+                        "id": "duplicate",
+                        "kind": "story",
+                        "start_s": 15.0,
+                        "end_s": 45.0,
+                        "score": 0.85,
+                        "note": "same section",
+                    },
+                    {
+                        "id": "separate",
+                        "kind": "story",
+                        "start_s": 80.0,
+                        "end_s": 120.0,
+                        "score": 0.7,
+                        "note": "separate payoff",
+                    },
+                ]
+            },
+            energy_body={"windows": []},
+            transcript_body={
+                "segments": [
+                    {
+                        "start_s": 10.0,
+                        "end_s": 50.0,
+                        "text": "This is the real hook.",
+                    },
+                    {
+                        "start_s": 80.0,
+                        "end_s": 120.0,
+                        "text": "This is the separate payoff.",
+                    },
+                ]
+            },
+            limit=5,
+            max_overlap_ratio=0.5,
+        )
+
+        self.assertEqual([c["moment_id"] for c in candidates], ["strong", "separate"])
+
+    def test_score_candidates_rejects_invalid_overlap_ratio(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_overlap_ratio"):
+            score_moments.score_candidates(
+                moments_body={"moments": []},
+                energy_body={"windows": []},
+                max_overlap_ratio=1.5,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

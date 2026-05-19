@@ -68,7 +68,11 @@ def score_candidates(
     quality_body: dict | None = None,
     topic_body: dict | None = None,
     limit: int = 8,
+    max_overlap_ratio: float | None = None,
 ) -> list[dict]:
+    if max_overlap_ratio is not None and not 0.0 <= max_overlap_ratio <= 1.0:
+        raise ValueError("max_overlap_ratio must be between 0 and 1")
+
     transcript = transcript_body or {}
     shot = shot_body or {}
     gaze = gaze_body or {}
@@ -126,6 +130,8 @@ def score_candidates(
             "note": m.get("note"),
         })
     scored.sort(key=lambda x: x["score"], reverse=True)
+    if max_overlap_ratio is not None:
+        scored = suppress_overlapping_candidates(scored, max_overlap_ratio)
     return scored[:limit]
 
 
@@ -139,6 +145,11 @@ def main() -> None:
     p.add_argument("--frame-quality")
     p.add_argument("--topic")
     p.add_argument("--limit", type=int, default=8)
+    p.add_argument(
+        "--max-overlap-ratio",
+        type=float,
+        help="Drop lower-scored candidates that overlap a kept candidate above this ratio.",
+    )
     args = p.parse_args()
 
     mbody = load_body(args.moments)
@@ -157,6 +168,7 @@ def main() -> None:
         quality_body=quality,
         topic_body=topic,
         limit=args.limit,
+        max_overlap_ratio=args.max_overlap_ratio,
     )
     print(json.dumps({"candidates": candidates}, indent=2))
 
@@ -213,6 +225,35 @@ def overlaps_topic(topic: dict, start: float, end: float) -> bool:
         if abs(start - ts) < 5 or abs(end - te) < 5:
             return True
     return False
+
+
+def suppress_overlapping_candidates(
+    candidates: list[dict],
+    max_overlap_ratio: float,
+) -> list[dict]:
+    if not 0.0 <= max_overlap_ratio <= 1.0:
+        raise ValueError("max_overlap_ratio must be between 0 and 1")
+
+    kept: list[dict] = []
+    for candidate in candidates:
+        if not any(
+            overlap_ratio(candidate, existing) > max_overlap_ratio
+            for existing in kept
+        ):
+            kept.append(candidate)
+    return kept
+
+
+def overlap_ratio(left: dict, right: dict) -> float:
+    left_start = float(left.get("start_s", 0.0))
+    left_end = float(left.get("end_s", left_start))
+    right_start = float(right.get("start_s", 0.0))
+    right_end = float(right.get("end_s", right_start))
+    overlap = max(0.0, min(left_end, right_end) - max(left_start, right_start))
+    shorter = min(max(0.0, left_end - left_start), max(0.0, right_end - right_start))
+    if shorter == 0.0:
+        return 0.0
+    return overlap / shorter
 
 
 if __name__ == "__main__":
