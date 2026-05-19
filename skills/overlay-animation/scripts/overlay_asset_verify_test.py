@@ -38,6 +38,7 @@ class OverlayAssetVerifyTests(unittest.TestCase):
                         "name": "Title Behind Speaker",
                         "duration_s": 2.0,
                         "asset_path": "generated/overlays/title/overlay.webm",
+                        "edl_hint": "*** Begin EDL\n*** Insert PiP\n+ asset: generated/overlays/title/overlay.webm\n+ duration_s: 2.0\n*** End EDL",
                         "subject_aware": True,
                         "matte_path": "generated/mattes/speaker.webm",
                     }
@@ -67,6 +68,30 @@ class OverlayAssetVerifyTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "blocked")
         self.assertIn("missing_overlay_asset", {issue["code"] for issue in report["issues"]})
+
+    def test_edl_hint_must_match_asset_and_duration_contract(self) -> None:
+        verifier = load_script("overlay_asset_verify")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "generated/overlays/title").mkdir(parents=True)
+            (root / "generated/overlays/title/overlay.webm").write_bytes(b"asset")
+            manifest = {
+                "slots": [
+                    {
+                        "name": "Mismatched Hint",
+                        "duration_s": 1.5,
+                        "asset_path": "generated/overlays/title/overlay.webm",
+                        "edl_hint": "*** Begin EDL\n*** Insert PiP\n+ asset: generated/overlays/other/overlay.webm\n+ duration_s: 2.0\n*** End EDL",
+                    }
+                ]
+            }
+
+            report = verifier.verify_manifest(manifest, project_root=root)
+
+        codes = {issue["code"] for issue in report["issues"]}
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("edl_asset_mismatch", codes)
+        self.assertIn("edl_duration_mismatch", codes)
 
     def test_subject_aware_slot_requires_existing_matte(self) -> None:
         verifier = load_script("overlay_asset_verify")

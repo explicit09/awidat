@@ -57,11 +57,60 @@ def _path_status(
     return resolved.as_posix(), issues
 
 
+def _edl_field(edl_hint: str, field: str) -> str | None:
+    prefix = f"+ {field}:"
+    for line in edl_hint.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            return stripped[len(prefix):].strip()
+    return None
+
+
+def _edl_hint_issues(
+    *,
+    slot_name: str,
+    edl_hint: str,
+    asset_path: str,
+    duration_s: float,
+) -> list[dict]:
+    issues: list[dict] = []
+    if not edl_hint.strip():
+        return [_issue(
+            slot_name,
+            "missing_edl_hint",
+            "slot must include an EDL insertion hint",
+        )]
+
+    hinted_asset = _edl_field(edl_hint, "asset")
+    if hinted_asset != asset_path:
+        issues.append(_issue(
+            slot_name,
+            "edl_asset_mismatch",
+            "EDL hint asset must match asset_path",
+            hinted_asset,
+        ))
+
+    hinted_duration = _edl_field(edl_hint, "duration_s")
+    try:
+        hinted_duration_s = float(hinted_duration or "")
+    except ValueError:
+        hinted_duration_s = -1.0
+    if round(hinted_duration_s, 3) != round(duration_s, 3):
+        issues.append(_issue(
+            slot_name,
+            "edl_duration_mismatch",
+            "EDL hint duration_s must match duration_s",
+            hinted_duration,
+        ))
+    return issues
+
+
 def verify_slot(slot: dict[str, Any], *, project_root: Path) -> dict:
     name = str(slot.get("name", "Overlay")).strip() or "Overlay"
     issues: list[dict] = []
     asset_path = str(slot.get("asset_path", "")).strip()
     duration_s = float(slot.get("duration_s", 0.0))
+    edl_hint = str(slot.get("edl_hint", "")).strip()
 
     _, asset_issues = _path_status(
         slot_name=name,
@@ -79,6 +128,12 @@ def verify_slot(slot: dict[str, Any], *, project_root: Path) -> dict:
             "invalid_duration",
             "duration_s must be positive",
         ))
+    issues.extend(_edl_hint_issues(
+        slot_name=name,
+        edl_hint=edl_hint,
+        asset_path=asset_path,
+        duration_s=duration_s,
+    ))
 
     matte_path = str(slot.get("matte_path", "")).strip()
     if bool(slot.get("subject_aware", False)):
@@ -98,6 +153,7 @@ def verify_slot(slot: dict[str, Any], *, project_root: Path) -> dict:
         "subject_aware": bool(slot.get("subject_aware", False)),
         "matte_path": matte_path if matte_path else None,
         "duration_s": round(duration_s, 3),
+        "edl_hint_present": bool(edl_hint),
         "status": "blocked" if issues else "ready",
         "issues": issues,
     }
