@@ -125,6 +125,14 @@ pub enum JobError {
     /// Job already cancelled / done.
     #[error("job {0} is already terminal ({1:?}); cannot cancel")]
     AlreadyTerminal(JobId, JobState),
+    /// Active render cap reached before a new ffmpeg process was spawned.
+    #[error("render job capacity reached: {active_jobs}/{max_running} active jobs")]
+    AtCapacity {
+        /// Configured active render cap.
+        max_running: usize,
+        /// Active queued/running jobs at the time of rejection.
+        active_jobs: usize,
+    },
 }
 
 /// A render-job spec the JobManager can run. Pre-built ffmpeg argv so the
@@ -178,15 +186,18 @@ pub const DEFAULT_JOB_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const POST_TERMINAL_RETENTION: Duration = Duration::from_secs(5 * 60);
 
 /// In-process job tracker. Cheaply cloneable.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct JobManager {
     inner: Arc<JobManagerInner>,
 }
 
-#[derive(Default)]
 struct JobManagerInner {
     jobs: RwLock<HashMap<JobId, JobHandle>>,
+    max_running: usize,
 }
+
+/// Default number of concurrently active render jobs.
+pub const DEFAULT_MAX_RUNNING_JOBS: usize = 2;
 
 /// Per-job tracking record.
 struct JobHandle {
@@ -197,7 +208,17 @@ struct JobHandle {
 impl JobManager {
     /// Construct an empty manager.
     pub fn new() -> Self {
-        Self::default()
+        Self::with_max_running(configured_max_running_jobs())
+    }
+
+    /// Construct an empty manager with an explicit active render cap.
+    pub fn with_max_running(max_running: usize) -> Self {
+        Self {
+            inner: Arc::new(JobManagerInner {
+                jobs: RwLock::new(HashMap::new()),
+                max_running,
+            }),
+        }
     }
 
     /// Spawn an ffmpeg invocation per `spec`. Returns the freshly-allocated
@@ -239,6 +260,15 @@ impl JobManager {
             cmd.current_dir(cwd);
         }
 
+        let mut jobs = self.inner.jobs.write().await;
+        let active_jobs = active_job_count(&jobs);
+        if active_jobs >= self.inner.max_running {
+            return Err(JobError::AtCapacity {
+                max_running: self.inner.max_running,
+                active_jobs,
+            });
+        }
+
         let child = cmd
             .spawn()
             .map_err(|e| JobError::Spawn(format!("{bin}: {e}", bin = bin.display())))?;
@@ -254,11 +284,7 @@ impl JobManager {
             debug!(job = %id_for_runner, "render job retention expired; reaped");
         });
 
-        self.inner
-            .jobs
-            .write()
-            .await
-            .insert(id.clone(), JobHandle { rx, cancel });
+        jobs.insert(id.clone(), JobHandle { rx, cancel });
         Ok(id)
     }
 
@@ -296,6 +322,30 @@ impl JobManager {
     pub async fn job_count(&self) -> usize {
         self.inner.jobs.read().await.len()
     }
+}
+
+impl Default for JobManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn configured_max_running_jobs() -> usize {
+    std::env::var("AWIDAT_MAX_RENDER_JOBS")
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_RUNNING_JOBS)
+}
+
+fn active_job_count(jobs: &HashMap<JobId, JobHandle>) -> usize {
+    jobs.values()
+        .filter(|handle| {
+            matches!(
+                handle.rx.borrow().state,
+                JobState::Queued | JobState::Running
+            )
+        })
+        .count()
 }
 
 async fn run_job(
@@ -508,6 +558,29 @@ mod tests {
         let m = JobManager::new();
         let err = m.status(&JobId("nope".into())).await.unwrap_err();
         assert!(matches!(err, JobError::UnknownJob(_)));
+    }
+
+    #[tokio::test]
+    async fn manager_rejects_start_when_active_job_cap_is_reached_before_spawn() {
+        let m = JobManager::with_max_running(0);
+        let spec = RenderJobSpec {
+            args: vec!["-version".into()],
+            total_duration_s: None,
+            cwd: None,
+            output_path: PathBuf::from("renders/out.mp4"),
+            limitations: Vec::new(),
+        };
+
+        let err = m.start(spec).await.unwrap_err();
+
+        assert!(matches!(
+            err,
+            JobError::AtCapacity {
+                max_running: 0,
+                active_jobs: 0
+            }
+        ));
+        assert_eq!(m.job_count().await, 0);
     }
 
     #[tokio::test]
