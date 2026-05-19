@@ -167,6 +167,16 @@ python3 <skill-root>/scripts/caption_plan.py \
   --output-format srt > captions.srt
 ```
 
+For browser preview or tools that prefer WebVTT text tracks, emit VTT:
+
+```bash
+python3 <skill-root>/scripts/caption_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --phrase-preset short \
+  --style classic \
+  --output-format vtt > captions.vtt
+```
+
 Use `--phrase-preset short` for fast social captions, `medium` for calmer
 talking-head edits, and `long` only when readability matters more than pace.
 The preset considers duration, pauses, punctuation, speaker changes, and word

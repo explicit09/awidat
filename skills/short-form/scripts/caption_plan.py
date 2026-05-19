@@ -50,9 +50,9 @@ CAPTION_STYLES = {
 }
 
 
-def format_srt_timestamp(seconds: float) -> str:
+def _format_subtitle_timestamp(seconds: float, *, millisecond_separator: str) -> str:
     if seconds < 0 or not isinstance(seconds, int | float):
-        raise ValueError("SRT timestamp seconds must be a non-negative number")
+        raise ValueError("subtitle timestamp seconds must be a non-negative number")
     milliseconds = round(float(seconds) * 1000.0)
     hours = milliseconds // 3_600_000
     milliseconds -= hours * 3_600_000
@@ -60,10 +60,21 @@ def format_srt_timestamp(seconds: float) -> str:
     milliseconds -= minutes * 60_000
     whole_seconds = milliseconds // 1_000
     milliseconds -= whole_seconds * 1_000
-    return f"{hours:02d}:{minutes:02d}:{whole_seconds:02d},{milliseconds:03d}"
+    return (
+        f"{hours:02d}:{minutes:02d}:{whole_seconds:02d}"
+        f"{millisecond_separator}{milliseconds:03d}"
+    )
 
 
-def build_srt(phrases: list[dict]) -> str:
+def format_srt_timestamp(seconds: float) -> str:
+    return _format_subtitle_timestamp(seconds, millisecond_separator=",")
+
+
+def format_vtt_timestamp(seconds: float) -> str:
+    return _format_subtitle_timestamp(seconds, millisecond_separator=".")
+
+
+def _build_subtitle_cues(phrases: list[dict], *, timestamp_formatter) -> str:
     cues = []
     previous_start = -1.0
     for index, phrase in enumerate(phrases, start=1):
@@ -71,22 +82,33 @@ def build_srt(phrases: list[dict]) -> str:
         start = float(phrase.get("start_s", 0.0))
         end = float(phrase.get("end_s", start))
         if not text:
-            raise ValueError(f"SRT cue {index} text is empty")
+            raise ValueError(f"subtitle cue {index} text is empty")
         if start < 0.0:
-            raise ValueError(f"SRT cue {index} start_s must be non-negative")
+            raise ValueError(f"subtitle cue {index} start_s must be non-negative")
         if end <= start:
-            raise ValueError(f"SRT cue {index} end_s must be greater than start_s")
+            raise ValueError(f"subtitle cue {index} end_s must be greater than start_s")
         if start < previous_start:
-            raise ValueError("SRT cues must be sorted by start_s")
+            raise ValueError("subtitle cues must be sorted by start_s")
         previous_start = start
         cues.append(
             "\n".join([
                 str(index),
-                f"{format_srt_timestamp(start)} --> {format_srt_timestamp(end)}",
+                f"{timestamp_formatter(start)} --> {timestamp_formatter(end)}",
                 text,
             ])
         )
     return "\n\n".join(cues) + ("\n" if cues else "")
+
+
+def build_srt(phrases: list[dict]) -> str:
+    return _build_subtitle_cues(phrases, timestamp_formatter=format_srt_timestamp)
+
+
+def build_vtt(phrases: list[dict]) -> str:
+    return "WEBVTT\n\n" + _build_subtitle_cues(
+        phrases,
+        timestamp_formatter=format_vtt_timestamp,
+    )
 
 
 def load_body(path: str) -> dict:
@@ -147,7 +169,7 @@ def main() -> None:
     p.add_argument("--hot-start-s", type=float)
     p.add_argument("--hot-end-s", type=float)
     p.add_argument("--style", choices=sorted(CAPTION_STYLES), default="classic")
-    p.add_argument("--output-format", choices=("json", "srt"), default="json")
+    p.add_argument("--output-format", choices=("json", "srt", "vtt"), default="json")
     args = p.parse_args()
 
     items = words(load_body(args.transcript))
@@ -162,6 +184,8 @@ def main() -> None:
     )
     if args.output_format == "srt":
         print(build_srt(phrases), end="")
+    elif args.output_format == "vtt":
+        print(build_vtt(phrases), end="")
     else:
         print(json.dumps({"phrases": phrases}, indent=2))
 

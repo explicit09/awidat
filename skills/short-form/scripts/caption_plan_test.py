@@ -203,6 +203,24 @@ class TranscriptPhraseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "end_s"):
             caption_plan.build_srt([{"text": "bad", "start_s": 2.0, "end_s": 1.0}])
 
+    def test_caption_plan_exports_vtt_with_timestamping_and_sanitized_arrows(self) -> None:
+        caption_plan = load_script("caption_plan")
+        phrases = [
+            {"text": "First --> point", "start_s": 0.0, "end_s": 0.64},
+            {"text": "Past an hour", "start_s": 3661.2, "end_s": 3662.3456},
+        ]
+
+        vtt = caption_plan.build_vtt(phrases)
+
+        self.assertTrue(vtt.startswith("WEBVTT\n\n"))
+        self.assertIn("00:00:00.000 --> 00:00:00.640", vtt)
+        self.assertIn("01:01:01.200 --> 01:01:02.346", vtt)
+        self.assertIn("First -> point", vtt)
+        self.assertTrue(vtt.endswith("\n"))
+
+        with self.assertRaisesRegex(ValueError, "end_s"):
+            caption_plan.build_vtt([{"text": "bad", "start_s": 2.0, "end_s": 1.0}])
+
     def test_caption_plan_cli_can_emit_srt(self) -> None:
         transcript = {
             "words": [
@@ -229,6 +247,35 @@ class TranscriptPhraseTests(unittest.TestCase):
             )
 
         self.assertIn("1\n00:00:00,000 --> 00:00:00,600", result.stdout)
+        self.assertIn("One line", result.stdout)
+
+    def test_caption_plan_cli_can_emit_vtt(self) -> None:
+        transcript = {
+            "words": [
+                {"word": "One", "start_s": 0.0, "end_s": 0.2, "speaker": "A"},
+                {"word": "line", "start_s": 0.25, "end_s": 0.5, "speaker": "A"},
+            ]
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:
+            json.dump(transcript, handle)
+            handle.flush()
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "caption_plan.py"),
+                    "--transcript",
+                    handle.name,
+                    "--output-format",
+                    "vtt",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertTrue(result.stdout.startswith("WEBVTT\n\n"))
+        self.assertIn("1\n00:00:00.000 --> 00:00:00.600", result.stdout)
         self.assertIn("One line", result.stdout)
 
     def test_packed_transcript_markdown_has_source_and_timed_rows(self) -> None:
