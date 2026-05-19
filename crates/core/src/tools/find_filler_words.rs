@@ -25,21 +25,7 @@ use serde::Deserialize;
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
-
-/// Default filler words. Lowercase-matched against word.text. The
-/// agent can override via the `fillers` arg — useful for languages
-/// or speakers where a specific filler dominates.
-const DEFAULT_FILLERS: &[&str] = &[
-    "um", "uh", "uhh", "umm", "ah", "ahh", "er",
-    "err",
-    // Discourse-marker fillers — these are more aggressive cuts;
-    // not all of them are noise. Off by default; opt-in via the
-    // `aggressive` arg.
-];
-
-/// More aggressive list — discourse markers that some editors trim
-/// in podcast cleanup but others leave for cadence. Opt-in.
-const AGGRESSIVE_EXTRAS: &[&str] = &["like", "you know", "i mean", "basically"];
+use crate::transcript_cleanup::{default_filler_tokens, normalize_transcript_token};
 
 /// Default cap on returned findings. Same magnitude as
 /// `find_dead_air`; podcasts can have hundreds of "um"s and the
@@ -153,13 +139,13 @@ impl ToolHandler for FindFillerWordsTool {
 
 fn build_filler_set(override_list: Option<Vec<String>>, aggressive: bool) -> Vec<String> {
     if let Some(list) = override_list {
-        return list.into_iter().map(|s| s.to_lowercase()).collect();
+        return list
+            .into_iter()
+            .map(|token| normalize_transcript_token(&token))
+            .filter(|token| !token.is_empty())
+            .collect();
     }
-    let mut out: Vec<String> = DEFAULT_FILLERS.iter().map(|s| s.to_string()).collect();
-    if aggressive {
-        out.extend(AGGRESSIVE_EXTRAS.iter().map(|s| s.to_string()));
-    }
-    out
+    default_filler_tokens(aggressive)
 }
 
 /// Walk the timeline + each clip's whisper sidecar; emit a finding
@@ -198,13 +184,7 @@ pub fn scan_filler_words(
                     if let Some(words) = load_whisper_words(project_root, &asset_id) {
                         for w in &words {
                             // Filler match (case-insensitive).
-                            let normalized = w
-                                .text
-                                .trim()
-                                .trim_matches(|c: char| {
-                                    c == '.' || c == ',' || c == '?' || c == '!'
-                                })
-                                .to_lowercase();
+                            let normalized = normalize_transcript_token(&w.text);
                             if !fillers.iter().any(|f| f == &normalized) {
                                 continue;
                             }
@@ -328,9 +308,10 @@ source_end_s, timeline_start_s, timeline_end_s }, ready to become \
 an EditorialNote of kind filler_word or to drive a `*** Trim Clip` \
 envelope.\
 \n\nDefault filler list: um/uh/uhh/umm/ah/ahh/er/err. Pass \
-`aggressive: true` to also include discourse markers (like / you \
-know / i mean / basically) — these are taste-dependent so they're \
-opt-in. Pass `fillers: [...]` to override the list entirely.\
+`aggressive: true` to also include discourse markers (like / so / \
+just / but / yeah / basically / you know / i mean) — these are \
+taste-dependent so they're opt-in. Pass `fillers: [...]` to \
+override the list entirely.\
 \n\nFindings are intersected with the timeline's clip ranges, so \
 fillers in trimmed-away regions don't get re-surfaced. Default \
 max_results=30, hard cap 200; `more_available: true` when the cap \

@@ -30,14 +30,7 @@ use serde::Deserialize;
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
-
-/// Restart-marker phrases. Lowercase-matched against word.text or
-/// against a sliding 2-word window (so "let me" matches across word
-/// boundaries). The single-word forms catch most restarts.
-const RESTART_MARKERS: &[&str] = &["wait", "actually"];
-
-/// Multi-word restart phrases. Matched across consecutive words.
-const RESTART_PHRASES: &[&[&str]] = &[&["let", "me"]];
+use crate::transcript_cleanup::{TranscriptWord, false_start_ranges};
 
 /// Default cap on findings.
 const DEFAULT_MAX_RESULTS: usize = 20;
@@ -186,93 +179,23 @@ pub fn scan_false_starts(
 /// pushes findings into `out`. Separated so unit tests can drive
 /// the heuristic without spinning up a full Timeline.
 fn scan_words_for_restarts(
-    words: &[WhisperWord],
+    words: &[TranscriptWord],
     asset_id: &str,
     clip_source_start: f64,
     clip_source_end: f64,
     timeline_offset: f64,
     out: &mut Vec<FalseStartFinding>,
 ) {
-    let n = words.len();
-    let mut i = 0;
-    while i < n {
-        let w = &words[i];
-        // Skip words outside the clip's visible range.
-        if w.end_s <= clip_source_start || w.start_s >= clip_source_end {
-            i += 1;
-            continue;
-        }
-        let normalized = normalize(&w.text);
-
-        // Check single-word restart marker.
-        let single_match = RESTART_MARKERS.iter().any(|m| *m == normalized);
-        // Check multi-word phrase starting at i (e.g. "let me").
-        let phrase_match = RESTART_PHRASES.iter().any(|phrase| {
-            phrase.iter().enumerate().all(|(off, expected)| {
-                words
-                    .get(i + off)
-                    .map(|w| normalize(&w.text) == *expected)
-                    .unwrap_or(false)
-            })
+    for range in false_start_ranges(words, clip_source_start, clip_source_end) {
+        out.push(FalseStartFinding {
+            asset_id: asset_id.to_string(),
+            marker: range.marker,
+            source_start_s: range.start_s,
+            source_end_s: range.end_s,
+            timeline_start_s: timeline_offset + (range.start_s - clip_source_start),
+            timeline_end_s: timeline_offset + (range.end_s - clip_source_start),
+            snippet: range.snippet,
         });
-
-        if single_match || phrase_match {
-            // The "false start" is everything from the previous
-            // restart-marker (or the beginning of this clip) up to
-            // (but not including) this marker. Surface that range
-            // so the user can decide whether to trim it.
-            //
-            // Lower bound: start of this segment / first word in
-            // this clip. v1 simplification: the first word in the
-            // clip whose start is ≥ clip_source_start. The tighter
-            // "start of the current sentence" needs whisper
-            // segments, which we'll add when the heuristic proves
-            // out.
-            let preceding_start_s = words
-                .iter()
-                .take(i)
-                .rev()
-                .find(|prev| {
-                    prev.start_s >= clip_source_start
-                        && (RESTART_MARKERS.iter().any(|m| *m == normalize(&prev.text))
-                            || RESTART_PHRASES.iter().any(|phrase| {
-                                phrase.iter().enumerate().all(|(off, expected)| {
-                                    words
-                                        .get(prev_index_of(words, prev) + off)
-                                        .map(|x| normalize(&x.text) == *expected)
-                                        .unwrap_or(false)
-                                })
-                            }))
-                })
-                .map(|prev| prev.end_s)
-                .unwrap_or(clip_source_start);
-
-            let visible_start = preceding_start_s.max(clip_source_start);
-            let visible_end = w.start_s.min(clip_source_end);
-            if visible_end <= visible_start {
-                i += 1;
-                continue;
-            }
-            // Build a short snippet of the false start so the agent
-            // can describe the Note in plain English.
-            let snippet: String = words
-                .iter()
-                .filter(|x| x.start_s >= visible_start && x.end_s <= visible_end)
-                .map(|x| x.text.trim())
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            out.push(FalseStartFinding {
-                asset_id: asset_id.to_string(),
-                marker: w.text.trim().to_string(),
-                source_start_s: visible_start,
-                source_end_s: visible_end,
-                timeline_start_s: timeline_offset + (visible_start - clip_source_start),
-                timeline_end_s: timeline_offset + (visible_end - clip_source_start),
-                snippet,
-            });
-        }
-        i += 1;
     }
 }
 
@@ -300,32 +223,7 @@ pub struct FalseStartFinding {
     pub snippet: String,
 }
 
-/// Lower-case + strip trailing punctuation. Words come out of
-/// whisper with trailing `.` / `,` / `?` attached.
-fn normalize(text: &str) -> String {
-    text.trim()
-        .trim_matches(|c: char| c == '.' || c == ',' || c == '?' || c == '!')
-        .to_lowercase()
-}
-
-/// Look up the slice index of a word by reference equality. Used
-/// inside the back-walk for previous-marker detection. O(n) but
-/// only runs on backtracks (rare in well-formed transcripts).
-fn prev_index_of(words: &[WhisperWord], target: &WhisperWord) -> usize {
-    words
-        .iter()
-        .position(|w| std::ptr::eq(w, target))
-        .unwrap_or(0)
-}
-
-#[derive(Debug, Clone)]
-struct WhisperWord {
-    text: String,
-    start_s: f64,
-    end_s: f64,
-}
-
-fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<WhisperWord>> {
+fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<TranscriptWord>> {
     let path = whisper_sidecar_path(project_root, asset_id);
     let bytes = std::fs::read(&path).ok()?;
     let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
@@ -354,7 +252,7 @@ fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<Whisper
         if let (Some(s), Some(e)) = (start_s, end_s)
             && e > s
         {
-            out.push(WhisperWord {
+            out.push(TranscriptWord {
                 text: text.to_string(),
                 start_s: s,
                 end_s: e,
@@ -394,10 +292,10 @@ whisper sidecars exist.\
 mod tests {
     use super::*;
 
-    fn words(items: &[(&str, f64, f64)]) -> Vec<WhisperWord> {
+    fn words(items: &[(&str, f64, f64)]) -> Vec<TranscriptWord> {
         items
             .iter()
-            .map(|(t, s, e)| WhisperWord {
+            .map(|(t, s, e)| TranscriptWord {
                 text: t.to_string(),
                 start_s: *s,
                 end_s: *e,
@@ -475,7 +373,7 @@ mod tests {
         let mut out = Vec::new();
         scan_words_for_restarts(&ws, "raw/ep.mp4", 0.0, 2.0, 0.0, &mut out);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].marker, "let");
+        assert_eq!(out[0].marker, "let me");
         assert!((out[0].source_end_s - 0.7).abs() < 1e-9);
     }
 
