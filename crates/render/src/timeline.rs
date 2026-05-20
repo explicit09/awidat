@@ -1652,7 +1652,8 @@ fn mask_source_limitations(segs: &[TimelineSegment]) -> Vec<RenderPlanLimitation
                 clip_id: Some(seg.clip_name.clone()),
                 parameter: Some("color_pipeline.mask_source".to_string()),
                 message: format!(
-                    "render ignored awidat.color_pipeline.mask_source {} on clip {:?}: regional grading is reserved but not yet implemented",
+                    "render ignored awidat.color_pipeline.mask_source {} on clip {:?}: regional grading is reserved but not yet implemented \
+                     (see docs/color-pipeline/render-mask-lowering.md for the implementation plan)",
                     mask.display(),
                     seg.clip_name,
                 ),
@@ -2708,6 +2709,18 @@ pub fn build_clip_preview_filtergraph(
     let mut current = String::from("[in]");
     let mut skipped: Vec<String> = Vec::new();
 
+    // HDR tonemap mirrors what the timeline render does first
+    // (`stage_segment_inputs` runs `hdr_tonemap_filter` before
+    // color correction). Without this, view_frame previews of
+    // PQ/HLG sources would skip the linearization step and the
+    // downstream LUT chain would see raw PQ/HLG pixels — that's
+    // the opposite of what render emits.
+    if let Some(transfer) = read_hdr_transfer(clip) {
+        let next = format!("[hdr_{SUFFIX}]");
+        segments.push(format!("{current}{}{next}", hdr_tonemap_filter(transfer)));
+        current = next;
+    }
+
     if let Some(plan) = read_color_correction(clip)
         && let Some(chain) = color_filter_chain(&plan)
     {
@@ -3022,25 +3035,60 @@ fn lut1d_filter(lut_path: &Path) -> String {
 /// P3-D65 primaries — close enough for the apply-time normalize
 /// case the agent uses to feed a P3-authored LUT; the actual
 /// gamma 2.6 encoding lives in the LUT itself.
-fn zscale_params_for_space(space: &str) -> Option<&'static str> {
+/// Stable (transfer, primaries, matrix) triple for each color space
+/// awidat can normalize via FFmpeg's `zscale` filter. Returns `None`
+/// for camera Log encodings — those need a shaper LUT for
+/// linearization, not a transfer-curve swap.
+///
+/// The DCI-P3 mapping is a compromise: zscale doesn't have a true
+/// "DCI-P3 gamma 2.6" preset, so we use `transfer=bt709` with
+/// P3-D65 primaries — close enough for the apply-time normalize
+/// case the agent uses to feed a P3-authored LUT; the actual
+/// gamma 2.6 encoding lives in the LUT itself.
+fn zscale_triple_for_space(space: &str) -> Option<(&'static str, &'static str, &'static str)> {
     match space {
-        "rec709_g24" => Some("transfer=bt709:primaries=bt709:matrix=bt709"),
-        "srgb" => Some("transfer=iec61966-2-1:primaries=bt709:matrix=bt709"),
-        "dci_p3" => Some("transfer=bt709:primaries=smpte432:matrix=bt709"),
-        "scene_linear" => Some("transfer=linear:primaries=bt709:matrix=bt709"),
-        "pq_rec2020" => Some("transfer=smpte2084:primaries=bt2020:matrix=bt2020nc"),
-        "hlg_rec2020" => Some("transfer=arib-std-b67:primaries=bt2020:matrix=bt2020nc"),
+        "rec709_g24" => Some(("bt709", "bt709", "bt709")),
+        "srgb" => Some(("iec61966-2-1", "bt709", "bt709")),
+        "dci_p3" => Some(("bt709", "smpte432", "bt709")),
+        "scene_linear" => Some(("linear", "bt709", "bt709")),
+        "pq_rec2020" => Some(("smpte2084", "bt2020", "bt2020nc")),
+        "hlg_rec2020" => Some(("arib-std-b67", "bt2020", "bt2020nc")),
         _ => None,
     }
 }
 
+/// Output-side `zscale=transfer=…:primaries=…:matrix=…` parameters
+/// for the named space. Returns `None` for spaces zscale can't
+/// represent — see [`zscale_triple_for_space`] for the underlying
+/// mapping.
+fn zscale_params_for_space(space: &str) -> Option<String> {
+    let (transfer, primaries, matrix) = zscale_triple_for_space(space)?;
+    Some(format!(
+        "transfer={transfer}:primaries={primaries}:matrix={matrix}"
+    ))
+}
+
+/// Input-side `zscale=transferin=…:primariesin=…:matrixin=…`
+/// parameters for the named space. Used to tag untagged source
+/// streams so `zscale` can compute the path between the input
+/// space and the target. FFmpeg fails with
+/// "no path between colorspaces" when the input is untagged and
+/// only output params are supplied.
+fn zscale_input_params_for_space(space: &str) -> Option<String> {
+    let (transfer, primaries, matrix) = zscale_triple_for_space(space)?;
+    Some(format!(
+        "transferin={transfer}:primariesin={primaries}:matrixin={matrix}"
+    ))
+}
+
 /// Decide whether render should auto-insert a `zscale=` filter to
 /// normalize the source pixels into the look LUT's declared input
-/// space. Returns the zscale parameter string, or `None` when no
-/// auto-conversion applies (matching spaces, agent-provided
-/// shaper/IDT, or unsupported space — typically a camera Log
+/// space. Returns the full `zscale=` parameter string (both input
+/// AND output side) so untagged sources still resolve, or `None`
+/// when no auto-conversion applies (matching spaces, agent-provided
+/// shaper/IDT, or an unsupported space — typically a camera Log
 /// encoding).
-fn auto_pre_lut_zscale(plan: &ColorPipelinePlan) -> Option<&'static str> {
+fn auto_pre_lut_zscale(plan: &ColorPipelinePlan) -> Option<String> {
     // Agent owns the chain whenever they declared one of these.
     if plan.shaper_lut.is_some() || plan.input_transform_lut.is_some() {
         return None;
@@ -3051,12 +3099,13 @@ fn auto_pre_lut_zscale(plan: &ColorPipelinePlan) -> Option<&'static str> {
     if plan.clip_input_space == lut_space {
         return None;
     }
-    // Both spaces must be zscale-representable. If either is a
-    // Log encoding (or anything else without a `zscale_params_for_space`
+    // Both spaces must be zscale-representable. If either is a Log
+    // encoding (or anything else without a `zscale_triple_for_space`
     // mapping), we don't auto-normalize — that would silently lie
     // to the LUT. The render limitation surfaces the gap instead.
-    let _ = zscale_params_for_space(&plan.clip_input_space)?;
-    zscale_params_for_space(lut_space)
+    let in_params = zscale_input_params_for_space(&plan.clip_input_space)?;
+    let out_params = zscale_params_for_space(lut_space)?;
+    Some(format!("{in_params}:{out_params}"))
 }
 
 /// Build the filter-graph block for an `awidat.color_pipeline` plan,
@@ -6659,6 +6708,26 @@ mod tests {
     }
 
     #[test]
+    fn build_clip_preview_filtergraph_mirrors_hdr_tonemap() {
+        use awidat_proto::otio::{Clip, Effect};
+        let mut clip = Clip::empty("hdr".to_string());
+        let mut sc = Effect::new("awidat.source_color");
+        sc.metadata
+            .insert("transfer".into(), serde_json::json!("smpte2084"));
+        clip.effects.push(sc);
+        let preview = build_clip_preview_filtergraph(&clip, Path::new("/p"));
+        let graph = preview.graph.expect("HDR source must produce a chain");
+        // Tonemap fires first, so the graph starts at [in] and
+        // routes through the HDR stage before anything else.
+        assert!(graph.starts_with("[in]zscale=t=linear"), "graph: {graph}");
+        assert!(graph.contains("tonemap=tonemap=hable"), "graph: {graph}");
+        // The HDR stage's output is the final stage because no
+        // other effects are stamped; it should rewrite to
+        // [grade_out].
+        assert!(graph.ends_with("[grade_out]"), "graph: {graph}");
+    }
+
+    #[test]
     fn build_clip_preview_filtergraph_returns_none_for_bare_clip() {
         use awidat_proto::otio::Clip;
         let clip = Clip::empty("bare".to_string());
@@ -6742,10 +6811,14 @@ mod tests {
             ..Default::default()
         });
         let plan = FilterPlanner::new(&[s0], &[]).plan();
+        // Both input-side and output-side params must be present.
+        // Without `transferin/primariesin/matrixin`, FFmpeg fails
+        // "no path between colorspaces" on untagged sources.
         assert!(
-            plan.filter_complex
-                .contains("zscale=transfer=bt709:primaries=bt709:matrix=bt709"),
-            "expected auto-zscale into rec709, got: {}",
+            plan.filter_complex.contains(
+                "zscale=transferin=iec61966-2-1:primariesin=bt709:matrixin=bt709:transfer=bt709:primaries=bt709:matrix=bt709"
+            ),
+            "expected auto-zscale with sRGB→Rec.709 in+out params, got: {}",
             plan.filter_complex,
         );
         // zscale runs before the look LUT.
