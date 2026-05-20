@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use awidat_proto::otio::{StackChild, Timeline, TrackChild};
 use awidat_proto::project::files;
-use awidat_render::ffmpeg::{ImageFormat, extract_frame_filtered};
-use awidat_render::{ClipGradeChain, build_clip_grade_chain};
+use awidat_render::ffmpeg::{ImageFormat, extract_frame_complex, extract_frame_filtered};
+use awidat_render::{ClipGradePreview, build_clip_preview_filtergraph};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::Deserialize;
@@ -165,15 +165,20 @@ impl ToolHandler for ViewFrameTool {
             Detail::Original => None,
         };
 
-        // Build the optional grade chain. The cache key folds the
-        // chain's identity in so graded and ungraded previews of the
-        // same asset/time don't collide.
+        // Build the optional grade preview. When the agent passes
+        // `clip`, we route through the labeled `-filter_complex`
+        // graph that mirrors what the timeline render would emit —
+        // strength<1 LUTs and multi-stage `color_pipeline` chains
+        // included.
         let grade = if let Some(clip_name) = args.clip.as_deref() {
-            Some(resolve_grade_chain(&ctx.project_root, clip_name)?)
+            Some(resolve_grade_preview(&ctx.project_root, clip_name)?)
         } else {
             None
         };
-        let grade_signature = grade.as_ref().and_then(|c| c.vf.as_deref()).unwrap_or("");
+        let grade_signature = grade
+            .as_ref()
+            .and_then(|p| p.graph.as_deref())
+            .unwrap_or("");
 
         let cache_path = cache_path_for(
             &ctx.project_root,
@@ -195,18 +200,23 @@ impl ToolHandler for ViewFrameTool {
                 ))
             })?
         } else {
-            let bytes = extract_frame_filtered(
-                &asset_path,
-                args.t_s,
-                format,
-                max_dim,
-                grade.as_ref().and_then(|c| c.vf.as_deref()),
-            )
-            .await
+            let bytes = match grade.as_ref().and_then(|p| p.graph.as_deref()) {
+                Some(graph) => {
+                    extract_frame_complex(
+                        &asset_path,
+                        args.t_s,
+                        format,
+                        graph,
+                        "[grade_out]",
+                        max_dim,
+                    )
+                    .await
+                }
+                None => extract_frame_filtered(&asset_path, args.t_s, format, max_dim, None).await,
+            }
             .map_err(|e| {
                 FunctionCallError::RespondToModel(format!("view_frame: ffmpeg failed: {e}"))
             })?;
-            // Best-effort cache write; failure here doesn't fail the call.
             if let Some(parent) = cache_path.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
@@ -216,8 +226,8 @@ impl ToolHandler for ViewFrameTool {
 
         let b64 = B64.encode(&bytes);
         let grade_summary = match grade.as_ref() {
-            Some(c) => {
-                let mut s = if c.vf.is_some() {
+            Some(p) => {
+                let mut s = if p.graph.is_some() {
                     format!(
                         " (graded via clip {:?})",
                         args.clip.as_deref().unwrap_or("")
@@ -228,8 +238,8 @@ impl ToolHandler for ViewFrameTool {
                         args.clip.as_deref().unwrap_or("")
                     )
                 };
-                if !c.skipped.is_empty() {
-                    s.push_str(&format!(" — skipped: {}", c.skipped.join("; ")));
+                if !p.skipped.is_empty() {
+                    s.push_str(&format!(" — skipped: {}", p.skipped.join("; ")));
                 }
                 s
             }
@@ -318,15 +328,15 @@ fn cache_path_for(
 }
 
 /// Look up `clip_name` in the project's OTIO and return the
-/// flat-chain grade preview for its effects. The `extract_frame`
-/// pipeline is happy to receive `ClipGradeChain { vf: None }`
-/// (no-op preview), so a clip with no graded effects is not an
-/// error — the caller sees `(clip ... had no graded effects)` in
-/// the summary line.
-fn resolve_grade_chain(
+/// labeled-graph preview for its effects. The `extract_frame_complex`
+/// pipeline handles `graph: None` by falling back to the raw
+/// extract, so a clip with no graded effects is not an error —
+/// the caller sees `(clip ... had no graded effects)` in the
+/// summary line.
+fn resolve_grade_preview(
     project_root: &Path,
     clip_name: &str,
-) -> Result<ClipGradeChain, FunctionCallError> {
+) -> Result<ClipGradePreview, FunctionCallError> {
     let otio_path = project_root.join(files::OTIO);
     let raw = std::fs::read_to_string(&otio_path).map_err(|e| {
         FunctionCallError::RespondToModel(format!(
@@ -346,7 +356,7 @@ fn resolve_grade_chain(
                 continue;
             };
             if clip.name == clip_name {
-                return Ok(build_clip_grade_chain(clip, project_root));
+                return Ok(build_clip_preview_filtergraph(clip, project_root));
             }
         }
     }

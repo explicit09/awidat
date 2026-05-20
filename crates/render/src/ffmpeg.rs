@@ -139,6 +139,104 @@ pub async fn extract_frame(
     extract_frame_filtered(asset_path, t_s, format, max_dim, None).await
 }
 
+/// Same as [`extract_frame`] but runs the source through a full
+/// `-filter_complex` graph (labeled, multi-segment) before scale.
+/// Required when the graph has internal labels (e.g. the
+/// `split → lut3d → blend` strength block) that the flat `-vf`
+/// form can't represent.
+///
+/// `filter_complex` must use `[in]` for the source label and end
+/// in `out_label` (typically `[grade_out]`). The scale stage is
+/// spliced on automatically based on `max_dim`. The final
+/// `-map` value is the scale stage's output when scaling, or
+/// `out_label` directly when not.
+pub async fn extract_frame_complex(
+    asset_path: &Path,
+    t_s: f64,
+    format: ImageFormat,
+    filter_complex: &str,
+    out_label: &str,
+    max_dim: Option<u32>,
+) -> Result<Vec<u8>, FfmpegError> {
+    if !t_s.is_finite() || t_s < 0.0 {
+        return Err(FfmpegError::BadTimestamp(t_s));
+    }
+    let bin = ffmpeg_path()?;
+    let prepared = filter_complex.replace("[in]", "[0:v:0]");
+    let (final_graph, map_label) = if let Some(dim) = max_dim {
+        let scale = format!("scale='if(gt(iw,ih),{dim},-2)':'if(gt(iw,ih),-2,{dim})'");
+        let final_label = "[grade_scaled]";
+        let graph = format!("{prepared};{out_label}{scale}{final_label}");
+        (graph, final_label.to_string())
+    } else {
+        (prepared, out_label.to_string())
+    };
+
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-ss")
+        .arg(format!("{t_s}"))
+        .arg("-i")
+        .arg(asset_path)
+        .arg("-filter_complex")
+        .arg(final_graph)
+        .arg("-map")
+        .arg(map_label)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("image2pipe")
+        .arg("-vcodec")
+        .arg(format.codec_name())
+        .arg("-");
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stdout missing")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
+
+    let collect_fut = async move {
+        let mut so = Vec::new();
+        let mut se = Vec::new();
+        let mut stdout_buf = stdout;
+        let mut stderr_buf = stderr;
+        let (a, b) = tokio::join!(
+            stdout_buf.read_to_end(&mut so),
+            stderr_buf.read_to_end(&mut se),
+        );
+        a.map_err(FfmpegError::Io)?;
+        b.map_err(FfmpegError::Io)?;
+        Ok::<(Vec<u8>, Vec<u8>), FfmpegError>((so, se))
+    };
+
+    let status_fut = async { child.wait().await.map_err(FfmpegError::Io) };
+    let ((stdout_bytes, stderr_bytes), status) = tokio::try_join!(collect_fut, status_fut)?;
+    if !status.success() {
+        let stderr_tail = tail_string(&stderr_bytes, STDERR_TAIL_BYTES);
+        return Err(FfmpegError::NonZero {
+            code: status.code().unwrap_or(-1),
+            stderr_tail,
+        });
+    }
+    Ok(stdout_bytes)
+}
+
 /// Same as [`extract_frame`] but prepends an additional flat filter
 /// chain (comma-separated, no labels) before the optional `scale`
 /// filter. Used to render graded previews where the chain mirrors

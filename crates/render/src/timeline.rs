@@ -2674,6 +2674,106 @@ pub struct ClipGradeChain {
     pub skipped: Vec<String>,
 }
 
+/// Labeled `-filter_complex` graph that applies the full grade for
+/// a single clip — color correction + the legacy `awidat.lut` or
+/// the full `awidat.color_pipeline` chain — without dropping any
+/// stage. Strength<1 LUTs and multi-stage pipelines lower cleanly.
+///
+/// The returned `graph` (when `Some`) uses `[in]` for the source
+/// input label and `[grade_out]` for the final output label so
+/// callers can splice their own scale / output transforms in after
+/// and route `-map [grade_out]` (or post-scale) on the encoder side.
+#[derive(Debug, Clone, Default)]
+pub struct ClipGradePreview {
+    /// Full filtergraph or `None` when the clip has no graded
+    /// effects (color correction, LUT, or color_pipeline).
+    pub graph: Option<String>,
+    /// Soft diagnostics surfaced when something couldn't resolve
+    /// (e.g. a `color_pipeline.look_lut` path that didn't exist).
+    pub skipped: Vec<String>,
+}
+
+/// Build a `-filter_complex` graph that reproduces the full grade
+/// the timeline render would apply to `clip`, preserving
+/// strength<1 (`split → lut3d → blend`) and multi-stage
+/// color_pipeline chains exactly. Input label is `[in]`, output is
+/// `[grade_out]`. Returns `graph: None` when the clip has no
+/// graded effects.
+pub fn build_clip_preview_filtergraph(
+    clip: &awidat_proto::otio::Clip,
+    project_root: &Path,
+) -> ClipGradePreview {
+    const SUFFIX: &str = "preview";
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = String::from("[in]");
+    let mut skipped: Vec<String> = Vec::new();
+
+    if let Some(plan) = read_color_correction(clip)
+        && let Some(chain) = color_filter_chain(&plan)
+    {
+        let next = format!("[cc_{SUFFIX}]");
+        segments.push(format!("{current}{chain}{next}"));
+        current = next;
+    }
+
+    let pipeline_present = clip
+        .effects
+        .iter()
+        .any(|e| e.effect_name == "awidat.color_pipeline");
+
+    if pipeline_present {
+        match read_color_pipeline(clip, project_root) {
+            Ok(Some(plan)) => {
+                let needs_chain = plan.has_any_lut() || auto_pre_lut_zscale(&plan).is_some();
+                if needs_chain {
+                    let next = format!("[cp_{SUFFIX}_out]");
+                    segments.push(color_pipeline_filter_block(&current, &next, SUFFIX, &plan));
+                    current = next;
+                }
+            }
+            Ok(None) => {}
+            Err(err) => skipped.push(format!("color_pipeline failed to resolve: {err}")),
+        }
+    } else if let Some(lut_path) =
+        read_effect_string(clip, "awidat.lut", "lut_path").map(|p| project_root.join(p))
+    {
+        let interpolation = read_lut_interpolation(clip);
+        let strength = read_effect_number(clip, "awidat.lut", "strength")
+            .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
+        let next = format!("[lut_{SUFFIX}_out]");
+        segments.push(lut3d_filter_block(
+            &current,
+            &next,
+            SUFFIX,
+            &lut_path,
+            interpolation.as_deref(),
+            strength,
+        ));
+        current = next;
+    }
+
+    if segments.is_empty() {
+        return ClipGradePreview {
+            graph: None,
+            skipped,
+        };
+    }
+
+    // Rewrite the last sub-chain's output label to the canonical
+    // `[grade_out]` so the caller has a stable label to splice the
+    // scale stage onto.
+    let final_label = "[grade_out]";
+    if let Some(last) = segments.last_mut() {
+        let new_last = last.replacen(current.as_str(), final_label, 1);
+        *last = new_last;
+    }
+
+    ClipGradePreview {
+        graph: Some(segments.join(";")),
+        skipped,
+    }
+}
+
 /// Build a flat preview-grade filter chain for `clip`, joining
 /// (when present): color correction, the legacy `awidat.lut` at
 /// full strength, and the `color_pipeline` look LUT at full
@@ -6499,6 +6599,72 @@ mod tests {
             "metadata-only pipeline must not emit any LUT, got: {}",
             plan.filter_complex,
         );
+    }
+
+    #[test]
+    fn build_clip_preview_filtergraph_emits_strength_blend_for_legacy_lut() {
+        use awidat_proto::otio::{Clip, Effect};
+        let mut clip = Clip::empty("partial".to_string());
+        let mut lut = Effect::new("awidat.lut");
+        lut.metadata
+            .insert("lut_path".into(), serde_json::json!("luts/x.cube"));
+        lut.metadata
+            .insert("strength".into(), serde_json::json!(0.4));
+        clip.effects.push(lut);
+        let preview = build_clip_preview_filtergraph(&clip, Path::new("/p"));
+        let graph = preview.graph.expect("graph emitted");
+        // Strength<1 means split/blend exists in the graph.
+        assert!(
+            graph.contains("split[lut_pre_preview]"),
+            "expected split fork in graph, got: {graph}",
+        );
+        // LUT-as-top semantics carry through.
+        assert!(
+            graph.contains("[lut_out_preview][lut_pre_preview]blend=all_opacity=0.4"),
+            "expected blend with LUT-top in graph, got: {graph}",
+        );
+        // Final segment terminates at the canonical [grade_out].
+        assert!(graph.ends_with("[grade_out]"), "graph: {graph}");
+    }
+
+    #[test]
+    fn build_clip_preview_filtergraph_chains_color_correction_into_pipeline() {
+        use awidat_proto::otio::{Clip, Effect};
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("luts")).unwrap();
+        std::fs::write(dir.path().join("luts/look.cube"), b"# stub").unwrap();
+
+        let mut clip = Clip::empty("graded".to_string());
+        let mut cc = Effect::new("awidat.color_correction");
+        cc.metadata
+            .insert("exposure_ev".into(), serde_json::json!(0.5));
+        clip.effects.push(cc);
+        let mut cp = Effect::new("awidat.color_pipeline");
+        cp.metadata
+            .insert("clip_input_space".into(), serde_json::json!("rec709_g24"));
+        cp.metadata
+            .insert("lut_input_space".into(), serde_json::json!("rec709_g24"));
+        cp.metadata
+            .insert("look_lut".into(), serde_json::json!("luts/look.cube"));
+        cp.metadata
+            .insert("look_strength".into(), serde_json::json!(0.7));
+        clip.effects.push(cp);
+        let preview = build_clip_preview_filtergraph(&clip, dir.path());
+        let graph = preview.graph.expect("graph emitted");
+        // Color correction feeds the pipeline stage.
+        assert!(graph.starts_with("[in]eq=brightness="), "graph: {graph}");
+        assert!(graph.contains("[cc_preview]"), "graph: {graph}");
+        assert!(graph.contains("blend=all_opacity=0.7"), "graph: {graph}");
+        assert!(graph.ends_with("[grade_out]"), "graph: {graph}");
+    }
+
+    #[test]
+    fn build_clip_preview_filtergraph_returns_none_for_bare_clip() {
+        use awidat_proto::otio::Clip;
+        let clip = Clip::empty("bare".to_string());
+        let preview = build_clip_preview_filtergraph(&clip, Path::new("/p"));
+        assert!(preview.graph.is_none());
+        assert!(preview.skipped.is_empty());
     }
 
     #[test]
