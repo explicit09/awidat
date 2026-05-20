@@ -3743,6 +3743,10 @@ const COLOR_CORRECTION_EFFECT_NAME: &str = awidat_effects::COLOR_CORRECTION;
 /// Effect name used for clip-level LUT application. Render maps the
 /// project-relative `lut_path` to FFmpeg's `lut3d` filter.
 const LUT_EFFECT_NAME: &str = awidat_effects::LUT;
+/// Effect name used for the atomic color pipeline. Schema is live;
+/// render lowering is the next stage (see
+/// `awidat-color-pipeline-plan` memory).
+const COLOR_PIPELINE_EFFECT_NAME: &str = awidat_effects::COLOR_PIPELINE;
 const SUPPORTED_LUT_EXTENSIONS: &[&str] = &["3dl", "cube", "dat", "m3d", "csp"];
 const SUPPORTED_LUT_INTERPOLATIONS: &[&str] =
     &["nearest", "trilinear", "tetrahedral", "pyramid", "prism"];
@@ -4472,6 +4476,9 @@ fn apply_set_effect(
     if definition.id == LUT_EFFECT_NAME {
         normalize_lut_metadata(index, &mut metadata)?;
     }
+    if definition.id == COLOR_PIPELINE_EFFECT_NAME {
+        normalize_color_pipeline_metadata(index, &mut metadata, ctx)?;
+    }
     if !matches!(definition.scope, awidat_effects::EffectScope::Clip) {
         return Err(ApplyError::Invalid {
             index,
@@ -4803,6 +4810,122 @@ fn normalize_lut_path(index: usize, lut_path: &str) -> Result<String, ApplyError
         });
     }
     Ok(trimmed.to_string())
+}
+
+/// Validate the metadata for an `awidat.color_pipeline` effect.
+///
+/// Beyond the per-param schema checks the effects registry already
+/// runs, this layer enforces:
+/// - color-space slot values are in [`awidat_effects::KNOWN_COLOR_SPACES`]
+/// - LUT path slots pass [`normalize_lut_path`] (project-relative,
+///   supported extension)
+/// - `look_interpolation` is a known interpolation mode
+/// - cross-slot consistency (e.g., `look_strength` without `look_lut`
+///   is meaningless and rejected)
+/// - if the project root is known and the `look_lut` is a `.cube`
+///   file that exists on disk, parse it via [`awidat_lut::parse_cube_3d`]
+fn normalize_color_pipeline_metadata(
+    index: usize,
+    metadata: &mut serde_json::Map<String, serde_json::Value>,
+    ctx: &AnchorContext,
+) -> Result<(), ApplyError> {
+    for slot in [
+        "clip_input_space",
+        "working_space",
+        "lut_input_space",
+        "output_space",
+    ] {
+        let Some(value) = metadata.get(slot).and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !awidat_effects::is_known_color_space(value) {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "set_effect: awidat.color_pipeline {slot} {value:?} is not a known color space; \
+                     expected one of {:?}",
+                    awidat_effects::KNOWN_COLOR_SPACES
+                ),
+            });
+        }
+    }
+
+    for slot in [
+        "input_transform_lut",
+        "shaper_lut",
+        "look_lut",
+        "output_transform_lut",
+    ] {
+        let Some(value) = metadata.get(slot).and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let normalized = normalize_lut_path(index, value).map_err(|err| {
+            // Surface the slot name so the agent knows which path
+            // was wrong when multiple LUTs are stamped on one
+            // effect.
+            ApplyError::Invalid {
+                index,
+                message: match err {
+                    ApplyError::Invalid { message, .. } => {
+                        format!("set_effect: awidat.color_pipeline {slot}: {message}")
+                    }
+                    other => format!("set_effect: awidat.color_pipeline {slot}: {other}"),
+                },
+            }
+        })?;
+        metadata.insert(slot.to_string(), serde_json::Value::String(normalized));
+    }
+
+    let interpolation = metadata
+        .get("look_interpolation")
+        .and_then(serde_json::Value::as_str);
+    match normalize_lut_interpolation(index, interpolation)? {
+        Some(value) => {
+            metadata.insert(
+                "look_interpolation".to_string(),
+                serde_json::Value::String(value),
+            );
+        }
+        None => {
+            metadata.remove("look_interpolation");
+        }
+    }
+
+    // Cross-slot consistency: any slot that customizes the look LUT
+    // needs the look LUT itself to be present.
+    let has_look_lut = metadata.contains_key("look_lut");
+    for dependent in ["look_interpolation", "lut_input_space"] {
+        if metadata.contains_key(dependent) && !has_look_lut {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "set_effect: awidat.color_pipeline {dependent} requires look_lut to also be set"
+                ),
+            });
+        }
+    }
+    if let Some(strength) = metadata
+        .get("look_strength")
+        .and_then(serde_json::Value::as_f64)
+        && (strength - 1.0).abs() > f64::EPSILON
+        && !has_look_lut
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "set_effect: awidat.color_pipeline look_strength != 1.0 requires look_lut"
+                .into(),
+        });
+    }
+
+    // If we have a project root and the look LUT is a `.cube`,
+    // parse it now to surface structured errors at apply time.
+    if let (Some(root), Some(lut_path)) = (
+        ctx.project_root(),
+        metadata.get("look_lut").and_then(serde_json::Value::as_str),
+    ) {
+        validate_lut_contents(index, root, lut_path)?;
+    }
+    Ok(())
 }
 
 fn normalize_lut_strength(index: usize, strength: Option<f64>) -> Result<Option<f64>, ApplyError> {
@@ -9113,6 +9236,125 @@ mod tests {
         assert!(
             matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("not a valid .cube LUT")),
             "expected structured .cube parse error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn color_pipeline_rejects_unknown_color_space() {
+        use crate::edl::op::EdlOp;
+        let tl = timeline_with_three_clips();
+        let mut params = serde_json::Map::new();
+        params.insert(
+            "clip_input_space".into(),
+            serde_json::json!("Made_Up_Space"),
+        );
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_pipeline".into(),
+                params,
+                rationale: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("not a known color space")),
+            "expected unknown color space error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn color_pipeline_rejects_look_strength_without_look_lut() {
+        use crate::edl::op::EdlOp;
+        let tl = timeline_with_three_clips();
+        let mut params = serde_json::Map::new();
+        params.insert("clip_input_space".into(), serde_json::json!("rec709_g24"));
+        params.insert("look_strength".into(), serde_json::json!(0.5));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_pipeline".into(),
+                params,
+                rationale: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("look_strength")),
+            "expected look_strength-without-look_lut error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn color_pipeline_round_trip_with_log_clip_and_partial_strength() {
+        use crate::edl::op::EdlOp;
+        let tl = timeline_with_three_clips();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("luts")).unwrap();
+        // Minimal valid 2³ cube so the parser is happy.
+        let cube = "LUT_3D_SIZE 2\n\
+                    0 0 0\n1 0 0\n0 1 0\n1 1 0\n\
+                    0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        std::fs::write(dir.path().join("luts/look.cube"), cube).unwrap();
+        let ctx = AnchorContext::with_project_root(dir.path());
+
+        let mut params = serde_json::Map::new();
+        params.insert("clip_input_space".into(), serde_json::json!("arri_logc4"));
+        params.insert("lut_input_space".into(), serde_json::json!("rec709_g24"));
+        params.insert("output_space".into(), serde_json::json!("rec709_g24"));
+        params.insert("look_lut".into(), serde_json::json!("luts/look.cube"));
+        params.insert("look_strength".into(), serde_json::json!(0.7));
+        params.insert(
+            "look_interpolation".into(),
+            serde_json::json!("tetrahedral"),
+        );
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_pipeline".into(),
+                params,
+                rationale: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &ctx).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let effect = clip
+            .effects
+            .iter()
+            .find(|e| e.effect_name == "awidat.color_pipeline")
+            .expect("color_pipeline effect should be stamped");
+        assert_eq!(
+            effect
+                .metadata
+                .get("clip_input_space")
+                .and_then(|v| v.as_str()),
+            Some("arri_logc4")
+        );
+        assert_eq!(
+            effect
+                .metadata
+                .get("look_strength")
+                .and_then(|v| v.as_f64()),
+            Some(0.7)
+        );
+        assert_eq!(
+            effect
+                .metadata
+                .get("look_interpolation")
+                .and_then(|v| v.as_str()),
+            Some("tetrahedral")
         );
     }
 
