@@ -64,6 +64,7 @@ pub async fn set_project_root(
     *state.project_root.lock().await = Some(buf.clone());
     *state.session.lock().await = None;
     *state.resume_log_path.lock().await = None;
+    crate::commands::media::clear_media_server_files(&state)?;
     allow_project_asset_dirs(&app, &buf);
 
     // Best-effort: ignore failures so a corrupted recents file
@@ -96,6 +97,7 @@ pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> 
     *state.project_root.lock().await = None;
     *state.session.lock().await = None;
     *state.resume_log_path.lock().await = None;
+    crate::commands::media::clear_media_server_files(&state)?;
     Ok(())
 }
 

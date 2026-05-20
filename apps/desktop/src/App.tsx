@@ -18,6 +18,7 @@ import { ChatStream } from "./agent/ChatStream";
 import { Composer } from "./agent/Composer";
 import { SessionBar } from "./agent/SessionBar";
 import { MediaPane } from "./media/MediaPane";
+import { clearMediaStreamUrlCache } from "./media/mediaStreamUrl";
 import { useMediaStore } from "./media/store";
 import { TimelinePane } from "./timeline/TimelinePane";
 import { isProposedEditItem, useProposalStore } from "./timeline/proposal";
@@ -225,6 +226,7 @@ function App() {
   useEffect(() => {
     clearAgent();
     clearProposal();
+    clearMediaStreamUrlCache();
     clearMediaSelection(null);
     clearSelection();
     clearNotes();
