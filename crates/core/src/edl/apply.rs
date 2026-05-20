@@ -2615,6 +2615,11 @@ fn current_cut_boundary_keys(timeline: &Timeline) -> HashSet<String> {
                         keys.insert(cut_boundary_key(&from_id, &to_id));
                     }
                 }
+                Some(TrackChild::Gap(_)) => {
+                    if let Some(to_id) = next_clip_id_after_gaps(track, index) {
+                        keys.insert(cut_boundary_key(&from_id, &to_id));
+                    }
+                }
                 _ => {}
             }
         }
@@ -2976,7 +2981,15 @@ fn apply_set_cut_intent(
                     Some(TrackChild::Transition(_))
                 )
         );
-    if to_loc.child_index != from_loc.child_index + 1 && !separated_by_transition {
+    let separated_by_lifted_gap = matches!(
+        working.tracks.children.get(from_loc.track_index),
+        Some(StackChild::Track(track))
+            if clips_are_separated_only_by_gaps(track, from_loc.child_index, to_loc.child_index)
+    );
+    if to_loc.child_index != from_loc.child_index + 1
+        && !separated_by_transition
+        && !separated_by_lifted_gap
+    {
         return Err(ApplyError::Invalid {
             index,
             message: format!(
@@ -3018,6 +3031,17 @@ fn apply_set_cut_intent(
         "set cut intent {:?} ({:?}) for boundary {key}",
         spec.cut_type, spec.audio_relation
     ))
+}
+
+fn clips_are_separated_only_by_gaps(
+    track: &awidat_proto::otio::Track,
+    from_index: usize,
+    to_index: usize,
+) -> bool {
+    to_index > from_index + 1
+        && track.children[from_index + 1..to_index]
+            .iter()
+            .all(|child| matches!(child, TrackChild::Gap(_)))
 }
 
 fn validate_semantic_cut_spec(index: usize, spec: &SemanticCutSpec) -> Result<(), ApplyError> {
@@ -4054,6 +4078,18 @@ fn next_clip_id(track: &awidat_proto::otio::Track, after_index: usize) -> Option
         .iter()
         .skip(after_index + 1)
         .find_map(track_child_clip_id)
+}
+
+fn next_clip_id_after_gaps(
+    track: &awidat_proto::otio::Track,
+    after_index: usize,
+) -> Option<String> {
+    track
+        .children
+        .iter()
+        .skip(after_index + 1)
+        .find(|child| !matches!(child, TrackChild::Gap(_)))
+        .and_then(track_child_clip_id)
 }
 
 fn track_child_clip_id(child: &TrackChild) -> Option<String> {
@@ -7507,6 +7543,47 @@ mod tests {
         assert_eq!(
             spec.reason.as_deref(),
             Some("motion carries across the boundary")
+        );
+    }
+
+    #[test]
+    fn apply_set_cut_intent_allows_lifted_gap_between_boundary_clips() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::DeleteClip {
+                    anchor: Anchor::ClipUuid {
+                        uuid: "clip-1".into(),
+                    },
+                },
+                EdlOp::SetCutIntent {
+                    between: super::super::op::TransitionBetween {
+                        from: Anchor::ClipUuid {
+                            uuid: "clip-0".into(),
+                        },
+                        to: Anchor::ClipUuid {
+                            uuid: "clip-2".into(),
+                        },
+                    },
+                    spec: SemanticCutSpec {
+                        cut_type: CutType::JCut,
+                        intent: "lifted_gap_handoff".into(),
+                        energy: None,
+                        audio_relation: AudioRelation::AudioLeads,
+                        confidence: Some(0.88),
+                        reason: Some("deleted reset take leaves timing gap".into()),
+                        extra: Default::default(),
+                    },
+                },
+            ],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert_eq!(outcome.applied.len(), 2);
+        let meta = new_tl.metadata.awidat.as_ref().expect("awidat metadata");
+        let key = cut_boundary_key("clip-0", "clip-2");
+        assert_eq!(
+            meta.cut_boundaries.get(&key).map(|spec| spec.cut_type),
+            Some(CutType::JCut)
         );
     }
 
