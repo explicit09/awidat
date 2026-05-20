@@ -293,6 +293,21 @@ pub enum TransitionPrimitiveOp {
         /// Block size in normalized `[0.0, 1.0]`.
         block_size: f64,
     },
+    /// Procedural luma-mask reveal. The GPU `LumaMask` shader reads
+    /// `mask_kind` to choose the mask geometry (clock / blinds /
+    /// checkerboard) and uses `softness` as the feathered edge band
+    /// around the progress threshold. Future image-based masks
+    /// (Kdenlive ports) extend the same primitive with a `texture`
+    /// asset reference.
+    LumaMask {
+        /// Stable mask kind id: `clock`, `blinds_horizontal`, or
+        /// `checkerboard`. Validation rejects unknown values.
+        mask_kind: String,
+        /// Edge softness in `[0.0, 1.0]`. 0 is a hard mask, 1 is a
+        /// very feathered band. Scalar or multi-keyframe curve so
+        /// the agent can author "edge sharpens then softens" feels.
+        softness: ParamCurve,
+    },
     /// Stable named atomic transition that does not decompose cleanly
     /// into primitives yet. This is still data: it points at an Awidat
     /// transition id, not backend code or a raw filter graph.
@@ -998,11 +1013,79 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         motion_alignment: None,
         color_sensitivity: ColorSensitivity::AvoidColorShift,
     },
+    // ---------- Luma-mask transitions (GPU-only) ----------
+    BuiltinTransition {
+        id: "awidat.clock_wipe",
+        family: "wipe",
+        display_name: "Clock Wipe",
+        // GPU-only: no FFmpeg `xfade` covers a rotating pie-slice
+        // mask. The composer routes via the LumaMask primitive.
+        ffmpeg_xfade: None,
+        default_duration_s: 0.45,
+        min_duration_s: 0.15,
+        max_duration_s: 1.8,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["time_passage", "vintage_grammar", "comedic_button"],
+        avoid_for: &["serious_dialogue", "documentary_realism", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.venetian_blinds_h",
+        family: "wipe",
+        display_name: "Venetian Blinds (Horizontal)",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.40,
+        min_duration_s: 0.12,
+        max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["broadcast_polish", "geometric_reveal", "scene_change"],
+        avoid_for: &["intimate_dialogue", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.checkerboard_dissolve",
+        family: "dissolve",
+        display_name: "Checkerboard Dissolve",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.55,
+        min_duration_s: 0.20,
+        max_duration_s: 2.0,
+        audio_policy: TransitionAudioPolicy::Crossfade,
+        best_for: &["tech_context", "data_visualization", "stylized_jump"],
+        avoid_for: &["intimate_dialogue", "documentary_realism"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
 ];
 
 /// Find a phase-one transition by stable id.
 pub fn lookup_builtin_transition(id: &str) -> Option<&'static BuiltinTransition> {
     BUILTIN_TRANSITIONS.iter().find(|t| t.id == id)
+}
+
+/// Backends this transition can render through. Built-ins with an
+/// FFmpeg `xfade` name advertise [`TransitionBackend::Ffmpeg`].
+/// Compositions that resolve to a [`crate::transitions::TransitionShader`]
+/// also advertise [`TransitionBackend::Glsl`] (the WGSL/wgpu path).
+/// Manifest validation rejects entries whose backends list is empty,
+/// so this is the single source of truth that keeps GPU-only luma
+/// mask transitions out of the "no backend" failure mode.
+fn declared_backends(transition: &BuiltinTransition) -> Vec<TransitionBackend> {
+    let mut backends = Vec::new();
+    if transition.ffmpeg_xfade.is_some() {
+        backends.push(TransitionBackend::Ffmpeg);
+    }
+    if let Some(composition) = builtin_transition_composition(transition.id) {
+        if resolve_composition_gpu_shader(&composition).is_some() {
+            backends.push(TransitionBackend::Glsl);
+        }
+    }
+    backends
 }
 
 /// Built-in transitions that should graduate to the stable external
@@ -1017,10 +1100,7 @@ pub fn stable_builtin_transition_manifests() -> Vec<TransitionManifest> {
             id: transition.id.into(),
             family: transition.family.into(),
             display_name: transition.display_name.into(),
-            backends: transition
-                .ffmpeg_xfade
-                .map(|_| vec![TransitionBackend::Ffmpeg])
-                .unwrap_or_default(),
+            backends: declared_backends(transition),
             default_duration_s: transition.default_duration_s,
             min_duration_s: transition.min_duration_s,
             max_duration_s: transition.max_duration_s,
@@ -1272,6 +1352,24 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
                 id: "awidat.radial".into(),
             },
         )])),
+        "awidat.clock_wipe" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::LumaMask {
+                mask_kind: "clock".into(),
+                softness: ParamCurve::Const(0.06),
+            },
+        )])),
+        "awidat.venetian_blinds_h" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::LumaMask {
+                mask_kind: "blinds_horizontal".into(),
+                softness: ParamCurve::Const(0.08),
+            },
+        )])),
+        "awidat.checkerboard_dissolve" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::LumaMask {
+                mask_kind: "checkerboard".into(),
+                softness: ParamCurve::Const(0.04),
+            },
+        )])),
         _ => None,
     }
 }
@@ -1332,7 +1430,9 @@ fn primitive_ffmpeg_xfade(op: &TransitionPrimitiveOp) -> Option<&'static str> {
         TransitionPrimitiveOp::Pixelize { .. } => Some("pixelize"),
         TransitionPrimitiveOp::Blur { .. } => Some("hblur"),
         TransitionPrimitiveOp::Opacity { .. } => Some("fade"),
-        TransitionPrimitiveOp::Shake { .. } | TransitionPrimitiveOp::ChromaticSplit { .. } => None,
+        TransitionPrimitiveOp::Shake { .. }
+        | TransitionPrimitiveOp::ChromaticSplit { .. }
+        | TransitionPrimitiveOp::LumaMask { .. } => None,
     }
 }
 
@@ -1346,7 +1446,9 @@ fn primitive_ffmpeg_priority(op: &TransitionPrimitiveOp) -> u8 {
         TransitionPrimitiveOp::Pixelize { .. } => 50,
         TransitionPrimitiveOp::Blur { .. } => 40,
         TransitionPrimitiveOp::Opacity { .. } => 30,
-        TransitionPrimitiveOp::Shake { .. } | TransitionPrimitiveOp::ChromaticSplit { .. } => 0,
+        TransitionPrimitiveOp::Shake { .. }
+        | TransitionPrimitiveOp::ChromaticSplit { .. }
+        | TransitionPrimitiveOp::LumaMask { .. } => 0,
     }
 }
 
@@ -1377,6 +1479,9 @@ fn primitive_gpu_shader(op: &TransitionPrimitiveOp) -> Option<&'static str> {
     match op {
         TransitionPrimitiveOp::Shake { .. } => Some("shake"),
         TransitionPrimitiveOp::ChromaticSplit { .. } => Some("chromatic_split"),
+        // LumaMask is GPU-only — FFmpeg `xfade` has no equivalent for
+        // these procedural mask reveals. Routed unconditionally.
+        TransitionPrimitiveOp::LumaMask { .. } => Some("luma_mask"),
         // Blur is GPU-routed because its `amount` accepts a
         // `ParamCurve` — the FFmpeg `hblur` fallback can only render
         // a constant. When the composition contains Blur alongside
@@ -1395,6 +1500,7 @@ fn primitive_gpu_priority(op: &TransitionPrimitiveOp) -> u8 {
     match op {
         TransitionPrimitiveOp::Shake { .. } => 100,
         TransitionPrimitiveOp::ChromaticSplit { .. } => 90,
+        TransitionPrimitiveOp::LumaMask { .. } => 80,
         TransitionPrimitiveOp::Blur { .. } => 50,
         TransitionPrimitiveOp::Opacity { .. } => 10,
         _ => 0,
@@ -1750,6 +1856,13 @@ fn validate_primitive_op(
         TransitionPrimitiveOp::Pixelize { block_size } => {
             validate_unit(idx, "block_size", *block_size)?;
         }
+        TransitionPrimitiveOp::LumaMask {
+            mask_kind,
+            softness,
+        } => {
+            validate_luma_mask_kind(idx, mask_kind)?;
+            validate_curve_unit(idx, "softness", softness)?;
+        }
         TransitionPrimitiveOp::Atomic { id } => {
             if !id.starts_with("awidat.") || lookup_builtin_transition(id).is_none() {
                 return Err(TransitionLookupError::InvalidSpec {
@@ -1765,6 +1878,38 @@ fn validate_primitive_op(
 
 fn validate_unit(idx: usize, field: &str, value: f64) -> Result<(), TransitionLookupError> {
     validate_range(idx, field, value, 0.0, 1.0)
+}
+
+/// Stable luma-mask kind ids the [`crate::transitions::TransitionPrimitiveOp::LumaMask`]
+/// primitive accepts. Each id maps to the integer slot the GPU shader
+/// reads from `extra_params[0]` (clock → 0, blinds_horizontal → 1,
+/// checkerboard → 2). Future image-based mask kinds will join this
+/// list with their own integer ids and a sampled-texture variant of
+/// the shader.
+pub const LUMA_MASK_KINDS: &[&str] = &["clock", "blinds_horizontal", "checkerboard"];
+
+/// Integer slot for a stable luma-mask kind id, as the GPU shader
+/// reads it. Returns `None` for unknown ids — callers should have
+/// already validated against [`LUMA_MASK_KINDS`].
+pub fn luma_mask_kind_slot(kind: &str) -> Option<u32> {
+    match kind {
+        "clock" => Some(0),
+        "blinds_horizontal" => Some(1),
+        "checkerboard" => Some(2),
+        _ => None,
+    }
+}
+
+fn validate_luma_mask_kind(idx: usize, kind: &str) -> Result<(), TransitionLookupError> {
+    if LUMA_MASK_KINDS.contains(&kind) {
+        return Ok(());
+    }
+    Err(TransitionLookupError::InvalidSpec {
+        message: format!(
+            "primitive #{idx} luma_mask kind {kind:?} is not one of {:?}",
+            LUMA_MASK_KINDS
+        ),
+    })
 }
 
 fn validate_curve_unit(
@@ -2095,6 +2240,52 @@ mod tests {
     }
 
     // Phase 3 catalog coverage tests.
+
+    #[test]
+    fn luma_mask_kinds_are_complete() {
+        // The shader's integer slots and the kind id list must stay
+        // in lockstep. If they ever drift, mask-kind selection at
+        // render time silently picks the wrong mask.
+        assert_eq!(LUMA_MASK_KINDS.len(), 3);
+        assert_eq!(luma_mask_kind_slot("clock"), Some(0));
+        assert_eq!(luma_mask_kind_slot("blinds_horizontal"), Some(1));
+        assert_eq!(luma_mask_kind_slot("checkerboard"), Some(2));
+        assert_eq!(luma_mask_kind_slot("unknown"), None);
+    }
+
+    #[test]
+    fn luma_mask_validation_rejects_unknown_kind() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::Linear,
+                op: TransitionPrimitiveOp::LumaMask {
+                    mask_kind: "spiraling_zigzag".into(),
+                    softness: ParamCurve::Const(0.1),
+                },
+            }],
+        };
+        let err = validate_transition_composition(&composition).unwrap_err();
+        assert!(err.to_string().contains("spiraling_zigzag"));
+    }
+
+    #[test]
+    fn luma_mask_routes_to_gpu_shader() {
+        // The composition lowering and GPU resolution should both
+        // agree that LumaMask is GPU-only. xfade fallback is None;
+        // gpu_shader returns "luma_mask".
+        let composition = builtin_transition_composition("awidat.clock_wipe").unwrap();
+        assert!(
+            resolve_composition_ffmpeg_xfade(&composition).is_none(),
+            "clock_wipe has no xfade fallback"
+        );
+        assert_eq!(
+            resolve_composition_gpu_shader(&composition),
+            Some("luma_mask")
+        );
+    }
 
     #[test]
     fn catalog_meets_phase_3_size_target() {

@@ -178,7 +178,7 @@ fn resolve_shader_for_id(id: &str) -> Option<TransitionShader> {
 /// the uniform. For shaders that don't consume params, this returns
 /// zeros, which is harmless.
 fn extra_params_for(id: &str, progress: f64) -> [f32; 4] {
-    use awidat_proto::transitions::TransitionPrimitiveOp;
+    use awidat_proto::transitions::{TransitionPrimitiveOp, luma_mask_kind_slot};
     let mut params = [0.0f32; 4];
     let Some(composition) = builtin_transition_composition(id) else {
         return params;
@@ -207,6 +207,16 @@ fn extra_params_for(id: &str, progress: f64) -> [f32; 4] {
             }
             TransitionPrimitiveOp::Zoom { scale } => {
                 params[0] = scale.evaluate(local) as f32;
+                return params;
+            }
+            TransitionPrimitiveOp::LumaMask {
+                mask_kind,
+                softness,
+            } => {
+                // params.x = integer kind slot (cast back in WGSL),
+                // params.y = current softness from the curve.
+                params[0] = luma_mask_kind_slot(&mask_kind).unwrap_or(0) as f32;
+                params[1] = softness.evaluate(local) as f32;
                 return params;
             }
             _ => {}

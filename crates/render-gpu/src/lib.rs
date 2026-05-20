@@ -32,6 +32,7 @@ const CROSS_DISSOLVE_FS_WGSL: &str = include_str!("shaders/cross_dissolve.wgsl")
 const SHAKE_FS_WGSL: &str = include_str!("shaders/shake.wgsl");
 const CHROMATIC_SPLIT_FS_WGSL: &str = include_str!("shaders/chromatic_split.wgsl");
 const BLUR_FS_WGSL: &str = include_str!("shaders/blur.wgsl");
+const LUMA_MASK_FS_WGSL: &str = include_str!("shaders/luma_mask.wgsl");
 
 /// wgpu requires every row of a texture-to-buffer copy to start on a
 /// 256-byte boundary. RGBA8 is 4 bytes per pixel, so we pad each row
@@ -88,6 +89,13 @@ pub enum TransitionShader {
     /// [`awidat_proto::transitions::ParamCurve`] evaluated at every
     /// progress value.
     Blur,
+    /// Luma-mask reveal. Reads `extra_params[0]` as the integer mask
+    /// kind id (0 = clock wipe, 1 = venetian blinds horizontal,
+    /// 2 = checkerboard dissolve) and `extra_params[1]` as the edge
+    /// softness in `[0.0, 1.0]`. Single shader handles the whole
+    /// procedural mask family; image-based masks (future Kdenlive
+    /// ports) can add a sampled-texture variant later.
+    LumaMask,
 }
 
 impl TransitionShader {
@@ -97,6 +105,7 @@ impl TransitionShader {
             Self::Shake => SHAKE_FS_WGSL,
             Self::ChromaticSplit => CHROMATIC_SPLIT_FS_WGSL,
             Self::Blur => BLUR_FS_WGSL,
+            Self::LumaMask => LUMA_MASK_FS_WGSL,
         }
     }
 
@@ -106,6 +115,7 @@ impl TransitionShader {
             Self::Shake => "shake",
             Self::ChromaticSplit => "chromatic_split",
             Self::Blur => "blur",
+            Self::LumaMask => "luma_mask",
         }
     }
 
@@ -119,6 +129,7 @@ impl TransitionShader {
             "shake" => Some(Self::Shake),
             "chromatic_split" => Some(Self::ChromaticSplit),
             "blur" => Some(Self::Blur),
+            "luma_mask" => Some(Self::LumaMask),
             _ => None,
         }
     }
@@ -984,6 +995,67 @@ mod tests {
                 "shader {shader:?}: preview must match export bit-for-bit"
             );
         }
+    }
+
+    #[test]
+    fn luma_mask_kinds_produce_different_renders() {
+        // Each procedural mask kind paints a different reveal shape.
+        // At mid-progress with the same inputs, the three masks
+        // should produce visibly different blends — if any two
+        // collapse to the same output we know the kind selector
+        // isn't actually doing anything in the shader.
+        let Some(renderer) = renderer_or_skip(TransitionShader::LumaMask) else {
+            return;
+        };
+        // Non-uniform inputs so the mask actually has something to
+        // reveal.
+        let width = 32u32;
+        let height = 32u32;
+        let mut from = vec![0u8; (width * height * 4) as usize];
+        for y in 0..height {
+            for x in 0..width {
+                let idx = ((y * width + x) * 4) as usize;
+                from[idx] = ((x * 8) % 256) as u8; // diagonal red ramp
+                from[idx + 1] = 0;
+                from[idx + 2] = 0;
+                from[idx + 3] = 255;
+            }
+        }
+        let to = solid(width, height, [0, 0, 255, 255]);
+        let progress = 0.5;
+        let make_params = |kind_slot: f32| FrameParams {
+            width,
+            height,
+            progress,
+            extra_params: [kind_slot, 0.04, 0.0, 0.0],
+        };
+        let clock = renderer.render_frame(&from, &to, make_params(0.0)).unwrap();
+        let blinds = renderer.render_frame(&from, &to, make_params(1.0)).unwrap();
+        let checker = renderer.render_frame(&from, &to, make_params(2.0)).unwrap();
+        // Any two of the three should differ on at least 5% of
+        // pixels — same-kind renders would be identical, so this
+        // catches a regression where the selector falls through.
+        let diff_ratio = |a: &[u8], b: &[u8]| -> f64 {
+            let mut diff = 0usize;
+            for i in (0..a.len()).step_by(4) {
+                if a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2] {
+                    diff += 1;
+                }
+            }
+            diff as f64 / (a.len() / 4) as f64
+        };
+        assert!(
+            diff_ratio(&clock, &blinds) > 0.05,
+            "clock vs blinds too similar at progress=0.5"
+        );
+        assert!(
+            diff_ratio(&clock, &checker) > 0.05,
+            "clock vs checkerboard too similar"
+        );
+        assert!(
+            diff_ratio(&blinds, &checker) > 0.05,
+            "blinds vs checkerboard too similar"
+        );
     }
 
     #[test]
