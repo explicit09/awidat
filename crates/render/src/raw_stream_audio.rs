@@ -93,7 +93,9 @@ pub async fn compose_audio(
             });
         }
         if t.duration_s <= 0.0 || !t.duration_s.is_finite() {
-            return Err(AudioError::BadConfig("transition duration_s must be positive"));
+            return Err(AudioError::BadConfig(
+                "transition duration_s must be positive",
+            ));
         }
         transition_by_from[t.from_segment_index] = Some(t);
     }
@@ -101,7 +103,10 @@ pub async fn compose_audio(
     let filter = build_audio_filter_complex(segments, &transition_by_from)?;
     let bin = ffmpeg_path()?;
     let mut cmd = Command::new(bin);
-    cmd.arg("-hide_banner").arg("-loglevel").arg("error").arg("-y");
+    cmd.arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y");
     for seg in segments {
         cmd.arg("-ss").arg(format!("{}", seg.source_start_s));
         cmd.arg("-t").arg(format!("{}", seg.duration_s));
@@ -335,7 +340,9 @@ mod tests {
 
     #[tokio::test]
     async fn compose_audio_rejects_empty_segments() {
-        let err = compose_audio(&[], &[], Path::new("/tmp/x.aac")).await.unwrap_err();
+        let err = compose_audio(&[], &[], Path::new("/tmp/x.aac"))
+            .await
+            .unwrap_err();
         assert!(matches!(err, AudioError::BadConfig(_)));
     }
 
@@ -494,7 +501,9 @@ mod tests {
             .unwrap();
         assert!(a_status.success());
 
-        mux_video_and_audio(&video, &audio, &out).await.expect("mux");
+        mux_video_and_audio(&video, &audio, &out)
+            .await
+            .expect("mux");
         let duration = probe_duration_s(&out).await.unwrap_or(0.0);
         assert!(
             (0.95..=1.10).contains(&duration),

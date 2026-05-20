@@ -407,8 +407,8 @@ impl RawStreamComposer {
                 0.0
             };
             let outgoing_duration_s = outgoing_transition.map(|t| t.duration_s).unwrap_or(0.0);
-            let pure_duration = (seg.duration_s - incoming_duration_s - outgoing_duration_s)
-                .max(0.0);
+            let pure_duration =
+                (seg.duration_s - incoming_duration_s - outgoing_duration_s).max(0.0);
             let pure_frames = ((pure_duration * self.fps as f64).round() as u32).max(0);
 
             // Emit pure frames from the current segment.
@@ -772,23 +772,23 @@ mod tests {
                 from_segment_index: 0,
                 duration_s: 0.4,
                 shader: TransitionShader::CrossDissolve,
-            param_curves: [
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-            ],
+                param_curves: [
+                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                ],
             },
             RawStreamTransition {
                 from_segment_index: 1,
                 duration_s: 0.4,
                 shader: TransitionShader::CrossDissolve,
-            param_curves: [
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-                awidat_proto::transitions::ParamCurve::Const(0.0),
-            ],
+                param_curves: [
+                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                    awidat_proto::transitions::ParamCurve::Const(0.0),
+                ],
             },
         ];
         let composer = RawStreamComposer::new(32, 32, 30).unwrap();
@@ -963,9 +963,7 @@ mod tests {
         let middle = std_dev_red(&frames[middle_idx]);
         let late = std_dev_red(&frames[frames.len().saturating_sub(2)]);
 
-        eprintln!(
-            "blur std-dev: early={early:.2} middle={middle:.2} late={late:.2}"
-        );
+        eprintln!("blur std-dev: early={early:.2} middle={middle:.2} late={late:.2}");
         // Sharper (lower-blur) frames have higher std dev because the
         // test pattern's hard color boundaries survive. The peak-blur
         // frame at index ~15 should have measurably lower std dev

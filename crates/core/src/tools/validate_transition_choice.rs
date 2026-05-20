@@ -319,7 +319,8 @@ mod tests {
             Some("wrong_direction")
         );
         assert_eq!(
-            body.pointer("/predicted_direction").and_then(|v| v.as_str()),
+            body.pointer("/predicted_direction")
+                .and_then(|v| v.as_str()),
             Some("left")
         );
     }

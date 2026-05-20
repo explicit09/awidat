@@ -391,7 +391,9 @@ mod tests {
         let red = dir.path().join("red.mp4");
         synth_color_mp4(&red, "red", 32, 32, 0.5, 30).await;
 
-        let mut provider = FrameProvider::open(&red, 0.0, 0.5, 32, 32, 30).await.unwrap();
+        let mut provider = FrameProvider::open(&red, 0.0, 0.5, 32, 32, 30)
+            .await
+            .unwrap();
         let mut count = 0;
         while provider.next_frame().await.unwrap().is_some() {
             count += 1;
@@ -414,7 +416,9 @@ mod tests {
         let red = dir.path().join("red.mp4");
         synth_color_mp4(&red, "red", 16, 16, 0.3, 30).await;
 
-        let mut provider = FrameProvider::open(&red, 0.0, 0.3, 16, 16, 30).await.unwrap();
+        let mut provider = FrameProvider::open(&red, 0.0, 0.3, 16, 16, 30)
+            .await
+            .unwrap();
         let frame = provider
             .next_frame()
             .await
@@ -441,7 +445,9 @@ mod tests {
         let out = dir.path().join("roundtrip.mp4");
         synth_color_mp4(&red, "red", 32, 32, 0.5, 30).await;
 
-        let mut provider = FrameProvider::open(&red, 0.0, 0.5, 32, 32, 30).await.unwrap();
+        let mut provider = FrameProvider::open(&red, 0.0, 0.5, 32, 32, 30)
+            .await
+            .unwrap();
         let mut encoder = FrameEncoder::open(&out, 32, 32, 30).await.unwrap();
 
         let mut frames_written = 0usize;

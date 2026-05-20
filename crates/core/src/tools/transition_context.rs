@@ -701,7 +701,8 @@ mod tests {
             Some(0.7)
         );
         assert!(
-            !body.pointer("/missing_signals")
+            !body
+                .pointer("/missing_signals")
                 .and_then(|v| v.as_array())
                 .is_some_and(|signals| signals.iter().any(|s| s == "motion_direction"))
         );

@@ -737,7 +737,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 0.5,
         audio_policy: TransitionAudioPolicy::Cut,
-        best_for: &["motion_cover", "hide_motion_jump", "screen_direction_unknown"],
+        best_for: &[
+            "motion_cover",
+            "hide_motion_jump",
+            "screen_direction_unknown",
+        ],
         avoid_for: &["static_dialogue", "slow_emotional_moment", "repeated_use"],
         requires_motion_continuity: true,
         motion_alignment: None,
@@ -752,7 +756,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 0.5,
         audio_policy: TransitionAudioPolicy::Cut,
-        best_for: &["fast_screen_direction", "pass_by_motion", "hide_motion_jump"],
+        best_for: &[
+            "fast_screen_direction",
+            "pass_by_motion",
+            "hide_motion_jump",
+        ],
         avoid_for: &["static_dialogue", "slow_emotional_moment", "repeated_use"],
         requires_motion_continuity: true,
         motion_alignment: Some(MotionAlignment::Left),
@@ -767,7 +775,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 0.5,
         audio_policy: TransitionAudioPolicy::Cut,
-        best_for: &["fast_screen_direction", "pass_by_motion", "hide_motion_jump"],
+        best_for: &[
+            "fast_screen_direction",
+            "pass_by_motion",
+            "hide_motion_jump",
+        ],
         avoid_for: &["static_dialogue", "slow_emotional_moment", "repeated_use"],
         requires_motion_continuity: true,
         motion_alignment: Some(MotionAlignment::Right),
@@ -842,8 +854,16 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.03,
         max_duration_s: 0.18,
         audio_policy: TransitionAudioPolicy::Cut,
-        best_for: &["occlusion_or_dark_frame", "hide_camera_reposition", "mask_cut"],
-        avoid_for: &["visible_mismatch", "no_occlusion_signal", "dialogue_emphasis"],
+        best_for: &[
+            "occlusion_or_dark_frame",
+            "hide_camera_reposition",
+            "mask_cut",
+        ],
+        avoid_for: &[
+            "visible_mismatch",
+            "no_occlusion_signal",
+            "dialogue_emphasis",
+        ],
         requires_motion_continuity: false,
         motion_alignment: None,
         color_sensitivity: ColorSensitivity::AvoidColorShift,
@@ -903,7 +923,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
-        best_for: &["graphic_movement", "ascending_motion", "related_scene_change"],
+        best_for: &[
+            "graphic_movement",
+            "ascending_motion",
+            "related_scene_change",
+        ],
         avoid_for: &["intimate_dialogue"],
         requires_motion_continuity: false,
         motion_alignment: Some(MotionAlignment::Up),
@@ -918,7 +942,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
-        best_for: &["graphic_movement", "descending_motion", "related_scene_change"],
+        best_for: &[
+            "graphic_movement",
+            "descending_motion",
+            "related_scene_change",
+        ],
         avoid_for: &["intimate_dialogue"],
         requires_motion_continuity: false,
         motion_alignment: Some(MotionAlignment::Down),
@@ -1351,7 +1379,6 @@ pub fn validate_transition_manifests(
     Ok(())
 }
 
-
 /// Return the built-in recipe for a phase-one transition when it can
 /// be represented as stable composition data. Some transitions remain
 /// atomic while the phase-one renderer exports them through FFmpeg
@@ -1660,16 +1687,19 @@ fn primitive_ffmpeg_priority(op: &TransitionPrimitiveOp) -> u8 {
 ///
 /// Priority: shake > chromatic_split > opacity → cross_dissolve.
 /// Other primitives fall through to xfade (return `None` from here).
-pub fn resolve_composition_gpu_shader(
-    composition: &TransitionComposition,
-) -> Option<&'static str> {
+pub fn resolve_composition_gpu_shader(composition: &TransitionComposition) -> Option<&'static str> {
     composition
         .primitives
         .iter()
         .enumerate()
         .filter_map(|(idx, primitive)| {
-            primitive_gpu_shader(&primitive.op)
-                .map(|shader| (primitive_gpu_priority(&primitive.op), std::cmp::Reverse(idx), shader))
+            primitive_gpu_shader(&primitive.op).map(|shader| {
+                (
+                    primitive_gpu_priority(&primitive.op),
+                    std::cmp::Reverse(idx),
+                    shader,
+                )
+            })
         })
         .max_by_key(|(priority, reverse_idx, _)| (*priority, *reverse_idx))
         .map(|(_, _, shader)| shader)
@@ -2393,13 +2423,11 @@ mod tests {
                 end: 1.0,
                 easing: TransitionEasing::Linear,
                 op: TransitionPrimitiveOp::Blur {
-                    amount: ParamCurve::Keyframes(vec![
-                        Keyframe {
-                            t: 1.5,
-                            v: 0.5,
-                            easing: TransitionEasing::Linear,
-                        },
-                    ]),
+                    amount: ParamCurve::Keyframes(vec![Keyframe {
+                        t: 1.5,
+                        v: 0.5,
+                        easing: TransitionEasing::Linear,
+                    }]),
                     direction: None,
                 },
             }],
@@ -2601,7 +2629,8 @@ mod tests {
     #[test]
     fn catalog_covers_every_intent_class() {
         use std::collections::HashSet;
-        let mut by_family: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut by_family: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
         for transition in BUILTIN_TRANSITIONS {
             *by_family.entry(transition.family).or_insert(0) += 1;
         }
@@ -2609,14 +2638,14 @@ mod tests {
         // transitions, so the agent has real choice rather than a
         // forced single option.
         let required_families: HashSet<&str> = [
-            "dissolve",      // time-pass
-            "fade",          // time-pass
-            "wipe",          // scene-change
-            "slide",         // scene-change
-            "flash",         // energy-shift
-            "motion_blur",   // energy-shift
-            "zoom",          // energy-shift
-            "iris",          // scene-change / stylistic
+            "dissolve",    // time-pass
+            "fade",        // time-pass
+            "wipe",        // scene-change
+            "slide",       // scene-change
+            "flash",       // energy-shift
+            "motion_blur", // energy-shift
+            "zoom",        // energy-shift
+            "iris",        // scene-change / stylistic
         ]
         .into_iter()
         .collect();

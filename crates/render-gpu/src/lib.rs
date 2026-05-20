@@ -670,9 +670,9 @@ pub fn encode_rgba_to_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8
         let mut encoder = png::Encoder::new(&mut buf, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|e| {
-            GpuError::Readback(format!("png header: {e}"))
-        })?;
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| GpuError::Readback(format!("png header: {e}")))?;
         writer
             .write_image_data(rgba)
             .map_err(|e| GpuError::Readback(format!("png write: {e}")))?;
@@ -982,9 +982,7 @@ mod tests {
             extra_params: [0.0; 4],
         };
         let export = renderer.render_frame(&from, &to, params).unwrap();
-        let preview = renderer
-            .render_preview_frame(&from, &to, params)
-            .unwrap();
+        let preview = renderer.render_preview_frame(&from, &to, params).unwrap();
         assert_eq!(
             export, preview,
             "preview and export paths must produce bit-identical RGBA bytes"
@@ -1014,9 +1012,7 @@ mod tests {
                 extra_params: [0.0; 4],
             };
             let export = renderer.render_frame(&from, &to, params).unwrap();
-            let preview = renderer
-                .render_preview_frame(&from, &to, params)
-                .unwrap();
+            let preview = renderer.render_preview_frame(&from, &to, params).unwrap();
             assert_eq!(
                 export, preview,
                 "shader {shader:?}: preview must match export bit-for-bit"

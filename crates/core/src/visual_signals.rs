@@ -75,7 +75,10 @@ pub struct BoundaryVisualSignals {
 impl BoundaryVisualSignals {
     /// Classify the motion-direction relationship between sides.
     pub fn motion_match(&self) -> MotionMatch {
-        match (self.outgoing.motion_direction, self.incoming.motion_direction) {
+        match (
+            self.outgoing.motion_direction,
+            self.incoming.motion_direction,
+        ) {
             (Some(out_dir), Some(in_dir)) if out_dir.agrees_with(in_dir) => MotionMatch::Aligned,
             (Some(out_dir), Some(in_dir)) if out_dir.opposes(in_dir) => MotionMatch::Opposed,
             (Some(_), Some(_)) => MotionMatch::Orthogonal,
@@ -202,7 +205,10 @@ mod tests {
         );
         let signals = load_boundary_signals(dir.path(), "raw_a", 2.0, "raw_b", 1.0);
         assert_eq!(signals.outgoing.motion_magnitude, Some(0.6));
-        assert_eq!(signals.outgoing.motion_direction, Some(MotionAlignment::Left));
+        assert_eq!(
+            signals.outgoing.motion_direction,
+            Some(MotionAlignment::Left)
+        );
         assert_eq!(signals.incoming.motion_magnitude, Some(0.4));
         assert_eq!(signals.motion_match(), MotionMatch::Aligned);
         assert_eq!(signals.motion_match_confidence(), Some(0.4));
