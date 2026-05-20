@@ -7,6 +7,11 @@ export function cachedMediaStreamUrl(path: string): string | undefined {
   return urlCache.get(path);
 }
 
+export function clearMediaStreamUrlCache(): void {
+  urlCache.clear();
+  inflight.clear();
+}
+
 export async function mediaStreamUrl(path: string): Promise<string> {
   const cached = urlCache.get(path);
   if (cached) return cached;

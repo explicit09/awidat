@@ -7,7 +7,6 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::State;
@@ -177,6 +176,22 @@ fn ensure_media_server(
     Ok((port, files))
 }
 
+pub(crate) fn clear_media_server_files(state: &crate::state::AwidatState) -> Result<(), String> {
+    let slot = state
+        .media_server
+        .inner
+        .lock()
+        .map_err(|_| "media server lock poisoned".to_string())?;
+    if let Some(inner) = slot.as_ref() {
+        inner
+            .files
+            .lock()
+            .map_err(|_| "media server lock poisoned".to_string())?
+            .clear();
+    }
+    Ok(())
+}
+
 fn handle_media_connection(mut stream: TcpStream, files: Arc<StdMutex<HashMap<String, PathBuf>>>) {
     let mut req = [0_u8; 8192];
     let Ok(n) = stream.read(&mut req) else {
@@ -310,11 +325,7 @@ fn write_simple_response(stream: &mut TcpStream, status: &str, content_type: &st
 }
 
 fn media_token(path: &Path) -> String {
-    let since_epoch = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{:x}-{:x}", since_epoch, stable_path_hash(path))
+    format!("{:016x}", stable_path_hash64(path))
 }
 
 /// Compute the absolute proxy-mp4 path for an asset path.
@@ -346,6 +357,15 @@ fn stable_path_hash(path: &Path) -> u32 {
     for byte in path.to_string_lossy().as_bytes() {
         hash ^= u32::from(*byte);
         hash = hash.wrapping_mul(0x01000193);
+    }
+    hash
+}
+
+fn stable_path_hash64(path: &Path) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x00000100000001b3);
     }
     hash
 }
@@ -575,6 +595,13 @@ mod tests {
     fn proxy_path_for_asset_id_returns_none_when_asset_missing() {
         let dir = tempfile::tempdir().unwrap();
         assert!(proxy_path_for_asset_id(dir.path(), "raw/nonexistent.mp4").is_none());
+    }
+
+    #[test]
+    fn media_token_is_stable_for_same_path() {
+        let path = PathBuf::from("/tmp/proj/.awidat/proxies/foo.mp4");
+
+        assert_eq!(media_token(&path), media_token(&path));
     }
 
     #[test]
