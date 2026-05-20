@@ -25,10 +25,11 @@ use awidat_core::tools::{
     find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, load_skill::LoadSkillTool,
-    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
-    plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
-    plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_looks::ListLooksTool,
+    load_skill::LoadSkillTool, plan_look_regions::PlanLookRegionsTool,
+    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
+    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
+    poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transition_context::TransitionContextTool,
@@ -183,6 +184,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(AssessEditQualityTool));
     registry.register(Arc::new(InspectClipTool));
     registry.register(Arc::new(ListAssetsTool));
+    registry.register(Arc::new(ListLooksTool));
     registry.register(Arc::new(PollRenderTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));

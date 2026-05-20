@@ -162,8 +162,9 @@ look or when a finishing pass clearly calls for one.
 The set of named looks the planner can emit lives in
 `looks.toml` next to this file. Each entry carries the look's
 display name, description, default input/output color space,
-default cube size, recommended `strength` range, and tags. Read
-that file before reasoning about which look to plan — the catalog
+default cube size, recommended `strength` range, and tags. Call
+the `list_looks` tool (no arguments) to read it as structured
+JSON before reasoning about which look to plan — the catalog
 is the source of truth, the planner script validates against it,
 and the agent-facing `awidat.color_pipeline` effect accepts the
 same color-space ids.
