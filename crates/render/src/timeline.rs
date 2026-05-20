@@ -2969,8 +2969,15 @@ fn lut3d_filter_block(
             let pre = format!("[lut_pre_{suffix}]");
             let lin = format!("[lut_in_{suffix}]");
             let lout = format!("[lut_out_{suffix}]");
+            // FFmpeg's `blend` filter treats the FIRST input as the
+            // "top" layer and applies `all_opacity` to it:
+            //   output = top * all_opacity + bottom * (1 - all_opacity)
+            // We want `strength` to mean "fraction of the LUT to
+            // keep" — strength=1 → full LUT, strength=0 → bypass.
+            // So the LUT-applied stream is FIRST (`lout`), with the
+            // un-graded original as the bottom (`pre`).
             format!(
-                "{in_label}split{pre}{lin};{lin}{core}{lout};{pre}{lout}blend=all_opacity={s}{out_label}",
+                "{in_label}split{pre}{lin};{lin}{core}{lout};{lout}{pre}blend=all_opacity={s}{out_label}",
                 s = fmt_filter_num(s),
             )
         }
@@ -6202,9 +6209,42 @@ mod tests {
         );
         assert!(
             plan.filter_complex
-                .contains("[lut_pre_0][lut_out_0]blend=all_opacity=0.6[lv0]"),
-            "expected blend with strength, got: {}",
+                .contains("[lut_out_0][lut_pre_0]blend=all_opacity=0.6[lv0]"),
+            "expected blend with LUT-as-top semantics (strength={{0.6}} → 60% LUT), got: {}",
             plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn lut3d_filter_block_puts_lut_as_blend_top_input() {
+        // FFmpeg's `blend` filter applies `all_opacity` to the
+        // FIRST input. For `strength=X` to mean "X fraction of the
+        // LUT visible," the LUT-applied stream must be first.
+        // Regression guard against the inverted ordering that
+        // shipped before the P1 fix.
+        let block = lut3d_filter_block(
+            "[base]",
+            "[done]",
+            "t",
+            Path::new("/luts/x.cube"),
+            Some("tetrahedral"),
+            Some(0.4),
+        );
+        let blend_idx = block
+            .find("blend=all_opacity=")
+            .expect("blend filter must be present at strength<1");
+        let blend_clause = &block[..blend_idx];
+        let lut_label = "[lut_out_t]";
+        let pre_label = "[lut_pre_t]";
+        let lut_pos = blend_clause
+            .rfind(lut_label)
+            .expect("LUT-out label must precede blend");
+        let pre_pos = blend_clause
+            .rfind(pre_label)
+            .expect("pre-LUT label must precede blend");
+        assert!(
+            lut_pos < pre_pos,
+            "LUT-out must be the first (top) blend input — saw lut at {lut_pos}, pre at {pre_pos} in: {block}",
         );
     }
 

@@ -202,8 +202,8 @@ fn project_with_partial_lut_strength_emits_split_and_blend() {
         "expected split fork in argv, got: {cmd}",
     );
     assert!(
-        cmd.contains("blend=all_opacity=0.6"),
-        "expected blend with strength in argv, got: {cmd}",
+        cmd.contains("[lut_out_0][lut_pre_0]blend=all_opacity=0.6"),
+        "expected blend with LUT-as-top (strength=0.6 → 60% LUT) in argv, got: {cmd}",
     );
 }
 

@@ -4474,7 +4474,7 @@ fn apply_set_effect(
             message: format!("set_effect: {e}"),
         })?;
     if definition.id == LUT_EFFECT_NAME {
-        normalize_lut_metadata(index, &mut metadata)?;
+        normalize_lut_metadata(index, &mut metadata, ctx)?;
     }
     if definition.id == COLOR_PIPELINE_EFFECT_NAME {
         normalize_color_pipeline_metadata(index, &mut metadata, ctx)?;
@@ -4661,7 +4661,7 @@ fn apply_lut(
     let interpolation = normalize_lut_interpolation(index, interpolation)?;
     let strength = normalize_lut_strength(index, strength)?;
     if let Some(root) = ctx.project_root() {
-        validate_lut_contents(index, root, &lut_path)?;
+        validate_lut_contents(index, root, &lut_path, ExpectedLutKind::ThreeD)?;
     }
     let locator = required_locator(index, locator)?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
@@ -4731,6 +4731,7 @@ fn apply_remove_lut(
 fn normalize_lut_metadata(
     index: usize,
     metadata: &mut serde_json::Map<String, serde_json::Value>,
+    ctx: &AnchorContext,
 ) -> Result<(), ApplyError> {
     let lut_path = metadata
         .get("lut_path")
@@ -4740,6 +4741,14 @@ fn normalize_lut_metadata(
             message: "set_effect: awidat.lut requires string lut_path".into(),
         })?;
     let normalized_path = normalize_lut_path(index, lut_path)?;
+    // Mirror apply_lut: when the project root is known, parse the
+    // file so a malformed `.cube` or `.3dl` fails at apply time
+    // rather than mid-render. Without this, agents could route a
+    // bad LUT through `Set Effect { effect: awidat.lut }` and skip
+    // the validation that `Apply LUT` runs.
+    if let Some(root) = ctx.project_root() {
+        validate_lut_contents(index, root, &normalized_path, ExpectedLutKind::ThreeD)?;
+    }
     metadata.insert(
         "lut_path".to_string(),
         serde_json::Value::String(normalized_path),
@@ -4850,13 +4859,19 @@ fn normalize_color_pipeline_metadata(
         }
     }
 
-    for slot in [
-        "input_transform_lut",
-        "shaper_lut",
-        "look_lut",
-        "output_transform_lut",
-    ] {
-        let Some(value) = metadata.get(slot).and_then(serde_json::Value::as_str) else {
+    // Each slot expects a particular LUT kind. Render lowers
+    // `shaper_lut` with FFmpeg's `lut1d` and the others with
+    // `lut3d`; validating the kind here means a `.cube` 3D LUT
+    // stamped on `shaper_lut` is rejected at apply time instead of
+    // crashing FFmpeg mid-render.
+    let slot_kinds: &[(&str, ExpectedLutKind)] = &[
+        ("input_transform_lut", ExpectedLutKind::ThreeD),
+        ("shaper_lut", ExpectedLutKind::OneD),
+        ("look_lut", ExpectedLutKind::ThreeD),
+        ("output_transform_lut", ExpectedLutKind::ThreeD),
+    ];
+    for (slot, kind) in slot_kinds {
+        let Some(value) = metadata.get(*slot).and_then(serde_json::Value::as_str) else {
             continue;
         };
         let normalized = normalize_lut_path(index, value).map_err(|err| {
@@ -4873,6 +4888,15 @@ fn normalize_color_pipeline_metadata(
                 },
             }
         })?;
+        if let Some(root) = ctx.project_root() {
+            validate_lut_contents(index, root, &normalized, *kind).map_err(|err| match err {
+                ApplyError::Invalid { message, .. } => ApplyError::Invalid {
+                    index,
+                    message: format!("set_effect: awidat.color_pipeline {slot}: {message}"),
+                },
+                other => other,
+            })?;
+        }
         metadata.insert(slot.to_string(), serde_json::Value::String(normalized));
     }
 
@@ -4931,14 +4955,9 @@ fn normalize_color_pipeline_metadata(
         });
     }
 
-    // If we have a project root and the look LUT is a `.cube`,
-    // parse it now to surface structured errors at apply time.
-    if let (Some(root), Some(lut_path)) = (
-        ctx.project_root(),
-        metadata.get("look_lut").and_then(serde_json::Value::as_str),
-    ) {
-        validate_lut_contents(index, root, lut_path)?;
-    }
+    // Look LUT content validation already ran above in the
+    // per-slot loop. (The redundant pass that used to live here
+    // would have invoked `validate_lut_contents` a second time.)
     Ok(())
 }
 
@@ -4995,28 +5014,55 @@ fn normalize_lut_strength(index: usize, strength: Option<f64>) -> Result<Option<
     Ok(Some(value))
 }
 
-/// Parse the referenced `.cube` and surface structured errors at
-/// apply time. Missing files are still allowed here — `render`
-/// catches those with its own `MissingLut` error so the existing
-/// "stamp now, render later" contract is preserved.
+/// Which LUT kind a slot expects. The legacy `awidat.lut` effect
+/// and most `awidat.color_pipeline` LUT slots are 3D; only the
+/// `shaper_lut` slot wants a 1D table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpectedLutKind {
+    /// 3D LUT (cube). Default for IDT/look/ODT slots.
+    ThreeD,
+    /// 1D LUT (per-channel response curve). Shaper slot only.
+    OneD,
+}
+
+/// Extensions awidat knows to always carry 3D data — listing one
+/// of these in a 1D slot is rejected at apply time before render.
+const THREE_D_ONLY_LUT_EXTENSIONS: &[&str] = &["3dl", "dat", "m3d"];
+
+/// Parse the referenced LUT and surface structured errors at apply
+/// time. Missing files are still allowed here — `render` catches
+/// those with its own `MissingLut` error so the existing "stamp
+/// now, render later" contract is preserved.
+///
+/// `expected` selects which kind of LUT the slot wants; mismatches
+/// (e.g. a 3D `.cube` in a 1D slot) are rejected with a clear
+/// message that tells the agent which slot and which kind. For
+/// extensions awidat doesn't yet parse (`.csp`, `.dat`, `.m3d`,
+/// `.look`), the kind check is extension-only — `THREE_D_ONLY_LUT_EXTENSIONS`
+/// gets rejected in 1D slots, everything else falls through.
 fn validate_lut_contents(
     index: usize,
     project_root: &std::path::Path,
     lut_path: &str,
+    expected: ExpectedLutKind,
 ) -> Result<(), ApplyError> {
     let full = project_root.join(lut_path);
     let extension = full
         .extension()
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase);
-    // Parsers we have today: `.cube` (most common, the only format
-    // our generator produces) and `.3dl` (Lustre/Quantel/AE). Other
-    // extensions remain passthrough — FFmpeg's `lut3d` accepts
-    // them, and adding parsers without a real asset would be
-    // speculative.
     let Some(ext) = extension.as_deref() else {
         return Ok(());
     };
+    // Extension-only kind check for formats we don't parse yet.
+    if matches!(expected, ExpectedLutKind::OneD) && THREE_D_ONLY_LUT_EXTENSIONS.contains(&ext) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "apply_lut: {lut_path:?} is a .{ext} (3D-only format) but the slot expects a 1D LUT"
+            ),
+        });
+    }
     if !matches!(ext, "cube" | "3dl") {
         return Ok(());
     }
@@ -5039,9 +5085,20 @@ fn validate_lut_contents(
             });
         }
     };
-    let parse_result = match ext {
-        "cube" => awidat_lut::parse_cube_3d(text).map(|_| ()),
-        "3dl" => awidat_lut::parse_3dl(text).map(|_| ()),
+    let parse_result = match (ext, expected) {
+        ("cube", ExpectedLutKind::ThreeD) => awidat_lut::parse_cube_3d(text).map(|_| ()),
+        ("cube", ExpectedLutKind::OneD) => awidat_lut::parse_cube_1d(text).map(|_| ()),
+        ("3dl", ExpectedLutKind::ThreeD) => awidat_lut::parse_3dl(text).map(|_| ()),
+        // `.3dl` in a 1D slot was rejected above on extension; this
+        // arm is unreachable but keeps the match exhaustive.
+        ("3dl", ExpectedLutKind::OneD) => {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "apply_lut: {lut_path:?} is .3dl (always 3D) but the slot expects 1D"
+                ),
+            });
+        }
         _ => return Ok(()),
     };
     parse_result.map_err(|err| ApplyError::Invalid {
@@ -9271,6 +9328,111 @@ mod tests {
         assert!(
             matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("strength")),
             "expected strength out-of-range error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn set_effect_lut_validates_cube_contents() {
+        // P3: stamping `awidat.lut` through `Set Effect` must run
+        // the same content-parse as `Apply LUT`. Previously the
+        // SetEffect path skipped `validate_lut_contents`, so a
+        // malformed LUT could sit on a clip until render time.
+        use crate::edl::op::EdlOp;
+        let tl = timeline_with_three_clips();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("luts")).unwrap();
+        std::fs::write(
+            dir.path().join("luts/broken.cube"),
+            "LUT_3D_SIZE 3\n0.0 0.0 0.0\n",
+        )
+        .unwrap();
+        let ctx = AnchorContext::with_project_root(dir.path());
+
+        let mut params = serde_json::Map::new();
+        params.insert("lut_path".into(), serde_json::json!("luts/broken.cube"));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.lut".into(),
+                params,
+                rationale: None,
+            }],
+        };
+        let err = apply(&tl, &env, &ctx).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("not a valid .cube LUT")),
+            "expected SetEffect path to surface .cube parse error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn color_pipeline_rejects_3d_cube_in_shaper_slot() {
+        // P2: shaper_lut expects 1D — a 3D `.cube` must be rejected
+        // at apply time rather than crashing FFmpeg's `lut1d`
+        // filter mid-render.
+        use crate::edl::op::EdlOp;
+        let tl = timeline_with_three_clips();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("luts")).unwrap();
+        // Minimal valid 2³ cube — succeeds as a 3D LUT.
+        let cube_3d = "LUT_3D_SIZE 2\n\
+                       0 0 0\n1 0 0\n0 1 0\n1 1 0\n\
+                       0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        std::fs::write(dir.path().join("luts/shaper.cube"), cube_3d).unwrap();
+        let ctx = AnchorContext::with_project_root(dir.path());
+
+        let mut params = serde_json::Map::new();
+        params.insert("clip_input_space".into(), serde_json::json!("arri_logc4"));
+        params.insert("shaper_lut".into(), serde_json::json!("luts/shaper.cube"));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_pipeline".into(),
+                params,
+                rationale: None,
+            }],
+        };
+        let err = apply(&tl, &env, &ctx).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("shaper_lut")),
+            "expected shaper_lut slot to reject 3D .cube, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn color_pipeline_rejects_3dl_in_shaper_slot() {
+        // P2: .3dl is always 3D, so it's rejected in the 1D slot
+        // on extension alone (no file read needed).
+        use crate::edl::op::EdlOp;
+        let tl = timeline_with_three_clips();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("luts")).unwrap();
+        // The file content doesn't matter — the extension check
+        // catches this before parsing.
+        std::fs::write(dir.path().join("luts/shaper.3dl"), b"").unwrap();
+        let ctx = AnchorContext::with_project_root(dir.path());
+
+        let mut params = serde_json::Map::new();
+        params.insert("clip_input_space".into(), serde_json::json!("arri_logc4"));
+        params.insert("shaper_lut".into(), serde_json::json!("luts/shaper.3dl"));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_pipeline".into(),
+                params,
+                rationale: None,
+            }],
+        };
+        let err = apply(&tl, &env, &ctx).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("3D-only format")),
+            "expected .3dl to be rejected from shaper_lut on extension, got {err:?}",
         );
     }
 

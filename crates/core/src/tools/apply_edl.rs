@@ -690,12 +690,17 @@ color filters before speed, concat, transitions, and title overlays. \
 Ranges: exposure_ev `[-4,4]`, contrast/saturation `[0,3]`, all other \
 controls `[-1,1]`.\
 \n  - **Apply LUT**: `+ lut_path: <project-relative-path>` (required), \
-optional `+ interpolation: <nearest|trilinear|tetrahedral|pyramid|prism>`. \
-Anchored to a clip. Stamps an `awidat.lut` Effect with a project-relative \
-LUT path; paths must be non-empty, non-absolute, must not contain `.`, \
-`..`, or backslashes, and must end in `.3dl`, `.cube`, `.dat`, `.m3d`, \
-or `.csp`. Re-applying replaces the prior LUT. Render emits `lut3d` \
-for this segment before speed, concat, transitions, and title overlays.\
+optional `+ interpolation: <nearest|trilinear|tetrahedral|pyramid|prism>`, \
+optional `+ strength: <0.0..=1.0>` (default 1.0 = full LUT; values below \
+1.0 mix the LUT with the un-graded source via FFmpeg's `split → lut3d → \
+blend=all_opacity=<strength>` pattern, where `strength=0.6` means 60% LUT \
++ 40% original). Anchored to a clip. Stamps an `awidat.lut` Effect with a \
+project-relative LUT path; paths must be non-empty, non-absolute, must \
+not contain `.`, `..`, or backslashes, and must end in `.3dl`, `.cube`, \
+`.dat`, `.m3d`, or `.csp`. `.cube` and `.3dl` files are parsed at apply \
+time and a structured error is returned if the LUT is malformed. \
+Re-applying replaces the prior LUT. Render emits `lut3d` for this segment \
+before speed, concat, transitions, and title overlays.\
 \n  - **Remove LUT**: no fields besides the anchor. Clears `awidat.lut` \
 from the clip while leaving color correction, speed, audio, and title \
 effects intact.\
