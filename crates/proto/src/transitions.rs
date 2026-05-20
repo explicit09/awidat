@@ -295,18 +295,49 @@ pub enum TransitionPrimitiveOp {
     },
     /// Procedural luma-mask reveal. The GPU `LumaMask` shader reads
     /// `mask_kind` to choose the mask geometry (clock / blinds /
-    /// checkerboard) and uses `softness` as the feathered edge band
-    /// around the progress threshold. Future image-based masks
-    /// (Kdenlive ports) extend the same primitive with a `texture`
-    /// asset reference.
+    /// checkerboard / spiral / burst / jaws) and uses `softness` as
+    /// the feathered edge band around the progress threshold. Future
+    /// image-based masks (Kdenlive ports) extend the same primitive
+    /// with a `texture` asset reference.
     LumaMask {
-        /// Stable mask kind id: `clock`, `blinds_horizontal`, or
-        /// `checkerboard`. Validation rejects unknown values.
+        /// Stable mask kind id. See [`LUMA_MASK_KINDS`] for the
+        /// supported set; validation rejects unknown values.
         mask_kind: String,
         /// Edge softness in `[0.0, 1.0]`. 0 is a hard mask, 1 is a
         /// very feathered band. Scalar or multi-keyframe curve so
         /// the agent can author "edge sharpens then softens" feels.
         softness: ParamCurve,
+    },
+    /// Warm overexposed lens-flare sweep, GPU-only. The shader pans
+    /// a glowing off-screen source through the frame across the
+    /// transition window and tints the affected pixels with a
+    /// configurable warmth bias.
+    LightLeak {
+        /// Peak leak intensity in `[0.0, 1.0]`, evaluated per frame.
+        intensity: ParamCurve,
+        /// Warmth bias in `[0.0, 1.0]`. 0 is neutral white,
+        /// 1 is sunset-orange. Held constant for a transition; an
+        /// agent that wants animated warmth can stack two leaks
+        /// inside one composition.
+        warmth: f64,
+    },
+    /// Polar-coordinate swirl that pulls the outgoing clip into a
+    /// vortex around the frame center. GPU-only.
+    SwirlVortex {
+        /// Rotation strength in `[0.0, 1.0]`. 0 collapses to a
+        /// cross-blend; 1 spins the corners ~2π by the end of the
+        /// transition. Scalar or curve.
+        strength: ParamCurve,
+    },
+    /// Directional cinematic motion blur. GPU-only; replaces the
+    /// FFmpeg `hblur` fallback for whip-pan-style transitions with
+    /// a proper 10-tap directional smear.
+    CinematicPan {
+        /// `left` or `right`. Validation rejects other values; the
+        /// shader maps these to the horizontal direction sign.
+        direction: String,
+        /// Peak blur intensity in `[0.0, 1.0]`, evaluated per frame.
+        intensity: ParamCurve,
     },
     /// Stable named atomic transition that does not decompose cleanly
     /// into primitives yet. This is still data: it points at an Awidat
@@ -1061,6 +1092,128 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         motion_alignment: None,
         color_sensitivity: ColorSensitivity::Insensitive,
     },
+    BuiltinTransition {
+        id: "awidat.spiral_wipe",
+        family: "wipe",
+        display_name: "Spiral Wipe",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.60,
+        min_duration_s: 0.20,
+        max_duration_s: 2.0,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["stylized_reveal", "comedic_button", "vintage_grammar"],
+        avoid_for: &["serious_dialogue", "documentary_realism", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.burst_wipe",
+        family: "wipe",
+        display_name: "Burst Wipe",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.45,
+        min_duration_s: 0.15,
+        max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["energy_jump", "comedic_button", "beat_hit"],
+        avoid_for: &["slow_emotional_moment", "documentary_realism"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.jaws_wipe",
+        family: "wipe",
+        display_name: "Jaws Wipe",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.50,
+        min_duration_s: 0.18,
+        max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["comedic_button", "stylized_jump", "tech_context"],
+        avoid_for: &["serious_dialogue", "documentary_realism"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    // ---------- Hyperframes-port GPU shaders ----------
+    BuiltinTransition {
+        id: "awidat.light_leak",
+        family: "fade",
+        display_name: "Light Leak",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.55,
+        min_duration_s: 0.20,
+        max_duration_s: 2.0,
+        audio_policy: TransitionAudioPolicy::Crossfade,
+        best_for: &[
+            "premium_cinematic",
+            "warm_organic",
+            "nostalgic",
+            "lifestyle_reveal",
+        ],
+        avoid_for: &["clinical_documentary", "hard_beat_hit"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        // The leak floods bright frames with extra warm energy; on
+        // already-bright incoming clips the effect washes out, so
+        // flag dark-to-bright as the risky direction.
+        color_sensitivity: ColorSensitivity::AvoidDarkToBright,
+    },
+    BuiltinTransition {
+        id: "awidat.swirl_vortex",
+        family: "stylized",
+        display_name: "Swirl Vortex",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.60,
+        min_duration_s: 0.25,
+        max_duration_s: 2.0,
+        audio_policy: TransitionAudioPolicy::Crossfade,
+        best_for: &["comedic_button", "stylized_jump", "energy_jump"],
+        avoid_for: &["serious_dialogue", "documentary_realism", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.cinematic_pan_left",
+        family: "motion_blur",
+        display_name: "Cinematic Pan Left",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.22,
+        min_duration_s: 0.08,
+        max_duration_s: 0.55,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &[
+            "fast_screen_direction",
+            "pass_by_motion",
+            "hide_motion_jump",
+        ],
+        avoid_for: &["static_dialogue", "slow_emotional_moment", "repeated_use"],
+        requires_motion_continuity: true,
+        motion_alignment: Some(MotionAlignment::Left),
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.cinematic_pan_right",
+        family: "motion_blur",
+        display_name: "Cinematic Pan Right",
+        ffmpeg_xfade: None,
+        default_duration_s: 0.22,
+        min_duration_s: 0.08,
+        max_duration_s: 0.55,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &[
+            "fast_screen_direction",
+            "pass_by_motion",
+            "hide_motion_jump",
+        ],
+        avoid_for: &["static_dialogue", "slow_emotional_moment", "repeated_use"],
+        requires_motion_continuity: true,
+        motion_alignment: Some(MotionAlignment::Right),
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
 ];
 
 /// Find a phase-one transition by stable id.
@@ -1370,6 +1523,47 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
                 softness: ParamCurve::Const(0.04),
             },
         )])),
+        "awidat.spiral_wipe" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::LumaMask {
+                mask_kind: "spiral".into(),
+                softness: ParamCurve::Const(0.05),
+            },
+        )])),
+        "awidat.burst_wipe" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::LumaMask {
+                mask_kind: "burst".into(),
+                softness: ParamCurve::Const(0.08),
+            },
+        )])),
+        "awidat.jaws_wipe" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::LumaMask {
+                mask_kind: "jaws".into(),
+                softness: ParamCurve::Const(0.06),
+            },
+        )])),
+        "awidat.light_leak" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::LightLeak {
+                intensity: ParamCurve::Const(0.85),
+                warmth: 0.75,
+            },
+        )])),
+        "awidat.swirl_vortex" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::SwirlVortex {
+                strength: ParamCurve::Const(0.6),
+            },
+        )])),
+        "awidat.cinematic_pan_left" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::CinematicPan {
+                direction: "left".into(),
+                intensity: ParamCurve::Const(0.85),
+            },
+        )])),
+        "awidat.cinematic_pan_right" => Some(composition(vec![primitive(
+            TransitionPrimitiveOp::CinematicPan {
+                direction: "right".into(),
+                intensity: ParamCurve::Const(0.85),
+            },
+        )])),
         _ => None,
     }
 }
@@ -1432,7 +1626,10 @@ fn primitive_ffmpeg_xfade(op: &TransitionPrimitiveOp) -> Option<&'static str> {
         TransitionPrimitiveOp::Opacity { .. } => Some("fade"),
         TransitionPrimitiveOp::Shake { .. }
         | TransitionPrimitiveOp::ChromaticSplit { .. }
-        | TransitionPrimitiveOp::LumaMask { .. } => None,
+        | TransitionPrimitiveOp::LumaMask { .. }
+        | TransitionPrimitiveOp::LightLeak { .. }
+        | TransitionPrimitiveOp::SwirlVortex { .. }
+        | TransitionPrimitiveOp::CinematicPan { .. } => None,
     }
 }
 
@@ -1448,7 +1645,10 @@ fn primitive_ffmpeg_priority(op: &TransitionPrimitiveOp) -> u8 {
         TransitionPrimitiveOp::Opacity { .. } => 30,
         TransitionPrimitiveOp::Shake { .. }
         | TransitionPrimitiveOp::ChromaticSplit { .. }
-        | TransitionPrimitiveOp::LumaMask { .. } => 0,
+        | TransitionPrimitiveOp::LumaMask { .. }
+        | TransitionPrimitiveOp::LightLeak { .. }
+        | TransitionPrimitiveOp::SwirlVortex { .. }
+        | TransitionPrimitiveOp::CinematicPan { .. } => 0,
     }
 }
 
@@ -1482,6 +1682,12 @@ fn primitive_gpu_shader(op: &TransitionPrimitiveOp) -> Option<&'static str> {
         // LumaMask is GPU-only — FFmpeg `xfade` has no equivalent for
         // these procedural mask reveals. Routed unconditionally.
         TransitionPrimitiveOp::LumaMask { .. } => Some("luma_mask"),
+        // LightLeak / SwirlVortex / CinematicPan are GPU-only ports
+        // from the Hyperframes shader catalogue. Each maps directly
+        // to a TransitionShader variant.
+        TransitionPrimitiveOp::LightLeak { .. } => Some("light_leak"),
+        TransitionPrimitiveOp::SwirlVortex { .. } => Some("swirl_vortex"),
+        TransitionPrimitiveOp::CinematicPan { .. } => Some("cinematic_pan"),
         // Blur is GPU-routed because its `amount` accepts a
         // `ParamCurve` — the FFmpeg `hblur` fallback can only render
         // a constant. When the composition contains Blur alongside
@@ -1501,6 +1707,9 @@ fn primitive_gpu_priority(op: &TransitionPrimitiveOp) -> u8 {
         TransitionPrimitiveOp::Shake { .. } => 100,
         TransitionPrimitiveOp::ChromaticSplit { .. } => 90,
         TransitionPrimitiveOp::LumaMask { .. } => 80,
+        TransitionPrimitiveOp::LightLeak { .. } => 75,
+        TransitionPrimitiveOp::SwirlVortex { .. } => 72,
+        TransitionPrimitiveOp::CinematicPan { .. } => 70,
         TransitionPrimitiveOp::Blur { .. } => 50,
         TransitionPrimitiveOp::Opacity { .. } => 10,
         _ => 0,
@@ -1863,6 +2072,20 @@ fn validate_primitive_op(
             validate_luma_mask_kind(idx, mask_kind)?;
             validate_curve_unit(idx, "softness", softness)?;
         }
+        TransitionPrimitiveOp::LightLeak { intensity, warmth } => {
+            validate_curve_range(idx, "intensity", intensity, 0.0, 2.0)?;
+            validate_unit(idx, "warmth", *warmth)?;
+        }
+        TransitionPrimitiveOp::SwirlVortex { strength } => {
+            validate_curve_unit(idx, "strength", strength)?;
+        }
+        TransitionPrimitiveOp::CinematicPan {
+            direction,
+            intensity,
+        } => {
+            validate_direction(idx, direction, &["left", "right"])?;
+            validate_curve_unit(idx, "intensity", intensity)?;
+        }
         TransitionPrimitiveOp::Atomic { id } => {
             if !id.starts_with("awidat.") || lookup_builtin_transition(id).is_none() {
                 return Err(TransitionLookupError::InvalidSpec {
@@ -1882,11 +2105,17 @@ fn validate_unit(idx: usize, field: &str, value: f64) -> Result<(), TransitionLo
 
 /// Stable luma-mask kind ids the [`crate::transitions::TransitionPrimitiveOp::LumaMask`]
 /// primitive accepts. Each id maps to the integer slot the GPU shader
-/// reads from `extra_params[0]` (clock → 0, blinds_horizontal → 1,
-/// checkerboard → 2). Future image-based mask kinds will join this
-/// list with their own integer ids and a sampled-texture variant of
-/// the shader.
-pub const LUMA_MASK_KINDS: &[&str] = &["clock", "blinds_horizontal", "checkerboard"];
+/// reads from `extra_params[0]`. Future image-based mask kinds will
+/// join this list with their own integer ids and a sampled-texture
+/// variant of the shader.
+pub const LUMA_MASK_KINDS: &[&str] = &[
+    "clock",
+    "blinds_horizontal",
+    "checkerboard",
+    "spiral",
+    "burst",
+    "jaws",
+];
 
 /// Integer slot for a stable luma-mask kind id, as the GPU shader
 /// reads it. Returns `None` for unknown ids — callers should have
@@ -1896,6 +2125,9 @@ pub fn luma_mask_kind_slot(kind: &str) -> Option<u32> {
         "clock" => Some(0),
         "blinds_horizontal" => Some(1),
         "checkerboard" => Some(2),
+        "spiral" => Some(3),
+        "burst" => Some(4),
+        "jaws" => Some(5),
         _ => None,
     }
 }
@@ -2246,11 +2478,61 @@ mod tests {
         // The shader's integer slots and the kind id list must stay
         // in lockstep. If they ever drift, mask-kind selection at
         // render time silently picks the wrong mask.
-        assert_eq!(LUMA_MASK_KINDS.len(), 3);
+        assert_eq!(LUMA_MASK_KINDS.len(), 6);
         assert_eq!(luma_mask_kind_slot("clock"), Some(0));
         assert_eq!(luma_mask_kind_slot("blinds_horizontal"), Some(1));
         assert_eq!(luma_mask_kind_slot("checkerboard"), Some(2));
+        assert_eq!(luma_mask_kind_slot("spiral"), Some(3));
+        assert_eq!(luma_mask_kind_slot("burst"), Some(4));
+        assert_eq!(luma_mask_kind_slot("jaws"), Some(5));
         assert_eq!(luma_mask_kind_slot("unknown"), None);
+    }
+
+    #[test]
+    fn hyperframes_port_transitions_resolve_to_their_shaders() {
+        // Each new Option-A preset must round-trip through composition
+        // → gpu_shader resolution, and must have no xfade fallback
+        // (these are GPU-only by design).
+        let cases = [
+            ("awidat.light_leak", "light_leak"),
+            ("awidat.swirl_vortex", "swirl_vortex"),
+            ("awidat.cinematic_pan_left", "cinematic_pan"),
+            ("awidat.cinematic_pan_right", "cinematic_pan"),
+            ("awidat.spiral_wipe", "luma_mask"),
+            ("awidat.burst_wipe", "luma_mask"),
+            ("awidat.jaws_wipe", "luma_mask"),
+        ];
+        for (id, expected_shader) in cases {
+            let composition =
+                builtin_transition_composition(id).expect("{id} should have composition");
+            assert!(
+                resolve_composition_ffmpeg_xfade(&composition).is_none(),
+                "{id} should have no xfade fallback"
+            );
+            assert_eq!(
+                resolve_composition_gpu_shader(&composition),
+                Some(expected_shader),
+                "{id} should resolve to {expected_shader}"
+            );
+        }
+    }
+
+    #[test]
+    fn cinematic_pan_rejects_unknown_direction() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::Linear,
+                op: TransitionPrimitiveOp::CinematicPan {
+                    direction: "diagonal".into(),
+                    intensity: ParamCurve::Const(0.8),
+                },
+            }],
+        };
+        let err = validate_transition_composition(&composition).unwrap_err();
+        assert!(err.to_string().contains("direction"));
     }
 
     #[test]

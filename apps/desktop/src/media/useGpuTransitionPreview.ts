@@ -35,11 +35,21 @@ const GPU_ROUTED_TRANSITION_IDS = new Set<string>([
   // only on the GPU; the CSS opacity-only blend loses the animation.
   "awidat.match_dissolve",
   // Luma-mask transitions — procedural reveals (clock, blinds,
-  // checkerboard) have no FFmpeg xfade equivalent and no CSS
-  // approximation, so the only correct preview is the GPU path.
+  // checkerboard, spiral, burst, jaws) have no FFmpeg xfade
+  // equivalent and no CSS approximation, so the only correct
+  // preview is the GPU path.
   "awidat.clock_wipe",
   "awidat.venetian_blinds_h",
   "awidat.checkerboard_dissolve",
+  "awidat.spiral_wipe",
+  "awidat.burst_wipe",
+  "awidat.jaws_wipe",
+  // Hyperframes-port GPU shaders. Each has a distinct visual that
+  // neither CSS overlays nor xfade can fake.
+  "awidat.light_leak",
+  "awidat.swirl_vortex",
+  "awidat.cinematic_pan_left",
+  "awidat.cinematic_pan_right",
 ]);
 
 export function shouldRenderTransitionOnGpu(transition: PreviewTransition | null): boolean {

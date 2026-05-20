@@ -33,6 +33,9 @@ const SHAKE_FS_WGSL: &str = include_str!("shaders/shake.wgsl");
 const CHROMATIC_SPLIT_FS_WGSL: &str = include_str!("shaders/chromatic_split.wgsl");
 const BLUR_FS_WGSL: &str = include_str!("shaders/blur.wgsl");
 const LUMA_MASK_FS_WGSL: &str = include_str!("shaders/luma_mask.wgsl");
+const LIGHT_LEAK_FS_WGSL: &str = include_str!("shaders/light_leak.wgsl");
+const SWIRL_VORTEX_FS_WGSL: &str = include_str!("shaders/swirl_vortex.wgsl");
+const CINEMATIC_PAN_FS_WGSL: &str = include_str!("shaders/cinematic_pan.wgsl");
 
 /// wgpu requires every row of a texture-to-buffer copy to start on a
 /// 256-byte boundary. RGBA8 is 4 bytes per pixel, so we pad each row
@@ -91,11 +94,26 @@ pub enum TransitionShader {
     Blur,
     /// Luma-mask reveal. Reads `extra_params[0]` as the integer mask
     /// kind id (0 = clock wipe, 1 = venetian blinds horizontal,
-    /// 2 = checkerboard dissolve) and `extra_params[1]` as the edge
-    /// softness in `[0.0, 1.0]`. Single shader handles the whole
-    /// procedural mask family; image-based masks (future Kdenlive
-    /// ports) can add a sampled-texture variant later.
+    /// 2 = checkerboard dissolve, 3 = spiral, 4 = burst, 5 = jaws)
+    /// and `extra_params[1]` as the edge softness in `[0.0, 1.0]`.
+    /// Single shader handles the whole procedural mask family;
+    /// image-based masks (future Kdenlive ports) can add a
+    /// sampled-texture variant later.
     LumaMask,
+    /// Warm overexposed lens-flare sweep. Reads `extra_params[0]` as
+    /// peak intensity and `extra_params[1]` as warmth bias. Fills
+    /// the "premium / cinematic warm" editorial category that CSS
+    /// and xfade cannot approximate.
+    LightLeak,
+    /// Polar-coordinate swirl that pulls the outgoing clip into a
+    /// vortex while the incoming clip arrives clean. Reads
+    /// `extra_params[0]` as rotation strength in `[0, 1]`.
+    SwirlVortex,
+    /// 10-tap horizontal motion blur whose intensity bells around
+    /// `progress = 0.5`. Reads `extra_params[0]` as the direction
+    /// sign (-1 left, +1 right) and `extra_params[1]` as the peak
+    /// blur intensity.
+    CinematicPan,
 }
 
 impl TransitionShader {
@@ -106,6 +124,9 @@ impl TransitionShader {
             Self::ChromaticSplit => CHROMATIC_SPLIT_FS_WGSL,
             Self::Blur => BLUR_FS_WGSL,
             Self::LumaMask => LUMA_MASK_FS_WGSL,
+            Self::LightLeak => LIGHT_LEAK_FS_WGSL,
+            Self::SwirlVortex => SWIRL_VORTEX_FS_WGSL,
+            Self::CinematicPan => CINEMATIC_PAN_FS_WGSL,
         }
     }
 
@@ -116,6 +137,9 @@ impl TransitionShader {
             Self::ChromaticSplit => "chromatic_split",
             Self::Blur => "blur",
             Self::LumaMask => "luma_mask",
+            Self::LightLeak => "light_leak",
+            Self::SwirlVortex => "swirl_vortex",
+            Self::CinematicPan => "cinematic_pan",
         }
     }
 
@@ -130,6 +154,9 @@ impl TransitionShader {
             "chromatic_split" => Some(Self::ChromaticSplit),
             "blur" => Some(Self::Blur),
             "luma_mask" => Some(Self::LumaMask),
+            "light_leak" => Some(Self::LightLeak),
+            "swirl_vortex" => Some(Self::SwirlVortex),
+            "cinematic_pan" => Some(Self::CinematicPan),
             _ => None,
         }
     }
@@ -1055,6 +1082,149 @@ mod tests {
         assert!(
             diff_ratio(&blinds, &checker) > 0.05,
             "blinds vs checkerboard too similar"
+        );
+    }
+
+    #[test]
+    fn light_leak_brightens_a_neutral_frame_at_peak_progress() {
+        // The leak should brighten the rendered frame compared to a
+        // pure cross-blend of the same inputs at progress=0.5. Use
+        // identical dark inputs so the brightness delta is entirely
+        // attributable to the leak.
+        let Some(renderer) = renderer_or_skip(TransitionShader::LightLeak) else {
+            return;
+        };
+        let dark = solid(32, 32, [40, 40, 40, 255]);
+        let plain = renderer
+            .render_frame(
+                &dark,
+                &dark,
+                FrameParams {
+                    width: 32,
+                    height: 32,
+                    progress: 0.5,
+                    extra_params: [0.0, 0.0, 0.0, 0.0],
+                },
+            )
+            .unwrap();
+        let leaked = renderer
+            .render_frame(
+                &dark,
+                &dark,
+                FrameParams {
+                    width: 32,
+                    height: 32,
+                    progress: 0.5,
+                    extra_params: [1.0, 0.7, 0.0, 0.0],
+                },
+            )
+            .unwrap();
+        // Aggregate luma: leaked frame should be brighter on average.
+        let avg = |frame: &[u8]| -> f64 {
+            let n = (frame.len() / 4) as f64;
+            let mut sum = 0.0;
+            for chunk in frame.chunks(4) {
+                sum += (chunk[0] as f64 + chunk[1] as f64 + chunk[2] as f64) / 3.0;
+            }
+            sum / n
+        };
+        assert!(
+            avg(&leaked) > avg(&plain) + 4.0,
+            "leak should brighten the frame: leaked={:.1}, plain={:.1}",
+            avg(&leaked),
+            avg(&plain)
+        );
+    }
+
+    #[test]
+    fn swirl_vortex_displaces_pixels_relative_to_cross_dissolve() {
+        // Render the same content with cross-dissolve and with
+        // swirl-vortex at the same progress. The swirl should
+        // displace at least some pixels off their straight-blend
+        // values — if it didn't, params.x = strength wouldn't be
+        // doing anything in the shader.
+        let Some(dissolve) = renderer_or_skip(TransitionShader::CrossDissolve) else {
+            return;
+        };
+        let Some(swirl) = renderer_or_skip(TransitionShader::SwirlVortex) else {
+            return;
+        };
+        // Non-uniform input so swirled UVs sample different colors
+        // than straight UVs.
+        let mut from = vec![0u8; 32 * 32 * 4];
+        for y in 0..32u32 {
+            for x in 0..32u32 {
+                let idx = ((y * 32 + x) * 4) as usize;
+                from[idx] = (x * 8) as u8;
+                from[idx + 1] = (y * 8) as u8;
+                from[idx + 2] = 0;
+                from[idx + 3] = 255;
+            }
+        }
+        let to = solid(32, 32, [0, 0, 200, 255]);
+        let params_d = FrameParams {
+            width: 32,
+            height: 32,
+            progress: 0.5,
+            extra_params: [0.0; 4],
+        };
+        let params_s = FrameParams {
+            extra_params: [0.8, 0.0, 0.0, 0.0],
+            ..params_d
+        };
+        let plain = dissolve.render_frame(&from, &to, params_d).unwrap();
+        let swirled = swirl.render_frame(&from, &to, params_s).unwrap();
+        let mut diff = 0usize;
+        for i in (0..plain.len()).step_by(4) {
+            if plain[i] != swirled[i] || plain[i + 1] != swirled[i + 1] {
+                diff += 1;
+            }
+        }
+        assert!(
+            diff > plain.len() / 16,
+            "swirl must displace many pixels relative to cross-dissolve, diff={diff}"
+        );
+    }
+
+    #[test]
+    fn cinematic_pan_left_and_right_produce_mirrored_blurs() {
+        // The same content, blurred left vs blurred right, should
+        // produce visibly different frames — if direction sign
+        // wasn't reaching the shader the two would be identical.
+        let Some(renderer) = renderer_or_skip(TransitionShader::CinematicPan) else {
+            return;
+        };
+        // Use a horizontal stripe pattern so the blur has something
+        // to smear along x.
+        let mut from = vec![0u8; 32 * 32 * 4];
+        for y in 0..32u32 {
+            for x in 0..32u32 {
+                let idx = ((y * 32 + x) * 4) as usize;
+                let stripe = ((x / 4) % 2) as u8;
+                from[idx] = stripe * 255;
+                from[idx + 1] = stripe * 255;
+                from[idx + 2] = stripe * 255;
+                from[idx + 3] = 255;
+            }
+        }
+        let to = solid(32, 32, [80, 80, 80, 255]);
+        let make = |dir: f32| FrameParams {
+            width: 32,
+            height: 32,
+            progress: 0.5,
+            extra_params: [dir, 0.9, 0.0, 0.0],
+        };
+        let left = renderer.render_frame(&from, &to, make(-1.0)).unwrap();
+        let right = renderer.render_frame(&from, &to, make(1.0)).unwrap();
+        let mut diff = 0usize;
+        for i in (0..left.len()).step_by(4) {
+            if left[i] != right[i] {
+                diff += 1;
+            }
+        }
+        assert!(
+            diff > 0,
+            "cinematic_pan left vs right must differ at least somewhere"
         );
     }
 

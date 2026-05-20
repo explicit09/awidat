@@ -219,6 +219,29 @@ fn extra_params_for(id: &str, progress: f64) -> [f32; 4] {
                 params[1] = softness.evaluate(local) as f32;
                 return params;
             }
+            TransitionPrimitiveOp::LightLeak { intensity, warmth } => {
+                params[0] = intensity.evaluate(local) as f32;
+                params[1] = warmth as f32;
+                return params;
+            }
+            TransitionPrimitiveOp::SwirlVortex { strength } => {
+                params[0] = strength.evaluate(local) as f32;
+                return params;
+            }
+            TransitionPrimitiveOp::CinematicPan {
+                direction,
+                intensity,
+            } => {
+                // params.x = horizontal direction sign (-1 left,
+                // +1 right). params.y = current intensity.
+                params[0] = match direction.as_str() {
+                    "right" => 1.0,
+                    "left" => -1.0,
+                    _ => 0.0,
+                };
+                params[1] = intensity.evaluate(local) as f32;
+                return params;
+            }
             _ => {}
         }
     }

@@ -8,15 +8,18 @@
 //   0  →  clock wipe (rotating pie-slice from 12 o'clock)
 //   1  →  venetian blinds horizontal (8 slats opening from top)
 //   2  →  checkerboard dissolve (8×8 grid, alternating tiles)
+//   3  →  spiral wipe (Archimedean spiral unwinding from center)
+//   4  →  burst wipe (12 radial spokes growing from center)
+//   5  →  jaws wipe (interlocking triangular teeth meeting in middle)
 //
 // `params.y` is the edge softness in `[0.0, 1.0]`. 0 = hard mask
 // (binary on/off per pixel); higher values feather the boundary so
 // the transition reads as a smooth reveal rather than a stepped one.
 //
 // This single shader is the entry point for the much larger Kdenlive
-// luma-mask catalogue. The first three kinds are procedural; future
-// kinds that need image-based masks (organic shapes, hand-drawn
-// patterns) will add a sampled texture binding alongside `params.x`.
+// luma-mask catalogue. All kinds are procedural; future image-based
+// masks (organic shapes, hand-drawn patterns) will add a sampled
+// texture binding alongside `params.x`.
 
 struct Uniforms {
     resolution: vec2<f32>,
@@ -64,12 +67,75 @@ fn checkerboard_mask(uv: vec2<f32>) -> f32 {
     return select(0.55, 0.0, parity == 0.0);
 }
 
+fn spiral_mask(uv: vec2<f32>) -> f32 {
+    // Archimedean spiral: mask value = (angle + radius * twist) wrapped.
+    // The result is a smooth radial sweep that turns inward as it
+    // moves toward the center, so the reveal "unwinds" from the
+    // outside.
+    let centered = uv - vec2<f32>(0.5);
+    let radius = length(centered);
+    var angle = atan2(centered.x, -centered.y);
+    if (angle < 0.0) {
+        angle = angle + TAU;
+    }
+    let twist = 4.0;
+    let raw = (angle / TAU + radius * twist) - floor(angle / TAU + radius * twist);
+    return raw;
+}
+
+fn burst_mask(uv: vec2<f32>) -> f32 {
+    // 12 radial spokes. Spokes are dark (small mask value) and the
+    // gaps between are bright; with progress sweeping, spokes
+    // reveal first, then the gaps fill in.
+    let centered = uv - vec2<f32>(0.5);
+    var angle = atan2(centered.x, -centered.y);
+    if (angle < 0.0) {
+        angle = angle + TAU;
+    }
+    let spokes = 12.0;
+    let phase = fract(angle / TAU * spokes);
+    // Distance from the nearest spoke center (0 at spoke, 0.5 between).
+    let to_spoke = min(phase, 1.0 - phase) * 2.0;
+    return to_spoke;
+}
+
+fn jaws_mask(uv: vec2<f32>) -> f32 {
+    // 8 interlocking triangular teeth from top and bottom. The
+    // top-edge teeth point down; the bottom-edge teeth point up,
+    // shifted by half a tooth so they alternate. Mask value is the
+    // vertical distance to the nearest tooth tip, so the reveal
+    // appears to close like jaws meeting in the middle.
+    let teeth = 8.0;
+    let column = fract(uv.x * teeth);
+    let tooth_offset = abs(column - 0.5) * 2.0; // 0 at tip, 1 at base
+    // Two sets of teeth: one pointing down from top, one pointing
+    // up from bottom, offset by half a tooth-column.
+    let top_tip = tooth_offset * 0.5;
+    let column_b = fract(uv.x * teeth + 0.5);
+    let bottom_offset = abs(column_b - 0.5) * 2.0;
+    let bottom_tip = 1.0 - bottom_offset * 0.5;
+    // Where is the pixel along the tooth axis? Distance from the
+    // closer tooth boundary so the bite closes from both edges.
+    let from_top = uv.y - top_tip;
+    let from_bottom = bottom_tip - uv.y;
+    return clamp(min(from_top, from_bottom) * 2.0 + 0.25, 0.0, 1.0);
+}
+
 fn mask_value(uv: vec2<f32>, kind: i32) -> f32 {
     if (kind == 1) {
         return blinds_mask(uv);
     }
     if (kind == 2) {
         return checkerboard_mask(uv);
+    }
+    if (kind == 3) {
+        return spiral_mask(uv);
+    }
+    if (kind == 4) {
+        return burst_mask(uv);
+    }
+    if (kind == 5) {
+        return jaws_mask(uv);
     }
     return clock_mask(uv);
 }
