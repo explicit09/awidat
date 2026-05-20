@@ -66,6 +66,13 @@ impl AnchorContext {
         }
     }
 
+    /// Project root if the context was constructed with one. Callers
+    /// (e.g., apply-time LUT validation) use this to resolve
+    /// project-relative paths against disk.
+    pub fn project_root(&self) -> Option<&Path> {
+        self.project_root.as_deref()
+    }
+
     /// Look up segments for the asset, loading the sidecar from disk
     /// on first miss. Returns an empty Vec if the sidecar doesn't
     /// exist or can't be parsed — that's a soft miss; the resolver

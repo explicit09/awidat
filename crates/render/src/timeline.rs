@@ -218,6 +218,11 @@ pub struct TimelineSegment {
     pub lut_path: Option<PathBuf>,
     /// Optional FFmpeg `lut3d` interpolation mode.
     pub lut_interpolation: Option<String>,
+    /// Optional LUT blend strength in `0.0..=1.0`. `None` or `1.0`
+    /// emits a single `lut3d` filter (full strength). Below `1.0`
+    /// emits a `split → lut3d → blend=all_opacity=<s>` block so the
+    /// LUT mixes with the un-graded source.
+    pub lut_strength: Option<f64>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
     /// Incoming audio lead for J-cut export, in seconds.
@@ -880,6 +885,8 @@ fn collect_timeline_segment(
         });
     }
     let lut_interpolation = read_lut_interpolation(clip);
+    let lut_strength = read_effect_number(clip, "awidat.lut", "strength")
+        .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
     Ok(Some(TimelineSegment {
         asset_path,
         clip_name: clip.name.clone(),
@@ -902,6 +909,7 @@ fn collect_timeline_segment(
         reframe: read_reframe(clip),
         lut_path,
         lut_interpolation,
+        lut_strength,
         audio_fx: read_clip_audio_fx(clip),
         audio_lead_s: clip
             .metadata
@@ -2196,9 +2204,13 @@ fn stage_overlay_video_input(
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[media_overlay_lv{input_idx}]");
         filter.push(';');
-        filter.push_str(&format!(
-            "{video_label}{}{lv}",
-            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        filter.push_str(&lut3d_filter_block(
+            &video_label,
+            &lv,
+            &format!("media_overlay_{input_idx}"),
+            lut_path,
+            seg.lut_interpolation.as_deref(),
+            seg.lut_strength,
         ));
         video_label = lv;
     }
@@ -2260,10 +2272,15 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
 
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[lv{i}]");
-        filter.push_str(&format!(
-            "{video_label}{}{lv};",
-            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        filter.push_str(&lut3d_filter_block(
+            &video_label,
+            &lv,
+            &i.to_string(),
+            lut_path,
+            seg.lut_interpolation.as_deref(),
+            seg.lut_strength,
         ));
+        filter.push(';');
         video_label = lv;
     }
 
@@ -2508,6 +2525,44 @@ fn lut3d_filter(lut_path: &Path, interpolation: Option<&str>) -> String {
     match interpolation {
         Some(interpolation) => format!("lut3d=file='{path}':interp={interpolation}"),
         None => format!("lut3d=file='{path}'"),
+    }
+}
+
+/// Build the filter-graph chain segment that applies a LUT to a labeled
+/// video stream, including the multi-filter `split → lut3d → blend`
+/// block when strength is below 1.0. Returns the full string starting
+/// with `in_label` and ending with `out_label`, with `;` separators
+/// between intermediate sub-chains. The caller appends a trailing `;`
+/// before the next filter.
+///
+/// `suffix` is a per-segment uniquifier (e.g. `"0"` for segment 0 or
+/// `"media_overlay_3"`) used to avoid label collisions across the
+/// graph.
+fn lut3d_filter_block(
+    in_label: &str,
+    out_label: &str,
+    suffix: &str,
+    lut_path: &Path,
+    interpolation: Option<&str>,
+    strength: Option<f64>,
+) -> String {
+    let core = lut3d_filter(lut_path, interpolation);
+    match strength {
+        Some(s) if s.is_finite() && s < 1.0 - 1e-9 => {
+            // Clamp away from 0 too — 0 means "bypass the LUT" but we
+            // still emit the filter so the graph topology is stable
+            // across re-renders; `blend=all_opacity=0` short-circuits
+            // back to the original.
+            let s = s.clamp(0.0, 1.0);
+            let pre = format!("[lut_pre_{suffix}]");
+            let lin = format!("[lut_in_{suffix}]");
+            let lout = format!("[lut_out_{suffix}]");
+            format!(
+                "{in_label}split{pre}{lin};{lin}{core}{lout};{pre}{lout}blend=all_opacity={s}{out_label}",
+                s = fmt_filter_num(s),
+            )
+        }
+        _ => format!("{in_label}{core}{out_label}"),
     }
 }
 
@@ -4144,10 +4199,15 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
     }
     if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[lv{i}]");
-        filter.push_str(&format!(
-            "{video_label}{}{lv};",
-            lut3d_filter(lut_path, seg.lut_interpolation.as_deref())
+        filter.push_str(&lut3d_filter_block(
+            &video_label,
+            &lv,
+            &i.to_string(),
+            lut_path,
+            seg.lut_interpolation.as_deref(),
+            seg.lut_strength,
         ));
+        filter.push(';');
         video_label = lv;
     }
     if let Some(reframe) = seg.reframe.as_ref()
@@ -5686,6 +5746,59 @@ mod tests {
         assert!(
             plan.filter_complex.contains("[sv0][sa0]concat"),
             "post-LUT/post-speed labels should feed concat, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_split_and_blend_when_lut_strength_below_one() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.lut_path = Some(PathBuf::from("/tmp/luts/show-look.cube"));
+        s0.lut_interpolation = Some("tetrahedral".into());
+        s0.lut_strength = Some(0.6);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0]split[lut_pre_0][lut_in_0];"),
+            "expected split fork, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains(
+                "[lut_in_0]lut3d=file='/tmp/luts/show-look.cube':interp=tetrahedral[lut_out_0];"
+            ),
+            "expected lut3d on forked branch, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex
+                .contains("[lut_pre_0][lut_out_0]blend=all_opacity=0.6[lv0]"),
+            "expected blend with strength, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_skips_split_when_lut_strength_is_one() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.lut_path = Some(PathBuf::from("/tmp/luts/show-look.cube"));
+        s0.lut_interpolation = Some("tetrahedral".into());
+        s0.lut_strength = Some(1.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0]lut3d=file='/tmp/luts/show-look.cube':interp=tetrahedral[lv0]"),
+            "expected single-filter chain at full strength, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            !plan.filter_complex.contains("split"),
+            "should not emit split at full strength, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            !plan.filter_complex.contains("blend=all_opacity"),
+            "should not emit blend at full strength, got: {}",
             plan.filter_complex,
         );
     }

@@ -155,3 +155,74 @@ fn project_with_lut_emits_lut3d() {
         "expected LUT path in argv, got: {cmd}",
     );
 }
+
+fn write_project_with_lut_strength(dir: &Path, strength: f64) {
+    let asset_a = "raw/a.mp4";
+    fs::create_dir_all(dir.join("raw")).unwrap();
+    fs::write(dir.join(asset_a), b"stub").unwrap();
+    fs::create_dir_all(dir.join("luts")).unwrap();
+    fs::write(dir.join("luts/show-look.cube"), b"# stub").unwrap();
+
+    let mut clip_a = Clip::empty("clip-a".to_string());
+    clip_a.media_reference = MediaReference::External(ExternalReference::new(asset_a));
+    clip_a.source_range = Some(TimeRange::new(
+        RationalTime::new(0.0, 24.0),
+        RationalTime::new(4.0 * 24.0, 24.0),
+    ));
+    let mut lut = Effect::new("awidat.lut");
+    lut.metadata.insert(
+        "lut_path".to_string(),
+        serde_json::json!("luts/show-look.cube"),
+    );
+    lut.metadata
+        .insert("strength".to_string(), serde_json::json!(strength));
+    clip_a.effects.push(lut);
+
+    let mut track = Track::empty("V1", TrackKind::Video);
+    track.children.push(TrackChild::Clip(clip_a));
+    let mut tl = Timeline::empty("p");
+    let mut stack = Stack::empty("root");
+    stack.children.push(StackChild::Track(track));
+    tl.tracks = stack;
+    fs::write(
+        dir.join(files::OTIO),
+        serde_json::to_string_pretty(&tl).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn project_with_partial_lut_strength_emits_split_and_blend() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_with_lut_strength(dir.path(), 0.6);
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("split[lut_pre_0][lut_in_0]"),
+        "expected split fork in argv, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("blend=all_opacity=0.6"),
+        "expected blend with strength in argv, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_full_lut_strength_emits_single_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_with_lut_strength(dir.path(), 1.0);
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("lut3d=file='"),
+        "expected lut3d in argv, got: {cmd}",
+    );
+    assert!(
+        !cmd.contains("blend=all_opacity"),
+        "should not emit blend at full strength, got: {cmd}",
+    );
+    assert!(
+        !cmd.contains("[lut_pre_0]"),
+        "should not emit split labels at full strength, got: {cmd}",
+    );
+}

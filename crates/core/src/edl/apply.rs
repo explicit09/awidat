@@ -379,12 +379,14 @@ fn apply_one(
             anchor,
             lut_path,
             interpolation,
+            strength,
         } => apply_lut(
             working,
             index,
             anchor,
             lut_path,
             interpolation.as_deref(),
+            *strength,
             ctx,
             locator,
         ),
@@ -4643,12 +4645,17 @@ fn apply_lut(
     anchor: &Anchor,
     lut_path: &str,
     interpolation: Option<&str>,
+    strength: Option<f64>,
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
-    let _ = (anchor, ctx);
+    let _ = anchor;
     let lut_path = normalize_lut_path(index, lut_path)?;
     let interpolation = normalize_lut_interpolation(index, interpolation)?;
+    let strength = normalize_lut_strength(index, strength)?;
+    if let Some(root) = ctx.project_root() {
+        validate_lut_contents(index, root, &lut_path)?;
+    }
     let locator = required_locator(index, locator)?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
@@ -4672,6 +4679,11 @@ fn apply_lut(
             "interpolation".to_string(),
             serde_json::json!(interpolation),
         );
+    }
+    if let Some(strength) = strength {
+        effect
+            .metadata
+            .insert("strength".to_string(), serde_json::json!(strength));
     }
     let clip_name = clip.name.clone();
     clip.effects.push(effect);
@@ -4739,6 +4751,21 @@ fn normalize_lut_metadata(
             metadata.remove("interpolation");
         }
     }
+    let strength = metadata.get("strength").and_then(serde_json::Value::as_f64);
+    match normalize_lut_strength(index, strength)? {
+        Some(value) => {
+            let Some(number) = serde_json::Number::from_f64(value) else {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: format!("set_effect: awidat.lut strength {value} is non-finite"),
+                });
+            };
+            metadata.insert("strength".to_string(), serde_json::Value::Number(number));
+        }
+        None => {
+            metadata.remove("strength");
+        }
+    }
     Ok(())
 }
 
@@ -4776,6 +4803,65 @@ fn normalize_lut_path(index: usize, lut_path: &str) -> Result<String, ApplyError
         });
     }
     Ok(trimmed.to_string())
+}
+
+fn normalize_lut_strength(index: usize, strength: Option<f64>) -> Result<Option<f64>, ApplyError> {
+    let Some(value) = strength else {
+        return Ok(None);
+    };
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("apply_lut: strength {value} must be finite and in 0.0..=1.0"),
+        });
+    }
+    Ok(Some(value))
+}
+
+/// Parse the referenced `.cube` and surface structured errors at
+/// apply time. Missing files are still allowed here — `render`
+/// catches those with its own `MissingLut` error so the existing
+/// "stamp now, render later" contract is preserved.
+fn validate_lut_contents(
+    index: usize,
+    project_root: &std::path::Path,
+    lut_path: &str,
+) -> Result<(), ApplyError> {
+    let full = project_root.join(lut_path);
+    let extension = full
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    // We only parse `.cube` right now (the most common format and
+    // the only one our generator produces); other extensions remain
+    // passthrough until a real asset forces broader support.
+    if extension.as_deref() != Some("cube") {
+        return Ok(());
+    }
+    let bytes = match std::fs::read(&full) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!("apply_lut: failed to read {lut_path:?}: {err}"),
+            });
+        }
+    };
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text,
+        Err(_) => {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!("apply_lut: {lut_path:?} is not valid UTF-8"),
+            });
+        }
+    };
+    awidat_lut::parse_cube_3d(text).map_err(|err| ApplyError::Invalid {
+        index,
+        message: format!("apply_lut: {lut_path:?} is not a valid .cube LUT: {err}"),
+    })?;
+    Ok(())
 }
 
 fn normalize_lut_interpolation(
@@ -8864,6 +8950,7 @@ mod tests {
                 },
                 lut_path: " luts/show-look.cube ".into(),
                 interpolation: Some("TETRAHEDRAL".into()),
+                strength: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -8899,6 +8986,7 @@ mod tests {
                     },
                     lut_path: "../secret.cube".into(),
                     interpolation: None,
+                    strength: None,
                 }],
             },
             &AnchorContext::empty(),
@@ -8918,6 +9006,7 @@ mod tests {
                     },
                     lut_path: "luts/show-look.txt".into(),
                     interpolation: None,
+                    strength: None,
                 }],
             },
             &AnchorContext::empty(),
@@ -8937,6 +9026,7 @@ mod tests {
                     },
                     lut_path: "luts/show-look.cube".into(),
                     interpolation: Some("magic".into()),
+                    strength: None,
                 }],
             },
             &AnchorContext::empty(),
@@ -8945,6 +9035,84 @@ mod tests {
         assert!(
             matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("interpolation")),
             "expected interpolation validation error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_lut_records_strength_and_rejects_out_of_range() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ApplyLut {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                lut_path: "luts/show-look.cube".into(),
+                interpolation: None,
+                strength: Some(0.6),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("strength")
+                .and_then(|v| v.as_f64()),
+            Some(0.6)
+        );
+
+        let err = apply(
+            &tl,
+            &EdlEnvelope {
+                ops: vec![EdlOp::ApplyLut {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    lut_path: "luts/show-look.cube".into(),
+                    interpolation: None,
+                    strength: Some(1.5),
+                }],
+            },
+            &AnchorContext::empty(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("strength")),
+            "expected strength out-of-range error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn apply_lut_rejects_malformed_cube_at_apply_time() {
+        let tl = timeline_with_three_clips();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("luts")).unwrap();
+        // Declared size 3 but only one row of data — RowCountMismatch.
+        std::fs::write(
+            dir.path().join("luts/broken.cube"),
+            "LUT_3D_SIZE 3\n0.0 0.0 0.0\n",
+        )
+        .unwrap();
+        let ctx = AnchorContext::with_project_root(dir.path());
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ApplyLut {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                lut_path: "luts/broken.cube".into(),
+                interpolation: None,
+                strength: None,
+            }],
+        };
+        let err = apply(&tl, &env, &ctx).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("not a valid .cube LUT")),
+            "expected structured .cube parse error, got {err:?}",
         );
     }
 
@@ -8959,6 +9127,7 @@ mod tests {
                     },
                     lut_path: "luts/show-look.cube".into(),
                     interpolation: None,
+                    strength: None,
                 },
                 EdlOp::SetVolume {
                     anchor: Anchor::TranscriptSnippet {

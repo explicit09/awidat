@@ -345,6 +345,7 @@ dependencies = [
  "awidat-config",
  "awidat-effects",
  "awidat-index",
+ "awidat-lut",
  "awidat-mcp",
  "awidat-proto",
  "awidat-render",
@@ -456,6 +457,13 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+]
+
+[[package]]
+name = "awidat-lut"
+version = "0.1.0"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]

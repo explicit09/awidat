@@ -367,6 +367,13 @@ pub enum EdlOp {
         /// Optional FFmpeg `lut3d` interpolation mode.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         interpolation: Option<String>,
+        /// Optional blend strength in `0.0..=1.0`. `None` or `1.0`
+        /// applies the LUT at full intensity (single `lut3d` filter).
+        /// Anything below 1.0 lowers the render to a
+        /// `split → lut3d → blend=all_opacity` pattern so the LUT
+        /// mixes with the un-graded source.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        strength: Option<f64>,
     },
     /// Remove the clip-level LUT effect, leaving other effects intact.
     RemoveLut {

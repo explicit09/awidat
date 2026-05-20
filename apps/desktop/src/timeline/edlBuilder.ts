@@ -142,6 +142,12 @@ export type EdlOp =
       anchor: EdlAnchor;
       lutPath: string;
       interpolation?: "nearest" | "trilinear" | "tetrahedral" | "pyramid" | "prism";
+      /**
+       * Blend strength in `[0, 1]`. `undefined` or `1` means the LUT
+       * is applied at full intensity; lower values mix the LUT with
+       * the un-graded source via FFmpeg's `blend=all_opacity` op.
+       */
+      strength?: number;
     }
   | { kind: "remove_lut"; anchor: EdlAnchor }
   | {
@@ -343,6 +349,8 @@ function appendOp(lines: string[], op: EdlOp): void {
       lines.push(`+ lut_path: ${op.lutPath.replace(/"/g, "")}`);
       if (op.interpolation !== undefined)
         lines.push(`+ interpolation: ${op.interpolation}`);
+      if (op.strength !== undefined)
+        lines.push(`+ strength: ${formatFloat(op.strength)}`);
       break;
     case "remove_lut":
       lines.push("*** Remove LUT");

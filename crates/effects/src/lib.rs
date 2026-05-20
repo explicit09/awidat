@@ -50,6 +50,16 @@ const COLOR_PARAMS: &[ParamDef] = &[
 const LUT_PARAMS: &[ParamDef] = &[
     ParamDef::string("lut_path", true, None),
     ParamDef::string("interpolation", false, None),
+    // 1.0 = full LUT (current behavior); 0.0 = bypass. Render emits
+    // a split/blend pattern when this drops below 1.0; see
+    // `lut3d_filter_block` in crates/render/src/timeline.rs.
+    ParamDef::number(
+        "strength",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(1.0)),
+    ),
 ];
 
 const TITLE_PARAMS: &[ParamDef] = &[

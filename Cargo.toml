@@ -10,6 +10,7 @@ members = [
     "crates/cli",
     "crates/render",
     "crates/effects",
+    "crates/lut",
     "crates/test-support",
     "crates/config",
     "crates/secrets",
@@ -86,6 +87,7 @@ awidat-sandboxing = { path = "crates/sandboxing" }
 awidat-tui = { path = "crates/tui" }
 awidat-render = { path = "crates/render" }
 awidat-effects = { path = "crates/effects" }
+awidat-lut = { path = "crates/lut" }
 awidat-config = { path = "crates/config" }
 awidat-secrets = { path = "crates/secrets" }
 awidat-index = { path = "crates/index" }

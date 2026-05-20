@@ -825,10 +825,12 @@ impl OpBuilder {
                     }
                 })?;
                 let interpolation = take_field_string(&mut fields, "interpolation");
+                let strength = take_field_f64(&mut fields, "strength");
                 Ok(EdlOp::ApplyLut {
                     anchor,
                     lut_path,
                     interpolation,
+                    strength,
                 })
             }
             OpKind::RemoveLut => {
@@ -2213,10 +2215,31 @@ mod tests {
                 anchor,
                 lut_path,
                 interpolation,
+                strength,
             } => {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-4"));
                 assert_eq!(lut_path, "luts/show-look.cube");
                 assert_eq!(interpolation.as_deref(), Some("tetrahedral"));
+                assert_eq!(*strength, None);
+            }
+            other => panic!("want ApplyLut, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_apply_lut_with_strength() {
+        let text = "\
+*** Begin EDL
+*** Apply LUT
+@@ anchor: clip_uuid=clip-4
++ lut_path: luts/show-look.cube
++ strength: 0.6
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::ApplyLut { strength, .. } => {
+                assert_eq!(*strength, Some(0.6));
             }
             other => panic!("want ApplyLut, got {other:?}"),
         }
