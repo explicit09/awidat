@@ -13,8 +13,8 @@ use awidat_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, CapabilityArea, ColorFinishingState, CompositionGraph,
     CompositionNode, CompositionNodeType, DeliveryPreflightInput, DeliveryProfile, Easing,
-    ExportPreset, ExpressionLink, ExpressionSource, FindingSeverity, GradeStack, GradeStage,
-    Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar, MotionGraphicsTemplate,
+    ExportPreset, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity, GradeStack,
+    GradeStage, Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar, MotionGraphicsTemplate,
     MotionPackage, PackageManifest, ParameterAnimation, PreflightReport, ProfessionalDiagnostic,
     ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract,
     StreamExportMode, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar,
@@ -25,7 +25,7 @@ use thiserror::Error;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::animation::keyframes_to_ffmpeg_expr;
-use crate::timeline::ColorCorrectionPlan;
+use crate::timeline::{ColorCorrectionPlan, TextReveal};
 use crate::{
     AudioAutomationPlan, AudioFxPlan, AudioTrackPlan, DuckingPlan, EqBandPlan, LoudnessTargetPlan,
     RenderJobSpec, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
@@ -1216,6 +1216,10 @@ fn clip_animation(
             parameter: parameter.into(),
         },
         keyframes,
+        pre_extrapolation: ExtrapolationMode::Hold,
+        post_extrapolation: ExtrapolationMode::Hold,
+        motion_path: None,
+        metadata_only: false,
         rationale: Some(format!("lowered from motion template {template_id}")),
     }
 }
@@ -1237,6 +1241,8 @@ fn keyframe(time_s: f64, value: f64) -> Keyframe {
         interpolation: KeyframeInterpolation::Linear,
         easing: Easing::EaseInOut,
         bezier: None,
+        tangent_mode: Default::default(),
+        spring: None,
     }
 }
 
@@ -1302,6 +1308,7 @@ fn title_plan(
         color: "#FFFFFF".into(),
         font_weight: TitleWeight::Bold,
         animation,
+        reveal: TextReveal::None,
         role: "motion_template".into(),
         safe_area: Some("title_safe".into()),
         animations: Vec::new(),

@@ -8,11 +8,11 @@ use awidat_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, ColorFinishingState, CompositionGraph, CompositionNode,
     DeliveryPreflightInput, DeliveryProfile, ExportPreset, ExpressionLink, ExpressionSource,
-    FindingSeverity, GradeStack, GradeStage, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
-    MotionGraphicsTemplate, MotionPackage, ParameterAnimation, ReframeKeyframe, ReframePath,
-    ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract, StreamExportMode,
-    StreamExportSpec, StreamKind, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample,
-    TrackSidecar, TrackingPackage,
+    ExtrapolationMode, FindingSeverity, GradeStack, GradeStage, Keyframe, MaskKeyframe,
+    MaskOperation, MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
+    ReframeKeyframe, ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule,
+    StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, TemplateSlot,
+    TemplateSlotKind, TrackKind, TrackSample, TrackSidecar, TrackingPackage,
 };
 use awidat_render::professional::{
     DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
@@ -609,6 +609,10 @@ fn effect_parameter_registry_reports_units_and_validation() {
             parameter: "awidat.video_overlay.scale".into(),
         },
         keyframes: vec![Keyframe::linear(0.0, 0.0)],
+        pre_extrapolation: ExtrapolationMode::Hold,
+        post_extrapolation: ExtrapolationMode::Hold,
+        motion_path: None,
+        metadata_only: false,
         rationale: None,
     };
     let diagnostic = match diagnose_effect_parameter_animation(&invalid) {
@@ -1220,6 +1224,10 @@ fn package_animation(
             parameter: parameter.into(),
         },
         keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+        pre_extrapolation: ExtrapolationMode::Hold,
+        post_extrapolation: ExtrapolationMode::Hold,
+        motion_path: None,
+        metadata_only: false,
         rationale: None,
     }
 }

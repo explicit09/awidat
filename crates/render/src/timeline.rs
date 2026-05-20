@@ -33,7 +33,10 @@ use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::animation::{is_phase_3a_parameter, keyframes_to_ffmpeg_expr};
+use crate::animation::{
+    MotionPathCoordinate, is_phase_3a_parameter, keyframes_to_ffmpeg_expr_with_extrapolation,
+    motion_path_to_ffmpeg_expr,
+};
 use crate::job::{RenderJobSpec, RenderPlanLimitation};
 use crate::output_safety::{OutputPathPolicy, validate_render_output_path};
 
@@ -763,7 +766,10 @@ pub fn collect_timeline_full_plan(
             continue;
         };
         if matches!(track.kind, TrackKind::Audio) {
-            audio_tracks.push(collect_audio_track_plan(project_root, track)?);
+            let audio_selection =
+                collect_audio_track_plan(project_root, track, parameter_animations)?;
+            consumed_animation_ids.extend(audio_selection.consumed_animation_ids);
+            audio_tracks.push(audio_selection.track);
             continue;
         }
         if !matches!(track.kind, TrackKind::Video) {
@@ -1175,10 +1181,17 @@ fn read_video_overlay_mode(clip: &awidat_proto::otio::Clip) -> VideoOverlayMode 
     }
 }
 
+#[derive(Debug)]
+struct AudioTrackAnimationSelection {
+    track: AudioTrackPlan,
+    consumed_animation_ids: BTreeSet<String>,
+}
+
 fn collect_audio_track_plan(
     project_root: &Path,
     track: &awidat_proto::otio::Track,
-) -> Result<AudioTrackPlan, RenderTimelineError> {
+    animations: &[awidat_proto::professional::ParameterAnimation],
+) -> Result<AudioTrackAnimationSelection, RenderTimelineError> {
     let settings = parse_audio_track_settings(track);
     let mut items = Vec::new();
     for tc in &track.children {
@@ -1218,17 +1231,81 @@ fn collect_audio_track_plan(
             TrackChild::Transition(_) | TrackChild::Stack(_) => {}
         }
     }
-    Ok(AudioTrackPlan {
-        name: track.name.clone(),
-        role: settings.role,
-        volume: settings.volume,
-        volume_automation: None,
-        muted: settings.muted,
-        solo: settings.solo,
-        ducking: settings.ducking,
-        audio_fx: settings.audio_fx,
-        items,
+    let automation_selection = audio_volume_automation_for_track(animations, &track.name);
+    Ok(AudioTrackAnimationSelection {
+        track: AudioTrackPlan {
+            name: track.name.clone(),
+            role: settings.role,
+            volume: settings.volume,
+            volume_automation: automation_selection.automation,
+            muted: settings.muted,
+            solo: settings.solo,
+            ducking: settings.ducking,
+            audio_fx: settings.audio_fx,
+            items,
+        },
+        consumed_animation_ids: automation_selection.consumed_animation_ids,
     })
+}
+
+#[derive(Debug, Default)]
+struct AudioAutomationSelection {
+    automation: Option<AudioAutomationPlan>,
+    consumed_animation_ids: BTreeSet<String>,
+}
+
+fn audio_volume_automation_for_track(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    track_name: &str,
+) -> AudioAutomationSelection {
+    let mut selection = AudioAutomationSelection::default();
+    for animation in animations {
+        let awidat_proto::professional::AnimationTarget::TrackParameter { track, parameter } =
+            &animation.target
+        else {
+            continue;
+        };
+        if track != track_name || !matches!(parameter.as_str(), "volume" | "volume_db") {
+            continue;
+        }
+        selection
+            .consumed_animation_ids
+            .insert(animation.id.clone());
+        if selection.automation.is_some() {
+            continue;
+        }
+        let expression = audio_volume_automation_expression(
+            parameter,
+            &animation.keyframes,
+            animation.pre_extrapolation,
+            animation.post_extrapolation,
+        );
+        selection.automation = Some(AudioAutomationPlan {
+            parameter: parameter.clone(),
+            expression,
+            keyframes: animation.keyframes.clone(),
+        });
+    }
+    selection
+}
+
+fn audio_volume_automation_expression(
+    parameter: &str,
+    keyframes: &[awidat_proto::professional::Keyframe],
+    pre_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    post_extrapolation: awidat_proto::professional::ExtrapolationMode,
+) -> String {
+    let value_expr = keyframes_to_ffmpeg_expr_with_extrapolation(
+        keyframes,
+        "t",
+        pre_extrapolation,
+        post_extrapolation,
+    );
+    if parameter == "volume_db" {
+        format!("pow(10\\,({value_expr})/20)")
+    } else {
+        value_expr
+    }
 }
 
 fn synthesize_split_edit_audio_tracks(
@@ -1466,6 +1543,12 @@ fn parse_title_plan(
         "slide_out" => TitleAnimation::SlideOut,
         _ => TitleAnimation::None,
     };
+    let reveal = match m.get("reveal").and_then(|v| v.as_str()).unwrap_or("none") {
+        "typewriter" => TextReveal::Typewriter,
+        "word" => TextReveal::Word,
+        "line" => TextReveal::Line,
+        _ => TextReveal::None,
+    };
     let role = m
         .get("role")
         .and_then(|v| v.as_str())
@@ -1488,6 +1571,7 @@ fn parse_title_plan(
         color,
         font_weight,
         animation,
+        reveal,
         role,
         safe_area,
         animations,
@@ -1512,6 +1596,12 @@ pub struct RenderParameterAnimation {
     pub parameter: String,
     /// Clip-local keyframes.
     pub keyframes: Vec<awidat_proto::professional::Keyframe>,
+    /// Behavior before the first keyframe.
+    pub pre_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    /// Behavior after the last keyframe.
+    pub post_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    /// Optional 2D path for position animations.
+    pub motion_path: Option<awidat_proto::professional::MotionPath>,
 }
 
 #[derive(Debug, Default)]
@@ -1585,6 +1675,9 @@ fn render_animations_for_clip_with_limitations(
         selection.animations.push(RenderParameterAnimation {
             parameter: parameter.clone(),
             keyframes: animation.keyframes.clone(),
+            pre_extrapolation: animation.pre_extrapolation,
+            post_extrapolation: animation.post_extrapolation,
+            motion_path: animation.motion_path.clone(),
         });
     });
     selection
@@ -1731,12 +1824,27 @@ pub struct TitlePlan {
     pub font_weight: TitleWeight,
     /// Entry / exit animation.
     pub animation: TitleAnimation,
+    /// Text reveal/write-on behavior.
+    pub reveal: TextReveal,
     /// Overlay role, usually `"title"` or `"caption"`.
     pub role: String,
     /// Optional safe-area profile carried by caption nodes.
     pub safe_area: Option<String>,
     /// Supported Phase 3A parameter animations attached to this title.
     pub animations: Vec<RenderParameterAnimation>,
+}
+
+/// Text reveal/write-on mode for title overlays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextReveal {
+    /// Show the full string for the whole title window.
+    None,
+    /// Reveal one Unicode scalar at a time.
+    Typewriter,
+    /// Reveal one whitespace-delimited word at a time.
+    Word,
+    /// Reveal one line at a time.
+    Line,
 }
 
 /// Mirrors `awidat_core::edl::op::TitlePosition` to avoid a render
@@ -2287,7 +2395,14 @@ fn append_video_overlays(
                 (scale_expr, x, y)
             }
         };
-        let x_expr = if has_overlay_animation(overlay, "overlay.x") {
+        let x_expr = if has_overlay_animation(overlay, "overlay.position") {
+            format!(
+                "({})+main_w*({})",
+                x_expr,
+                overlay_motion_path_expr(overlay, MotionPathCoordinate::X, "t")
+                    .unwrap_or_else(|| "0".to_string())
+            )
+        } else if has_overlay_animation(overlay, "overlay.x") {
             format!(
                 "({})+main_w*({})",
                 x_expr,
@@ -2296,7 +2411,14 @@ fn append_video_overlays(
         } else {
             x_expr
         };
-        let y_expr = if has_overlay_animation(overlay, "overlay.y") {
+        let y_expr = if has_overlay_animation(overlay, "overlay.position") {
+            format!(
+                "({})+main_h*({})",
+                y_expr,
+                overlay_motion_path_expr(overlay, MotionPathCoordinate::Y, "t")
+                    .unwrap_or_else(|| "0".to_string())
+            )
+        } else if has_overlay_animation(overlay, "overlay.y") {
             format!(
                 "({})+main_h*({})",
                 y_expr,
@@ -2333,6 +2455,22 @@ fn append_video_overlays(
     }
 }
 
+fn overlay_motion_path_expr(
+    overlay: &VideoOverlayPlan,
+    coordinate: MotionPathCoordinate,
+    time_var: &str,
+) -> Option<String> {
+    overlay
+        .animations
+        .iter()
+        .find(|animation| animation.parameter == "overlay.position")
+        .and_then(|animation| animation.motion_path.as_ref())
+        .map(|path| {
+            let local_time_var = format!("({time_var}-{})", overlay.track_start_s);
+            motion_path_to_ffmpeg_expr(path, coordinate, &local_time_var)
+        })
+}
+
 fn has_overlay_animation(overlay: &VideoOverlayPlan, parameter: &str) -> bool {
     overlay
         .animations
@@ -2352,7 +2490,12 @@ fn overlay_animation_value_expr(
         .find(|animation| animation.parameter == parameter)
         .map(|animation| {
             let local_time_var = format!("({time_var}-{})", overlay.track_start_s);
-            keyframes_to_ffmpeg_expr(&animation.keyframes, &local_time_var)
+            keyframes_to_ffmpeg_expr_with_extrapolation(
+                &animation.keyframes,
+                &local_time_var,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+            )
         })
         .unwrap_or_else(|| fallback.to_string())
 }
@@ -3271,7 +3414,20 @@ fn format_drawtext_filter(
     t: &TitlePlan,
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
 ) -> String {
-    let escaped_text = drawtext_escape(&t.text);
+    if t.reveal != TextReveal::None {
+        return format_revealed_drawtext_filters(t, broadcast_overlay);
+    }
+    format_drawtext_filter_with_text(t, &t.text, t.start_s, t.end_s, broadcast_overlay)
+}
+
+fn format_drawtext_filter_with_text(
+    t: &TitlePlan,
+    text: &str,
+    start_s: f64,
+    end_s: f64,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let escaped_text = drawtext_escape(text);
     let resting_y = match t.position {
         TitlePosition::Top => "h*0.05".to_string(),
         TitlePosition::Center => "(h-text_h)/2".to_string(),
@@ -3297,7 +3453,13 @@ fn format_drawtext_filter(
     } else {
         anim.alpha
     };
-    let x = if has_title_animation(t, "title.x") {
+    let x = if has_title_animation(t, "title.position") {
+        format!(
+            "({})+w*({})",
+            anim.x,
+            title_motion_path_expr(t, MotionPathCoordinate::X).unwrap_or_else(|| "0".to_string())
+        )
+    } else if has_title_animation(t, "title.x") {
         format!(
             "({})+w*({})",
             anim.x,
@@ -3306,7 +3468,13 @@ fn format_drawtext_filter(
     } else {
         anim.x
     };
-    let y = if has_title_animation(t, "title.y") {
+    let y = if has_title_animation(t, "title.position") {
+        format!(
+            "({})+h*({})",
+            anim.y,
+            title_motion_path_expr(t, MotionPathCoordinate::Y).unwrap_or_else(|| "0".to_string())
+        )
+    } else if has_title_animation(t, "title.y") {
         format!(
             "({})+h*({})",
             anim.y,
@@ -3331,9 +3499,83 @@ fn format_drawtext_filter(
         x = x,
         y = y,
         alpha = alpha,
-        start = t.start_s,
-        end = t.end_s,
+        start = start_s,
+        end = end_s,
     )
+}
+
+fn title_motion_path_expr(title: &TitlePlan, coordinate: MotionPathCoordinate) -> Option<String> {
+    title
+        .animations
+        .iter()
+        .find(|animation| animation.parameter == "title.position")
+        .and_then(|animation| animation.motion_path.as_ref())
+        .map(|path| {
+            let local_time_var = format!("(t-{})", title.start_s);
+            motion_path_to_ffmpeg_expr(path, coordinate, &local_time_var)
+        })
+}
+
+fn format_revealed_drawtext_filters(
+    t: &TitlePlan,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let steps = reveal_steps(&t.text, t.reveal);
+    if steps.is_empty() {
+        return String::new();
+    }
+    let duration = (t.end_s - t.start_s).max(0.0);
+    let step_duration = duration / steps.len() as f64;
+    steps
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let start_s = t.start_s + step_duration * index as f64;
+            let end_s = if index + 1 == steps.len() {
+                t.end_s
+            } else {
+                t.start_s + step_duration * (index + 1) as f64
+            };
+            format_drawtext_filter_with_text(t, text, start_s, end_s, broadcast_overlay)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn reveal_steps(text: &str, reveal: TextReveal) -> Vec<String> {
+    match reveal {
+        TextReveal::None => vec![text.to_string()],
+        TextReveal::Typewriter => text
+            .char_indices()
+            .map(|(index, character)| {
+                let end = index + character.len_utf8();
+                text[..end].to_string()
+            })
+            .collect(),
+        TextReveal::Word => {
+            let mut steps = Vec::new();
+            let mut end = 0;
+            for word in text.split_whitespace() {
+                if let Some(relative) = text[end..].find(word) {
+                    end += relative + word.len();
+                    steps.push(text[..end].to_string());
+                }
+            }
+            steps
+        }
+        TextReveal::Line => {
+            let mut steps = Vec::new();
+            let mut end = 0;
+            for line in text.split_inclusive('\n') {
+                end += line.len();
+                steps.push(text[..end].to_string());
+            }
+            if steps.is_empty() && !text.is_empty() {
+                steps.push(text.to_string());
+            }
+            steps
+        }
+    }
 }
 
 fn has_title_animation(title: &TitlePlan, parameter: &str) -> bool {
@@ -3350,7 +3592,12 @@ fn title_animation_value_expr(title: &TitlePlan, parameter: &str, fallback: &str
         .find(|animation| animation.parameter == parameter)
         .map(|animation| {
             let local_time_var = format!("(t-{})", title.start_s);
-            keyframes_to_ffmpeg_expr(&animation.keyframes, &local_time_var)
+            keyframes_to_ffmpeg_expr_with_extrapolation(
+                &animation.keyframes,
+                &local_time_var,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+            )
         })
         .unwrap_or_else(|| fallback.to_string())
 }
@@ -5415,7 +5662,8 @@ mod tests {
         TimeRange as OtioRange, Timeline, Track, TrackChild, TrackKind,
     };
     use awidat_proto::professional::{
-        BezierHandles, Easing, Keyframe, KeyframeInterpolation, ParameterAnimation,
+        BezierHandles, Easing, ExtrapolationMode, Keyframe, KeyframeInterpolation,
+        ParameterAnimation,
     };
     use std::fs;
 
@@ -5523,6 +5771,40 @@ mod tests {
             .unwrap()
             .parameter_animations
             .push(animation);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_audio_track_animation(
+        dir: &Path,
+        animation: ParameterAnimation,
+    ) -> PathBuf {
+        let asset_rel = "raw/music.wav";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(asset_rel), b"stub").unwrap();
+
+        let mut clip = Clip::empty("music-clip".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 48_000.0),
+            RationalTime::new(2.0 * 48_000.0, 48_000.0),
+        ));
+
+        let mut track = Track::empty("Music", TrackKind::Audio);
+        track.children.push(TrackChild::Clip(clip));
+
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        tl.metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .parameter_animations
+            .push(animation);
+
+        let otio_path = dir.join(files::OTIO);
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
         otio_path
     }
@@ -5642,9 +5924,15 @@ mod tests {
                             in_x: 0.25,
                             in_y: 1.0,
                         }),
+                        tangent_mode: Default::default(),
+                        spring: None,
                     },
                     Keyframe::linear(1.0, 1.0),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
         );
@@ -5680,9 +5968,15 @@ mod tests {
                             in_x: 0.25,
                             in_y: 1.0,
                         }),
+                        tangent_mode: Default::default(),
+                        spring: None,
                     },
                     Keyframe::linear(1.0, 1.0),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
         );
@@ -5704,6 +5998,10 @@ mod tests {
                     parameter: "awidat.color_correction.brightness".to_string(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.2), Keyframe::linear(1.0, 0.4)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: true,
                 rationale: None,
             },
         );
@@ -5716,6 +6014,40 @@ mod tests {
             spec.limitations[0].animation_id.as_deref(),
             Some("anim-base-brightness")
         );
+    }
+
+    #[test]
+    fn track_volume_db_animation_lowers_to_audio_automation_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_audio_track_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "music-duck".to_string(),
+                target: awidat_proto::professional::AnimationTarget::TrackParameter {
+                    track: "Music".to_string(),
+                    parameter: "volume_db".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -18.0), Keyframe::linear(2.0, -6.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let (_, _, _, _, _, audio_tracks, _, limitations) =
+            collect_timeline_full_plan(dir.path()).unwrap();
+
+        assert!(limitations.is_empty());
+        assert_eq!(audio_tracks.len(), 1);
+        let automation = audio_tracks[0]
+            .volume_automation
+            .as_ref()
+            .expect("track volume animation should lower");
+        assert_eq!(automation.parameter, "volume_db");
+        assert!(automation.expression.contains("pow(10\\,"));
+        assert_eq!(automation.keyframes.len(), 2);
     }
 
     #[test]
@@ -6194,6 +6526,60 @@ mod tests {
             "expected volume automation in filter graph: {filter}"
         );
         assert!(filter.contains(":eval=frame[atrackauto0]"));
+    }
+
+    #[test]
+    fn explicit_audio_track_volume_automation_uses_post_concat_track_time() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 6.0)];
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "music".into(),
+            role: "music".into(),
+            volume: 1.0,
+            volume_automation: Some(AudioAutomationPlan {
+                parameter: "volume".into(),
+                expression: "if(lt(t\\,5)\\,0.25\\,1)".into(),
+                keyframes: vec![Keyframe::linear(5.0, 0.25), Keyframe::linear(6.0, 1.0)],
+            }),
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![
+                AudioTrackItemPlan::Gap { duration_s: 5.0 },
+                AudioTrackItemPlan::Clip(AudioClipPlan {
+                    asset_path: PathBuf::from("/tmp/music.wav"),
+                    start_s: 0.0,
+                    duration_s: 1.0,
+                    volume: None,
+                    speed: None,
+                    fade_in_s: None,
+                    fade_out_s: None,
+                    audio_fx: None,
+                }),
+            ],
+        }];
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+
+        assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=5[agap0_0]"));
+        assert!(filter.contains("volume='if(lt(t\\,5)\\,0.25\\,1)':eval=frame[atrackauto0]"));
+        assert!(
+            !filter.contains("t+5"),
+            "automation runs after track concat, where t already includes leading gaps: {filter}"
+        );
     }
 
     #[test]
@@ -6999,6 +7385,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation: TitleAnimation::None,
+            reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
             animations: Vec::new(),
@@ -7048,6 +7435,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: TitleWeight::Normal,
                 animation: TitleAnimation::None,
+                reveal: TextReveal::None,
                 role: "title".into(),
                 safe_area: None,
                 animations: Vec::new(),
@@ -7061,6 +7449,7 @@ mod tests {
                 color: "#FFAA00".into(),
                 font_weight: TitleWeight::Bold,
                 animation: TitleAnimation::None,
+                reveal: TextReveal::None,
                 role: "caption".into(),
                 safe_area: Some("mobile".into()),
                 animations: Vec::new(),
@@ -7094,6 +7483,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            reveal: TextReveal::None,
             role: "caption".into(),
             safe_area: Some("mobile".into()),
             animations: Vec::new(),
@@ -7128,6 +7518,35 @@ mod tests {
     }
 
     #[test]
+    fn typewriter_title_reveal_emits_prefix_drawtext_windows() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.text = "Hi".into();
+        title.start_s = 1.0;
+        title.end_s = 3.0;
+        title.reveal = TextReveal::Typewriter;
+
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+
+        assert!(
+            plan.filter_complex.contains("drawtext=text='H'"),
+            "typewriter reveal should render first prefix: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains("drawtext=text='Hi'"),
+            "typewriter reveal should render final prefix: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains("enable='between(t\\,1\\,2)'")
+                && plan.filter_complex.contains("enable='between(t\\,2\\,3)'"),
+            "typewriter reveal should split title window across prefixes: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
     fn long_form_broadcast_overlay_suppresses_generic_titles() {
         let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
         let title = TitlePlan {
@@ -7139,6 +7558,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
             animations: Vec::new(),
@@ -7302,6 +7722,9 @@ mod tests {
                         awidat_proto::professional::Keyframe::linear(0.0, 0.0),
                         awidat_proto::professional::Keyframe::linear(1.0, -0.1),
                     ],
+                    pre_extrapolation: ExtrapolationMode::Hold,
+                    post_extrapolation: ExtrapolationMode::Hold,
+                    motion_path: None,
                 },
                 RenderParameterAnimation {
                     parameter: "overlay.scale".to_string(),
@@ -7309,6 +7732,9 @@ mod tests {
                         awidat_proto::professional::Keyframe::linear(0.0, 1.0),
                         awidat_proto::professional::Keyframe::linear(1.0, 1.2),
                     ],
+                    pre_extrapolation: ExtrapolationMode::Hold,
+                    post_extrapolation: ExtrapolationMode::Hold,
+                    motion_path: None,
                 },
             ],
         };
@@ -7356,6 +7782,9 @@ mod tests {
                     awidat_proto::professional::Keyframe::linear(0.0, 0.0),
                     awidat_proto::professional::Keyframe::linear(1.0, 1.0),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
             }],
         };
 
@@ -7413,6 +7842,9 @@ mod tests {
                         awidat_proto::professional::Keyframe::linear(0.0, 0.2),
                         awidat_proto::professional::Keyframe::linear(1.0, 0.8),
                     ],
+                    pre_extrapolation: ExtrapolationMode::Hold,
+                    post_extrapolation: ExtrapolationMode::Hold,
+                    motion_path: None,
                 },
                 RenderParameterAnimation {
                     parameter: "overlay.scale".into(),
@@ -7420,6 +7852,9 @@ mod tests {
                         awidat_proto::professional::Keyframe::linear(0.0, 0.25),
                         awidat_proto::professional::Keyframe::linear(1.0, 0.45),
                     ],
+                    pre_extrapolation: ExtrapolationMode::Hold,
+                    post_extrapolation: ExtrapolationMode::Hold,
+                    motion_path: None,
                 },
             ],
         };
@@ -7481,6 +7916,10 @@ mod tests {
                 parameter: "title.opacity".to_string(),
             },
             keyframes: vec![awidat_proto::professional::Keyframe::linear(0.0, 0.0)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
             rationale: None,
         }];
 
@@ -7499,6 +7938,10 @@ mod tests {
                 parameter: "overlay.x".to_string(),
             },
             keyframes: vec![awidat_proto::professional::Keyframe::linear(0.0, 0.0)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
             rationale: None,
         }];
 
@@ -7590,6 +8033,9 @@ mod tests {
                 awidat_proto::professional::Keyframe::linear(0.0, 0.0),
                 awidat_proto::professional::Keyframe::linear(1.0, 1.0),
             ],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
         }];
 
         let argv = build_timeline_argv_full(
@@ -7624,6 +8070,9 @@ mod tests {
                     awidat_proto::professional::Keyframe::linear(0.0, -0.1),
                     awidat_proto::professional::Keyframe::linear(1.0, 0.1),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
             },
             RenderParameterAnimation {
                 parameter: "title.y".to_string(),
@@ -7631,6 +8080,9 @@ mod tests {
                     awidat_proto::professional::Keyframe::linear(0.0, 0.0),
                     awidat_proto::professional::Keyframe::linear(1.0, 0.2),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
             },
         ];
 
@@ -7665,6 +8117,9 @@ mod tests {
                 awidat_proto::professional::Keyframe::linear(0.0, 48.0),
                 awidat_proto::professional::Keyframe::linear(1.0, 72.0),
             ],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
         }];
 
         let argv = build_timeline_argv_full(
@@ -7689,6 +8144,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn title_motion_path_offsets_position() {
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.animations = vec![RenderParameterAnimation {
+            parameter: "title.position".to_string(),
+            keyframes: Vec::new(),
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: Some(awidat_proto::professional::MotionPath {
+                points: vec![
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 0.0,
+                        x: -0.2,
+                        y: 0.0,
+                    },
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 1.0,
+                        x: 0.2,
+                        y: 0.4,
+                    },
+                ],
+            }),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &[],
+            &[],
+            &[],
+            &[title],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("x=((w-text_w)/2)+w*(if(lt((t-1)"),
+            "title.position path should drive x offset: {filter}"
+        );
+        assert!(
+            filter.contains("y=((h-text_h)/2)+h*(if(lt((t-1)"),
+            "title.position path should drive y offset: {filter}"
+        );
+    }
+
     fn title(animation: TitleAnimation, position: TitlePosition) -> TitlePlan {
         TitlePlan {
             text: "Hi".into(),
@@ -7699,6 +8200,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation,
+            reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
             animations: Vec::new(),
