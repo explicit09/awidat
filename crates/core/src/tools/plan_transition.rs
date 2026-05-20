@@ -5,7 +5,7 @@
 //! returned EDL fragment still has to go through `apply_edl`.
 
 use async_trait::async_trait;
-use awidat_proto::transitions::{BuiltinTransition, lookup_builtin_transition};
+use awidat_proto::transitions::{BuiltinTransition, MotionAlignment, lookup_builtin_transition};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -35,6 +35,11 @@ struct ContextSummary {
     continuity_verdict: String,
     max_centered_duration_s: Option<f64>,
     missing_signals: Vec<String>,
+    outgoing_motion_direction: Option<MotionAlignment>,
+    incoming_motion_direction: Option<MotionAlignment>,
+    motion_match: Option<String>,
+    motion_match_confidence: Option<f64>,
+    either_side_static: bool,
 }
 
 #[async_trait]
@@ -139,12 +144,36 @@ fn parse_context(value: &serde_json::Value) -> Result<ContextSummary, FunctionCa
                 .collect()
         })
         .unwrap_or_default();
+    let outgoing_motion_direction = value
+        .pointer("/visual_signals/outgoing/motion_direction")
+        .and_then(|v| v.as_str())
+        .and_then(MotionAlignment::from_hint);
+    let incoming_motion_direction = value
+        .pointer("/visual_signals/incoming/motion_direction")
+        .and_then(|v| v.as_str())
+        .and_then(MotionAlignment::from_hint);
+    let motion_match = value
+        .pointer("/visual_signals/motion_match")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let motion_match_confidence = value
+        .pointer("/visual_signals/motion_match_confidence")
+        .and_then(|v| v.as_f64());
+    let either_side_static = value
+        .pointer("/visual_signals/either_side_static")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     Ok(ContextSummary {
         from_uuid,
         to_uuid,
         continuity_verdict,
         max_centered_duration_s,
         missing_signals,
+        outgoing_motion_direction,
+        incoming_motion_direction,
+        motion_match,
+        motion_match_confidence,
+        either_side_static,
     })
 }
 
@@ -161,6 +190,9 @@ fn recommend(
         );
     };
 
+    let direction = direction
+        .and_then(MotionAlignment::from_hint)
+        .or_else(|| inferred_motion_direction(context));
     let transition_id = transition_for_job(job, direction);
     let Some(transition) = lookup_builtin_transition(transition_id) else {
         return hard_cut(
@@ -169,6 +201,11 @@ fn recommend(
             "The requested transition job does not map to a supported Awidat transition id.",
         );
     };
+
+    if let Some(reason) = incompatibility_reason(transition, context, job) {
+        return hard_cut(context, "transition_incompatible", &reason);
+    }
+
     let duration_s = clamped_duration(transition, context.max_centered_duration_s);
     if duration_s < transition.min_duration_s {
         return hard_cut(
@@ -180,7 +217,7 @@ fn recommend(
 
     let intent = intent_for_job(job);
     let energy = energy_for_job(job);
-    let direction = transition_direction(transition.id, direction);
+    let direction = transition_direction(transition, direction);
     let reason = transition_reason(job, transition, context, direction);
     serde_json::json!({
         "recommended": {
@@ -189,7 +226,7 @@ fn recommend(
             "duration_s": round3(duration_s),
             "intent": intent,
             "energy": energy,
-            "direction": direction,
+            "direction": direction.map(|d| d.as_str()),
             "reason": reason,
         },
         "alternates": [
@@ -202,6 +239,48 @@ fn recommend(
     })
 }
 
+/// Returns a human reason when the chosen transition's metadata is
+/// incompatible with the cut, or `None` when the transition is fine.
+fn incompatibility_reason(
+    transition: &BuiltinTransition,
+    context: &ContextSummary,
+    job: &str,
+) -> Option<String> {
+    if transition.avoid_for.contains(&"static_dialogue") && context.either_side_static {
+        return Some(format!(
+            "{} is marked avoid_for static scenes and the boundary has a near-static side; \
+             prefer a hard cut or a non-motion transition.",
+            transition.display_name
+        ));
+    }
+    if transition.avoid_for.contains(&job) {
+        return Some(format!(
+            "{} is marked avoid_for {job}; the metadata says this transition undermines this \
+             editorial job rather than serving it.",
+            transition.display_name
+        ));
+    }
+    if transition.requires_motion_continuity
+        && context.motion_match.as_deref() == Some("opposed")
+    {
+        return Some(format!(
+            "{} requires motion continuity and the boundary shows opposed screen-direction \
+             motion; a motion-following transition would cut against the action.",
+            transition.display_name
+        ));
+    }
+    None
+}
+
+fn inferred_motion_direction(context: &ContextSummary) -> Option<MotionAlignment> {
+    match context.motion_match.as_deref() {
+        Some("aligned") => context
+            .outgoing_motion_direction
+            .or(context.incoming_motion_direction),
+        _ => None,
+    }
+}
+
 fn job_from_context(context: &ContextSummary) -> Option<&'static str> {
     match context.continuity_verdict.as_str() {
         "dirty" | "risky" => Some("hide_motion_jump"),
@@ -209,7 +288,7 @@ fn job_from_context(context: &ContextSummary) -> Option<&'static str> {
     }
 }
 
-fn transition_for_job(job: &str, direction: Option<&str>) -> &'static str {
+fn transition_for_job(job: &str, direction: Option<MotionAlignment>) -> &'static str {
     match job {
         "beat_hit" => "awidat.flash_white",
         "soft_time_passage" => "awidat.cross_dissolve",
@@ -217,8 +296,8 @@ fn transition_for_job(job: &str, direction: Option<&str>) -> &'static str {
         "visual_match" => "awidat.match_dissolve",
         "style_accent" => "awidat.motion_blur",
         "hide_motion_jump" => match direction {
-            Some("left") => "awidat.whip_pan_left",
-            Some("right") => "awidat.whip_pan_right",
+            Some(MotionAlignment::Left) => "awidat.whip_pan_left",
+            Some(MotionAlignment::Right) => "awidat.whip_pan_right",
             _ => "awidat.motion_blur",
         },
         _ => "awidat.motion_blur",
@@ -246,13 +325,11 @@ fn energy_for_job(job: &str) -> f64 {
     }
 }
 
-fn transition_direction<'a>(transition_id: &str, direction: Option<&'a str>) -> Option<&'a str> {
-    direction.filter(|_| {
-        transition_id.contains("left")
-            || transition_id.contains("right")
-            || transition_id.contains("slide")
-            || transition_id.contains("push")
-    })
+fn transition_direction(
+    transition: &BuiltinTransition,
+    direction: Option<MotionAlignment>,
+) -> Option<MotionAlignment> {
+    transition.motion_alignment.or(direction)
 }
 
 fn clamped_duration(transition: &BuiltinTransition, max_centered_s: Option<f64>) -> f64 {
@@ -267,10 +344,23 @@ fn transition_reason(
     job: &str,
     transition: &BuiltinTransition,
     context: &ContextSummary,
-    direction: Option<&str>,
+    direction: Option<MotionAlignment>,
 ) -> String {
     let direction_text = direction
-        .map(|d| format!(" following {d} screen motion"))
+        .map(|d| format!(" following {} screen motion", d.as_str()))
+        .unwrap_or_default();
+    let motion_match_text = match context.motion_match.as_deref() {
+        Some("aligned") if transition.requires_motion_continuity => {
+            " Outgoing and incoming motion are aligned, which matches this transition's motion-continuity expectation.".to_string()
+        }
+        Some("opposed") if transition.requires_motion_continuity => {
+            " Note: motion appears opposed; verify direction before applying.".to_string()
+        }
+        _ => String::new(),
+    };
+    let confidence_text = context
+        .motion_match_confidence
+        .map(|c| format!(" Motion confidence {c:.2}."))
         .unwrap_or_default();
     let missing_text = if context.missing_signals.is_empty() {
         String::new()
@@ -281,7 +371,7 @@ fn transition_reason(
         )
     };
     format!(
-        "{job} gives this transition a named job; {} is the lowest supported visible transition for that job{direction_text}.{missing_text}",
+        "{job} gives this transition a named job; {} is the lowest supported visible transition for that job{direction_text}.{motion_match_text}{confidence_text}{missing_text}",
         transition.display_name
     )
 }
@@ -304,7 +394,7 @@ fn transition_edl(
     duration_s: f64,
     intent: &str,
     energy: f64,
-    direction: Option<&str>,
+    direction: Option<MotionAlignment>,
 ) -> String {
     let mut lines = vec![
         "*** Begin EDL".to_string(),
@@ -320,7 +410,7 @@ fn transition_edl(
         format!("+ energy: {:.3}", round3(energy)),
     ];
     if let Some(direction) = direction {
-        lines.push(format!("+ direction: {direction}"));
+        lines.push(format!("+ direction: {}", direction.as_str()));
     }
     lines.extend([
         format!("+ duration_s: {:.3}", round3(duration_s)),
@@ -368,6 +458,37 @@ mod tests {
                 "rules": []
             },
             "missing_signals": ["motion"]
+        })
+    }
+
+    fn context_with_motion(
+        verdict: &str,
+        max_duration_s: f64,
+        outgoing_direction: Option<&str>,
+        incoming_direction: Option<&str>,
+        motion_match: &str,
+        either_side_static: bool,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "between": {
+                "from": {"clip_uuid": "clip-a"},
+                "to": {"clip_uuid": "clip-b"}
+            },
+            "handles": {
+                "max_centered_duration_s": max_duration_s
+            },
+            "continuity": {
+                "verdict": verdict,
+                "rules": []
+            },
+            "visual_signals": {
+                "outgoing": {"motion_direction": outgoing_direction},
+                "incoming": {"motion_direction": incoming_direction},
+                "motion_match": motion_match,
+                "motion_match_confidence": 0.6,
+                "either_side_static": either_side_static
+            },
+            "missing_signals": []
         })
     }
 
@@ -441,6 +562,107 @@ mod tests {
         assert!(edl.contains("+ intent: hide_motion_jump"));
         assert!(edl.contains("+ duration_s: 0.180"));
         crate::edl::parse(edl).expect("visible transition fragment should parse as EDL");
+    }
+
+    #[tokio::test]
+    async fn opposed_motion_blocks_motion_continuity_transition() {
+        let out = PlanTransitionTool
+            .handle(
+                invoke(serde_json::json!({
+                    "context": context_with_motion(
+                        "dirty",
+                        0.4,
+                        Some("left"),
+                        Some("right"),
+                        "opposed",
+                        false,
+                    ),
+                    "objective": "hide_motion_jump",
+                    "direction": "left"
+                })),
+                fake_ctx(),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(
+            body.pointer("/recommended/decision")
+                .and_then(|v| v.as_str()),
+            Some("hard_cut")
+        );
+        assert!(
+            body.pointer("/recommended/reason")
+                .and_then(|v| v.as_str())
+                .is_some_and(|r| r.contains("motion continuity"))
+        );
+    }
+
+    #[tokio::test]
+    async fn static_side_blocks_motion_blur() {
+        let out = PlanTransitionTool
+            .handle(
+                invoke(serde_json::json!({
+                    "context": context_with_motion(
+                        "dirty",
+                        0.4,
+                        Some("left"),
+                        Some("left"),
+                        "aligned",
+                        true,
+                    ),
+                    "objective": "hide_motion_jump"
+                })),
+                fake_ctx(),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(
+            body.pointer("/recommended/decision")
+                .and_then(|v| v.as_str()),
+            Some("hard_cut")
+        );
+        assert!(
+            body.pointer("/recommended/reason")
+                .and_then(|v| v.as_str())
+                .is_some_and(|r| r.contains("static"))
+        );
+    }
+
+    #[tokio::test]
+    async fn aligned_motion_infers_direction_when_not_supplied() {
+        let out = PlanTransitionTool
+            .handle(
+                invoke(serde_json::json!({
+                    "context": context_with_motion(
+                        "dirty",
+                        0.4,
+                        Some("right"),
+                        Some("right"),
+                        "aligned",
+                        false,
+                    ),
+                    "objective": "hide_motion_jump"
+                })),
+                fake_ctx(),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(
+            body.pointer("/recommended/id").and_then(|v| v.as_str()),
+            Some("awidat.whip_pan_right")
+        );
+        assert_eq!(
+            body.pointer("/recommended/direction")
+                .and_then(|v| v.as_str()),
+            Some("right")
+        );
+        assert!(
+            body.pointer("/recommended/reason")
+                .and_then(|v| v.as_str())
+                .is_some_and(|r| r.contains("aligned"))
+        );
     }
 
     #[tokio::test]

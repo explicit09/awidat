@@ -11,6 +11,7 @@ use awidat_core::tool::ApprovalDecision;
 use awidat_desktop_protocol::Transcript;
 use awidat_proto::otio::Timeline;
 use awidat_render::JobManager;
+use awidat_render_gpu::{GpuTransitionRenderer, TransitionShader};
 use tokio::sync::{Mutex, oneshot};
 use tokio_util::sync::CancellationToken;
 
@@ -77,6 +78,12 @@ pub struct AwidatState {
     /// blob URLs load multi-GB proxies into RAM. This streams files
     /// over `http://127.0.0.1` with Range support instead.
     pub media_server: MediaServerState,
+    /// One [`GpuTransitionRenderer`] per shader, lazily initialized
+    /// on the first preview call. wgpu device/queue/pipeline creation
+    /// runs ~100ms+ on cold start so we keep them warm across scrub
+    /// frames. Wrapped in `Arc` so the command can drop the lock
+    /// before doing the GPU work itself.
+    pub gpu_preview_renderers: Mutex<HashMap<TransitionShader, Arc<GpuTransitionRenderer>>>,
 }
 
 /// Shared state for the localhost media streamer.

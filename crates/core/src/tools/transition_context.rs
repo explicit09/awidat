@@ -14,6 +14,7 @@ use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::continuity::{ContinuityInputs, CutKind, WhisperWord, assess_continuity};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::visual_signals::{BoundaryVisualSignals, SideSignals, load_boundary_signals};
 
 use super::assess_continuity::build_inputs;
 
@@ -136,6 +137,13 @@ impl ToolHandler for TransitionContextTool {
             boundary.to.source_start_s,
             boundary.to.source_start_s + window_s,
         );
+        let signals = load_boundary_signals(
+            &ctx.project_root,
+            &boundary.from.asset_id,
+            from_source_end_s,
+            &boundary.to.asset_id,
+            boundary.to.source_start_s,
+        );
 
         let body = serde_json::json!({
             "between": {
@@ -170,7 +178,8 @@ impl ToolHandler for TransitionContextTool {
                 "before_s": round3((boundary.at_s - 0.05).max(0.0)),
                 "after_s": round3(boundary.at_s + 0.05),
             },
-            "missing_signals": missing_signals(&inputs),
+            "visual_signals": visual_signals_packet(&signals),
+            "missing_signals": missing_signals(&inputs, &signals),
         });
         Ok(ToolOutput::text(body.to_string()))
     }
@@ -180,9 +189,12 @@ const DESCRIPTION: &str = "\
 Build a read-only transition decision context packet for one adjacent \
 timeline boundary. Returns adjacent clip metadata, timeline/source ranges, \
 transition handle availability, continuity verdict, transcript snippets, \
-suggested frame timestamps, and missing-signal names. This tool does not \
-choose or apply a transition; use it before deciding whether a hard cut, \
-semantic cut, split edit, b-roll cover, or visible transition is warranted.\
+suggested frame timestamps, per-side motion magnitudes and screen \
+directions (outgoing/incoming), motion-match classification \
+(aligned/opposed/orthogonal/unknown), and missing-signal names. This tool \
+does not choose or apply a transition; use it before deciding whether a \
+hard cut, semantic cut, split edit, b-roll cover, or visible transition \
+is warranted.\
 ";
 
 #[derive(Debug)]
@@ -377,7 +389,10 @@ fn word_packet(word: WhisperWord) -> serde_json::Value {
     })
 }
 
-fn missing_signals(inputs: &ContinuityInputs) -> Vec<&'static str> {
+fn missing_signals(
+    inputs: &ContinuityInputs,
+    signals: &BoundaryVisualSignals,
+) -> Vec<&'static str> {
     let mut missing = Vec::new();
     if inputs.whisper_words.is_none() {
         missing.push("whisper_words");
@@ -394,7 +409,30 @@ fn missing_signals(inputs: &ContinuityInputs) -> Vec<&'static str> {
     if inputs.silences.is_none() {
         missing.push("silences");
     }
+    if signals.outgoing.motion_direction.is_none() || signals.incoming.motion_direction.is_none() {
+        missing.push("motion_direction");
+    }
     missing
+}
+
+fn visual_signals_packet(signals: &BoundaryVisualSignals) -> serde_json::Value {
+    serde_json::json!({
+        "outgoing": side_signals_packet(&signals.outgoing),
+        "incoming": side_signals_packet(&signals.incoming),
+        "motion_match": signals.motion_match().as_str(),
+        "motion_match_confidence": signals.motion_match_confidence().map(round3),
+        "either_side_static": signals.either_side_static(),
+    })
+}
+
+fn side_signals_packet(side: &SideSignals) -> serde_json::Value {
+    serde_json::json!({
+        "motion_magnitude": side.motion_magnitude.map(round3),
+        "motion_direction": side.motion_direction.map(|d| d.as_str()),
+        "whip_pan_score": side.whip_pan_score.map(round3),
+        "occlusion_score": side.occlusion_score.map(round3),
+        "action_score": side.action_score.map(round3),
+    })
 }
 
 fn round3(value: f64) -> f64 {
@@ -463,6 +501,16 @@ mod tests {
         );
         clip.metadata.awidat = Some(meta);
         clip
+    }
+
+    fn write_shot_sidecar(project_root: &std::path::Path, asset: &str, shots: serde_json::Value) {
+        let path = project_root
+            .join("index")
+            .join("shot")
+            .join(format!("{asset}.json"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let payload = serde_json::json!({ "data": { "shots": shots } });
+        std::fs::write(path, serde_json::to_vec_pretty(&payload).unwrap()).unwrap();
     }
 
     fn write_whisper(project_root: &std::path::Path, asset: &str, words: Vec<(&str, f64, f64)>) {
@@ -598,6 +646,64 @@ mod tests {
             body.pointer("/missing_signals")
                 .and_then(|v| v.as_array())
                 .is_some_and(|signals| signals.iter().any(|s| s == "motion"))
+        );
+    }
+
+    #[tokio::test]
+    async fn surfaces_motion_direction_from_shot_sidecars() {
+        let dir = project_with_boundary();
+        write_shot_sidecar(
+            dir.path(),
+            "raw/a.mp4",
+            serde_json::json!([
+                {"start_s": 0.0, "end_s": 10.0, "motion_magnitude": 0.6, "dominant_direction": "left", "whip_pan_score": 0.7}
+            ]),
+        );
+        write_shot_sidecar(
+            dir.path(),
+            "raw/b.mp4",
+            serde_json::json!([
+                {"start_s": 0.0, "end_s": 8.0, "motion_magnitude": 0.4, "dominant_direction": "left"}
+            ]),
+        );
+        let out = TransitionContextTool
+            .handle(
+                invoke(serde_json::json!({
+                    "between": {
+                        "from": {"clip_uuid": "clip-a"},
+                        "to": {"clip_uuid": "clip-b"}
+                    }
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+
+        assert_eq!(
+            body.pointer("/visual_signals/outgoing/motion_direction")
+                .and_then(|v| v.as_str()),
+            Some("left")
+        );
+        assert_eq!(
+            body.pointer("/visual_signals/incoming/motion_direction")
+                .and_then(|v| v.as_str()),
+            Some("left")
+        );
+        assert_eq!(
+            body.pointer("/visual_signals/motion_match")
+                .and_then(|v| v.as_str()),
+            Some("aligned")
+        );
+        assert_eq!(
+            body.pointer("/visual_signals/outgoing/whip_pan_score")
+                .and_then(|v| v.as_f64()),
+            Some(0.7)
+        );
+        assert!(
+            !body.pointer("/missing_signals")
+                .and_then(|v| v.as_array())
+                .is_some_and(|signals| signals.iter().any(|s| s == "motion_direction"))
         );
     }
 

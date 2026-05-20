@@ -29,7 +29,9 @@ use awidat_core::tools::{
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transition_context::TransitionContextTool,
-    update_plan::UpdatePlanTool, use_broll::UseBrollTool, vedit_commit::VeditCommitTool,
+    update_plan::UpdatePlanTool,
+    validate_transition_choice::ValidateTransitionChoiceTool, use_broll::UseBrollTool,
+    vedit_commit::VeditCommitTool,
     vedit_diff::VeditDiffTool, vedit_log::VeditLogTool, vedit_revert::VeditRevertTool,
     view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
@@ -143,6 +145,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(TransitionContextTool));
+    registry.register(Arc::new(ValidateTransitionChoiceTool));
     registry.register(Arc::new(UpdatePlanTool));
     registry.register(Arc::new(FindBeatTool));
     registry.register(Arc::new(InspectMomentTool));

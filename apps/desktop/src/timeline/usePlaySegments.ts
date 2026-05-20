@@ -62,7 +62,16 @@ export type VideoOverlaySegment = PlaySegment & {
 };
 
 export type PreviewTransition = {
+  /** OTIO effect_name, e.g. `SMPTE_Dissolve` or a raw FFmpeg xfade name. */
   kind: string;
+  /**
+   * Stable awidat transition id, e.g. `awidat.match_dissolve`. `null`
+   * when the transition has no `metadata.awidat_transition`. Used by
+   * the preview to decide whether to route through the GPU renderer
+   * (when the transition's composition wants a shader CSS can't fake)
+   * or fall back to the CSS-based overlay.
+   */
+  transitionId: string | null;
   cutTime: number;
   inOffset: number;
   outOffset: number;
@@ -191,6 +200,7 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
   const transitions: PreviewTransition[] = [];
   let pendingTransition: {
     kind: string;
+    transitionId: string | null;
     duration: number;
     inOffset: number;
     outOffset: number;
@@ -204,6 +214,7 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
     if (item.kind === "transition") {
       pendingTransition = {
         kind: item.effect_name,
+        transitionId: item.transition_id ?? null,
         duration: Math.max(0, item.duration_s),
         inOffset: Math.max(0, item.in_offset_s),
         outOffset: Math.max(0, item.out_offset_s),
@@ -245,6 +256,7 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
         const cutTime = segment.timelineStart;
         transitions.push({
           kind: pendingTransition.kind,
+          transitionId: pendingTransition.transitionId,
           cutTime,
           inOffset,
           outOffset,

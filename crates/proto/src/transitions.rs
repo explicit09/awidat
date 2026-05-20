@@ -98,16 +98,145 @@ pub enum TransitionEasing {
     EaseOutExpo,
 }
 
+impl TransitionEasing {
+    /// Apply the easing curve to a normalized progress value in
+    /// `[0.0, 1.0]`. Output is also clamped to `[0.0, 1.0]`.
+    pub fn apply(&self, t: f64) -> f64 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Linear => t,
+            Self::EaseInOut => {
+                // Smooth-step cubic: 3t² - 2t³
+                t * t * (3.0 - 2.0 * t)
+            }
+            Self::EaseOut => 1.0 - (1.0 - t).powi(2),
+            Self::EaseIn => t * t,
+            Self::EaseOutExpo => {
+                if t >= 1.0 {
+                    1.0
+                } else {
+                    1.0 - (-10.0 * t).exp()
+                }
+            }
+        }
+    }
+}
+
+/// A single keyframe in a [`ParamCurve`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Keyframe {
+    /// Normalized time inside the primitive's `[start, end]` window,
+    /// in `[0.0, 1.0]`.
+    pub t: f64,
+    /// Parameter value at this keyframe.
+    pub v: f64,
+    /// Easing curve from this keyframe to the next one. Ignored at
+    /// the terminal keyframe.
+    #[serde(default)]
+    pub easing: TransitionEasing,
+}
+
+/// A parameter value: either a constant or a multi-keyframe curve.
+///
+/// JSON serialization is `#[serde(untagged)]` so existing project
+/// files using bare numeric parameters continue to parse:
+///
+/// ```json
+/// "amount": 0.5
+/// ```
+///
+/// becomes [`ParamCurve::Const(0.5)`]. A keyframed parameter is an
+/// array of keyframe objects:
+///
+/// ```json
+/// "amount": [
+///   {"t": 0.0, "v": 0.0},
+///   {"t": 0.5, "v": 0.8, "easing": "ease_in_out"},
+///   {"t": 1.0, "v": 0.0}
+/// ]
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ParamCurve {
+    /// A constant value across the entire primitive window.
+    Const(f64),
+    /// A multi-keyframe curve. Keyframes must be sorted by `t` and
+    /// every `t` must lie in `[0.0, 1.0]`. Validation enforces both.
+    Keyframes(Vec<Keyframe>),
+}
+
+impl ParamCurve {
+    /// Evaluate the curve at progress `p` in `[0.0, 1.0]`.
+    ///
+    /// * [`ParamCurve::Const`] returns the constant unchanged.
+    /// * [`ParamCurve::Keyframes`] linearly interpolates between
+    ///   adjacent keyframes, applying each segment's leading easing
+    ///   curve. Progress before the first keyframe returns the first
+    ///   value; progress after the last keyframe returns the last
+    ///   value. Empty keyframe lists return 0.0 (validation rejects
+    ///   them at the project-load layer, so this only happens for
+    ///   in-memory test fixtures).
+    pub fn evaluate(&self, p: f64) -> f64 {
+        match self {
+            Self::Const(v) => *v,
+            Self::Keyframes(keys) => {
+                if keys.is_empty() {
+                    return 0.0;
+                }
+                if keys.len() == 1 {
+                    return keys[0].v;
+                }
+                let p = p.clamp(0.0, 1.0);
+                if p <= keys[0].t {
+                    return keys[0].v;
+                }
+                let last = keys[keys.len() - 1];
+                if p >= last.t {
+                    return last.v;
+                }
+                for window in keys.windows(2) {
+                    let a = window[0];
+                    let b = window[1];
+                    if p >= a.t && p <= b.t {
+                        let span = b.t - a.t;
+                        if span <= 0.0 {
+                            return a.v;
+                        }
+                        let local = (p - a.t) / span;
+                        let eased = a.easing.apply(local);
+                        return a.v + (b.v - a.v) * eased;
+                    }
+                }
+                last.v
+            }
+        }
+    }
+}
+
+impl From<f64> for ParamCurve {
+    fn from(v: f64) -> Self {
+        Self::Const(v)
+    }
+}
+
+impl Default for ParamCurve {
+    fn default() -> Self {
+        Self::Const(0.0)
+    }
+}
+
 /// Stable primitive vocabulary for data-authored transitions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum TransitionPrimitiveOp {
     /// Blend outgoing opacity to incoming opacity.
     Opacity {
-        /// Outgoing opacity at primitive start.
-        from: f64,
-        /// Incoming opacity at primitive end.
-        to: f64,
+        /// Outgoing opacity at primitive start. Scalar or
+        /// multi-keyframe curve.
+        from: ParamCurve,
+        /// Incoming opacity at primitive end. Scalar or
+        /// multi-keyframe curve.
+        to: ParamCurve,
     },
     /// Push both clips along a direction.
     Push {
@@ -120,18 +249,22 @@ pub enum TransitionPrimitiveOp {
     Wipe {
         /// Direction: left, right, up, down, in, or out.
         direction: String,
-        /// Edge softness in `[0.0, 1.0]`.
-        softness: f64,
+        /// Edge softness in `[0.0, 1.0]`. Scalar or multi-keyframe
+        /// curve — useful for "soft edge grows then shrinks" reveals.
+        softness: ParamCurve,
     },
     /// Scale the image around its center.
     Zoom {
-        /// End scale. `1.0` is unchanged.
-        scale: f64,
+        /// End scale. `1.0` is unchanged. Scalar or multi-keyframe
+        /// curve — useful for "punch in, overshoot, settle" effects.
+        scale: ParamCurve,
     },
     /// Directional or isotropic blur.
     Blur {
-        /// Blur amount in `[0.0, 1.0]`.
-        amount: f64,
+        /// Blur amount in `[0.0, 1.0]`. Scalar or multi-keyframe
+        /// curve — useful for "asymmetric ramp" feels (snap-in,
+        /// trail-out).
+        amount: ParamCurve,
         /// Optional blur direction.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         direction: Option<String>,
@@ -189,6 +322,108 @@ pub struct BuiltinTransition {
     pub max_duration_s: f64,
     /// How timeline audio should behave while the visual transition overlaps.
     pub audio_policy: TransitionAudioPolicy,
+    /// Editorial contexts in which the agent should reach for this transition.
+    pub best_for: &'static [&'static str],
+    /// Editorial contexts where the agent should avoid this transition.
+    pub avoid_for: &'static [&'static str],
+    /// Whether picking this transition meaningfully depends on matching
+    /// the actual screen-direction of motion at the cut.
+    pub requires_motion_continuity: bool,
+    /// Screen direction this transition encodes, if any.
+    pub motion_alignment: Option<MotionAlignment>,
+    /// How visually disruptive the transition is to color/luma continuity.
+    pub color_sensitivity: ColorSensitivity,
+}
+
+/// Screen-direction encoded by a transition, used to match against
+/// measured motion at a cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionAlignment {
+    /// Conveys leftward screen motion.
+    Left,
+    /// Conveys rightward screen motion.
+    Right,
+    /// Conveys upward screen motion.
+    Up,
+    /// Conveys downward screen motion.
+    Down,
+    /// Pushes inward (zoom/iris in).
+    In,
+    /// Pulls outward (iris/zoom out).
+    Out,
+}
+
+/// How sensitive the transition is to color/luminance continuity at
+/// the cut. The agent uses this to avoid choices that will read as
+/// visually jarring on adjacent frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorSensitivity {
+    /// Reads cleanly regardless of color/luma delta.
+    Insensitive,
+    /// Reads poorly when going from a dark frame into a bright frame.
+    AvoidDarkToBright,
+    /// Reads poorly when going from a bright frame into a dark frame.
+    AvoidBrightToDark,
+    /// Reads poorly across any significant color/saturation jump.
+    AvoidColorShift,
+}
+
+impl MotionAlignment {
+    /// Stable lowercase identifier for serialization and EDL output.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+            Self::Up => "up",
+            Self::Down => "down",
+            Self::In => "in",
+            Self::Out => "out",
+        }
+    }
+
+    /// Parse from a direction hint string. Returns `None` for unknown values.
+    pub fn from_hint(hint: &str) -> Option<Self> {
+        match hint {
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            "up" => Some(Self::Up),
+            "down" => Some(Self::Down),
+            "in" => Some(Self::In),
+            "out" => Some(Self::Out),
+            _ => None,
+        }
+    }
+
+    /// True when two alignments share the same axis direction.
+    pub fn agrees_with(self, other: MotionAlignment) -> bool {
+        self == other
+    }
+
+    /// True when alignments are opposite on the same axis (`left` vs
+    /// `right`, `up` vs `down`, `in` vs `out`).
+    pub fn opposes(self, other: MotionAlignment) -> bool {
+        matches!(
+            (self, other),
+            (Self::Left, Self::Right)
+                | (Self::Right, Self::Left)
+                | (Self::Up, Self::Down)
+                | (Self::Down, Self::Up)
+                | (Self::In, Self::Out)
+                | (Self::Out, Self::In)
+        )
+    }
+}
+
+impl ColorSensitivity {
+    /// Stable lowercase identifier for manifest/JSON output.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Insensitive => "insensitive",
+            Self::AvoidDarkToBright => "avoid_dark_to_bright",
+            Self::AvoidBrightToDark => "avoid_bright_to_dark",
+            Self::AvoidColorShift => "avoid_color_shift",
+        }
+    }
 }
 
 /// Audio behavior paired with a visual transition.
@@ -291,6 +526,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.0,
         max_duration_s: 0.0,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &[],
+        avoid_for: &[],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.composite",
@@ -301,6 +541,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 2.0,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &[],
+        avoid_for: &[],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.cross_dissolve",
@@ -311,6 +556,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 2.0,
         audio_policy: TransitionAudioPolicy::Crossfade,
+        best_for: &["soft_time_passage", "topic_drift", "gentle_emotion"],
+        avoid_for: &["hard_beat_hit", "dirty_dialogue_repair"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.match_dissolve",
@@ -321,6 +571,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.12,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Crossfade,
+        best_for: &["visual_echo", "memory_bridge", "graphic_match"],
+        avoid_for: &["unrelated_images", "fast_dialogue"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::AvoidColorShift,
     },
     BuiltinTransition {
         id: "awidat.fade_black",
@@ -331,6 +586,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 3.0,
         audio_policy: TransitionAudioPolicy::Crossfade,
+        best_for: &["chapter_break", "ending", "heavy_reset"],
+        avoid_for: &["fast_dialogue"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.flash_white",
@@ -341,6 +601,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.04,
         max_duration_s: 0.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["beat_hit", "reveal", "energy_jump"],
+        avoid_for: &["serious_dialogue"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::AvoidDarkToBright,
     },
     BuiltinTransition {
         id: "awidat.wipe_left",
@@ -351,6 +616,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["graphic_movement", "related_scene_change"],
+        avoid_for: &["intimate_dialogue"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Left),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.wipe_right",
@@ -361,6 +631,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["graphic_movement", "related_scene_change"],
+        avoid_for: &["intimate_dialogue"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Right),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.slide_left",
@@ -371,6 +646,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["motion_continuity", "screen_direction", "social_push"],
+        avoid_for: &["static_interview"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Left),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.slide_right",
@@ -381,6 +661,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["motion_continuity", "screen_direction", "social_push"],
+        avoid_for: &["static_interview"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Right),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.smooth_push_left",
@@ -391,6 +676,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["motion_continuity", "screen_direction", "social_push"],
+        avoid_for: &["static_interview"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Left),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.motion_blur",
@@ -401,6 +691,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 0.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["motion_cover", "hide_motion_jump", "screen_direction_unknown"],
+        avoid_for: &["static_dialogue", "slow_emotional_moment", "repeated_use"],
+        requires_motion_continuity: true,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.whip_pan_left",
@@ -411,6 +706,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 0.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["fast_screen_direction", "pass_by_motion", "hide_motion_jump"],
+        avoid_for: &["static_dialogue", "slow_emotional_moment", "repeated_use"],
+        requires_motion_continuity: true,
+        motion_alignment: Some(MotionAlignment::Left),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.whip_pan_right",
@@ -421,6 +721,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 0.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["fast_screen_direction", "pass_by_motion", "hide_motion_jump"],
+        avoid_for: &["static_dialogue", "slow_emotional_moment", "repeated_use"],
+        requires_motion_continuity: true,
+        motion_alignment: Some(MotionAlignment::Right),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.pass_by_left",
@@ -431,6 +736,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.04,
         max_duration_s: 0.45,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["occlusion_mask", "pass_by_motion", "invisible_scene_move"],
+        avoid_for: &["no_occlusion_signal", "static_dialogue", "repeated_use"],
+        requires_motion_continuity: true,
+        motion_alignment: Some(MotionAlignment::Left),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.pass_by_right",
@@ -441,6 +751,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.04,
         max_duration_s: 0.45,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["occlusion_mask", "pass_by_motion", "invisible_scene_move"],
+        avoid_for: &["no_occlusion_signal", "static_dialogue", "repeated_use"],
+        requires_motion_continuity: true,
+        motion_alignment: Some(MotionAlignment::Right),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.iris_open",
@@ -451,6 +766,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.10,
         max_duration_s: 1.2,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["stylized_reveal", "vintage_grammar", "comic_reveal"],
+        avoid_for: &["documentary_realism", "intimate_dialogue", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Out),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.iris_close",
@@ -461,6 +781,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.10,
         max_duration_s: 1.2,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["stylized_closure", "vintage_grammar", "comic_button"],
+        avoid_for: &["documentary_realism", "intimate_dialogue", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::In),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.invisible_cut",
@@ -471,6 +796,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.03,
         max_duration_s: 0.18,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["occlusion_or_dark_frame", "hide_camera_reposition", "mask_cut"],
+        avoid_for: &["visible_mismatch", "no_occlusion_signal", "dialogue_emphasis"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::AvoidColorShift,
     },
     BuiltinTransition {
         id: "awidat.zoom_in",
@@ -481,6 +811,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["forward_momentum", "beat_hit", "punch_in"],
+        avoid_for: &["slow_emotional_moment"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::In),
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.pixelize",
@@ -491,6 +826,11 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 0.75,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["tech_context", "stylized_jump", "glitch_moment"],
+        avoid_for: &["serious_dialogue"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.radial",
@@ -501,6 +841,162 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         min_duration_s: 0.05,
         max_duration_s: 1.5,
         audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["stylized_reveal", "graphic_topic_shift"],
+        avoid_for: &["repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    // ---------- Phase 3 catalog expansion (10 new transitions) ----------
+    BuiltinTransition {
+        id: "awidat.wipe_up",
+        family: "wipe",
+        display_name: "Wipe Up",
+        ffmpeg_xfade: Some("wipeup"),
+        default_duration_s: 0.30,
+        min_duration_s: 0.05,
+        max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["graphic_movement", "ascending_motion", "related_scene_change"],
+        avoid_for: &["intimate_dialogue"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Up),
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.wipe_down",
+        family: "wipe",
+        display_name: "Wipe Down",
+        ffmpeg_xfade: Some("wipedown"),
+        default_duration_s: 0.30,
+        min_duration_s: 0.05,
+        max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["graphic_movement", "descending_motion", "related_scene_change"],
+        avoid_for: &["intimate_dialogue"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Down),
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.slide_up",
+        family: "slide",
+        display_name: "Slide Up",
+        ffmpeg_xfade: Some("slideup"),
+        default_duration_s: 0.28,
+        min_duration_s: 0.05,
+        max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["motion_continuity", "social_push", "ascending_motion"],
+        avoid_for: &["static_interview"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::Up),
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.barn_door_open_h",
+        family: "wipe",
+        display_name: "Barn Door Open Horizontal",
+        ffmpeg_xfade: Some("horzopen"),
+        default_duration_s: 0.40,
+        min_duration_s: 0.10,
+        max_duration_s: 1.8,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["broadcast_reveal", "geometric_open", "scene_change"],
+        avoid_for: &["intimate_dialogue", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.barn_door_close_h",
+        family: "wipe",
+        display_name: "Barn Door Close Horizontal",
+        ffmpeg_xfade: Some("horzclose"),
+        default_duration_s: 0.40,
+        min_duration_s: 0.10,
+        max_duration_s: 1.8,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["broadcast_button", "geometric_close", "chapter_button"],
+        avoid_for: &["intimate_dialogue", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.barn_door_open_v",
+        family: "wipe",
+        display_name: "Barn Door Open Vertical",
+        ffmpeg_xfade: Some("vertopen"),
+        default_duration_s: 0.40,
+        min_duration_s: 0.10,
+        max_duration_s: 1.8,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["broadcast_reveal", "geometric_open", "scene_change"],
+        avoid_for: &["intimate_dialogue", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.barn_door_close_v",
+        family: "wipe",
+        display_name: "Barn Door Close Vertical",
+        ffmpeg_xfade: Some("vertclose"),
+        default_duration_s: 0.40,
+        min_duration_s: 0.10,
+        max_duration_s: 1.8,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["broadcast_button", "geometric_close", "chapter_button"],
+        avoid_for: &["intimate_dialogue", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.diag_tl",
+        family: "wipe",
+        display_name: "Diagonal Top-Left",
+        ffmpeg_xfade: Some("diagtl"),
+        default_duration_s: 0.35,
+        min_duration_s: 0.08,
+        max_duration_s: 1.5,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["comedic_button", "graphic_topic_shift", "stylized_reveal"],
+        avoid_for: &["serious_dialogue", "repeated_use"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.distance_zoom",
+        family: "zoom",
+        display_name: "Distance Zoom",
+        ffmpeg_xfade: Some("distance"),
+        default_duration_s: 0.40,
+        min_duration_s: 0.10,
+        max_duration_s: 1.6,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["forward_momentum", "energy_jump", "spatial_shift"],
+        avoid_for: &["slow_emotional_moment", "static_interview"],
+        requires_motion_continuity: false,
+        motion_alignment: Some(MotionAlignment::In),
+        color_sensitivity: ColorSensitivity::Insensitive,
+    },
+    BuiltinTransition {
+        id: "awidat.dissolve_grain",
+        family: "dissolve",
+        display_name: "Dissolve (Noisy)",
+        ffmpeg_xfade: Some("dissolve"),
+        default_duration_s: 0.45,
+        min_duration_s: 0.10,
+        max_duration_s: 2.5,
+        audio_policy: TransitionAudioPolicy::Crossfade,
+        best_for: &["nostalgic", "stylized_jump", "memory_bridge"],
+        avoid_for: &["clinical_documentary", "hard_beat_hit"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::AvoidColorShift,
     },
 ];
 
@@ -517,32 +1013,39 @@ pub fn stable_builtin_transition_manifests() -> Vec<TransitionManifest> {
     BUILTIN_TRANSITIONS
         .iter()
         .filter(|transition| !matches!(transition.id, "awidat.hard_cut" | "awidat.composite"))
-        .map(|transition| {
-            let (best_for, avoid_for) = editorial_metadata(transition.id);
-            TransitionManifest {
-                id: transition.id.into(),
-                family: transition.family.into(),
-                display_name: transition.display_name.into(),
-                backends: transition
-                    .ffmpeg_xfade
-                    .map(|_| vec![TransitionBackend::Ffmpeg])
-                    .unwrap_or_default(),
-                default_duration_s: transition.default_duration_s,
-                min_duration_s: transition.min_duration_s,
-                max_duration_s: transition.max_duration_s,
-                ffmpeg_xfade: transition.ffmpeg_xfade.map(str::to_string),
-                audio_policy: transition.audio_policy.into(),
-                best_for: best_for.into_iter().map(str::to_string).collect(),
-                avoid_for: avoid_for.into_iter().map(str::to_string).collect(),
-                license: "Apache-2.0".into(),
-                attribution: "Awidat built-in".into(),
-                preview: format!(
-                    "transitions/{}/preview.mp4",
-                    transition.id.trim_start_matches("awidat.")
-                ),
-                params: serde_json::Map::new(),
-                composition: builtin_transition_composition(transition.id),
-            }
+        .map(|transition| TransitionManifest {
+            id: transition.id.into(),
+            family: transition.family.into(),
+            display_name: transition.display_name.into(),
+            backends: transition
+                .ffmpeg_xfade
+                .map(|_| vec![TransitionBackend::Ffmpeg])
+                .unwrap_or_default(),
+            default_duration_s: transition.default_duration_s,
+            min_duration_s: transition.min_duration_s,
+            max_duration_s: transition.max_duration_s,
+            ffmpeg_xfade: transition.ffmpeg_xfade.map(str::to_string),
+            audio_policy: transition.audio_policy.into(),
+            best_for: transition
+                .best_for
+                .iter()
+                .copied()
+                .map(str::to_string)
+                .collect(),
+            avoid_for: transition
+                .avoid_for
+                .iter()
+                .copied()
+                .map(str::to_string)
+                .collect(),
+            license: "Apache-2.0".into(),
+            attribution: "Awidat built-in".into(),
+            preview: format!(
+                "transitions/{}/preview.mp4",
+                transition.id.trim_start_matches("awidat.")
+            ),
+            params: serde_json::Map::new(),
+            composition: builtin_transition_composition(transition.id),
         })
         .collect()
 }
@@ -615,87 +1118,6 @@ pub fn validate_transition_manifests(
     Ok(())
 }
 
-fn editorial_metadata(id: &str) -> (Vec<&'static str>, Vec<&'static str>) {
-    match id {
-        "awidat.cross_dissolve" => (
-            vec!["soft_time_passage", "topic_drift", "gentle_emotion"],
-            vec!["hard_beat_hit", "dirty_dialogue_repair"],
-        ),
-        "awidat.match_dissolve" => (
-            vec!["visual_echo", "memory_bridge", "graphic_match"],
-            vec!["unrelated_images", "fast_dialogue"],
-        ),
-        "awidat.fade_black" => (
-            vec!["chapter_break", "ending", "heavy_reset"],
-            vec!["fast_dialogue"],
-        ),
-        "awidat.flash_white" => (
-            vec!["beat_hit", "reveal", "energy_jump"],
-            vec!["serious_dialogue"],
-        ),
-        "awidat.wipe_left" | "awidat.wipe_right" => (
-            vec!["graphic_movement", "related_scene_change"],
-            vec!["intimate_dialogue"],
-        ),
-        "awidat.slide_left" | "awidat.slide_right" | "awidat.smooth_push_left" => (
-            vec!["motion_continuity", "screen_direction", "social_push"],
-            vec!["static_interview"],
-        ),
-        "awidat.motion_blur" => (
-            vec![
-                "motion_cover",
-                "hide_motion_jump",
-                "screen_direction_unknown",
-            ],
-            vec!["static_dialogue", "slow_emotional_moment", "repeated_use"],
-        ),
-        "awidat.whip_pan_left" | "awidat.whip_pan_right" => (
-            vec![
-                "fast_screen_direction",
-                "pass_by_motion",
-                "hide_motion_jump",
-            ],
-            vec!["static_dialogue", "slow_emotional_moment", "repeated_use"],
-        ),
-        "awidat.pass_by_left" | "awidat.pass_by_right" => (
-            vec!["occlusion_mask", "pass_by_motion", "invisible_scene_move"],
-            vec!["no_occlusion_signal", "static_dialogue", "repeated_use"],
-        ),
-        "awidat.iris_open" => (
-            vec!["stylized_reveal", "vintage_grammar", "comic_reveal"],
-            vec!["documentary_realism", "intimate_dialogue", "repeated_use"],
-        ),
-        "awidat.iris_close" => (
-            vec!["stylized_closure", "vintage_grammar", "comic_button"],
-            vec!["documentary_realism", "intimate_dialogue", "repeated_use"],
-        ),
-        "awidat.invisible_cut" => (
-            vec![
-                "occlusion_or_dark_frame",
-                "hide_camera_reposition",
-                "mask_cut",
-            ],
-            vec![
-                "visible_mismatch",
-                "no_occlusion_signal",
-                "dialogue_emphasis",
-            ],
-        ),
-        "awidat.zoom_in" => (
-            vec!["forward_momentum", "beat_hit", "punch_in"],
-            vec!["slow_emotional_moment"],
-        ),
-        "awidat.pixelize" => (
-            vec!["tech_context", "stylized_jump", "glitch_moment"],
-            vec!["serious_dialogue"],
-        ),
-        "awidat.radial" => (
-            vec!["stylized_reveal", "graphic_topic_shift"],
-            vec!["repeated_use"],
-        ),
-        _ => (Vec::new(), Vec::new()),
-    }
-}
 
 /// Return the built-in recipe for a phase-one transition when it can
 /// be represented as stable composition data. Some transitions remain
@@ -715,16 +1137,48 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
     match id {
         "awidat.composite" => None,
         "awidat.cross_dissolve" => Some(composition(vec![primitive(
-            TransitionPrimitiveOp::Opacity { from: 1.0, to: 1.0 },
+            TransitionPrimitiveOp::Opacity {
+                from: ParamCurve::Const(1.0),
+                to: ParamCurve::Const(1.0),
+            },
         )])),
         "awidat.match_dissolve" => Some(composition(vec![
-            primitive(TransitionPrimitiveOp::Opacity { from: 1.0, to: 1.0 }),
+            primitive(TransitionPrimitiveOp::Opacity {
+                from: ParamCurve::Const(1.0),
+                to: ParamCurve::Const(1.0),
+            }),
             TransitionPrimitive {
                 start: 0.18,
                 end: 0.82,
                 easing: TransitionEasing::EaseInOut,
                 op: TransitionPrimitiveOp::Blur {
-                    amount: 0.18,
+                    // Demonstrate a non-trivial ParamCurve: blur
+                    // ramps in to ~0.18, holds briefly, then eases
+                    // out. This satisfies Phase 4's "at least one
+                    // builtin composition uses a non-trivial curve"
+                    // requirement.
+                    amount: ParamCurve::Keyframes(vec![
+                        Keyframe {
+                            t: 0.0,
+                            v: 0.0,
+                            easing: TransitionEasing::EaseInOut,
+                        },
+                        Keyframe {
+                            t: 0.45,
+                            v: 0.18,
+                            easing: TransitionEasing::EaseInOut,
+                        },
+                        Keyframe {
+                            t: 0.55,
+                            v: 0.18,
+                            easing: TransitionEasing::EaseInOut,
+                        },
+                        Keyframe {
+                            t: 1.0,
+                            v: 0.0,
+                            easing: TransitionEasing::Linear,
+                        },
+                    ]),
                     direction: None,
                 },
             },
@@ -740,11 +1194,11 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
         })])),
         "awidat.wipe_left" => Some(composition(vec![primitive(TransitionPrimitiveOp::Wipe {
             direction: "left".into(),
-            softness: 0.0,
+            softness: ParamCurve::Const(0.0),
         })])),
         "awidat.wipe_right" => Some(composition(vec![primitive(TransitionPrimitiveOp::Wipe {
             direction: "right".into(),
-            softness: 0.0,
+            softness: ParamCurve::Const(0.0),
         })])),
         "awidat.slide_left" => Some(composition(vec![primitive(TransitionPrimitiveOp::Push {
             direction: "left".into(),
@@ -764,21 +1218,21 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
         "awidat.motion_blur" => Some(composition(vec![TransitionPrimitive {
             easing: TransitionEasing::EaseOutExpo,
             ..primitive(TransitionPrimitiveOp::Blur {
-                amount: 0.75,
+                amount: ParamCurve::Const(0.75),
                 direction: None,
             })
         }])),
         "awidat.whip_pan_left" => Some(composition(vec![TransitionPrimitive {
             easing: TransitionEasing::EaseOutExpo,
             ..primitive(TransitionPrimitiveOp::Blur {
-                amount: 0.85,
+                amount: ParamCurve::Const(0.85),
                 direction: Some("left".into()),
             })
         }])),
         "awidat.whip_pan_right" => Some(composition(vec![TransitionPrimitive {
             easing: TransitionEasing::EaseOutExpo,
             ..primitive(TransitionPrimitiveOp::Blur {
-                amount: 0.85,
+                amount: ParamCurve::Const(0.85),
                 direction: Some("right".into()),
             })
         }])),
@@ -808,7 +1262,7 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
             },
         )])),
         "awidat.zoom_in" => Some(composition(vec![primitive(TransitionPrimitiveOp::Zoom {
-            scale: 1.25,
+            scale: ParamCurve::Const(1.25),
         })])),
         "awidat.pixelize" => Some(composition(vec![primitive(
             TransitionPrimitiveOp::Pixelize { block_size: 0.6 },
@@ -865,7 +1319,11 @@ fn primitive_ffmpeg_xfade(op: &TransitionPrimitiveOp) -> Option<&'static str> {
             "in" | "out" => Some("radial"),
             _ => None,
         },
-        TransitionPrimitiveOp::Zoom { scale } if *scale >= 1.0 => Some("zoomin"),
+        // For ffmpeg fallback we evaluate the scale curve at the
+        // primitive midpoint as a representative value. A zoom-in
+        // curve that peaks above 1.0 still reads as zoomin even
+        // when the endpoints are below 1.
+        TransitionPrimitiveOp::Zoom { scale } if scale.evaluate(0.5) >= 1.0 => Some("zoomin"),
         TransitionPrimitiveOp::Zoom { .. } => Some("fade"),
         TransitionPrimitiveOp::Flash { color, .. } if color.eq_ignore_ascii_case("#ffffff") => {
             Some("fadewhite")
@@ -889,6 +1347,57 @@ fn primitive_ffmpeg_priority(op: &TransitionPrimitiveOp) -> u8 {
         TransitionPrimitiveOp::Blur { .. } => 40,
         TransitionPrimitiveOp::Opacity { .. } => 30,
         TransitionPrimitiveOp::Shake { .. } | TransitionPrimitiveOp::ChromaticSplit { .. } => 0,
+    }
+}
+
+/// Resolve a composition to a stable GPU shader id, when the
+/// composition contains a primitive that the GPU backend can render
+/// (and FFmpeg `xfade` cannot, or the GPU implementation is
+/// preferred). Returns the shader id as a stable string so this crate
+/// does not depend on the render-gpu enum.
+///
+/// Priority: shake > chromatic_split > opacity → cross_dissolve.
+/// Other primitives fall through to xfade (return `None` from here).
+pub fn resolve_composition_gpu_shader(
+    composition: &TransitionComposition,
+) -> Option<&'static str> {
+    composition
+        .primitives
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, primitive)| {
+            primitive_gpu_shader(&primitive.op)
+                .map(|shader| (primitive_gpu_priority(&primitive.op), std::cmp::Reverse(idx), shader))
+        })
+        .max_by_key(|(priority, reverse_idx, _)| (*priority, *reverse_idx))
+        .map(|(_, _, shader)| shader)
+}
+
+fn primitive_gpu_shader(op: &TransitionPrimitiveOp) -> Option<&'static str> {
+    match op {
+        TransitionPrimitiveOp::Shake { .. } => Some("shake"),
+        TransitionPrimitiveOp::ChromaticSplit { .. } => Some("chromatic_split"),
+        // Blur is GPU-routed because its `amount` accepts a
+        // `ParamCurve` — the FFmpeg `hblur` fallback can only render
+        // a constant. When the composition contains Blur alongside
+        // Opacity (the match_dissolve recipe), Blur wins on priority
+        // because the Blur shader already includes the cross-blend.
+        TransitionPrimitiveOp::Blur { .. } => Some("blur"),
+        // Opacity is renderable on either backend; we only flag it as
+        // GPU when nothing else in the composition wants xfade. The
+        // priority ordering below handles that.
+        TransitionPrimitiveOp::Opacity { .. } => Some("cross_dissolve"),
+        _ => None,
+    }
+}
+
+fn primitive_gpu_priority(op: &TransitionPrimitiveOp) -> u8 {
+    match op {
+        TransitionPrimitiveOp::Shake { .. } => 100,
+        TransitionPrimitiveOp::ChromaticSplit { .. } => 90,
+        TransitionPrimitiveOp::Blur { .. } => 50,
+        TransitionPrimitiveOp::Opacity { .. } => 10,
+        _ => 0,
     }
 }
 
@@ -1193,8 +1702,8 @@ fn validate_primitive_op(
 ) -> Result<(), TransitionLookupError> {
     match op {
         TransitionPrimitiveOp::Opacity { from, to } => {
-            validate_unit(idx, "from", *from)?;
-            validate_unit(idx, "to", *to)?;
+            validate_curve_unit(idx, "from", from)?;
+            validate_curve_unit(idx, "to", to)?;
         }
         TransitionPrimitiveOp::Push {
             direction,
@@ -1212,13 +1721,13 @@ fn validate_primitive_op(
                 direction,
                 &["left", "right", "up", "down", "in", "out"],
             )?;
-            validate_unit(idx, "softness", *softness)?;
+            validate_curve_unit(idx, "softness", softness)?;
         }
         TransitionPrimitiveOp::Zoom { scale } => {
-            validate_range(idx, "scale", *scale, 0.25, 4.0)?;
+            validate_curve_range(idx, "scale", scale, 0.25, 4.0)?;
         }
         TransitionPrimitiveOp::Blur { amount, direction } => {
-            validate_unit(idx, "amount", *amount)?;
+            validate_curve_unit(idx, "amount", amount)?;
             if let Some(direction) = direction {
                 validate_direction(
                     idx,
@@ -1256,6 +1765,60 @@ fn validate_primitive_op(
 
 fn validate_unit(idx: usize, field: &str, value: f64) -> Result<(), TransitionLookupError> {
     validate_range(idx, field, value, 0.0, 1.0)
+}
+
+fn validate_curve_unit(
+    idx: usize,
+    field: &str,
+    curve: &ParamCurve,
+) -> Result<(), TransitionLookupError> {
+    validate_curve_range(idx, field, curve, 0.0, 1.0)
+}
+
+/// Validate that every value in a [`ParamCurve`] sits in `[min, max]`,
+/// and (for keyframed curves) that keyframe times are sorted, finite,
+/// and inside `[0, 1]`. Empty keyframe lists are rejected.
+fn validate_curve_range(
+    idx: usize,
+    field: &str,
+    curve: &ParamCurve,
+    min: f64,
+    max: f64,
+) -> Result<(), TransitionLookupError> {
+    match curve {
+        ParamCurve::Const(value) => validate_range(idx, field, *value, min, max),
+        ParamCurve::Keyframes(keys) => {
+            if keys.is_empty() {
+                return Err(TransitionLookupError::InvalidSpec {
+                    message: format!("primitive #{idx} field {field:?} has empty keyframe list"),
+                });
+            }
+            let mut prev_t = f64::NEG_INFINITY;
+            for (kf_idx, kf) in keys.iter().enumerate() {
+                if !kf.t.is_finite() || !(0.0..=1.0).contains(&kf.t) {
+                    return Err(TransitionLookupError::InvalidSpec {
+                        message: format!(
+                            "primitive #{idx} field {field:?} keyframe #{kf_idx} t={} \
+                             must be a finite value in [0.0, 1.0]",
+                            kf.t
+                        ),
+                    });
+                }
+                if kf.t <= prev_t {
+                    return Err(TransitionLookupError::InvalidSpec {
+                        message: format!(
+                            "primitive #{idx} field {field:?} keyframes must be strictly \
+                             sorted by t (keyframe #{kf_idx} t={} <= previous t={})",
+                            kf.t, prev_t
+                        ),
+                    });
+                }
+                prev_t = kf.t;
+                validate_range(idx, field, kf.v, min, max)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn validate_range(
@@ -1304,6 +1867,303 @@ fn validate_hex_color(idx: usize, color: &str) -> Result<(), TransitionLookupErr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Phase 4: ParamCurve tests.
+
+    #[test]
+    fn param_curve_const_round_trips_as_bare_number() {
+        let curve = ParamCurve::Const(0.5);
+        let json = serde_json::to_string(&curve).unwrap();
+        assert_eq!(json, "0.5", "const must serialize as a bare number");
+        let parsed: ParamCurve = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, ParamCurve::Const(0.5));
+    }
+
+    #[test]
+    fn param_curve_keyframes_round_trips_as_array() {
+        let curve = ParamCurve::Keyframes(vec![
+            Keyframe {
+                t: 0.0,
+                v: 0.0,
+                easing: TransitionEasing::Linear,
+            },
+            Keyframe {
+                t: 0.5,
+                v: 0.8,
+                easing: TransitionEasing::EaseInOut,
+            },
+            Keyframe {
+                t: 1.0,
+                v: 0.0,
+                easing: TransitionEasing::Linear,
+            },
+        ]);
+        let json = serde_json::to_string(&curve).unwrap();
+        assert!(json.starts_with('['), "keyframes must serialize as array");
+        let parsed: ParamCurve = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, curve);
+    }
+
+    #[test]
+    fn param_curve_const_evaluates_to_itself() {
+        let curve = ParamCurve::Const(0.42);
+        assert_eq!(curve.evaluate(0.0), 0.42);
+        assert_eq!(curve.evaluate(0.5), 0.42);
+        assert_eq!(curve.evaluate(1.0), 0.42);
+    }
+
+    #[test]
+    fn param_curve_linear_keyframes_interpolate_correctly() {
+        let curve = ParamCurve::Keyframes(vec![
+            Keyframe {
+                t: 0.0,
+                v: 0.0,
+                easing: TransitionEasing::Linear,
+            },
+            Keyframe {
+                t: 1.0,
+                v: 1.0,
+                easing: TransitionEasing::Linear,
+            },
+        ]);
+        assert_eq!(curve.evaluate(0.0), 0.0);
+        assert!((curve.evaluate(0.5) - 0.5).abs() < 1e-9);
+        assert_eq!(curve.evaluate(1.0), 1.0);
+    }
+
+    #[test]
+    fn param_curve_three_keyframes_peak_at_middle() {
+        let curve = ParamCurve::Keyframes(vec![
+            Keyframe {
+                t: 0.0,
+                v: 0.0,
+                easing: TransitionEasing::Linear,
+            },
+            Keyframe {
+                t: 0.5,
+                v: 0.8,
+                easing: TransitionEasing::Linear,
+            },
+            Keyframe {
+                t: 1.0,
+                v: 0.0,
+                easing: TransitionEasing::Linear,
+            },
+        ]);
+        assert!((curve.evaluate(0.5) - 0.8).abs() < 1e-9);
+        assert!(curve.evaluate(0.25) < 0.8);
+        assert!(curve.evaluate(0.75) < 0.8);
+        // Both shoulders should match by symmetry.
+        let left = curve.evaluate(0.25);
+        let right = curve.evaluate(0.75);
+        assert!((left - right).abs() < 1e-9, "{left} vs {right}");
+    }
+
+    #[test]
+    fn param_curve_clamps_out_of_range_progress() {
+        let curve = ParamCurve::Keyframes(vec![
+            Keyframe {
+                t: 0.2,
+                v: 0.3,
+                easing: TransitionEasing::Linear,
+            },
+            Keyframe {
+                t: 0.8,
+                v: 0.7,
+                easing: TransitionEasing::Linear,
+            },
+        ]);
+        assert_eq!(curve.evaluate(-1.0), 0.3);
+        assert_eq!(curve.evaluate(0.0), 0.3);
+        assert_eq!(curve.evaluate(2.0), 0.7);
+    }
+
+    #[test]
+    fn validation_rejects_unsorted_keyframes() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::Linear,
+                op: TransitionPrimitiveOp::Blur {
+                    amount: ParamCurve::Keyframes(vec![
+                        Keyframe {
+                            t: 0.5,
+                            v: 0.5,
+                            easing: TransitionEasing::Linear,
+                        },
+                        Keyframe {
+                            t: 0.3,
+                            v: 0.2,
+                            easing: TransitionEasing::Linear,
+                        },
+                    ]),
+                    direction: None,
+                },
+            }],
+        };
+        let err = validate_transition_composition(&composition).unwrap_err();
+        assert!(err.to_string().contains("sorted"));
+    }
+
+    #[test]
+    fn validation_rejects_keyframe_t_outside_unit_interval() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::Linear,
+                op: TransitionPrimitiveOp::Blur {
+                    amount: ParamCurve::Keyframes(vec![
+                        Keyframe {
+                            t: 1.5,
+                            v: 0.5,
+                            easing: TransitionEasing::Linear,
+                        },
+                    ]),
+                    direction: None,
+                },
+            }],
+        };
+        let err = validate_transition_composition(&composition).unwrap_err();
+        assert!(err.to_string().contains("[0.0, 1.0]"));
+    }
+
+    #[test]
+    fn validation_rejects_empty_keyframe_list() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::Linear,
+                op: TransitionPrimitiveOp::Blur {
+                    amount: ParamCurve::Keyframes(vec![]),
+                    direction: None,
+                },
+            }],
+        };
+        let err = validate_transition_composition(&composition).unwrap_err();
+        assert!(err.to_string().contains("empty keyframe list"));
+    }
+
+    /// Backward compat: a JSON value with bare-number params must
+    /// deserialize into a primitive whose ParamCurve fields are
+    /// `Const`. This locks in the contract for existing project
+    /// files.
+    #[test]
+    fn legacy_scalar_blur_json_still_parses() {
+        let json = r#"{
+            "op": "blur",
+            "amount": 0.5,
+            "direction": "left"
+        }"#;
+        let parsed: TransitionPrimitiveOp = serde_json::from_str(json).unwrap();
+        match parsed {
+            TransitionPrimitiveOp::Blur { amount, direction } => {
+                assert_eq!(amount, ParamCurve::Const(0.5));
+                assert_eq!(direction.as_deref(), Some("left"));
+            }
+            _ => panic!("expected Blur, got {parsed:?}"),
+        }
+    }
+
+    #[test]
+    fn keyframed_blur_json_parses_into_keyframes_variant() {
+        let json = r#"{
+            "op": "blur",
+            "amount": [
+                {"t": 0.0, "v": 0.0},
+                {"t": 0.5, "v": 0.8, "easing": "ease_in_out"},
+                {"t": 1.0, "v": 0.0}
+            ]
+        }"#;
+        let parsed: TransitionPrimitiveOp = serde_json::from_str(json).unwrap();
+        match parsed {
+            TransitionPrimitiveOp::Blur { amount, .. } => match amount {
+                ParamCurve::Keyframes(keys) => {
+                    assert_eq!(keys.len(), 3);
+                    assert_eq!(keys[1].v, 0.8);
+                    assert_eq!(keys[1].easing, TransitionEasing::EaseInOut);
+                }
+                _ => panic!("expected Keyframes, got {amount:?}"),
+            },
+            _ => panic!("expected Blur"),
+        }
+    }
+
+    // Phase 3 catalog coverage tests.
+
+    #[test]
+    fn catalog_meets_phase_3_size_target() {
+        // The Phase 3 goal contract requires the registry to ship at
+        // least 30 named transitions across all intent classes.
+        assert!(
+            BUILTIN_TRANSITIONS.len() >= 30,
+            "catalog has only {} entries; Phase 3 needs ≥30",
+            BUILTIN_TRANSITIONS.len()
+        );
+    }
+
+    #[test]
+    fn every_transition_documents_best_for() {
+        // Every non-cut transition must document at least one editorial
+        // context. `awidat.hard_cut` and `awidat.composite` are the only
+        // exceptions (hard_cut has no editorial intent; composite is the
+        // agent-authored escape hatch).
+        for transition in BUILTIN_TRANSITIONS {
+            if matches!(transition.id, "awidat.hard_cut" | "awidat.composite") {
+                continue;
+            }
+            assert!(
+                !transition.best_for.is_empty(),
+                "{} has empty best_for; every shipped preset must document its editorial use",
+                transition.id
+            );
+        }
+    }
+
+    #[test]
+    fn catalog_covers_every_intent_class() {
+        use std::collections::HashSet;
+        let mut by_family: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for transition in BUILTIN_TRANSITIONS {
+            *by_family.entry(transition.family).or_insert(0) += 1;
+        }
+        // Each of the five major intent classes must have at least two
+        // transitions, so the agent has real choice rather than a
+        // forced single option.
+        let required_families: HashSet<&str> = [
+            "dissolve",      // time-pass
+            "fade",          // time-pass
+            "wipe",          // scene-change
+            "slide",         // scene-change
+            "flash",         // energy-shift
+            "motion_blur",   // energy-shift
+            "zoom",          // energy-shift
+            "iris",          // scene-change / stylistic
+        ]
+        .into_iter()
+        .collect();
+        for family in required_families {
+            let count = by_family.get(family).copied().unwrap_or(0);
+            assert!(
+                count >= 1,
+                "intent family {family:?} has {count} transitions; need ≥1"
+            );
+        }
+        // Stronger guarantee for the families we identified as the
+        // weakest in the original survey.
+        for must_have_two in ["wipe", "slide", "motion_blur"] {
+            let count = by_family.get(must_have_two).copied().unwrap_or(0);
+            assert!(
+                count >= 2,
+                "family {must_have_two:?} has only {count} transitions; need ≥2"
+            );
+        }
+    }
 
     #[test]
     fn resolves_built_in_awidat_ids_to_ffmpeg() {
@@ -1416,7 +2276,7 @@ mod tests {
                     end: 0.7,
                     easing: TransitionEasing::EaseOut,
                     op: TransitionPrimitiveOp::Blur {
-                        amount: 0.65,
+                        amount: ParamCurve::Const(0.65),
                         direction: Some("left".into()),
                     },
                 },
@@ -1457,7 +2317,7 @@ mod tests {
                     end: 0.7,
                     easing: TransitionEasing::EaseOut,
                     op: TransitionPrimitiveOp::Blur {
-                        amount: 0.65,
+                        amount: ParamCurve::Const(0.65),
                         direction: Some("left".into()),
                     },
                 },

@@ -43,6 +43,7 @@ pub mod start_indexing;
 pub mod start_render;
 pub mod transition_context;
 pub mod update_plan;
+pub mod validate_transition_choice;
 pub mod use_broll;
 pub mod vedit_commit;
 pub mod vedit_diff;

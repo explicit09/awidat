@@ -312,7 +312,7 @@ fn project_with_transition_composition_carries_recipe_into_render_plan() {
                 end: 0.7,
                 easing: TransitionEasing::EaseOut,
                 op: TransitionPrimitiveOp::Blur {
-                    amount: 0.65,
+                    amount: awidat_proto::transitions::ParamCurve::Const(0.65),
                     direction: Some("left".into()),
                 },
             },

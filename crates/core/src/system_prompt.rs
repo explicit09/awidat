@@ -237,12 +237,48 @@ cover, or a motivated transition. Use this result instead of defaulting \
 dirty cuts to cross dissolves.\
 \n- transition_context(between): BEFORE proposing a visible transition \
 between two clips, call this to assemble adjacent clip metadata, transition \
-handles, transcript context, frame timestamps, continuity verdict, and \
-missing signals. It does not choose or apply the transition.\
+handles, transcript context, frame timestamps, continuity verdict, \
+per-side motion magnitudes and screen directions, a motion-match \
+classification (aligned/opposed/orthogonal/unknown), and missing-signal \
+names. It does not choose or apply the transition. Use the \
+`visual_signals` block to pick a direction that matches actual screen \
+motion instead of guessing — a whip pan against the action will read as \
+a mistake.\
 \n- plan_transition(context): after `transition_context`, call this to turn \
 the packet into either a hard-cut intent fragment or a motivated visible \
-transition fragment with safe duration. It is still read-only; apply only \
-through `apply_edl` after review.\
+transition fragment with safe duration. The planner consults each preset's \
+`best_for` / `avoid_for` metadata and the boundary's motion match: it will \
+refuse a motion-continuity transition when motion is opposed, refuse a \
+motion-blur transition when one side is near-static, and infer screen \
+direction when the boundary's motion is aligned. It is still read-only; \
+apply only through `apply_edl` after review.\
+\n- Transition primitive parameters accept either a scalar or a \
+multi-keyframe curve. A scalar stays constant for the whole transition \
+window: `\"amount\": 0.5`. A curve animates over the transition's \
+normalized `[0, 1]` window: `\"amount\": [ {\"t\": 0.0, \"v\": 0.0}, \
+{\"t\": 0.5, \"v\": 0.8, \"easing\": \"ease_in_out\"}, {\"t\": 1.0, \"v\": 0.0} ]`. \
+Use curves for editorial moves the agent could otherwise only describe \
+in prose: zoom-punch with overshoot and settle (Zoom.scale curve), \
+blur that snaps in fast and trails out (Blur.amount curve), or a wipe \
+whose edge softens then tightens (Wipe.softness curve). Keyframes must \
+be sorted by `t` and each `t` in `[0, 1]`; the validator rejects \
+out-of-order or out-of-range curves. Curves only render when the \
+transition routes through the GPU backend; FFmpeg `xfade` fallbacks \
+silently use the curve's midpoint as a constant.\
+\n- validate_transition_choice(transition_id, outgoing_asset_id, \
+outgoing_source_end_s, incoming_asset_id, incoming_source_start_s): \
+AFTER applying any motion-sensitive transition (`whip_pan_*`, \
+`pass_by_*`, `motion_blur`, `slide_*`, `wipe_*` with a non-`None` \
+motion_alignment, `zoom_in`, `distance_zoom`), call this to verify \
+that the chosen direction matches the source clips' measured motion. \
+The tool returns `predicted_direction`, the measured directions from \
+each side, `motion_match`, and an `editorial_verdict` of \
+`acceptable` / `wrong_direction` / `no_signal`. When the verdict is \
+`wrong_direction`, surface a Note explaining the mismatch and \
+recommend the opposite-direction transition (or a non-directional \
+fallback like `motion_blur`). Skip this validation when the transition \
+itself is direction-agnostic (the tool will return `acceptable` for \
+those anyway, but the call is wasted work).\
 \n- assess_continuity(at_s, kind): lower-level rule breakdown. It returns \
 `{ verdict, rules: [...] }` where verdict is `clean` / `risky` / `dirty` / `abstain`. Behavior:\
 \n  • `clean`: propose the raw cut.\

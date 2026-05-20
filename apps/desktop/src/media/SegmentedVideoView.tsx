@@ -43,6 +43,10 @@ import {
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "./store";
 import { cachedMediaStreamUrl, mediaStreamUrl } from "./mediaStreamUrl";
+import {
+  shouldRenderTransitionOnGpu,
+  useGpuTransitionPreview,
+} from "./useGpuTransitionPreview";
 import { useProjectStore } from "../app/state";
 import {
   useTimelineStore,
@@ -536,9 +540,27 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     [activeKey, activeSlotOpacity],
   );
 
+  const stackRef = useRef<HTMLDivElement | null>(null);
+  const [stackSize, setStackSize] = useState<{ width: number; height: number }>({
+    width: 0,
+    height: 0,
+  });
+  useLayoutEffect(() => {
+    const el = stackRef.current;
+    if (!el) return;
+    const update = () => {
+      setStackSize({ width: el.clientWidth, height: el.clientHeight });
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => update());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   return (
     <div className="video-wrap">
-      <div className="video-stack">
+      <div className="video-stack" ref={stackRef}>
         {mediaError && <MediaErrorOverlay message={mediaError} />}
         <video
           ref={refA}
@@ -580,13 +602,23 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           isPlaying={isPlaying}
         />
         <TimelineTransitionOverlay
-          transition={activeTransition}
+          transition={
+            shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
+          }
           timelineTime={timelineTime}
           isPlaying={isPlaying}
         />
         <TimelineTransitionColorOverlay
+          transition={
+            shouldRenderTransitionOnGpu(activeTransition) ? null : activeTransition
+          }
+          timelineTime={timelineTime}
+        />
+        <GpuTransitionPreview
           transition={activeTransition}
           timelineTime={timelineTime}
+          width={stackSize.width}
+          height={stackSize.height}
         />
         <TimelineTitleOverlays
           overlays={activeTitles}
@@ -723,6 +755,46 @@ function TimelineTransitionOverlay({
         zIndex: 3,
       }}
       aria-hidden="true"
+    />
+  );
+}
+
+/**
+ * GPU-rendered preview overlay. Shown when `transition.transitionId`
+ * maps to a shader the GPU path renders better than the CSS overlay
+ * can fake — keyframed Blur curves today, shader-only primitives
+ * (Shake / ChromaticSplit / agent composites) later. The data URL
+ * comes from the `render_transition_preview_frame` Tauri command and
+ * sits on top of the video stack so it occludes both slot videos
+ * during the transition window.
+ */
+function GpuTransitionPreview({
+  transition,
+  timelineTime,
+  width,
+  height,
+}: {
+  transition: PreviewTransition | null;
+  timelineTime: number;
+  width: number;
+  height: number;
+}) {
+  const dataUrl = useGpuTransitionPreview(transition, timelineTime, width, height);
+  if (!dataUrl) return null;
+  return (
+    <img
+      src={dataUrl}
+      alt=""
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        objectFit: "contain",
+        pointerEvents: "none",
+        zIndex: 5,
+      }}
     />
   );
 }

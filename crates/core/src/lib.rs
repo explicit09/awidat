@@ -65,6 +65,7 @@ pub mod tools;
 pub mod transcript_cleanup;
 pub mod vc;
 pub mod verify;
+pub mod visual_signals;
 
 pub use error::FunctionCallError;
 pub use session::{Session, SessionError, SessionEvent};

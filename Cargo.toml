@@ -9,6 +9,7 @@ members = [
     "crates/tui",
     "crates/cli",
     "crates/render",
+    "crates/render-gpu",
     "crates/effects",
     "crates/lut",
     "crates/test-support",
@@ -86,6 +87,7 @@ awidat-mcp = { path = "crates/mcp" }
 awidat-sandboxing = { path = "crates/sandboxing" }
 awidat-tui = { path = "crates/tui" }
 awidat-render = { path = "crates/render" }
+awidat-render-gpu = { path = "crates/render-gpu" }
 awidat-effects = { path = "crates/effects" }
 awidat-lut = { path = "crates/lut" }
 awidat-config = { path = "crates/config" }
@@ -141,6 +143,15 @@ libc = "0.2"
 unicode-width = "0.2"
 unicode-segmentation = "1"
 derive_more = { version = "1", default-features = false, features = ["is_variant"] }
+# GPU rendering for transitions. wgpu picks the best available backend
+# at runtime (Metal on macOS, Vulkan/DX12/GL elsewhere); we keep wgpu's
+# default features so all those backends compile in. pollster is the
+# trivial executor we use to block on wgpu's async setup. bytemuck lets
+# us cast plain-data uniform structs into byte slices for wgpu without
+# unsafe code in callers.
+wgpu = "0.20"
+pollster = "0.3"
+bytemuck = { version = "1", features = ["derive"] }
 
 [profile.release]
 lto = "thin"

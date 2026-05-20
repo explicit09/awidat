@@ -850,6 +850,10 @@ pub fn collect_timeline_full_plan(
                             in_offset_s,
                             out_offset_s,
                         )?;
+                        let gpu_shader = composition
+                            .as_ref()
+                            .and_then(awidat_proto::transitions::resolve_composition_gpu_shader)
+                            .and_then(awidat_render_gpu::TransitionShader::from_proto_id);
                         transitions.push(TransitionPlan {
                             from_segment_index: new_index - 1,
                             to_segment_index: new_index,
@@ -858,6 +862,7 @@ pub fn collect_timeline_full_plan(
                             out_offset_s,
                             duration_s: in_offset_s + out_offset_s,
                             composition,
+                            gpu_shader,
                         });
                     }
                 }
@@ -1800,6 +1805,11 @@ pub struct TransitionPlan {
     /// `metadata.awidat_transition.composition`. Phase-one FFmpeg still
     /// exports by `kind`; future backends lower this recipe directly.
     pub composition: Option<TransitionComposition>,
+    /// Optional GPU shader identifier. When `Some`, the render
+    /// orchestrator routes this transition through the raw-stream
+    /// composer (wgpu fragment shader instead of FFmpeg `xfade`).
+    /// `None` keeps the legacy filter-graph path unchanged.
+    pub gpu_shader: Option<awidat_render_gpu::TransitionShader>,
 }
 
 /// Plans the `-filter_complex` argument + map labels for a render.
@@ -5738,6 +5748,7 @@ mod tests {
             out_offset_s: duration_s / 2.0,
             duration_s,
             composition: None,
+            gpu_shader: None,
         }
     }
 
@@ -5993,6 +6004,7 @@ mod tests {
             out_offset_s: 0.5,
             duration_s: 1.0,
             composition: None,
+            gpu_shader: None,
         }];
         let plan = FilterPlanner::new(&segs, &trans).plan();
         assert!(

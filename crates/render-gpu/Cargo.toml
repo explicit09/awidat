@@ -1,0 +1,30 @@
+[package]
+name = "awidat-render-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "awidat_render_gpu"
+path = "src/lib.rs"
+
+[dependencies]
+awidat-proto = { workspace = true }
+wgpu = { workspace = true }
+pollster = { workspace = true }
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+# Minimal PNG encoder for the preview path: takes an RGBA buffer and
+# emits a `data:image/png;base64,…` payload the desktop sends to the
+# webview as the source of an <img> overlay. We only need encoding,
+# not decoding or any other format support — the `png` crate is the
+# lighter dep next to `image`.
+png = "0.17"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

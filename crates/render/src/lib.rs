@@ -38,10 +38,14 @@
 
 pub mod animation;
 pub mod ffmpeg;
+pub mod frame_io;
 pub mod job;
 pub mod output_safety;
 pub mod professional;
 pub mod progress;
+pub mod raw_stream;
+pub mod raw_stream_audio;
+pub mod raw_stream_render;
 pub mod timeline;
 
 pub use ffmpeg::{
@@ -49,6 +53,12 @@ pub use ffmpeg::{
     TranscodeProgressCallback, extract_frame, extract_frame_complex, extract_frame_filtered,
     ffmpeg_path, ffprobe_path, generate_black_frames, generate_motion_signal, generate_silences,
     generate_thumbnails, generate_waveform, probe_duration_s, probe_media, transcode_proxy,
+};
+pub use frame_io::{FrameEncoder, FrameIoError, FrameProvider};
+pub use raw_stream::{ComposeError, RawStreamComposer, RawStreamSegment, RawStreamTransition};
+pub use raw_stream_audio::{AudioError, compose_audio, mux_video_and_audio};
+pub use raw_stream_render::{
+    RawStreamRenderError, build_timeline_raw_stream_render, should_route_through_raw_stream,
 };
 pub use job::{
     JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec, RenderPlanLimitation,
