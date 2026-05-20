@@ -4876,6 +4876,20 @@ fn normalize_color_pipeline_metadata(
         metadata.insert(slot.to_string(), serde_json::Value::String(normalized));
     }
 
+    // Mask is a different file kind from a LUT, so it gets its own
+    // path normalizer instead of reusing `normalize_lut_path`'s
+    // extension whitelist.
+    if let Some(value) = metadata
+        .get("mask_source")
+        .and_then(serde_json::Value::as_str)
+    {
+        let normalized = normalize_mask_path(index, value)?;
+        metadata.insert(
+            "mask_source".to_string(),
+            serde_json::Value::String(normalized),
+        );
+    }
+
     let interpolation = metadata
         .get("look_interpolation")
         .and_then(serde_json::Value::as_str);
@@ -4926,6 +4940,46 @@ fn normalize_color_pipeline_metadata(
         validate_lut_contents(index, root, lut_path)?;
     }
     Ok(())
+}
+
+/// Validate an `awidat.color_pipeline.mask_source` path. Mirrors
+/// `normalize_lut_path` (project-relative, no `..`, no backslashes)
+/// but swaps the LUT extension whitelist for
+/// [`awidat_effects::SUPPORTED_MASK_EXTENSIONS`].
+fn normalize_mask_path(index: usize, mask_source: &str) -> Result<String, ApplyError> {
+    let trimmed = mask_source.trim();
+    let path = std::path::Path::new(trimmed);
+    if trimmed.is_empty()
+        || trimmed.contains('\\')
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message:
+                "set_effect: awidat.color_pipeline mask_source must be a non-empty project-relative path without '.', '..', absolute prefixes, or backslashes"
+                    .into(),
+        });
+    }
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase);
+    if !extension
+        .as_deref()
+        .is_some_and(|ext| awidat_effects::SUPPORTED_MASK_EXTENSIONS.contains(&ext))
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_effect: awidat.color_pipeline mask_source must end in one of: {}",
+                awidat_effects::SUPPORTED_MASK_EXTENSIONS.join(", ")
+            ),
+        });
+    }
+    Ok(trimmed.to_string())
 }
 
 fn normalize_lut_strength(index: usize, strength: Option<f64>) -> Result<Option<f64>, ApplyError> {
@@ -9296,6 +9350,65 @@ mod tests {
         assert!(
             matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("look_strength")),
             "expected look_strength-without-look_lut error, got {err:?}",
+        );
+    }
+
+    #[test]
+    fn color_pipeline_accepts_mask_source_with_supported_extension() {
+        use crate::edl::op::EdlOp;
+        let tl = timeline_with_three_clips();
+        let mut params = serde_json::Map::new();
+        params.insert("clip_input_space".into(), serde_json::json!("rec709_g24"));
+        params.insert("mask_source".into(), serde_json::json!("masks/face.png"));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_pipeline".into(),
+                params,
+                rationale: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let effect = clip
+            .effects
+            .iter()
+            .find(|e| e.effect_name == "awidat.color_pipeline")
+            .expect("pipeline stamped");
+        assert_eq!(
+            effect.metadata.get("mask_source").and_then(|v| v.as_str()),
+            Some("masks/face.png")
+        );
+    }
+
+    #[test]
+    fn color_pipeline_rejects_mask_source_with_disallowed_extension() {
+        use crate::edl::op::EdlOp;
+        let tl = timeline_with_three_clips();
+        let mut params = serde_json::Map::new();
+        params.insert("clip_input_space".into(), serde_json::json!("rec709_g24"));
+        params.insert("mask_source".into(), serde_json::json!("masks/face.txt"));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.color_pipeline".into(),
+                params,
+                rationale: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Invalid { ref message, .. } if message.contains("mask_source must end in one of")),
+            "expected mask-extension validation error, got {err:?}",
         );
     }
 

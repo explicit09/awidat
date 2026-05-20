@@ -248,7 +248,7 @@ pub struct TimelineSegment {
 /// -color_range`; the other space fields are carried for the agent's
 /// reasoning today and reserved for automatic conversion in a
 /// follow-up.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ColorPipelinePlan {
     /// Stable id of the color space the decoded pixels live in.
     pub clip_input_space: String,
@@ -270,6 +270,12 @@ pub struct ColorPipelinePlan {
     pub look_strength: Option<f64>,
     /// Optional working-to-display ODT (3D LUT, project-relative).
     pub output_transform_lut: Option<PathBuf>,
+    /// Optional regional-grading mask source (PNG with alpha,
+    /// grayscale image, or video). Reserved schema slot — render
+    /// does not apply masking yet; presence surfaces a
+    /// `mask_not_implemented` [`RenderPlanLimitation`] so the agent
+    /// sees the field is being ignored.
+    pub mask_source: Option<PathBuf>,
 }
 
 impl ColorPipelinePlan {
@@ -601,6 +607,13 @@ fn read_color_pipeline(
         .get("look_strength")
         .and_then(serde_json::Value::as_f64)
         .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
+    let mask_source = metadata
+        .get("mask_source")
+        .and_then(serde_json::Value::as_str)
+        .map(|raw| project_root.join(raw));
+    // We don't require the mask to exist on disk yet — render
+    // doesn't read it, and failing here would block a forward-
+    // compatible workflow where the agent stages the mask later.
     Ok(Some(ColorPipelinePlan {
         clip_input_space,
         working_space: string_field("working_space"),
@@ -612,6 +625,7 @@ fn read_color_pipeline(
         look_interpolation: interpolation,
         look_strength,
         output_transform_lut: resolve("output_transform_lut")?,
+        mask_source,
     }))
 }
 
@@ -918,6 +932,7 @@ pub fn collect_timeline_full_plan(
         parameter_animations,
         &consumed_animation_ids,
     ));
+    render_limitations.extend(mask_source_limitations(&segs));
     Ok((
         segs,
         transitions,
@@ -1577,6 +1592,31 @@ fn unconsumed_animation_limitations(
         .iter()
         .filter(|animation| !consumed_animation_ids.contains(&animation.id))
         .map(render_limitation_for_unconsumed_animation)
+        .collect()
+}
+
+/// Surface a `mask_not_implemented` limitation for every segment
+/// whose `color_pipeline.mask_source` is set. The mask itself is
+/// stamped on the OTIO and validated at apply time, but render's
+/// `color_pipeline_filter_block` does not honor it yet — the agent
+/// needs to know its regional grading request was a no-op.
+fn mask_source_limitations(segs: &[TimelineSegment]) -> Vec<RenderPlanLimitation> {
+    segs.iter()
+        .filter_map(|seg| {
+            let plan = seg.color_pipeline.as_ref()?;
+            let mask = plan.mask_source.as_ref()?;
+            Some(RenderPlanLimitation {
+                kind: "mask_not_implemented".to_string(),
+                animation_id: None,
+                clip_id: Some(seg.clip_name.clone()),
+                parameter: Some("color_pipeline.mask_source".to_string()),
+                message: format!(
+                    "render ignored awidat.color_pipeline.mask_source {} on clip {:?}: regional grading is reserved but not yet implemented",
+                    mask.display(),
+                    seg.clip_name,
+                ),
+            })
+        })
         .collect()
 }
 
@@ -6207,6 +6247,7 @@ mod tests {
             look_interpolation: Some("tetrahedral".into()),
             look_strength: None,
             output_transform_lut: None,
+            mask_source: None,
         });
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
@@ -6233,6 +6274,7 @@ mod tests {
             look_interpolation: Some("tetrahedral".into()),
             look_strength: Some(0.5),
             output_transform_lut: None,
+            mask_source: None,
         });
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         // 1D shaper first, on the clip's source label.
@@ -6273,6 +6315,7 @@ mod tests {
             look_interpolation: None,
             look_strength: None,
             output_transform_lut: None,
+            mask_source: None,
         });
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
@@ -6303,6 +6346,7 @@ mod tests {
             look_interpolation: None,
             look_strength: None,
             output_transform_lut: None,
+            mask_source: None,
         });
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
@@ -6381,20 +6425,41 @@ mod tests {
     }
 
     #[test]
+    fn mask_source_surfaces_render_plan_limitation() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.clip_name = "clip-with-mask".into();
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            mask_source: Some(PathBuf::from("/tmp/masks/face.png")),
+            ..Default::default()
+        });
+        let limitations = mask_source_limitations(&[s0]);
+        assert_eq!(limitations.len(), 1);
+        assert_eq!(limitations[0].kind, "mask_not_implemented");
+        assert_eq!(limitations[0].clip_id.as_deref(), Some("clip-with-mask"));
+        assert!(limitations[0].message.contains("mask_source"));
+    }
+
+    #[test]
+    fn no_mask_source_means_no_limitation() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            look_lut: Some(PathBuf::from("/tmp/luts/x.cube")),
+            ..Default::default()
+        });
+        let limitations = mask_source_limitations(&[s0]);
+        assert!(limitations.is_empty());
+    }
+
+    #[test]
     fn output_color_tags_match_known_delivery_spaces() {
         let case = |space: &str| {
             let mut s = seg("/tmp/a.mp4", 0.0, 2.0);
             s.color_pipeline = Some(ColorPipelinePlan {
                 clip_input_space: "rec709_g24".into(),
-                working_space: None,
-                lut_input_space: None,
                 output_space: Some(space.into()),
-                input_transform_lut: None,
-                shaper_lut: None,
-                look_lut: None,
-                look_interpolation: None,
-                look_strength: None,
-                output_transform_lut: None,
+                ..Default::default()
             });
             output_color_tag_argv(&[s]).join(" ")
         };

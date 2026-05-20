@@ -90,6 +90,13 @@ const LUT_PARAMS: &[ParamDef] = &[
 // - `look_interpolation`: optional interpolation for `look_lut`.
 // - `look_strength`: optional 0..=1 blend; defaults to 1.0.
 // - `output_transform_lut`: optional working-to-display ODT.
+//
+// Mask slot (Stage 9, schema-only):
+// - `mask_source`: optional project-relative path to a mask asset
+//   (PNG with alpha, grayscale image, or video). Reserved for
+//   regional grading — apply-time validation accepts it, but render
+//   reports a `mask_not_implemented` limitation until the
+//   split→mask→lut3d→overlay path lands.
 const COLOR_PIPELINE_PARAMS: &[ParamDef] = &[
     ParamDef::string("clip_input_space", true, None),
     ParamDef::string("working_space", false, None),
@@ -107,7 +114,14 @@ const COLOR_PIPELINE_PARAMS: &[ParamDef] = &[
         Some(ParamDefault::Number(1.0)),
     ),
     ParamDef::string("output_transform_lut", false, None),
+    ParamDef::string("mask_source", false, None),
 ];
+
+/// Extensions accepted for `awidat.color_pipeline.mask_source`. Image
+/// formats carry the alpha matte; video formats let the mask
+/// animate. The validator accepts these and treats anything else
+/// as a malformed request.
+pub const SUPPORTED_MASK_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "mp4", "mov"];
 
 /// Stable identifiers for the color spaces awidat understands. These
 /// are the *names* the agent uses when emitting an
