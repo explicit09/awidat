@@ -159,6 +159,15 @@ Use `natural` when the user wants correction/matching more than a
 creative grade. Use a style preset only when the user has asked for a
 look or when a finishing pass clearly calls for one.
 
+The set of named looks the planner can emit lives in
+`looks.toml` next to this file. Each entry carries the look's
+display name, description, default input/output color space,
+default cube size, recommended `strength` range, and tags. Read
+that file before reasoning about which look to plan — the catalog
+is the source of truth, the planner script validates against it,
+and the agent-facing `awidat.color_pipeline` effect accepts the
+same color-space ids.
+
 ### 2. Apply corrections through the graph
 
 For each corrected clip, emit one anchored op:

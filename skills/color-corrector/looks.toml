@@ -1,0 +1,108 @@
+# awidat looks catalog — agent-facing manifest of every named look
+# the color-corrector skill can plan and generate.
+#
+# Each entry is purely metadata. The actual RGB transforms live in
+# `scripts/look_region_plan.py:transform_for`; this file just tells
+# the planner (and the agent) what's available, what each look is
+# good for, and where it sits in color-pipeline space.
+#
+# Adding a new look requires:
+#   1. an entry here, AND
+#   2. a matching `def <id>(r, g, b) -> tuple` inside
+#      `look_region_plan.py:transform_for`, registered in the
+#      `transforms = { ... }` dict at the bottom of that function.
+#
+# `default_input_space` and `default_output_space` use stable ids
+# from `awidat-effects::KNOWN_COLOR_SPACES` so the agent can wire
+# the catalog directly into an `awidat.color_pipeline` effect.
+
+schema_version = 1
+catalog_name = "color-corrector v1"
+
+[[look]]
+id = "natural_balance"
+display_name = "Natural Balance"
+description = "Subtle white-balance correction and gentle saturation push. Safe default for general-purpose footage — barely visible at full strength, useful as a baseline grade."
+default_input_space = "rec709_g24"
+default_output_space = "rec709_g24"
+default_size = 17
+recommended_strength_min = 0.7
+recommended_strength_max = 1.0
+tags = ["safe", "neutral", "default"]
+
+[[look]]
+id = "contrast_pop"
+display_name = "Contrast Pop"
+description = "Increases contrast around mid-gray on all channels (S-curve approximation). Good for flat or low-contrast source that needs presence."
+default_input_space = "rec709_g24"
+default_output_space = "rec709_g24"
+default_size = 17
+recommended_strength_min = 0.5
+recommended_strength_max = 0.9
+tags = ["contrast", "punch"]
+
+[[look]]
+id = "warm_gold"
+display_name = "Warm Gold"
+description = "Pushes shadows and midtones toward amber, cools blue channel. Flattering on skin in evening or interior light; reads as 'golden hour'."
+default_input_space = "rec709_g24"
+default_output_space = "rec709_g24"
+default_size = 17
+recommended_strength_min = 0.5
+recommended_strength_max = 0.85
+tags = ["warm", "amber", "skin", "interior"]
+
+[[look]]
+id = "cool_blue"
+display_name = "Cool Blue"
+description = "Lifts blue channel and cools shadows. Good for night exteriors, tech subjects, and any 'overcast' or 'tungsten-shifted' rebalancing."
+default_input_space = "rec709_g24"
+default_output_space = "rec709_g24"
+default_size = 17
+recommended_strength_min = 0.5
+recommended_strength_max = 0.85
+tags = ["cool", "blue", "night", "exterior"]
+
+[[look]]
+id = "teal_orange"
+display_name = "Teal & Orange"
+description = "Shifts shadows toward teal and highlights toward orange in a luminance-weighted way. The modern cinematic flavor — most flattering on skin in warm-key environments."
+default_input_space = "rec709_g24"
+default_output_space = "rec709_g24"
+default_size = 33
+recommended_strength_min = 0.5
+recommended_strength_max = 0.9
+tags = ["cinematic", "teal", "orange", "popular", "skin"]
+
+[[look]]
+id = "bleach_bypass"
+display_name = "Bleach Bypass"
+description = "Mixes desaturated luminance back into RGB then bumps contrast. Mimics silver-retention film stock — gritty, low-saturation, high-contrast. Used in war / thriller / documentary footage."
+default_input_space = "rec709_g24"
+default_output_space = "rec709_g24"
+default_size = 17
+recommended_strength_min = 0.5
+recommended_strength_max = 0.85
+tags = ["desaturated", "gritty", "film", "documentary"]
+
+[[look]]
+id = "shadow_lift"
+display_name = "Shadow Lift"
+description = "Raises shadow detail with a square-root curve without crushing highlights. Use when the source has rich shadow information you want visible (dark interiors, low-key portraits)."
+default_input_space = "rec709_g24"
+default_output_space = "rec709_g24"
+default_size = 17
+recommended_strength_min = 0.5
+recommended_strength_max = 1.0
+tags = ["shadow", "lift", "recovery", "low-key"]
+
+[[look]]
+id = "highlight_soften"
+display_name = "Highlight Soften"
+description = "Rolls off bright highlights with a gentle gamma compression on the top of the curve. Tames clipped or harsh skies, brings detail back near white."
+default_input_space = "rec709_g24"
+default_output_space = "rec709_g24"
+default_size = 17
+recommended_strength_min = 0.5
+recommended_strength_max = 1.0
+tags = ["highlight", "rolloff", "sky", "skin"]

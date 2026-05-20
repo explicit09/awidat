@@ -21,9 +21,19 @@ import argparse
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+# Python 3.11+ ships tomllib; on older interpreters fall back to the
+# `tomli` shim if available. We need the catalog at every run so
+# import-time failure is a clear stop signal rather than a silent
+# fallback to undocumented hardcoded defaults.
+try:
+    import tomllib  # type: ignore[unused-ignore]
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib  # type: ignore[no-redef]
 
 
 FIELDS = [
@@ -36,7 +46,67 @@ FIELDS = [
     "highlights",
 ]
 SUPPORTED_INTERPOLATION = "tetrahedral"
-DEFAULT_LUT_SIZE = 17
+
+# Looks catalog lives next to this script as `../looks.toml` so the
+# skill is self-contained. Layout matches what the Rust agent layer
+# reads at runtime (no separate copy).
+CATALOG_PATH = Path(__file__).resolve().parent.parent / "looks.toml"
+
+
+@dataclass(frozen=True)
+class CatalogLook:
+    id: str
+    display_name: str
+    description: str
+    default_input_space: str
+    default_output_space: str
+    default_size: int
+    recommended_strength_min: float
+    recommended_strength_max: float
+    tags: tuple[str, ...]
+
+
+def load_catalog(path: Path = CATALOG_PATH) -> dict[str, CatalogLook]:
+    """Read looks.toml from disk and index it by `id`.
+
+    Raises FileNotFoundError or KeyError if the catalog is missing
+    required fields — that's intentional: the planner should fail
+    fast when its agent-facing manifest is out of sync rather than
+    silently writing LUTs for looks the agent thinks don't exist.
+    """
+    with path.open("rb") as handle:
+        data = tomllib.load(handle)
+    looks: dict[str, CatalogLook] = {}
+    for entry in data.get("look", []):
+        look = CatalogLook(
+            id=entry["id"],
+            display_name=entry["display_name"],
+            description=entry["description"],
+            default_input_space=entry["default_input_space"],
+            default_output_space=entry["default_output_space"],
+            default_size=int(entry["default_size"]),
+            recommended_strength_min=float(entry["recommended_strength_min"]),
+            recommended_strength_max=float(entry["recommended_strength_max"]),
+            tags=tuple(entry.get("tags", [])),
+        )
+        looks[look.id] = look
+    return looks
+
+
+CATALOG = load_catalog()
+
+
+def catalog_default_size() -> int:
+    """Fall-back cube size when the agent omits ``--lut-size``.
+
+    Uses the catalog's natural_balance default (the safest neutral
+    look) so re-runs are reproducible without consulting CLI args.
+    """
+    natural = CATALOG.get("natural_balance")
+    return natural.default_size if natural else 17
+
+
+DEFAULT_LUT_SIZE = catalog_default_size()
 
 
 @dataclass(frozen=True)
@@ -449,6 +519,30 @@ def transform_for(look_id: str) -> Callable[[float, float, float], tuple[float, 
         "shadow_lift": shadow_lift,
         "highlight_soften": highlight_soften,
     }
+    # Every transform implemented here must also exist in the
+    # catalog (and vice versa). Drift would mean the agent picks
+    # looks the planner can't generate or vice versa, so fail at
+    # planner startup rather than silently falling back to
+    # `natural`.
+    catalog_ids = set(CATALOG.keys())
+    impl_ids = set(transforms.keys())
+    missing_impl = catalog_ids - impl_ids
+    missing_catalog = impl_ids - catalog_ids
+    if missing_impl or missing_catalog:
+        message = (
+            "look catalog drift: "
+            f"impls missing for catalog ids {sorted(missing_impl)}, "
+            f"catalog missing for impl ids {sorted(missing_catalog)}"
+        )
+        raise RuntimeError(message)
+    if look_id not in transforms:
+        # Unknown id is a planner bug — log loudly so the agent
+        # surfaces it instead of silently producing a natural LUT
+        # under the wrong filename.
+        print(
+            f"warning: look_id {look_id!r} not in catalog; falling back to natural_balance",
+            file=sys.stderr,
+        )
     return transforms.get(look_id, natural)
 
 
@@ -470,15 +564,23 @@ def write_cube(path: Path, look_id: str, size: int) -> None:
                     handle.write(f"{rr:.6f} {gg:.6f} {bb:.6f}\n")
 
 
-def generate_luts(project: Path, regions: list[RegionPlan], size: int) -> list[str]:
+def generate_luts(project: Path, regions: list[RegionPlan], size: int | None) -> list[str]:
+    """Write a `.cube` per unique look referenced by the regions.
+
+    `size` of `None` means "use the catalog's per-look
+    `default_size`", which lets looks like `teal_orange` opt into a
+    larger cube without forcing every look to that size.
+    """
     written: list[str] = []
     for region in regions:
         if not region.lut_path:
             continue
         out = project / region.lut_path
-        if str(out) not in written:
-            write_cube(out, region.look_id, size)
-            written.append(str(out))
+        if str(out) in written:
+            continue
+        cube_size = size if size is not None else CATALOG[region.look_id].default_size if region.look_id in CATALOG else DEFAULT_LUT_SIZE
+        write_cube(out, region.look_id, cube_size)
+        written.append(str(out))
     return written
 
 
@@ -558,7 +660,15 @@ def main() -> None:
     parser.add_argument("--output-edl", required=True)
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--report-md")
-    parser.add_argument("--lut-size", type=int, default=DEFAULT_LUT_SIZE)
+    parser.add_argument(
+        "--lut-size",
+        type=int,
+        default=None,
+        help=(
+            "Override cube size for every generated LUT. Omit to use each look's "
+            "catalog default_size (e.g. teal_orange opts into 33-cube)."
+        ),
+    )
     parser.add_argument("--no-splits", action="store_true", help="Do not emit Split Clip for multiple color regions in one clip")
     args = parser.parse_args()
 
