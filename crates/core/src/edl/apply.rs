@@ -511,11 +511,7 @@ fn apply_one(
             Ok(format!("stored proposal package {}", package.id))
         }
         EdlOp::SetParameterAnimation { animation } => {
-            let meta = timeline_awidat_metadata(working);
-            replace_by_id(&mut meta.parameter_animations, animation.clone(), |item| {
-                &item.id
-            });
-            Ok(format!("stored parameter animation {}", animation.id))
+            apply_set_parameter_animation(working, index, animation)
         }
         EdlOp::SetMotionTemplate { template } => {
             let meta = timeline_awidat_metadata(working);
@@ -676,6 +672,46 @@ fn required_locator(index: usize, locator: Option<ClipLocator>) -> Result<ClipLo
         index,
         message: "internal error: anchored op applied without a resolved locator".into(),
     })
+}
+
+fn apply_set_parameter_animation(
+    working: &mut Timeline,
+    index: usize,
+    animation: &awidat_proto::professional::ParameterAnimation,
+) -> Result<String, ApplyError> {
+    use awidat_proto::professional::{
+        FindingSeverity, RUNTIME_CLIP_PARAMETERS, RUNTIME_TRACK_PARAMETERS,
+        is_runtime_parameter_animation_target,
+    };
+
+    if let Some(diagnostic) = animation
+        .validate()
+        .into_iter()
+        .find(|diagnostic| diagnostic.severity == FindingSeverity::Error)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: diagnostic.message,
+        });
+    }
+
+    if !animation.metadata_only && !is_runtime_parameter_animation_target(&animation.target) {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "set_parameter_animation: unsupported parameter animation target for {}; supported clip parameters: {}; supported track parameters: {}; set metadata_only=true to store this as non-runtime metadata",
+                animation.id,
+                RUNTIME_CLIP_PARAMETERS.join(", "),
+                RUNTIME_TRACK_PARAMETERS.join(", ")
+            ),
+        });
+    }
+
+    let meta = timeline_awidat_metadata(working);
+    replace_by_id(&mut meta.parameter_animations, animation.clone(), |item| {
+        &item.id
+    });
+    Ok(format!("stored parameter animation {}", animation.id))
 }
 
 fn apply_professional_timeline_edit(

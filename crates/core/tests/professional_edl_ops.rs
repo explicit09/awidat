@@ -146,6 +146,92 @@ fn parsed_professional_substrate_ops_apply_to_timeline_metadata() {
 }
 
 #[test]
+fn set_parameter_animation_rejects_runtime_unsupported_target_by_default() {
+    let timeline = Timeline::empty("animation-contract");
+    let envelope = awidat_core::edl::op::EdlEnvelope {
+        ops: vec![EdlOp::SetParameterAnimation {
+            animation: ParameterAnimation {
+                id: "anim-blur".into(),
+                target: AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "effect.blur.radius".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
+                ..ParameterAnimation::default()
+            },
+        }],
+    };
+
+    let err = apply(&timeline, &envelope, &AnchorContext::empty()).unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("unsupported parameter animation target"),
+        "expected unsupported target rejection, got: {err}"
+    );
+    assert!(
+        err.to_string().contains("metadata_only"),
+        "error should name the explicit metadata-only escape hatch, got: {err}"
+    );
+    assert!(
+        err.to_string().contains("title.opacity") && err.to_string().contains("volume_db"),
+        "error should list runtime-supported parameters for agent correction, got: {err}"
+    );
+}
+
+#[test]
+fn set_parameter_animation_preserves_unsupported_target_when_metadata_only() {
+    let timeline = Timeline::empty("animation-contract");
+    let envelope = awidat_core::edl::op::EdlEnvelope {
+        ops: vec![EdlOp::SetParameterAnimation {
+            animation: ParameterAnimation {
+                id: "anim-blur".into(),
+                target: AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "effect.blur.radius".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
+                metadata_only: true,
+                ..ParameterAnimation::default()
+            },
+        }],
+    };
+
+    let (timeline, outcome) = apply(&timeline, &envelope, &AnchorContext::empty()).unwrap();
+    let metadata = timeline.metadata.awidat.expect("timeline metadata missing");
+
+    assert_eq!(outcome.applied.len(), 1);
+    assert_eq!(metadata.parameter_animations.len(), 1);
+    assert!(metadata.parameter_animations[0].metadata_only);
+    assert_eq!(metadata.parameter_animations[0].id, "anim-blur");
+}
+
+#[test]
+fn set_parameter_animation_accepts_track_volume_db_automation() {
+    let timeline = Timeline::empty("animation-contract");
+    let envelope = awidat_core::edl::op::EdlEnvelope {
+        ops: vec![EdlOp::SetParameterAnimation {
+            animation: ParameterAnimation {
+                id: "music-duck".into(),
+                target: AnimationTarget::TrackParameter {
+                    track: "Music".into(),
+                    parameter: "volume_db".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -18.0), Keyframe::linear(1.0, -6.0)],
+                ..ParameterAnimation::default()
+            },
+        }],
+    };
+
+    let (timeline, outcome) = apply(&timeline, &envelope, &AnchorContext::empty()).unwrap();
+    let metadata = timeline.metadata.awidat.expect("timeline metadata missing");
+
+    assert_eq!(outcome.applied.len(), 1);
+    assert_eq!(metadata.parameter_animations.len(), 1);
+    assert_eq!(metadata.parameter_animations[0].id, "music-duck");
+}
+
+#[test]
 fn lowered_professional_timeline_edit_records_metadata() {
     let edl = r#"
 *** Begin EDL
