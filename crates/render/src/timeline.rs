@@ -223,12 +223,65 @@ pub struct TimelineSegment {
     /// emits a `split → lut3d → blend=all_opacity=<s>` block so the
     /// LUT mixes with the un-graded source.
     pub lut_strength: Option<f64>,
+    /// Optional atomic color pipeline read from `awidat.color_pipeline`.
+    /// When present, supersedes the legacy `lut_path` slots and
+    /// drives a multi-stage LUT chain (input transform → shaper →
+    /// look → output transform) plus output color-space tagging.
+    pub color_pipeline: Option<ColorPipelinePlan>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
     /// Incoming audio lead for J-cut export, in seconds.
     pub audio_lead_s: Option<f64>,
     /// Outgoing audio trail for L-cut export, in seconds.
     pub audio_trail_s: Option<f64>,
+}
+
+/// Render-time plan for an `awidat.color_pipeline` effect.
+///
+/// Slots that are `None` are skipped. The filter chain runs each
+/// non-empty slot in order:
+/// `input_transform_lut → shaper_lut → look_lut → output_transform_lut`.
+/// Color-space identifiers (`clip_input_space`, `working_space`,
+/// `lut_input_space`, `output_space`) are stable strings from
+/// [`awidat_effects::KNOWN_COLOR_SPACES`]. `output_space` flows out
+/// to the encoder as `-color_primaries / -color_trc / -colorspace /
+/// -color_range`; the other space fields are carried for the agent's
+/// reasoning today and reserved for automatic conversion in a
+/// follow-up.
+#[derive(Debug, Clone)]
+pub struct ColorPipelinePlan {
+    /// Stable id of the color space the decoded pixels live in.
+    pub clip_input_space: String,
+    /// Optional intermediate space the chain operates in.
+    pub working_space: Option<String>,
+    /// Optional declared input space of the `look_lut`.
+    pub lut_input_space: Option<String>,
+    /// Optional delivery space (drives encoder color tags).
+    pub output_space: Option<String>,
+    /// Optional camera-to-working IDT (3D LUT, project-relative).
+    pub input_transform_lut: Option<PathBuf>,
+    /// Optional 1D shaper applied before the look LUT.
+    pub shaper_lut: Option<PathBuf>,
+    /// Optional creative 3D LUT.
+    pub look_lut: Option<PathBuf>,
+    /// Optional FFmpeg `lut3d` interpolation for `look_lut`.
+    pub look_interpolation: Option<String>,
+    /// Optional `look_lut` blend strength in `0.0..=1.0`.
+    pub look_strength: Option<f64>,
+    /// Optional working-to-display ODT (3D LUT, project-relative).
+    pub output_transform_lut: Option<PathBuf>,
+}
+
+impl ColorPipelinePlan {
+    /// `true` if at least one LUT slot is populated. A pipeline with
+    /// only color-space metadata and no LUTs still affects encoder
+    /// tagging but emits no filter chain.
+    pub fn has_any_lut(&self) -> bool {
+        self.input_transform_lut.is_some()
+            || self.shaper_lut.is_some()
+            || self.look_lut.is_some()
+            || self.output_transform_lut.is_some()
+    }
 }
 
 /// Render-time media overlay extracted from an upper video track.
@@ -490,6 +543,76 @@ fn read_reframe(clip: &awidat_proto::otio::Clip) -> Option<ReframePlan> {
             .unwrap_or(0.0)
             .clamp(-1.0, 1.0),
     })
+}
+
+/// Read an `awidat.color_pipeline` effect off `clip` and resolve its
+/// LUT paths against `project_root`. Returns `None` when no
+/// pipeline effect is stamped. Surfaces `MissingLut` for any
+/// declared-but-not-on-disk LUT path so render fails fast like
+/// `awidat.lut` does.
+fn read_color_pipeline(
+    clip: &awidat_proto::otio::Clip,
+    project_root: &Path,
+) -> Result<Option<ColorPipelinePlan>, RenderTimelineError> {
+    let Some(effect) = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.color_pipeline")
+    else {
+        return Ok(None);
+    };
+    let metadata = &effect.metadata;
+    let Some(clip_input_space) = metadata
+        .get("clip_input_space")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        // Apply-time validation enforces this field; if it's absent at
+        // render time we treat the effect as malformed and skip rather
+        // than crash. Render-time errors would just confuse the agent.
+        return Ok(None);
+    };
+    let resolve = |key: &str| -> Result<Option<PathBuf>, RenderTimelineError> {
+        let Some(raw) = metadata.get(key).and_then(serde_json::Value::as_str) else {
+            return Ok(None);
+        };
+        let full = project_root.join(raw);
+        if !full.exists() {
+            return Err(RenderTimelineError::MissingLut {
+                clip_name: clip.name.clone(),
+                missing: full,
+            });
+        }
+        Ok(Some(full))
+    };
+    let string_field = |key: &str| {
+        metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let interpolation = string_field("look_interpolation").filter(|value| {
+        matches!(
+            value.as_str(),
+            "nearest" | "trilinear" | "tetrahedral" | "pyramid" | "prism"
+        )
+    });
+    let look_strength = metadata
+        .get("look_strength")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
+    Ok(Some(ColorPipelinePlan {
+        clip_input_space,
+        working_space: string_field("working_space"),
+        lut_input_space: string_field("lut_input_space"),
+        output_space: string_field("output_space"),
+        input_transform_lut: resolve("input_transform_lut")?,
+        shaper_lut: resolve("shaper_lut")?,
+        look_lut: resolve("look_lut")?,
+        look_interpolation: interpolation,
+        look_strength,
+        output_transform_lut: resolve("output_transform_lut")?,
+    }))
 }
 
 fn read_lut_interpolation(clip: &awidat_proto::otio::Clip) -> Option<String> {
@@ -887,6 +1010,7 @@ fn collect_timeline_segment(
     let lut_interpolation = read_lut_interpolation(clip);
     let lut_strength = read_effect_number(clip, "awidat.lut", "strength")
         .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
+    let color_pipeline = read_color_pipeline(clip, project_root)?;
     Ok(Some(TimelineSegment {
         asset_path,
         clip_name: clip.name.clone(),
@@ -910,6 +1034,7 @@ fn collect_timeline_segment(
         lut_path,
         lut_interpolation,
         lut_strength,
+        color_pipeline,
         audio_fx: read_clip_audio_fx(clip),
         audio_lead_s: clip
             .metadata
@@ -2201,7 +2326,19 @@ fn stage_overlay_video_input(
         filter.push_str(&format!("{video_label}{chain}{cv}"));
         video_label = cv;
     }
-    if let Some(lut_path) = seg.lut_path.as_ref() {
+    if let Some(plan) = seg.color_pipeline.as_ref() {
+        if plan.has_any_lut() {
+            let cv = format!("[media_overlay_cpv{input_idx}]");
+            filter.push(';');
+            filter.push_str(&color_pipeline_filter_block(
+                &video_label,
+                &cv,
+                &format!("media_overlay_{input_idx}"),
+                plan,
+            ));
+            video_label = cv;
+        }
+    } else if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[media_overlay_lv{input_idx}]");
         filter.push(';');
         filter.push_str(&lut3d_filter_block(
@@ -2270,7 +2407,19 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         video_label = cv;
     }
 
-    if let Some(lut_path) = seg.lut_path.as_ref() {
+    if let Some(plan) = seg.color_pipeline.as_ref() {
+        if plan.has_any_lut() {
+            let cv = format!("[cpv{i}]");
+            filter.push_str(&color_pipeline_filter_block(
+                &video_label,
+                &cv,
+                &i.to_string(),
+                plan,
+            ));
+            filter.push(';');
+            video_label = cv;
+        }
+    } else if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[lv{i}]");
         filter.push_str(&lut3d_filter_block(
             &video_label,
@@ -2520,12 +2669,141 @@ fn filter_escape_single_quoted(s: &str) -> String {
         .collect()
 }
 
+/// Map a delivery color-space id (as carried on
+/// `awidat.color_pipeline.output_space`) to the four FFmpeg encoder
+/// tags needed to round-trip the intent in the output container:
+/// `-color_primaries -color_trc -colorspace -color_range`. Returns
+/// `None` for spaces awidat doesn't currently tag (Log encodings —
+/// nobody delivers those — and `scene_linear`, which has no
+/// canonical container-tag triple).
+fn output_space_color_tags(output_space: &str) -> Option<[&'static str; 4]> {
+    // primaries, trc, matrix, range.
+    let tags: [&'static str; 4] = match output_space {
+        "rec709_g24" => ["bt709", "bt709", "bt709", "tv"],
+        "srgb" => ["bt709", "iec61966-2-1", "bt709", "pc"],
+        "dci_p3" => ["smpte432", "bt709", "bt709", "tv"],
+        "pq_rec2020" => ["bt2020", "smpte2084", "bt2020nc", "tv"],
+        "hlg_rec2020" => ["bt2020", "arib-std-b67", "bt2020nc", "tv"],
+        _ => return None,
+    };
+    Some(tags)
+}
+
+/// Pick a single delivery `output_space` for the whole render by
+/// taking the first segment that declares one. The agent is
+/// expected to set `output_space` consistently across clips when it
+/// cares; mixed values are not reconciled here.
+fn render_output_space(segs: &[TimelineSegment]) -> Option<&str> {
+    segs.iter()
+        .filter_map(|s| s.color_pipeline.as_ref())
+        .find_map(|p| p.output_space.as_deref())
+}
+
+/// Build the `-color_primaries / -color_trc / -colorspace /
+/// -color_range` argv chunk for the render's delivery space, or an
+/// empty vec when no tags apply.
+fn output_color_tag_argv(segs: &[TimelineSegment]) -> Vec<String> {
+    let Some(space) = render_output_space(segs) else {
+        return Vec::new();
+    };
+    let Some([primaries, trc, matrix, range]) = output_space_color_tags(space) else {
+        return Vec::new();
+    };
+    vec![
+        "-color_primaries".into(),
+        primaries.into(),
+        "-color_trc".into(),
+        trc.into(),
+        "-colorspace".into(),
+        matrix.into(),
+        "-color_range".into(),
+        range.into(),
+    ]
+}
+
 fn lut3d_filter(lut_path: &Path, interpolation: Option<&str>) -> String {
     let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
     match interpolation {
         Some(interpolation) => format!("lut3d=file='{path}':interp={interpolation}"),
         None => format!("lut3d=file='{path}'"),
     }
+}
+
+/// FFmpeg `lut1d=file=...` filter for shaper LUTs and 1D output
+/// transforms. Used by [`color_pipeline_filter_block`] to apply a
+/// 1D shaper (e.g. log → working space) before the look LUT.
+fn lut1d_filter(lut_path: &Path) -> String {
+    let path = filter_escape_single_quoted(&lut_path.to_string_lossy());
+    format!("lut1d=file='{path}'")
+}
+
+/// Build the filter-graph block for an `awidat.color_pipeline` plan,
+/// chaining each populated slot in order:
+/// input_transform_lut → shaper_lut → look_lut (with look_strength)
+/// → output_transform_lut. Returns the entire block including
+/// `[in_label]` and `[out_label]` and any intermediate `;`
+/// separators between sub-chains. Callers append a trailing `;`
+/// before the next stage.
+///
+/// If no LUT slot is populated, emits a single `null` filter so the
+/// caller always gets a chain that terminates at `out_label`.
+///
+/// `suffix` is a per-segment uniquifier used to avoid label
+/// collisions across the wider graph.
+fn color_pipeline_filter_block(
+    in_label: &str,
+    out_label: &str,
+    suffix: &str,
+    plan: &ColorPipelinePlan,
+) -> String {
+    let mut segments: Vec<String> = Vec::new();
+    let mut current = in_label.to_string();
+
+    if let Some(p) = &plan.input_transform_lut {
+        let next = format!("[cp_idt_{suffix}]");
+        segments.push(format!("{current}{}{next}", lut3d_filter(p, None)));
+        current = next;
+    }
+    if let Some(p) = &plan.shaper_lut {
+        let next = format!("[cp_shaper_{suffix}]");
+        segments.push(format!("{current}{}{next}", lut1d_filter(p)));
+        current = next;
+    }
+    if let Some(p) = &plan.look_lut {
+        let next = format!("[cp_look_{suffix}]");
+        let block = lut3d_filter_block(
+            &current,
+            &next,
+            &format!("cp_look_{suffix}"),
+            p,
+            plan.look_interpolation.as_deref(),
+            plan.look_strength,
+        );
+        segments.push(block);
+        current = next;
+    }
+    if let Some(p) = &plan.output_transform_lut {
+        let next = format!("[cp_odt_{suffix}]");
+        segments.push(format!("{current}{}{next}", lut3d_filter(p, None)));
+        current = next;
+    }
+
+    if segments.is_empty() {
+        // Metadata-only pipeline (e.g., agent set output_space but no
+        // LUTs). Emit a no-op `null` so the chain terminates at
+        // `out_label` regardless.
+        return format!("{in_label}null{out_label}");
+    }
+
+    // Rewrite the last sub-chain's output label so it points at the
+    // caller's `out_label` rather than the intermediate label we
+    // generated for it.
+    if let Some(last) = segments.last_mut() {
+        let new_last = last.replacen(current.as_str(), out_label, 1);
+        *last = new_last;
+    }
+
+    segments.join(";")
 }
 
 /// Build the filter-graph chain segment that applies a LUT to a labeled
@@ -3965,6 +4243,9 @@ pub fn build_timeline_argv_full(
         "20".into(),
         "-pix_fmt".into(),
         "yuv420p".into(),
+    ]);
+    argv.extend(output_color_tag_argv(segs));
+    argv.extend([
         "-c:a".into(),
         "aac".into(),
         "-b:a".into(),
@@ -4097,6 +4378,9 @@ pub fn build_timeline_argv_with_audio_tracks(
         "20".into(),
         "-pix_fmt".into(),
         "yuv420p".into(),
+    ]);
+    argv.extend(output_color_tag_argv(segs));
+    argv.extend([
         "-c:a".into(),
         "aac".into(),
         "-b:a".into(),
@@ -4197,7 +4481,19 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push_str(&format!("{video_label}{chain}{cv};"));
         video_label = cv;
     }
-    if let Some(lut_path) = seg.lut_path.as_ref() {
+    if let Some(plan) = seg.color_pipeline.as_ref() {
+        if plan.has_any_lut() {
+            let cv = format!("[cpv{i}]");
+            filter.push_str(&color_pipeline_filter_block(
+                &video_label,
+                &cv,
+                &i.to_string(),
+                plan,
+            ));
+            filter.push(';');
+            video_label = cv;
+        }
+    } else if let Some(lut_path) = seg.lut_path.as_ref() {
         let lv = format!("[lv{i}]");
         filter.push_str(&lut3d_filter_block(
             &video_label,
@@ -5801,6 +6097,161 @@ mod tests {
             "should not emit blend at full strength, got: {}",
             plan.filter_complex,
         );
+    }
+
+    #[test]
+    fn filter_planner_lowers_color_pipeline_look_to_lut3d() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            working_space: None,
+            lut_input_space: Some("rec709_g24".into()),
+            output_space: Some("rec709_g24".into()),
+            input_transform_lut: None,
+            shaper_lut: None,
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            look_interpolation: Some("tetrahedral".into()),
+            look_strength: None,
+            output_transform_lut: None,
+        });
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0]lut3d=file='/tmp/luts/look.cube':interp=tetrahedral[cpv0]"),
+            "expected single-LUT pipeline chain, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_lowers_color_pipeline_log_chain() {
+        // Log clip + shaper + creative LUT + output transform — every
+        // slot exercised.
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "arri_logc4".into(),
+            working_space: Some("rec709_g24".into()),
+            lut_input_space: Some("rec709_g24".into()),
+            output_space: Some("rec709_g24".into()),
+            input_transform_lut: None,
+            shaper_lut: Some(PathBuf::from("/tmp/luts/logc4_shaper.csp")),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            look_interpolation: Some("tetrahedral".into()),
+            look_strength: Some(0.5),
+            output_transform_lut: None,
+        });
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        // 1D shaper first, on the clip's source label.
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0]lut1d=file='/tmp/luts/logc4_shaper.csp'[cp_shaper_0]"),
+            "expected shaper lut1d on clip input, got: {}",
+            plan.filter_complex,
+        );
+        // Look LUT runs after the shaper with strength 0.5 (split/blend block).
+        assert!(
+            plan.filter_complex
+                .contains("[cp_shaper_0]split[lut_pre_cp_look_0][lut_in_cp_look_0]"),
+            "expected split after shaper, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("blend=all_opacity=0.5[cpv0]"),
+            "expected blend strength to drive cpv0, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_color_pipeline_supersedes_legacy_lut() {
+        // If both effects are on a clip, color_pipeline wins; the
+        // legacy lut3d branch is skipped.
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.lut_path = Some(PathBuf::from("/tmp/luts/legacy.cube"));
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            working_space: None,
+            lut_input_space: Some("rec709_g24".into()),
+            output_space: None,
+            input_transform_lut: None,
+            shaper_lut: None,
+            look_lut: Some(PathBuf::from("/tmp/luts/new.cube")),
+            look_interpolation: None,
+            look_strength: None,
+            output_transform_lut: None,
+        });
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex.contains("/tmp/luts/new.cube"),
+            "expected new color_pipeline LUT in argv, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            !plan.filter_complex.contains("/tmp/luts/legacy.cube"),
+            "legacy lut3d should be skipped when color_pipeline is present, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_color_pipeline_with_only_metadata_is_noop_chain() {
+        // No LUT slots set — the pipeline carries only color-space
+        // metadata, so the filter chain has no LUT segment.
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            working_space: None,
+            lut_input_space: None,
+            output_space: Some("rec709_g24".into()),
+            input_transform_lut: None,
+            shaper_lut: None,
+            look_lut: None,
+            look_interpolation: None,
+            look_strength: None,
+            output_transform_lut: None,
+        });
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            !plan.filter_complex.contains("lut3d"),
+            "metadata-only pipeline must not emit any LUT, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            !plan.filter_complex.contains("lut1d"),
+            "metadata-only pipeline must not emit any LUT, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn output_color_tags_match_known_delivery_spaces() {
+        let case = |space: &str| {
+            let mut s = seg("/tmp/a.mp4", 0.0, 2.0);
+            s.color_pipeline = Some(ColorPipelinePlan {
+                clip_input_space: "rec709_g24".into(),
+                working_space: None,
+                lut_input_space: None,
+                output_space: Some(space.into()),
+                input_transform_lut: None,
+                shaper_lut: None,
+                look_lut: None,
+                look_interpolation: None,
+                look_strength: None,
+                output_transform_lut: None,
+            });
+            output_color_tag_argv(&[s]).join(" ")
+        };
+        assert!(case("rec709_g24").contains("-color_primaries bt709"));
+        assert!(case("rec709_g24").contains("-color_trc bt709"));
+        assert!(case("rec709_g24").contains("-color_range tv"));
+        assert!(case("pq_rec2020").contains("-color_trc smpte2084"));
+        assert!(case("pq_rec2020").contains("-colorspace bt2020nc"));
+        assert!(case("hlg_rec2020").contains("-color_trc arib-std-b67"));
+        assert!(case("srgb").contains("-color_trc iec61966-2-1"));
+        assert!(case("srgb").contains("-color_range pc"));
+        // Log encodings and scene_linear deliberately omit tags.
+        assert_eq!(case("arri_logc4"), "");
+        assert_eq!(case("scene_linear"), "");
     }
 
     #[test]

@@ -207,6 +207,90 @@ fn project_with_partial_lut_strength_emits_split_and_blend() {
     );
 }
 
+fn write_project_with_color_pipeline(dir: &Path) {
+    let asset_a = "raw/a.mp4";
+    fs::create_dir_all(dir.join("raw")).unwrap();
+    fs::write(dir.join(asset_a), b"stub").unwrap();
+    fs::create_dir_all(dir.join("luts")).unwrap();
+    fs::write(dir.join("luts/look.cube"), b"# stub").unwrap();
+    fs::write(dir.join("luts/shaper.csp"), b"# stub").unwrap();
+
+    let mut clip_a = Clip::empty("clip-a".to_string());
+    clip_a.media_reference = MediaReference::External(ExternalReference::new(asset_a));
+    clip_a.source_range = Some(TimeRange::new(
+        RationalTime::new(0.0, 24.0),
+        RationalTime::new(4.0 * 24.0, 24.0),
+    ));
+    let mut cp = Effect::new("awidat.color_pipeline");
+    cp.metadata.insert(
+        "clip_input_space".to_string(),
+        serde_json::json!("arri_logc4"),
+    );
+    cp.metadata.insert(
+        "lut_input_space".to_string(),
+        serde_json::json!("rec709_g24"),
+    );
+    cp.metadata
+        .insert("output_space".to_string(), serde_json::json!("rec709_g24"));
+    cp.metadata.insert(
+        "shaper_lut".to_string(),
+        serde_json::json!("luts/shaper.csp"),
+    );
+    cp.metadata
+        .insert("look_lut".to_string(), serde_json::json!("luts/look.cube"));
+    cp.metadata
+        .insert("look_strength".to_string(), serde_json::json!(0.7));
+    cp.metadata.insert(
+        "look_interpolation".to_string(),
+        serde_json::json!("tetrahedral"),
+    );
+    clip_a.effects.push(cp);
+
+    let mut track = Track::empty("V1", TrackKind::Video);
+    track.children.push(TrackChild::Clip(clip_a));
+    let mut tl = Timeline::empty("p");
+    let mut stack = Stack::empty("root");
+    stack.children.push(StackChild::Track(track));
+    tl.tracks = stack;
+    fs::write(
+        dir.join(files::OTIO),
+        serde_json::to_string_pretty(&tl).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn project_with_color_pipeline_emits_chain_and_color_tags() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_with_color_pipeline(dir.path());
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+    assert!(
+        cmd.contains("lut1d=file='"),
+        "expected shaper lut1d in argv, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("luts/shaper.csp"),
+        "expected shaper path in argv, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("lut3d=file='"),
+        "expected look lut3d in argv, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("blend=all_opacity=0.7"),
+        "expected look_strength blend in argv, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("-color_primaries bt709"),
+        "expected output_space color tags in argv, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("-color_trc bt709"),
+        "expected output_space transfer in argv, got: {cmd}",
+    );
+}
+
 #[test]
 fn project_with_full_lut_strength_emits_single_filter() {
     let dir = tempfile::tempdir().unwrap();
