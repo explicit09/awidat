@@ -32,4 +32,8 @@ font_weight: string,
  * Animation: `"none"`, `"fade_in"`, `"fade_out"`, `"fade_in_out"`,
  * `"slide_in"`, or `"slide_out"`.
  */
-animation: string, };
+animation: string,
+/**
+ * Text reveal: `"none"`, `"typewriter"`, `"word"`, or `"line"`.
+ */
+reveal: string, };

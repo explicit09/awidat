@@ -17,9 +17,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use awidat_proto::transitions::{
-    resolve_composition_gpu_shader, builtin_transition_composition,
-};
+use awidat_proto::transitions::{builtin_transition_composition, resolve_composition_gpu_shader};
 use awidat_render::FrameProvider;
 use awidat_render_gpu::{
     FrameParams, GpuError, GpuTransitionRenderer, TransitionShader, encode_rgba_to_png,
@@ -124,10 +122,16 @@ async fn pull_one_rgba_frame(
     height: u32,
     fps: u32,
 ) -> Result<Vec<u8>, String> {
-    let mut provider =
-        FrameProvider::open(source, source_start_s.max(0.0), window_s, width, height, fps)
-            .await
-            .map_err(|e| format!("frame provider open: {e}"))?;
+    let mut provider = FrameProvider::open(
+        source,
+        source_start_s.max(0.0),
+        window_s,
+        width,
+        height,
+        fps,
+    )
+    .await
+    .map_err(|e| format!("frame provider open: {e}"))?;
     let frame = match provider.next_frame().await {
         Ok(Some(bytes)) => bytes.to_vec(),
         Ok(None) => return Err("frame provider yielded no frames at requested time".into()),

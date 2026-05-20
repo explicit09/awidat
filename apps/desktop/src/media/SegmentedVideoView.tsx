@@ -1566,6 +1566,7 @@ type PreviewTitleOverlay = {
   color: string;
   fontWeight: "normal" | "bold";
   animation: "none" | "fade_in" | "fade_out" | "fade_in_out" | "slide_in" | "slide_out";
+  reveal: "none" | "typewriter" | "word" | "line";
   animations: TimelineParameterAnimation[];
 };
 
@@ -1596,6 +1597,7 @@ function activeTitleOverlays(
       color: item.title.color || "#FFFFFF",
       fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
       animation: titleAnimation(item.title.animation),
+      reveal: titleReveal(item.title.reveal),
       animations: item.animations ?? [],
     });
   }
@@ -1627,7 +1629,7 @@ function TimelineTitleOverlays({
           className={`timeline-title-overlay title-pos-${overlay.position}`}
           style={titleOverlayStyle(overlay, timelineTime)}
         >
-          {overlay.text}
+          {titleRevealText(overlay, timelineTime)}
         </div>
       ))}
     </div>
@@ -1660,12 +1662,13 @@ function titleOverlayStyle(
   if (animated["title.opacity"] !== undefined) {
     opacity = clampOpacity(animated["title.opacity"]);
   }
+  const fontSize = animated["title.font_size"] ?? overlay.fontSize;
   const xOffset = animated["title.x"] ?? 0;
   const yOffset = animated["title.y"] ?? 0;
 
   return {
     color: overlay.color,
-    fontSize: `clamp(15px, ${Math.max(1.2, overlay.fontSize / 22).toFixed(2)}vw, ${overlay.fontSize}px)`,
+    fontSize: `clamp(15px, ${Math.max(1.2, fontSize / 22).toFixed(2)}vw, ${fontSize}px)`,
     fontWeight: overlay.fontWeight === "bold" ? 750 : 500,
     opacity,
     transform: `translate(calc(${translateX} + ${xOffset * 100}vw), calc(${translateY} + ${yOffset * 100}vh))`,
@@ -1687,6 +1690,47 @@ function titleAnimation(value: string): PreviewTitleOverlay["animation"] {
     default:
       return "none";
   }
+}
+
+function titleReveal(value: string): PreviewTitleOverlay["reveal"] {
+  switch (value) {
+    case "typewriter":
+    case "word":
+    case "line":
+      return value;
+    default:
+      return "none";
+  }
+}
+
+function titleRevealText(overlay: PreviewTitleOverlay, timelineTime: number): string {
+  if (overlay.reveal === "none") return overlay.text;
+  const elapsed = Math.max(0, timelineTime - overlay.startS);
+  const duration = Math.max(0.001, overlay.endS - overlay.startS);
+  const progress = Math.min(1, elapsed / duration);
+  const steps = revealSteps(overlay.text, overlay.reveal);
+  if (steps.length === 0) return "";
+  const index = Math.min(steps.length - 1, Math.floor(progress * steps.length));
+  return steps[index];
+}
+
+function revealSteps(text: string, reveal: PreviewTitleOverlay["reveal"]): string[] {
+  if (reveal === "typewriter") {
+    return Array.from(text).map((_, index, chars) => chars.slice(0, index + 1).join(""));
+  }
+  if (reveal === "word") {
+    const matches = [...text.matchAll(/\S+/g)];
+    return matches.map((match) => text.slice(0, (match.index ?? 0) + match[0].length));
+  }
+  if (reveal === "line") {
+    const lines = text.match(/.*(?:\n|$)/g)?.filter((line) => line.length > 0) ?? [];
+    let cursor = 0;
+    return lines.map((line) => {
+      cursor += line.length;
+      return text.slice(0, cursor);
+    });
+  }
+  return [text];
 }
 
 /**
