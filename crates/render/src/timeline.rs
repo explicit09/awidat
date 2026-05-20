@@ -2574,6 +2574,100 @@ fn db_to_linear(db: f64) -> f64 {
     10_f64.powf(db / 20.0)
 }
 
+/// Flat-chain grade preview for a single clip, suitable for
+/// FFmpeg's `-vf` argument when extracting one frame.
+///
+/// Returned `vf` is a comma-separated filter chain (no labels) that
+/// can be prefixed onto a `scale=...` chain. When a clip's effects
+/// require multi-segment labeled filtergraphs (e.g.
+/// `awidat.lut.strength < 1.0`, multi-stage `color_pipeline`) those
+/// stages are recorded in `skipped` rather than emitted — the
+/// preview falls back to a partial grade and the caller can warn
+/// the user. Full-strength single-LUT cases are the common path
+/// and are emitted faithfully.
+#[derive(Debug, Clone, Default)]
+pub struct ClipGradeChain {
+    /// Comma-separated filter chain or `None` if nothing applies.
+    pub vf: Option<String>,
+    /// Human-readable reasons certain stages were skipped.
+    pub skipped: Vec<String>,
+}
+
+/// Build a flat preview-grade filter chain for `clip`, joining
+/// (when present): color correction, the legacy `awidat.lut` at
+/// full strength, and the `color_pipeline` look LUT at full
+/// strength. Multi-stage pipelines and partial-strength LUTs are
+/// recorded in `skipped`.
+pub fn build_clip_grade_chain(
+    clip: &awidat_proto::otio::Clip,
+    project_root: &Path,
+) -> ClipGradeChain {
+    let mut filters: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+
+    if let Some(plan) = read_color_correction(clip)
+        && let Some(chain) = color_filter_chain(&plan)
+    {
+        filters.push(chain);
+    }
+
+    let pipeline_present = clip
+        .effects
+        .iter()
+        .any(|e| e.effect_name == "awidat.color_pipeline");
+
+    if pipeline_present {
+        match read_color_pipeline(clip, project_root) {
+            Ok(Some(plan)) => {
+                if plan.input_transform_lut.is_some()
+                    || plan.shaper_lut.is_some()
+                    || plan.output_transform_lut.is_some()
+                {
+                    skipped.push(
+                        "color_pipeline has multi-stage chain (shaper/IDT/ODT); only look_lut is included in preview".into(),
+                    );
+                }
+                if let Some(look) = plan.look_lut.as_ref() {
+                    let s = plan.look_strength.unwrap_or(1.0);
+                    if s >= 1.0 - 1e-9 {
+                        filters.push(lut3d_filter(look, plan.look_interpolation.as_deref()));
+                    } else {
+                        skipped.push(format!(
+                            "color_pipeline look_strength {s} < 1.0 needs split/blend; preview drops blend"
+                        ));
+                        filters.push(lut3d_filter(look, plan.look_interpolation.as_deref()));
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(err) => skipped.push(format!("color_pipeline failed to resolve: {err}")),
+        }
+    } else if let Some(lut_path) =
+        read_effect_string(clip, "awidat.lut", "lut_path").map(|p| project_root.join(p))
+    {
+        let interpolation = read_lut_interpolation(clip);
+        let strength = read_effect_number(clip, "awidat.lut", "strength")
+            .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
+        if let Some(s) = strength
+            && s < 1.0 - 1e-9
+        {
+            skipped.push(format!(
+                "awidat.lut strength {s} < 1.0 needs split/blend; preview applies LUT at full strength"
+            ));
+        }
+        filters.push(lut3d_filter(&lut_path, interpolation.as_deref()));
+    }
+
+    if filters.is_empty() {
+        ClipGradeChain { vf: None, skipped }
+    } else {
+        ClipGradeChain {
+            vf: Some(filters.join(",")),
+            skipped,
+        }
+    }
+}
+
 fn color_filter_chain(plan: &ColorCorrectionPlan) -> Option<String> {
     let mut filters = Vec::new();
     let exposure = plan.exposure_ev.unwrap_or(0.0);
@@ -6221,6 +6315,69 @@ mod tests {
             "metadata-only pipeline must not emit any LUT, got: {}",
             plan.filter_complex,
         );
+    }
+
+    #[test]
+    fn build_clip_grade_chain_emits_color_and_lut_for_simple_clip() {
+        use awidat_proto::otio::{Clip, Effect};
+        let mut clip = Clip::empty("test-clip".to_string());
+        let mut color = Effect::new("awidat.color_correction");
+        color
+            .metadata
+            .insert("exposure_ev".into(), serde_json::json!(0.5));
+        color
+            .metadata
+            .insert("saturation".into(), serde_json::json!(1.2));
+        clip.effects.push(color);
+        let mut lut = Effect::new("awidat.lut");
+        lut.metadata
+            .insert("lut_path".into(), serde_json::json!("luts/show-look.cube"));
+        lut.metadata
+            .insert("interpolation".into(), serde_json::json!("tetrahedral"));
+        clip.effects.push(lut);
+
+        // Use an arbitrary project root; we're not parsing the LUT
+        // here, just building the filter string.
+        let chain = build_clip_grade_chain(&clip, Path::new("/tmp/project"));
+        let vf = chain.vf.expect("expected a non-empty grade chain");
+        assert!(vf.contains("eq=brightness="));
+        assert!(vf.contains("lut3d=file='/tmp/project/luts/show-look.cube':interp=tetrahedral"));
+        // Order: color_correction then LUT.
+        let eq_idx = vf.find("eq=").unwrap();
+        let lut_idx = vf.find("lut3d=").unwrap();
+        assert!(
+            eq_idx < lut_idx,
+            "color correction must precede LUT in: {vf}"
+        );
+        assert!(chain.skipped.is_empty());
+    }
+
+    #[test]
+    fn build_clip_grade_chain_warns_about_partial_strength() {
+        use awidat_proto::otio::{Clip, Effect};
+        let mut clip = Clip::empty("partial".to_string());
+        let mut lut = Effect::new("awidat.lut");
+        lut.metadata
+            .insert("lut_path".into(), serde_json::json!("luts/x.cube"));
+        lut.metadata
+            .insert("strength".into(), serde_json::json!(0.6));
+        clip.effects.push(lut);
+        let chain = build_clip_grade_chain(&clip, Path::new("/p"));
+        assert!(chain.vf.is_some(), "LUT still applied as approximation");
+        assert!(
+            chain.skipped.iter().any(|m| m.contains("strength")),
+            "expected strength<1 to be noted, got {:?}",
+            chain.skipped
+        );
+    }
+
+    #[test]
+    fn build_clip_grade_chain_returns_none_for_bare_clip() {
+        use awidat_proto::otio::Clip;
+        let clip = Clip::empty("bare".to_string());
+        let chain = build_clip_grade_chain(&clip, Path::new("/p"));
+        assert!(chain.vf.is_none());
+        assert!(chain.skipped.is_empty());
     }
 
     #[test]

@@ -46,9 +46,9 @@ pub mod timeline;
 
 pub use ffmpeg::{
     BlackFrameRange, FfmpegError, MediaProbe, MotionSignal, SilenceRange, TranscodeProgress,
-    TranscodeProgressCallback, extract_frame, ffmpeg_path, ffprobe_path, generate_black_frames,
-    generate_motion_signal, generate_silences, generate_thumbnails, generate_waveform,
-    probe_duration_s, probe_media, transcode_proxy,
+    TranscodeProgressCallback, extract_frame, extract_frame_filtered, ffmpeg_path, ffprobe_path,
+    generate_black_frames, generate_motion_signal, generate_silences, generate_thumbnails,
+    generate_waveform, probe_duration_s, probe_media, transcode_proxy,
 };
 pub use job::{
     JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec, RenderPlanLimitation,
@@ -57,13 +57,13 @@ pub use output_safety::{OutputPathPolicy, OutputPathSafetyError, validate_render
 pub use progress::ProgressSnapshot;
 pub use timeline::{
     AudioAutomationPlan, AudioClipPlan, AudioFxPlan, AudioTrackItemPlan, AudioTrackPlan,
-    BroadcastOverlayPlan, DuckingPlan, EqBandPlan, FilterPlan, FilterPlanner, LoudnessTargetPlan,
-    RenderTimelineError, TimelineSegment, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
-    TransitionPlan, VideoOverlayMode, VideoOverlayPlan, build_timeline_argv,
-    build_timeline_argv_full, build_timeline_argv_with_audio_tracks,
-    build_timeline_argv_with_transitions, build_timeline_render_spec,
-    build_timeline_section_render_spec, collect_timeline_full_plan, collect_timeline_plan,
-    collect_timeline_segments,
+    BroadcastOverlayPlan, ClipGradeChain, ColorPipelinePlan, DuckingPlan, EqBandPlan, FilterPlan,
+    FilterPlanner, LoudnessTargetPlan, RenderTimelineError, TimelineSegment, TitleAnimation,
+    TitlePlan, TitlePosition, TitleWeight, TransitionPlan, VideoOverlayMode, VideoOverlayPlan,
+    build_clip_grade_chain, build_timeline_argv, build_timeline_argv_full,
+    build_timeline_argv_with_audio_tracks, build_timeline_argv_with_transitions,
+    build_timeline_render_spec, build_timeline_section_render_spec, collect_timeline_full_plan,
+    collect_timeline_plan, collect_timeline_segments,
 };
 
 #[cfg(test)]

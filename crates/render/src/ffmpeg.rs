@@ -136,6 +136,24 @@ pub async fn extract_frame(
     format: ImageFormat,
     max_dim: Option<u32>,
 ) -> Result<Vec<u8>, FfmpegError> {
+    extract_frame_filtered(asset_path, t_s, format, max_dim, None).await
+}
+
+/// Same as [`extract_frame`] but prepends an additional flat filter
+/// chain (comma-separated, no labels) before the optional `scale`
+/// filter. Used to render graded previews where the chain mirrors
+/// the per-clip color filters the full timeline render would apply.
+///
+/// `vf_prefix` must be a syntactically valid `-vf` chain; the caller
+/// is expected to have escaped paths via [`crate::timeline`] helpers.
+/// Passing `None` is identical to [`extract_frame`].
+pub async fn extract_frame_filtered(
+    asset_path: &Path,
+    t_s: f64,
+    format: ImageFormat,
+    max_dim: Option<u32>,
+    vf_prefix: Option<&str>,
+) -> Result<Vec<u8>, FfmpegError> {
     if !t_s.is_finite() || t_s < 0.0 {
         return Err(FfmpegError::BadTimestamp(t_s));
     }
@@ -155,12 +173,19 @@ pub async fn extract_frame(
         .arg("-frames:v")
         .arg("1");
 
-    if let Some(dim) = max_dim {
+    let scale_chain = max_dim.map(|dim| {
         // The `-2` keeps the other dimension even-numbered, which many
         // codecs require.
-        cmd.arg("-vf").arg(format!(
-            "scale='if(gt(iw,ih),{dim},-2)':'if(gt(iw,ih),-2,{dim})'"
-        ));
+        format!("scale='if(gt(iw,ih),{dim},-2)':'if(gt(iw,ih),-2,{dim})'")
+    });
+    let combined_vf = match (vf_prefix, scale_chain) {
+        (None, None) => None,
+        (Some(p), None) => Some(p.to_string()),
+        (None, Some(s)) => Some(s),
+        (Some(p), Some(s)) => Some(format!("{p},{s}")),
+    };
+    if let Some(vf) = combined_vf {
+        cmd.arg("-vf").arg(vf);
     }
 
     cmd.arg("-f")

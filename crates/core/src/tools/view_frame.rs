@@ -13,7 +13,10 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_render::ffmpeg::{ImageFormat, extract_frame};
+use awidat_proto::otio::{StackChild, Timeline, TrackChild};
+use awidat_proto::project::files;
+use awidat_render::ffmpeg::{ImageFormat, extract_frame_filtered};
+use awidat_render::{ClipGradeChain, build_clip_grade_chain};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::Deserialize;
@@ -45,6 +48,16 @@ struct ViewFrameArgs {
     /// Image format: `"png"` (default) or `"jpeg"`.
     #[serde(default)]
     format: Option<String>,
+    /// Optional clip name from the project's OTIO. When set, the
+    /// frame is extracted through the same color filter chain the
+    /// full timeline render would apply to that clip
+    /// (`awidat.color_correction` + LUT effects). Useful for graded
+    /// before/after previews without running the full render.
+    /// Multi-stage / partial-strength color pipelines fall back to
+    /// a single-pass approximation and the response lists what was
+    /// skipped.
+    #[serde(default)]
+    clip: Option<String>,
 }
 
 #[async_trait]
@@ -78,6 +91,10 @@ impl ToolHandler for ViewFrameTool {
                         "type": "string",
                         "enum": ["png", "jpeg"],
                         "description": "png (default) | jpeg."
+                    },
+                    "clip": {
+                        "type": "string",
+                        "description": "Optional clip name; when set, the frame is rendered through that clip's color grade (color_correction + LUT effects) using the same flat filter chain the timeline render would apply."
                     }
                 },
                 "required": ["asset", "t_s"]
@@ -148,13 +165,27 @@ impl ToolHandler for ViewFrameTool {
             Detail::Original => None,
         };
 
-        // Cache lookup. Key on (asset_path, t_s, format, max_dim).
-        let cache_path = cache_path_for(&ctx.project_root, &asset_path, args.t_s, format, max_dim)
-            .map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "view_frame: cache path build failed: {e}"
-                ))
-            })?;
+        // Build the optional grade chain. The cache key folds the
+        // chain's identity in so graded and ungraded previews of the
+        // same asset/time don't collide.
+        let grade = if let Some(clip_name) = args.clip.as_deref() {
+            Some(resolve_grade_chain(&ctx.project_root, clip_name)?)
+        } else {
+            None
+        };
+        let grade_signature = grade.as_ref().and_then(|c| c.vf.as_deref()).unwrap_or("");
+
+        let cache_path = cache_path_for(
+            &ctx.project_root,
+            &asset_path,
+            args.t_s,
+            format,
+            max_dim,
+            grade_signature,
+        )
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!("view_frame: cache path build failed: {e}"))
+        })?;
 
         let bytes = if cache_path.exists() {
             tokio::fs::read(&cache_path).await.map_err(|e| {
@@ -164,11 +195,17 @@ impl ToolHandler for ViewFrameTool {
                 ))
             })?
         } else {
-            let bytes = extract_frame(&asset_path, args.t_s, format, max_dim)
-                .await
-                .map_err(|e| {
-                    FunctionCallError::RespondToModel(format!("view_frame: ffmpeg failed: {e}"))
-                })?;
+            let bytes = extract_frame_filtered(
+                &asset_path,
+                args.t_s,
+                format,
+                max_dim,
+                grade.as_ref().and_then(|c| c.vf.as_deref()),
+            )
+            .await
+            .map_err(|e| {
+                FunctionCallError::RespondToModel(format!("view_frame: ffmpeg failed: {e}"))
+            })?;
             // Best-effort cache write; failure here doesn't fail the call.
             if let Some(parent) = cache_path.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
@@ -178,12 +215,33 @@ impl ToolHandler for ViewFrameTool {
         };
 
         let b64 = B64.encode(&bytes);
+        let grade_summary = match grade.as_ref() {
+            Some(c) => {
+                let mut s = if c.vf.is_some() {
+                    format!(
+                        " (graded via clip {:?})",
+                        args.clip.as_deref().unwrap_or("")
+                    )
+                } else {
+                    format!(
+                        " (clip {:?} had no graded effects)",
+                        args.clip.as_deref().unwrap_or("")
+                    )
+                };
+                if !c.skipped.is_empty() {
+                    s.push_str(&format!(" — skipped: {}", c.skipped.join("; ")));
+                }
+                s
+            }
+            None => String::new(),
+        };
         let summary = format!(
-            "frame {:.3}s of {} ({}, {} bytes)",
+            "frame {:.3}s of {} ({}, {} bytes){}",
             args.t_s,
             args.asset,
             format.media_type(),
             bytes.len(),
+            grade_summary,
         );
         Ok(ToolOutput::text(summary).with_images(vec![(format.media_type().to_string(), b64)]))
     }
@@ -225,6 +283,7 @@ fn cache_path_for(
     t_s: f64,
     format: ImageFormat,
     max_dim: Option<u32>,
+    grade_signature: &str,
 ) -> std::io::Result<PathBuf> {
     // Hash the asset *path* (cheap; doesn't read file). For invalidation
     // on asset change, callers can prune .awidat/cache/frames/.
@@ -240,12 +299,61 @@ fn cache_path_for(
         ImageFormat::Png => "png",
         ImageFormat::Jpeg => "jpg",
     };
+    // Fold the grade chain into the cache key so a graded frame
+    // doesn't collide with the ungraded version of the same frame.
+    let grade_tag = if grade_signature.is_empty() {
+        "raw".to_string()
+    } else {
+        let mut gh = Sha256::new();
+        gh.update(grade_signature.as_bytes());
+        let hex = format!("{:x}", gh.finalize());
+        format!("g{}", hex.chars().take(12).collect::<String>())
+    };
     Ok(project_root
         .join(".awidat")
         .join("cache")
         .join("frames")
         .join(asset_dir)
-        .join(format!("{t_ms}_{dim_tag}.{ext}")))
+        .join(format!("{t_ms}_{dim_tag}_{grade_tag}.{ext}")))
+}
+
+/// Look up `clip_name` in the project's OTIO and return the
+/// flat-chain grade preview for its effects. The `extract_frame`
+/// pipeline is happy to receive `ClipGradeChain { vf: None }`
+/// (no-op preview), so a clip with no graded effects is not an
+/// error — the caller sees `(clip ... had no graded effects)` in
+/// the summary line.
+fn resolve_grade_chain(
+    project_root: &Path,
+    clip_name: &str,
+) -> Result<ClipGradeChain, FunctionCallError> {
+    let otio_path = project_root.join(files::OTIO);
+    let raw = std::fs::read_to_string(&otio_path).map_err(|e| {
+        FunctionCallError::RespondToModel(format!(
+            "view_frame: project OTIO unreadable at {}: {e}",
+            otio_path.display()
+        ))
+    })?;
+    let tl: Timeline = serde_json::from_str(&raw).map_err(|e| {
+        FunctionCallError::RespondToModel(format!("view_frame: project OTIO not valid JSON: {e}"))
+    })?;
+    for stack_child in &tl.tracks.children {
+        let StackChild::Track(track) = stack_child else {
+            continue;
+        };
+        for track_child in &track.children {
+            let TrackChild::Clip(clip) = track_child else {
+                continue;
+            };
+            if clip.name == clip_name {
+                return Ok(build_clip_grade_chain(clip, project_root));
+            }
+        }
+    }
+    Err(FunctionCallError::RespondToModel(format!(
+        "view_frame: clip {clip_name:?} not found in project OTIO at {}",
+        otio_path.display()
+    )))
 }
 
 const DESCRIPTION: &str = "\
@@ -357,11 +465,12 @@ mod tests {
             12.345,
             ImageFormat::Png,
             Some(768),
+            "",
         )
         .unwrap();
         let s = p.to_string_lossy();
         assert!(s.contains("/.awidat/cache/frames/"));
-        assert!(s.ends_with("12345_d768.png"));
+        assert!(s.ends_with("12345_d768_raw.png"));
     }
 
     #[test]
@@ -372,8 +481,37 @@ mod tests {
             0.0,
             ImageFormat::Jpeg,
             None,
+            "",
         )
         .unwrap();
-        assert!(p.to_string_lossy().ends_with("0_orig.jpg"));
+        assert!(p.to_string_lossy().ends_with("0_orig_raw.jpg"));
+    }
+
+    #[test]
+    fn cache_path_partitions_graded_from_raw() {
+        let raw = cache_path_for(
+            Path::new("/proj"),
+            Path::new("/proj/raw/x.mp4"),
+            1.0,
+            ImageFormat::Png,
+            Some(768),
+            "",
+        )
+        .unwrap();
+        let graded = cache_path_for(
+            Path::new("/proj"),
+            Path::new("/proj/raw/x.mp4"),
+            1.0,
+            ImageFormat::Png,
+            Some(768),
+            "lut3d=file='X':interp=tetrahedral",
+        )
+        .unwrap();
+        assert_ne!(
+            raw, graded,
+            "graded preview must not collide with raw cache"
+        );
+        assert!(raw.to_string_lossy().contains("_raw."));
+        assert!(graded.to_string_lossy().contains("_g"));
     }
 }
