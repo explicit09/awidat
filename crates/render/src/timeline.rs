@@ -933,6 +933,7 @@ pub fn collect_timeline_full_plan(
         &consumed_animation_ids,
     ));
     render_limitations.extend(mask_source_limitations(&segs));
+    render_limitations.extend(log_clip_without_shaper_limitations(&segs));
     Ok((
         segs,
         transitions,
@@ -1592,6 +1593,46 @@ fn unconsumed_animation_limitations(
         .iter()
         .filter(|animation| !consumed_animation_ids.contains(&animation.id))
         .map(render_limitation_for_unconsumed_animation)
+        .collect()
+}
+
+/// Surface a `log_clip_without_shaper` limitation when a clip
+/// declares a camera Log `clip_input_space` (something `zscale`
+/// can't normalize), has a non-Log `lut_input_space`, and didn't
+/// provide a shaper or IDT to bridge. Render falls back to
+/// applying the LUT in Log space, which is the wrong call — the
+/// agent needs to know.
+fn log_clip_without_shaper_limitations(segs: &[TimelineSegment]) -> Vec<RenderPlanLimitation> {
+    segs.iter()
+        .filter_map(|seg| {
+            let plan = seg.color_pipeline.as_ref()?;
+            // No look LUT means no space-mismatch to worry about.
+            plan.look_lut.as_ref()?;
+            let lut_space = plan.lut_input_space.as_deref()?;
+            if plan.clip_input_space == lut_space {
+                return None;
+            }
+            // Agent provided their own chain — trust it.
+            if plan.shaper_lut.is_some() || plan.input_transform_lut.is_some() {
+                return None;
+            }
+            // Auto-zscale will handle display-referred pairs.
+            let clip_supported = zscale_params_for_space(&plan.clip_input_space).is_some();
+            let lut_supported = zscale_params_for_space(lut_space).is_some();
+            if clip_supported && lut_supported {
+                return None;
+            }
+            Some(RenderPlanLimitation {
+                kind: "log_clip_without_shaper".to_string(),
+                animation_id: None,
+                clip_id: Some(seg.clip_name.clone()),
+                parameter: Some("color_pipeline.shaper_lut".to_string()),
+                message: format!(
+                    "clip {:?}: clip_input_space={:?} (camera Log) but no shaper_lut or input_transform_lut was provided; render will apply the look LUT to log-encoded pixels which is likely incorrect",
+                    seg.clip_name, plan.clip_input_space,
+                ),
+            })
+        })
         .collect()
 }
 
@@ -2871,6 +2912,53 @@ fn lut1d_filter(lut_path: &Path) -> String {
     format!("lut1d=file='{path}'")
 }
 
+/// Map a stable color-space id to FFmpeg `zscale` parameters that
+/// place pixels in that space. Returns `None` for spaces zscale
+/// can't represent — camera Log encodings need a shaper LUT for
+/// linearization, not a transfer-curve swap.
+///
+/// The DCI-P3 mapping is a compromise: zscale doesn't have a true
+/// "DCI-P3 gamma 2.6" preset, so we use `transfer=bt709` with
+/// P3-D65 primaries — close enough for the apply-time normalize
+/// case the agent uses to feed a P3-authored LUT; the actual
+/// gamma 2.6 encoding lives in the LUT itself.
+fn zscale_params_for_space(space: &str) -> Option<&'static str> {
+    match space {
+        "rec709_g24" => Some("transfer=bt709:primaries=bt709:matrix=bt709"),
+        "srgb" => Some("transfer=iec61966-2-1:primaries=bt709:matrix=bt709"),
+        "dci_p3" => Some("transfer=bt709:primaries=smpte432:matrix=bt709"),
+        "scene_linear" => Some("transfer=linear:primaries=bt709:matrix=bt709"),
+        "pq_rec2020" => Some("transfer=smpte2084:primaries=bt2020:matrix=bt2020nc"),
+        "hlg_rec2020" => Some("transfer=arib-std-b67:primaries=bt2020:matrix=bt2020nc"),
+        _ => None,
+    }
+}
+
+/// Decide whether render should auto-insert a `zscale=` filter to
+/// normalize the source pixels into the look LUT's declared input
+/// space. Returns the zscale parameter string, or `None` when no
+/// auto-conversion applies (matching spaces, agent-provided
+/// shaper/IDT, or unsupported space — typically a camera Log
+/// encoding).
+fn auto_pre_lut_zscale(plan: &ColorPipelinePlan) -> Option<&'static str> {
+    // Agent owns the chain whenever they declared one of these.
+    if plan.shaper_lut.is_some() || plan.input_transform_lut.is_some() {
+        return None;
+    }
+    // Only triggers when there's actually a look LUT to feed.
+    plan.look_lut.as_ref()?;
+    let lut_space = plan.lut_input_space.as_deref()?;
+    if plan.clip_input_space == lut_space {
+        return None;
+    }
+    // Both spaces must be zscale-representable. If either is a
+    // Log encoding (or anything else without a `zscale_params_for_space`
+    // mapping), we don't auto-normalize — that would silently lie
+    // to the LUT. The render limitation surfaces the gap instead.
+    let _ = zscale_params_for_space(&plan.clip_input_space)?;
+    zscale_params_for_space(lut_space)
+}
+
 /// Build the filter-graph block for an `awidat.color_pipeline` plan,
 /// chaining each populated slot in order:
 /// input_transform_lut → shaper_lut → look_lut (with look_strength)
@@ -2901,6 +2989,18 @@ fn color_pipeline_filter_block(
     if let Some(p) = &plan.shaper_lut {
         let next = format!("[cp_shaper_{suffix}]");
         segments.push(format!("{current}{}{next}", lut1d_filter(p)));
+        current = next;
+    }
+    // When the agent didn't provide a shaper / IDT but the clip's
+    // input space differs from the LUT's declared input space, fall
+    // back to FFmpeg's `zscale` filter for display-referred pairs
+    // (per [[lut-color-space-rule]]: apply each LUT in its declared
+    // input space). Log encodings without a shaper still get no
+    // pre-transform — the lack of shaper is surfaced separately as
+    // a `log_clip_without_shaper` render limitation.
+    if let Some(zscale_params) = auto_pre_lut_zscale(plan) {
+        let next = format!("[cp_norm_{suffix}]");
+        segments.push(format!("{current}zscale={zscale_params}{next}"));
         current = next;
     }
     if let Some(p) = &plan.look_lut {
@@ -6462,6 +6562,96 @@ mod tests {
         let chain = build_clip_grade_chain(&clip, Path::new("/p"));
         assert!(chain.vf.is_none());
         assert!(chain.skipped.is_empty());
+    }
+
+    #[test]
+    fn auto_pre_lut_zscale_inserts_for_display_referred_mismatch() {
+        // sRGB-encoded clip, Rec.709-authored LUT, no shaper — the
+        // chain must `zscale` into Rec.709 before applying the LUT.
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 2.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "srgb".into(),
+            lut_input_space: Some("rec709_g24".into()),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            ..Default::default()
+        });
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("zscale=transfer=bt709:primaries=bt709:matrix=bt709"),
+            "expected auto-zscale into rec709, got: {}",
+            plan.filter_complex,
+        );
+        // zscale runs before the look LUT.
+        let zscale_pos = plan.filter_complex.find("zscale=").unwrap();
+        let lut_pos = plan.filter_complex.find("lut3d=").unwrap();
+        assert!(zscale_pos < lut_pos);
+    }
+
+    #[test]
+    fn auto_pre_lut_zscale_skipped_when_spaces_match() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 2.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            lut_input_space: Some("rec709_g24".into()),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            ..Default::default()
+        });
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            !plan.filter_complex.contains("zscale="),
+            "matching spaces should skip zscale, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn auto_pre_lut_zscale_skipped_when_shaper_present() {
+        // Agent provided its own shaper — render trusts it and
+        // doesn't second-guess with an auto-zscale.
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 2.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "arri_logc4".into(),
+            lut_input_space: Some("rec709_g24".into()),
+            shaper_lut: Some(PathBuf::from("/tmp/luts/logc4_shaper.csp")),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            ..Default::default()
+        });
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            !plan.filter_complex.contains("zscale="),
+            "agent-provided shaper should suppress auto-zscale, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn log_clip_without_shaper_surfaces_limitation() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 2.0);
+        s0.clip_name = "logc-shot".into();
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "arri_logc4".into(),
+            lut_input_space: Some("rec709_g24".into()),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            ..Default::default()
+        });
+        let limitations = log_clip_without_shaper_limitations(&[s0]);
+        assert_eq!(limitations.len(), 1);
+        assert_eq!(limitations[0].kind, "log_clip_without_shaper");
+        assert_eq!(limitations[0].clip_id.as_deref(), Some("logc-shot"));
+    }
+
+    #[test]
+    fn log_clip_with_shaper_emits_no_limitation() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 2.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "arri_logc4".into(),
+            lut_input_space: Some("rec709_g24".into()),
+            shaper_lut: Some(PathBuf::from("/tmp/luts/logc4.csp")),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            ..Default::default()
+        });
+        assert!(log_clip_without_shaper_limitations(&[s0]).is_empty());
     }
 
     #[test]
