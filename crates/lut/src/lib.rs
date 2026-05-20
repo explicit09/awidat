@@ -8,6 +8,7 @@
 //! callers that only accept one shape can use [`parse_cube_3d`] or
 //! [`parse_cube_1d`] for an explicit mismatch error.
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 /// Smallest cube size accepted (size 1 is degenerate; size 2 is the
@@ -84,7 +85,67 @@ impl Lut {
             Lut::One(_) => LutKind::One,
         }
     }
+
+    /// SHA-256 hash of the parsed LUT contents — kind tag, size,
+    /// domain, table values — suitable as a content-addressed cache
+    /// key. Identical tables produce identical hashes regardless of
+    /// the source file's formatting (whitespace, comments, BOM,
+    /// quoted vs. unquoted TITLE) because the hash sees only the
+    /// parsed normal form.
+    pub fn content_hash(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        match self {
+            Lut::Three(l) => {
+                hasher.update(b"3D");
+                hash_inner(&mut hasher, l.size, &l.domain_min, &l.domain_max, &l.table);
+            }
+            Lut::One(l) => {
+                hasher.update(b"1D");
+                hash_inner(&mut hasher, l.size, &l.domain_min, &l.domain_max, &l.table);
+            }
+        }
+        hasher.finalize().into()
+    }
+
+    /// [`Lut::content_hash`] rendered as lowercase hex. Useful for
+    /// cache filenames like `luts/cache/<hash>.cube`.
+    pub fn content_hash_hex(&self) -> String {
+        hex_encode(&self.content_hash())
+    }
 }
+
+fn hash_inner(
+    hasher: &mut Sha256,
+    size: usize,
+    domain_min: &[f32; 3],
+    domain_max: &[f32; 3],
+    table: &[f32],
+) {
+    hasher.update((size as u64).to_le_bytes());
+    for value in domain_min {
+        hasher.update(value.to_le_bytes());
+    }
+    for value in domain_max {
+        hasher.update(value.to_le_bytes());
+    }
+    for value in table {
+        hasher.update(value.to_le_bytes());
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        // `unwrap_used` is denied in this crate, but write! on a
+        // String never fails — using a manual nibble lookup avoids
+        // needing the macro at all.
+        out.push(NIBBLE[(byte >> 4) as usize] as char);
+        out.push(NIBBLE[(byte & 0x0F) as usize] as char);
+    }
+    out
+}
+
+const NIBBLE: &[u8; 16] = b"0123456789abcdef";
 
 /// Why a `.cube` file failed to parse. Distinct variants per failure
 /// mode so callers (especially the agent layer) can react
@@ -626,6 +687,47 @@ mod tests {
     fn parse_cube_1d_rejects_a_3d_lut() {
         let err = parse_cube_1d(&cube_3d(2)).unwrap_err();
         assert_eq!(err, LutValidationError::Was3DExpectedOne);
+    }
+
+    #[test]
+    fn content_hash_is_deterministic_across_formatting() {
+        // Two formattings of the same minimal 2-cube identity LUT
+        // (different TITLE, CRLF, comments) should hash the same.
+        let plain = cube_3d(2);
+        let mut decorated = String::from("\u{FEFF}TITLE \"identity\"\n");
+        decorated.push_str("# annotated\n");
+        for line in plain.lines() {
+            decorated.push_str(line);
+            decorated.push_str("\r\n");
+        }
+        let a = parse_cube_3d(&plain).unwrap();
+        let b = parse_cube_3d(&decorated).unwrap();
+        assert_eq!(a.table, b.table);
+        let hash_a = Lut::Three(a).content_hash();
+        let hash_b = Lut::Three(b).content_hash();
+        assert_eq!(hash_a, hash_b, "identical tables must hash identically");
+    }
+
+    #[test]
+    fn content_hash_differs_for_different_tables() {
+        let a = parse_cube_3d(&cube_3d(2)).unwrap();
+        // Same size, but flip the corner so the table differs.
+        let mut perturbed = a.clone();
+        perturbed.table[0] = 0.5;
+        let hash_a = Lut::Three(a).content_hash();
+        let hash_b = Lut::Three(perturbed).content_hash();
+        assert_ne!(hash_a, hash_b);
+    }
+
+    #[test]
+    fn content_hash_hex_is_64_lowercase_chars() {
+        let lut = parse_cube_3d(&cube_3d(2)).unwrap();
+        let hex = Lut::Three(lut).content_hash_hex();
+        assert_eq!(hex.len(), 64);
+        assert!(
+            hex.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
     }
 
     #[test]

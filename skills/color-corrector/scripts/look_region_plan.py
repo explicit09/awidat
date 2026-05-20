@@ -18,6 +18,7 @@ apply, render, and verify.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -120,8 +121,14 @@ class ClipRef:
     track_end_s: float
 
 
-@dataclass(frozen=True)
+@dataclass
 class RegionPlan:
+    """Editable region row. `lut_path` is filled in by
+    [`resolve_cached_lut_paths`] after content-hashing — it points
+    at `luts/cache/<sha256>.cube` so identical looks (same id, same
+    size, same transform) share a single file across runs.
+    """
+
     clip: ClipRef
     region_index: int
     anchor: str
@@ -546,42 +553,93 @@ def transform_for(look_id: str) -> Callable[[float, float, float], tuple[float, 
     return transforms.get(look_id, natural)
 
 
-def write_cube(path: Path, look_id: str, size: int) -> None:
+def build_cube_text(look_id: str, size: int) -> str:
+    """Render a `.cube` file as a string. Used for both content
+    hashing and on-disk writing so the hash sees exactly what the
+    write would have produced.
+    """
     transform = transform_for(look_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        handle.write(f'TITLE "{look_id}"\n')
-        handle.write(f"LUT_3D_SIZE {size}\n")
-        handle.write("DOMAIN_MIN 0.0 0.0 0.0\n")
-        handle.write("DOMAIN_MAX 1.0 1.0 1.0\n")
-        for bi in range(size):
-            b = bi / (size - 1)
-            for gi in range(size):
-                g = gi / (size - 1)
-                for ri in range(size):
-                    r = ri / (size - 1)
-                    rr, gg, bb = transform(r, g, b)
-                    handle.write(f"{rr:.6f} {gg:.6f} {bb:.6f}\n")
+    parts = [
+        f'TITLE "{look_id}"',
+        f"LUT_3D_SIZE {size}",
+        "DOMAIN_MIN 0.0 0.0 0.0",
+        "DOMAIN_MAX 1.0 1.0 1.0",
+    ]
+    for bi in range(size):
+        b = bi / (size - 1)
+        for gi in range(size):
+            g = gi / (size - 1)
+            for ri in range(size):
+                r = ri / (size - 1)
+                rr, gg, bb = transform(r, g, b)
+                parts.append(f"{rr:.6f} {gg:.6f} {bb:.6f}")
+    return "\n".join(parts) + "\n"
 
 
-def generate_luts(project: Path, regions: list[RegionPlan], size: int | None) -> list[str]:
-    """Write a `.cube` per unique look referenced by the regions.
+def lut_cube_size(look_id: str, override: int | None) -> int:
+    """Final cube size for a look — CLI override wins, otherwise
+    the catalog's per-look default, otherwise the module default.
+    """
+    if override is not None:
+        return override
+    if look_id in CATALOG:
+        return CATALOG[look_id].default_size
+    return DEFAULT_LUT_SIZE
 
-    `size` of `None` means "use the catalog's per-look
-    `default_size`", which lets looks like `teal_orange` opt into a
-    larger cube without forcing every look to that size.
+
+def cache_path_for(content: str) -> str:
+    """Project-relative cache path keyed by SHA-256 of the file's
+    final bytes. Same content → same path → reused across regions
+    and across runs.
+    """
+    digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    return f"luts/cache/{digest}.cube"
+
+
+def resolve_cached_lut_paths(
+    project: Path,
+    regions: list[RegionPlan],
+    size_override: int | None,
+) -> list[str]:
+    """Generate (or reuse) one cache file per unique
+    `(look_id, size)` pair and stamp `region.lut_path` with the
+    resolved cache-relative path. Returns the list of cache paths
+    that were *written* this run (existing files are not relisted)
+    so the planner can surface a deterministic regeneration count.
     """
     written: list[str] = []
+    # Group regions by the (look_id, cube_size) tuple so we only
+    # rebuild each unique LUT once. Within a group every region
+    # ends up pointing at the same cache file.
+    content_cache: dict[tuple[str, int], tuple[str, str]] = {}
     for region in regions:
-        if not region.lut_path:
+        if region.look_id == "none":
+            region.lut_path = None
             continue
-        out = project / region.lut_path
-        if str(out) in written:
-            continue
-        cube_size = size if size is not None else CATALOG[region.look_id].default_size if region.look_id in CATALOG else DEFAULT_LUT_SIZE
-        write_cube(out, region.look_id, cube_size)
-        written.append(str(out))
+        size = lut_cube_size(region.look_id, size_override)
+        key = (region.look_id, size)
+        if key not in content_cache:
+            content = build_cube_text(region.look_id, size)
+            relpath = cache_path_for(content)
+            content_cache[key] = (content, relpath)
+        content, relpath = content_cache[key]
+        out = project / relpath
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(content, encoding="utf-8")
+            written.append(str(out))
+        region.lut_path = relpath
     return written
+
+
+# Retained as a thin shim so external callers (and the prior tool
+# entry point) keep working. Prefer `resolve_cached_lut_paths`.
+def generate_luts(
+    project: Path,
+    regions: list[RegionPlan],
+    size: int | None,
+) -> list[str]:
+    return resolve_cached_lut_paths(project, regions, size)
 
 
 def plan_json(regions: list[RegionPlan], written_luts: list[str], edl_path: Path | None) -> dict[str, Any]:

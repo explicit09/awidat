@@ -844,7 +844,20 @@ mod tests {
         assert!(dir.path().join("renders/tool-look.edl").is_file());
         assert!(dir.path().join("renders/tool-look.json").is_file());
         assert!(dir.path().join("renders/tool-look.md").is_file());
-        assert!(dir.path().join("luts/generated").is_dir());
+        // Stage 5 redirected generated LUTs to a content-addressed
+        // cache. The previous per-look `luts/generated/` directory
+        // is gone; we assert the cache directory exists and holds
+        // at least one .cube instead.
+        assert!(dir.path().join("luts/cache").is_dir());
+        let cache_entries: Vec<_> = std::fs::read_dir(dir.path().join("luts/cache"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("cube"))
+            .collect();
+        assert!(
+            !cache_entries.is_empty(),
+            "expected at least one cached .cube, got {cache_entries:?}",
+        );
         let edl_text = std::fs::read_to_string(dir.path().join("renders/tool-look.edl")).unwrap();
         let env = crate::edl::parser::parse(&edl_text).unwrap();
         assert!(env.ops.iter().any(|op| {
