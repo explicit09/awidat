@@ -28,11 +28,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            ffmpeg \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libxdo-dev \
             libssl-dev
+      - name: Install macOS media dependencies
+        if: matrix.os == 'macos-latest'
+        run: brew install ffmpeg
       - uses: Swatinem/rust-cache@v2
       - name: Fetch desktop sidecars
         run: make desktop-yt-dlp
