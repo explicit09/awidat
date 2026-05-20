@@ -119,6 +119,12 @@ class ClipRef:
     source_end_s: float
     track_start_s: float
     track_end_s: float
+    # Stable color-space id from awidat-effects::KNOWN_COLOR_SPACES.
+    # Defaults to `rec709_g24` when the clip has no explicit
+    # `awidat.color_pipeline.clip_input_space` — that's the implicit
+    # contract for Rec.709-delivered footage that was correct
+    # without color management.
+    clip_input_space: str = "rec709_g24"
 
 
 @dataclass
@@ -127,6 +133,12 @@ class RegionPlan:
     [`resolve_cached_lut_paths`] after content-hashing — it points
     at `luts/cache/<sha256>.cube` so identical looks (same id, same
     size, same transform) share a single file across runs.
+
+    `look_strength` (Stage 7) is the midpoint of the catalog's
+    recommended range for that look; the planner emits it on the
+    EDL `Apply LUT` op so render mixes the LUT with the source
+    instead of slamming on at 100%. `None` means "let
+    awidat.lut default to full strength" (legacy behavior).
     """
 
     clip: ClipRef
@@ -147,6 +159,7 @@ class RegionPlan:
     rationale: str
     sample_times_s: list[float]
     source_sample_times_s: list[float]
+    look_strength: float | None = None
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -184,6 +197,26 @@ def external_asset(clip: dict[str, Any]) -> str | None:
         return None
     value = ref.get("target_url")
     return value if isinstance(value, str) and value else None
+
+
+def read_clip_input_space(clip: dict[str, Any]) -> str:
+    """Pull `awidat.color_pipeline.clip_input_space` off `clip` so the
+    planner knows what space the source pixels live in. Falls back
+    to `rec709_g24` — the implicit assumption for footage the
+    project never tagged.
+
+    Only `awidat.color_pipeline` is consulted, not the legacy
+    `awidat.lut` effect, because `clip_input_space` is a property
+    of the source, not of any particular grade.
+    """
+    for effect in clip.get("effects", []) or []:
+        if effect.get("effect_name") != "awidat.color_pipeline":
+            continue
+        metadata = effect.get("metadata") or {}
+        value = metadata.get("clip_input_space")
+        if isinstance(value, str) and value:
+            return value
+    return "rec709_g24"
 
 
 def range_seconds(clip: dict[str, Any]) -> tuple[float, float] | None:
@@ -230,6 +263,7 @@ def timeline_clips(project: Path) -> list[ClipRef]:
             duration = rng[1] - rng[0]
             name = child.get("name") or asset_id
             anchor = clip_uuid(child) or name
+            clip_input_space = read_clip_input_space(child)
             clips.append(
                 ClipRef(
                     name=name,
@@ -239,6 +273,7 @@ def timeline_clips(project: Path) -> list[ClipRef]:
                     source_end_s=rng[1],
                     track_start_s=cursor,
                     track_end_s=cursor + duration,
+                    clip_input_space=clip_input_space,
                 )
             )
             cursor += duration
@@ -355,10 +390,47 @@ def candidate_scores(tags: list[str], policy: dict[str, Any], style: str) -> dic
     return {key: max(0.0, min(1.0, value)) for key, value in scores.items()}
 
 
-def choose_look(tags: list[str], policy: dict[str, Any], style: str) -> tuple[str, float]:
+def choose_look(
+    tags: list[str],
+    policy: dict[str, Any],
+    style: str,
+    clip_input_space: str = "rec709_g24",
+) -> tuple[str, float]:
+    """Score every catalog look and pick the highest survivor.
+
+    Stage 7: looks whose catalog `default_input_space` doesn't match
+    `clip_input_space` are dropped from contention. The `"none"`
+    fallback is always eligible — when no compatible look exists
+    the planner emits no LUT op for that region, which is the
+    correct behavior for log-encoded footage with no bundled
+    shaper.
+    """
     scores = candidate_scores(tags, policy, style)
-    look_id, score = max(scores.items(), key=lambda item: item[1])
+    eligible: dict[str, float] = {"none": scores.get("none", 0.0)}
+    for look_id, score in scores.items():
+        if look_id == "none":
+            continue
+        entry = CATALOG.get(look_id)
+        # Unknown ids slip through the drift check, so just keep
+        # them eligible — better an unexpected look than silently
+        # blackholed planning.
+        if entry is None or entry.default_input_space == clip_input_space:
+            eligible[look_id] = score
+    look_id, score = max(eligible.items(), key=lambda item: item[1])
     return look_id, score
+
+
+def strength_for(look_id: str) -> float | None:
+    """Recommended `awidat.lut.strength` for a look — midpoint of
+    the catalog range, clamped to `[0.0, 1.0]`. Returns `None` when
+    the look isn't in the catalog (caller skips emitting strength,
+    so the legacy "full strength" default applies).
+    """
+    entry = CATALOG.get(look_id)
+    if entry is None:
+        return None
+    mid = (entry.recommended_strength_min + entry.recommended_strength_max) / 2.0
+    return max(0.0, min(1.0, mid))
 
 
 def consistency_group(asset_id: str, tags: list[str], look_id: str) -> str:
@@ -386,18 +458,27 @@ def make_regions(clips: list[ClipRef], indexes: dict[str, dict[str, Any]], style
             issue_tags = [str(tag) for tag in scene.get("issue_tags", [])]
             policy = dict(scene.get("policy") or {})
             correction = normalize_correction(scene.get("recommended_correction") or {})
-            look_id, score = choose_look(issue_tags, policy, style)
+            look_id, score = choose_look(
+                issue_tags,
+                policy,
+                style,
+                clip_input_space=clip.clip_input_space,
+            )
             if look_id == "none":
                 lut_path = None
+                look_strength = None
             else:
                 lut_path = f"luts/generated/{style}-{look_id}.cube"
+                look_strength = strength_for(look_id)
             group = consistency_group(clip.asset_id, issue_tags, look_id)
             source_start = float(scene["_overlap_start_s"])
             source_end = float(scene["_overlap_end_s"])
             offset = source_start - clip.source_start_s
             timeline_start = clip.track_start_s + offset
             timeline_end = timeline_start + (source_end - source_start)
-            rationale = rationale_for(look_id, issue_tags, policy, style)
+            rationale = rationale_for(
+                look_id, issue_tags, policy, style, clip.clip_input_space
+            )
             regions.append(
                 RegionPlan(
                     clip=clip,
@@ -418,17 +499,37 @@ def make_regions(clips: list[ClipRef], indexes: dict[str, dict[str, Any]], style
                     rationale=rationale,
                     sample_times_s=sample_times(timeline_start, timeline_end),
                     source_sample_times_s=sample_times(source_start, source_end),
+                    look_strength=look_strength,
                 )
             )
     return regions
 
 
-def rationale_for(look_id: str, tags: list[str], policy: dict[str, Any], style: str) -> str:
+def rationale_for(
+    look_id: str,
+    tags: list[str],
+    policy: dict[str, Any],
+    style: str,
+    clip_input_space: str = "rec709_g24",
+) -> str:
     action = policy.get("recommended_action", "review_only")
     tag_text = ", ".join(tags) or "no issue tags"
     if look_id == "none":
+        compatible = sum(
+            1
+            for look in CATALOG.values()
+            if look.default_input_space == clip_input_space
+        )
+        if compatible == 0:
+            return (
+                f"no compatible look in catalog for clip_input_space={clip_input_space}; "
+                f"policy={action}; tags={tag_text}"
+            )
         return f"leave unchanged; policy={action}; tags={tag_text}"
-    return f"{look_id} selected for style={style}; policy={action}; tags={tag_text}"
+    return (
+        f"{look_id} selected for style={style}; "
+        f"clip_input_space={clip_input_space}; policy={action}; tags={tag_text}"
+    )
 
 
 def piece_anchors(clip: ClipRef, count: int) -> list[str]:
@@ -475,6 +576,11 @@ def build_edl(regions: list[RegionPlan], emit_splits: bool) -> str:
                         f"+ interpolation: {SUPPORTED_INTERPOLATION}",
                     ]
                 )
+                # Emit the catalog-recommended strength so render
+                # mixes the LUT with the source. Skipped when
+                # `look_strength` is None (legacy "full strength").
+                if region.look_strength is not None:
+                    lines.append(f"+ strength: {fmt_num(region.look_strength)}")
     lines.append("*** End EDL")
     return "\n".join(lines) + "\n"
 
@@ -666,6 +772,8 @@ def plan_json(regions: list[RegionPlan], written_luts: list[str], edl_path: Path
                 "consistency_group": r.consistency_group,
                 "look_id": r.look_id,
                 "lut_path": r.lut_path,
+                "look_strength": r.look_strength,
+                "clip_input_space": r.clip.clip_input_space,
                 "score": r.score,
                 "rationale": r.rationale,
             }
