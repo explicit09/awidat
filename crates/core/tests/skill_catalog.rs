@@ -185,6 +185,38 @@ fn color_corrector_skill_is_graph_native() {
             "color-corrector must mention {required:?}"
         );
     }
+
+    // Bundled shaper LUTs for camera Log encodings — agents
+    // reference these on `awidat.color_pipeline.shaper_lut` when
+    // the clip's input space is log. If the files vanish, the
+    // skill instructions become a lie.
+    let shapers_dir = workspace_root().join("skills/color-corrector/shapers");
+    for space in [
+        "arri_logc3",
+        "arri_logc4",
+        "slog3_sgamut3",
+        "vlog_vgamut",
+        "bmd_film_gen5",
+    ] {
+        let path = shapers_dir.join(format!("{space}_to_rec709_g24.csp"));
+        assert!(
+            path.is_file(),
+            "expected bundled shaper at {}",
+            path.display()
+        );
+        let header = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .lines()
+            .take(2)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            header,
+            "CSPLUTV100\n1D",
+            "shaper {} must start with CineSpace 1D header, got: {header:?}",
+            path.display()
+        );
+    }
 }
 
 #[test]

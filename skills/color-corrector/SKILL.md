@@ -169,6 +169,17 @@ is the source of truth, the planner script validates against it,
 and the agent-facing `awidat.color_pipeline` effect accepts the
 same color-space ids.
 
+Camera Log encodings (ARRI LogC3/LogC4, Sony S-Log3, Panasonic
+V-Log, Blackmagic Film Gen 5) come with bundled 1D shaper LUTs
+under `shapers/`. When a clip's `clip_input_space` is one of
+these and the look LUT is authored in `rec709_g24`, set
+`shaper_lut = "skills/color-corrector/shapers/<space>_to_rec709_g24.csp"`
+on the `awidat.color_pipeline` effect. The shaper converts the
+log-encoded source into Rec.709 g2.4 *before* the look LUT runs,
+so the LUT sees the pixel values it was authored for. To
+regenerate the shapers (e.g. after updating a vendor EOTF
+formula), run `python3 scripts/generate_shaper_luts.py`.
+
 ### 2. Apply corrections through the graph
 
 For each corrected clip, emit one anchored op:
