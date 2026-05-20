@@ -4955,10 +4955,15 @@ fn validate_lut_contents(
         .extension()
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase);
-    // We only parse `.cube` right now (the most common format and
-    // the only one our generator produces); other extensions remain
-    // passthrough until a real asset forces broader support.
-    if extension.as_deref() != Some("cube") {
+    // Parsers we have today: `.cube` (most common, the only format
+    // our generator produces) and `.3dl` (Lustre/Quantel/AE). Other
+    // extensions remain passthrough — FFmpeg's `lut3d` accepts
+    // them, and adding parsers without a real asset would be
+    // speculative.
+    let Some(ext) = extension.as_deref() else {
+        return Ok(());
+    };
+    if !matches!(ext, "cube" | "3dl") {
         return Ok(());
     }
     let bytes = match std::fs::read(&full) {
@@ -4980,9 +4985,14 @@ fn validate_lut_contents(
             });
         }
     };
-    awidat_lut::parse_cube_3d(text).map_err(|err| ApplyError::Invalid {
+    let parse_result = match ext {
+        "cube" => awidat_lut::parse_cube_3d(text).map(|_| ()),
+        "3dl" => awidat_lut::parse_3dl(text).map(|_| ()),
+        _ => return Ok(()),
+    };
+    parse_result.map_err(|err| ApplyError::Invalid {
         index,
-        message: format!("apply_lut: {lut_path:?} is not a valid .cube LUT: {err}"),
+        message: format!("apply_lut: {lut_path:?} is not a valid .{ext} LUT: {err}"),
     })?;
     Ok(())
 }

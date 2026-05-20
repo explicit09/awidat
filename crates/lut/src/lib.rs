@@ -262,6 +262,140 @@ pub fn parse_cube_1d(src: &str) -> Result<Lut1d, LutValidationError> {
     }
 }
 
+/// Parse a `.3dl` LUT (Lustre / Quantel / After Effects style).
+///
+/// The format is integer-valued and either prefixed by a mesh-point
+/// header (a line of ≥4 ascending integers giving both the cube
+/// edge length and the max input value) or headerless (cube edge
+/// length inferred from `cbrt(row_count)`).
+///
+/// Each data row is three non-negative integers. Values are
+/// normalized to `[0.0, 1.0]` by dividing by the mesh-header max
+/// (or the largest value in the file when the header is absent).
+///
+/// Like [`parse_cube`], tolerates BOM, CRLF, `#` line/trailing
+/// comments, and blank lines. There is no DOMAIN keyword in
+/// `.3dl`; the domain is always `[0, 1]` after normalization.
+pub fn parse_3dl(src: &str) -> Result<Lut3d, LutValidationError> {
+    let stripped = src.strip_prefix('\u{FEFF}').unwrap_or(src);
+    let mut mesh_header: Option<Vec<u32>> = None;
+    let mut data: Vec<u32> = Vec::new();
+    let mut row_count: usize = 0;
+    let mut saw_first_significant = false;
+
+    for (idx, raw) in stripped.split('\n').enumerate() {
+        let line_no = idx + 1;
+        let no_cr = raw.strip_suffix('\r').unwrap_or(raw);
+        let no_comment = match no_cr.split_once('#') {
+            Some((before, _)) => before,
+            None => no_cr,
+        };
+        let line = no_comment.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+
+        // First non-empty line is either a mesh-point header
+        // (strictly ascending integers, ≥2 entries) or a data row.
+        // Token count alone is insufficient because a 3-cube's
+        // header and its data rows both have 3 tokens; "strictly
+        // ascending" reliably tells them apart since data rows
+        // either repeat (identity LUT) or zigzag.
+        if !saw_first_significant {
+            let parsed: Result<Vec<u32>, _> = tokens.iter().map(|t| t.parse::<u32>()).collect();
+            if let Ok(mesh) = parsed {
+                let strictly_ascending = mesh.len() >= 2 && mesh.windows(2).all(|w| w[0] < w[1]);
+                if strictly_ascending {
+                    if !(MIN_SIZE..=MAX_SIZE_3D).contains(&mesh.len()) {
+                        return Err(LutValidationError::SizeOutOfRange {
+                            kind: "3D",
+                            got: mesh.len(),
+                            min: MIN_SIZE,
+                            max: MAX_SIZE_3D,
+                        });
+                    }
+                    mesh_header = Some(mesh);
+                    saw_first_significant = true;
+                    continue;
+                }
+            }
+            // Otherwise fall through to data-row handling — the
+            // file is in the headerless variant.
+        }
+
+        if tokens.len() != 3 {
+            return Err(LutValidationError::MalformedRow {
+                line: line_no,
+                detail: format!("expected 3 integers, got {}", tokens.len()),
+            });
+        }
+        for (channel_idx, tok) in tokens.iter().enumerate() {
+            let v: u32 = tok.parse().map_err(|_| LutValidationError::MalformedRow {
+                line: line_no,
+                detail: format!(
+                    "channel {} value {tok:?} is not a non-negative integer",
+                    match channel_idx {
+                        0 => "R",
+                        1 => "G",
+                        _ => "B",
+                    }
+                ),
+            })?;
+            data.push(v);
+        }
+        row_count += 1;
+        saw_first_significant = true;
+    }
+
+    if row_count == 0 {
+        return Err(LutValidationError::Empty);
+    }
+
+    // Determine cube edge length: prefer the explicit mesh-point
+    // header; otherwise infer from the cube root of the row count.
+    let size = if let Some(mesh) = &mesh_header {
+        mesh.len()
+    } else {
+        let cube_root = (row_count as f64).cbrt().round() as usize;
+        if !(MIN_SIZE..=MAX_SIZE_3D).contains(&cube_root) {
+            return Err(LutValidationError::SizeOutOfRange {
+                kind: "3D",
+                got: cube_root,
+                min: MIN_SIZE,
+                max: MAX_SIZE_3D,
+            });
+        }
+        cube_root
+    };
+
+    let expected = size.pow(3);
+    if row_count != expected {
+        return Err(LutValidationError::RowCountMismatch {
+            expected,
+            got: row_count,
+        });
+    }
+
+    // Normalization max: the mesh header's last value if present,
+    // otherwise the largest seen data value. Clamped to ≥1 so we
+    // never divide by zero on a degenerate identity LUT (all zeros).
+    let max_value = mesh_header
+        .as_ref()
+        .and_then(|m| m.last().copied())
+        .unwrap_or_else(|| data.iter().copied().max().unwrap_or(1023))
+        .max(1) as f32;
+    let table: Vec<f32> = data.iter().map(|&v| (v as f32) / max_value).collect();
+
+    Ok(Lut3d {
+        size,
+        domain_min: [0.0, 0.0, 0.0],
+        domain_max: [1.0, 1.0, 1.0],
+        title: None,
+        table,
+    })
+}
+
 #[derive(Default)]
 struct ParserState {
     title: Option<String>,
@@ -728,6 +862,104 @@ mod tests {
             hex.chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
         );
+    }
+
+    fn build_3dl_identity(size: usize, max_value: u32) -> String {
+        // Build a mesh-point header for an evenly-spaced grid, then
+        // emit the size³ identity entries (each component scaled to
+        // `max_value`).
+        let mut s = String::new();
+        for i in 0..size {
+            let v = (i * max_value as usize) / (size - 1);
+            if i > 0 {
+                s.push(' ');
+            }
+            s.push_str(&v.to_string());
+        }
+        s.push('\n');
+        let scale = |i: usize| (i * max_value as usize) / (size - 1);
+        for bi in 0..size {
+            for gi in 0..size {
+                for ri in 0..size {
+                    s.push_str(&format!("{} {} {}\n", scale(ri), scale(gi), scale(bi)));
+                }
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn parses_3dl_with_mesh_header() {
+        let src = build_3dl_identity(3, 1023);
+        let lut = parse_3dl(&src).unwrap();
+        assert_eq!(lut.size, 3);
+        assert_eq!(lut.table.len(), 3 * 3 * 3 * 3);
+        // Corner (r=0,g=0,b=0) is black.
+        assert!((lut.table[0] - 0.0).abs() < 1e-6);
+        // Corner (r=2,g=2,b=2) is white after normalization.
+        let last_base = ((2 * 3 + 2) * 3 + 2) * 3;
+        assert!((lut.table[last_base] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parses_3dl_without_mesh_header_via_cuberoot() {
+        // Headerless: just 2³ = 8 data rows, max value 65535 (16-bit).
+        let mut s = String::new();
+        let max_value: u32 = 65_535;
+        for bi in 0..2 {
+            for gi in 0..2 {
+                for ri in 0..2 {
+                    s.push_str(&format!(
+                        "{} {} {}\n",
+                        ri * max_value as usize,
+                        gi * max_value as usize,
+                        bi * max_value as usize,
+                    ));
+                }
+            }
+        }
+        let lut = parse_3dl(&s).unwrap();
+        assert_eq!(lut.size, 2);
+        // (1,0,0) corner normalizes to 1.0 via inferred max.
+        assert!((lut.table[3] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn rejects_3dl_with_wrong_row_count() {
+        let src = "0 1023\n0 0 0\n";
+        let err = parse_3dl(src).unwrap_err();
+        // Mesh size 2 expects 8 rows; we gave 1.
+        assert!(matches!(
+            err,
+            LutValidationError::RowCountMismatch {
+                expected: 8,
+                got: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_3dl_with_non_integer_value() {
+        let src = "0 1023\n0.5 0 0\n";
+        let err = parse_3dl(src).unwrap_err();
+        assert!(matches!(err, LutValidationError::MalformedRow { .. }));
+    }
+
+    #[test]
+    fn rejects_empty_3dl() {
+        assert_eq!(parse_3dl("").unwrap_err(), LutValidationError::Empty);
+        assert_eq!(
+            parse_3dl("# comment only\n").unwrap_err(),
+            LutValidationError::Empty
+        );
+    }
+
+    #[test]
+    fn tolerates_crlf_and_comments_in_3dl() {
+        let mut src = build_3dl_identity(2, 1023).replace('\n', "\r\n");
+        src.insert_str(0, "# 3D LUT v1\r\n");
+        let lut = parse_3dl(&src).unwrap();
+        assert_eq!(lut.size, 2);
     }
 
     #[test]
