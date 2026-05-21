@@ -1743,18 +1743,23 @@ fn lower_composition_node(node: &CompositionNode) -> Option<RenderLoweringStep> 
             let scale = number_param(node, "scale").unwrap_or(1.0);
             format!("scale=iw*{scale}:ih*{scale},setpts=PTS-STARTPTS")
         }
+        // TODO(overnight-wave1-vfx-graph): lower Merge to a real multi-input
+        // overlay/blendmode chain instead of a placeholder.
         CompositionNodeType::Merge => "overlay=x=0:y=0:format=auto".to_string(),
-        CompositionNodeType::Mask => "alphamerge".to_string(),
+        CompositionNodeType::Mask => lower_mask_node(node),
+        // TODO(overnight-wave1-vfx-graph): lower Matte to the proper matte
+        // sidecar / luma-key chain instead of the current placeholder.
         CompositionNodeType::Matte => "format=rgba,alphamerge".to_string(),
         CompositionNodeType::Text => {
             let text = string_param(node, "text").unwrap_or("");
             format!("drawtext=text='{text}'")
         }
-        CompositionNodeType::Blur => {
-            let radius = number_param(node, "radius").unwrap_or(2.0).max(0.0);
-            format!("boxblur={radius}")
-        }
+        CompositionNodeType::Blur => lower_blur_node(node),
+        // TODO(overnight-wave1-vfx-graph): lower Color to the real color-pipeline
+        // filter chain (lift/gamma/gain + LUT) instead of an `eq=` stub.
         CompositionNodeType::Color => "eq=brightness=0:contrast=1:saturation=1".to_string(),
+        // TODO(overnight-wave1-vfx-graph): lower TrackerBind to a sendcmd /
+        // tracked-overlay graph instead of the current metadata placeholder.
         CompositionNodeType::TrackerBind => {
             let track_id = string_param(node, "track_id").unwrap_or("unbound");
             format!("metadata={track_id}")
@@ -1771,6 +1776,113 @@ fn lower_composition_node(node: &CompositionNode) -> Option<RenderLoweringStep> 
         backend: "ffmpeg".into(),
         expression,
     })
+}
+
+/// Lower a Blur composition node to a real FFmpeg filter expression.
+///
+/// Supported `method` params:
+/// * `"box"` (default) — emits `boxblur=luma_radius=<r>:luma_power=<power>`
+/// * `"gaussian"` — emits `gblur=sigma=<sigma>:steps=<steps>` where sigma
+///   falls back to `radius` if no explicit `sigma` param is provided.
+///
+/// `radius` is clamped to `>= 0` so a negative authoring value cannot leak
+/// into the FFmpeg graph (FFmpeg rejects negative radii at runtime).
+fn lower_blur_node(node: &CompositionNode) -> String {
+    let radius = number_param(node, "radius").unwrap_or(2.0).max(0.0);
+    let method = string_param(node, "method").unwrap_or("box").to_lowercase();
+    match method.as_str() {
+        "gaussian" | "gauss" | "gblur" => {
+            let sigma = number_param(node, "sigma").unwrap_or(radius).max(0.0);
+            let steps = number_param(node, "steps")
+                .map(|value| value.clamp(1.0, 6.0).round() as u32)
+                .unwrap_or(1);
+            format!("gblur=sigma={sigma}:steps={steps}")
+        }
+        _ => {
+            // boxblur power defaults to 1 (single pass). Higher powers stack the
+            // box kernel and approximate gaussian shape for cheap.
+            let power = number_param(node, "power")
+                .map(|value| value.clamp(1.0, 4.0).round() as u32)
+                .unwrap_or(1);
+            format!("boxblur=luma_radius={radius}:luma_power={power}")
+        }
+    }
+}
+
+/// Lower a Mask composition node to a real FFmpeg filter chain.
+///
+/// Supported `kind` params:
+/// * `"rect"` (default) — synthesizes a rectangular alpha mask via `geq`
+///   and merges it into the input alpha plane with `alphamerge`.
+/// * `"ellipse"` — synthesizes an elliptical alpha mask via `geq` using
+///   normalized coordinates around the rect center.
+/// * `"alpha_in"` — uses the upstream alpha plane as-is via `alphamerge`
+///   (no synthesized mask).
+/// * `"alpha_out"` — inverts the upstream alpha plane before merging.
+///
+/// Common params:
+/// * `x`, `y`, `width`, `height` — rect/ellipse bounds as normalized
+///   `[0.0, 1.0]` fractions of the frame.
+/// * `invert` (bool) — inverts the final alpha plane via `negate=alpha=1`.
+/// * `feather` (number, pixels) — softens the synthesized mask edges with a
+///   `boxblur` pass before merging.
+fn lower_mask_node(node: &CompositionNode) -> String {
+    let kind = string_param(node, "kind").unwrap_or("rect").to_lowercase();
+    let invert = bool_param(node, "invert").unwrap_or(false);
+    let feather = number_param(node, "feather").unwrap_or(0.0).max(0.0);
+    let x = number_param(node, "x").unwrap_or(0.0).clamp(0.0, 1.0);
+    let y = number_param(node, "y").unwrap_or(0.0).clamp(0.0, 1.0);
+    let width = number_param(node, "width").unwrap_or(1.0).clamp(0.0, 1.0);
+    let height = number_param(node, "height").unwrap_or(1.0).clamp(0.0, 1.0);
+
+    let alpha_expr = match kind.as_str() {
+        "ellipse" | "oval" | "circle" => {
+            // Ellipse: alpha = 255 if normalized distance from rect center <= 1.
+            // Uses `hypot` so the expression reads as an ellipse rather than a
+            // square. Width/height fractions become the ellipse radii.
+            let cx = x + width / 2.0;
+            let cy = y + height / 2.0;
+            let rx = (width / 2.0).max(f64::EPSILON);
+            let ry = (height / 2.0).max(f64::EPSILON);
+            Some(format!(
+                "geq=lum='if(lte(hypot((X/W-{cx})/{rx}\\,(Y/H-{cy})/{ry})\\,1)\\,255\\,0)':a='if(lte(hypot((X/W-{cx})/{rx}\\,(Y/H-{cy})/{ry})\\,1)\\,255\\,0)'"
+            ))
+        }
+        "rect" | "rectangle" | "box" => {
+            // Rectangular alpha: 255 inside `[x..x+w] x [y..y+h]`, else 0.
+            let x_end = (x + width).min(1.0);
+            let y_end = (y + height).min(1.0);
+            Some(format!(
+                "geq=lum='if(between(X/W\\,{x}\\,{x_end})*between(Y/H\\,{y}\\,{y_end})\\,255\\,0)':a='if(between(X/W\\,{x}\\,{x_end})*between(Y/H\\,{y}\\,{y_end})\\,255\\,0)'"
+            ))
+        }
+        // alpha_in / alpha_out (and unknown kinds) reuse upstream alpha rather
+        // than synthesizing a geq mask.
+        _ => None,
+    };
+
+    let mut chain: Vec<String> = Vec::new();
+    if let Some(expr) = alpha_expr {
+        chain.push(expr);
+        if feather > 0.0 {
+            chain.push(format!("boxblur=luma_radius={feather}:luma_power=1"));
+        }
+    }
+    // alpha_out always inverts upstream alpha. The `invert` flag XORs on top.
+    let net_invert = invert ^ matches!(kind.as_str(), "alpha_out");
+    if net_invert {
+        // `negate=alpha=1` inverts only the alpha plane, leaving RGB untouched.
+        chain.push("negate=alpha=1".to_string());
+    }
+    // alphamerge consumes the source's alpha as the mask. For synthesized
+    // rect/ellipse masks the preceding geq writes that alpha plane; for
+    // alpha_in/alpha_out the upstream alpha is used directly.
+    chain.push("alphamerge".to_string());
+    chain.join(",")
+}
+
+fn bool_param(node: &CompositionNode, key: &str) -> Option<bool> {
+    node.params.get(key).and_then(Value::as_bool)
 }
 
 fn composition_node_needs_future_runtime(node_type: CompositionNodeType) -> bool {
