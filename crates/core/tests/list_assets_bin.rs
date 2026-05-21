@@ -8,6 +8,8 @@
 //!   - Unknown bin ids return zero results (not an error — the model
 //!     should be able to probe).
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use awidat_core::FunctionCallError;
 use awidat_core::media_catalog_mutation::{
     create_bin, ensure_awidat_metadata, move_asset_to_bin, upsert_asset,

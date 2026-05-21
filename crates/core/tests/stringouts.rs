@@ -8,6 +8,8 @@
 //!   - `list_bins` returns user-defined bins plus the built-in role
 //!     buckets, identifiable by a kind marker.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use awidat_core::media_catalog_mutation::{create_bin, ensure_awidat_metadata};
 use awidat_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
 use awidat_core::tools::create_stringout::CreateStringoutTool;

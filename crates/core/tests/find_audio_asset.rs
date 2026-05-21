@@ -4,6 +4,8 @@
 //! discoverable through the tool, can be filtered by `kind` + `mood`,
 //! and respects `max_duration_s`.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::{Path, PathBuf};
 
 use awidat_core::tools::find_audio_asset::{FindAudioAssetTool, find_audio_assets};

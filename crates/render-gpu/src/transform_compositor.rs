@@ -415,7 +415,9 @@ mod tests {
                 blend: crate::compositor::BlendMode::Normal,
             }],
         };
-        let err = compositor.compose(&spec).unwrap_err();
-        assert!(matches!(err, CompositorError::BadOutputSize { .. }));
+        match compositor.compose(&spec) {
+            Err(err) => assert!(matches!(err, CompositorError::BadOutputSize { .. })),
+            Ok(_) => panic!("expected BadOutputSize error"),
+        }
     }
 }

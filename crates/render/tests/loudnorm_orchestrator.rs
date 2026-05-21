@@ -12,7 +12,7 @@
 //!    parsed in step 2.
 //! 4. Return pass-2's output.
 
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -155,7 +155,7 @@ fn orchestrator_runs_measure_then_apply_and_returns_pass2_output() {
     // Null sink: `-f null -`
     let mut found_null_sink = false;
     for (i, w) in submitted[0].args.iter().enumerate() {
-        if w == "-f" && submitted[0].args.get(i + 1).map(|s| s.as_str()) == Some("null") {
+        if w == "-f" && submitted[0].args.get(i + 1).map(String::as_str) == Some("null") {
             found_null_sink = true;
             break;
         }

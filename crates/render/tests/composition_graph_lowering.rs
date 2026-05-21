@@ -6,7 +6,7 @@
 //! emitting placeholder identifiers. Coverage is currently MVP-scoped to the
 //! Blur and Mask node types (see overnight-wave1-vfx-graph).
 
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use awidat_proto::professional::{
     CompositionEdge, CompositionGraph, CompositionNode, CompositionNodeType,

@@ -8,7 +8,7 @@
 //! exported clip plays at realtime even though the recipe claimed a
 //! speed change.
 
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use awidat_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Timeline,

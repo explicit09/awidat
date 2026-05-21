@@ -14,6 +14,8 @@
 //! skips with a `eprintln!` and exits cleanly, mirroring the
 //! `renderer_or_skip` pattern in `lib.rs`.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use awidat_render_gpu::{
     BlendMode, Compositor, CompositorError, CompositorFrameSpec, LayerSpec, TransformCompositor,
     TransformSpec,
@@ -71,9 +73,10 @@ fn transform_compositor_renders_non_empty_frame_with_translate_scale_rotate() {
         },
     );
 
-    let frame = compositor
-        .compose(&spec)
-        .expect("TransformCompositor::compose should succeed on synthetic input");
+    let frame = match compositor.compose(&spec) {
+        Ok(frame) => frame,
+        Err(err) => panic!("TransformCompositor::compose should succeed on synthetic input: {err:?}"),
+    };
 
     assert_eq!(frame.width, width, "frame.width must match spec");
     assert_eq!(frame.height, height, "frame.height must match spec");
@@ -121,8 +124,8 @@ fn transform_compositor_rejects_layer_size_mismatch() {
             blend: BlendMode::Normal,
         },
     );
-    let err = compositor
-        .compose(&spec)
-        .expect_err("undersized layer must be rejected");
-    assert!(matches!(err, CompositorError::BadLayerSize { .. }));
+    match compositor.compose(&spec) {
+        Err(err) => assert!(matches!(err, CompositorError::BadLayerSize { .. })),
+        Ok(_) => panic!("undersized layer must be rejected"),
+    }
 }

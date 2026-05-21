@@ -75,17 +75,12 @@ pub enum CompositorError {
 /// How a layer is blended over the accumulated output. Phase-1 only
 /// uses `Normal` (replace-with-alpha); the enum exists so multi-layer
 /// composers can extend it without breaking the public spec shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BlendMode {
     /// Standard alpha blend over the destination. The only mode
     /// supported by [`crate::TransformCompositor`] today.
+    #[default]
     Normal,
-}
-
-impl Default for BlendMode {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 /// Affine transform applied to a single layer, expressed in component

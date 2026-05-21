@@ -268,7 +268,7 @@ fn fmt(value: f64) -> String {
 /// filter, replacing whatever single-pass `loudnorm=...` chunk the
 /// timeline already emitted (if any) and rewriting the `-map` for audio
 /// to the new label.
-fn inject_master_loudnorm_filter(argv: &mut Vec<String>, loudnorm_filter: &str) {
+fn inject_master_loudnorm_filter(argv: &mut [String], loudnorm_filter: &str) {
     let Some(fc_idx) = filter_complex_value_index(argv) else {
         // No filter graph — nothing to splice into. Caller must have
         // built a non-trivial spec, but bail gracefully.
@@ -343,12 +343,11 @@ fn strip_existing_master_loudnorm(graph: &str) -> String {
 /// Locate the argv index of the audio `-map` value matching `label`.
 fn audio_map_index(argv: &[String], label: &str) -> Option<usize> {
     for (i, w) in argv.iter().enumerate() {
-        if w == "-map" {
-            if let Some(next) = argv.get(i + 1)
-                && next == label
-            {
-                return Some(i + 1);
-            }
+        if w == "-map"
+            && let Some(next) = argv.get(i + 1)
+            && next == label
+        {
+            return Some(i + 1);
         }
     }
     None

@@ -11,7 +11,7 @@
 //! The mocked `MeasuredLoudnorm` stands in for the JSON we'd pull off
 //! ffmpeg's stderr — we do not run ffmpeg here.
 
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::otio::{
@@ -82,7 +82,7 @@ fn master_loudnorm_emits_two_pass_specs() {
     // Null sink: `-f null -` (so no encode, only measurement).
     let mut found_null_sink = false;
     for (i, w) in measure.args.iter().enumerate() {
-        if w == "-f" && measure.args.get(i + 1).map(|s| s.as_str()) == Some("null") {
+        if w == "-f" && measure.args.get(i + 1).map(String::as_str) == Some("null") {
             found_null_sink = true;
             break;
         }

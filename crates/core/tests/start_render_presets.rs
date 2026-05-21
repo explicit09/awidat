@@ -5,6 +5,8 @@
 //! than the legacy hardcoded libx264 path. The default — no preset — must
 //! continue to produce libx264 args (backward compatibility).
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::Path;
 
 use awidat_core::FunctionCallError;

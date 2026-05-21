@@ -16,6 +16,8 @@
 //! callback seam (`resolve_commit_author_with_env`) instead of by
 //! mutating the test process's env.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::path::Path;
 
 use awidat_core::vc::{
