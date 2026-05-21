@@ -444,7 +444,7 @@ pub const EFFECTS: &[EffectDef] = &[
         scope: EffectScope::Clip,
         media_kind: MediaKind::Both,
         phase: EffectPhase::Clip,
-        support: SupportStatus::Experimental,
+        support: SupportStatus::Stable,
         stack_policy: StackPolicy::ReplaceSameId,
         backend: BackendKind::FfmpegNative,
         min_present_params: 0,

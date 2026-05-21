@@ -546,7 +546,7 @@ fn alternates(motion: EmphasisMotion) -> Vec<serde_json::Value> {
     }
     alternates.push(serde_json::json!({
         "motion": "time_ramp",
-        "reason": "Requires a time-remapping primitive; do not emit until that runtime exists."
+        "reason": "Bend pacing into the beat with a time remap curve when an animation isn't enough; use sparingly because it retimes the underlying media."
     }));
     alternates
 }
