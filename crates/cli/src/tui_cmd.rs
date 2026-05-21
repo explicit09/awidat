@@ -17,7 +17,7 @@ use awidat_core::tools::{
     analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
     assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
     bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    delegate::DelegateTool, delegate_all::DelegateAllTool,
+    color_scopes::ColorScopesTool, delegate::DelegateTool, delegate_all::DelegateAllTool,
     diagnose_project_media::DiagnoseProjectMediaTool, download_yt_clip::DownloadYtClipTool,
     export_package::ExportPackageTool, find_beat::FindBeatTool,
     find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
@@ -74,7 +74,8 @@ visible — needs whisper diarization + face), find_eye_contact \
 fragment from subject-center evidence).\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index \
 (any indexer channel), inspect_clip (one clip's metadata), \
-view_frame (extract a frame at a timestamp).\
+view_frame (extract a frame at a timestamp), color_scopes \
+(histogram/waveform/parade/vectorscope evidence for one frame).\
 \n  - **Edit quality**: assess_edit_quality before risky trims/splits; it recommends hard cut, recut, J/L split edit, b-roll, or motivated transition. transition_context assembles handles, transcript, frames, and continuity context before choosing a visible transition; plan_transition turns that packet into a hard-cut or visible-transition proposal. assess_continuity is the lower-level rule breakdown.\
 \n  - **Editing**: apply_edl (commit edits — Trim, Untrim, Delete, \
 Split, Insert, Insert PiP). For `@@ anchor: clip_uuid=...`, use the clip \
@@ -188,6 +189,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(InspectClipTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(ListLooksTool));
+    registry.register(Arc::new(ColorScopesTool));
     registry.register(Arc::new(PollRenderTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));

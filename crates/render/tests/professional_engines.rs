@@ -7,12 +7,13 @@ use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, ColorFinishingState, CompositionGraph, CompositionNode,
-    DeliveryPreflightInput, DeliveryProfile, ExportPreset, ExpressionLink, ExpressionSource,
-    ExtrapolationMode, FindingSeverity, GradeStack, GradeStage, Keyframe, MaskKeyframe,
-    MaskOperation, MaskSidecar, MotionGraphicsTemplate, MotionPackage, ParameterAnimation,
-    ReframeKeyframe, ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule,
-    StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, TemplateSlot,
-    TemplateSlotKind, TrackKind, TrackSample, TrackSidecar, TrackingPackage,
+    DeliveryPreflightInput, DeliveryProfile, ExportOutputSettings, ExportPreset, ExpressionLink,
+    ExpressionSource, ExtrapolationMode, FindingSeverity, GradeStack, GradeStage,
+    HardwareAccelerationPolicy, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
+    MotionGraphicsTemplate, MotionPackage, ParameterAnimation, ReframeKeyframe, ReframePath,
+    ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract, StreamExportMode,
+    StreamExportSpec, StreamKind, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample,
+    TrackSidecar, TrackingPackage,
 };
 use awidat_render::professional::{
     DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, SubjectReframeRequest,
@@ -1877,6 +1878,104 @@ fn export_preset_lowers_codecs_container_and_audio_settings() {
     assert!(profiled.args.windows(2).any(|w| w == ["-ar", "48000"]));
     assert!(profiled.args.windows(2).any(|w| w == ["-ac", "2"]));
     assert!(profiled.args.windows(2).any(|w| w == ["-f", "mp4"]));
+}
+
+#[test]
+fn export_preset_sets_faststart_for_mp4_delivery() {
+    let preset = ExportPreset::vertical_short_form();
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let profiled = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(spec) => spec,
+        Err(err) => panic!("preset lowers: {err}"),
+    };
+
+    assert!(
+        profiled
+            .args
+            .windows(2)
+            .any(|w| w == ["-movflags", "+faststart"])
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn export_preset_auto_hardware_uses_videotoolbox_for_h264_on_macos() {
+    let mut preset = ExportPreset::vertical_short_form();
+    preset.output.hardware_acceleration = HardwareAccelerationPolicy::Auto;
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let profiled = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(spec) => spec,
+        Err(err) => panic!("preset lowers: {err}"),
+    };
+
+    assert!(
+        profiled
+            .args
+            .windows(2)
+            .any(|w| w == ["-c:v", "h264_videotoolbox"])
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn export_preset_auto_hardware_keeps_software_codec_when_no_native_mapping_exists() {
+    let mut preset = ExportPreset::vertical_short_form();
+    preset.output.hardware_acceleration = HardwareAccelerationPolicy::Auto;
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let profiled = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(spec) => spec,
+        Err(err) => panic!("preset lowers: {err}"),
+    };
+
+    assert!(profiled.args.windows(2).any(|w| w == ["-c:v", "libx264"]));
+}
+
+#[test]
+fn export_preset_require_hardware_errors_when_codec_has_no_mapping() {
+    let mut preset = ExportPreset::vertical_short_form();
+    match preset.video.as_mut() {
+        Some(video) => video.codec = "prores_ks".into(),
+        None => panic!("video settings"),
+    }
+    preset.output = ExportOutputSettings {
+        hardware_acceleration: HardwareAccelerationPolicy::Require,
+        ..ExportOutputSettings::mp4()
+    };
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let err = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(_) => panic!("unsupported required hardware should fail"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("hardware"));
 }
 
 #[test]
