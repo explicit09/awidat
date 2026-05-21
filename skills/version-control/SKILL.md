@@ -5,8 +5,15 @@ version: 0.1.0
 tier: editorial
 tools_allowlist:
   - vedit_commit
+  - vedit_blame
+  - vedit_branch
+  - vedit_changed_clip_ids
+  - vedit_checkout
   - vedit_diff
   - vedit_log
+  - vedit_merge_preflight
+  - vedit_show
+  - vedit_tag
   - view_timeline
 ---
 
@@ -26,6 +33,7 @@ Load this skill when the user asks any of:
 - "Save this version" / "commit this" / "snapshot"
 - "Show me the edit history"
 - "Roll back to ..."
+- "Try this on an alternate branch"
 - "What did the agent do at <time>?"
 - "Why did we cut this clip?"
 
@@ -52,7 +60,7 @@ Load this skill when the user asks any of:
   edit, or when you want to land a commit message richer than what
   the auto-header produces. Use it sparingly.
 
-## The 3-tool surface
+## The tool surface
 
 ### `vedit_commit(header, reasoning?)` — save the current state
 
@@ -87,18 +95,86 @@ Render as English prose for the user: "Trimmed drone_shot_04 by 1.8s
 (in)", "Inserted skyline_dusk.mp4 between interview-take-2 and
 b_roll_03", etc.
 
+### `vedit_changed_clip_ids(from?, to?)` — list touched clip/media ids
+
+Default: `from=session-start`, `to=HEAD`. Returns sorted clip names,
+media references, and clip animation targets touched by the diff, plus
+structural and animation change counts.
+
+Use this for read-only review or preflight overlap checks between refs.
+It does not checkout, merge, or mutate any ref. Until bounded merge is
+approved, use it only to explain potential overlap; do not perform an
+automated merge.
+
+### `vedit_merge_preflight(source, target?)` — check bounded merge safety
+
+Default target: `HEAD`. Returns the source/target commits, their common
+ancestor, each side's changed clip/media ids, overlap ids, change
+counts, and `is_mergeable`.
+
+Use this before discussing a branch merge. It enforces the proposed
+bounded rule as a read-only report: if overlap ids are present, the
+merge would require human/manual resolution. If no overlap ids are
+present, the refs are compatible with a future non-overlapping merge
+path, but this tool still does not merge or move refs.
+
 ### `vedit_log(limit?)` — list recent commits
 
 Default 30, hard cap 200. Each entry: header, full message, timestamp,
 hashes, parents. Use this for "what's been going on lately" / "show me
 history."
 
+### `vedit_tag(name?, refstr?, list?)` — name a checkpoint
+
+Use tags for human-stable checkpoint names: `client-review-v1`,
+`before-tightening-pass`, `shown-to-sarah`. Tags point at commits and
+live under `.vedit/refs/tags/`. They do not switch HEAD, create a
+branch, or merge anything.
+
+Call with `list=true` to list existing tags. Call with `name` and
+optional `refstr` to create/update a tag; `refstr` defaults to `HEAD`.
+
+### `vedit_show(refstr)` — deep-dive one commit
+
+Use this after `vedit_log` when the user asks "what exactly happened
+in that commit?" It returns the commit hashes, full message, parents,
+and the semantic diff from the first parent to that commit. Initial
+commits diff against an empty timeline.
+
+### `vedit_blame(clip_id, start_ref?, limit?)` — why did this clip change?
+
+Use this when the user asks "who/why touched this clip?" or "when did
+this clip get trimmed?" It walks first-parent history from `HEAD` (or
+`start_ref`) and returns commits whose semantic diff touches the clip
+name, media reference, or animation target string.
+
+This is attribution, not full git-style line blame. It projects commit
+reasoning and semantic OTIO ops onto a clip so the user can see the
+most relevant history without reading the whole log.
+
+### `vedit_branch(name?, start_ref?, list?)` — create/list alternates
+
+Use branches for alternate local cuts: `alt-tight`,
+`client-version-b`, `try-cold-open`. Branches point at commits and
+live under `.vedit/refs/heads/`. Creating a branch does not switch the
+working timeline; it just creates the alternate ref.
+
+Call with `list=true` to list existing branches and see which one is
+current. Call with `name` and optional `start_ref` to create a branch;
+`start_ref` defaults to `HEAD`.
+
+### `vedit_checkout(branch)` — switch to an alternate
+
+Use this only when the user explicitly wants to work on an existing
+branch. It switches HEAD to the branch and restores `project.otio.json`
+to that branch's committed timeline snapshot. It does not merge and it
+does not create an audit commit by itself.
+
 ## Editorial conventions
 
-- **Commit cadence (Phase A)**: per substantial change. A typo fix in
-  the agent reasoning text is NOT a commit. A trimmed clip + bundled
-  b-roll cover IS. When unsure: ask the user "should I commit this as
-  a checkpoint?"
+- **Commit cadence**: accepted timeline mutations auto-commit. Use
+  `vedit_commit` only for explicit save points or metadata-only
+  checkpoints the user asked for.
 - **Header format**: imperative, present tense. "Trim X by 1.8s",
   not "Trimmed X by 1.8s" or "X was trimmed by 1.8s." Same rule as
   good git.
@@ -125,7 +201,9 @@ history."
 ```
 1. Confirm WHAT to call this checkpoint
 2. vedit_commit(header=<chosen header>, reasoning=<context from this session>)
-3. Tell the user the commit hash so they can refer back
+3. Optionally vedit_tag(name=<stable name>) if the user gave a
+   human-friendly label
+4. Tell the user the short commit hash and tag, if created
 ```
 
 ### "Show me the history"
@@ -133,15 +211,40 @@ history."
 ```
 1. vedit_log(limit=10) for a quick overview
 2. Render entries as: "<short hash> · <timestamp> · <header>"
-3. If a specific commit is interesting, the user can ask about it by
-   short hash and you fetch the full message
+3. If a specific commit is interesting, call vedit_show(refstr=<hash>)
+   and render the parent..commit diff
+```
+
+### "Why did we cut this clip?"
+
+```
+1. vedit_blame(clip_id=<clip name from view_timeline>)
+2. Render matching commits newest-first:
+   "<short hash> · <header> · <reasoning summary>"
+3. Include the structural change that matched, e.g. Trimmed / Moved /
+   EffectsChanged
 ```
 
 ### "What's different between commit A and now?"
 
 ```
 1. vedit_diff(from=<commit A's short hash>)
-2. Same prose-rendering as session diff
+2. vedit_changed_clip_ids(from=<commit A's short hash>) if the user
+   asks which clips/media were touched
+3. Same prose-rendering as session diff
+```
+
+### "Try a tighter cut on a branch"
+
+```
+1. vedit_branch(name="alt-tight")
+2. vedit_checkout(branch="alt-tight")
+3. Make the requested edit through apply_edl so it auto-commits
+4. vedit_diff(from=<original branch/tag>, to="HEAD") to explain the alternate
+5. vedit_changed_clip_ids(from=<original branch/tag>, to="HEAD") if you need
+   overlap preflight data for a later human merge decision
+6. vedit_merge_preflight(source="alt-tight", target=<original branch/tag>)
+   to get the common ancestor and overlap report without merging
 ```
 
 ## What NOT to do
@@ -153,19 +256,20 @@ history."
   "metadata-only checkpoint" in the header.
 - **Don't pull every commit's full body**. Default `vedit_log` returns
   enough; deep-dive only when the user asks about a specific commit.
-- **Don't try to merge or branch in Phase A.** Those tools aren't
-  exposed yet. If the user asks "let's try this on a branch", tell
-  them branching lands in Phase B and offer to commit the current
-  state as a checkpoint they can return to manually.
-- **Don't auto-commit on every turn.** Phase A is user-triggered. The
-  apply pipeline doesn't auto-commit yet (that's Phase B), so each
-  `vedit_commit` call is a deliberate save-point.
+- **Don't merge branches yet.** Branch and checkout tools are local
+  alternates only, and `vedit_merge_preflight` is read-only. Bounded
+  merge execution is still roadmap work until the product rule is
+  accepted: merge only when changed clip ids do not overlap; otherwise
+  return a conflict for human choice.
+- **Don't call `vedit_commit` for every turn.** The apply pipeline
+  already auto-commits accepted edit envelopes. Manual commits are
+  deliberate save points.
 
 ## You are done when...
 
-- [ ] The user's question about history was answered with
-      structured `vedit_log` / `vedit_diff` data, not vague
-      "I think I trimmed something."
+- [ ] The user's question about history was answered with structured
+      `vedit_log` / `vedit_show` / `vedit_diff` / `vedit_changed_clip_ids` /
+      `vedit_blame` data, not vague "I think I trimmed something."
 - [ ] If the user asked you to commit, the commit landed and you
       returned the short hash so they can refer to it later.
 - [ ] If the diff was empty but a commit exists, you said so
@@ -176,9 +280,10 @@ history."
 
 ## Still on the roadmap
 
-- **Branch + switch tools.** The agent will be able to propose
-  alternatives on a branch ("let me try a tighter cut on `alt-tight`
-  and show you both"). User reviews, picks, optionally merges.
+- **Bounded merge execution.** Branches and read-only merge preflight
+  exist, but automated merge is still deferred. The safe rule is
+  non-overlapping changed clip ids only; overlapping edits must prompt
+  the user.
 - **Diff view in the desktop UI.** No CLI roundtrip needed for the
   user; the diff renders in the timeline pane.
 
