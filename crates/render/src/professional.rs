@@ -12,13 +12,13 @@ use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, CapabilityArea, ColorFinishingState, CompositionGraph,
-    CompositionNode, CompositionNodeType, DeliveryPreflightInput, DeliveryProfile, Easing,
-    ExportPreset, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity, GradeStack,
-    GradeStage, Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar, MotionGraphicsTemplate,
-    MotionPackage, PackageManifest, ParameterAnimation, PreflightReport, ProfessionalDiagnostic,
-    ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract,
-    StreamExportMode, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar,
-    TrackingPackage,
+    CompositionNode, CompositionNodeType, CoordinateSpace, DeliveryPreflightInput, DeliveryProfile,
+    Easing, ExportPreset, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity,
+    GradeStack, GradeStage, Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar,
+    MotionGraphicsTemplate, MotionPackage, PackageManifest, ParameterAnimation, PreflightReport,
+    ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS, ReframePath, ReframeSmoothing, ReviewStatus,
+    SafeAreaRule, StreamExportContract, StreamExportMode, TemplateSlot, TemplateSlotKind,
+    TrackKind, TrackSample, TrackSidecar, TrackingPackage, is_runtime_clip_parameter,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -85,6 +85,14 @@ pub enum ProfessionalEngineError {
         /// Existing animation id.
         animation_id: String,
     },
+    /// A tracker binding node is malformed or not supported by the evaluator.
+    #[error("tracker binding {binding_id} is invalid: {message}")]
+    InvalidTrackerBinding {
+        /// Composition node / binding id.
+        binding_id: String,
+        /// Detailed validation message.
+        message: String,
+    },
 }
 
 /// Lightweight tracking evidence available from existing index sidecars.
@@ -102,6 +110,64 @@ pub struct TrackingEvidence {
     pub height: u32,
     /// Per-sample motion magnitude, usually from the motion sidecar.
     pub motion_signal: Vec<f32>,
+}
+
+/// Normalized rectangle used to initialize a tracker.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackerRegion {
+    /// Left coordinate in normalized frame space.
+    pub x: f64,
+    /// Top coordinate in normalized frame space.
+    pub y: f64,
+    /// Width in normalized frame space.
+    pub width: f64,
+    /// Height in normalized frame space.
+    pub height: f64,
+}
+
+impl TrackerRegion {
+    /// Build a normalized `x/y/width/height` region.
+    pub fn from_xywh(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+/// Request to create or reuse a tracker for a clip region.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackingRequest {
+    /// Clip or asset id to track.
+    pub clip_id: String,
+    /// Requested track primitive.
+    pub kind: TrackKind,
+    /// Initial normalized tracking rectangle.
+    pub region: TrackerRegion,
+    /// First sampled frame.
+    pub start_frame: u64,
+    /// Last sampled frame, inclusive.
+    pub end_frame: u64,
+}
+
+/// One observed tracker rectangle from a detection/tracking pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackerObservation {
+    /// Frame number for this observation.
+    pub frame: u64,
+    /// Observed normalized tracking rectangle.
+    pub region: TrackerRegion,
+    /// Observation confidence in `0.0..=1.0`.
+    pub confidence: f64,
+}
+
+/// Opaque handle returned to callers after tracker creation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackerHandle {
+    /// Stable sidecar track id.
+    pub track_id: String,
 }
 
 /// Deterministic lowering for an overlay bound to a tracker.
@@ -128,6 +194,17 @@ pub struct ReframePathLowering {
     pub smoothing: ReframeSmoothing,
     /// Render expression/summary for deterministic review.
     pub expression: String,
+}
+
+/// Deterministic lowering for a surface track driving a corner-pin distortion.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CornerPinLowering {
+    /// Track id used for the surface binding.
+    pub track_id: String,
+    /// Clip id receiving the corner-pin distortion.
+    pub target_clip_id: String,
+    /// FFmpeg perspective filter expression.
+    pub filter: String,
 }
 
 /// Result of evaluating expression links at one sample time.
@@ -213,6 +290,208 @@ pub fn generate_tracking_package(evidence: TrackingEvidence) -> TrackingPackage 
     }
 }
 
+/// Ensure a stable tracker exists for a clip region and return its handle.
+pub fn ensure_tracker(
+    package: &mut TrackingPackage,
+    request: TrackingRequest,
+) -> Result<TrackerHandle, ProfessionalEngineError> {
+    validate_tracking_request(&request)?;
+    let track_id = tracker_request_id(&request);
+    if package.tracks.iter().any(|track| track.id == track_id) {
+        return Ok(TrackerHandle { track_id });
+    }
+    let samples = (request.start_frame..=request.end_frame)
+        .map(|frame| TrackSample {
+            frame,
+            points: tracker_region_points(request.kind, request.region),
+            confidence: Some(1.0),
+        })
+        .collect::<Vec<_>>();
+    package.tracks.push(TrackSidecar {
+        id: track_id.clone(),
+        asset_id: request.clip_id,
+        kind: request.kind,
+        coordinate_space: CoordinateSpace::Normalized,
+        samples,
+        confidence: Some(1.0),
+    });
+    Ok(TrackerHandle { track_id })
+}
+
+/// Ensure a stable tracker exists from observed per-frame rectangles.
+pub fn ensure_tracker_from_observations(
+    package: &mut TrackingPackage,
+    request: TrackingRequest,
+    observations: Vec<TrackerObservation>,
+) -> Result<TrackerHandle, ProfessionalEngineError> {
+    validate_tracking_request(&request)?;
+    if observations.is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "ensure_tracker_from_observations".into(),
+            message: "at least one tracker observation is required".into(),
+        });
+    }
+    let track_id = tracker_request_id(&request);
+    let samples = tracker_samples_from_observations(&request, observations)?;
+    let confidence = average_sample_confidence(&samples);
+    let sidecar = TrackSidecar {
+        id: track_id.clone(),
+        asset_id: request.clip_id,
+        kind: request.kind,
+        coordinate_space: CoordinateSpace::Normalized,
+        samples,
+        confidence,
+    };
+    if let Some(existing) = package.tracks.iter_mut().find(|track| track.id == track_id) {
+        *existing = sidecar;
+    } else {
+        package.tracks.push(sidecar);
+    }
+    Ok(TrackerHandle { track_id })
+}
+
+fn tracker_samples_from_observations(
+    request: &TrackingRequest,
+    observations: Vec<TrackerObservation>,
+) -> Result<Vec<TrackSample>, ProfessionalEngineError> {
+    let mut observations = observations;
+    observations.sort_by_key(|observation| observation.frame);
+    let mut previous_frame = None;
+    let mut samples = Vec::with_capacity(observations.len());
+    for observation in observations {
+        if observation.frame < request.start_frame || observation.frame > request.end_frame {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: request.clip_id.clone(),
+                message: format!(
+                    "tracker observation frame {} is outside requested frame range {}..={}",
+                    observation.frame, request.start_frame, request.end_frame
+                ),
+            });
+        }
+        if previous_frame == Some(observation.frame) {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: request.clip_id.clone(),
+                message: format!(
+                    "duplicate tracker observation for frame {}",
+                    observation.frame
+                ),
+            });
+        }
+        validate_tracker_region(observation.region, &request.clip_id)?;
+        if !observation.confidence.is_finite() {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: request.clip_id.clone(),
+                message: "tracker observation confidence must be finite".into(),
+            });
+        }
+        samples.push(TrackSample {
+            frame: observation.frame,
+            points: tracker_region_points(request.kind, observation.region),
+            confidence: Some(observation.confidence.clamp(0.0, 1.0)),
+        });
+        previous_frame = Some(observation.frame);
+    }
+    Ok(samples)
+}
+
+fn validate_tracking_request(request: &TrackingRequest) -> Result<(), ProfessionalEngineError> {
+    if request.clip_id.trim().is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "ensure_tracker".into(),
+            message: "clip_id is required".into(),
+        });
+    }
+    if request.end_frame < request.start_frame {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: request.clip_id.clone(),
+            message: "end_frame must be greater than or equal to start_frame".into(),
+        });
+    }
+    validate_tracker_region(request.region, &request.clip_id)
+}
+
+fn validate_tracker_region(
+    region: TrackerRegion,
+    binding_id: &str,
+) -> Result<(), ProfessionalEngineError> {
+    let valid_region = [region.x, region.y, region.width, region.height]
+        .into_iter()
+        .all(f64::is_finite)
+        && region.width > 0.0
+        && region.height > 0.0
+        && region.x >= 0.0
+        && region.y >= 0.0
+        && region.x + region.width <= 1.0
+        && region.y + region.height <= 1.0;
+    if !valid_region {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: binding_id.to_string(),
+            message: "tracker region must be finite normalized xywh within 0..1".into(),
+        });
+    }
+    Ok(())
+}
+
+fn tracker_request_id(request: &TrackingRequest) -> String {
+    format!(
+        "tracker-{}-{}-{}-{}-{}-{}-{}-{}",
+        sanitize_track_id_component(&request.clip_id),
+        track_kind_id(request.kind),
+        request.start_frame,
+        request.end_frame,
+        tracker_coord_id(request.region.x),
+        tracker_coord_id(request.region.y),
+        tracker_coord_id(request.region.width),
+        tracker_coord_id(request.region.height)
+    )
+}
+
+fn sanitize_track_id_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    sanitized.trim_matches('-').to_string()
+}
+
+fn track_kind_id(kind: TrackKind) -> &'static str {
+    match kind {
+        TrackKind::Point => "point",
+        TrackKind::Planar => "planar",
+        TrackKind::Surface => "surface",
+    }
+}
+
+fn tracker_coord_id(value: f64) -> i64 {
+    (value * 10_000.0).round() as i64
+}
+
+fn tracker_region_points(kind: TrackKind, region: TrackerRegion) -> Vec<[f64; 2]> {
+    let left = stable_tracker_coordinate(region.x);
+    let top = stable_tracker_coordinate(region.y);
+    let right = stable_tracker_coordinate(region.x + region.width);
+    let bottom = stable_tracker_coordinate(region.y + region.height);
+    match kind {
+        TrackKind::Point => vec![[
+            stable_tracker_coordinate((left + right) / 2.0),
+            stable_tracker_coordinate((top + bottom) / 2.0),
+        ]],
+        TrackKind::Planar | TrackKind::Surface => {
+            vec![[left, top], [right, top], [right, bottom], [left, bottom]]
+        }
+    }
+}
+
+fn stable_tracker_coordinate(value: f64) -> f64 {
+    (value * 1_000_000.0).round() / 1_000_000.0
+}
+
 /// Lower an overlay transform from a reviewed tracking package.
 pub fn lower_track_bound_overlay(
     package: &TrackingPackage,
@@ -248,6 +527,239 @@ pub fn lower_track_bound_overlay(
             point[0], point[1]
         ),
     })
+}
+
+/// Lower tracker-bind composition nodes into executable clip parameter animations.
+pub fn lower_tracker_parameter_bindings(
+    package: &TrackingPackage,
+    graph: &CompositionGraph,
+    frame_rate: f64,
+) -> Result<Vec<ParameterAnimation>, ProfessionalEngineError> {
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: graph.id.clone(),
+            message: "frame_rate must be finite and positive".into(),
+        });
+    }
+    graph
+        .nodes
+        .iter()
+        .filter(|node| node.node_type == CompositionNodeType::TrackerBind)
+        .map(|node| lower_tracker_binding_node(package, node, frame_rate))
+        .collect()
+}
+
+fn lower_tracker_binding_node(
+    package: &TrackingPackage,
+    node: &CompositionNode,
+    frame_rate: f64,
+) -> Result<ParameterAnimation, ProfessionalEngineError> {
+    let track_id = required_string_param(node, "track_id")?;
+    let target_clip_id = required_string_param(node, "target_clip_id")?;
+    let target_parameter = required_string_param(node, "target_parameter")?;
+    if !is_runtime_clip_parameter(&target_parameter) {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: node.id.clone(),
+            message: format!(
+                "unsupported target_parameter {target_parameter:?}; supported clip parameters: {}",
+                RUNTIME_CLIP_PARAMETERS.join(", ")
+            ),
+        });
+    }
+    let channel = string_param(node, "channel")
+        .map(str::to_string)
+        .unwrap_or_else(|| inferred_tracker_channel(&target_parameter).to_string());
+    let track = package
+        .tracks
+        .iter()
+        .find(|track| track.id == track_id)
+        .ok_or_else(|| ProfessionalEngineError::MissingTrack(track_id.clone()))?;
+    if track.coordinate_space != CoordinateSpace::Normalized {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: node.id.clone(),
+            message:
+                "only normalized tracker coordinate space can bind directly to overlay parameters"
+                    .into(),
+        });
+    }
+    let mut keyframes = Vec::new();
+    for sample in track
+        .samples
+        .iter()
+        .filter(|sample| !sample.points.is_empty())
+    {
+        let value = tracker_channel_value(sample, &channel).ok_or_else(|| {
+            ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: node.id.clone(),
+                message: format!("unsupported tracker channel {channel:?}"),
+            }
+        })?;
+        keyframes.push(Keyframe::linear(sample.frame as f64 / frame_rate, value));
+    }
+    if keyframes.is_empty() {
+        return Err(ProfessionalEngineError::MissingTrack(track_id));
+    }
+    Ok(ParameterAnimation {
+        id: format!("tracker-bind-{}", node.id),
+        target: AnimationTarget::ClipParameter {
+            clip_id: target_clip_id,
+            parameter: target_parameter,
+        },
+        keyframes,
+        pre_extrapolation: ExtrapolationMode::Hold,
+        post_extrapolation: ExtrapolationMode::Hold,
+        motion_path: None,
+        metadata_only: false,
+        rationale: Some(format!("bound to tracker {}", track.id)),
+    })
+}
+
+fn required_string_param(
+    node: &CompositionNode,
+    key: &'static str,
+) -> Result<String, ProfessionalEngineError> {
+    let Some(value) = string_param(node, key).filter(|value| !value.trim().is_empty()) else {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: node.id.clone(),
+            message: format!("missing required string parameter {key}"),
+        });
+    };
+    Ok(value.to_string())
+}
+
+fn inferred_tracker_channel(target_parameter: &str) -> &'static str {
+    if target_parameter.ends_with(".y") {
+        "y"
+    } else {
+        "x"
+    }
+}
+
+fn tracker_channel_value(sample: &TrackSample, channel: &str) -> Option<f64> {
+    let points = sample.points.as_slice();
+    match channel {
+        "x" | "center_x" => {
+            Some(points.iter().map(|point| point[0]).sum::<f64>() / points.len() as f64)
+        }
+        "y" | "center_y" => {
+            Some(points.iter().map(|point| point[1]).sum::<f64>() / points.len() as f64)
+        }
+        "width" => {
+            let (min_x, max_x) = min_max_coordinate(points, 0)?;
+            Some(max_x - min_x)
+        }
+        "height" => {
+            let (min_y, max_y) = min_max_coordinate(points, 1)?;
+            Some(max_y - min_y)
+        }
+        _ => None,
+    }
+}
+
+/// Lower a reviewed four-point surface track into an FFmpeg perspective filter.
+pub fn lower_surface_track_corner_pin(
+    package: &TrackingPackage,
+    track_id: &str,
+    target_clip_id: &str,
+    width: u32,
+    height: u32,
+) -> Result<CornerPinLowering, ProfessionalEngineError> {
+    let track = package
+        .tracks
+        .iter()
+        .find(|track| track.id == track_id)
+        .ok_or_else(|| ProfessionalEngineError::MissingTrack(track_id.to_string()))?;
+    if track.kind != TrackKind::Surface {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: track_id.to_string(),
+            message: "corner-pin lowering requires a surface track".into(),
+        });
+    }
+    if track.coordinate_space != CoordinateSpace::Normalized {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: track_id.to_string(),
+            message: "corner-pin lowering currently requires normalized surface points".into(),
+        });
+    }
+    let samples = track
+        .samples
+        .iter()
+        .filter(|sample| sample.points.len() >= 4)
+        .collect::<Vec<_>>();
+    if samples.is_empty() {
+        return Err(ProfessionalEngineError::MissingTrack(track_id.to_string()));
+    }
+    let x0 = surface_corner_expr(&samples, 0, 0, f64::from(width));
+    let y0 = surface_corner_expr(&samples, 0, 1, f64::from(height));
+    let x1 = surface_corner_expr(&samples, 1, 0, f64::from(width));
+    let y1 = surface_corner_expr(&samples, 1, 1, f64::from(height));
+    let x2 = surface_corner_expr(&samples, 3, 0, f64::from(width));
+    let y2 = surface_corner_expr(&samples, 3, 1, f64::from(height));
+    let x3 = surface_corner_expr(&samples, 2, 0, f64::from(width));
+    let y3 = surface_corner_expr(&samples, 2, 1, f64::from(height));
+    Ok(CornerPinLowering {
+        track_id: track_id.into(),
+        target_clip_id: target_clip_id.into(),
+        filter: format!(
+            "perspective=x0='{x0}':y0='{y0}':x1='{x1}':y1='{y1}':x2='{x2}':y2='{y2}':x3='{x3}':y3='{y3}':interpolation=linear:eval=frame"
+        ),
+    })
+}
+
+/// Lower graph-native corner-pin nodes through reviewed surface tracks.
+pub fn lower_surface_track_corner_pin_bindings(
+    package: &TrackingPackage,
+    graph: &CompositionGraph,
+    width: u32,
+    height: u32,
+) -> Result<Vec<CornerPinLowering>, ProfessionalEngineError> {
+    graph
+        .nodes
+        .iter()
+        .filter(|node| node.node_type == CompositionNodeType::CornerPin)
+        .map(|node| {
+            let track_id = required_string_param(node, "track_id")?;
+            let target_clip_id = required_string_param(node, "target_clip_id")?;
+            lower_surface_track_corner_pin(package, &track_id, &target_clip_id, width, height)
+        })
+        .collect()
+}
+
+fn surface_corner_expr(
+    samples: &[&TrackSample],
+    point_index: usize,
+    coordinate_index: usize,
+    scale: f64,
+) -> String {
+    let mut expr =
+        fmt_filter_num(samples[samples.len() - 1].points[point_index][coordinate_index] * scale);
+    for sample in samples.iter().rev().skip(1) {
+        let value = fmt_filter_num(sample.points[point_index][coordinate_index] * scale);
+        expr = format!("if(lte(n\\,{})\\,{value}\\,{expr})", sample.frame);
+    }
+    expr
+}
+
+fn fmt_filter_num(value: f64) -> String {
+    let mut s = format!("{value:.6}");
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    if s == "-0" { "0".into() } else { s }
+}
+
+fn min_max_coordinate(points: &[[f64; 2]], coordinate: usize) -> Option<(f64, f64)> {
+    let first = points.first()?;
+    let mut min = first[coordinate];
+    let mut max = first[coordinate];
+    for point in points.iter().skip(1) {
+        min = min.min(point[coordinate]);
+        max = max.max(point[coordinate]);
+    }
+    Some((min, max))
 }
 
 /// Lower a reviewed subject-aware reframe path into a deterministic crop expression.
@@ -702,6 +1214,11 @@ fn lower_composition_node(node: &CompositionNode) -> Option<RenderLoweringStep> 
         CompositionNodeType::TrackerBind => {
             let track_id = string_param(node, "track_id").unwrap_or("unbound");
             format!("metadata={track_id}")
+        }
+        CompositionNodeType::CornerPin => {
+            let track_id = string_param(node, "track_id").unwrap_or("unbound");
+            let target_clip_id = string_param(node, "target_clip_id").unwrap_or("unbound");
+            format!("corner_pin=track:{track_id}:target:{target_clip_id}")
         }
         CompositionNodeType::Output => "map=output".to_string(),
     };

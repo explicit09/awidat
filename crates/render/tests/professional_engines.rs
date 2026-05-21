@@ -16,12 +16,15 @@ use awidat_proto::professional::{
 };
 use awidat_render::professional::{
     DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
-    TrackCorrection, TrackingEvidence, apply_delivery_profile_to_spec, apply_export_preset_to_spec,
-    apply_motion_package, built_in_motion_templates, diagnose_effect_parameter_animation,
-    effect_parameter_capability_matrix, evaluate_expression_links, fill_motion_template,
-    generate_tracking_package, inspect_composition_graph, lower_audio_finishing,
-    lower_composition_graph, lower_grade_stack, lower_motion_template, lower_reframe_path,
-    lower_track_bound_overlay, motion_package_summary, plan_delivery_queue_item,
+    TrackCorrection, TrackerObservation, TrackerRegion, TrackingEvidence, TrackingRequest,
+    apply_delivery_profile_to_spec, apply_export_preset_to_spec, apply_motion_package,
+    built_in_motion_templates, diagnose_effect_parameter_animation,
+    effect_parameter_capability_matrix, ensure_tracker, ensure_tracker_from_observations,
+    evaluate_expression_links, fill_motion_template, generate_tracking_package,
+    inspect_composition_graph, lower_audio_finishing, lower_composition_graph, lower_grade_stack,
+    lower_motion_template, lower_reframe_path, lower_surface_track_corner_pin,
+    lower_surface_track_corner_pin_bindings, lower_track_bound_overlay,
+    lower_tracker_parameter_bindings, motion_package_summary, plan_delivery_queue_item,
     plan_stream_export_args, summarize_color_finishing,
 };
 use awidat_render::{RenderJobSpec, TitleAnimation, TitlePosition};
@@ -90,6 +93,88 @@ fn tracking_corrections_replace_samples_and_rescore_quality() {
     };
     assert!(corrected > initial);
     assert_eq!(package.tracks[0].samples[0].points.len(), 4);
+}
+
+#[test]
+fn ensure_tracker_creates_stable_region_handle_and_track_samples() {
+    let mut package = TrackingPackage::default();
+    let request = TrackingRequest {
+        clip_id: "clip-a".into(),
+        kind: TrackKind::Surface,
+        region: TrackerRegion::from_xywh(0.20, 0.30, 0.40, 0.20),
+        start_frame: 10,
+        end_frame: 12,
+    };
+
+    let handle = match ensure_tracker(&mut package, request.clone()) {
+        Ok(handle) => handle,
+        Err(err) => panic!("tracker creation should succeed: {err}"),
+    };
+    let duplicate = match ensure_tracker(&mut package, request) {
+        Ok(handle) => handle,
+        Err(err) => panic!("tracker creation should be idempotent: {err}"),
+    };
+
+    assert_eq!(handle.track_id, duplicate.track_id);
+    assert_eq!(package.tracks.len(), 1);
+    let track = &package.tracks[0];
+    assert_eq!(track.id, handle.track_id);
+    assert_eq!(track.asset_id, "clip-a");
+    assert_eq!(track.kind, TrackKind::Surface);
+    assert_eq!(track.samples.len(), 3);
+    assert_eq!(track.samples[0].frame, 10);
+    assert_eq!(
+        track.samples[0].points,
+        vec![[0.20, 0.30], [0.60, 0.30], [0.60, 0.50], [0.20, 0.50]]
+    );
+    assert!(package.validate().is_empty());
+}
+
+#[test]
+fn ensure_tracker_from_observations_creates_moving_track_rows() {
+    let mut package = TrackingPackage::default();
+    let request = TrackingRequest {
+        clip_id: "clip-a".into(),
+        kind: TrackKind::Surface,
+        region: TrackerRegion::from_xywh(0.20, 0.30, 0.40, 0.20),
+        start_frame: 10,
+        end_frame: 12,
+    };
+    let observations = vec![
+        TrackerObservation {
+            frame: 10,
+            region: TrackerRegion::from_xywh(0.20, 0.30, 0.40, 0.20),
+            confidence: 0.98,
+        },
+        TrackerObservation {
+            frame: 11,
+            region: TrackerRegion::from_xywh(0.23, 0.31, 0.40, 0.20),
+            confidence: 0.90,
+        },
+        TrackerObservation {
+            frame: 12,
+            region: TrackerRegion::from_xywh(0.27, 0.33, 0.41, 0.22),
+            confidence: 0.82,
+        },
+    ];
+
+    let handle = match ensure_tracker_from_observations(&mut package, request, observations) {
+        Ok(handle) => handle,
+        Err(err) => panic!("observed tracker creation should succeed: {err}"),
+    };
+
+    assert_eq!(package.tracks.len(), 1);
+    let track = &package.tracks[0];
+    assert_eq!(track.id, handle.track_id);
+    assert_eq!(track.samples.len(), 3);
+    assert_eq!(track.samples[0].points[0], [0.20, 0.30]);
+    assert_eq!(track.samples[1].points[0], [0.23, 0.31]);
+    assert_eq!(track.samples[2].points[2], [0.68, 0.55]);
+    let Some(confidence) = track.confidence else {
+        panic!("observed tracker confidence");
+    };
+    assert!((confidence - 0.9).abs() < 1e-9);
+    assert!(package.validate().is_empty());
 }
 
 #[test]
@@ -182,6 +267,216 @@ fn track_bound_overlay_fails_loudly_when_track_is_missing() {
     };
 
     assert_eq!(err.to_string(), "track missing-track not found");
+}
+
+#[test]
+fn tracker_bind_node_lowers_to_clip_parameter_animation() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "speaker-face".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Point,
+            samples: vec![
+                TrackSample {
+                    frame: 0,
+                    points: vec![[0.25, 0.75]],
+                    confidence: Some(0.95),
+                },
+                TrackSample {
+                    frame: 30,
+                    points: vec![[0.40, 0.60]],
+                    confidence: Some(0.90),
+                },
+            ],
+            confidence: Some(0.925),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+    let graph = CompositionGraph {
+        id: "tracked-lower-third".into(),
+        nodes: vec![node(
+            "bind-x",
+            "tracker_bind",
+            json!({
+                "track_id": "speaker-face",
+                "target_clip_id": "lower-third",
+                "target_parameter": "overlay.x",
+                "channel": "x"
+            }),
+        )],
+        ..CompositionGraph::default()
+    };
+
+    let animations = match lower_tracker_parameter_bindings(&package, &graph, 30.0) {
+        Ok(animations) => animations,
+        Err(err) => panic!("tracker bind should lower: {err}"),
+    };
+
+    assert_eq!(animations.len(), 1);
+    assert_eq!(
+        animations[0].target,
+        AnimationTarget::ClipParameter {
+            clip_id: "lower-third".into(),
+            parameter: "overlay.x".into()
+        }
+    );
+    assert_eq!(animations[0].keyframes[0], Keyframe::linear(0.0, 0.25));
+    assert_eq!(animations[0].keyframes[1], Keyframe::linear(1.0, 0.40));
+    assert!(!animations[0].metadata_only);
+}
+
+#[test]
+fn tracker_bind_node_rejects_unsupported_target_parameter() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "speaker-face".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Point,
+            samples: vec![TrackSample {
+                frame: 0,
+                points: vec![[0.25, 0.75]],
+                confidence: Some(0.95),
+            }],
+            confidence: Some(0.95),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+    let graph = CompositionGraph {
+        id: "bad-bind".into(),
+        nodes: vec![node(
+            "bind-bad",
+            "tracker_bind",
+            json!({
+                "track_id": "speaker-face",
+                "target_clip_id": "lower-third",
+                "target_parameter": "overlay.lut_path",
+                "channel": "x"
+            }),
+        )],
+        ..CompositionGraph::default()
+    };
+
+    let err = match lower_tracker_parameter_bindings(&package, &graph, 30.0) {
+        Ok(_) => panic!("unsupported tracker_bind target should fail"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string().contains("unsupported target_parameter")
+            && err.to_string().contains("overlay.rotation_deg"),
+        "error should enumerate supported runtime clip parameters: {err}"
+    );
+}
+
+#[test]
+fn surface_track_lowers_to_perspective_filter() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "screen-surface".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Surface,
+            samples: vec![
+                TrackSample {
+                    frame: 0,
+                    points: vec![[0.10, 0.20], [0.90, 0.18], [0.86, 0.82], [0.14, 0.80]],
+                    confidence: Some(0.91),
+                },
+                TrackSample {
+                    frame: 30,
+                    points: vec![[0.12, 0.22], [0.88, 0.20], [0.84, 0.84], [0.16, 0.82]],
+                    confidence: Some(0.88),
+                },
+            ],
+            confidence: Some(0.895),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let lowering = match lower_surface_track_corner_pin(
+        &package,
+        "screen-surface",
+        "replacement-screen",
+        1920,
+        1080,
+    ) {
+        Ok(lowering) => lowering,
+        Err(err) => panic!("surface track should lower: {err}"),
+    };
+
+    assert_eq!(lowering.track_id, "screen-surface");
+    assert_eq!(lowering.target_clip_id, "replacement-screen");
+    assert!(
+        lowering.filter.contains("perspective=") && lowering.filter.contains(":eval=frame"),
+        "corner pin should lower to a per-frame perspective filter: {}",
+        lowering.filter
+    );
+    assert!(
+        lowering.filter.contains("x0='if(lte(n\\,0)\\,192")
+            && lowering.filter.contains("y0='if(lte(n\\,0)\\,216"),
+        "top-left normalized surface point should become pixel expressions: {}",
+        lowering.filter
+    );
+    assert!(
+        lowering.filter.contains("x2='if(lte(n\\,0)\\,268.8")
+            && lowering.filter.contains("x3='if(lte(n\\,0)\\,1651.2"),
+        "surface point order should map bottom-left to x2 and bottom-right to x3: {}",
+        lowering.filter
+    );
+}
+
+#[test]
+fn corner_pin_graph_node_lowers_from_surface_track() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "screen-surface".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Surface,
+            samples: vec![
+                TrackSample {
+                    frame: 0,
+                    points: vec![[0.10, 0.20], [0.90, 0.18], [0.86, 0.82], [0.14, 0.80]],
+                    confidence: Some(0.91),
+                },
+                TrackSample {
+                    frame: 30,
+                    points: vec![[0.12, 0.22], [0.88, 0.20], [0.84, 0.84], [0.16, 0.82]],
+                    confidence: Some(0.88),
+                },
+            ],
+            confidence: Some(0.895),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+    let graph = CompositionGraph {
+        id: "screen-replace".into(),
+        nodes: vec![node(
+            "pin-screen",
+            "corner_pin",
+            json!({
+                "track_id": "screen-surface",
+                "target_clip_id": "replacement-screen"
+            }),
+        )],
+        ..CompositionGraph::default()
+    };
+
+    let lowerings = match lower_surface_track_corner_pin_bindings(&package, &graph, 1920, 1080) {
+        Ok(lowerings) => lowerings,
+        Err(err) => panic!("corner-pin graph node should lower: {err}"),
+    };
+
+    assert_eq!(lowerings.len(), 1);
+    assert_eq!(lowerings[0].track_id, "screen-surface");
+    assert_eq!(lowerings[0].target_clip_id, "replacement-screen");
+    assert!(
+        lowerings[0].filter.contains("perspective=") && lowerings[0].filter.contains(":eval=frame"),
+        "corner-pin graph node should lower through the surface track perspective path: {}",
+        lowerings[0].filter
+    );
 }
 
 #[test]
@@ -1163,6 +1458,7 @@ fn node(
             "blur" => awidat_proto::professional::CompositionNodeType::Blur,
             "color" => awidat_proto::professional::CompositionNodeType::Color,
             "tracker_bind" => awidat_proto::professional::CompositionNodeType::TrackerBind,
+            "corner_pin" => awidat_proto::professional::CompositionNodeType::CornerPin,
             "output" => awidat_proto::professional::CompositionNodeType::Output,
             other => panic!("node kind {other}"),
         },
