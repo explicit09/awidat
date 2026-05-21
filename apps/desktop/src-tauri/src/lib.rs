@@ -139,6 +139,7 @@ pub fn run() {
             commands::vedit::list_vedit_commits,
             commands::vedit::diff_vedit_refs,
             commands::vedit::restore_vedit_ref,
+            commands::review::author_local_review_package,
         ])
         .run(tauri::generate_context!());
 

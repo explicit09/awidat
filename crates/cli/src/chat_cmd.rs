@@ -22,10 +22,11 @@ use awidat_core::tools::{
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_looks::ListLooksTool,
-    load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
-    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
-    plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
-    plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    load_skill::LoadSkillTool, local_review_package::LocalReviewPackageTool,
+    plan_emphasis::PlanEmphasisTool, plan_look_regions::PlanLookRegionsTool,
+    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
+    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
+    poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transition_context::TransitionContextTool,
@@ -166,6 +167,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(FindSpeakerOncamTool));
     registry.register(Arc::new(ShotSummaryTool));
     registry.register(Arc::new(LoadSkillTool));
+    registry.register(Arc::new(LocalReviewPackageTool));
 
     let session = Arc::new(Session::new(
         client,

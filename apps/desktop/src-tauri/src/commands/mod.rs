@@ -15,6 +15,7 @@ pub mod professional;
 pub mod project;
 pub mod proposal;
 pub mod render;
+pub mod review;
 pub mod silence;
 pub mod thumbnail;
 pub mod timeline;
