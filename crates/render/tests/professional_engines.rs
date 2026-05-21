@@ -16,16 +16,17 @@ use awidat_proto::professional::{
 };
 use awidat_render::professional::{
     DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
-    TrackCorrection, TrackerObservation, TrackerRegion, TrackingEvidence, TrackingRequest,
-    apply_delivery_profile_to_spec, apply_export_preset_to_spec, apply_motion_package,
-    built_in_motion_templates, diagnose_effect_parameter_animation,
-    effect_parameter_capability_matrix, ensure_tracker, ensure_tracker_from_observations,
-    evaluate_expression_links, fill_motion_template, generate_tracking_package,
-    inspect_composition_graph, lower_audio_finishing, lower_composition_graph, lower_grade_stack,
-    lower_motion_template, lower_reframe_path, lower_surface_track_corner_pin,
-    lower_surface_track_corner_pin_bindings, lower_track_bound_overlay,
-    lower_tracker_parameter_bindings, motion_package_summary, plan_delivery_queue_item,
-    plan_stream_export_args, summarize_color_finishing,
+    TrackCorrection, TrackedInsertRequest, TrackerObservation, TrackerRegion, TrackingEvidence,
+    TrackingRequest, apply_delivery_profile_to_spec, apply_export_preset_to_spec,
+    apply_motion_package, author_tracked_insert, built_in_motion_templates,
+    diagnose_effect_parameter_animation, effect_parameter_capability_matrix, ensure_tracker,
+    ensure_tracker_from_observations, evaluate_expression_links, fill_motion_template,
+    generate_tracking_package, inspect_composition_graph, lower_audio_finishing,
+    lower_composition_graph, lower_grade_stack, lower_motion_template, lower_reframe_path,
+    lower_surface_track_corner_pin, lower_surface_track_corner_pin_bindings,
+    lower_track_bound_overlay, lower_tracker_parameter_bindings, motion_package_summary,
+    plan_delivery_queue_item, plan_stream_export_args, summarize_color_finishing,
+    summarize_tracking_package,
 };
 use awidat_render::{RenderJobSpec, TitleAnimation, TitlePosition};
 use serde_json::json;
@@ -175,6 +176,80 @@ fn ensure_tracker_from_observations_creates_moving_track_rows() {
     };
     assert!((confidence - 0.9).abs() < 1e-9);
     assert!(package.validate().is_empty());
+}
+
+#[test]
+fn author_tracked_insert_creates_bindings_and_review_surface() {
+    let mut package = TrackingPackage::default();
+    let plan = match author_tracked_insert(
+        &mut package,
+        TrackedInsertRequest {
+            overlay_clip_id: "logo-overlay".into(),
+            tracker: TrackingRequest {
+                clip_id: "speaker-clip".into(),
+                kind: TrackKind::Point,
+                region: TrackerRegion::from_xywh(0.20, 0.30, 0.20, 0.20),
+                start_frame: 0,
+                end_frame: 30,
+            },
+            observations: vec![
+                TrackerObservation {
+                    frame: 0,
+                    region: TrackerRegion::from_xywh(0.20, 0.30, 0.20, 0.20),
+                    confidence: 0.94,
+                },
+                TrackerObservation {
+                    frame: 30,
+                    region: TrackerRegion::from_xywh(0.40, 0.50, 0.20, 0.20),
+                    confidence: 0.52,
+                },
+            ],
+        },
+        30.0,
+    ) {
+        Ok(plan) => plan,
+        Err(err) => panic!("tracked insert should author: {err}"),
+    };
+
+    assert_eq!(plan.generated_animations.len(), 2);
+    assert!(
+        plan.generated_animations
+            .iter()
+            .any(|animation| animation.target
+                == AnimationTarget::ClipParameter {
+                    clip_id: "logo-overlay".into(),
+                    parameter: "overlay.x".into()
+                })
+    );
+    assert!(
+        plan.generated_animations
+            .iter()
+            .any(|animation| animation.target
+                == AnimationTarget::ClipParameter {
+                    clip_id: "logo-overlay".into(),
+                    parameter: "overlay.y".into()
+                })
+    );
+    assert_eq!(plan.review.tracks.len(), 1);
+    assert_eq!(plan.review.tracks[0].track_id, plan.track_id);
+    assert_eq!(plan.review.tracks[0].correction_frames, vec![30]);
+    assert!(plan.review.tracks[0].requires_correction);
+
+    if let Err(err) = (TrackCorrection {
+        track_id: plan.track_id,
+        samples: vec![
+            (0, vec![[0.30, 0.40]], 0.96),
+            (30, vec![[0.50, 0.60]], 0.95),
+        ],
+    })
+    .apply(&mut package)
+    {
+        panic!("correction applies: {err}");
+    }
+    let review = summarize_tracking_package(&package);
+
+    assert!(review.tracks[0].correction_frames.is_empty());
+    assert!(!review.tracks[0].requires_correction);
 }
 
 #[test]
@@ -524,6 +599,12 @@ fn reframe_path_lowers_to_deterministic_crop_expression() {
     assert!(lowering.expression.contains("center=0.45,0.5"));
     assert!(lowering.expression.contains("scale=1.15"));
     assert!(lowering.expression.contains("safe_area=mobile"));
+
+    let review = summarize_tracking_package(&package);
+    assert_eq!(review.reframe_paths.len(), 1);
+    assert_eq!(review.reframe_paths[0].reframe_id, "vertical-speaker");
+    assert_eq!(review.reframe_paths[0].keyframe_count, 2);
+    assert!(!review.reframe_paths[0].requires_correction);
 }
 
 #[test]
@@ -849,7 +930,7 @@ fn motion_template_preserves_explicit_duplicate_subtitle() {
 }
 
 #[test]
-fn motion_template_reports_unsupported_filled_graphic_slots() {
+fn motion_template_lowers_filled_image_slots_to_media_overlays() {
     let template = match built_in_motion_templates()
         .into_iter()
         .find(|template| template.id == "product-insert-emphasis")
@@ -879,12 +960,116 @@ fn motion_template_reports_unsupported_filled_graphic_slots() {
         },
     );
 
+    assert_eq!(render.media_overlays.len(), 1);
+    assert_eq!(
+        render.media_overlays[0].segment.asset_path,
+        PathBuf::from("logo.svg")
+    );
+    assert_eq!(render.media_overlays[0].track_start_s, 1.0);
+    assert_eq!(render.media_overlays[0].segment.duration_s, 3.0);
     assert!(
-        render.limitations.iter().any(|limitation| {
-            limitation.node_id == "product-insert-emphasis:image_asset"
-                && limitation.message.contains("image_asset")
-        }),
-        "expected a limitation for the unsupported image slot: {:?}",
+        render
+            .media_overlays
+            .iter()
+            .flat_map(|overlay| overlay.animations.iter())
+            .any(|animation| animation.parameter == "overlay.scale")
+    );
+    assert!(
+        render
+            .limitations
+            .iter()
+            .all(|limitation| !limitation.node_id.ends_with(":image_asset")),
+        "image slot should lower into a media overlay rather than report unsupported: {:?}",
+        render.limitations
+    );
+}
+
+#[test]
+fn logo_reveal_template_lowers_logo_asset_to_fade_and_scale_overlay() {
+    let template = built_in_template("logo-reveal");
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("logo-clip")),
+            ("logo_asset", json!("brand/logo.png")),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("logo reveal fill: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 2.0,
+            end_s: 5.0,
+            animation: TemplateAnimation::Transform,
+        },
+    );
+
+    assert_eq!(render.media_overlays.len(), 1);
+    assert_eq!(
+        render.media_overlays[0].segment.asset_path,
+        PathBuf::from("brand/logo.png")
+    );
+    assert!(
+        render
+            .media_overlays
+            .iter()
+            .flat_map(|overlay| overlay.animations.iter())
+            .any(|animation| animation.parameter == "overlay.opacity")
+    );
+    assert!(
+        render
+            .media_overlays
+            .iter()
+            .flat_map(|overlay| overlay.animations.iter())
+            .any(|animation| animation.parameter == "overlay.scale")
+    );
+}
+
+#[test]
+fn image_only_template_lowers_without_target_clip() {
+    let template = MotionGraphicsTemplate {
+        id: "brand-bug".into(),
+        name: "Brand Bug".into(),
+        slots: vec![TemplateSlot {
+            id: "logo_asset".into(),
+            kind: TemplateSlotKind::Image,
+            required: true,
+            ..TemplateSlot::default()
+        }],
+        safe_areas: Vec::new(),
+        platform_variants: Vec::new(),
+    };
+    let filled =
+        match fill_motion_template(&template, btree_map([("logo_asset", json!("bug.png"))])) {
+            Ok(filled) => filled,
+            Err(err) => panic!("image-only fill: {err}"),
+        };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 6.0,
+            end_s: 9.0,
+            animation: TemplateAnimation::None,
+        },
+    );
+
+    assert_eq!(render.media_overlays.len(), 1);
+    assert_eq!(
+        render.media_overlays[0].segment.asset_path,
+        PathBuf::from("bug.png")
+    );
+    assert!(render.media_overlays[0].animations.is_empty());
+    assert!(
+        render
+            .limitations
+            .iter()
+            .all(|limitation| !limitation.node_id.ends_with(":logo_asset")),
+        "image-only template should not silently drop or warn for a renderable logo slot: {:?}",
         render.limitations
     );
 }
@@ -973,6 +1158,17 @@ fn effect_parameter_registry_reports_units_and_validation() {
     assert_eq!(saturation.unit, "multiplier");
     assert!(saturation.previewable);
     assert!(saturation.renderable);
+    let blur = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.video_overlay" && entry.parameter == "blur")
+    {
+        Some(entry) => entry,
+        None => panic!("overlay blur capability"),
+    };
+
+    assert_eq!(blur.unit, "px");
+    assert!(blur.previewable);
+    assert!(blur.renderable);
 
     let invalid = ParameterAnimation {
         id: "anim-bad-scale".into(),
@@ -1012,6 +1208,8 @@ fn built_in_motion_template_catalog_covers_phase_3b_templates() {
         "title-reveal",
         "pip-emphasis",
         "product-insert-emphasis",
+        "shake-emphasis",
+        "logo-reveal",
     ] {
         assert!(ids.contains(&expected), "missing template {expected}");
     }
@@ -1041,7 +1239,7 @@ fn lower_third_template_lowers_to_title_opacity_and_y_animations() {
             ("target_clip", json!("title-clip")),
             ("text", json!("Ada Lovelace")),
             ("subtitle", json!("Host")),
-            ("color", json!("#FFFFFF")),
+            ("color", json!("#FFCC00")),
             ("safe_area", json!("16:9")),
         ]),
     ) {
@@ -1070,6 +1268,16 @@ fn lower_third_template_lowers_to_title_opacity_and_y_animations() {
         .collect::<Vec<_>>();
     assert!(parameters.contains(&"title-clip/title.opacity".to_string()));
     assert!(parameters.contains(&"title-clip/title.y".to_string()));
+    assert_eq!(render.titles[0].color, "#FFCC00");
+    assert_eq!(render.titles[1].color, "#FFCC00");
+    assert!(
+        render
+            .limitations
+            .iter()
+            .all(|limitation| !limitation.node_id.ends_with(":color")),
+        "color slot should lower into title color rather than report unsupported: {:?}",
+        render.limitations
+    );
 }
 
 #[test]
@@ -1108,6 +1316,51 @@ fn focus_highlight_template_lowers_to_overlay_scale_and_opacity() {
         .collect::<Vec<_>>();
     assert!(parameters.contains(&"overlay.scale"));
     assert!(parameters.contains(&"overlay.opacity"));
+}
+
+#[test]
+fn shake_emphasis_template_lowers_to_overlay_x_and_rotation_keyframes() {
+    let template = built_in_template("shake-emphasis");
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("overlay-clip")),
+            ("intensity", json!(0.04)),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("shake emphasis fill: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 4.0,
+            end_s: 5.0,
+            animation: TemplateAnimation::Transform,
+        },
+    );
+
+    let x_animation = clip_parameter_animation(&render.parameter_animations, "overlay.x");
+    let y_animation = clip_parameter_animation(&render.parameter_animations, "overlay.y");
+    let rotation_animation =
+        clip_parameter_animation(&render.parameter_animations, "overlay.rotation_deg");
+
+    assert_eq!(x_animation.keyframes.len(), 6);
+    assert_eq!(x_animation.keyframes[0].value, 0.0);
+    assert_eq!(x_animation.keyframes[1].value, -0.04);
+    assert_eq!(x_animation.keyframes[2].value, 0.04);
+    assert_eq!(x_animation.keyframes[5].value, 0.0);
+    assert_eq!(y_animation.keyframes.len(), 6);
+    assert_eq!(y_animation.keyframes[0].value, 0.0);
+    assert!(y_animation.keyframes[1].value > 0.0);
+    assert!(y_animation.keyframes[2].value < 0.0);
+    assert_eq!(y_animation.keyframes[5].value, 0.0);
+    assert_eq!(rotation_animation.keyframes.len(), 5);
+    assert_eq!(rotation_animation.keyframes[0].value, 0.0);
+    assert!(rotation_animation.keyframes[1].value < 0.0);
+    assert!(rotation_animation.keyframes[2].value > 0.0);
 }
 
 #[test]
@@ -1603,6 +1856,25 @@ fn package_animation(
         metadata_only: false,
         rationale: None,
     }
+}
+
+fn clip_parameter_animation<'a>(
+    animations: &'a [ParameterAnimation],
+    parameter: &str,
+) -> &'a ParameterAnimation {
+    for animation in animations {
+        let AnimationTarget::ClipParameter {
+            parameter: candidate,
+            ..
+        } = &animation.target
+        else {
+            continue;
+        };
+        if candidate == parameter {
+            return animation;
+        }
+    }
+    panic!("parameter animation {parameter}");
 }
 
 fn expression_link(

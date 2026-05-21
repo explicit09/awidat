@@ -25,11 +25,16 @@ use thiserror::Error;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::animation::keyframes_to_ffmpeg_expr;
-use crate::timeline::{ColorCorrectionPlan, TextReveal};
+use crate::timeline::{
+    ColorCorrectionPlan, RenderParameterAnimation, TextReveal, TimelineSegment, VideoOverlayMode,
+    VideoOverlayPlan,
+};
 use crate::{
     AudioAutomationPlan, AudioFxPlan, AudioTrackPlan, DuckingPlan, EqBandPlan, LoudnessTargetPlan,
     RenderJobSpec, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
 };
+
+const TRACKING_REVIEW_CONFIDENCE_THRESHOLD: f64 = 0.75;
 
 /// Errors returned by professional pipeline engines.
 #[derive(Debug, Error)]
@@ -168,6 +173,73 @@ pub struct TrackerObservation {
 pub struct TrackerHandle {
     /// Stable sidecar track id.
     pub track_id: String,
+}
+
+/// Agent/UI request to author an overlay insert bound to a tracker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackedInsertRequest {
+    /// Overlay clip id that should follow the tracked subject.
+    pub overlay_clip_id: String,
+    /// Tracker region request for the source clip.
+    pub tracker: TrackingRequest,
+    /// Optional observed tracker rows from a detector/tracker pass.
+    pub observations: Vec<TrackerObservation>,
+}
+
+/// Authored tracker insert with concrete runtime animations and review summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackedInsertPlan {
+    /// Stable track id used by the authored insert.
+    pub track_id: String,
+    /// Generated `overlay.x` and `overlay.y` animations for the insert clip.
+    pub generated_animations: Vec<ParameterAnimation>,
+    /// Review summary callers can surface before accepting the insert.
+    pub review: TrackingReviewPackage,
+}
+
+/// Compact review surface for tracker packages.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackingReviewPackage {
+    /// Track rows with confidence and correction cues.
+    pub tracks: Vec<TrackingReviewTrack>,
+    /// Reframe rows with confidence and correction cues.
+    pub reframe_paths: Vec<TrackingReviewReframe>,
+}
+
+/// Review row for a tracker sidecar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackingReviewTrack {
+    /// Track id.
+    pub track_id: String,
+    /// Asset or clip id being tracked.
+    pub asset_id: String,
+    /// Track primitive kind.
+    pub kind: TrackKind,
+    /// Number of sampled frames.
+    pub sample_count: usize,
+    /// Average confidence if available.
+    pub confidence: Option<f64>,
+    /// Frames that need user/agent correction.
+    pub correction_frames: Vec<u64>,
+    /// True when correction frames or low aggregate confidence remain.
+    pub requires_correction: bool,
+}
+
+/// Review row for a subject-aware reframe path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackingReviewReframe {
+    /// Reframe path id.
+    pub reframe_id: String,
+    /// Clip being reframed.
+    pub clip_id: String,
+    /// Number of authored crop keyframes.
+    pub keyframe_count: usize,
+    /// Average keyframe confidence if available.
+    pub confidence: Option<f64>,
+    /// Times that need user/agent correction.
+    pub correction_times_s: Vec<f64>,
+    /// True when correction times or low aggregate confidence remain.
+    pub requires_correction: bool,
 }
 
 /// Deterministic lowering for an overlay bound to a tracker.
@@ -350,6 +422,93 @@ pub fn ensure_tracker_from_observations(
     Ok(TrackerHandle { track_id })
 }
 
+/// Author a tracked overlay insert from a tracker request and optional observations.
+pub fn author_tracked_insert(
+    package: &mut TrackingPackage,
+    request: TrackedInsertRequest,
+    frame_rate: f64,
+) -> Result<TrackedInsertPlan, ProfessionalEngineError> {
+    if request.overlay_clip_id.trim().is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "author_tracked_insert".into(),
+            message: "overlay_clip_id is required".into(),
+        });
+    }
+    let overlay_clip_id = request.overlay_clip_id;
+    let handle = if request.observations.is_empty() {
+        ensure_tracker(package, request.tracker)?
+    } else {
+        ensure_tracker_from_observations(package, request.tracker, request.observations)?
+    };
+    let graph = tracked_insert_binding_graph(&handle.track_id, &overlay_clip_id);
+    let generated_animations = lower_tracker_parameter_bindings(package, &graph, frame_rate)?;
+    Ok(TrackedInsertPlan {
+        track_id: handle.track_id,
+        generated_animations,
+        review: summarize_tracking_package(package),
+    })
+}
+
+/// Summarize a tracking package into rows suitable for UI or agent review.
+pub fn summarize_tracking_package(package: &TrackingPackage) -> TrackingReviewPackage {
+    TrackingReviewPackage {
+        tracks: package.tracks.iter().map(tracking_review_track).collect(),
+        reframe_paths: package
+            .reframe_paths
+            .iter()
+            .map(tracking_review_reframe)
+            .collect(),
+    }
+}
+
+fn tracked_insert_binding_graph(track_id: &str, overlay_clip_id: &str) -> CompositionGraph {
+    CompositionGraph {
+        id: format!("tracked-insert-{overlay_clip_id}"),
+        nodes: vec![
+            tracker_bind_node_for_authoring(
+                "tracked-insert-x",
+                track_id,
+                overlay_clip_id,
+                "overlay.x",
+                "x",
+            ),
+            tracker_bind_node_for_authoring(
+                "tracked-insert-y",
+                track_id,
+                overlay_clip_id,
+                "overlay.y",
+                "y",
+            ),
+        ],
+        ..CompositionGraph::default()
+    }
+}
+
+fn tracker_bind_node_for_authoring(
+    id: &str,
+    track_id: &str,
+    target_clip_id: &str,
+    target_parameter: &str,
+    channel: &str,
+) -> CompositionNode {
+    CompositionNode {
+        id: id.into(),
+        node_type: CompositionNodeType::TrackerBind,
+        params: HashMap::from([
+            ("track_id".into(), Value::String(track_id.into())),
+            (
+                "target_clip_id".into(),
+                Value::String(target_clip_id.into()),
+            ),
+            (
+                "target_parameter".into(),
+                Value::String(target_parameter.into()),
+            ),
+            ("channel".into(), Value::String(channel.into())),
+        ]),
+    }
+}
+
 fn tracker_samples_from_observations(
     request: &TrackingRequest,
     observations: Vec<TrackerObservation>,
@@ -490,6 +649,92 @@ fn tracker_region_points(kind: TrackKind, region: TrackerRegion) -> Vec<[f64; 2]
 
 fn stable_tracker_coordinate(value: f64) -> f64 {
     (value * 1_000_000.0).round() / 1_000_000.0
+}
+
+fn tracking_review_track(track: &TrackSidecar) -> TrackingReviewTrack {
+    let confidence = track
+        .confidence
+        .filter(|confidence| confidence.is_finite())
+        .or_else(|| average_sample_confidence(&track.samples));
+    let correction_frames = track
+        .samples
+        .iter()
+        .filter(|sample| track_sample_requires_correction(sample))
+        .map(|sample| sample.frame)
+        .collect::<Vec<_>>();
+    TrackingReviewTrack {
+        track_id: track.id.clone(),
+        asset_id: track.asset_id.clone(),
+        kind: track.kind,
+        sample_count: track.samples.len(),
+        confidence,
+        requires_correction: !correction_frames.is_empty()
+            || confidence
+                .map(|value| value < TRACKING_REVIEW_CONFIDENCE_THRESHOLD)
+                .unwrap_or(true),
+        correction_frames,
+    }
+}
+
+fn track_sample_requires_correction(sample: &TrackSample) -> bool {
+    sample.points.is_empty()
+        || sample
+            .points
+            .iter()
+            .flatten()
+            .any(|coordinate| !coordinate.is_finite())
+        || sample
+            .confidence
+            .filter(|confidence| confidence.is_finite())
+            .map(|confidence| confidence < TRACKING_REVIEW_CONFIDENCE_THRESHOLD)
+            .unwrap_or(true)
+}
+
+fn tracking_review_reframe(path: &ReframePath) -> TrackingReviewReframe {
+    let confidence = average_reframe_confidence(path);
+    let correction_times_s = path
+        .keyframes
+        .iter()
+        .filter(|keyframe| {
+            keyframe
+                .confidence
+                .filter(|confidence| confidence.is_finite())
+                .map(|confidence| confidence < TRACKING_REVIEW_CONFIDENCE_THRESHOLD)
+                .unwrap_or(true)
+        })
+        .map(|keyframe| keyframe.time_s)
+        .collect::<Vec<_>>();
+    TrackingReviewReframe {
+        reframe_id: path.id.clone(),
+        clip_id: path.clip_id.clone(),
+        keyframe_count: path.keyframes.len(),
+        confidence,
+        requires_correction: !correction_times_s.is_empty()
+            || confidence
+                .map(|value| value < TRACKING_REVIEW_CONFIDENCE_THRESHOLD)
+                .unwrap_or(true),
+        correction_times_s,
+    }
+}
+
+fn average_reframe_confidence(path: &ReframePath) -> Option<f64> {
+    let mut total = 0.0;
+    let mut count = 0usize;
+    for confidence in path
+        .keyframes
+        .iter()
+        .filter_map(|keyframe| keyframe.confidence)
+    {
+        if confidence.is_finite() {
+            total += confidence.clamp(0.0, 1.0);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        None
+    } else {
+        Some(total / count as f64)
+    }
 }
 
 /// Lower an overlay transform from a reviewed tracking package.
@@ -1035,6 +1280,7 @@ pub struct EffectParameterCapability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EffectParameterValidation {
     AnyFinite,
+    NonNegative,
     Normalized,
     Positive,
 }
@@ -1081,6 +1327,14 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             previewable: true,
             renderable: true,
             validation: EffectParameterValidation::Positive,
+        },
+        EffectParameterCapability {
+            effect: "awidat.video_overlay",
+            parameter: "blur",
+            unit: "px",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::NonNegative,
         },
         EffectParameterCapability {
             effect: "awidat.volume",
@@ -1131,6 +1385,7 @@ fn effect_parameter_value_is_valid(value: f64, validation: EffectParameterValida
     }
     match validation {
         EffectParameterValidation::AnyFinite => true,
+        EffectParameterValidation::NonNegative => value >= 0.0,
         EffectParameterValidation::Normalized => (0.0..=1.0).contains(&value),
         EffectParameterValidation::Positive => value > 0.0,
     }
@@ -1292,6 +1547,8 @@ pub enum TemplateAnimation {
 pub struct MotionTemplateRender {
     /// Title plans the current renderer can draw.
     pub titles: Vec<TitlePlan>,
+    /// Media overlay plans lowered from image, logo, or video template slots.
+    pub media_overlays: Vec<VideoOverlayPlan>,
     /// Explicit parameter animations generated by the template.
     pub parameter_animations: Vec<ParameterAnimation>,
     /// Safe-area violations found before render.
@@ -1381,6 +1638,29 @@ pub fn built_in_motion_templates() -> Vec<MotionGraphicsTemplate> {
                 slot("target_clip", TemplateSlotKind::TargetClip, true),
                 slot("image_asset", TemplateSlotKind::Image, false),
                 slot("video_asset", TemplateSlotKind::Video, false),
+                slot("scale", TemplateSlotKind::Number, false),
+                slot("safe_area", TemplateSlotKind::SafeAreaProfile, false),
+            ],
+            safe_areas: platform_safe_areas(),
+            platform_variants: platform_variants(),
+        },
+        MotionGraphicsTemplate {
+            id: "shake-emphasis".into(),
+            name: "Shake Emphasis".into(),
+            slots: vec![
+                slot("target_clip", TemplateSlotKind::TargetClip, true),
+                slot("intensity", TemplateSlotKind::Number, false),
+                slot("safe_area", TemplateSlotKind::SafeAreaProfile, false),
+            ],
+            safe_areas: platform_safe_areas(),
+            platform_variants: platform_variants(),
+        },
+        MotionGraphicsTemplate {
+            id: "logo-reveal".into(),
+            name: "Logo Reveal".into(),
+            slots: vec![
+                slot("target_clip", TemplateSlotKind::TargetClip, true),
+                slot("logo_asset", TemplateSlotKind::Image, true),
                 slot("scale", TemplateSlotKind::Number, false),
                 slot("safe_area", TemplateSlotKind::SafeAreaProfile, false),
             ],
@@ -1663,9 +1943,16 @@ pub fn lower_motion_template(
             32,
         ));
     }
-    render
-        .parameter_animations
-        .extend(template_parameter_animations(filled, timing));
+    if let Some(color) = color_slot(filled) {
+        apply_title_color(&mut render.titles, color);
+    }
+    let parameter_animations = template_parameter_animations(filled, timing);
+    render.media_overlays.extend(template_media_overlays(
+        filled,
+        timing,
+        &parameter_animations,
+    ));
+    render.parameter_animations.extend(parameter_animations);
     render
 }
 
@@ -1695,9 +1982,18 @@ fn motion_template_slot_is_lowered(slot: &TemplateSlot) -> bool {
             matches!(slot.id.as_str(), "name" | "text" | "title" | "subtitle")
         }
         TemplateSlotKind::Number => matches!(slot.id.as_str(), "scale" | "intensity"),
+        TemplateSlotKind::Color => matches!(slot.id.as_str(), "color" | "accent_color"),
+        TemplateSlotKind::Image => image_template_slot_is_lowered(&slot.id),
+        TemplateSlotKind::Video => matches!(slot.id.as_str(), "video_asset"),
         TemplateSlotKind::TargetClip | TemplateSlotKind::SafeAreaProfile => true,
-        TemplateSlotKind::Image | TemplateSlotKind::Video | TemplateSlotKind::Color => false,
     }
+}
+
+fn image_template_slot_is_lowered(slot_id: &str) -> bool {
+    matches!(
+        slot_id,
+        "image_asset" | "logo" | "logo_asset" | "brand_logo" | "brand_logo_path"
+    )
 }
 
 fn template_parameter_animations(
@@ -1751,7 +2047,146 @@ fn template_parameter_animations(
                 ),
             ]
         }
+        "shake-emphasis" => {
+            let intensity = number_slot(filled, "intensity")
+                .unwrap_or(0.035)
+                .abs()
+                .clamp(0.005, 0.20);
+            let rotation_deg = (intensity * 60.0).clamp(1.0, 8.0);
+            vec![
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.x",
+                    shake_keyframes(duration_s, intensity),
+                ),
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.y",
+                    shake_y_keyframes(duration_s, intensity * 0.65),
+                ),
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.rotation_deg",
+                    vec![
+                        keyframe(0.0, 0.0),
+                        keyframe(duration_s * 0.20, -rotation_deg),
+                        keyframe(duration_s * 0.40, rotation_deg),
+                        keyframe(duration_s * 0.65, -rotation_deg * 0.5),
+                        keyframe(duration_s, 0.0),
+                    ],
+                ),
+            ]
+        }
+        "logo-reveal" => {
+            let scale = number_slot(filled, "scale").unwrap_or(1.0).max(0.05);
+            vec![
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.opacity",
+                    fade_keyframes(duration_s),
+                ),
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.scale",
+                    vec![
+                        keyframe(0.0, 0.85 * scale),
+                        keyframe((duration_s * 0.25).min(0.45), scale),
+                        keyframe(duration_s, scale),
+                    ],
+                ),
+            ]
+        }
         _ => Vec::new(),
+    }
+}
+
+fn template_media_overlays(
+    filled: &FilledMotionTemplate,
+    timing: MotionTemplateTiming,
+    parameter_animations: &[ParameterAnimation],
+) -> Vec<VideoOverlayPlan> {
+    let target_clip = text_slot(filled, "target_clip");
+    let duration_s = (timing.end_s - timing.start_s).max(0.1);
+    let animations = target_clip
+        .as_deref()
+        .map(|target_clip| {
+            parameter_animations
+                .iter()
+                .filter_map(|animation| {
+                    render_animation_for_template_overlay(animation, target_clip)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    media_asset_slots(filled)
+        .into_iter()
+        .map(|(slot_id, asset_path)| VideoOverlayPlan {
+            segment: TimelineSegment {
+                clip_name: format!("{}:{slot_id}", filled.template_id),
+                asset_path: PathBuf::from(asset_path),
+                start_s: 0.0,
+                duration_s,
+                ..TimelineSegment::default()
+            },
+            track_start_s: timing.start_s,
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".into(),
+                scale: template_media_overlay_scale(filled),
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: animations.clone(),
+        })
+        .collect()
+}
+
+fn media_asset_slots(filled: &FilledMotionTemplate) -> Vec<(String, String)> {
+    filled
+        .slot_defs
+        .iter()
+        .filter(|slot| match slot.kind {
+            TemplateSlotKind::Image => image_template_slot_is_lowered(&slot.id),
+            TemplateSlotKind::Video => slot.id == "video_asset",
+            _ => false,
+        })
+        .filter_map(|slot| text_slot(filled, &slot.id).map(|value| (slot.id.clone(), value)))
+        .collect()
+}
+
+fn render_animation_for_template_overlay(
+    animation: &ParameterAnimation,
+    target_clip: &str,
+) -> Option<RenderParameterAnimation> {
+    let AnimationTarget::ClipParameter { clip_id, parameter } = &animation.target else {
+        return None;
+    };
+    if clip_id != target_clip || !parameter.starts_with("overlay.") {
+        return None;
+    }
+    Some(RenderParameterAnimation {
+        parameter: parameter.clone(),
+        keyframes: animation.keyframes.clone(),
+        pre_extrapolation: animation.pre_extrapolation,
+        post_extrapolation: animation.post_extrapolation,
+        motion_path: animation.motion_path.clone(),
+    })
+}
+
+fn template_media_overlay_scale(filled: &FilledMotionTemplate) -> f64 {
+    match filled.template_id.as_str() {
+        "product-insert-emphasis" => 0.30,
+        "pip-emphasis" => 0.28,
+        _ => 0.25,
     }
 }
 
@@ -1782,6 +2217,28 @@ fn fade_keyframes(duration_s: f64) -> Vec<Keyframe> {
         keyframe(0.0, 0.0),
         keyframe(ramp_s, 1.0),
         keyframe((duration_s - ramp_s).max(ramp_s), 1.0),
+        keyframe(duration_s, 0.0),
+    ]
+}
+
+fn shake_keyframes(duration_s: f64, intensity: f64) -> Vec<Keyframe> {
+    vec![
+        keyframe(0.0, 0.0),
+        keyframe(duration_s * 0.16, -intensity),
+        keyframe(duration_s * 0.32, intensity),
+        keyframe(duration_s * 0.52, -intensity * 0.5),
+        keyframe(duration_s * 0.72, intensity * 0.5),
+        keyframe(duration_s, 0.0),
+    ]
+}
+
+fn shake_y_keyframes(duration_s: f64, intensity: f64) -> Vec<Keyframe> {
+    vec![
+        keyframe(0.0, 0.0),
+        keyframe(duration_s * 0.16, intensity),
+        keyframe(duration_s * 0.32, -intensity),
+        keyframe(duration_s * 0.52, intensity * 0.5),
+        keyframe(duration_s * 0.72, -intensity * 0.5),
         keyframe(duration_s, 0.0),
     ]
 }
@@ -1875,6 +2332,28 @@ fn text_slot(filled: &FilledMotionTemplate, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .filter(|value| !value.trim().is_empty())
+}
+
+fn color_slot(filled: &FilledMotionTemplate) -> Option<String> {
+    text_slot(filled, "color")
+        .or_else(|| text_slot(filled, "accent_color"))
+        .filter(|value| color_value_is_safe(value))
+}
+
+fn color_value_is_safe(value: &str) -> bool {
+    let value = value.trim();
+    if value.len() > 32 {
+        return false;
+    }
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '#')
+}
+
+fn apply_title_color(titles: &mut [TitlePlan], color: String) {
+    for title in titles {
+        title.color.clone_from(&color);
+    }
 }
 
 fn number_slot(filled: &FilledMotionTemplate, key: &str) -> Option<f64> {
