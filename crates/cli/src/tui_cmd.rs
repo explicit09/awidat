@@ -26,10 +26,10 @@ use awidat_core::tools::{
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_looks::ListLooksTool,
-    load_skill::LoadSkillTool, plan_look_regions::PlanLookRegionsTool,
-    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
-    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
-    poll_render::PollRenderTool, read_index::ReadIndexTool,
+    load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
+    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
+    plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
+    plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transition_context::TransitionContextTool,
@@ -194,6 +194,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(StartLookRegionPassTool));
     registry.register(Arc::new(PlanLookRegionsTool));
     registry.register(Arc::new(ReviewLookRegionsTool));
+    registry.register(Arc::new(PlanEmphasisTool));
     registry.register(Arc::new(PlanMulticamTool));
     registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(StartIndexingTool));
