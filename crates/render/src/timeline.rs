@@ -29,7 +29,9 @@ use awidat_proto::awidat_meta::{
     AwidatTimelineMetadata, BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle,
 };
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
-use awidat_proto::professional::{MaskOperation, ReframePath, TrackingPackage};
+use awidat_proto::professional::{
+    MaskOperation, ReframePath, TrackingPackage, canonical_runtime_clip_parameter,
+};
 use awidat_proto::project::{files, read_otio_timeline};
 use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
@@ -2861,7 +2863,8 @@ fn select_clip_effect_animation(
             awidat_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: target_clip_id,
                 parameter: target_parameter,
-            } if target_clip_id == clip_id && target_parameter == parameter
+            } if target_clip_id == clip_id
+                && canonical_runtime_clip_parameter(target_parameter) == Some(parameter)
         )
     })?;
     consumed_animation_ids.insert(animation.id.clone());
@@ -9683,6 +9686,35 @@ mod tests {
             filter.contains("geq=lum='min(max(("),
             "animated clip blur should drive the radius map from keyframes: {filter}"
         );
+    }
+
+    #[test]
+    fn effect_parameter_alias_selects_blur_radius_animation() {
+        let animations = vec![ParameterAnimation {
+            id: "blur-alias".to_string(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-a".to_string(),
+                parameter: "effects.awidat.blur.params.radius_px".to_string(),
+            },
+            keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        }];
+        let mut consumed = BTreeSet::new();
+
+        let selected = select_clip_effect_animation(
+            &animations,
+            "clip-a",
+            "awidat.blur.radius_px",
+            &mut consumed,
+        )
+        .expect("alias should select canonical blur radius animation");
+
+        assert_eq!(selected.parameter, "awidat.blur.radius_px");
+        assert!(consumed.contains("blur-alias"));
     }
 
     #[test]
