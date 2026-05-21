@@ -27,6 +27,15 @@
 use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
 
+pub mod compositor;
+mod transform_compositor;
+
+pub use compositor::{
+    BlendMode, Compositor, CompositorError, CompositorFrame, CompositorFrameSpec, LayerSpec,
+    TransformSpec,
+};
+pub use transform_compositor::TransformCompositor;
+
 const FULLSCREEN_VS_WGSL: &str = include_str!("shaders/fullscreen.wgsl");
 const CROSS_DISSOLVE_FS_WGSL: &str = include_str!("shaders/cross_dissolve.wgsl");
 const SHAKE_FS_WGSL: &str = include_str!("shaders/shake.wgsl");
