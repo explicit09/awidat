@@ -28,7 +28,7 @@ type AnimationWithExtrapolation = TimelineParameterAnimation & {
   post_extrapolation?: string | null;
 };
 
-const PHASE_3A_PARAMETERS = new Set([
+export const RUNTIME_CLIP_PARAMETERS = [
   "title.opacity",
   "title.x",
   "title.y",
@@ -40,7 +40,10 @@ const PHASE_3A_PARAMETERS = new Set([
   "overlay.position",
   "overlay.scale",
   "overlay.rotation_deg",
-]);
+  "overlay.blur",
+] as const;
+
+const PHASE_3A_PARAMETERS = new Set<string>(RUNTIME_CLIP_PARAMETERS);
 
 export function isPhase3AParameter(parameter: string): boolean {
   return PHASE_3A_PARAMETERS.has(parameter);

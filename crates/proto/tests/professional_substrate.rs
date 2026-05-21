@@ -1,6 +1,8 @@
 //! Professional substrate schema acceptance tests.
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 
 use awidat_proto::awidat_meta::{AwidatTimelineMetadata, BeatMarker, BeatMarkerRole};
 use awidat_proto::professional::{
@@ -13,14 +15,32 @@ use awidat_proto::professional::{
     HardwareAccelerationPolicy, Keyframe, MaskArtifactKind, MaskArtifactProfile,
     MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MatteGenerationFallback,
     MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings, MotionGraphicsTemplate,
-    MotionPackage, ParameterAnimation, PipelineReadinessReport, PreflightCheckKind, ReadinessState,
-    ReframeKeyframe, ReframePath, ReframeSmoothing, SegmentationIntent, SegmentationPrompt,
-    SegmentationPromptKind, SegmentationPromptLabel, SegmentationPromptPackage,
-    SegmentationRuntimeStatus, SegmentationSessionOperation, SegmentationSessionOperationKind,
-    SelectDecision, SourceRange, SourceSelect, StreamExportContract, StreamExportMode,
-    StreamExportSpec, StreamKind, Stringout, TangentMode, TemplateSlot, TrackingPackage,
-    WorkflowLens,
+    MotionPackage, ParameterAnimation, PipelineReadinessReport, PreflightCheckKind,
+    RUNTIME_CLIP_PARAMETERS, ReadinessState, ReframeKeyframe, ReframePath, ReframeSmoothing,
+    SegmentationIntent, SegmentationPrompt, SegmentationPromptKind, SegmentationPromptLabel,
+    SegmentationPromptPackage, SegmentationRuntimeStatus, SegmentationSessionOperation,
+    SegmentationSessionOperationKind, SelectDecision, SourceRange, SourceSelect,
+    StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, Stringout, TangentMode,
+    TemplateSlot, TrackingPackage, WorkflowLens,
 };
+
+#[test]
+fn runtime_clip_parameter_allowlist_matches_desktop_preview() {
+    let desktop_parameters = desktop_runtime_clip_parameters();
+    assert!(
+        !desktop_parameters.is_empty(),
+        "failed to parse non-empty desktop RUNTIME_CLIP_PARAMETERS export; keep marker `export const RUNTIME_CLIP_PARAMETERS = [` and `] as const` visible in apps/desktop/src/timeline/animation.ts"
+    );
+    let rust_parameters = RUNTIME_CLIP_PARAMETERS
+        .iter()
+        .map(|parameter| (*parameter).to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        desktop_parameters, rust_parameters,
+        "desktop preview runtime parameter support must match the Rust render/protocol allowlist"
+    );
+}
 
 #[test]
 fn timeline_metadata_carries_all_professional_substrate_documents() {
@@ -1931,6 +1951,19 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                 rationale: None,
             },
             ParameterAnimation {
+                id: "anim-blur".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "overlay.blur".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -1.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+            ParameterAnimation {
                 id: "anim-font-size".into(),
                 target: awidat_proto::professional::AnimationTarget::ClipParameter {
                     clip_id: "clip-a".into(),
@@ -1978,6 +2011,13 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
     assert!(
         diagnostics
             .iter()
+            .any(|diagnostic| diagnostic.message.contains("overlay.blur")
+                && diagnostic.message.contains("non-negative")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
             .any(|diagnostic| diagnostic.message.contains("title.font_size")
                 && diagnostic.message.contains("positive")),
         "{diagnostics:?}"
@@ -1989,4 +2029,37 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                 && diagnostic.message.contains("non-finite keyframe")),
         "{diagnostics:?}"
     );
+}
+
+fn desktop_runtime_clip_parameters() -> Vec<String> {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source_path = repo_root.join("apps/desktop/src/timeline/animation.ts");
+    let source = fs::read_to_string(&source_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+    let marker = "export const RUNTIME_CLIP_PARAMETERS = [";
+    let Some(start) = source.find(marker) else {
+        panic!(
+            "desktop runtime parameter export missing in {}",
+            source_path.display()
+        );
+    };
+    let rest = &source[start + marker.len()..];
+    let Some(end) = rest.find("] as const") else {
+        panic!(
+            "desktop runtime parameter export terminator missing in {}",
+            source_path.display()
+        );
+    };
+
+    rest[..end]
+        .lines()
+        .filter_map(|line| {
+            let parameter = line.trim().trim_end_matches(',');
+            if parameter.starts_with('"') && parameter.ends_with('"') {
+                Some(parameter.trim_matches('"').to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
 }

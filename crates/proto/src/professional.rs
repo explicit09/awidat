@@ -571,6 +571,7 @@ pub const RUNTIME_CLIP_PARAMETERS: &[&str] = &[
     "overlay.position",
     "overlay.scale",
     "overlay.rotation_deg",
+    "overlay.blur",
 ];
 
 /// Track parameter paths executable by the current preview/render runtime.
@@ -733,6 +734,15 @@ fn validate_parameter_animation_value(
                 CapabilityArea::ParameterAnimation,
                 format!(
                     "parameter animation {animation_id} target {parameter} value {} must be positive",
+                    keyframe.value
+                ),
+            ));
+        }
+        "overlay.blur" if keyframe.value < 0.0 => {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} target {parameter} value {} must be non-negative",
                     keyframe.value
                 ),
             ));
