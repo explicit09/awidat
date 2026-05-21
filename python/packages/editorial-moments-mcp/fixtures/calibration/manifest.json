@@ -1,0 +1,42 @@
+{
+  "schema": "awidat-editorial-moments-calibration/1",
+  "description": "Skeleton calibration fixture set for editorial-moments. Each clip points at a short video file plus per-moment-type human-rated scores in [0, 1]. Real video files are NOT checked in — populate clip_path with paths on a labeler's local disk (or a corpus mount) before running scripts/calibrate.py.",
+  "clips": [
+    {
+      "clip_path": "fixtures/calibration/clips/sample_001.mp4",
+      "labels": {
+        "hook": 0.85,
+        "punchline": 0.05,
+        "emotional_peak": 0.2,
+        "cta": 0.0,
+        "dead_air": 0.1
+      },
+      "source": "synthetic-skeleton",
+      "notes": "Strong cold-open hook; rated by harness author as a structural example, not a calibration data point."
+    },
+    {
+      "clip_path": "fixtures/calibration/clips/sample_002.mp4",
+      "labels": {
+        "hook": 0.1,
+        "punchline": 0.9,
+        "emotional_peak": 0.6,
+        "cta": 0.0,
+        "dead_air": 0.0
+      },
+      "source": "synthetic-skeleton",
+      "notes": "Joke landing after a setup ~12s earlier; punchline-dominant."
+    },
+    {
+      "clip_path": "fixtures/calibration/clips/sample_003.mp4",
+      "labels": {
+        "hook": 0.0,
+        "punchline": 0.0,
+        "emotional_peak": 0.0,
+        "cta": 0.0,
+        "dead_air": 0.95
+      },
+      "source": "synthetic-skeleton",
+      "notes": "Long silent transition; should score near zero on every editorial kind except dead_air."
+    }
+  ]
+}
