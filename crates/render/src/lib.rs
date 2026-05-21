@@ -61,8 +61,10 @@ pub use job::{
     JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec, RenderPlanLimitation,
 };
 pub use master_loudnorm::{
-    MasterLoudnormError, MasterLoudnormPlan, MeasuredLoudnorm, build_master_loudnorm_apply_spec,
+    JobManagerRunner, MasterLoudnormError, MasterLoudnormPlan, MeasuredLoudnorm, RenderJobRunner,
+    RenderJobRunnerError, RenderRunnerOutput, build_master_loudnorm_apply_spec,
     build_master_loudnorm_measure_spec, parse_loudnorm_measure_json, read_master_loudnorm_plan,
+    run_master_loudnorm_render,
 };
 pub use output_safety::{OutputPathPolicy, OutputPathSafetyError, validate_render_output_path};
 pub use progress::ProgressSnapshot;

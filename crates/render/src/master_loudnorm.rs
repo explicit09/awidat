@@ -16,7 +16,7 @@
 //! the default; this module is purely additive and opt-in via
 //! `metadata.awidat.extra["master_loudnorm"]` on the timeline.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::otio::Timeline as OtioTimeline;
@@ -24,7 +24,7 @@ use awidat_proto::project::files;
 use serde::Deserialize;
 use thiserror::Error;
 
-use crate::job::RenderJobSpec;
+use crate::job::{JobManager, JobState, JobStatus, RenderJobSpec};
 use crate::timeline::{RenderTimelineError, build_timeline_render_spec};
 
 /// Render-side projection of the proto `MasterLoudnorm` settings.
@@ -97,6 +97,9 @@ pub enum MasterLoudnormError {
     /// Loudnorm JSON parsed but a required field was missing or malformed.
     #[error("loudnorm measurement JSON is incomplete: {0}")]
     MeasureJsonIncomplete(String),
+    /// A render-job runner submission failed.
+    #[error("render job runner failed: {0}")]
+    Runner(#[from] RenderJobRunnerError),
 }
 
 /// Read the `master_loudnorm` block off the project's OTIO metadata.
@@ -367,6 +370,133 @@ fn retarget_argv_to_null_muxer(spec: &mut RenderJobSpec) {
     // Pass 1 writes to a null sink, so the original output path is no
     // longer meaningful — but callers can still observe it for
     // diagnostics so we leave `spec.output_path` alone.
+}
+
+/// Outcome of a single render-job submission as seen by the master
+/// loudnorm orchestrator. Mirrors only the fields the orchestrator needs
+/// out of [`crate::job::JobStatus`] so the trait stays mockable without
+/// depending on the full status surface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderRunnerOutput {
+    /// Captured ffmpeg stderr (tail-truncated). Pass 1's stderr carries
+    /// the loudnorm JSON block; pass 2's is kept for diagnostics.
+    pub stderr: String,
+    /// Path the runner wrote to. For pass 1 this is the spec's nominal
+    /// output (no media is actually written — ffmpeg used `-f null -`);
+    /// for pass 2 this is the real encoded artifact.
+    pub output_path: PathBuf,
+    /// ffmpeg exit code, if the process exited.
+    pub exit_code: Option<i32>,
+}
+
+/// Errors a [`RenderJobRunner`] can report to the orchestrator.
+#[derive(Debug, Error)]
+pub enum RenderJobRunnerError {
+    /// The runner could not submit or complete the job. The message is
+    /// implementation-defined (e.g. ffmpeg spawn failure, non-zero exit).
+    #[error("render job failed: {0}")]
+    Failed(String),
+}
+
+/// Thin abstraction over `JobManager` so the master loudnorm
+/// orchestrator can run end-to-end against a mock in tests without
+/// touching ffmpeg. The single method submits one render spec and
+/// blocks until terminal, returning the captured stderr + output path.
+///
+/// Implementations should be `Send + Sync` if used across threads; for
+/// the orchestrator's purposes a single-threaded call is sufficient.
+pub trait RenderJobRunner {
+    /// Submit `spec`, wait for it to reach a terminal state, and return
+    /// the captured stderr + output path. Implementations decide how
+    /// long to wait (e.g. via a polling loop) and translate non-zero
+    /// exits into [`RenderJobRunnerError::Failed`].
+    fn run(&self, spec: &RenderJobSpec) -> Result<RenderRunnerOutput, RenderJobRunnerError>;
+}
+
+/// Default polling cadence the JobManager-backed runner uses while
+/// waiting for a job to reach a terminal state.
+const JOB_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Production [`RenderJobRunner`] backed by [`JobManager`]. Reuses the
+/// existing async manager but exposes a synchronous `run` for the
+/// orchestrator (which is itself sync — the orchestrator does not need
+/// to interleave with other async work, only to thread two ffmpeg
+/// invocations).
+pub struct JobManagerRunner {
+    manager: JobManager,
+    runtime: tokio::runtime::Handle,
+}
+
+impl JobManagerRunner {
+    /// Build a runner against an existing `JobManager` and the tokio
+    /// runtime handle the manager was created on.
+    pub fn new(manager: JobManager, runtime: tokio::runtime::Handle) -> Self {
+        Self { manager, runtime }
+    }
+}
+
+impl RenderJobRunner for JobManagerRunner {
+    fn run(&self, spec: &RenderJobSpec) -> Result<RenderRunnerOutput, RenderJobRunnerError> {
+        let manager = self.manager.clone();
+        let spec = spec.clone();
+        let status: JobStatus = self
+            .runtime
+            .block_on(async move {
+                let id = manager
+                    .start(spec)
+                    .await
+                    .map_err(|e| RenderJobRunnerError::Failed(e.to_string()))?;
+                loop {
+                    let status = manager
+                        .status(&id)
+                        .await
+                        .map_err(|e| RenderJobRunnerError::Failed(e.to_string()))?;
+                    if matches!(
+                        status.state,
+                        JobState::Done | JobState::Failed | JobState::Cancelled
+                    ) {
+                        return Ok::<JobStatus, RenderJobRunnerError>(status);
+                    }
+                    tokio::time::sleep(JOB_POLL_INTERVAL).await;
+                }
+            })?;
+
+        if !matches!(status.state, JobState::Done) {
+            return Err(RenderJobRunnerError::Failed(format!(
+                "job ended in non-Done state {:?} (exit={:?}): {}",
+                status.state, status.exit_code, status.log_excerpt
+            )));
+        }
+
+        Ok(RenderRunnerOutput {
+            stderr: status.log_excerpt,
+            output_path: status.output_path,
+            exit_code: status.exit_code,
+        })
+    }
+}
+
+/// Run the full two-pass master loudnorm workflow against `runner`:
+///
+/// 1. Build the **measure** spec for `project_root`.
+/// 2. Submit it to `runner`; capture pass-1 stderr.
+/// 3. Parse the loudnorm JSON block out of that stderr.
+/// 4. Build the **apply** spec with the parsed measurements substituted.
+/// 5. Submit pass 2 and return its output.
+///
+/// This is the orchestrator the user-facing `start_render` tool should
+/// call when a timeline opts into two-pass master loudnorm; wiring that
+/// up is a separate slice. For now this function ships standalone so it
+/// can be tested against a mock runner.
+pub fn run_master_loudnorm_render<R: RenderJobRunner + ?Sized>(
+    project_root: &Path,
+    runner: &R,
+) -> Result<RenderRunnerOutput, MasterLoudnormError> {
+    let measure_spec = build_master_loudnorm_measure_spec(project_root)?;
+    let measure_out = runner.run(&measure_spec)?;
+    let measured = parse_loudnorm_measure_json(&measure_out.stderr)?;
+    let apply_spec = build_master_loudnorm_apply_spec(project_root, measured)?;
+    Ok(runner.run(&apply_spec)?)
 }
 
 #[cfg(test)]
