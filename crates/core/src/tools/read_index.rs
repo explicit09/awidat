@@ -63,8 +63,8 @@ impl ToolHandler for ReadIndexTool {
                     },
                     "channel": {
                         "type": "string",
-                        "enum": ["transcript", "scenes", "audio_levels", "topics", "color", "summary"],
-                        "description": "Which signal to read. transcript=words+segments; scenes=shot boundaries; audio_levels=RMS+LUFS+silences; topics=topic-segmentation; color=per-frame color/exposure analysis; summary=one-line overview of all channels."
+                        "enum": ["transcript", "scenes", "audio_levels", "beats", "topics", "color", "summary"],
+                        "description": "Which signal to read. transcript=words+segments; scenes=shot boundaries; audio_levels=RMS+LUFS+silences; beats=tempo+BPM+beat times; topics=topic-segmentation; color=per-frame color/exposure analysis; summary=one-line overview of all channels."
                     },
                     "offset": { "type": "integer", "minimum": 0, "description": "0-based first entry. Default 0." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Max entries. Default 50, hard cap 300. For larger reads paginate via `offset`." }
@@ -87,7 +87,7 @@ impl ToolHandler for ReadIndexTool {
         let args: ReadIndexArgs = serde_json::from_value(invocation.args).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "read_index: invalid args ({e}). Required: {{ \"asset_id\": <str>, \
-                 \"channel\": \"transcript\"|\"scenes\"|\"audio_levels\"|\"topics\"|\"color\"|\"summary\" }}."
+                 \"channel\": \"transcript\"|\"scenes\"|\"audio_levels\"|\"beats\"|\"topics\"|\"color\"|\"summary\" }}."
             ))
         })?;
 
@@ -95,13 +95,14 @@ impl ToolHandler for ReadIndexTool {
             "transcript" => "whisper",
             "scenes" => "scenedetect",
             "audio_levels" => "audio-energy",
+            "beats" => "beats",
             "topics" => "topic",
             "color" => "color-analysis",
             "summary" => return summary(&ctx.project_root, &args.asset_id),
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "read_index: channel '{other}' not recognized. Use one of: \
-                     transcript, scenes, audio_levels, topics, color, summary."
+                     transcript, scenes, audio_levels, beats, topics, color, summary."
                 )));
             }
         };
@@ -190,6 +191,24 @@ fn project_channel(
                     .unwrap_or(0),
             })
         }
+        "beats" => {
+            let beats = data
+                .get("beats")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let total = beats.as_array().map(Vec::len).unwrap_or(0);
+            let windowed = window(&beats, offset, limit);
+            serde_json::json!({
+                "asset_id": sidecar.get("asset_id"),
+                "duration_s": data.get("duration_s"),
+                "tempo_bpm": data.get("tempo_bpm"),
+                "beat_times_s": data.get("beat_times_s"),
+                "beats": windowed,
+                "total_beats": total,
+                "offset": offset,
+                "limit": limit,
+            })
+        }
         "topics" => {
             let topics = data
                 .get("topics")
@@ -259,6 +278,7 @@ fn summary(
         ("transcript", "whisper"),
         ("scenes", "scenedetect"),
         ("audio_levels", "audio-energy"),
+        ("beats", "beats"),
         ("topics", "topic"),
         ("color", "color-analysis"),
     ] {
@@ -317,7 +337,7 @@ fn summary(
 const DESCRIPTION: &str = "\
 Read one channel of the footage index for an asset. Channels: \
 'transcript' (whisper words+segments), 'scenes' (shot boundaries), \
-'audio_levels' (LUFS + silences), 'topics' (topic segmentation), \
+'audio_levels' (LUFS + silences), 'beats' (tempo + beat times), 'topics' (topic segmentation), \
 'color' (per-frame color/exposure analysis), 'summary' (one-line overview \
 of all channels). Windowed channels accept \
 offset+limit (default 0+50). Result is capped at 8KB; page via offset \
@@ -482,6 +502,48 @@ mod tests {
         assert_eq!(body["total_frames"], 3);
         assert_eq!(body["per_frame"].as_array().unwrap().len(), 1);
         assert_eq!(body["per_frame"][0]["t_s"], 1);
+    }
+
+    #[tokio::test]
+    async fn beats_channel_projects_tempo_and_windowed_beats() {
+        let dir = tempfile::tempdir().unwrap();
+        write_sidecar(
+            dir.path(),
+            "beats",
+            "raw/song.wav",
+            serde_json::json!({
+                "indexer": "beats",
+                "asset_id": "raw/song.wav",
+                "data": {
+                    "duration_s": 2.0,
+                    "tempo_bpm": 120.0,
+                    "beat_times_s": [0.5, 1.0, 1.5],
+                    "beats": [
+                        {"time_s": 0.5, "strength": 0.9},
+                        {"time_s": 1.0, "strength": 0.8},
+                        {"time_s": 1.5, "strength": 0.7}
+                    ]
+                }
+            }),
+        );
+        let out = ReadIndexTool
+            .handle(
+                invoke(serde_json::json!({
+                    "asset_id": "raw/song.wav",
+                    "channel": "beats",
+                    "offset": 1,
+                    "limit": 1,
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(body["tempo_bpm"], 120.0);
+        assert_eq!(body["beat_times_s"], serde_json::json!([0.5, 1.0, 1.5]));
+        assert_eq!(body["total_beats"], 3);
+        assert_eq!(body["beats"].as_array().unwrap().len(), 1);
+        assert_eq!(body["beats"][0]["time_s"], 1.0);
     }
 
     #[tokio::test]

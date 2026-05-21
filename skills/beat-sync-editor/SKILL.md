@@ -24,8 +24,9 @@ montage, hit a drop, or match visual energy to audio rhythm.
 
 ### 1. Create the beat plan
 
-Use any available beat/energy JSON, or generate one externally through
-`bash` if needed. Then run:
+Use the first-party `beats` index sidecar when available:
+`index/beats/raw/<asset>.json`. If it is missing, run indexing for the
+`beats` MCP producer before falling back to an external beat file. Then run:
 
 ```bash
 python3 <skill-root>/scripts/beat_cut_plan.py \
