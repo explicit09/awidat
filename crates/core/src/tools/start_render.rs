@@ -23,9 +23,10 @@
 //! Output naming: `<project>/renders/<scope>-<asset-stem>-<job_id>.mp4`.
 //! Predictable so the user can find it; job_id-suffixed to avoid clobber.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use awidat_proto::professional::ExportPreset;
 use awidat_render::{
     OutputPathPolicy, RenderJobSpec, RenderPlanLimitation, validate_render_output_path,
 };
@@ -52,6 +53,12 @@ struct StartRenderArgs {
     /// Optional timeline guide marker section. Only used with `scope=timeline`.
     #[serde(default)]
     guide: Option<GuideSection>,
+    /// Optional export-codec preset slug. Recognized values: `"hevc"`,
+    /// `"prores"`. When set, the preset's codec/container fully overrides
+    /// the scope's hardcoded `libx264 + aac` defaults. `None` preserves
+    /// the legacy libx264 path for backward compatibility.
+    #[serde(default)]
+    preset: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +112,11 @@ impl ToolHandler for StartRenderTool {
                         },
                         "required": ["track_id", "marker_id"],
                         "description": "Optional guide-track marker range for scope=timeline section exports. Ignored for preview/segment/full."
+                    },
+                    "preset": {
+                        "type": "string",
+                        "enum": ["hevc", "prores"],
+                        "description": "Optional export-codec preset. 'hevc' = libx265 in MP4 (broadcast/archive); 'prores' = Apple ProRes 422 HQ in MOV (mastering). Without a preset, the legacy libx264+aac defaults are used. DNxHR / AV1 are pending — TODO(overnight-wave1-export-codecs)."
                     }
                 },
                 "required": ["scope"]
@@ -138,9 +150,14 @@ impl ToolHandler for StartRenderTool {
             .get("guide")
             .map(serde_json::Value::to_string)
             .unwrap_or_else(|| "<full-timeline>".to_string());
+        let preset = invocation
+            .args
+            .get("preset")
+            .and_then(|v| v.as_str())
+            .unwrap_or("<default>");
         vec![ApprovalKey::new(
             "start_render",
-            format!("{scope}:{asset}:{range}:{guide}:writes=renders"),
+            format!("{scope}:{asset}:{range}:{guide}:{preset}:writes=renders"),
         )]
     }
 
@@ -168,7 +185,7 @@ impl ToolHandler for StartRenderTool {
         {
             crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
                 .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
-            let spec = match args.guide.as_ref() {
+            let mut spec = match args.guide.as_ref() {
                 Some(guide) => awidat_render::build_timeline_section_render_spec(
                     &ctx.project_root,
                     &guide.track_id,
@@ -264,6 +281,16 @@ impl ToolHandler for StartRenderTool {
                     };
                     FunctionCallError::RespondToModel(msg)
                 })?;
+            if let Some(slug) = args.preset.as_deref() {
+                let preset = resolve_export_preset(slug)?;
+                spec = awidat_render::professional::apply_export_preset_to_spec(spec, &preset)
+                    .map_err(|e| {
+                        FunctionCallError::RespondToModel(format!(
+                            "start_render: failed to apply export preset '{}': {e}",
+                            preset.id
+                        ))
+                    })?;
+            }
             (
                 spec.args,
                 spec.total_duration_s,
@@ -373,8 +400,78 @@ fn build_ffmpeg_argv(
     asset_path: &std::path::Path,
     output_path: &std::path::Path,
 ) -> Result<Vec<String>, FunctionCallError> {
+    let range = args.range.as_ref().map(|r| (r.start_s, r.end_s));
+    build_render_argv(
+        &args.scope,
+        asset_path,
+        output_path,
+        range,
+        args.preset.as_deref(),
+    )
+}
+
+/// Build the ffmpeg argv for a `start_render` invocation.
+///
+/// This is the single source of truth for translating a scope (+ optional
+/// time range + optional export-codec preset) into the deterministic
+/// ffmpeg argv that the job manager runs. The function is `pub` so the
+/// integration tests in `tests/start_render_presets.rs` can assert on the
+/// argv shape without spinning up a tool context, and so external
+/// callers (UI, MCP, alternative entry points) can reuse the same
+/// lowering.
+///
+/// Preset semantics:
+/// - `None` — preserve the legacy hardcoded `libx264 + aac` envelope per
+///   scope. This is the back-compat path that existing tools rely on.
+/// - `Some("hevc")` / `Some("prores")` — build a stripped-down base argv
+///   without baked-in codec args and then let
+///   [`awidat_render::professional::apply_export_preset_to_spec`] inject
+///   the codec/container/bitrate args. This ensures broadcast and
+///   archive workflows produce the right delivery codec.
+///
+/// Unknown preset slugs are rejected with `FunctionCallError::RespondToModel`.
+pub fn build_render_argv(
+    scope: &str,
+    asset_path: &Path,
+    output_path: &Path,
+    range: Option<(f64, f64)>,
+    preset: Option<&str>,
+) -> Result<Vec<String>, FunctionCallError> {
+    match preset {
+        None => build_legacy_argv(scope, asset_path, output_path, range),
+        Some(slug) => {
+            let preset = resolve_export_preset(slug)?;
+            let base = build_preset_base_argv(scope, asset_path, output_path, range)?;
+            apply_preset_to_argv(base, output_path, &preset)
+        }
+    }
+}
+
+/// Resolve a preset slug (the public surface — keep it small and
+/// explicit) to a concrete `ExportPreset`.
+fn resolve_export_preset(slug: &str) -> Result<ExportPreset, FunctionCallError> {
+    match slug {
+        "hevc" | "h265" | "libx265" => Ok(ExportPreset::archival_hevc()),
+        "prores" | "prores_hq" | "prores_ks" => Ok(ExportPreset::archival_prores()),
+        // TODO(overnight-wave1-export-codecs): add "dnxhr" and "av1"
+        // slugs once the proto layer grows the matching constructors.
+        other => Err(FunctionCallError::RespondToModel(format!(
+            "start_render: unknown export preset '{other}'. \
+             Supported presets: hevc, prores. \
+             (DNxHR / AV1 are pending — TODO(overnight-wave1-export-codecs).)"
+        ))),
+    }
+}
+
+/// Legacy `libx264 + aac` argv, preserved verbatim for back-compat.
+fn build_legacy_argv(
+    scope: &str,
+    asset_path: &Path,
+    output_path: &Path,
+    range: Option<(f64, f64)>,
+) -> Result<Vec<String>, FunctionCallError> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
-    match args.scope.as_str() {
+    match scope {
         "preview" => {
             argv.extend([
                 "-i".into(),
@@ -395,24 +492,23 @@ fn build_ffmpeg_argv(
             ]);
         }
         "segment" => {
-            let r = args.range.as_ref().ok_or_else(|| {
+            let (start_s, end_s) = range.ok_or_else(|| {
                 FunctionCallError::RespondToModel(
                     "start_render: scope=segment requires `range: { start_s, end_s }`".into(),
                 )
             })?;
-            if r.end_s <= r.start_s {
+            if end_s <= start_s {
                 return Err(FunctionCallError::RespondToModel(format!(
-                    "start_render: range.end_s ({}) must be > range.start_s ({})",
-                    r.end_s, r.start_s
+                    "start_render: range.end_s ({end_s}) must be > range.start_s ({start_s})"
                 )));
             }
             argv.extend([
                 "-ss".into(),
-                format!("{}", r.start_s),
+                format!("{start_s}"),
                 "-i".into(),
                 asset_path.to_string_lossy().into_owned(),
                 "-t".into(),
-                format!("{}", r.end_s - r.start_s),
+                format!("{}", end_s - start_s),
                 "-c".into(),
                 "copy".into(),
                 output_path.to_string_lossy().into_owned(),
@@ -442,6 +538,81 @@ fn build_ffmpeg_argv(
         }
     }
     Ok(argv)
+}
+
+/// Preset-aware base argv: input + scope-specific filters but **no**
+/// codec/container flags. Codec args come from `apply_preset_to_argv`,
+/// which delegates to `awidat_render::professional::apply_export_preset_to_spec`.
+fn build_preset_base_argv(
+    scope: &str,
+    asset_path: &Path,
+    output_path: &Path,
+    range: Option<(f64, f64)>,
+) -> Result<Vec<String>, FunctionCallError> {
+    let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
+    match scope {
+        "preview" => {
+            argv.extend([
+                "-i".into(),
+                asset_path.to_string_lossy().into_owned(),
+                "-vf".into(),
+                "scale=-2:480".into(),
+                output_path.to_string_lossy().into_owned(),
+            ]);
+        }
+        "full" => {
+            argv.extend([
+                "-i".into(),
+                asset_path.to_string_lossy().into_owned(),
+                output_path.to_string_lossy().into_owned(),
+            ]);
+        }
+        "segment" => {
+            // Segment is stream-copy by definition — pairing it with a
+            // re-encode preset is contradictory. Surface the conflict
+            // loudly instead of silently dropping the preset.
+            return Err(FunctionCallError::RespondToModel(
+                "start_render: scope=segment is stream-copy only; do not combine with an export preset.".into(),
+            ));
+        }
+        other => {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "start_render: scope '{other}' not recognized for preset rendering. Use preview or full with a preset."
+            )));
+        }
+    }
+    // `range` is intentionally ignored for preview/full preset renders —
+    // the scope vocabulary treats range as a segment-only knob. If a
+    // future preset needs trim handles, lift `range` into the preset
+    // `ExportRange` rather than the bare argv builder.
+    let _ = range;
+    Ok(argv)
+}
+
+/// Apply a resolved export preset to a base argv via the shared
+/// render-side lowering. Wraps the spec round-trip needed because
+/// `apply_export_preset_to_spec` operates on a `RenderJobSpec`.
+fn apply_preset_to_argv(
+    base: Vec<String>,
+    output_path: &Path,
+    preset: &ExportPreset,
+) -> Result<Vec<String>, FunctionCallError> {
+    let spec = RenderJobSpec {
+        args: base,
+        total_duration_s: None,
+        cwd: None,
+        output_path: output_path.to_path_buf(),
+        limitations: Vec::new(),
+    };
+    let lowered = awidat_render::professional::apply_export_preset_to_spec(spec, preset).map_err(
+        |e| {
+            FunctionCallError::RespondToModel(format!(
+                "start_render: failed to apply export preset '{}': {e}",
+                preset.id
+            ))
+        },
+    )?;
+    Ok(lowered.args)
 }
 
 const DESCRIPTION: &str = "\
@@ -548,6 +719,7 @@ mod tests {
             asset: Some("raw/x.mp4".into()),
             range: None,
             guide: None,
+            preset: None,
         };
         let argv = build_ffmpeg_argv(&args, "raw/x.mp4", asset, out).unwrap();
         assert!(argv.contains(&"libx264".to_string()));
@@ -566,6 +738,7 @@ mod tests {
                 end_s: 3.5,
             }),
             guide: None,
+            preset: None,
         };
         let argv = build_ffmpeg_argv(&args, "raw/x.mp4", asset, out).unwrap();
         assert!(argv.iter().any(|a| a == "copy"));
