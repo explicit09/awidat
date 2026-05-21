@@ -72,6 +72,14 @@ pub struct PersistedNote {
     /// or `{ "kind": "transcript_snippet", "text": "..." }`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub broll_anchor: Option<serde_json::Value>,
+    /// Optional author tag attached to the finding. Kept optional to keep
+    /// old notes backward-compatible and to allow machine-generated notes.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub author: Option<String>,
+    /// Optional review comment body for authored notes. Kept optional to keep
+    /// old notes backward-compatible.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub comment_text: Option<String>,
 }
 
 /// On-disk shape: versioned wrapper so future schema growth
@@ -181,7 +189,32 @@ mod tests {
             broll_query: None,
             broll_previews: None,
             broll_anchor: None,
+            author: None,
+            comment_text: None,
         }
+    }
+
+    #[test]
+    fn load_notes_preserves_legacy_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = serde_json::json!({
+            "version": 1,
+            "notes": [{
+                "id": "n1",
+                "kind": "silence_trim",
+                "status": "open",
+                "anchor_at_s": 1.0,
+                "summary": "legacy note"
+            }]
+        });
+        let legacy_path = notes_file_path(dir.path());
+        std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
+        std::fs::write(&legacy_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let loaded = load_notes(dir.path());
+        assert_eq!(loaded.notes.len(), 1);
+        assert_eq!(loaded.notes[0].author, None);
+        assert_eq!(loaded.notes[0].comment_text, None);
     }
 
     #[test]

@@ -140,13 +140,22 @@ impl ToolHandler for PlanMulticamTool {
             }));
         }
 
+        let apply_plan = serde_json::json!({
+            "program_track": "Program Video",
+            "decisions": decisions,
+        });
+        let apply_edl = format!(
+            "*** Begin EDL\n*** Apply Multicam Plan\n+ plan_json: {}\n*** End EDL\n",
+            apply_plan
+        );
         let body = serde_json::json!({
             "audio_master": audio_master,
             "camera_count": cameras.len(),
             "cameras": cameras,
             "program_track": "Program Video",
-            "decisions": decisions,
-            "review_flow": "Apply by converting accepted decisions into Insert Clip/Move Clip EDL ops on a flattened Program Video track; keep source_asset and reason metadata for vedit audit.",
+            "decisions": apply_plan["decisions"].clone(),
+            "apply_edl": apply_edl,
+            "review_flow": "Review the decisions, then apply the included Apply Multicam Plan EDL fragment to atomically replace the flattened Program Video track while preserving source_asset and reason metadata for vedit audit.",
         });
         Ok(ToolOutput::text(body.to_string()))
     }

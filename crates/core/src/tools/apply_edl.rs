@@ -681,6 +681,17 @@ becomes `source_duration / factor`. Render uses \
 audio (atempo's per-instance range is `[0.5, 2.0]`; factors \
 outside chain — extreme values produce audible artifacts, so \
 keep within `[0.25, 4.0]` unless the clip is silent).\
+\n  - **Set Time Remap**: `+ curve_json: [...]` (required). Anchored \
+to a clip. Stamps an `awidat.time_remap` Effect; re-applying replaces \
+the existing time-remap effect rather than stacking. Curve points should \
+be ordered objects such as `{\\\"source_time_s\\\":0,\\\"timeline_time_s\\\":0}` \
+and can include planner metadata for beat-sync or ramp intent. Use this \
+for variable speed ramps; use Set Speed for one constant multiplier.\
+\n  - **Set Freeze**: `+ freeze_at_source_s: <seconds>` and \
+`+ duration_s: <seconds>` required. Optional `+ freeze_position: at` \
+and `+ audio_behavior: silence`. Anchored to a clip. Stamps an \
+`awidat.freeze` Effect; re-applying replaces the existing freeze effect. \
+Render inserts a held video frame and generated silence for the hold.\
 \n  - **Set Color Correction**: optional fields `+ exposure_ev`, \
 `+ contrast`, `+ saturation`, `+ temperature`, `+ tint`, `+ shadows`, \
 `+ highlights` (at least one required). Anchored to a clip. Stamps \
@@ -724,9 +735,11 @@ no `awidat.title` effect.\
 \n  - **Insert Caption**: `+ start_s: <seconds>`, `+ end_s: <seconds>`, \
 `+ text: \"<string>\"` (required). Optional `+ position: <top|center|bottom>` \
 (default `bottom`), `+ font_size: <px>` (default 52), `+ color: <#RRGGBB>` \
-(default `#FFFFFF`), `+ safe_area: <profile>` (default `mobile`). Captions \
-are graph nodes on the Titles track with `role=\"caption\"`; do not burn \
-captions by writing a separate render script.\
+(default `#FFFFFF`), `+ safe_area: <profile>` (default `mobile`), \
+`+ word_timings_json: [{\"text\":\"word\",\"start_s\":1.0,\"end_s\":1.2}]` \
+(optional transcript word timings for per-word reveal). Captions are graph \
+nodes on the Titles track with `role=\"caption\"`; do not burn captions by \
+writing a separate render script.\
 \n  - **Set Output Format**: `+ aspect_ratio: <16:9|9:16|1:1|4:5>` \
 (required). Optional `+ platform: <name>` and `+ safe_area: <profile>`. \
 Stores delivery format intent on `timeline.metadata.awidat.extra.output_format`.\

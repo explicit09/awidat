@@ -14,26 +14,36 @@ use awidat_core::tools::{
     analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
     assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
     bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    color_scopes::ColorScopesTool, diagnose_project_media::DiagnoseProjectMediaTool,
-    download_yt_clip::DownloadYtClipTool, export_package::ExportPackageTool,
-    find_beat::FindBeatTool, find_black_frames::FindBlackFramesTool,
-    find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
-    find_episode_start::FindEpisodeStartTool, find_eye_contact::FindEyeContactTool,
-    find_false_starts::FindFalseStartsTool, find_filler_words::FindFillerWordsTool,
-    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
-    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
-    list_looks::ListLooksTool, load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
-    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
-    plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
-    plan_reframe::PlanReframeTool, plan_transition::PlanTransitionTool,
-    poll_render::PollRenderTool, read_index::ReadIndexTool,
+    color_scopes::ColorScopesTool,
+    diagnose_project_media::DiagnoseProjectMediaTool, download_yt_clip::DownloadYtClipTool,
+    export_package::ExportPackageTool, find_beat::FindBeatTool,
+    find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
+    find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
+    find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
+    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
+    find_speaker_oncam::FindSpeakerOncamTool, import_media::ImportLocalTool,
+    import_media::ImportUrlTool, inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool,
+    list_assets::ListAssetsTool, list_looks::ListLooksTool, list_markers::ListMarkersTool,
+    load_skill::LoadSkillTool, local_review_package::LocalReviewPackageTool,
+    manage_assets::CreateBinTool, manage_assets::MarkSelectTool, manage_assets::MoveToBinTool,
+    manage_assets::RateAssetTool, manage_assets::RenameAssetTool, manage_assets::TagAssetTool,
+    plan_emphasis::PlanEmphasisTool, plan_look_regions::PlanLookRegionsTool,
+    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
+    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
+    poll_render::PollRenderTool, proxy_media::GenerateProxyTool, proxy_media::ProxyStatusTool,
+    read_index::ReadIndexTool, relink_media::RelinkMediaTool,
+    plan_reframe::PlanReframeTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
-    start_render::StartRenderTool, transition_context::TransitionContextTool,
-    update_plan::UpdatePlanTool, use_broll::UseBrollTool,
-    validate_transition_choice::ValidateTransitionChoiceTool, vedit_commit::VeditCommitTool,
-    vedit_diff::VeditDiffTool, vedit_log::VeditLogTool, vedit_revert::VeditRevertTool,
-    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    start_render::StartRenderTool, transcript_search::TranscriptSearchTool,
+    transition_context::TransitionContextTool, update_plan::UpdatePlanTool,
+    use_broll::UseBrollTool, validate_transition_choice::ValidateTransitionChoiceTool,
+    vedit_blame::VeditBlameTool, vedit_branch::VeditBranchTool,
+    vedit_changed_clip_ids::VeditChangedClipIdsTool, vedit_checkout::VeditCheckoutTool,
+    vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
+    vedit_merge_preflight::VeditMergePreflightTool, vedit_revert::VeditRevertTool,
+    vedit_show::VeditShowTool, vedit_tag::VeditTagTool, view_episode::ViewEpisodeTool,
+    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -51,7 +61,7 @@ surfaces avoidable errors to the user. The single discovery call is \
 cheap and makes everything after it correct.\
 \n\nYou have the full editorial toolset, organized by purpose:\
 \n  - **Discovery / map**: view_episode (compact map of the project — \
-includes which vision indexers have run), view_timeline, list_assets, \
+includes which vision indexers have run), view_timeline, list_markers, list_assets, \
 find_episode_start (publishable podcast/interview start; rejects \
 pre-roll and rehearsed intros).\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
@@ -133,12 +143,25 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(AssessContinuityTool));
     registry.register(Arc::new(AssessEditQualityTool));
     registry.register(Arc::new(InspectClipTool));
+    registry.register(Arc::new(ImportLocalTool));
+    registry.register(Arc::new(ImportUrlTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(ListLooksTool));
+    registry.register(Arc::new(ListMarkersTool));
+    registry.register(Arc::new(CreateBinTool));
+    registry.register(Arc::new(MoveToBinTool));
+    registry.register(Arc::new(RenameAssetTool));
+    registry.register(Arc::new(TagAssetTool));
+    registry.register(Arc::new(RateAssetTool));
+    registry.register(Arc::new(MarkSelectTool));
     registry.register(Arc::new(ColorScopesTool));
     registry.register(Arc::new(PollRenderTool));
+    registry.register(Arc::new(ProxyStatusTool));
+    registry.register(Arc::new(GenerateProxyTool));
     registry.register(Arc::new(ReadIndexTool));
+    registry.register(Arc::new(RelinkMediaTool));
     registry.register(Arc::new(RequestUserInputTool));
+    registry.register(Arc::new(TranscriptSearchTool));
     registry.register(Arc::new(StartRenderTool));
     registry.register(Arc::new(ExportPackageTool));
     registry.register(Arc::new(StartLookRegionPassTool));
@@ -164,13 +187,21 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(DownloadYtClipTool));
     registry.register(Arc::new(VeditCommitTool));
     registry.register(Arc::new(VeditDiffTool));
+    registry.register(Arc::new(VeditChangedClipIdsTool));
     registry.register(Arc::new(VeditLogTool));
+    registry.register(Arc::new(VeditMergePreflightTool));
     registry.register(Arc::new(VeditRevertTool));
+    registry.register(Arc::new(VeditBranchTool));
+    registry.register(Arc::new(VeditCheckoutTool));
+    registry.register(Arc::new(VeditTagTool));
+    registry.register(Arc::new(VeditShowTool));
+    registry.register(Arc::new(VeditBlameTool));
     registry.register(Arc::new(ClipSearchTool));
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));
     registry.register(Arc::new(ShotSummaryTool));
     registry.register(Arc::new(LoadSkillTool));
+    registry.register(Arc::new(LocalReviewPackageTool));
 
     let session = Arc::new(Session::new(
         client,

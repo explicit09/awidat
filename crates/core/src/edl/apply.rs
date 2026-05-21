@@ -32,8 +32,9 @@ use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
 use super::op::{
-    Anchor, AnnotationKind, AudioFxConfig, EdlEnvelope, EdlOp, InsertTrackKind,
-    MotionTemplateAnimation, ProfessionalTimelineEdit, TransitionAlignment, valid_graphic_color,
+    Anchor, AnnotationKind, AudioFxConfig, EdlEnvelope, EdlOp, InsertTrackKind, MarkerSelector,
+    MotionTemplateAnimation, MulticamApplyPlan, MulticamDecision, ProfessionalTimelineEdit,
+    SnapOptions, SnapTargetKind, TransitionAlignment, valid_graphic_color,
 };
 
 /// One record of what was applied. Surfaced back to the model + the TUI.
@@ -215,7 +216,18 @@ fn apply_one(
             anchor,
             to_position,
             at_s,
-        } => apply_move_clip(working, index, anchor, *to_position, *at_s, ctx, locator),
+            snap,
+        } => apply_move_clip(
+            working,
+            index,
+            anchor,
+            *to_position,
+            *at_s,
+            snap.as_ref(),
+            ctx,
+            locator,
+        ),
+        EdlOp::ApplyMulticamPlan { plan } => apply_multicam_plan(working, index, plan),
         EdlOp::InsertTransition {
             between,
             kind,
@@ -353,6 +365,26 @@ fn apply_one(
         EdlOp::SetSpeed { anchor, factor } => {
             apply_set_speed(working, index, anchor, *factor, ctx, locator)
         }
+        EdlOp::SetTimeRemap { anchor, curve } => {
+            apply_set_time_remap(working, index, anchor, curve, ctx, locator)
+        }
+        EdlOp::SetFreeze {
+            anchor,
+            freeze_at_source_s,
+            duration_s,
+            freeze_position,
+            audio_behavior,
+        } => apply_set_freeze(
+            working,
+            index,
+            anchor,
+            *freeze_at_source_s,
+            *duration_s,
+            freeze_position.as_deref(),
+            audio_behavior.as_deref(),
+            ctx,
+            locator,
+        ),
         EdlOp::SetColorCorrection {
             anchor,
             exposure_ev,
@@ -471,8 +503,18 @@ fn apply_one(
             font_size,
             color,
             safe_area,
+            word_timings,
         } => apply_insert_caption(
-            working, index, *start_s, *end_s, text, *position, *font_size, color, safe_area,
+            working,
+            index,
+            *start_s,
+            *end_s,
+            text,
+            *position,
+            *font_size,
+            color,
+            safe_area,
+            word_timings,
         ),
         EdlOp::InsertAnnotation {
             start_s,
@@ -696,6 +738,8 @@ fn resolve_locator_for_op(
         | EdlOp::SetClipAudioFx { anchor, .. }
         | EdlOp::SetEffect { anchor, .. }
         | EdlOp::SetSpeed { anchor, .. }
+        | EdlOp::SetTimeRemap { anchor, .. }
+        | EdlOp::SetFreeze { anchor, .. }
         | EdlOp::SetColorCorrection { anchor, .. }
         | EdlOp::ApplyLut { anchor, .. }
         | EdlOp::RemoveLut { anchor }
@@ -713,6 +757,7 @@ fn resolve_locator_for_op(
             edit: ProfessionalTimelineEdit::ReplaceClip { anchor, .. },
         } => anchor,
         EdlOp::InsertClip { .. }
+        | EdlOp::ApplyMulticamPlan { .. }
         | EdlOp::InsertTransition { .. }
         | EdlOp::DeleteTransition { .. }
         | EdlOp::SetCutIntent { .. }
@@ -1056,6 +1101,37 @@ fn apply_professional_timeline_edit(
                 "added marker via professional timeline edit: {description}"
             ))
         }
+        ProfessionalTimelineEdit::UpdateMarker {
+            selector,
+            label,
+            category,
+            note,
+            at_s,
+            duration_s,
+        } => {
+            let description = apply_update_marker(
+                working,
+                index,
+                selector,
+                label,
+                category,
+                note,
+                *at_s,
+                *duration_s,
+                ctx,
+            )?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "updated marker via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::DeleteMarker { selector } => {
+            let description = apply_delete_marker(working, index, selector, ctx)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "deleted marker via professional timeline edit: {description}"
+            ))
+        }
         ProfessionalTimelineEdit::RollEdit { between, delta_s } => {
             let description = apply_roll_edit(working, index, between, *delta_s, ctx)?;
             record_professional_timeline_edit(working, index, edit)?;
@@ -1115,6 +1191,26 @@ fn apply_professional_timeline_edit(
             record_professional_timeline_edit(working, index, edit)?;
             Ok(format!(
                 "overwrote range via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::WrapAsNested {
+            track,
+            start_index,
+            end_index,
+            name,
+        } => {
+            let description =
+                apply_wrap_as_nested(working, index, track, *start_index, *end_index, name)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "wrapped nested stack via professional timeline edit: {description}"
+            ))
+        }
+        ProfessionalTimelineEdit::FlattenNested { track, child_index } => {
+            let description = apply_flatten_nested(working, index, track, *child_index)?;
+            record_professional_timeline_edit(working, index, edit)?;
+            Ok(format!(
+                "flattened nested stack via professional timeline edit: {description}"
             ))
         }
     }
@@ -2135,12 +2231,12 @@ fn apply_professional_marker(
             message: "add_marker: label must not be empty".into(),
         });
     }
-    for child in &mut working.tracks.children {
+    for (track_index, child) in working.tracks.children.iter_mut().enumerate() {
         let StackChild::Track(track) = child else {
             continue;
         };
         let mut cursor_s = 0.0;
-        for child in &mut track.children {
+        for (child_index, child) in track.children.iter_mut().enumerate() {
             let duration_s = child_duration(child);
             let start_s = cursor_s;
             let end_s = start_s + duration_s;
@@ -2163,6 +2259,7 @@ fn apply_professional_marker(
                 .map(|range| range.start_time.rate)
                 .unwrap_or(24.0);
             let relative_s = at_s - start_s;
+            let marker_id = format!("marker-{track_index}-{child_index}-{}", clip.markers.len());
             let mut marker = awidat_proto::otio::Marker::new(
                 label.to_string(),
                 awidat_proto::otio::TimeRange::new(
@@ -2170,11 +2267,15 @@ fn apply_professional_marker(
                     awidat_proto::otio::RationalTime::new(0.0, rate),
                 ),
             );
-            marker.metadata.awidat = Some(awidat_proto::awidat_meta::AwidatMarkerMetadata {
+            let mut metadata = awidat_proto::awidat_meta::AwidatMarkerMetadata {
                 category: category.clone(),
                 note: Some(label.to_string()),
                 ..awidat_proto::awidat_meta::AwidatMarkerMetadata::default()
-            });
+            };
+            metadata
+                .extra
+                .insert("id".into(), serde_json::Value::String(marker_id));
+            marker.metadata.awidat = Some(metadata);
             clip.markers.push(marker);
             return Ok(format!(
                 "added marker {label:?} at {at_s:.3}s on clip {:?}",
@@ -2186,6 +2287,291 @@ fn apply_professional_marker(
         index,
         message: format!("add_marker: no clip covers timeline time {at_s:.3}s"),
     })
+}
+
+#[derive(Debug, Clone)]
+struct MarkerCandidate {
+    track_index: usize,
+    child_index: usize,
+    marker_index: usize,
+    clip_start_s: f64,
+    clip_end_s: f64,
+    timeline_s: f64,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_update_marker(
+    working: &mut Timeline,
+    index: usize,
+    selector: &MarkerSelector,
+    label: &Option<String>,
+    category: &Option<String>,
+    note: &Option<String>,
+    at_s: Option<f64>,
+    duration_s: Option<f64>,
+    ctx: &AnchorContext,
+) -> Result<String, ApplyError> {
+    let candidate = resolve_marker_candidate(working, index, selector, ctx)?;
+    if let Some(new_at_s) = at_s
+        && (!new_at_s.is_finite() || new_at_s < 0.0)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("update_marker: at_s must be finite and >= 0, got {new_at_s}"),
+        });
+    }
+    if let Some(new_duration_s) = duration_s
+        && (!new_duration_s.is_finite() || new_duration_s < 0.0)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "update_marker: duration_s must be finite and >= 0, got {new_duration_s}"
+            ),
+        });
+    }
+    if let Some(new_at_s) = at_s
+        && (new_at_s < candidate.clip_start_s || new_at_s >= candidate.clip_end_s)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "update_marker: moving marker to {new_at_s:.3}s would leave its current clip range [{:.3}s..{:.3}s]",
+                candidate.clip_start_s, candidate.clip_end_s
+            ),
+        });
+    }
+    let StackChild::Track(track) = &mut working.tracks.children[candidate.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "update_marker: resolved marker track is not a track".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[candidate.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "update_marker: resolved marker child is not a clip".into(),
+        });
+    };
+    let marker = clip
+        .markers
+        .get_mut(candidate.marker_index)
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: "update_marker: resolved marker index disappeared".into(),
+        })?;
+    if let Some(label) = label {
+        let label = label.trim();
+        if label.is_empty() {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "update_marker: label must not be empty".into(),
+            });
+        }
+        marker.name = label.to_string();
+    }
+    let marker_metadata = marker
+        .metadata
+        .awidat
+        .get_or_insert_with(awidat_proto::awidat_meta::AwidatMarkerMetadata::default);
+    if let Some(category) = category {
+        marker_metadata.category = Some(category.trim().to_string());
+    }
+    if let Some(note) = note {
+        let note = note.trim().to_string();
+        marker.comment = Some(note.clone());
+        marker_metadata.note = Some(note);
+    }
+    if let Some(new_at_s) = at_s {
+        let rate = marker.marked_range.start_time.rate;
+        let relative_s = new_at_s - candidate.clip_start_s;
+        marker.marked_range.start_time =
+            awidat_proto::otio::RationalTime::new(relative_s * rate, rate);
+    }
+    if let Some(new_duration_s) = duration_s {
+        let rate = marker.marked_range.duration.rate;
+        marker.marked_range.duration =
+            awidat_proto::otio::RationalTime::new(new_duration_s * rate, rate);
+    }
+    Ok(format!(
+        "updated marker {:?} at {:.3}s on clip {:?}",
+        marker.name, candidate.timeline_s, clip.name
+    ))
+}
+
+fn apply_delete_marker(
+    working: &mut Timeline,
+    index: usize,
+    selector: &MarkerSelector,
+    ctx: &AnchorContext,
+) -> Result<String, ApplyError> {
+    let candidate = resolve_marker_candidate(working, index, selector, ctx)?;
+    let StackChild::Track(track) = &mut working.tracks.children[candidate.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "delete_marker: resolved marker track is not a track".into(),
+        });
+    };
+    let TrackChild::Clip(clip) = &mut track.children[candidate.child_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "delete_marker: resolved marker child is not a clip".into(),
+        });
+    };
+    if candidate.marker_index >= clip.markers.len() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "delete_marker: resolved marker index disappeared".into(),
+        });
+    }
+    let marker = clip.markers.remove(candidate.marker_index);
+    Ok(format!(
+        "deleted marker {:?} at {:.3}s from clip {:?}",
+        marker.name, candidate.timeline_s, clip.name
+    ))
+}
+
+fn resolve_marker_candidate(
+    working: &Timeline,
+    index: usize,
+    selector: &MarkerSelector,
+    ctx: &AnchorContext,
+) -> Result<MarkerCandidate, ApplyError> {
+    validate_marker_selector(index, selector)?;
+    let locator = selector
+        .anchor
+        .as_ref()
+        .map(|anchor| {
+            resolve(working, anchor, ctx).map_err(|miss| ApplyError::AnchorMiss { index, miss })
+        })
+        .transpose()?;
+    let matches = collect_marker_candidates(working, selector, locator);
+    match matches.as_slice() {
+        [candidate] => Ok(candidate.clone()),
+        [] => Err(ApplyError::Invalid {
+            index,
+            message: format!("marker selector {selector:?} matched no markers"),
+        }),
+        many => Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "marker selector {selector:?} matches {} markers; add marker_id, anchor, or at_s to disambiguate",
+                many.len()
+            ),
+        }),
+    }
+}
+
+fn validate_marker_selector(index: usize, selector: &MarkerSelector) -> Result<(), ApplyError> {
+    if selector.marker_id.is_none()
+        && selector.anchor.is_none()
+        && selector.label.is_none()
+        && selector.at_s.is_none()
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "marker selector must include marker_id, anchor, label, or at_s".into(),
+        });
+    }
+    if let Some(marker_id) = selector.marker_id.as_deref()
+        && marker_id.trim().is_empty()
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "marker selector marker_id must not be empty".into(),
+        });
+    }
+    if let Some(label) = selector.label.as_deref()
+        && label.trim().is_empty()
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "marker selector label must not be empty".into(),
+        });
+    }
+    if let Some(at_s) = selector.at_s
+        && (!at_s.is_finite() || at_s < 0.0)
+    {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("marker selector at_s must be finite and >= 0, got {at_s}"),
+        });
+    }
+    Ok(())
+}
+
+fn collect_marker_candidates(
+    timeline: &Timeline,
+    selector: &MarkerSelector,
+    locator: Option<ClipLocator>,
+) -> Vec<MarkerCandidate> {
+    let mut out = Vec::new();
+    for (track_index, child) in timeline.tracks.children.iter().enumerate() {
+        let StackChild::Track(track) = child else {
+            continue;
+        };
+        let mut cursor_s = 0.0;
+        for (child_index, child) in track.children.iter().enumerate() {
+            let duration_s = child_duration(child);
+            let clip_start_s = cursor_s;
+            let clip_end_s = cursor_s + duration_s;
+            cursor_s = clip_end_s;
+            if let Some(locator) = locator
+                && (locator.track_index != track_index || locator.child_index != child_index)
+            {
+                continue;
+            }
+            let TrackChild::Clip(clip) = child else {
+                continue;
+            };
+            for (marker_index, marker) in clip.markers.iter().enumerate() {
+                let timeline_s = clip_start_s + marker.marked_range.start_time.to_seconds();
+                if marker_matches_selector(marker, timeline_s, selector) {
+                    out.push(MarkerCandidate {
+                        track_index,
+                        child_index,
+                        marker_index,
+                        clip_start_s,
+                        clip_end_s,
+                        timeline_s,
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+fn marker_matches_selector(
+    marker: &awidat_proto::otio::Marker,
+    timeline_s: f64,
+    selector: &MarkerSelector,
+) -> bool {
+    if let Some(expected_id) = selector.marker_id.as_deref()
+        && marker_metadata_id(marker) != Some(expected_id.trim())
+    {
+        return false;
+    }
+    if let Some(label) = selector.label.as_deref()
+        && marker.name != label.trim()
+    {
+        return false;
+    }
+    if let Some(at_s) = selector.at_s
+        && (timeline_s - at_s).abs() > 1e-6
+    {
+        return false;
+    }
+    true
+}
+
+fn marker_metadata_id(marker: &awidat_proto::otio::Marker) -> Option<&str> {
+    marker
+        .metadata
+        .awidat
+        .as_ref()
+        .and_then(|metadata| metadata.extra.get("id"))
+        .and_then(serde_json::Value::as_str)
 }
 
 fn apply_trim(
@@ -3498,17 +3884,366 @@ fn validate_transition_handle(
 /// where we extracted lands the clip back where it started); the
 /// helper below normalizes that case to a no-op rather than confusing
 /// the user with an op that "succeeded but did nothing."
+#[derive(Debug, Clone, Copy)]
+struct SnapTarget {
+    kind: SnapTargetKind,
+    time_s: f64,
+}
+
+fn resolve_snap_time(
+    timeline: &Timeline,
+    index: usize,
+    requested_s: f64,
+    snap: Option<&SnapOptions>,
+) -> Result<f64, ApplyError> {
+    let Some(snap) = snap else {
+        return Ok(requested_s);
+    };
+    if !snap.enabled {
+        return Ok(requested_s);
+    }
+    if !snap.tolerance_s.is_finite() || snap.tolerance_s < 0.0 {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "move: snap_tolerance_s must be finite and >= 0, got {}",
+                snap.tolerance_s
+            ),
+        });
+    }
+    let targets = collect_snap_targets(timeline, snap);
+    if let Some(target) = targets
+        .into_iter()
+        .filter(|target| (target.time_s - requested_s).abs() <= snap.tolerance_s)
+        .min_by(|a, b| {
+            (a.time_s - requested_s)
+                .abs()
+                .total_cmp(&(b.time_s - requested_s).abs())
+                .then_with(|| snap_target_priority(a.kind).cmp(&snap_target_priority(b.kind)))
+                .then_with(|| a.time_s.total_cmp(&b.time_s))
+        })
+    {
+        Ok(target.time_s)
+    } else {
+        Ok(requested_s)
+    }
+}
+
+fn collect_snap_targets(timeline: &Timeline, snap: &SnapOptions) -> Vec<SnapTarget> {
+    let mut targets = Vec::new();
+    let include_clip_edges = snap_includes(snap, SnapTargetKind::ClipEdge);
+    let include_markers = snap_includes(snap, SnapTargetKind::Marker);
+    if !include_clip_edges && !include_markers {
+        return targets;
+    }
+    for child in &timeline.tracks.children {
+        let StackChild::Track(track) = child else {
+            continue;
+        };
+        let mut cursor_s = 0.0;
+        for child in &track.children {
+            let duration_s = child_duration(child);
+            if include_clip_edges {
+                targets.push(SnapTarget {
+                    kind: SnapTargetKind::ClipEdge,
+                    time_s: cursor_s,
+                });
+                targets.push(SnapTarget {
+                    kind: SnapTargetKind::ClipEdge,
+                    time_s: cursor_s + duration_s,
+                });
+            }
+            if include_markers && let TrackChild::Clip(clip) = child {
+                for marker in &clip.markers {
+                    targets.push(SnapTarget {
+                        kind: SnapTargetKind::Marker,
+                        time_s: cursor_s + marker.marked_range.start_time.to_seconds(),
+                    });
+                }
+            }
+            cursor_s += duration_s;
+        }
+    }
+    targets
+}
+
+fn snap_includes(snap: &SnapOptions, kind: SnapTargetKind) -> bool {
+    snap.targets.is_empty() || snap.targets.contains(&kind)
+}
+
+fn snap_target_priority(kind: SnapTargetKind) -> u8 {
+    match kind {
+        SnapTargetKind::Marker => 0,
+        SnapTargetKind::ClipEdge => 1,
+        SnapTargetKind::Playhead => 2,
+    }
+}
+
+fn apply_multicam_plan(
+    working: &mut Timeline,
+    index: usize,
+    plan: &MulticamApplyPlan,
+) -> Result<String, ApplyError> {
+    let program_track = plan.program_track.trim();
+    if program_track.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "apply_multicam_plan: program_track must not be empty".into(),
+        });
+    }
+    validate_multicam_decisions(index, &plan.decisions)?;
+
+    let replacement = build_multicam_program_track(program_track, &plan.decisions);
+    if let Some(existing_index) =
+        working.tracks.children.iter().position(
+            |child| matches!(child, StackChild::Track(track) if track.name == program_track),
+        )
+    {
+        working.tracks.children[existing_index] = StackChild::Track(replacement);
+    } else {
+        working.tracks.children.push(StackChild::Track(replacement));
+    }
+    Ok(format!(
+        "applied multicam plan to track {program_track:?} with {} decisions",
+        plan.decisions.len()
+    ))
+}
+
+fn validate_multicam_decisions(
+    index: usize,
+    decisions: &[MulticamDecision],
+) -> Result<(), ApplyError> {
+    if decisions.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "apply_multicam_plan: decisions must not be empty".into(),
+        });
+    }
+    let mut cursor_s = 0.0;
+    for (decision_index, decision) in decisions.iter().enumerate() {
+        let source_asset = decision.source_asset.trim();
+        if source_asset.is_empty() {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "apply_multicam_plan: decision {decision_index} source_asset must not be empty"
+                ),
+            });
+        }
+        if !decision.start_s.is_finite() || decision.start_s < 0.0 {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "apply_multicam_plan: decision {decision_index} start_s must be finite and >= 0"
+                ),
+            });
+        }
+        if !decision.end_s.is_finite() || decision.end_s <= decision.start_s {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "apply_multicam_plan: decision {decision_index} end_s must be finite and > start_s"
+                ),
+            });
+        }
+        if decision.start_s + 1e-6 < cursor_s {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "apply_multicam_plan: decision {decision_index} starts at {:.3}s before previous decision ends at {cursor_s:.3}s",
+                    decision.start_s
+                ),
+            });
+        }
+        cursor_s = decision.end_s;
+    }
+    Ok(())
+}
+
+fn build_multicam_program_track(
+    program_track: &str,
+    decisions: &[MulticamDecision],
+) -> awidat_proto::otio::Track {
+    use awidat_proto::otio::{ExternalReference, MediaReference, RationalTime, TimeRange, Track};
+
+    let rate = 24.0;
+    let mut track = Track::empty(program_track.to_string(), TrackKind::Video);
+    let mut cursor_s = 0.0;
+    for (decision_index, decision) in decisions.iter().enumerate() {
+        if decision.start_s > cursor_s + 0.001 {
+            track
+                .children
+                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    decision.start_s - cursor_s,
+                    rate,
+                )));
+        }
+        let mut clip = Clip::empty(format!("multicam-{decision_index}"));
+        clip.media_reference =
+            MediaReference::External(ExternalReference::new(decision.source_asset.clone()));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(decision.start_s * rate, rate),
+            RationalTime::new((decision.end_s - decision.start_s) * rate, rate),
+        ));
+        {
+            let awidat = clip
+                .metadata
+                .awidat
+                .get_or_insert_with(AwidatClipMetadata::default);
+            awidat.reasoning = decision.reason.clone();
+            awidat.extra.insert(
+                "multicam_source_asset".into(),
+                serde_json::json!(&decision.source_asset),
+            );
+            awidat.extra.insert(
+                "multicam_decision_index".into(),
+                serde_json::json!(decision_index),
+            );
+            if let Some(speaker) = decision.speaker.as_deref() {
+                awidat
+                    .extra
+                    .insert("speaker".into(), serde_json::json!(speaker));
+            }
+            if let Some(sync_group_id) = decision.sync_group_id.as_deref() {
+                awidat
+                    .extra
+                    .insert("sync_group_id".into(), serde_json::json!(sync_group_id));
+            }
+        }
+        stamp_fresh_clip_uuid(&mut clip);
+        track.children.push(TrackChild::Clip(clip));
+        cursor_s = decision.end_s;
+    }
+    track
+}
+
+fn apply_wrap_as_nested(
+    working: &mut Timeline,
+    index: usize,
+    track_name: &str,
+    start_index: usize,
+    end_index: usize,
+    name: &Option<String>,
+) -> Result<String, ApplyError> {
+    let track_name = track_name.trim();
+    if track_name.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "wrap_as_nested: track must not be empty".into(),
+        });
+    }
+    if start_index >= end_index {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "wrap_as_nested: start_index {start_index} must be < end_index {end_index}"
+            ),
+        });
+    }
+    let track = find_track_mut(working, track_name).ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: format!("wrap_as_nested: track {track_name:?} not found"),
+    })?;
+    if end_index > track.children.len() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "wrap_as_nested: range [{start_index}..{end_index}) exceeds track length {}",
+                track.children.len()
+            ),
+        });
+    }
+    let nested_name = name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Nested Stack");
+    let nested_children: Vec<TrackChild> = track.children.drain(start_index..end_index).collect();
+    let mut nested_track =
+        awidat_proto::otio::Track::empty(format!("{nested_name} Track"), track.kind);
+    nested_track.children = nested_children;
+    let mut stack = awidat_proto::otio::Stack::empty(nested_name.to_string());
+    stack.children.push(StackChild::Track(nested_track));
+    track.children.insert(start_index, TrackChild::Stack(stack));
+    Ok(format!(
+        "wrapped children [{start_index}..{end_index}) on track {track_name:?} into nested stack {nested_name:?}"
+    ))
+}
+
+fn apply_flatten_nested(
+    working: &mut Timeline,
+    index: usize,
+    track_name: &str,
+    child_index: usize,
+) -> Result<String, ApplyError> {
+    let track_name = track_name.trim();
+    if track_name.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "flatten_nested: track must not be empty".into(),
+        });
+    }
+    let track = find_track_mut(working, track_name).ok_or_else(|| ApplyError::Invalid {
+        index,
+        message: format!("flatten_nested: track {track_name:?} not found"),
+    })?;
+    if child_index >= track.children.len() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "flatten_nested: child_index {child_index} exceeds track length {}",
+                track.children.len()
+            ),
+        });
+    }
+    let TrackChild::Stack(stack) = track.children.remove(child_index) else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("flatten_nested: child {child_index} is not a nested stack"),
+        });
+    };
+    let mut flattened = Vec::new();
+    for child in stack.children {
+        match child {
+            StackChild::Track(nested_track) => {
+                if nested_track.kind != track.kind {
+                    return Err(ApplyError::Invalid {
+                        index,
+                        message: format!(
+                            "flatten_nested: nested track {:?} kind {:?} does not match parent kind {:?}",
+                            nested_track.name, nested_track.kind, track.kind
+                        ),
+                    });
+                }
+                flattened.extend(nested_track.children);
+            }
+            StackChild::Clip(clip) => flattened.push(TrackChild::Clip(clip)),
+            StackChild::Gap(gap) => flattened.push(TrackChild::Gap(gap)),
+            StackChild::Stack(stack) => flattened.push(TrackChild::Stack(stack)),
+        }
+    }
+    let flattened_len = flattened.len();
+    track.children.splice(child_index..child_index, flattened);
+    Ok(format!(
+        "flattened nested stack at child {child_index} on track {track_name:?} into {flattened_len} children"
+    ))
+}
+
 fn apply_move_clip(
     working: &mut Timeline,
     index: usize,
     anchor: &Anchor,
     to_position: usize,
     at_s: Option<f64>,
+    snap: Option<&SnapOptions>,
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
     let _ = (anchor, ctx);
     let locator = required_locator(index, locator)?;
+    let target_start_s = at_s
+        .map(|target_start_s| resolve_snap_time(working, index, target_start_s, snap))
+        .transpose()?;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
@@ -3527,7 +4262,7 @@ fn apply_move_clip(
         });
     }
 
-    if let Some(target_start_s) = at_s {
+    if let Some(target_start_s) = target_start_s {
         return apply_move_clip_to_time(index, track, locator.child_index, target_start_s);
     }
 
@@ -4890,6 +5625,73 @@ fn apply_set_speed(
     ))
 }
 
+fn apply_set_time_remap(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    curve: &[serde_json::Value],
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "curve".to_string(),
+        serde_json::Value::Array(curve.to_vec()),
+    );
+    apply_set_effect(
+        working,
+        index,
+        anchor,
+        awidat_effects::TIME_REMAP,
+        &params,
+        None,
+        ctx,
+        locator,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_set_freeze(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    freeze_at_source_s: f64,
+    duration_s: f64,
+    freeze_position: Option<&str>,
+    audio_behavior: Option<&str>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "freeze_at_source_s".to_string(),
+        serde_json::json!(freeze_at_source_s),
+    );
+    params.insert("duration_s".to_string(), serde_json::json!(duration_s));
+    if let Some(freeze_position) = freeze_position {
+        params.insert(
+            "freeze_position".to_string(),
+            serde_json::Value::String(freeze_position.to_string()),
+        );
+    }
+    if let Some(audio_behavior) = audio_behavior {
+        params.insert(
+            "audio_behavior".to_string(),
+            serde_json::Value::String(audio_behavior.to_string()),
+        );
+    }
+    apply_set_effect(
+        working,
+        index,
+        anchor,
+        awidat_effects::FREEZE,
+        &params,
+        None,
+        ctx,
+        locator,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_set_color_correction(
     working: &mut Timeline,
@@ -5621,6 +6423,7 @@ fn apply_insert_caption(
     font_size: u32,
     color: &str,
     safe_area: &str,
+    word_timings: &[super::op::CaptionWordTiming],
 ) -> Result<String, ApplyError> {
     if safe_area.trim().is_empty() {
         return Err(ApplyError::Invalid {
@@ -5628,13 +6431,40 @@ fn apply_insert_caption(
             message: "insert_caption: safe_area must be non-empty".into(),
         });
     }
+    for word in word_timings {
+        if word.text.trim().is_empty()
+            || !word.start_s.is_finite()
+            || !word.end_s.is_finite()
+            || word.end_s < word.start_s
+        {
+            return Err(ApplyError::Invalid {
+                index,
+                message:
+                    "insert_caption: word_timings must have non-empty text and finite ordered times"
+                        .into(),
+            });
+        }
+    }
+    let extra_metadata = if word_timings.is_empty() {
+        None
+    } else {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "word_timings".to_string(),
+            serde_json::to_value(word_timings).map_err(|e| ApplyError::Invalid {
+                index,
+                message: format!("insert_caption: failed to serialize word_timings: {e}"),
+            })?,
+        );
+        Some(metadata)
+    };
     apply_insert_text_overlay(
         working,
         index,
         "caption",
         Some(safe_area),
         None,
-        None,
+        extra_metadata,
         start_s,
         end_s,
         text,
@@ -6511,7 +7341,7 @@ impl ValidateForApply for Timeline {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edl::op::ProfessionalTimelineEdit;
+    use crate::edl::op::{MarkerSelector, ProfessionalTimelineEdit};
     use awidat_proto::awidat_meta::{
         Anchor as AwAnchor, AudioRelation, AwidatClipMetadata, CutType, cut_boundary_key,
     };
@@ -6738,6 +7568,153 @@ mod tests {
             marker.metadata.awidat.as_ref().unwrap().category.as_deref(),
             Some("note")
         );
+        assert_eq!(
+            marker
+                .metadata
+                .awidat
+                .as_ref()
+                .unwrap()
+                .extra
+                .get("id")
+                .and_then(serde_json::Value::as_str),
+            Some("marker-0-1-0")
+        );
+    }
+
+    #[test]
+    fn professional_update_marker_edits_unique_marker_by_id() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::AddMarker {
+                        at_s: 6.0,
+                        label: "Review beat".into(),
+                        category: Some("note".into()),
+                    },
+                },
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::UpdateMarker {
+                        selector: MarkerSelector {
+                            marker_id: Some("marker-0-1-0".into()),
+                            ..MarkerSelector::default()
+                        },
+                        label: Some("Use this quote".into()),
+                        category: Some("select".into()),
+                        note: Some("Strong pull quote".into()),
+                        at_s: Some(6.5),
+                        duration_s: Some(1.25),
+                    },
+                },
+            ],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(clip) = &track.children[1] else {
+            panic!("expected clip")
+        };
+        let marker = clip.markers.first().expect("marker should remain attached");
+
+        assert!(outcome.applied[1].description.contains("updated marker"));
+        assert_eq!(marker.name, "Use this quote");
+        assert_eq!(marker.comment.as_deref(), Some("Strong pull quote"));
+        assert!((marker.marked_range.start_time.to_seconds() - 1.5).abs() < 1e-9);
+        assert!((marker.marked_range.duration.to_seconds() - 1.25).abs() < 1e-9);
+        assert_eq!(
+            marker.metadata.awidat.as_ref().unwrap().category.as_deref(),
+            Some("select")
+        );
+    }
+
+    #[test]
+    fn professional_delete_marker_removes_unique_marker_by_label_and_anchor() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::AddMarker {
+                        at_s: 1.0,
+                        label: "Review beat".into(),
+                        category: Some("note".into()),
+                    },
+                },
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::AddMarker {
+                        at_s: 6.0,
+                        label: "Review beat".into(),
+                        category: Some("note".into()),
+                    },
+                },
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::DeleteMarker {
+                        selector: MarkerSelector {
+                            anchor: Some(Anchor::ClipUuid {
+                                uuid: "clip-1".into(),
+                            }),
+                            label: Some("Review beat".into()),
+                            ..MarkerSelector::default()
+                        },
+                    },
+                },
+            ],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(first_clip) = &track.children[0] else {
+            panic!("expected clip")
+        };
+        let TrackChild::Clip(second_clip) = &track.children[1] else {
+            panic!("expected clip")
+        };
+
+        assert!(outcome.applied[2].description.contains("deleted marker"));
+        assert_eq!(first_clip.markers.len(), 1);
+        assert!(second_clip.markers.is_empty());
+    }
+
+    #[test]
+    fn professional_update_marker_rejects_ambiguous_label_selector() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::AddMarker {
+                        at_s: 1.0,
+                        label: "Review beat".into(),
+                        category: Some("note".into()),
+                    },
+                },
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::AddMarker {
+                        at_s: 6.0,
+                        label: "Review beat".into(),
+                        category: Some("note".into()),
+                    },
+                },
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::UpdateMarker {
+                        selector: MarkerSelector {
+                            label: Some("Review beat".into()),
+                            ..MarkerSelector::default()
+                        },
+                        label: Some("Ambiguous".into()),
+                        category: None,
+                        note: None,
+                        at_s: None,
+                        duration_s: None,
+                    },
+                },
+            ],
+        };
+
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(format!("{err}").contains("matches 2 markers"));
     }
 
     #[test]
@@ -9134,6 +10111,7 @@ mod tests {
                 },
                 to_position: 0,
                 at_s: None,
+                snap: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -9175,6 +10153,7 @@ mod tests {
                     },
                     to_position: 2,
                     at_s: None,
+                    snap: None,
                 },
             ],
         };
@@ -9199,6 +10178,7 @@ mod tests {
                 },
                 to_position: 99, // way past the end — clamp.
                 at_s: None,
+                snap: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -9221,6 +10201,7 @@ mod tests {
                 },
                 to_position: 1, // already there.
                 at_s: None,
+                snap: None,
             }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -9249,6 +10230,7 @@ mod tests {
                 },
                 to_position: 0,
                 at_s: Some(20.0),
+                snap: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -9262,6 +10244,238 @@ mod tests {
         assert!(matches!(&t.children[3], TrackChild::Gap(_)));
         assert!((child_duration(&t.children[3]) - 5.0).abs() < 0.001);
         assert!(matches!(&t.children[4], TrackChild::Clip(c) if c.name == "clip-0"));
+    }
+
+    #[test]
+    fn apply_move_clip_snaps_timeline_time_to_clip_edge() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::MoveClip {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "alpha snippet".into(),
+                },
+                to_position: 0,
+                at_s: Some(5.04),
+                snap: Some(SnapOptions {
+                    enabled: true,
+                    tolerance_s: 0.1,
+                    targets: vec![SnapTargetKind::ClipEdge],
+                }),
+            }],
+        };
+
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+
+        assert!(matches!(&track.children[0], TrackChild::Gap(_)));
+        assert!((child_duration(&track.children[0]) - 5.0).abs() < 0.001);
+        assert!(matches!(&track.children[1], TrackChild::Clip(c) if c.name == "clip-0"));
+    }
+
+    #[test]
+    fn snap_resolution_uses_marker_targets_within_tolerance() {
+        let mut tl = timeline_with_three_clips();
+        let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(clip) = &mut track.children[1] else {
+            panic!("expected clip")
+        };
+        clip.markers.push(awidat_proto::otio::Marker::new(
+            "snap here",
+            TimeRange::new(
+                RationalTime::new(1.0 * 24.0, 24.0),
+                RationalTime::new(0.0, 24.0),
+            ),
+        ));
+
+        let snapped = resolve_snap_time(
+            &tl,
+            0,
+            5.96,
+            Some(&SnapOptions {
+                enabled: true,
+                tolerance_s: 0.1,
+                targets: vec![SnapTargetKind::Marker],
+            }),
+        )
+        .unwrap();
+
+        assert!((snapped - 6.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn apply_multicam_plan_replaces_program_track_atomically() {
+        let mut tl = timeline_with_three_clips();
+        tl.tracks.children.push(StackChild::Track(Track::empty(
+            "Program Video",
+            TrackKind::Video,
+        )));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ApplyMulticamPlan {
+                plan: MulticamApplyPlan {
+                    program_track: "Program Video".into(),
+                    decisions: vec![
+                        MulticamDecision {
+                            source_asset: "raw/cam-a.mov".into(),
+                            start_s: 0.0,
+                            end_s: 3.0,
+                            reason: Some("speaker A".into()),
+                            speaker: Some("A".into()),
+                            sync_group_id: Some("sync-1".into()),
+                        },
+                        MulticamDecision {
+                            source_asset: "raw/cam-b.mov".into(),
+                            start_s: 3.0,
+                            end_s: 6.0,
+                            reason: Some("reaction".into()),
+                            speaker: None,
+                            sync_group_id: Some("sync-1".into()),
+                        },
+                    ],
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let program_tracks: Vec<&Track> = new_tl
+            .tracks
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                StackChild::Track(track) if track.name == "Program Video" => Some(track),
+                _ => None,
+            })
+            .collect();
+        let program = program_tracks.first().expect("program track");
+        let TrackChild::Clip(first) = &program.children[0] else {
+            panic!("expected first multicam clip")
+        };
+
+        assert_eq!(program_tracks.len(), 1);
+        assert_eq!(program.children.len(), 2);
+        assert!(outcome.applied[0].description.contains("multicam plan"));
+        assert!(matches!(
+            &first.media_reference,
+            MediaReference::External(reference) if reference.target_url == "raw/cam-a.mov"
+        ));
+        let metadata = first.metadata.awidat.as_ref().expect("awidat metadata");
+        assert_eq!(metadata.reasoning.as_deref(), Some("speaker A"));
+        assert_eq!(
+            metadata
+                .extra
+                .get("sync_group_id")
+                .and_then(serde_json::Value::as_str),
+            Some("sync-1")
+        );
+    }
+
+    #[test]
+    fn apply_multicam_plan_rejects_invalid_decision_before_mutation() {
+        let tl = timeline_with_three_clips();
+        let before = serde_json::to_string(&tl).unwrap();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ApplyMulticamPlan {
+                plan: MulticamApplyPlan {
+                    program_track: "Program Video".into(),
+                    decisions: vec![
+                        MulticamDecision {
+                            source_asset: "raw/cam-a.mov".into(),
+                            start_s: 0.0,
+                            end_s: 5.0,
+                            reason: None,
+                            speaker: None,
+                            sync_group_id: None,
+                        },
+                        MulticamDecision {
+                            source_asset: "raw/cam-b.mov".into(),
+                            start_s: 4.0,
+                            end_s: 6.0,
+                            reason: None,
+                            speaker: None,
+                            sync_group_id: None,
+                        },
+                    ],
+                },
+            }],
+        };
+
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        let after = serde_json::to_string(&tl).unwrap();
+
+        assert!(format!("{err}").contains("before previous decision ends"));
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn professional_wrap_as_nested_creates_track_child_stack() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::WrapAsNested {
+                    track: "V1".into(),
+                    start_index: 0,
+                    end_index: 2,
+                    name: Some("Angle group".into()),
+                },
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Stack(stack) = &track.children[0] else {
+            panic!("expected nested stack")
+        };
+        let StackChild::Track(nested_track) = &stack.children[0] else {
+            panic!("expected nested track")
+        };
+
+        assert!(outcome.applied[0].description.contains("nested stack"));
+        assert_eq!(stack.name, "Angle group");
+        assert_eq!(nested_track.children.len(), 2);
+        assert!(matches!(&track.children[1], TrackChild::Clip(clip) if clip.name == "clip-2"));
+    }
+
+    #[test]
+    fn professional_flatten_nested_restores_children() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::WrapAsNested {
+                        track: "V1".into(),
+                        start_index: 0,
+                        end_index: 2,
+                        name: Some("Angle group".into()),
+                    },
+                },
+                EdlOp::ProfessionalTimelineEdit {
+                    edit: ProfessionalTimelineEdit::FlattenNested {
+                        track: "V1".into(),
+                        child_index: 0,
+                    },
+                },
+            ],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(track) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+
+        assert!(
+            outcome.applied[1]
+                .description
+                .contains("flattened nested stack")
+        );
+        assert_eq!(track.children.len(), 3);
+        assert!(matches!(&track.children[0], TrackChild::Clip(clip) if clip.name == "clip-0"));
+        assert!(matches!(&track.children[1], TrackChild::Clip(clip) if clip.name == "clip-1"));
+        assert!(matches!(&track.children[2], TrackChild::Clip(clip) if clip.name == "clip-2"));
     }
 
     #[test]
@@ -9676,6 +10890,49 @@ mod tests {
     }
 
     #[test]
+    fn apply_set_parameter_animation_accepts_runtime_blur_effect_alias() {
+        let tl = timeline_with_three_clips();
+        let animation = awidat_proto::professional::ParameterAnimation {
+            id: "anim-blur-radius-alias".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-1".into(),
+                parameter: "effects.awidat.blur.params.radius_px".into(),
+            },
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                awidat_proto::professional::Keyframe::linear(1.0, 12.0),
+            ],
+            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetParameterAnimation {
+                animation: animation.clone(),
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("anim-blur-radius-alias")
+        );
+        assert_eq!(
+            new_tl
+                .metadata
+                .awidat
+                .as_ref()
+                .unwrap()
+                .parameter_animations,
+            vec![animation]
+        );
+    }
+
+    #[test]
     fn apply_set_parameter_animation_accepts_runtime_shake_effect_parameter() {
         let tl = timeline_with_three_clips();
         let animation = awidat_proto::professional::ParameterAnimation {
@@ -9902,6 +11159,78 @@ mod tests {
             .and_then(|v| v.as_f64())
             .unwrap();
         assert!((f - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_set_time_remap_stamps_time_remap_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetTimeRemap {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                curve: vec![
+                    serde_json::json!({"source_time_s": 0.0, "timeline_time_s": 0.0}),
+                    serde_json::json!({"source_time_s": 2.0, "timeline_time_s": 3.0}),
+                ],
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.time_remap");
+        let curve = clip.effects[0]
+            .metadata
+            .get("curve")
+            .and_then(|value| value.as_array())
+            .unwrap();
+        assert_eq!(curve.len(), 2);
+        assert_eq!(curve[1]["source_time_s"], serde_json::json!(2.0));
+        assert_eq!(curve[1]["timeline_time_s"], serde_json::json!(3.0));
+    }
+
+    #[test]
+    fn apply_set_freeze_stamps_freeze_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetFreeze {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                freeze_at_source_s: 1.2,
+                duration_s: 0.8,
+                freeze_position: Some("at".into()),
+                audio_behavior: Some("silence".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.freeze");
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("freeze_at_source_s")
+                .and_then(|value| value.as_f64()),
+            Some(1.2)
+        );
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("duration_s")
+                .and_then(|value| value.as_f64()),
+            Some(0.8)
+        );
     }
 
     #[test]
@@ -10669,6 +11998,7 @@ mod tests {
                 font_size: 52,
                 color: "#FFFFFF".into(),
                 safe_area: "mobile".into(),
+                word_timings: Vec::new(),
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -10692,6 +12022,51 @@ mod tests {
         assert_eq!(
             effect.metadata.get("position").and_then(|v| v.as_str()),
             Some("bottom"),
+        );
+    }
+
+    #[test]
+    fn apply_insert_caption_persists_word_timings_metadata() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertCaption {
+                start_s: 1.0,
+                end_s: 2.5,
+                text: "This changed everything".into(),
+                position: super::super::op::TitlePosition::Bottom,
+                font_size: 52,
+                color: "#FFFFFF".into(),
+                safe_area: "mobile".into(),
+                word_timings: vec![
+                    super::super::op::CaptionWordTiming {
+                        text: "This".into(),
+                        start_s: 1.0,
+                        end_s: 1.2,
+                    },
+                    super::super::op::CaptionWordTiming {
+                        text: "changed".into(),
+                        start_s: 1.24,
+                        end_s: 1.5,
+                    },
+                ],
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!("expected titles track")
+        };
+        let TrackChild::Clip(caption_clip) = &titles.children[0] else {
+            panic!("expected caption clip")
+        };
+        let timings = caption_clip.effects[0]
+            .metadata
+            .get("word_timings")
+            .and_then(|value| value.as_array())
+            .expect("word_timings metadata");
+        assert_eq!(timings.len(), 2);
+        assert_eq!(
+            timings[0].get("text").and_then(|value| value.as_str()),
+            Some("This")
         );
     }
 

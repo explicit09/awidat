@@ -14,12 +14,12 @@ use awidat_proto::professional::{
     AudioMeterReading, AudioRole, CapabilityArea, ColorFinishingState, CompositionGraph,
     CompositionNode, CompositionNodeType, CoordinateSpace, DeliveryPreflightInput, DeliveryProfile,
     Easing, ExportPreset, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity,
-    GradeStack, GradeStage, HardwareAccelerationPolicy, Keyframe, KeyframeInterpolation,
-    MaskSidecar, MatteSidecar, MotionGraphicsTemplate, MotionPackage, PackageManifest,
-    ParameterAnimation, PreflightReport, ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS,
-    ReframeKeyframe, ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule,
-    StreamExportContract, StreamExportMode, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample,
-    TrackSidecar, TrackingPackage, is_runtime_clip_parameter,
+    GradeStack, GradeStage, HardwareAccelerationPolicy, Keyframe, KeyframeInterpolation, MaskSidecar,
+    MatteSidecar, MotionGraphicsTemplate, MotionPackage, PackageManifest, ParameterAnimation,
+    PreflightReport, ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS, ReframeKeyframe,
+    ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract,
+    StreamExportMode, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar,
+    TrackingPackage, canonical_runtime_clip_parameter, is_runtime_clip_parameter,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -1041,6 +1041,9 @@ fn lower_tracker_binding_node(
             ),
         });
     }
+    let target_parameter = canonical_runtime_clip_parameter(&target_parameter)
+        .map(str::to_string)
+        .unwrap_or(target_parameter);
     let channel = string_param(node, "channel")
         .map(str::to_string)
         .unwrap_or_else(|| inferred_tracker_channel(&target_parameter).to_string());
@@ -1693,7 +1696,7 @@ pub fn lower_composition_graph(graph: &CompositionGraph) -> CompositionLowering 
             None => lowering.limitations.push(RenderLimitation {
                 node_id: node.id.clone(),
                 severity: FindingSeverity::Warning,
-                message: format!("node {:?} has no current render lowering", node.node_type),
+                message: composition_node_limitation_message(node.node_type),
             }),
         }
     }
@@ -1777,6 +1780,18 @@ fn composition_node_needs_future_runtime(node_type: CompositionNodeType) -> bool
             | CompositionNodeType::Scene3d
             | CompositionNodeType::ParticleEmitter
     )
+}
+
+fn composition_node_limitation_message(node_type: CompositionNodeType) -> String {
+    match node_type {
+        CompositionNodeType::Scene3d => {
+            "Scene3d nodes require a future 3D scene runtime; no executable FFmpeg lowering was emitted".into()
+        }
+        CompositionNodeType::ParticleEmitter => {
+            "ParticleEmitter nodes require a future particle runtime; no executable FFmpeg lowering was emitted".into()
+        }
+        _ => format!("node {node_type:?} has no current render lowering"),
+    }
 }
 
 fn string_param<'a>(node: &'a CompositionNode, key: &str) -> Option<&'a str> {
@@ -2459,8 +2474,11 @@ fn render_animation_for_template_overlay(
     if clip_id != target_clip || !parameter.starts_with("overlay.") {
         return None;
     }
+    let parameter = canonical_runtime_clip_parameter(parameter)
+        .map(str::to_string)
+        .unwrap_or_else(|| parameter.clone());
     Some(RenderParameterAnimation {
-        parameter: parameter.clone(),
+        parameter,
         keyframes: animation.keyframes.clone(),
         pre_extrapolation: animation.pre_extrapolation,
         post_extrapolation: animation.post_extrapolation,
@@ -2607,6 +2625,7 @@ fn title_plan(
         role: "motion_template".into(),
         safe_area: Some("title_safe".into()),
         rich_segments: Vec::new(),
+        word_timings: Vec::new(),
         animations: Vec::new(),
     }
 }

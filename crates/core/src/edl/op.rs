@@ -164,6 +164,14 @@ pub enum EdlOp {
         /// Optional absolute timeline start time on the same track.
         /// When set, gaps are split/created so the clip starts here.
         at_s: Option<f64>,
+        /// Optional snap behavior for timeline-time moves.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        snap: Option<SnapOptions>,
+    },
+    /// Atomically apply accepted multicam decisions to a flattened program track.
+    ApplyMulticamPlan {
+        /// Multicam plan to apply.
+        plan: MulticamApplyPlan,
     },
     /// Insert a transition between two adjacent clips. F2.
     InsertTransition {
@@ -335,6 +343,33 @@ pub enum EdlOp {
         /// Speed multiplier. Must be finite and `> 0.0`.
         factor: f64,
     },
+    /// Set a clip-level time remap curve. The apply layer stamps an
+    /// `awidat.time_remap` Effect on the clip; render can then lower the
+    /// keyed curve into retiming filters. Re-applying replaces the prior
+    /// time remap.
+    SetTimeRemap {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Ordered curve points from `curve_json`.
+        curve: Vec<serde_json::Value>,
+    },
+    /// Insert a held frame at a clip-local source time. The apply layer
+    /// stamps an `awidat.freeze` Effect on the clip and render splices
+    /// the hold into the segment.
+    SetFreeze {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Source time, in seconds, where the frame is held.
+        freeze_at_source_s: f64,
+        /// Hold duration inserted into the timeline.
+        duration_s: f64,
+        /// Placement mode. Currently `at`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        freeze_position: Option<String>,
+        /// Audio fill behavior for the inserted hold. Currently `silence`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        audio_behavior: Option<String>,
+    },
     /// Set clip-level color correction controls. The apply layer stamps
     /// an `awidat.color_correction` Effect on the clip; render converts
     /// those normalized controls into FFmpeg video filters before speed,
@@ -493,6 +528,9 @@ pub enum EdlOp {
         color: String,
         /// Safe-area profile such as `"mobile"` or `"standard"`.
         safe_area: String,
+        /// Optional transcript word timings for per-word caption reveal.
+        #[serde(default)]
+        word_timings: Vec<CaptionWordTiming>,
     },
     /// Insert a first-class annotation overlay such as a rectangle,
     /// circle, arrow, bracket, or blur region. Coordinates are
@@ -662,6 +700,17 @@ pub enum EdlOp {
     },
 }
 
+/// One transcript word timing carried by an inserted caption overlay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CaptionWordTiming {
+    /// Word text as emitted by the transcript sidecar.
+    pub text: String,
+    /// Word start in master-timeline seconds.
+    pub start_s: f64,
+    /// Word end in master-timeline seconds.
+    pub end_s: f64,
+}
+
 /// Return true when a graphic color can be passed to FFmpeg filters without
 /// escaping or option injection risk.
 pub fn valid_graphic_color(raw: &str) -> bool {
@@ -753,6 +802,25 @@ pub enum ProfessionalTimelineEdit {
         /// Source range.
         range: SourceRange,
     },
+    /// Wrap a contiguous range of track children into an OTIO nested stack.
+    WrapAsNested {
+        /// Track containing the children to wrap.
+        track: String,
+        /// Inclusive start child index.
+        start_index: usize,
+        /// Exclusive end child index.
+        end_index: usize,
+        /// Optional nested stack name.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        name: Option<String>,
+    },
+    /// Flatten a nested stack child back into its parent track.
+    FlattenNested {
+        /// Track containing the nested stack child.
+        track: String,
+        /// Child index of the nested stack.
+        child_index: usize,
+    },
     /// Add a timeline marker.
     AddMarker {
         /// Marker time in seconds.
@@ -763,6 +831,108 @@ pub enum ProfessionalTimelineEdit {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         category: Option<String>,
     },
+    /// Update an existing timeline marker.
+    UpdateMarker {
+        /// Marker selector.
+        selector: MarkerSelector,
+        /// Replacement marker label.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        label: Option<String>,
+        /// Replacement category. `None` keeps the current category.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        category: Option<String>,
+        /// Replacement note/comment. `None` keeps the current note.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        note: Option<String>,
+        /// Replacement timeline time in seconds. Must remain on the same clip.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        at_s: Option<f64>,
+        /// Replacement marker duration in seconds.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        duration_s: Option<f64>,
+    },
+    /// Delete an existing timeline marker.
+    DeleteMarker {
+        /// Marker selector.
+        selector: MarkerSelector,
+    },
+}
+
+/// Selector for clip-level OTIO markers.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MarkerSelector {
+    /// Durable marker id from `metadata.awidat.extra.id`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub marker_id: Option<String>,
+    /// Optional clip anchor used to disambiguate label/time selectors.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub anchor: Option<Anchor>,
+    /// Optional marker label.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub label: Option<String>,
+    /// Optional timeline time in seconds.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub at_s: Option<f64>,
+}
+
+/// Snap settings for timeline-time edit operations.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SnapOptions {
+    /// Whether snapping is active for this operation.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum distance in seconds between the requested time and a snap target.
+    pub tolerance_s: f64,
+    /// Snap target kinds to consider. Empty means all supported target kinds.
+    #[serde(default)]
+    pub targets: Vec<SnapTargetKind>,
+}
+
+/// Kinds of timeline targets an edit can snap to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapTargetKind {
+    /// Clip starts and ends.
+    ClipEdge,
+    /// Clip-level OTIO marker times.
+    Marker,
+    /// UI playhead time. Core apply has no session playhead, but desktop does.
+    Playhead,
+}
+
+/// Accepted multicam decisions to flatten into a program track.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MulticamApplyPlan {
+    /// Program track to create or replace.
+    #[serde(default = "default_program_track")]
+    pub program_track: String,
+    /// Ordered multicam decisions.
+    #[serde(default)]
+    pub decisions: Vec<MulticamDecision>,
+}
+
+/// One source-angle decision in an accepted multicam plan.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MulticamDecision {
+    /// Source asset id/path for this angle.
+    pub source_asset: String,
+    /// Source and timeline start in seconds.
+    pub start_s: f64,
+    /// Source and timeline end in seconds.
+    pub end_s: f64,
+    /// Optional decision reason for audit/review.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reason: Option<String>,
+    /// Optional speaker label from the planner.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub speaker: Option<String>,
+    /// Optional sync group id shared with source tracks.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sync_group_id: Option<String>,
+}
+
+fn default_program_track() -> String {
+    "Program Video".into()
 }
 
 /// Hint for the kind of track created by `Insert Clip` when the named
@@ -787,6 +957,21 @@ pub struct AudioFxConfig {
     /// Low-pass cutoff in Hz.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub low_pass_hz: Option<f64>,
+    /// Stereo pan position in [-1, 1], where -1 is left and 1 is right.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pan: Option<f64>,
+    /// Stereo balance in [-1, 1], where -1 attenuates right and 1 attenuates left.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub balance: Option<f64>,
+    /// Enable FFmpeg adeclick click/pop repair.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub adeclick: Option<bool>,
+    /// Enable FFmpeg adeclip clipped-sample repair.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub adeclip: Option<bool>,
+    /// Project-relative or absolute arnndn/RNNoise model path.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub arnndn_model: Option<String>,
     /// Parametric EQ bands.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub eq_bands: Vec<EqBand>,
@@ -824,6 +1009,11 @@ impl AudioFxConfig {
     pub fn is_empty(&self) -> bool {
         self.high_pass_hz.is_none()
             && self.low_pass_hz.is_none()
+            && self.pan.is_none()
+            && self.balance.is_none()
+            && self.adeclick.is_none()
+            && self.adeclip.is_none()
+            && self.arnndn_model.is_none()
             && self.eq_bands.is_empty()
             && self.compressor_threshold_db.is_none()
             && self.compressor_ratio.is_none()

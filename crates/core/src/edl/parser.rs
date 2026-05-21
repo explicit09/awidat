@@ -37,10 +37,10 @@ use awidat_proto::professional::{
 use thiserror::Error;
 
 use super::op::{
-    Anchor, AnnotationKind, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand,
-    InsertTrackKind, MotionTemplateAnimation, PiPCorner, ProfessionalTimelineEdit, RichTextSegment,
-    TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
-    valid_graphic_color,
+    Anchor, AnnotationKind, AudioFxConfig, BRollPosition, CaptionWordTiming, EdlEnvelope, EdlOp,
+    EqBand, InsertTrackKind, MotionTemplateAnimation, MulticamApplyPlan, PiPCorner,
+    ProfessionalTimelineEdit, RichTextSegment, SnapOptions, SnapTargetKind, TitleAnimation,
+    TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween, valid_graphic_color,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -56,7 +56,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay, Author Subject Reframe From Track"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Time Remap, Set Freeze, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay, Author Subject Reframe From Track"
     )]
     UnknownOp {
         /// Line number.
@@ -228,6 +228,7 @@ enum OpKind {
     InsertBRoll,
     InsertPiP,
     MoveClip,
+    ApplyMulticamPlan,
     InsertTransition,
     DeleteTransition,
     SetCutIntent,
@@ -242,6 +243,8 @@ enum OpKind {
     SetTrackAudioFx,
     SetEffect,
     SetSpeed,
+    SetTimeRemap,
+    SetFreeze,
     SetColorCorrection,
     ApplyLut,
     RemoveLut,
@@ -283,6 +286,7 @@ impl OpBuilder {
             "Insert BRoll" => OpKind::InsertBRoll,
             "Insert PiP" => OpKind::InsertPiP,
             "Move Clip" => OpKind::MoveClip,
+            "Apply Multicam Plan" => OpKind::ApplyMulticamPlan,
             "Insert Transition" => OpKind::InsertTransition,
             "Delete Transition" => OpKind::DeleteTransition,
             "Set Cut Intent" => OpKind::SetCutIntent,
@@ -297,6 +301,8 @@ impl OpBuilder {
             "Set Track Audio FX" => OpKind::SetTrackAudioFx,
             "Set Effect" => OpKind::SetEffect,
             "Set Speed" => OpKind::SetSpeed,
+            "Set Time Remap" => OpKind::SetTimeRemap,
+            "Set Freeze" => OpKind::SetFreeze,
             "Set Color Correction" => OpKind::SetColorCorrection,
             "Apply LUT" => OpKind::ApplyLut,
             "Remove LUT" => OpKind::RemoveLut,
@@ -516,8 +522,12 @@ impl OpBuilder {
                     anchor,
                     to_position,
                     at_s,
+                    snap: parse_snap_options(&mut fields, head)?,
                 })
             }
+            OpKind::ApplyMulticamPlan => Ok(EdlOp::ApplyMulticamPlan {
+                plan: take_required_json::<MulticamApplyPlan>(&mut fields, "plan_json", head)?,
+            }),
             OpKind::InsertTransition => {
                 let between = self.between.ok_or_else(|| EdlParseError::MissingField {
                     line: head,
@@ -808,6 +818,39 @@ impl OpBuilder {
                 })?;
                 Ok(EdlOp::SetSpeed { anchor, factor })
             }
+            OpKind::SetTimeRemap => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let curve =
+                    take_required_json::<Vec<serde_json::Value>>(&mut fields, "curve_json", head)?;
+                Ok(EdlOp::SetTimeRemap { anchor, curve })
+            }
+            OpKind::SetFreeze => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let freeze_at_source_s = take_field_f64(&mut fields, "freeze_at_source_s")
+                    .ok_or_else(|| EdlParseError::MissingField {
+                        line: head,
+                        field: "freeze_at_source_s".into(),
+                    })?;
+                let duration_s = take_field_f64(&mut fields, "duration_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "duration_s".into(),
+                    }
+                })?;
+                Ok(EdlOp::SetFreeze {
+                    anchor,
+                    freeze_at_source_s,
+                    duration_s,
+                    freeze_position: take_field_string(&mut fields, "freeze_position"),
+                    audio_behavior: take_field_string(&mut fields, "audio_behavior"),
+                })
+            }
             OpKind::SetColorCorrection => {
                 let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
                     line: head,
@@ -1036,6 +1079,12 @@ impl OpBuilder {
                     .unwrap_or_else(|| "#FFFFFF".to_string());
                 let safe_area =
                     take_field_string(&mut fields, "safe_area").unwrap_or_else(|| "mobile".into());
+                let word_timings = take_field_json::<Vec<CaptionWordTiming>>(
+                    &mut fields,
+                    "word_timings_json",
+                    head,
+                )?
+                .unwrap_or_default();
                 Ok(EdlOp::InsertCaption {
                     start_s,
                     end_s,
@@ -1044,6 +1093,7 @@ impl OpBuilder {
                     font_size,
                     color,
                     safe_area,
+                    word_timings,
                 })
             }
             OpKind::InsertAnnotation => {
@@ -1390,6 +1440,11 @@ fn parse_audio_fx_config(
     let mut fx = AudioFxConfig {
         high_pass_hz: take_field_f64(fields, "high_pass_hz"),
         low_pass_hz: take_field_f64(fields, "low_pass_hz"),
+        pan: take_field_f64(fields, "pan"),
+        balance: take_field_f64(fields, "balance"),
+        adeclick: take_field_bool(fields, "adeclick"),
+        adeclip: take_field_bool(fields, "adeclip"),
+        arnndn_model: take_field_string(fields, "arnndn_model"),
         eq_bands: Vec::new(),
         compressor_threshold_db: take_field_f64(fields, "compressor_threshold_db"),
         compressor_ratio: take_field_f64(fields, "compressor_ratio"),
@@ -1514,6 +1569,58 @@ fn parse_motion_template_animation(
             message: "must be 'none', 'opacity', 'transform', 'text_reveal', or 'write_on'".into(),
         }),
     }
+}
+
+fn parse_snap_options(
+    fields: &mut Vec<(String, FieldValue)>,
+    line: usize,
+) -> Result<Option<SnapOptions>, EdlParseError> {
+    let enabled = take_field_bool(fields, "snap");
+    let tolerance_s = take_field_f64(fields, "snap_tolerance_s");
+    let targets = take_field_string(fields, "snap_targets")
+        .map(|raw| parse_snap_targets(&raw, line))
+        .transpose()?;
+    if enabled.is_none() && tolerance_s.is_none() && targets.is_none() {
+        return Ok(None);
+    }
+    let tolerance_s = tolerance_s.unwrap_or(0.1);
+    if !tolerance_s.is_finite() || tolerance_s < 0.0 {
+        return Err(EdlParseError::BadField {
+            line,
+            raw: format!("snap_tolerance_s: {tolerance_s}"),
+            message: "must be finite and >= 0".into(),
+        });
+    }
+    Ok(Some(SnapOptions {
+        enabled: enabled.unwrap_or(true),
+        tolerance_s,
+        targets: targets.unwrap_or_default(),
+    }))
+}
+
+fn parse_snap_targets(raw: &str, line: usize) -> Result<Vec<SnapTargetKind>, EdlParseError> {
+    let mut targets = Vec::new();
+    for part in raw.split(',') {
+        let target = match part.trim() {
+            "" => continue,
+            "clip_edge" | "clip_edges" => SnapTargetKind::ClipEdge,
+            "marker" | "markers" => SnapTargetKind::Marker,
+            "playhead" => SnapTargetKind::Playhead,
+            other => {
+                return Err(EdlParseError::BadField {
+                    line,
+                    raw: format!("snap_targets: {other}"),
+                    message:
+                        "must contain comma-separated values from: clip_edge, marker, playhead"
+                            .into(),
+                });
+            }
+        };
+        if !targets.contains(&target) {
+            targets.push(target);
+        }
+    }
+    Ok(targets)
 }
 
 fn parse_annotation_kind(raw: &str, line: usize) -> Result<AnnotationKind, EdlParseError> {
@@ -2094,22 +2201,93 @@ mod tests {
 *** End EDL
 ";
         let env = parse(text).unwrap();
-        assert!(matches!(env.ops[0], EdlOp::MoveClip { to_position: 4, .. }));
+        assert!(matches!(
+            env.ops[0],
+            EdlOp::MoveClip {
+                to_position: 4,
+                snap: None,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn parses_move_clip_at_timeline_time() {
+    fn parses_move_clip_at_timeline_time_with_snap_options() {
         let text = "\
 *** Begin EDL
 *** Move Clip
 @@ anchor: clip_uuid=c-9f2
 + at_s: 12.5
++ snap: true
++ snap_tolerance_s: 0.2
++ snap_targets: clip_edge, marker
 *** End EDL
 ";
         let env = parse(text).unwrap();
-        assert!(
-            matches!(env.ops[0], EdlOp::MoveClip { at_s: Some(v), .. } if (v - 12.5).abs() < 0.001)
+        let EdlOp::MoveClip { at_s, snap, .. } = &env.ops[0] else {
+            panic!("expected MoveClip");
+        };
+        assert!(at_s.is_some_and(|v| (v - 12.5).abs() < 0.001));
+        let snap = snap.as_ref().expect("snap options should parse");
+        assert!(snap.enabled);
+        assert!((snap.tolerance_s - 0.2).abs() < 0.001);
+        assert_eq!(
+            snap.targets,
+            vec![SnapTargetKind::ClipEdge, SnapTargetKind::Marker]
         );
+    }
+
+    #[test]
+    fn parses_apply_multicam_plan() {
+        let text = "\
+*** Begin EDL
+*** Apply Multicam Plan
++ plan_json: {\"program_track\":\"Program Video\",\"decisions\":[{\"source_asset\":\"raw/cam-a.mov\",\"start_s\":0.0,\"end_s\":3.0,\"reason\":\"speaker A\"}]}
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        let EdlOp::ApplyMulticamPlan { plan } = &env.ops[0] else {
+            panic!("expected ApplyMulticamPlan");
+        };
+
+        assert_eq!(plan.program_track, "Program Video");
+        assert_eq!(plan.decisions.len(), 1);
+        assert_eq!(plan.decisions[0].source_asset, "raw/cam-a.mov");
+        assert_eq!(plan.decisions[0].reason.as_deref(), Some("speaker A"));
+    }
+
+    #[test]
+    fn parses_professional_nested_stack_edits() {
+        let text = "\
+*** Begin EDL
+*** Professional Timeline Edit
++ edit_json: {\"edit\":\"wrap_as_nested\",\"track\":\"V1\",\"start_index\":0,\"end_index\":2,\"name\":\"Angle group\"}
+*** Professional Timeline Edit
++ edit_json: {\"edit\":\"flatten_nested\",\"track\":\"V1\",\"child_index\":0}
+*** End EDL
+";
+        let env = parse(text).unwrap();
+
+        assert!(matches!(
+            &env.ops[0],
+            EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::WrapAsNested {
+                    track,
+                    start_index: 0,
+                    end_index: 2,
+                    name: Some(name),
+                },
+            } if track == "V1" && name == "Angle group"
+        ));
+        assert!(matches!(
+            &env.ops[1],
+            EdlOp::ProfessionalTimelineEdit {
+                edit: ProfessionalTimelineEdit::FlattenNested {
+                    track,
+                    child_index: 0,
+                },
+            } if track == "V1"
+        ));
     }
 
     #[test]
@@ -2126,6 +2304,11 @@ mod tests {
 @@ anchor: clip_uuid=mic-a
 + high_pass_hz: 80
 + hum_notch_hz: 60
++ pan: -0.25
++ balance: 0.40
++ adeclick: true
++ adeclip: true
++ arnndn_model: models/rnnoise.rnnn
 + compressor_threshold_db: -18
 + compressor_ratio: 2.5
 + eq_bands_json: [{\"freq_hz\":3000,\"gain_db\":-2,\"width_hz\":800}]
@@ -2151,6 +2334,11 @@ mod tests {
             EdlOp::SetClipAudioFx { fx, .. }
                 if fx.high_pass_hz == Some(80.0)
                     && fx.hum_notch_hz == Some(60.0)
+                    && fx.pan == Some(-0.25)
+                    && fx.balance == Some(0.40)
+                    && fx.adeclick == Some(true)
+                    && fx.adeclip == Some(true)
+                    && fx.arnndn_model.as_deref() == Some("models/rnnoise.rnnn")
                     && fx.eq_bands.len() == 1
         ));
         assert!(matches!(
@@ -2497,6 +2685,58 @@ mod tests {
     }
 
     #[test]
+    fn parses_set_time_remap() {
+        let text = "\
+*** Begin EDL
+*** Set Time Remap
+@@ anchor: clip_uuid=clip-2
++ curve_json: [{\"source_time_s\":0,\"timeline_time_s\":0},{\"source_time_s\":2,\"timeline_time_s\":3}]
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetTimeRemap { anchor, curve } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-2"));
+                assert_eq!(curve.len(), 2);
+                assert_eq!(curve[1]["source_time_s"], serde_json::json!(2));
+                assert_eq!(curve[1]["timeline_time_s"], serde_json::json!(3));
+            }
+            other => panic!("want SetTimeRemap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_set_freeze() {
+        let text = "\
+*** Begin EDL
+*** Set Freeze
+@@ anchor: clip_uuid=clip-2
++ freeze_at_source_s: 1.2
++ duration_s: 0.8
++ freeze_position: at
++ audio_behavior: silence
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetFreeze {
+                anchor,
+                freeze_at_source_s,
+                duration_s,
+                freeze_position,
+                audio_behavior,
+            } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-2"));
+                assert!((freeze_at_source_s - 1.2).abs() < 1e-9);
+                assert!((duration_s - 0.8).abs() < 1e-9);
+                assert_eq!(freeze_position.as_deref(), Some("at"));
+                assert_eq!(audio_behavior.as_deref(), Some("silence"));
+            }
+            other => panic!("want SetFreeze, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_set_color_correction_with_partial_fields() {
         let text = "\
 *** Begin EDL
@@ -2725,6 +2965,7 @@ mod tests {
                 font_size,
                 color,
                 safe_area,
+                word_timings,
             } => {
                 assert!((start_s - 1.0).abs() < 1e-9);
                 assert!((end_s - 2.4).abs() < 1e-9);
@@ -2733,6 +2974,29 @@ mod tests {
                 assert_eq!(*font_size, 52);
                 assert_eq!(color, "#FFFFFF");
                 assert_eq!(safe_area, "mobile");
+                assert!(word_timings.is_empty());
+            }
+            other => panic!("want InsertCaption, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_caption_with_word_timings_json() {
+        let text = "\
+*** Begin EDL
+*** Insert Caption
++ start_s: 1.0
++ end_s: 2.4
++ text: \"This changed everything\"
++ word_timings_json: [{\"text\":\"This\",\"start_s\":1.0,\"end_s\":1.2},{\"text\":\"changed\",\"start_s\":1.24,\"end_s\":1.5}]
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertCaption { word_timings, .. } => {
+                assert_eq!(word_timings.len(), 2);
+                assert_eq!(word_timings[0].text, "This");
+                assert!((word_timings[1].start_s - 1.24).abs() < 1e-9);
             }
             other => panic!("want InsertCaption, got {other:?}"),
         }

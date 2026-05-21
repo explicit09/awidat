@@ -1,10 +1,9 @@
 //! `diagnose_project_media` tool - surface repair diagnostics for timeline media.
 
-use std::ffi::OsStr;
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
+use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
 use awidat_proto::project::Project;
 use awidat_proto::validate::{ValidationWarning, validate_project};
 use serde::Deserialize;
@@ -174,59 +173,16 @@ impl ToolHandler for DiagnoseProjectMediaTool {
 }
 
 fn collect_media_files(project_root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    visit_media_dir(project_root, project_root, &mut out);
-    out.sort();
-    out
-}
-
-fn visit_media_dir(project_root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
-    if out.len() >= MAX_SCAN_FILES || is_ignored_scan_dir(project_root, dir) {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        if out.len() >= MAX_SCAN_FILES {
-            return;
-        }
-        let path = entry.path();
-        if path.is_dir() {
-            visit_media_dir(project_root, &path, out);
-        } else if is_media_path(&path) {
-            out.push(path);
-        }
-    }
-}
-
-fn is_ignored_scan_dir(project_root: &Path, dir: &Path) -> bool {
-    if dir == project_root {
-        return false;
-    }
-    let Ok(relative) = dir.strip_prefix(project_root) else {
-        return true;
-    };
-    relative.components().next().is_some_and(|component| {
-        matches!(
-            component,
-            Component::Normal(name)
-                if name == OsStr::new("index")
-                    || name == OsStr::new("renders")
-                    || name == OsStr::new(".awidat")
-                    || name == OsStr::new(".git")
-        )
-    })
-}
-
-fn is_media_path(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(OsStr::to_str) else {
-        return false;
-    };
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "mp4" | "mov" | "m4v" | "mkv" | "webm" | "avi" | "wav" | "mp3" | "m4a" | "aac" | "flac"
+    collect_project_media_files(
+        project_root,
+        MediaScanOptions {
+            include_raw: true,
+            include_renders: false,
+            max_files: Some(MAX_SCAN_FILES),
+        },
     )
+    .map(|files| files.into_iter().map(|file| file.path).collect())
+    .unwrap_or_default()
 }
 
 fn candidate_relinks(

@@ -458,7 +458,7 @@ indexer_group = "vision"
         // No global, no project — Config::load() returns the
         // bundled defaults.
         let c = Config::load(None).unwrap();
-        assert_eq!(c.mcp.servers.len(), 11);
+        assert_eq!(c.mcp.servers.len(), 12);
         assert!(c.find_server("whisper").is_some());
         assert!(c.find_server("clip").is_some());
     }
@@ -492,8 +492,8 @@ args = ["run", "custom-mcp"]
 "#,
         );
         let c = Config::load(Some(dir.path())).unwrap();
-        // Originally 11 defaults; project added one new ("my-custom-tool").
-        assert_eq!(c.mcp.servers.len(), 12);
+        // Originally 12 defaults; project added one new ("my-custom-tool").
+        assert_eq!(c.mcp.servers.len(), 13);
         let whisper = c.find_server("whisper").unwrap();
         // Project config replaced the default whisper command/args.
         assert_eq!(whisper.command, "/custom/uv");

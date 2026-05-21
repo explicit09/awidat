@@ -288,7 +288,7 @@ fn job_from_context(context: &ContextSummary) -> Option<&'static str> {
 
 fn transition_for_job(job: &str, direction: Option<MotionAlignment>) -> &'static str {
     match job {
-        "beat_hit" => "awidat.flash_white",
+        "beat_hit" => "awidat.ramp_in_beat",
         "soft_time_passage" => "awidat.cross_dissolve",
         "chapter_reset" => "awidat.fade_black",
         "visual_match" => "awidat.match_dissolve",
@@ -503,6 +503,11 @@ mod tests {
         assert!(!PlanTransitionTool.is_mutating(&invoke(serde_json::json!({
             "context": context("clean", 1.0)
         }))));
+    }
+
+    #[test]
+    fn beat_hit_prefers_speed_ramp_transition() {
+        assert_eq!(transition_for_job("beat_hit", None), "awidat.ramp_in_beat");
     }
 
     #[tokio::test]

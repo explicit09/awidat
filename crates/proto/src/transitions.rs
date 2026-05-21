@@ -339,6 +339,13 @@ pub enum TransitionPrimitiveOp {
         /// Peak blur intensity in `[0.0, 1.0]`, evaluated per frame.
         intensity: ParamCurve,
     },
+    /// Playback-speed curve applied across the transition window.
+    /// Values are multipliers where `1.0` is realtime, `0.5` is half
+    /// speed, and `2.0` is double speed.
+    TimeRemap {
+        /// Speed multiplier curve in `[0.05, 8.0]`.
+        speed: ParamCurve,
+    },
     /// Stable named atomic transition that does not decompose cleanly
     /// into primitives yet. This is still data: it points at an Awidat
     /// transition id, not backend code or a raw filter graph.
@@ -652,6 +659,36 @@ pub const BUILTIN_TRANSITIONS: &[BuiltinTransition] = &[
         requires_motion_continuity: false,
         motion_alignment: None,
         color_sensitivity: ColorSensitivity::AvoidDarkToBright,
+    },
+    BuiltinTransition {
+        id: "awidat.ramp_in_beat",
+        family: "speed_ramp",
+        display_name: "Ramp In Beat",
+        ffmpeg_xfade: Some("fadewhite"),
+        default_duration_s: 0.32,
+        min_duration_s: 0.16,
+        max_duration_s: 0.65,
+        audio_policy: TransitionAudioPolicy::Cut,
+        best_for: &["beat_hit", "energy_jump", "music_sync"],
+        avoid_for: &["static_dialogue", "clinical_documentary"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::AvoidBrightToDark,
+    },
+    BuiltinTransition {
+        id: "awidat.ramp_out_chapter",
+        family: "speed_ramp",
+        display_name: "Ramp Out Chapter",
+        ffmpeg_xfade: Some("fadeblack"),
+        default_duration_s: 0.55,
+        min_duration_s: 0.24,
+        max_duration_s: 1.0,
+        audio_policy: TransitionAudioPolicy::Crossfade,
+        best_for: &["chapter_reset", "soft_time_passage"],
+        avoid_for: &["hard_beat_hit"],
+        requires_motion_continuity: false,
+        motion_alignment: None,
+        color_sensitivity: ColorSensitivity::Insensitive,
     },
     BuiltinTransition {
         id: "awidat.wipe_left",
@@ -1452,6 +1489,55 @@ pub fn builtin_transition_composition(id: &str) -> Option<TransitionComposition>
             color: "#ffffff".into(),
             peak: 1.0,
         })])),
+        "awidat.ramp_in_beat" => Some(composition(vec![
+            primitive(TransitionPrimitiveOp::TimeRemap {
+                speed: ParamCurve::Keyframes(vec![
+                    Keyframe {
+                        t: 0.0,
+                        v: 0.7,
+                        easing: TransitionEasing::EaseIn,
+                    },
+                    Keyframe {
+                        t: 0.55,
+                        v: 1.85,
+                        easing: TransitionEasing::EaseOutExpo,
+                    },
+                    Keyframe {
+                        t: 1.0,
+                        v: 1.0,
+                        easing: TransitionEasing::EaseOut,
+                    },
+                ]),
+            }),
+            primitive(TransitionPrimitiveOp::Flash {
+                color: "#ffffff".into(),
+                peak: 0.85,
+            }),
+        ])),
+        "awidat.ramp_out_chapter" => Some(composition(vec![
+            primitive(TransitionPrimitiveOp::TimeRemap {
+                speed: ParamCurve::Keyframes(vec![
+                    Keyframe {
+                        t: 0.0,
+                        v: 1.0,
+                        easing: TransitionEasing::EaseOut,
+                    },
+                    Keyframe {
+                        t: 0.7,
+                        v: 0.45,
+                        easing: TransitionEasing::EaseInOut,
+                    },
+                    Keyframe {
+                        t: 1.0,
+                        v: 1.0,
+                        easing: TransitionEasing::Linear,
+                    },
+                ]),
+            }),
+            primitive(TransitionPrimitiveOp::Atomic {
+                id: "awidat.fade_black".into(),
+            }),
+        ])),
         "awidat.wipe_left" => Some(composition(vec![primitive(TransitionPrimitiveOp::Wipe {
             direction: "left".into(),
             softness: ParamCurve::Const(0.0),
@@ -1656,7 +1742,8 @@ fn primitive_ffmpeg_xfade(op: &TransitionPrimitiveOp) -> Option<&'static str> {
         | TransitionPrimitiveOp::LumaMask { .. }
         | TransitionPrimitiveOp::LightLeak { .. }
         | TransitionPrimitiveOp::SwirlVortex { .. }
-        | TransitionPrimitiveOp::CinematicPan { .. } => None,
+        | TransitionPrimitiveOp::CinematicPan { .. }
+        | TransitionPrimitiveOp::TimeRemap { .. } => None,
     }
 }
 
@@ -1675,7 +1762,8 @@ fn primitive_ffmpeg_priority(op: &TransitionPrimitiveOp) -> u8 {
         | TransitionPrimitiveOp::LumaMask { .. }
         | TransitionPrimitiveOp::LightLeak { .. }
         | TransitionPrimitiveOp::SwirlVortex { .. }
-        | TransitionPrimitiveOp::CinematicPan { .. } => 0,
+        | TransitionPrimitiveOp::CinematicPan { .. }
+        | TransitionPrimitiveOp::TimeRemap { .. } => 0,
     }
 }
 
@@ -2115,6 +2203,9 @@ fn validate_primitive_op(
         } => {
             validate_direction(idx, direction, &["left", "right"])?;
             validate_curve_unit(idx, "intensity", intensity)?;
+        }
+        TransitionPrimitiveOp::TimeRemap { speed } => {
+            validate_curve_range(idx, "speed", speed, 0.05, 8.0)?;
         }
         TransitionPrimitiveOp::Atomic { id } => {
             if !id.starts_with("awidat.") || lookup_builtin_transition(id).is_none() {
@@ -2560,6 +2651,76 @@ mod tests {
         };
         let err = validate_transition_composition(&composition).unwrap_err();
         assert!(err.to_string().contains("direction"));
+    }
+
+    #[test]
+    fn time_remap_primitive_validates_speed_curve() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::EaseInOut,
+                op: TransitionPrimitiveOp::TimeRemap {
+                    speed: ParamCurve::Keyframes(vec![
+                        Keyframe {
+                            t: 0.0,
+                            v: 0.75,
+                            easing: TransitionEasing::EaseIn,
+                        },
+                        Keyframe {
+                            t: 0.5,
+                            v: 1.8,
+                            easing: TransitionEasing::EaseOut,
+                        },
+                        Keyframe {
+                            t: 1.0,
+                            v: 1.0,
+                            easing: TransitionEasing::Linear,
+                        },
+                    ]),
+                },
+            }],
+        };
+
+        validate_transition_composition(&composition).unwrap();
+        assert_eq!(resolve_composition_ffmpeg_xfade(&composition), None);
+        assert_eq!(resolve_composition_gpu_shader(&composition), None);
+    }
+
+    #[test]
+    fn time_remap_primitive_rejects_non_positive_speed() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::Linear,
+                op: TransitionPrimitiveOp::TimeRemap {
+                    speed: ParamCurve::Const(0.0),
+                },
+            }],
+        };
+
+        let err = validate_transition_composition(&composition).unwrap_err();
+        assert!(err.to_string().contains("speed"));
+    }
+
+    #[test]
+    fn ramp_in_beat_transition_has_time_remap_and_visual_accent() {
+        let transition = lookup_builtin_transition("awidat.ramp_in_beat").unwrap();
+        assert_eq!(transition.family, "speed_ramp");
+        assert!(transition.best_for.contains(&"beat_hit"));
+
+        let composition = builtin_transition_composition("awidat.ramp_in_beat").unwrap();
+        assert!(
+            composition
+                .primitives
+                .iter()
+                .any(|primitive| matches!(primitive.op, TransitionPrimitiveOp::TimeRemap { .. }))
+        );
+        assert!(resolve_composition_ffmpeg_xfade(&composition).is_some());
+        validate_transition_composition(&composition).unwrap();
     }
 
     #[test]

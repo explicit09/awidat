@@ -561,6 +561,7 @@ fn build_diff_hints(
                 }
             }
             EdlOp::InsertTransition { .. }
+            | EdlOp::ApplyMulticamPlan { .. }
             | EdlOp::DeleteTransition { .. }
             | EdlOp::SetCutIntent { .. }
             | EdlOp::SetVolume { .. }
@@ -574,6 +575,8 @@ fn build_diff_hints(
             | EdlOp::SetTrackAudioFx { .. }
             | EdlOp::SetEffect { .. }
             | EdlOp::SetSpeed { .. }
+            | EdlOp::SetTimeRemap { .. }
+            | EdlOp::SetFreeze { .. }
             | EdlOp::SetColorCorrection { .. }
             | EdlOp::ApplyLut { .. }
             | EdlOp::RemoveLut { .. }
@@ -581,6 +584,7 @@ fn build_diff_hints(
             | EdlOp::SetAssetCatalog { .. }
             | EdlOp::SetSourceReview { .. }
             | EdlOp::ProfessionalTimelineEdit { .. }
+            | EdlOp::AuthorSubjectReframeFromTrack { .. }
             | EdlOp::AddProposalPackage { .. }
             | EdlOp::SetParameterAnimation { .. }
             | EdlOp::SetMotionTemplate { .. }
@@ -772,6 +776,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::InsertBRoll { .. } => "InsertBRoll",
         EdlOp::InsertPiP { .. } => "InsertPiP",
         EdlOp::MoveClip { .. } => "MoveClip",
+        EdlOp::ApplyMulticamPlan { .. } => "ApplyMulticamPlan",
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::DeleteTransition { .. } => "DeleteTransition",
         EdlOp::SetCutIntent { .. } => "SetCutIntent",
@@ -786,6 +791,8 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetTrackAudioFx { .. } => "SetTrackAudioFx",
         EdlOp::SetEffect { .. } => "SetEffect",
         EdlOp::SetSpeed { .. } => "SetSpeed",
+        EdlOp::SetTimeRemap { .. } => "SetTimeRemap",
+        EdlOp::SetFreeze { .. } => "SetFreeze",
         EdlOp::SetColorCorrection { .. } => "SetColorCorrection",
         EdlOp::ApplyLut { .. } => "ApplyLut",
         EdlOp::RemoveLut { .. } => "RemoveLut",
@@ -793,6 +800,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetAssetCatalog { .. } => "SetAssetCatalog",
         EdlOp::SetSourceReview { .. } => "SetSourceReview",
         EdlOp::ProfessionalTimelineEdit { .. } => "ProfessionalTimelineEdit",
+        EdlOp::AuthorSubjectReframeFromTrack { .. } => "AuthorSubjectReframeFromTrack",
         EdlOp::AddProposalPackage { .. } => "AddProposalPackage",
         EdlOp::SetParameterAnimation { .. } => "SetParameterAnimation",
         EdlOp::SetMotionTemplate { .. } => "SetMotionTemplate",
@@ -1083,6 +1091,7 @@ mod tests {
                 anchor: Anchor::ClipUuid { uuid: "u0".into() },
                 to_position: 1,
                 at_s: None,
+                snap: None,
             }],
         };
         let applied = vec![applied_at(0, 0)];

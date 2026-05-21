@@ -199,6 +199,7 @@ def build_caption_phrases(
             ),
             "start_s": round(start, 3),
             "end_s": round(max(end, start + 0.6), 3),
+            "word_timings": phrase.get("word_timings", []),
             **styled,
         })
     return phrases

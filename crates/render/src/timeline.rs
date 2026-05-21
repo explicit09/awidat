@@ -29,7 +29,9 @@ use awidat_proto::awidat_meta::{
     AwidatTimelineMetadata, BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle,
 };
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
-use awidat_proto::professional::{MaskOperation, ReframePath, TrackingPackage};
+use awidat_proto::professional::{
+    MaskOperation, ReframePath, TrackingPackage, canonical_runtime_clip_parameter,
+};
 use awidat_proto::project::{files, read_otio_timeline};
 use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
@@ -224,19 +226,26 @@ pub struct TimelineSegment {
     /// identical to `None` but the planner still emits the filter
     /// for explicitness).
     pub volume: Option<f64>,
-    /// Playback rate multiplier. `None` means no `awidat.speed`
-    /// effect — the segment plays at 1×. The segment's contribution
-    /// to the master timeline duration is `duration_s / factor` when
-    /// `factor` is `Some`.
-    pub speed: Option<f64>,
+    /// Optional keyframed clip-local volume automation.
+    pub volume_automation: Option<AudioAutomationPlan>,
+    /// Optional constant-speed retime controls read from `awidat.speed`.
+    pub speed: Option<SpeedPlan>,
     /// Optional source-local → timeline-local retime curve.
     pub time_remap: Option<TimeRemapPlan>,
+    /// Optional inserted freeze-frame hold.
+    pub freeze: Option<FreezePlan>,
     /// Optional clip-level color correction controls, read from the
     /// `awidat.color_correction` effect.
     pub color_correction: Option<ColorCorrectionPlan>,
     /// Optional clip-level blur controls, read from the
     /// `awidat.blur` effect.
     pub blur: Option<BlurPlan>,
+    /// Optional clip-level chroma key controls.
+    pub chroma_key: Option<ChromaKeyPlan>,
+    /// Optional clip-level luma key controls.
+    pub luma_key: Option<LumaKeyPlan>,
+    /// Optional clip-level static region blur controls.
+    pub region_blur: Option<RegionBlurPlan>,
     /// Optional clip-level blur radius animation, read from a runtime
     /// `awidat.blur.radius_px` parameter animation.
     pub blur_radius_animation: Option<RenderParameterAnimation>,
@@ -278,6 +287,8 @@ pub struct TimelineSegment {
     pub color_pipeline: Option<ColorPipelinePlan>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
+    /// Optional full-frame overlay blend mode.
+    pub overlay_blend_mode: Option<String>,
     /// Incoming audio lead for J-cut export, in seconds.
     pub audio_lead_s: Option<f64>,
     /// Outgoing audio trail for L-cut export, in seconds.
@@ -509,14 +520,62 @@ pub struct AudioClipPlan {
     pub duration_s: f64,
     /// Optional gain multiplier for the clip.
     pub volume: Option<f64>,
-    /// Optional playback speed multiplier.
-    pub speed: Option<f64>,
+    /// Optional keyframed clip-local volume automation.
+    pub volume_automation: Option<AudioAutomationPlan>,
+    /// Optional constant-speed retime controls.
+    pub speed: Option<SpeedPlan>,
     /// Optional fade-in duration in seconds.
     pub fade_in_s: Option<f64>,
     /// Optional fade-out duration in seconds.
     pub fade_out_s: Option<f64>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
+}
+
+/// Constant-speed retime controls read from `awidat.speed`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpeedPlan {
+    /// Playback rate multiplier.
+    pub factor: f64,
+    /// Reverse playback before timeline-speed normalization.
+    pub reverse: bool,
+    /// Preserve pitch with `atempo` when true; retime sample rate when false.
+    pub maintain_pitch: bool,
+    /// Frame interpolation quality mode.
+    pub frame_blending: FrameBlending,
+}
+
+impl SpeedPlan {
+    /// Build a default forward, pitch-preserving speed plan.
+    pub fn new(factor: f64) -> Self {
+        Self {
+            factor,
+            reverse: false,
+            maintain_pitch: true,
+            frame_blending: FrameBlending::Nearest,
+        }
+    }
+}
+
+/// Frame interpolation mode for speed/time-remap lowering.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FrameBlending {
+    /// Current FFmpeg `setpts` behavior.
+    #[default]
+    Nearest,
+    /// Frame-blended interpolation.
+    Blend,
+    /// Motion-compensated interpolation.
+    Flow,
+}
+
+/// Clip-level freeze-frame hold extracted from `awidat.freeze`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FreezePlan {
+    /// Source time, in seconds, where the frame is held.
+    pub freeze_at_source_s: f64,
+    /// Hold duration inserted into the timeline.
+    pub duration_s: f64,
 }
 
 /// Render-time item on an audio track.
@@ -586,6 +645,16 @@ pub struct AudioFxPlan {
     pub high_pass_hz: Option<f64>,
     /// Low-pass cutoff in Hz.
     pub low_pass_hz: Option<f64>,
+    /// Stereo pan position in [-1, 1], where -1 is left and 1 is right.
+    pub pan: Option<f64>,
+    /// Stereo balance in [-1, 1], where -1 attenuates right and 1 attenuates left.
+    pub balance: Option<f64>,
+    /// Enable FFmpeg adeclick click/pop repair.
+    pub adeclick: Option<bool>,
+    /// Enable FFmpeg adeclip clipped-sample repair.
+    pub adeclip: Option<bool>,
+    /// Project-relative or absolute arnndn/RNNoise model path.
+    pub arnndn_model: Option<String>,
     /// Parametric EQ bands.
     #[serde(default)]
     pub eq_bands: Vec<EqBandPlan>,
@@ -644,6 +713,52 @@ pub struct ColorCorrectionPlan {
 pub struct BlurPlan {
     /// Blur radius in source pixels.
     pub radius_px: f64,
+}
+
+/// Clip-level chroma key controls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChromaKeyPlan {
+    /// FFmpeg color literal accepted by `chromakey`, usually `0xRRGGBB`.
+    pub key_color: String,
+    /// Color-distance threshold.
+    pub similarity: f64,
+    /// Edge blend softness.
+    pub blend: f64,
+}
+
+/// Clip-level luma key controls.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LumaKeyPlan {
+    /// Luma threshold in `0..=1`.
+    pub threshold: f64,
+    /// Edge softness in `0..=1`.
+    pub softness: f64,
+}
+
+/// Static region blur controls.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionBlurPlan {
+    /// Region shape.
+    pub shape: RegionBlurShape,
+    /// Normalized left edge.
+    pub x: f64,
+    /// Normalized top edge.
+    pub y: f64,
+    /// Normalized width.
+    pub width: f64,
+    /// Normalized height.
+    pub height: f64,
+    /// Blur radius in pixels.
+    pub radius_px: f64,
+}
+
+/// Supported static region blur shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionBlurShape {
+    /// Rectangular crop bounds.
+    Rect,
+    /// Ellipse inscribed inside the crop bounds.
+    Ellipse,
 }
 
 /// Clip-level scale/crop controls for simple punch-ins and reframes.
@@ -752,6 +867,18 @@ fn read_effect_number(
         .and_then(serde_json::Value::as_f64)
 }
 
+fn read_effect_bool(
+    clip: &awidat_proto::otio::Clip,
+    effect_name: &str,
+    field: &str,
+) -> Option<bool> {
+    clip.effects
+        .iter()
+        .find(|e| e.effect_name == effect_name)
+        .and_then(|e| e.metadata.get(field))
+        .and_then(serde_json::Value::as_bool)
+}
+
 fn read_effect_string(
     clip: &awidat_proto::otio::Clip,
     effect_name: &str,
@@ -763,6 +890,25 @@ fn read_effect_string(
         .and_then(|e| e.metadata.get(field))
         .and_then(|v| v.as_str())
         .map(str::to_string)
+}
+
+fn read_speed(clip: &awidat_proto::otio::Clip) -> Option<SpeedPlan> {
+    let factor = read_effect_number(clip, "awidat.speed", "factor")?;
+    if !factor.is_finite() || factor <= 0.0 {
+        return None;
+    }
+    let frame_blending = match read_effect_string(clip, "awidat.speed", "frame_blending").as_deref()
+    {
+        Some("blend") => FrameBlending::Blend,
+        Some("flow") => FrameBlending::Flow,
+        _ => FrameBlending::Nearest,
+    };
+    Some(SpeedPlan {
+        factor,
+        reverse: read_effect_bool(clip, "awidat.speed", "reverse").unwrap_or(false),
+        maintain_pitch: read_effect_bool(clip, "awidat.speed", "maintain_pitch").unwrap_or(true),
+        frame_blending,
+    })
 }
 
 fn read_time_remap(
@@ -839,6 +985,28 @@ fn read_time_remap(
     Ok(Some(TimeRemapPlan { points }))
 }
 
+fn read_freeze(clip: &awidat_proto::otio::Clip) -> Option<FreezePlan> {
+    let freeze_at_source_s = read_effect_number(clip, "awidat.freeze", "freeze_at_source_s")?;
+    let duration_s = read_effect_number(clip, "awidat.freeze", "duration_s")?;
+    let freeze_position =
+        read_effect_string(clip, "awidat.freeze", "freeze_position").unwrap_or_else(|| "at".into());
+    let audio_behavior = read_effect_string(clip, "awidat.freeze", "audio_behavior")
+        .unwrap_or_else(|| "silence".into());
+    if !freeze_at_source_s.is_finite()
+        || freeze_at_source_s < 0.0
+        || !duration_s.is_finite()
+        || duration_s <= 0.0
+        || freeze_position != "at"
+        || audio_behavior != "silence"
+    {
+        return None;
+    }
+    Some(FreezePlan {
+        freeze_at_source_s,
+        duration_s,
+    })
+}
+
 fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrectionPlan> {
     let effect = clip
         .effects
@@ -873,6 +1041,101 @@ fn read_blur(clip: &awidat_proto::otio::Clip) -> Option<BlurPlan> {
     Some(BlurPlan {
         radius_px: radius_px.clamp(0.0, 100.0),
     })
+}
+
+fn read_chroma_key(clip: &awidat_proto::otio::Clip) -> Option<ChromaKeyPlan> {
+    let key_color = read_effect_string(clip, "awidat.chroma_key", "key_color")?;
+    let similarity = read_effect_number(clip, "awidat.chroma_key", "similarity").unwrap_or(0.1);
+    let blend = read_effect_number(clip, "awidat.chroma_key", "blend").unwrap_or(0.0);
+    if !similarity.is_finite() || !blend.is_finite() {
+        return None;
+    }
+    Some(ChromaKeyPlan {
+        key_color: normalize_ffmpeg_color(&key_color),
+        similarity: similarity.clamp(0.0, 1.0),
+        blend: blend.clamp(0.0, 1.0),
+    })
+}
+
+fn read_luma_key(clip: &awidat_proto::otio::Clip) -> Option<LumaKeyPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.luma_key")?;
+    let threshold = effect
+        .metadata
+        .get("threshold")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.5);
+    let softness = effect
+        .metadata
+        .get("softness")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.1);
+    if !threshold.is_finite() || !softness.is_finite() {
+        return None;
+    }
+    Some(LumaKeyPlan {
+        threshold: threshold.clamp(0.0, 1.0),
+        softness: softness.clamp(0.0, 1.0),
+    })
+}
+
+fn read_region_blur(clip: &awidat_proto::otio::Clip) -> Option<RegionBlurPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.region_blur")?;
+    let m = &effect.metadata;
+    let x = m.get("x").and_then(serde_json::Value::as_f64)?;
+    let y = m.get("y").and_then(serde_json::Value::as_f64)?;
+    let width = m.get("width").and_then(serde_json::Value::as_f64)?;
+    let height = m.get("height").and_then(serde_json::Value::as_f64)?;
+    let radius_px = m
+        .get("radius_px")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(12.0);
+    if !x.is_finite()
+        || !y.is_finite()
+        || !width.is_finite()
+        || !height.is_finite()
+        || !radius_px.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || radius_px <= 0.0
+    {
+        return None;
+    }
+    let shape = match m
+        .get("shape")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("rect")
+    {
+        "ellipse" => RegionBlurShape::Ellipse,
+        _ => RegionBlurShape::Rect,
+    };
+    Some(RegionBlurPlan {
+        shape,
+        x: x.clamp(0.0, 1.0),
+        y: y.clamp(0.0, 1.0),
+        width: width.clamp(f64::MIN_POSITIVE, 1.0),
+        height: height.clamp(f64::MIN_POSITIVE, 1.0),
+        radius_px: radius_px.clamp(0.0, 100.0),
+    })
+}
+
+fn normalize_ffmpeg_color(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(hex) = trimmed.strip_prefix('#') {
+        format!("0x{hex}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn read_overlay_blend_mode(clip: &awidat_proto::otio::Clip) -> Option<String> {
+    let blend_mode = read_effect_string(clip, "awidat.video_overlay", "blend_mode")?;
+    matches!(blend_mode.as_str(), "multiply" | "screen").then_some(blend_mode)
 }
 
 fn read_hdr_transfer(clip: &awidat_proto::otio::Clip) -> Option<HdrTransfer> {
@@ -1156,7 +1419,8 @@ type TimelineFullPlan = (
 
 /// Walk `<project_root>/project.otio.json` and collect every
 /// video-track clip's `(asset, source_range)` in playback order.
-/// Skips Gap, Transition, and nested Stack children for v1.
+/// Skips Gap and Transition children; nested Stack children are flattened
+/// in playback order for render planning.
 ///
 /// Wraps [`collect_timeline_plan`] and drops the transitions +
 /// titles — preserved for callers that don't need either.
@@ -1421,8 +1685,25 @@ pub fn collect_timeline_full_plan(
                         composition,
                     ));
                 }
-                TrackChild::Gap(_) | TrackChild::Stack(_) => {
+                TrackChild::Gap(_) => {
                     pending_transition = None;
+                }
+                TrackChild::Stack(stack) => {
+                    pending_transition = None;
+                    if collect_nested_video_stack_segments(
+                        project_root,
+                        stack,
+                        &parameter_animations,
+                        timeline
+                            .metadata
+                            .awidat
+                            .as_ref()
+                            .and_then(|m| m.tracking_package.as_ref()),
+                        &mut consumed_animation_ids,
+                        &mut segs,
+                    )? {
+                        saw_clip_on_track = true;
+                    }
                 }
             }
         }
@@ -1877,6 +2158,104 @@ fn validate_renderable_composite_transition(
     Ok(())
 }
 
+fn collect_nested_video_stack_segments(
+    project_root: &Path,
+    stack: &awidat_proto::otio::Stack,
+    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    tracking_package: Option<&TrackingPackage>,
+    consumed_animation_ids: &mut BTreeSet<String>,
+    segs: &mut Vec<TimelineSegment>,
+) -> Result<bool, RenderTimelineError> {
+    let mut saw_clip = false;
+    for child in &stack.children {
+        match child {
+            StackChild::Clip(clip) => {
+                if let Some(segment) = collect_timeline_segment(
+                    project_root,
+                    clip,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                )? {
+                    segs.push(segment);
+                    saw_clip = true;
+                }
+            }
+            StackChild::Track(track)
+                if matches!(track.kind, TrackKind::Video)
+                    && !is_titles_track(track)
+                    && !is_annotations_track(track) =>
+            {
+                if collect_nested_video_track_segments(
+                    project_root,
+                    track,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                    segs,
+                )? {
+                    saw_clip = true;
+                }
+            }
+            StackChild::Stack(nested) => {
+                if collect_nested_video_stack_segments(
+                    project_root,
+                    nested,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                    segs,
+                )? {
+                    saw_clip = true;
+                }
+            }
+            StackChild::Track(_) | StackChild::Gap(_) => {}
+        }
+    }
+    Ok(saw_clip)
+}
+
+fn collect_nested_video_track_segments(
+    project_root: &Path,
+    track: &awidat_proto::otio::Track,
+    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    tracking_package: Option<&TrackingPackage>,
+    consumed_animation_ids: &mut BTreeSet<String>,
+    segs: &mut Vec<TimelineSegment>,
+) -> Result<bool, RenderTimelineError> {
+    let mut saw_clip = false;
+    for child in &track.children {
+        match child {
+            TrackChild::Clip(clip) => {
+                if let Some(segment) = collect_timeline_segment(
+                    project_root,
+                    clip,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                )? {
+                    segs.push(segment);
+                    saw_clip = true;
+                }
+            }
+            TrackChild::Stack(stack) => {
+                if collect_nested_video_stack_segments(
+                    project_root,
+                    stack,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                    segs,
+                )? {
+                    saw_clip = true;
+                }
+            }
+            TrackChild::Gap(_) | TrackChild::Transition(_) => {}
+        }
+    }
+    Ok(saw_clip)
+}
+
 fn collect_timeline_segment(
     project_root: &Path,
     clip: &awidat_proto::otio::Clip,
@@ -1934,6 +2313,8 @@ fn collect_timeline_segment(
     let warp_animation =
         select_warp_animation(parameter_animations, &clip_id, consumed_animation_ids);
     let warp = read_warp(clip).or_else(|| warp_animation.as_ref().map(|_| default_warp_plan()));
+    let audio_volume_automation = audio_volume_automation_for_clip(parameter_animations, &clip_id);
+    consumed_animation_ids.extend(audio_volume_automation.consumed_animation_ids.clone());
     Ok(Some(TimelineSegment {
         asset_path,
         clip_name: clip.name.clone(),
@@ -1951,10 +2332,15 @@ fn collect_timeline_segment(
             .map(|r| r.start_time.to_seconds() + r.duration.to_seconds()),
         mask_input_index: None,
         volume: read_effect_number(clip, "awidat.volume", "value"),
-        speed: read_effect_number(clip, "awidat.speed", "factor"),
+        volume_automation: audio_volume_automation.automation,
+        speed: read_speed(clip),
         time_remap,
+        freeze: read_freeze(clip),
         color_correction: read_color_correction(clip),
         blur: read_blur(clip),
+        chroma_key: read_chroma_key(clip),
+        luma_key: read_luma_key(clip),
+        region_blur: read_region_blur(clip),
         blur_radius_animation: select_clip_effect_animation(
             parameter_animations,
             &clip_id,
@@ -1974,6 +2360,7 @@ fn collect_timeline_segment(
         lut_strength,
         color_pipeline,
         audio_fx: read_clip_audio_fx(clip),
+        overlay_blend_mode: read_overlay_blend_mode(clip),
         audio_lead_s: clip
             .metadata
             .awidat
@@ -2155,6 +2542,7 @@ fn collect_audio_track_plan(
 ) -> Result<AudioTrackAnimationSelection, RenderTimelineError> {
     let settings = parse_audio_track_settings(track);
     let mut items = Vec::new();
+    let mut consumed_animation_ids = BTreeSet::new();
     for tc in &track.children {
         match tc {
             TrackChild::Clip(clip) => {
@@ -2175,12 +2563,17 @@ fn collect_audio_track_plan(
                 }
                 let (fade_in_s, fade_out_s) = read_audio_fade(clip);
                 let audio_fx = read_clip_audio_fx(clip);
+                let clip_id = render_clip_id(clip);
+                let audio_volume_automation =
+                    audio_volume_automation_for_clip(animations, &clip_id);
+                consumed_animation_ids.extend(audio_volume_automation.consumed_animation_ids);
                 items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
                     asset_path,
                     start_s: range.start_time.to_seconds(),
                     duration_s: range.duration.to_seconds(),
                     volume: read_effect_number(clip, "awidat.volume", "value"),
-                    speed: read_effect_number(clip, "awidat.speed", "factor"),
+                    volume_automation: audio_volume_automation.automation,
+                    speed: read_speed(clip),
                     fade_in_s,
                     fade_out_s,
                     audio_fx,
@@ -2193,6 +2586,7 @@ fn collect_audio_track_plan(
         }
     }
     let automation_selection = audio_volume_automation_for_track(animations, &track.name);
+    consumed_animation_ids.extend(automation_selection.consumed_animation_ids);
     Ok(AudioTrackAnimationSelection {
         track: AudioTrackPlan {
             name: track.name.clone(),
@@ -2205,7 +2599,7 @@ fn collect_audio_track_plan(
             audio_fx: settings.audio_fx,
             items,
         },
-        consumed_animation_ids: automation_selection.consumed_animation_ids,
+        consumed_animation_ids,
     })
 }
 
@@ -2227,6 +2621,43 @@ fn audio_volume_automation_for_track(
             continue;
         };
         if track != track_name || !matches!(parameter.as_str(), "volume" | "volume_db") {
+            continue;
+        }
+        selection
+            .consumed_animation_ids
+            .insert(animation.id.clone());
+        if selection.automation.is_some() {
+            continue;
+        }
+        let expression = audio_volume_automation_expression(
+            parameter,
+            &animation.keyframes,
+            animation.pre_extrapolation,
+            animation.post_extrapolation,
+        );
+        selection.automation = Some(AudioAutomationPlan {
+            parameter: parameter.clone(),
+            expression,
+            keyframes: animation.keyframes.clone(),
+        });
+    }
+    selection
+}
+
+fn audio_volume_automation_for_clip(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+) -> AudioAutomationSelection {
+    let mut selection = AudioAutomationSelection::default();
+    for animation in animations {
+        let awidat_proto::professional::AnimationTarget::ClipParameter {
+            clip_id: target_clip_id,
+            parameter,
+        } = &animation.target
+        else {
+            continue;
+        };
+        if target_clip_id != clip_id || !matches!(parameter.as_str(), "volume" | "volume_db") {
             continue;
         }
         selection
@@ -2295,6 +2726,7 @@ fn synthesize_split_edit_audio_tracks(
             start_s: source_start_s,
             duration_s,
             volume: segment.volume,
+            volume_automation: segment.volume_automation.clone(),
             speed: segment.speed,
             fade_in_s: None,
             fade_out_s: None,
@@ -2535,6 +2967,10 @@ fn parse_title_plan(
         .get("rich_segments")
         .and_then(|value| serde_json::from_value::<Vec<RichTextSegment>>(value.clone()).ok())
         .unwrap_or_default();
+    let word_timings = m
+        .get("word_timings")
+        .and_then(|value| serde_json::from_value::<Vec<CaptionWordTiming>>(value.clone()).ok())
+        .unwrap_or_default();
     let clip_id = render_clip_id(clip);
     let animation_selection =
         render_animations_for_clip_with_limitations(parameter_animations, &clip_id, "title");
@@ -2552,6 +2988,7 @@ fn parse_title_plan(
         role,
         safe_area,
         rich_segments,
+        word_timings,
         animations,
     };
     Some((plan, animation_selection))
@@ -2861,7 +3298,8 @@ fn select_clip_effect_animation(
             awidat_proto::professional::AnimationTarget::ClipParameter {
                 clip_id: target_clip_id,
                 parameter: target_parameter,
-            } if target_clip_id == clip_id && target_parameter == parameter
+            } if target_clip_id == clip_id
+                && canonical_runtime_clip_parameter(target_parameter) == Some(parameter)
         )
     })?;
     consumed_animation_ids.insert(animation.id.clone());
@@ -3207,8 +3645,21 @@ pub struct TitlePlan {
     pub safe_area: Option<String>,
     /// Optional inline rich-text runs.
     pub rich_segments: Vec<RichTextSegment>,
+    /// Optional transcript word timings for word-accurate caption reveal.
+    pub word_timings: Vec<CaptionWordTiming>,
     /// Supported Phase 3A parameter animations attached to this title.
     pub animations: Vec<RenderParameterAnimation>,
+}
+
+/// One transcript word timing attached to a caption title.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct CaptionWordTiming {
+    /// Word text.
+    pub text: String,
+    /// Word start in master-timeline seconds.
+    pub start_s: f64,
+    /// Word end in master-timeline seconds.
+    pub end_s: f64,
 }
 
 /// One styled inline run inside a rich title.
@@ -3801,10 +4252,19 @@ fn append_video_overlays(
         } else {
             (String::new(), transformed_label)
         };
-        let overlay_filter = format!(
-            "{ref_label}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
-            overlay_video_label = opacity_filter.1,
-        );
+        let overlay_filter = if let (VideoOverlayMode::FullFrame, Some(blend_mode)) =
+            (&overlay.mode, overlay.segment.overlay_blend_mode.as_deref())
+        {
+            format!(
+                "{ref_label}{overlay_video_label}blend=all_mode={blend_mode}:all_opacity=1:enable='between(t\\,{start}\\,{end})'{next}",
+                overlay_video_label = opacity_filter.1,
+            )
+        } else {
+            format!(
+                "{ref_label}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
+                overlay_video_label = opacity_filter.1,
+            )
+        };
         filter.push_str(&format!(
             "{pts_label}{current}scale2ref={scale_expr}{scaled_label}{ref_label};\
              {rotation_filter}\
@@ -4732,16 +5192,12 @@ fn stage_overlay_video_input(
             expr = time_remap_setpts_expr(time_remap),
         ));
         video_label = sv;
-    } else if let Some(factor) = seg.speed
-        && (factor - 1.0).abs() > 1e-9
-        && factor > 0.0
+    } else if let Some(speed) = seg.speed
+        && speed_needs_filter(speed)
     {
         let sv = format!("[media_overlay_sv{input_idx}]");
         filter.push(';');
-        filter.push_str(&format!(
-            "{video_label}setpts={inv}*PTS{sv}",
-            inv = 1.0 / factor,
-        ));
+        filter.push_str(&format!("{video_label}{}{sv}", speed_video_filter(speed)));
         video_label = sv;
     }
     video_label
@@ -4788,6 +5244,33 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
     );
     if blurred_label != video_label {
         video_label = blurred_label;
+    }
+    if let Some(chroma_key) = seg.chroma_key.as_ref() {
+        let kv = format!("[ckv{i}]");
+        filter.push_str(&format!(
+            "{video_label}{}{kv};",
+            chroma_key_filter_chain(chroma_key)
+        ));
+        video_label = kv;
+    }
+    if let Some(luma_key) = seg.luma_key {
+        let kv = format!("[lkv{i}]");
+        filter.push_str(&format!(
+            "{video_label}{}{kv};",
+            luma_key_filter_chain(luma_key)
+        ));
+        video_label = kv;
+    }
+    if let Some(region_blur) = seg.region_blur {
+        let rv = format!("[rbv{i}]");
+        filter.push_str(&region_blur_filter_block(
+            &video_label,
+            &rv,
+            &i.to_string(),
+            region_blur,
+        ));
+        filter.push(';');
+        video_label = rv;
     }
 
     if let Some(plan) = seg.color_pipeline.as_ref() {
@@ -4860,6 +5343,13 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         audio_label = fx_label;
     }
 
+    if let Some(freeze) = seg.freeze {
+        let (fv, fa) =
+            append_freeze_frame_filters(filter, i, &video_label, &audio_label, seg, freeze);
+        video_label = fv;
+        audio_label = fa;
+    }
+
     // Speed/time-remap after color/audio cleanup: setpts on video, atempo
     // (possibly chained) on audio. Variable time remap uses an average
     // audio tempo to keep stream duration aligned with the retimed video.
@@ -4878,26 +5368,29 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
             filter.push_str(&format!("{audio_label}{chain}{sa};"));
             audio_label = sa;
         }
-    } else if let Some(factor) = seg.speed
-        && (factor - 1.0).abs() > 1e-9
-        && factor > 0.0
+    } else if let Some(speed) = seg.speed
+        && speed_needs_filter(speed)
     {
         let sv = format!("[sv{i}]");
-        filter.push_str(&format!(
-            "{video_label}setpts={inv}*PTS{sv};",
-            inv = 1.0 / factor,
-        ));
+        filter.push_str(&format!("{video_label}{}{sv};", speed_video_filter(speed)));
         video_label = sv;
 
         let sa = format!("[sa{i}]");
-        let chain = atempo_chain(factor);
-        filter.push_str(&format!("{audio_label}{chain}{sa};"));
+        filter.push_str(&format!("{audio_label}{}{sa};", speed_audio_filter(speed)));
         audio_label = sa;
     }
 
     // Volume next: applies to whatever the audio_label currently
-    // points at (raw input or speed-stretched stream).
-    if let Some(v) = seg.volume
+    // points at (raw input or speed-stretched stream). Clip-local
+    // automation takes precedence over scalar `awidat.volume`.
+    if let Some(automation) = seg.volume_automation.as_ref() {
+        let av = format!("[av{i}]");
+        filter.push_str(&format!(
+            "{audio_label}volume='{}':eval=frame{av};",
+            automation.expression
+        ));
+        audio_label = av;
+    } else if let Some(v) = seg.volume
         && (v - 1.0).abs() > 1e-9
     {
         let av = format!("[av{i}]");
@@ -4907,10 +5400,112 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
     (video_label, audio_label)
 }
 
+fn chroma_key_filter_chain(plan: &ChromaKeyPlan) -> String {
+    format!(
+        "chromakey={}:{}:{}",
+        plan.key_color,
+        fmt_filter_num(plan.similarity),
+        fmt_filter_num(plan.blend),
+    )
+}
+
+fn luma_key_filter_chain(plan: LumaKeyPlan) -> String {
+    format!(
+        "format=rgba,lumakey=threshold={}:softness={}",
+        fmt_filter_num(plan.threshold),
+        fmt_filter_num(plan.softness),
+    )
+}
+
+fn region_blur_filter_block(
+    input_label: &str,
+    output_label: &str,
+    suffix: &str,
+    plan: RegionBlurPlan,
+) -> String {
+    let base = format!("[rb_base{suffix}]");
+    let src = format!("[rb_src{suffix}]");
+    let crop = format!("[rb_crop{suffix}]");
+    let shape_filter = match plan.shape {
+        RegionBlurShape::Rect => String::new(),
+        RegionBlurShape::Ellipse => ",format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(pow((X-W/2)/(W/2)\\,2)+pow((Y-H/2)/(H/2)\\,2)\\,1)\\,255\\,0)'".to_string(),
+    };
+    format!(
+        "{input_label}split=2{base}{src};\
+{src}crop=w=iw*{w}:h=ih*{h}:x=iw*{x}:y=ih*{y},boxblur={radius}{shape_filter}{crop};\
+{base}{crop}overlay=x=main_w*{x}:y=main_h*{y}{output_label}",
+        x = fmt_filter_num(plan.x),
+        y = fmt_filter_num(plan.y),
+        w = fmt_filter_num(plan.width),
+        h = fmt_filter_num(plan.height),
+        radius = fmt_filter_num(plan.radius_px),
+    )
+}
+
+fn append_freeze_frame_filters(
+    filter: &mut String,
+    i: usize,
+    video_label: &str,
+    audio_label: &str,
+    seg: &TimelineSegment,
+    freeze: FreezePlan,
+) -> (String, String) {
+    let freeze_at = (freeze.freeze_at_source_s - seg.start_s).clamp(0.0, seg.duration_s);
+    let frame_end = (freeze_at + (1.0 / 24.0)).min(seg.duration_s);
+    let clip_end = seg.duration_s;
+
+    let vpre_src = format!("[fvpre_src{i}]");
+    let vhold_src = format!("[fvhold_src{i}]");
+    let vpost_src = format!("[fvpost_src{i}]");
+    let vpre = format!("[fvpre{i}]");
+    let vhold = format!("[fvhold{i}]");
+    let vpost = format!("[fvpost{i}]");
+    let fv = format!("[fv{i}]");
+    filter.push_str(&format!(
+        "{video_label}split=3{vpre_src}{vhold_src}{vpost_src};\
+{vpre_src}trim=0:{freeze_at},setpts=PTS-STARTPTS{vpre};\
+{vhold_src}trim={freeze_at}:{frame_end},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={hold}{vhold};\
+{vpost_src}trim={freeze_at}:{clip_end},setpts=PTS-STARTPTS{vpost};\
+{vpre}{vhold}{vpost}concat=n=3:v=1:a=0{fv};",
+        freeze_at = fmt_filter_num(freeze_at),
+        frame_end = fmt_filter_num(frame_end),
+        hold = fmt_filter_num(freeze.duration_s),
+        clip_end = fmt_filter_num(clip_end),
+    ));
+
+    let apre_src = format!("[fapre_src{i}]");
+    let apost_src = format!("[fapost_src{i}]");
+    let apre = format!("[fapre{i}]");
+    let silence = format!("[fasilence{i}]");
+    let apost = format!("[fapost{i}]");
+    let fa = format!("[fa{i}]");
+    filter.push_str(&format!(
+        "{audio_label}asplit=2{apre_src}{apost_src};\
+{apre_src}atrim=0:{freeze_at},asetpts=PTS-STARTPTS{apre};\
+anullsrc=channel_layout=stereo:sample_rate=48000,atrim=0:{hold}{silence};\
+{apost_src}atrim={freeze_at}:{clip_end},asetpts=PTS-STARTPTS{apost};\
+{apre}{silence}{apost}concat=n=3:v=0:a=1{fa};",
+        freeze_at = fmt_filter_num(freeze_at),
+        hold = fmt_filter_num(freeze.duration_s),
+        clip_end = fmt_filter_num(clip_end),
+    ));
+
+    (fv, fa)
+}
+
 fn audio_fx_filter_chain(plan: &AudioFxPlan) -> Option<String> {
     let mut filters = Vec::new();
 
     // cleanup
+    if plan.adeclick.unwrap_or(false) {
+        filters.push("adeclick".to_string());
+    }
+    if plan.adeclip.unwrap_or(false) {
+        filters.push("adeclip".to_string());
+    }
+    if let Some(model) = filter_string(plan.arnndn_model.as_deref()) {
+        filters.push(format!("arnndn=m={}", ffmpeg_filter_value_escape(model)));
+    }
     if let Some(freq) = positive(plan.high_pass_hz) {
         filters.push(format!("highpass=f={}", fmt_filter_num(freq)));
     }
@@ -4932,6 +5527,14 @@ fn audio_fx_filter_chain(plan: &AudioFxPlan) -> Option<String> {
             "bandstop=f={}:width_type=h:width=4",
             fmt_filter_num(freq * 2.0)
         ));
+    }
+
+    // stereo image
+    if let Some(pan) = unit_interval(plan.pan) {
+        filters.push(stereo_balance_filter(pan));
+    }
+    if let Some(balance) = unit_interval(plan.balance) {
+        filters.push(stereo_balance_filter(balance));
     }
 
     // EQ
@@ -4990,8 +5593,38 @@ fn finite(value: Option<f64>) -> Option<f64> {
     value.filter(|v| v.is_finite())
 }
 
+fn unit_interval(value: Option<f64>) -> Option<f64> {
+    finite(value).map(|v| v.clamp(-1.0, 1.0))
+}
+
 fn positive(value: Option<f64>) -> Option<f64> {
     value.filter(|v| v.is_finite() && *v > 0.0)
+}
+
+fn filter_string(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
+}
+
+fn stereo_balance_filter(value: f64) -> String {
+    let value = value.clamp(-1.0, 1.0);
+    let left_gain = if value > 0.0 { 1.0 - value } else { 1.0 };
+    let right_gain = if value < 0.0 { 1.0 + value } else { 1.0 };
+    format!(
+        "pan=stereo|c0={}*FL|c1={}*FR",
+        fmt_filter_num(left_gain),
+        fmt_filter_num(right_gain)
+    )
+}
+
+fn ffmpeg_filter_value_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '\\' | ':' | '\'' | ',' | ';' | '[' | ']') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 fn db_to_linear(db: f64) -> f64 {
@@ -5958,6 +6591,9 @@ fn format_drawtext_filter(
     t: &TitlePlan,
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
 ) -> String {
+    if !t.word_timings.is_empty() {
+        return format_word_timed_drawtext_filters(t, broadcast_overlay);
+    }
     if !t.rich_segments.is_empty() && t.reveal == TextReveal::None {
         return format_rich_drawtext_filters(t, broadcast_overlay);
     }
@@ -6315,6 +6951,70 @@ fn format_revealed_drawtext_filters(
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_word_timed_drawtext_filters(
+    t: &TitlePlan,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let steps = word_timed_reveal_steps(t);
+    steps
+        .iter()
+        .map(|step| {
+            format_drawtext_filter_with_text(
+                t,
+                &step.text,
+                step.start_s,
+                step.end_s,
+                broadcast_overlay,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+struct WordTimedRevealStep {
+    text: String,
+    start_s: f64,
+    end_s: f64,
+}
+
+fn word_timed_reveal_steps(t: &TitlePlan) -> Vec<WordTimedRevealStep> {
+    let valid_words = t
+        .word_timings
+        .iter()
+        .filter(|word| {
+            !word.text.trim().is_empty()
+                && word.start_s.is_finite()
+                && word.end_s.is_finite()
+                && word.start_s >= t.start_s
+                && word.start_s < t.end_s
+                && word.end_s >= word.start_s
+        })
+        .collect::<Vec<_>>();
+    if valid_words.is_empty() {
+        return Vec::new();
+    }
+
+    let mut steps = Vec::with_capacity(valid_words.len());
+    let mut prefix_words = Vec::with_capacity(valid_words.len());
+    for (index, word) in valid_words.iter().enumerate() {
+        prefix_words.push(word.text.trim());
+        let start_s = word.start_s.max(t.start_s);
+        let end_s = valid_words
+            .get(index + 1)
+            .map(|next| next.start_s.min(t.end_s))
+            .unwrap_or(t.end_s);
+        if end_s <= start_s {
+            continue;
+        }
+        steps.push(WordTimedRevealStep {
+            text: prefix_words.join(" "),
+            start_s,
+            end_s,
+        });
+    }
+    steps
 }
 
 fn reveal_steps(text: &str, reveal: TextReveal) -> Vec<String> {
@@ -7491,10 +8191,11 @@ fn pick_sponsor_fontfile_attr() -> String {
 /// `awidat.time_remap` curve or `awidat.speed` factor. A 4s clip at
 /// 2× plays in 2s; at 0.5× it plays in 8s.
 fn effective_duration(seg: &TimelineSegment) -> f64 {
+    let freeze_duration = seg.freeze.map(|freeze| freeze.duration_s).unwrap_or(0.0);
     if let Some(time_remap) = seg.time_remap.as_ref() {
-        time_remap.timeline_time_at_source(seg.duration_s)
+        time_remap.timeline_time_at_source(seg.duration_s) + freeze_duration
     } else {
-        seg.duration_s / segment_speed(seg)
+        (seg.duration_s + freeze_duration) / segment_speed(seg)
     }
 }
 
@@ -7510,8 +8211,47 @@ fn segment_speed(seg: &TimelineSegment) -> f64 {
         }
     }
     match seg.speed {
-        Some(f) if f > 0.0 => f,
+        Some(speed) if speed.factor > 0.0 => speed.factor,
         _ => 1.0,
+    }
+}
+
+fn speed_needs_filter(speed: SpeedPlan) -> bool {
+    speed.reverse || ((speed.factor - 1.0).abs() > 1e-9 && speed.factor > 0.0)
+}
+
+fn speed_video_filter(speed: SpeedPlan) -> String {
+    let mut filter = format!("setpts={}*PTS", 1.0 / speed.factor);
+    match speed.frame_blending {
+        FrameBlending::Nearest => {}
+        FrameBlending::Blend => {
+            filter.push_str(",tblend=all_mode=average,framerate=fps=30000/1001");
+        }
+        FrameBlending::Flow => {
+            filter.push_str(",minterpolate=mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=30000/1001");
+        }
+    }
+    if speed.reverse {
+        let setpts = filter;
+        format!("reverse,{setpts}")
+    } else {
+        filter
+    }
+}
+
+fn speed_audio_filter(speed: SpeedPlan) -> String {
+    let retime = if speed.maintain_pitch {
+        atempo_chain(speed.factor)
+    } else {
+        format!(
+            "asetrate=sample_rate*{},aresample=sample_rate",
+            fmt_filter_num(speed.factor)
+        )
+    };
+    if speed.reverse {
+        format!("areverse,{retime}")
+    } else {
+        retime
     }
 }
 
@@ -8043,10 +8783,10 @@ fn audio_track_duration(track: &AudioTrackPlan) -> f64 {
         .iter()
         .map(|item| match item {
             AudioTrackItemPlan::Clip(c) => {
-                if let Some(factor) = c.speed
-                    && factor > 0.0
+                if let Some(speed) = c.speed
+                    && speed.factor > 0.0
                 {
-                    return c.duration_s / factor;
+                    return c.duration_s / speed.factor;
                 }
                 c.duration_s
             }
@@ -8131,15 +8871,11 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push_str(&format!("{video_label}{chain}{sv};"));
         video_label = sv;
     }
-    if let Some(factor) = seg.speed
-        && (factor - 1.0).abs() > 1e-9
-        && factor > 0.0
+    if let Some(speed) = seg.speed
+        && speed_needs_filter(speed)
     {
         let sv = format!("[sv{i}]");
-        filter.push_str(&format!(
-            "{video_label}setpts={inv}*PTS{sv};",
-            inv = 1.0 / factor,
-        ));
+        filter.push_str(&format!("{video_label}{}{sv};", speed_video_filter(speed)));
         video_label = sv;
     }
     video_label
@@ -8203,9 +8939,13 @@ fn plan_audio_mix_filter(
             && track.role != "dialogue"
         {
             let out = format!("[ducked{idx}]");
+            let ratio = ducking_sidechain_ratio(duck.amount_db);
             filter.push_str(&format!(
-                "{label}{sidechain}sidechaincompress=threshold=0.05:ratio=8:attack={}:release={}{};",
-                duck.attack_ms, duck.release_ms, out
+                "{label}{sidechain}sidechaincompress=threshold=0.05:ratio={}:attack={}:release={}{};",
+                fmt_filter_num(ratio),
+                fmt_filter_num(duck.attack_ms),
+                fmt_filter_num(duck.release_ms),
+                out
             ));
             mix_labels.push(out);
             continue;
@@ -8220,6 +8960,15 @@ fn plan_audio_mix_filter(
         mix_labels.len()
     ));
     "[finala]".into()
+}
+
+fn ducking_sidechain_ratio(amount_db: f64) -> f64 {
+    let reduction_db = if amount_db.is_finite() {
+        amount_db.abs().clamp(0.0, 60.0)
+    } else {
+        12.0
+    };
+    1.0 + reduction_db * (7.0 / 12.0)
 }
 
 fn plan_one_audio_track(
@@ -8256,15 +9005,21 @@ fn plan_one_audio_track(
                     filter.push_str(&format!("{label}{chain}{fx_label};"));
                     label = fx_label;
                 }
-                if let Some(factor) = clip.speed
-                    && (factor - 1.0).abs() > 1e-9
-                    && factor > 0.0
+                if let Some(speed) = clip.speed
+                    && speed_needs_filter(speed)
                 {
                     let sped = format!("[aspeed{track_index}_{item_index}]");
-                    filter.push_str(&format!("{label}{}{};", atempo_chain(factor), sped));
+                    filter.push_str(&format!("{label}{}{sped};", speed_audio_filter(speed)));
                     label = sped;
                 }
-                if let Some(v) = clip.volume
+                if let Some(automation) = clip.volume_automation.as_ref() {
+                    let vol = format!("[avol{track_index}_{item_index}]");
+                    filter.push_str(&format!(
+                        "{label}volume='{}':eval=frame{vol};",
+                        automation.expression
+                    ));
+                    label = vol;
+                } else if let Some(v) = clip.volume
                     && (v - 1.0).abs() > 1e-9
                 {
                     let vol = format!("[avol{track_index}_{item_index}]");
@@ -8664,6 +9419,31 @@ mod tests {
         let mut tl = Timeline::empty("p");
         let mut stack = Stack::empty("root");
         stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_nested_stack(dir: &Path) -> PathBuf {
+        let asset_rel = "raw/nested.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(asset_rel), b"stub").unwrap();
+        let mut clip = Clip::empty("nested-c1".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        clip.source_range = Some(OtioRange::new(
+            RationalTime::new(1.0 * 24.0, 24.0),
+            RationalTime::new(2.5 * 24.0, 24.0),
+        ));
+        let mut nested_track = Track::empty("Nested V1", TrackKind::Video);
+        nested_track.children.push(TrackChild::Clip(clip));
+        let mut nested_stack = Stack::empty("nested-stack");
+        nested_stack.children.push(StackChild::Track(nested_track));
+        let mut base_track = Track::empty("V1", TrackKind::Video);
+        base_track.children.push(TrackChild::Stack(nested_stack));
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(base_track));
         tl.tracks = stack;
         let otio_path = dir.join(files::OTIO);
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
@@ -9264,6 +10044,19 @@ mod tests {
     }
 
     #[test]
+    fn nested_stack_clip_is_collected_for_timeline_render() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_nested_stack(dir.path());
+
+        let segments = collect_timeline_segments(dir.path()).unwrap();
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].asset_path, dir.path().join("raw/nested.mp4"));
+        assert!((segments[0].start_s - 1.0).abs() < 0.001);
+        assert!((segments[0].duration_s - 2.5).abs() < 0.001);
+    }
+
+    #[test]
     fn timeline_render_spec_lowers_time_remap_curve_to_setpts() {
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project_with_time_remap(dir.path());
@@ -9686,6 +10479,35 @@ mod tests {
     }
 
     #[test]
+    fn effect_parameter_alias_selects_blur_radius_animation() {
+        let animations = vec![ParameterAnimation {
+            id: "blur-alias".to_string(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-a".to_string(),
+                parameter: "effects.awidat.blur.params.radius_px".to_string(),
+            },
+            keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        }];
+        let mut consumed = BTreeSet::new();
+
+        let selected = select_clip_effect_animation(
+            &animations,
+            "clip-a",
+            "awidat.blur.radius_px",
+            &mut consumed,
+        )
+        .expect("alias should select canonical blur radius animation");
+
+        assert_eq!(selected.parameter, "awidat.blur.radius_px");
+        assert!(consumed.contains("blur-alias"));
+    }
+
+    #[test]
     fn base_clip_shake_intensity_animation_lowers_to_dynamic_crop_expression() {
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project_with_base_animation(
@@ -9800,6 +10622,40 @@ mod tests {
     }
 
     #[test]
+    fn base_clip_volume_db_animation_lowers_to_segment_audio_automation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "clip-volume".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "volume_db".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -18.0), Keyframe::linear(2.0, -3.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let (segments, _, _, _, _, _, _, _, limitations) =
+            collect_timeline_full_plan(dir.path()).unwrap();
+
+        assert!(limitations.is_empty());
+        assert_eq!(segments.len(), 1);
+        let automation = segments[0]
+            .volume_automation
+            .as_ref()
+            .expect("clip volume animation should lower");
+        assert_eq!(automation.parameter, "volume_db");
+        assert!(automation.expression.contains("pow(10\\,"));
+        assert_eq!(automation.keyframes.len(), 2);
+    }
+
+    #[test]
     fn missing_asset_returns_missing_asset_error() {
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project(dir.path());
@@ -9857,6 +10713,7 @@ mod tests {
                     start_s: 0.0,
                     duration_s: 2.0,
                     volume: Some(0.5),
+                    volume_automation: None,
                     speed: None,
                     fade_in_s: Some(0.1),
                     fade_out_s: Some(0.2),
@@ -9971,6 +10828,7 @@ mod tests {
                 start_s: 0.0,
                 duration_s: 4.0,
                 volume: None,
+                volume_automation: None,
                 speed: None,
                 fade_in_s: None,
                 fade_out_s: None,
@@ -10248,6 +11106,7 @@ mod tests {
                 start_s: 0.0,
                 duration_s: 2.0,
                 volume: None,
+                volume_automation: None,
                 speed: None,
                 fade_in_s: None,
                 fade_out_s: None,
@@ -10278,6 +11137,86 @@ mod tests {
     }
 
     #[test]
+    fn filter_planner_emits_clip_volume_automation_for_timeline_segment() {
+        let mut s = seg("/tmp/a.mp4", 0.0, 2.0);
+        s.volume = Some(0.25);
+        s.volume_automation = Some(AudioAutomationPlan {
+            parameter: "volume_db".into(),
+            expression: "pow(10\\,(if(lt(t\\,2)\\,-18+(-3--18)*((t-0)/(2-0))\\,-3))/20)".into(),
+            keyframes: vec![Keyframe::linear(0.0, -18.0), Keyframe::linear(2.0, -3.0)],
+        });
+
+        let plan = FilterPlanner::new(&[s], &[]).plan();
+
+        assert!(
+            plan.filter_complex.contains("volume='pow(10\\,"),
+            "expected clip-local volume automation in filter graph: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains(":eval=frame[av0]"),
+            "expected eval=frame clip-local volume automation label: {}",
+            plan.filter_complex
+        );
+        assert!(
+            !plan.filter_complex.contains("volume=0.25"),
+            "scalar volume should not also apply when clip automation exists: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn explicit_audio_track_emits_clip_volume_automation_filter() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "music".into(),
+            role: "music".into(),
+            volume: 1.0,
+            volume_automation: None,
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: PathBuf::from("/tmp/music.wav"),
+                start_s: 0.0,
+                duration_s: 2.0,
+                volume: Some(0.25),
+                volume_automation: Some(AudioAutomationPlan {
+                    parameter: "volume".into(),
+                    expression: "if(lt(t\\,2)\\,0.25\\,1)".into(),
+                    keyframes: vec![Keyframe::linear(0.0, 0.25), Keyframe::linear(2.0, 1.0)],
+                }),
+                speed: None,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_fx: None,
+            })],
+        }];
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("volume='if(lt(t\\,2)\\,0.25\\,1)':eval=frame[avol0_0]"),
+            "expected clip-local volume automation in explicit audio path: {filter}"
+        );
+        assert!(
+            !filter.contains("volume=0.25"),
+            "scalar volume should not also apply when clip automation exists: {filter}"
+        );
+    }
+
+    #[test]
     fn explicit_audio_track_volume_automation_uses_post_concat_track_time() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 6.0)];
         let audio_tracks = vec![AudioTrackPlan {
@@ -10300,6 +11239,7 @@ mod tests {
                     start_s: 0.0,
                     duration_s: 1.0,
                     volume: None,
+                    volume_automation: None,
                     speed: None,
                     fade_in_s: None,
                     fade_out_s: None,
@@ -10366,7 +11306,7 @@ mod tests {
             loudnorm_tp: Some(-1.5),
             ..Default::default()
         });
-        s.speed = Some(1.1);
+        s.speed = Some(SpeedPlan::new(1.1));
         s.volume = Some(0.8);
         let plan = FilterPlanner::new(&[s], &[]).plan();
         let filter = plan.filter_complex;
@@ -10381,9 +11321,110 @@ mod tests {
     }
 
     #[test]
+    fn filter_planner_audio_fx_emits_pan_cleanup_and_rnnoise_filters() {
+        let mut s = seg("/tmp/a.mp4", 0.0, 4.0);
+        s.audio_fx = Some(AudioFxPlan {
+            pan: Some(-0.5),
+            balance: Some(0.25),
+            adeclick: Some(true),
+            adeclip: Some(true),
+            arnndn_model: Some("models/rnnoise:voice.rnnn".into()),
+            ..Default::default()
+        });
+
+        let plan = FilterPlanner::new(&[s], &[]).plan();
+        let filter = plan.filter_complex;
+
+        assert!(
+            filter.contains("adeclick,adeclip,arnndn=m=models/rnnoise\\:voice.rnnn"),
+            "cleanup filters should be ordered before stereo shaping: {filter}"
+        );
+        assert!(
+            filter.contains("pan=stereo|c0=1*FL|c1=0.5*FR"),
+            "pan should lower to a stereo pan filter: {filter}"
+        );
+        assert!(
+            filter.contains("pan=stereo|c0=0.75*FL|c1=1*FR"),
+            "balance should lower to a stereo balance filter: {filter}"
+        );
+    }
+
+    #[test]
+    fn ducking_amount_db_changes_sidechain_compression_ratio() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
+        let audio_tracks = vec![
+            AudioTrackPlan {
+                name: "dialogue".into(),
+                role: "dialogue".into(),
+                volume: 1.0,
+                volume_automation: None,
+                muted: false,
+                solo: false,
+                ducking: None,
+                audio_fx: None,
+                items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                    asset_path: PathBuf::from("/tmp/dialogue.wav"),
+                    start_s: 0.0,
+                    duration_s: 2.0,
+                    volume: None,
+                    volume_automation: None,
+                    speed: None,
+                    fade_in_s: None,
+                    fade_out_s: None,
+                    audio_fx: None,
+                })],
+            },
+            AudioTrackPlan {
+                name: "music".into(),
+                role: "music".into(),
+                volume: 1.0,
+                volume_automation: None,
+                muted: false,
+                solo: false,
+                ducking: Some(DuckingPlan {
+                    enabled: true,
+                    amount_db: -6.0,
+                    attack_ms: 25.0,
+                    release_ms: 150.0,
+                }),
+                audio_fx: None,
+                items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                    asset_path: PathBuf::from("/tmp/music.wav"),
+                    start_s: 0.0,
+                    duration_s: 2.0,
+                    volume: None,
+                    volume_automation: None,
+                    speed: None,
+                    fade_in_s: None,
+                    fade_out_s: None,
+                    audio_fx: None,
+                })],
+            },
+        ];
+
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("sidechaincompress=threshold=0.05:ratio=4.5:attack=25:release=150"),
+            "ducking amount should tune the sidechain compressor ratio: {filter}"
+        );
+    }
+
+    #[test]
     fn filter_planner_emits_setpts_and_atempo_for_speed_segment() {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
         let plan = FilterPlanner::new(&[s0, s1], &[]).plan();
         // setpts on video with 1/factor.
@@ -10437,7 +11478,7 @@ mod tests {
     fn filter_planner_chains_atempo_for_extreme_speed() {
         // factor=4.0 → atempo=2.0 twice (2.0 × 2.0 = 4.0).
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(4.0);
+        s0.speed = Some(SpeedPlan::new(4.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex.contains("atempo=2,atempo=2"),
@@ -10450,7 +11491,7 @@ mod tests {
     fn filter_planner_chains_atempo_for_slow_speed() {
         // factor=0.25 → atempo=0.5 twice (0.5 × 0.5 = 0.25).
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(0.25);
+        s0.speed = Some(SpeedPlan::new(0.25));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex.contains("atempo=0.5,atempo=0.5"),
@@ -10464,7 +11505,7 @@ mod tests {
         // 4s @ 2× = 2s effective. xfade duration 0.5 → offset 1.5
         // (effective − transition.duration).
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
         let trans = vec![trans(0, 1, 0.5)];
         let plan = FilterPlanner::new(&[s0, s1], &trans).plan();
@@ -10480,7 +11521,7 @@ mod tests {
         // Both effects on the same segment: setpts/atempo run first,
         // then volume runs on the time-stretched audio.
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         s0.volume = Some(0.5);
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         // atempo runs first (input [0:a:0] → [sa0]).
@@ -10509,7 +11550,7 @@ mod tests {
             shadows: None,
             highlights: Some(-0.3),
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
@@ -10563,7 +11604,7 @@ mod tests {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
         s0.lut_path = Some(PathBuf::from("/tmp/luts/show-look.cube"));
         s0.lut_interpolation = Some("tetrahedral".into());
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
@@ -11141,6 +12182,7 @@ mod tests {
                 start_s: 0.0,
                 duration_s: 4.0,
                 volume: None,
+                volume_automation: None,
                 speed: None,
                 fade_in_s: None,
                 fade_out_s: None,
@@ -11211,7 +12253,7 @@ mod tests {
             x: 0.25,
             y: -0.5,
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex.contains(
@@ -11240,7 +12282,7 @@ mod tests {
             intensity_px: 6.0,
             frequency_hz: 10.0,
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex.contains(
@@ -11271,7 +12313,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
@@ -11309,7 +12351,7 @@ mod tests {
             intensity_px: 5.0,
             frequency_hz: 8.0,
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
@@ -11345,6 +12387,7 @@ mod tests {
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
@@ -11394,6 +12437,7 @@ mod tests {
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         }];
         let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
@@ -11441,6 +12485,7 @@ mod tests {
                 role: "title".into(),
                 safe_area: None,
                 rich_segments: Vec::new(),
+                word_timings: Vec::new(),
                 animations: Vec::new(),
             },
             TitlePlan {
@@ -11456,6 +12501,7 @@ mod tests {
                 role: "caption".into(),
                 safe_area: Some("mobile".into()),
                 rich_segments: Vec::new(),
+                word_timings: Vec::new(),
                 animations: Vec::new(),
             },
         ];
@@ -11485,6 +12531,7 @@ mod tests {
             role: "title".into(),
             safe_area: None,
 rich_segments: Vec::new(),
+word_timings: Vec::new(),
 animations: Vec::new(),
         };
 
@@ -11586,6 +12633,7 @@ animations: Vec::new(),
             role: "caption".into(),
             safe_area: Some("mobile".into()),
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         }];
 
@@ -11695,6 +12743,7 @@ animations: Vec::new(),
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         }];
 
@@ -11896,6 +12945,57 @@ animations: Vec::new(),
     }
 
     #[test]
+    fn word_timed_caption_reveal_uses_transcript_timing_windows() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut title = title(TitleAnimation::None, TitlePosition::Bottom);
+        title.role = "caption".into();
+        title.text = "This changed everything".into();
+        title.start_s = 1.0;
+        title.end_s = 2.5;
+        title.word_timings = vec![
+            CaptionWordTiming {
+                text: "This".into(),
+                start_s: 1.0,
+                end_s: 1.2,
+            },
+            CaptionWordTiming {
+                text: "changed".into(),
+                start_s: 1.24,
+                end_s: 1.5,
+            },
+            CaptionWordTiming {
+                text: "everything".into(),
+                start_s: 1.55,
+                end_s: 1.9,
+            },
+        ];
+
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+
+        assert!(
+            plan.filter_complex.contains("drawtext=text='This'")
+                && plan.filter_complex.contains("drawtext=text='This changed'")
+                && plan
+                    .filter_complex
+                    .contains("drawtext=text='This changed everything'"),
+            "word-timed captions should render cumulative word prefixes: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex
+                .contains("enable='between(t\\,1\\,1.24)'")
+                && plan
+                    .filter_complex
+                    .contains("enable='between(t\\,1.24\\,1.55)'")
+                && plan
+                    .filter_complex
+                    .contains("enable='between(t\\,1.55\\,2.5)'"),
+            "word-timed captions should use transcript word starts, not uniform steps: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
     fn reveal_steps_keep_grapheme_clusters_intact() {
         assert_eq!(
             reveal_steps("👩\u{200d}💻", TextReveal::Typewriter),
@@ -11923,6 +13023,7 @@ animations: Vec::new(),
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         };
         let overlay = BroadcastOverlayPlan {
@@ -13075,6 +14176,7 @@ animations: Vec::new(),
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         }
     }

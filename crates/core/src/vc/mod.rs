@@ -52,6 +52,7 @@
 //! - Branch / merge surface. Phase B work; the wrapper grows when the
 //!   tool surface does.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use vedit_core::commit::{Author, Commit};
@@ -354,31 +355,8 @@ pub fn diff_refs(
         Some(hash) => Some(read_timeline_value_at_commit(repo, &hash)?),
         None => None,
     };
-    let before_timeline = before_value
-        .as_ref()
-        .map(otio::parse_timeline)
-        .transpose()
-        .map_err(vedit_err)?;
-    let after_timeline = after_value
-        .as_ref()
-        .map(otio::parse_timeline)
-        .transpose()
-        .map_err(vedit_err)?;
-
-    let changes = match (before_timeline.as_ref(), after_timeline.as_ref()) {
-        (Some(b), Some(a)) => diff::diff(b, a),
-        // No commits at all yet — empty diff is the right answer.
-        (None, None) => Vec::new(),
-        // No before but there's an after: report everything in
-        // `after` as added. vedit's diff() handles this if we pass an
-        // empty timeline.
-        (None, Some(a)) => diff::diff(&empty_timeline(), a),
-        // Symmetric: no after but there's a before — everything was
-        // removed. Unlikely in practice but defensive.
-        (Some(b), None) => diff::diff(b, &empty_timeline()),
-    };
-    let animation_changes =
-        animation_diff::diff_parameter_animations(before_value.as_ref(), after_value.as_ref())?;
+    let (changes, animation_changes) =
+        diff_timeline_values(before_value.as_ref(), after_value.as_ref())?;
 
     Ok(CommittedDiff {
         from_ref: from_ref.unwrap_or(SESSION_START_BRANCH).to_string(),
@@ -399,7 +377,9 @@ fn resolve_default(
     match explicit {
         Some(r) => match repo.inner.resolve(r) {
             Ok(h) => Ok(Some(h)),
-            Err(_) => Err(VcError::UnknownRef(r.to_string())),
+            Err(_) => read_tag_target(repo, r)
+                .map(Some)
+                .ok_or_else(|| VcError::UnknownRef(r.to_string())),
         },
         None => match repo.inner.resolve(default) {
             Ok(h) => Ok(Some(h)),
@@ -411,6 +391,15 @@ fn resolve_default(
     }
 }
 
+fn resolve_ref(repo: &Repo, refstr: &str) -> Result<String, VcError> {
+    match repo.inner.resolve(refstr) {
+        Ok(hash) => Ok(hash),
+        Err(_) => {
+            read_tag_target(repo, refstr).ok_or_else(|| VcError::UnknownRef(refstr.to_string()))
+        }
+    }
+}
+
 fn read_timeline_value_at_commit(
     repo: &Repo,
     commit_hash: &str,
@@ -419,6 +408,35 @@ fn read_timeline_value_at_commit(
     repo.inner
         .read_timeline(&commit.timeline)
         .map_err(vedit_err)
+}
+
+fn diff_timeline_values(
+    before_value: Option<&serde_json::Value>,
+    after_value: Option<&serde_json::Value>,
+) -> Result<(Vec<diff::Change>, Vec<AnimationChange>), VcError> {
+    let before_timeline = before_value
+        .map(otio::parse_timeline)
+        .transpose()
+        .map_err(vedit_err)?;
+    let after_timeline = after_value
+        .map(otio::parse_timeline)
+        .transpose()
+        .map_err(vedit_err)?;
+
+    let changes = match (before_timeline.as_ref(), after_timeline.as_ref()) {
+        (Some(b), Some(a)) => diff::diff(b, a),
+        // No commits at all yet — empty diff is the right answer.
+        (None, None) => Vec::new(),
+        // No before but there's an after: report everything in
+        // `after` as added. vedit's diff() handles this if we pass an
+        // empty timeline.
+        (None, Some(a)) => diff::diff(&empty_timeline(), a),
+        // Symmetric: no after but there's a before — everything was
+        // removed. Unlikely in practice but defensive.
+        (Some(b), None) => diff::diff(b, &empty_timeline()),
+    };
+    let animation_changes = animation_diff::diff_parameter_animations(before_value, after_value)?;
+    Ok((changes, animation_changes))
 }
 
 fn empty_timeline() -> vedit_core::model::Timeline {
@@ -456,15 +474,810 @@ impl CommittedDiff {
     }
 }
 
+/// Create or update a flat tag under `.vedit/refs/tags/<name>`.
+pub fn tag_ref(repo: &Repo, name: &str, refstr: Option<&str>) -> Result<TagRef, VcError> {
+    let name = validate_flat_ref_name("tag", name)?;
+    let requested_ref = refstr.unwrap_or("HEAD");
+    let target = resolve_ref(repo, requested_ref)?;
+    let path = tag_path(repo, &name);
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| VcError::Vedit(format!("create refs/tags/: {e}")))?;
+    }
+    std::fs::write(&path, format!("{target}\n"))
+        .map_err(|e| VcError::Vedit(format!("writing tag {name}: {e}")))?;
+    Ok(TagRef { name, target })
+}
+
+/// List flat tags from `.vedit/refs/tags/`, sorted by name.
+pub fn list_tags(repo: &Repo) -> Result<Vec<TagRef>, VcError> {
+    let dir = repo.inner.root.join("refs").join("tags");
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut tags = Vec::new();
+    for entry in
+        std::fs::read_dir(&dir).map_err(|e| VcError::Vedit(format!("reading refs/tags/: {e}")))?
+    {
+        let entry = entry.map_err(|e| VcError::Vedit(format!("reading tag entry: {e}")))?;
+        if !entry
+            .file_type()
+            .map_err(|e| VcError::Vedit(format!("reading tag file type: {e}")))?
+            .is_file()
+        {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let target = std::fs::read_to_string(entry.path())
+            .map_err(|e| VcError::Vedit(format!("reading tag {name}: {e}")))?
+            .trim()
+            .to_string();
+        tags.push(TagRef { name, target });
+    }
+    tags.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(tags)
+}
+
+fn tag_path(repo: &Repo, name: &str) -> PathBuf {
+    repo.inner.root.join("refs").join("tags").join(name)
+}
+
+fn read_tag_target(repo: &Repo, name: &str) -> Option<String> {
+    let Ok(name) = validate_flat_ref_name("tag", name) else {
+        return None;
+    };
+    let path = tag_path(repo, &name);
+    if !path.exists() {
+        return None;
+    }
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|raw| raw.trim().to_string())
+        .filter(|target| target.starts_with("sha256:"))
+}
+
+fn validate_flat_ref_name(kind: &str, name: &str) -> Result<String, VcError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(VcError::Vedit(format!("{kind} name cannot be empty")));
+    }
+    if name == "." || name == ".." {
+        return Err(VcError::Vedit(format!("{kind} name cannot be {name:?}")));
+    }
+    if name
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'))
+    {
+        return Err(VcError::Vedit(format!(
+            "{kind} name {name:?} must be flat ASCII using letters, digits, '.', '-', or '_'"
+        )));
+    }
+    Ok(name.to_string())
+}
+
+/// One named vedit tag.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TagRef {
+    /// Flat tag name under `.vedit/refs/tags/`.
+    pub name: String,
+    /// Commit hash the tag points at.
+    pub target: String,
+}
+
+/// Create a user-facing branch/alternate pointing at a ref.
+pub fn create_branch(
+    repo: &Repo,
+    name: &str,
+    start_ref: Option<&str>,
+) -> Result<BranchRef, VcError> {
+    let start_ref = start_ref.unwrap_or("HEAD");
+    let target = resolve_ref(repo, start_ref)?;
+    let created = repo.inner.create_branch(name, &target).map_err(vedit_err)?;
+    let current = repo.inner.current_branch().map_err(vedit_err)?;
+    Ok(BranchRef {
+        name: name.trim().to_string(),
+        target: created,
+        is_current: current.as_deref() == Some(name.trim()),
+    })
+}
+
+/// List user-facing branches/alternates from `.vedit/refs/heads/`.
+pub fn list_branches(repo: &Repo) -> Result<Vec<BranchRef>, VcError> {
+    let current = repo.inner.current_branch().map_err(vedit_err)?;
+    let branches = repo.inner.list_branches().map_err(vedit_err)?;
+    Ok(branches
+        .into_iter()
+        .map(|(name, target)| {
+            let is_current = current.as_deref() == Some(name.as_str());
+            BranchRef {
+                name,
+                target,
+                is_current,
+            }
+        })
+        .collect())
+}
+
+/// Switch HEAD to an existing branch and restore the working timeline
+/// to that branch's committed snapshot.
+pub fn checkout_branch(repo: &Repo, name: &str) -> Result<CheckoutOutcome, VcError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(VcError::Vedit("branch name cannot be empty".to_string()));
+    }
+    let target = repo
+        .inner
+        .branch_target(name)
+        .map_err(vedit_err)?
+        .ok_or_else(|| VcError::UnknownRef(name.to_string()))?;
+    let restored = restore_working_timeline(repo, name)?;
+    repo.inner.switch_branch(name).map_err(vedit_err)?;
+    Ok(CheckoutOutcome {
+        branch: name.to_string(),
+        commit_hash: target,
+        timeline_hash: restored.timeline_hash,
+    })
+}
+
+/// One vedit branch/alternate.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BranchRef {
+    /// Flat branch name under `.vedit/refs/heads/`.
+    pub name: String,
+    /// Commit hash the branch points at.
+    pub target: String,
+    /// Whether HEAD currently points at this branch.
+    pub is_current: bool,
+}
+
+/// Result of checking out a vedit branch.
+#[derive(Debug, Clone)]
+pub struct CheckoutOutcome {
+    /// Branch HEAD now points at.
+    pub branch: String,
+    /// Commit hash restored into `project.otio.json`.
+    pub commit_hash: String,
+    /// Timeline object hash restored into `project.otio.json`.
+    pub timeline_hash: String,
+}
+
+/// Show one commit and its semantic diff from its first parent.
+pub fn show_commit(repo: &Repo, refstr: &str) -> Result<CommitDetails, VcError> {
+    let commit_hash = resolve_ref(repo, refstr)?;
+    let commit = repo.inner.read_commit(&commit_hash).map_err(vedit_err)?;
+    let diff = diff_commit_against_parent(repo, &commit_hash, &commit)?;
+    Ok(CommitDetails {
+        commit_hash,
+        timestamp: commit.timestamp,
+        header: header_line(&commit.message),
+        full_message: commit.message,
+        timeline_hash: commit.timeline,
+        parents: commit.parents,
+        diff,
+    })
+}
+
+fn diff_commit_against_parent(
+    repo: &Repo,
+    commit_hash: &str,
+    commit: &Commit,
+) -> Result<CommittedDiff, VcError> {
+    let before_value = commit
+        .parents
+        .first()
+        .map(|parent| read_timeline_value_at_commit(repo, parent))
+        .transpose()?;
+    let after_value = Some(
+        repo.inner
+            .read_timeline(&commit.timeline)
+            .map_err(vedit_err)?,
+    );
+    let (changes, animation_changes) =
+        diff_timeline_values(before_value.as_ref(), after_value.as_ref())?;
+    Ok(CommittedDiff {
+        from_ref: commit
+            .parents
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "<empty>".to_string()),
+        to_ref: commit_hash.to_string(),
+        changes,
+        animation_changes,
+    })
+}
+
+/// Commit details plus the local diff for that commit.
+#[derive(Debug, Clone)]
+pub struct CommitDetails {
+    /// Resolved commit hash.
+    pub commit_hash: String,
+    /// ISO-8601 timestamp.
+    pub timestamp: String,
+    /// First line of the message.
+    pub header: String,
+    /// Complete commit message.
+    pub full_message: String,
+    /// Timeline object hash.
+    pub timeline_hash: String,
+    /// Parent commit hashes.
+    pub parents: Vec<String>,
+    /// Diff from the first parent to this commit.
+    pub diff: CommittedDiff,
+}
+
+/// Project the first-parent log onto changes touching one clip.
+pub fn blame_clip(
+    repo: &Repo,
+    clip_id: &str,
+    start_ref: Option<&str>,
+    limit: usize,
+) -> Result<Vec<BlameEntry>, VcError> {
+    let clip_id = clip_id.trim();
+    if clip_id.is_empty() {
+        return Err(VcError::Vedit("clip id cannot be empty".to_string()));
+    }
+    let start_resolved = start_ref.map(|r| resolve_ref(repo, r)).transpose()?;
+    let entries = repo
+        .inner
+        .log(start_resolved.as_deref())
+        .map_err(vedit_err)?;
+    let mut out = Vec::new();
+    for (commit_hash, commit) in entries.into_iter().take(limit) {
+        let diff = diff_commit_against_parent(repo, &commit_hash, &commit)?;
+        let changes = diff
+            .changes
+            .into_iter()
+            .filter(|change| change_touches_clip(change, clip_id))
+            .collect::<Vec<_>>();
+        let animation_changes = diff
+            .animation_changes
+            .into_iter()
+            .filter(|change| animation_change_touches_clip(change, clip_id))
+            .collect::<Vec<_>>();
+        if changes.is_empty() && animation_changes.is_empty() {
+            continue;
+        }
+        out.push(BlameEntry {
+            commit_hash,
+            timestamp: commit.timestamp,
+            header: header_line(&commit.message),
+            full_message: commit.message,
+            timeline_hash: commit.timeline,
+            parents: commit.parents,
+            changes,
+            animation_changes,
+        });
+    }
+    Ok(out)
+}
+
+/// Return stable clip/media identifiers touched by a committed diff.
+pub fn changed_clip_ids(diff: &CommittedDiff) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    for change in &diff.changes {
+        collect_change_clip_ids(change, &mut ids);
+    }
+    for change in &diff.animation_changes {
+        collect_animation_change_clip_ids(change, &mut ids);
+    }
+    ids
+}
+
+/// Read-only preflight for the first bounded merge surface.
+///
+/// This intentionally does not merge or move refs. It reports whether
+/// both sides changed any of the same stable clip/media identifiers
+/// since their common ancestor, which is the conflict boundary the
+/// local-first merge plan can safely enforce before a full OTIO
+/// three-way merge exists.
+pub fn merge_preflight(
+    repo: &Repo,
+    source_ref: &str,
+    target_ref: Option<&str>,
+) -> Result<MergePreflight, VcError> {
+    let source_ref = source_ref.trim();
+    if source_ref.is_empty() {
+        return Err(VcError::Vedit("source ref cannot be empty".to_string()));
+    }
+    let target_ref = target_ref.unwrap_or("HEAD").trim();
+    if target_ref.is_empty() {
+        return Err(VcError::Vedit("target ref cannot be empty".to_string()));
+    }
+
+    let source_commit = resolve_ref(repo, source_ref)?;
+    let target_commit = resolve_ref(repo, target_ref)?;
+    let merge_base = common_ancestor(repo, &source_commit, &target_commit)?;
+
+    let source_diff = diff_refs(repo, Some(&merge_base), Some(&source_commit))?;
+    let target_diff = diff_refs(repo, Some(&merge_base), Some(&target_commit))?;
+    let source_ids = changed_clip_ids(&source_diff);
+    let target_ids = changed_clip_ids(&target_diff);
+    let overlapping_clip_ids = source_ids
+        .intersection(&target_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Ok(MergePreflight {
+        source_ref: source_ref.to_string(),
+        target_ref: target_ref.to_string(),
+        source_commit,
+        target_commit,
+        merge_base,
+        is_mergeable: overlapping_clip_ids.is_empty(),
+        source_changed_clip_ids: source_ids.into_iter().collect(),
+        target_changed_clip_ids: target_ids.into_iter().collect(),
+        overlapping_clip_ids,
+        source_change_count: source_diff.len(),
+        target_change_count: target_diff.len(),
+    })
+}
+
+fn common_ancestor(repo: &Repo, left: &str, right: &str) -> Result<String, VcError> {
+    let left_ancestors = ancestor_distances(repo, left)?;
+    let right_ancestors = ancestor_distances(repo, right)?;
+    left_ancestors
+        .iter()
+        .filter_map(|(hash, left_distance)| {
+            right_ancestors.get(hash).map(|right_distance| {
+                (
+                    left_distance + right_distance,
+                    *left_distance,
+                    hash.to_string(),
+                )
+            })
+        })
+        .min()
+        .map(|(_, _, hash)| hash)
+        .ok_or_else(|| VcError::Vedit(format!("no common ancestor found for {left} and {right}")))
+}
+
+fn ancestor_distances(repo: &Repo, start: &str) -> Result<BTreeMap<String, usize>, VcError> {
+    let mut distances = BTreeMap::new();
+    let mut stack = vec![(start.to_string(), 0usize)];
+    while let Some((hash, distance)) = stack.pop() {
+        if distances
+            .get(&hash)
+            .is_some_and(|existing| *existing <= distance)
+        {
+            continue;
+        }
+        distances.insert(hash.clone(), distance);
+        let commit: Commit = repo.inner.read_commit(&hash).map_err(vedit_err)?;
+        for parent in commit.parents {
+            stack.push((parent, distance + 1));
+        }
+    }
+    Ok(distances)
+}
+
+/// Result of checking whether a source ref can be safely merged into a
+/// target ref under the strict non-overlapping-clip rule.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MergePreflight {
+    /// Source ref requested by the caller.
+    pub source_ref: String,
+    /// Target ref requested by the caller. Defaults to `HEAD`.
+    pub target_ref: String,
+    /// Resolved source commit hash.
+    pub source_commit: String,
+    /// Resolved target commit hash.
+    pub target_commit: String,
+    /// Common ancestor used as the diff base for both sides.
+    pub merge_base: String,
+    /// True when no clip/media ids overlap between source and target changes.
+    pub is_mergeable: bool,
+    /// Sorted clip/media ids changed by the source since the merge base.
+    pub source_changed_clip_ids: Vec<String>,
+    /// Sorted clip/media ids changed by the target since the merge base.
+    pub target_changed_clip_ids: Vec<String>,
+    /// Sorted ids changed on both sides. Non-empty means conflict.
+    pub overlapping_clip_ids: Vec<String>,
+    /// Source structural plus animation change count since the merge base.
+    pub source_change_count: usize,
+    /// Target structural plus animation change count since the merge base.
+    pub target_change_count: usize,
+}
+
+/// Execute the approved bounded merge rule: merge only when source and
+/// target changed non-overlapping clip/media ids. The current
+/// implementation overlays source-changed clip objects onto the target
+/// timeline and writes a two-parent commit on the target branch.
+pub fn merge_refs(
+    repo: &Repo,
+    source_ref: &str,
+    target_ref: Option<&str>,
+) -> Result<MergeOutcome, VcError> {
+    let preflight = merge_preflight(repo, source_ref, target_ref)?;
+    if !preflight.is_mergeable {
+        return Err(VcError::Vedit(format!(
+            "merge conflicts on overlapping clip ids: {}",
+            preflight.overlapping_clip_ids.join(", ")
+        )));
+    }
+
+    checkout_merge_target(repo, &preflight.target_ref, &preflight.target_commit)?;
+    let source_value = read_timeline_value_at_commit(repo, &preflight.source_commit)?;
+    let mut merged_value = read_timeline_value_at_commit(repo, &preflight.target_commit)?;
+    overlay_source_changed_clips(
+        &mut merged_value,
+        &source_value,
+        &preflight.source_changed_clip_ids,
+    )?;
+
+    let pretty = serde_json::to_vec_pretty(&merged_value)
+        .map_err(|e| VcError::Project(format!("serializing merged timeline: {e}")))?;
+    std::fs::write(&repo.project_otio, pretty)
+        .map_err(|e| VcError::Project(format!("writing {}: {e}", repo.project_otio.display())))?;
+    let timeline_hash = repo
+        .inner
+        .write_timeline(&merged_value)
+        .map_err(vedit_err)?;
+    let message = format_commit_message(
+        &format!(
+            "Merge {} into {}",
+            preflight.source_ref, preflight.target_ref
+        ),
+        Some(
+            "Merged only after bounded preflight confirmed non-overlapping changed clip/media ids.",
+        ),
+    );
+    let parents = vec![
+        preflight.target_commit.clone(),
+        preflight.source_commit.clone(),
+    ];
+    let commit_hash = repo
+        .inner
+        .commit_with_parents(&timeline_hash, parents.clone(), awidat_author(), &message)
+        .map_err(vedit_err)?;
+
+    Ok(MergeOutcome {
+        commit_hash,
+        timeline_hash,
+        message,
+        source_ref: preflight.source_ref,
+        target_ref: preflight.target_ref,
+        source_commit: preflight.source_commit,
+        target_commit: preflight.target_commit,
+        merge_base: preflight.merge_base,
+        parents,
+        source_changed_clip_ids: preflight.source_changed_clip_ids,
+        target_changed_clip_ids: preflight.target_changed_clip_ids,
+    })
+}
+
+fn checkout_merge_target(
+    repo: &Repo,
+    target_ref: &str,
+    target_commit: &str,
+) -> Result<(), VcError> {
+    let current = repo.inner.current_branch().map_err(vedit_err)?;
+    if target_ref == "HEAD" {
+        return Ok(());
+    }
+    if current.as_deref() == Some(target_ref) {
+        return Ok(());
+    }
+    let target_branch = repo
+        .inner
+        .branch_target(target_ref)
+        .map_err(vedit_err)?
+        .filter(|branch_target| branch_target == target_commit);
+    if target_branch.is_none() {
+        return Err(VcError::Vedit(format!(
+            "bounded merge target {target_ref:?} must be an existing branch or HEAD"
+        )));
+    }
+    repo.inner.switch_branch(target_ref).map_err(vedit_err)
+}
+
+fn overlay_source_changed_clips(
+    target: &mut serde_json::Value,
+    source: &serde_json::Value,
+    changed_ids: &[String],
+) -> Result<(), VcError> {
+    let changed_ids = changed_ids.iter().cloned().collect::<BTreeSet<_>>();
+    if changed_ids.is_empty() {
+        return Ok(());
+    }
+    let source_clips = collect_matching_clips(source, &changed_ids);
+    if source_clips.is_empty() {
+        return Err(VcError::Vedit(
+            "bounded merge source changed ids did not resolve to mergeable clip objects"
+                .to_string(),
+        ));
+    }
+    for source_clip in source_clips {
+        let ids = clip_value_ids(&source_clip);
+        if !replace_matching_clip(target, &ids, source_clip.clone()) {
+            return Err(VcError::Vedit(format!(
+                "bounded merge cannot apply source clip change for ids: {}",
+                ids.into_iter().collect::<Vec<_>>().join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn collect_matching_clips(
+    timeline: &serde_json::Value,
+    wanted_ids: &BTreeSet<String>,
+) -> Vec<serde_json::Value> {
+    let mut clips = Vec::new();
+    if let Some(tracks) = timeline
+        .get("tracks")
+        .and_then(|tracks| tracks.get("children"))
+        .and_then(serde_json::Value::as_array)
+    {
+        for track in tracks {
+            if let Some(children) = track.get("children").and_then(serde_json::Value::as_array) {
+                for child in children {
+                    if is_clip_value(child) && !clip_value_ids(child).is_disjoint(wanted_ids) {
+                        clips.push(child.clone());
+                    }
+                }
+            }
+        }
+    }
+    clips
+}
+
+fn replace_matching_clip(
+    timeline: &mut serde_json::Value,
+    wanted_ids: &BTreeSet<String>,
+    replacement: serde_json::Value,
+) -> bool {
+    let Some(tracks) = timeline
+        .get_mut("tracks")
+        .and_then(|tracks| tracks.get_mut("children"))
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return false;
+    };
+    for track in tracks {
+        let Some(children) = track
+            .get_mut("children")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for child in children {
+            if is_clip_value(child) && !clip_value_ids(child).is_disjoint(wanted_ids) {
+                *child = replacement;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_clip_value(value: &serde_json::Value) -> bool {
+    value
+        .get("OTIO_SCHEMA")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|schema| schema.starts_with("Clip."))
+}
+
+fn clip_value_ids(value: &serde_json::Value) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    collect_optional_id(
+        value.get("name").and_then(serde_json::Value::as_str),
+        &mut ids,
+    );
+    collect_optional_id(
+        value
+            .get("media_reference")
+            .and_then(|media| media.get("target_url"))
+            .and_then(serde_json::Value::as_str),
+        &mut ids,
+    );
+    ids
+}
+
+/// Result of a successful bounded merge.
+#[derive(Debug, Clone)]
+pub struct MergeOutcome {
+    /// New two-parent merge commit hash.
+    pub commit_hash: String,
+    /// Timeline object hash written by the merge commit.
+    pub timeline_hash: String,
+    /// Final commit message written to the object.
+    pub message: String,
+    /// Source ref requested by the caller.
+    pub source_ref: String,
+    /// Target ref requested by the caller.
+    pub target_ref: String,
+    /// Resolved source commit hash.
+    pub source_commit: String,
+    /// Resolved target commit hash.
+    pub target_commit: String,
+    /// Common ancestor used by preflight.
+    pub merge_base: String,
+    /// Commit parents, target first then source.
+    pub parents: Vec<String>,
+    /// Sorted source changed ids accepted by preflight.
+    pub source_changed_clip_ids: Vec<String>,
+    /// Sorted target changed ids accepted by preflight.
+    pub target_changed_clip_ids: Vec<String>,
+}
+
+fn change_touches_clip(change: &diff::Change, clip_id: &str) -> bool {
+    match change {
+        diff::Change::Trimmed { clip, .. }
+        | diff::Change::Added { clip, .. }
+        | diff::Change::Removed { clip, .. }
+        | diff::Change::EffectsChanged { clip, .. }
+        | diff::Change::Replaced { clip, .. } => clip_ref_matches(clip, clip_id),
+        diff::Change::Moved {
+            clip,
+            after_neighbor,
+            before_neighbor,
+            ..
+        } => {
+            clip_ref_matches(clip, clip_id)
+                || after_neighbor
+                    .as_ref()
+                    .is_some_and(|clip| clip_ref_matches(clip, clip_id))
+                || before_neighbor
+                    .as_ref()
+                    .is_some_and(|clip| clip_ref_matches(clip, clip_id))
+        }
+        diff::Change::TransitionAdded {
+            between_before,
+            between_after,
+            ..
+        }
+        | diff::Change::TransitionRemoved {
+            between_before,
+            between_after,
+            ..
+        } => {
+            between_before
+                .as_ref()
+                .is_some_and(|clip| clip_ref_matches(clip, clip_id))
+                || between_after
+                    .as_ref()
+                    .is_some_and(|clip| clip_ref_matches(clip, clip_id))
+        }
+        diff::Change::TrackAdded { .. } | diff::Change::TrackRemoved { .. } => false,
+    }
+}
+
+fn clip_ref_matches(clip: &diff::ClipRef, clip_id: &str) -> bool {
+    clip.name == clip_id || clip.media_reference.as_deref() == Some(clip_id)
+}
+
+fn animation_change_touches_clip(change: &AnimationChange, clip_id: &str) -> bool {
+    let mut ids = BTreeSet::new();
+    collect_animation_change_clip_ids(change, &mut ids);
+    ids.contains(clip_id)
+}
+
+fn collect_change_clip_ids(change: &diff::Change, ids: &mut BTreeSet<String>) {
+    match change {
+        diff::Change::Trimmed { clip, .. }
+        | diff::Change::Added { clip, .. }
+        | diff::Change::Removed { clip, .. }
+        | diff::Change::EffectsChanged { clip, .. } => collect_clip_ref_ids(clip, ids),
+        diff::Change::Replaced {
+            clip,
+            before_media,
+            after_media,
+            ..
+        } => {
+            collect_clip_ref_ids(clip, ids);
+            collect_optional_id(before_media.as_deref(), ids);
+            collect_optional_id(after_media.as_deref(), ids);
+        }
+        diff::Change::Moved {
+            clip,
+            after_neighbor,
+            before_neighbor,
+            ..
+        } => {
+            collect_clip_ref_ids(clip, ids);
+            collect_optional_clip_ref_ids(after_neighbor.as_ref(), ids);
+            collect_optional_clip_ref_ids(before_neighbor.as_ref(), ids);
+        }
+        diff::Change::TransitionAdded {
+            between_before,
+            between_after,
+            ..
+        }
+        | diff::Change::TransitionRemoved {
+            between_before,
+            between_after,
+            ..
+        } => {
+            collect_optional_clip_ref_ids(between_before.as_ref(), ids);
+            collect_optional_clip_ref_ids(between_after.as_ref(), ids);
+        }
+        diff::Change::TrackAdded { .. } | diff::Change::TrackRemoved { .. } => {}
+    }
+}
+
+fn collect_clip_ref_ids(clip: &diff::ClipRef, ids: &mut BTreeSet<String>) {
+    collect_optional_id(Some(&clip.name), ids);
+    collect_optional_id(clip.media_reference.as_deref(), ids);
+}
+
+fn collect_optional_clip_ref_ids(clip: Option<&diff::ClipRef>, ids: &mut BTreeSet<String>) {
+    if let Some(clip) = clip {
+        collect_clip_ref_ids(clip, ids);
+    }
+}
+
+fn collect_animation_change_clip_ids(change: &AnimationChange, ids: &mut BTreeSet<String>) {
+    match change {
+        AnimationChange::AnimationAdded { animation }
+        | AnimationChange::AnimationRemoved { animation } => {
+            collect_animation_target_clip_id(&animation.target, ids);
+        }
+        AnimationChange::AnimationUpdated {
+            target,
+            field_changes,
+            ..
+        } => {
+            collect_animation_target_clip_id(target, ids);
+            for field_change in field_changes {
+                if field_change.field == "target" {
+                    collect_animation_target_value_clip_id(&field_change.before, ids);
+                    collect_animation_target_value_clip_id(&field_change.after, ids);
+                }
+            }
+        }
+    }
+}
+
+fn collect_animation_target_value_clip_id(value: &serde_json::Value, ids: &mut BTreeSet<String>) {
+    if let Some(target) = value.as_str() {
+        collect_animation_target_clip_id(target, ids);
+    }
+}
+
+fn collect_animation_target_clip_id(target: &str, ids: &mut BTreeSet<String>) {
+    let Some(rest) = target.strip_prefix("clip:") else {
+        return;
+    };
+    let clip_id = rest.split('/').next().unwrap_or_default();
+    collect_optional_id(Some(clip_id), ids);
+}
+
+fn collect_optional_id(id: Option<&str>, ids: &mut BTreeSet<String>) {
+    let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return;
+    };
+    ids.insert(id.to_string());
+}
+
+/// One blame projection entry.
+#[derive(Debug, Clone)]
+pub struct BlameEntry {
+    /// Commit hash where this clip changed.
+    pub commit_hash: String,
+    /// ISO-8601 timestamp.
+    pub timestamp: String,
+    /// First line of the commit message.
+    pub header: String,
+    /// Complete commit message.
+    pub full_message: String,
+    /// Timeline hash for this commit.
+    pub timeline_hash: String,
+    /// Parent commit hashes.
+    pub parents: Vec<String>,
+    /// Matching structural changes.
+    pub changes: Vec<diff::Change>,
+    /// Matching animation metadata changes.
+    pub animation_changes: Vec<AnimationChange>,
+}
+
 /// Restore the project's working `project.otio.json` to the timeline
 /// stored at `refstr`. This does not move HEAD by itself; callers that
 /// want an auditable revert should call [`commit_current_timeline`]
 /// after the restore succeeds.
 pub fn restore_working_timeline(repo: &Repo, refstr: &str) -> Result<RestoreOutcome, VcError> {
-    let commit_hash = repo
-        .inner
-        .resolve(refstr)
-        .map_err(|_| VcError::UnknownRef(refstr.to_string()))?;
+    let commit_hash = resolve_ref(repo, refstr)?;
     let commit: Commit = repo.inner.read_commit(&commit_hash).map_err(vedit_err)?;
     let timeline_value = repo
         .inner
@@ -570,6 +1383,15 @@ mod tests {
     }
 
     fn write_otio_with_clip(path: &Path, clip_name: &str, source_url: &str) {
+        write_otio_with_clip_duration(path, clip_name, source_url, 240.0);
+    }
+
+    fn write_otio_with_clip_duration(
+        path: &Path,
+        clip_name: &str,
+        source_url: &str,
+        duration_frames: f64,
+    ) {
         let v = serde_json::json!({
             "OTIO_SCHEMA": "Timeline.1",
             "name": "test",
@@ -602,7 +1424,7 @@ mod tests {
                             },
                             "duration": {
                                 "OTIO_SCHEMA": "RationalTime.1",
-                                "value": 240.0,
+                                "value": duration_frames,
                                 "rate": 24.0
                             }
                         },
@@ -611,6 +1433,70 @@ mod tests {
                             "target_url": source_url
                         }
                     }]
+                }]
+            }
+        });
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+    }
+
+    fn write_otio_with_two_clip_durations(path: &Path, clip_a_frames: f64, clip_b_frames: f64) {
+        let v = serde_json::json!({
+            "OTIO_SCHEMA": "Timeline.1",
+            "name": "test",
+            "tracks": {
+                "OTIO_SCHEMA": "Stack.1",
+                "name": "tracks",
+                "children": [{
+                    "OTIO_SCHEMA": "Track.1",
+                    "name": "V1",
+                    "kind": "Video",
+                    "children": [
+                        {
+                            "OTIO_SCHEMA": "Clip.2",
+                            "name": "shot-a",
+                            "source_range": {
+                                "OTIO_SCHEMA": "TimeRange.1",
+                                "start_time": {
+                                    "OTIO_SCHEMA": "RationalTime.1",
+                                    "value": 0.0,
+                                    "rate": 24.0
+                                },
+                                "duration": {
+                                    "OTIO_SCHEMA": "RationalTime.1",
+                                    "value": clip_a_frames,
+                                    "rate": 24.0
+                                }
+                            },
+                            "media_reference": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "target_url": "raw/a.mp4"
+                            }
+                        },
+                        {
+                            "OTIO_SCHEMA": "Clip.2",
+                            "name": "shot-b",
+                            "source_range": {
+                                "OTIO_SCHEMA": "TimeRange.1",
+                                "start_time": {
+                                    "OTIO_SCHEMA": "RationalTime.1",
+                                    "value": 0.0,
+                                    "rate": 24.0
+                                },
+                                "duration": {
+                                    "OTIO_SCHEMA": "RationalTime.1",
+                                    "value": clip_b_frames,
+                                    "rate": 24.0
+                                }
+                            },
+                            "media_reference": {
+                                "OTIO_SCHEMA": "ExternalReference.1",
+                                "target_url": "raw/b.mp4"
+                            }
+                        }
+                    ]
                 }]
             }
         });
@@ -766,6 +1652,242 @@ mod tests {
             .join(SESSION_START_BRANCH);
         let contents = std::fs::read_to_string(&session_ref).unwrap();
         assert!(contents.trim() == outcome.commit_hash, "{contents:?}");
+    }
+
+    #[test]
+    fn tag_ref_writes_and_lists_named_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        write_minimal_otio(&dir.path().join("project.otio.json"), "v1");
+        let repo = open_or_init(dir.path()).unwrap();
+        let outcome = commit_current_timeline(&repo, "Initial", None).unwrap();
+
+        let tag = tag_ref(&repo, "client-review-v1", None).unwrap();
+        assert_eq!(tag.name, "client-review-v1");
+        assert_eq!(tag.target, outcome.commit_hash);
+
+        let tags = list_tags(&repo).unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].name, "client-review-v1");
+        assert_eq!(tags[0].target, outcome.commit_hash);
+    }
+
+    #[test]
+    fn create_branch_writes_and_lists_named_alternate() {
+        let dir = tempfile::tempdir().unwrap();
+        write_minimal_otio(&dir.path().join("project.otio.json"), "v1");
+        let repo = open_or_init(dir.path()).unwrap();
+        let outcome = commit_current_timeline(&repo, "Initial", None).unwrap();
+
+        let branch = create_branch(&repo, "alt-tight", None).unwrap();
+        assert_eq!(branch.name, "alt-tight");
+        assert_eq!(branch.target, outcome.commit_hash);
+        assert!(!branch.is_current);
+
+        let branches = list_branches(&repo).unwrap();
+        assert!(
+            branches.iter().any(|branch| branch.name == DEFAULT_BRANCH
+                && branch.target == outcome.commit_hash
+                && branch.is_current),
+            "expected main branch to remain current: {branches:?}"
+        );
+        assert!(
+            branches
+                .iter()
+                .any(|branch| branch.name == "alt-tight" && branch.target == outcome.commit_hash),
+            "expected alt-tight branch in list: {branches:?}"
+        );
+    }
+
+    #[test]
+    fn checkout_branch_switches_head_and_restores_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_minimal_otio(&otio, "v1");
+        let repo = open_or_init(dir.path()).unwrap();
+        let first = commit_current_timeline(&repo, "Initial", None).unwrap();
+        create_branch(&repo, "alt-tight", Some(&first.commit_hash)).unwrap();
+
+        write_minimal_otio(&otio, "v2");
+        commit_current_timeline(&repo, "Main update", None).unwrap();
+
+        let checkout = checkout_branch(&repo, "alt-tight").unwrap();
+        assert_eq!(checkout.branch, "alt-tight");
+        assert_eq!(checkout.commit_hash, first.commit_hash);
+        assert_eq!(
+            repo.inner.current_branch().unwrap().as_deref(),
+            Some("alt-tight")
+        );
+
+        let restored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&otio).unwrap()).unwrap();
+        assert_eq!(restored["name"].as_str(), Some("v1"));
+    }
+
+    #[test]
+    fn show_commit_returns_parent_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_clip_duration(&otio, "shot-a", "raw/foo.mp4", 240.0);
+        let repo = open_or_init(dir.path()).unwrap();
+        commit_current_timeline(&repo, "Initial", None).unwrap();
+
+        write_otio_with_clip_duration(&otio, "shot-a", "raw/foo.mp4", 120.0);
+        let second =
+            commit_current_timeline(&repo, "Trim shot-a", Some("Tighter pacing.")).unwrap();
+
+        let details = show_commit(&repo, &second.commit_hash).unwrap();
+        assert_eq!(details.header, "Trim shot-a");
+        assert_eq!(details.parents.len(), 1);
+        assert!(
+            details
+                .diff
+                .changes
+                .iter()
+                .any(|change| matches!(change, diff::Change::Trimmed { clip, .. } if clip.name == "shot-a")),
+            "expected show diff to include shot-a trim: {:?}",
+            details.diff.changes
+        );
+    }
+
+    #[test]
+    fn blame_clip_projects_history_onto_clip() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_clip_duration(&otio, "shot-a", "raw/foo.mp4", 240.0);
+        let repo = open_or_init(dir.path()).unwrap();
+        commit_current_timeline(&repo, "Initial", None).unwrap();
+
+        write_otio_with_clip_duration(&otio, "shot-a", "raw/foo.mp4", 120.0);
+        commit_current_timeline(&repo, "Trim shot-a", Some("Tighter pacing.")).unwrap();
+
+        let entries = blame_clip(&repo, "shot-a", None, 20).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].header, "Trim shot-a");
+        assert!(
+            entries[0]
+                .changes
+                .iter()
+                .any(|change| matches!(change, diff::Change::Trimmed { clip, .. } if clip.name == "shot-a")),
+            "expected blame to include shot-a trim: {:?}",
+            entries[0].changes
+        );
+    }
+
+    #[test]
+    fn changed_clip_ids_collects_structural_and_animation_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_clip_duration(&otio, "shot-a", "raw/foo.mp4", 240.0);
+        let repo = open_or_init(dir.path()).unwrap();
+        let first = commit_current_timeline(&repo, "Initial", None).unwrap();
+
+        write_otio_with_clip_duration(&otio, "shot-a", "raw/foo.mp4", 120.0);
+        let second = commit_current_timeline(&repo, "Trim shot-a", None).unwrap();
+
+        let diff = diff_refs(&repo, Some(&first.commit_hash), Some(&second.commit_hash)).unwrap();
+        let ids = changed_clip_ids(&diff);
+        assert!(
+            ids.contains("shot-a"),
+            "expected structural clip id: {ids:?}"
+        );
+        assert!(
+            ids.contains("raw/foo.mp4"),
+            "expected structural media reference: {ids:?}"
+        );
+
+        write_otio_with_animation(&otio, "title-fade", 0.5, "ease_out");
+        let animation_first = commit_current_timeline(&repo, "Initial animation", None).unwrap();
+        write_otio_with_animation(&otio, "title-fade", 0.3, "ease_out_expo");
+        let animation_second = commit_current_timeline(&repo, "Tighten title fade", None).unwrap();
+
+        let diff = diff_refs(
+            &repo,
+            Some(&animation_first.commit_hash),
+            Some(&animation_second.commit_hash),
+        )
+        .unwrap();
+        let ids = changed_clip_ids(&diff);
+        assert!(
+            ids.contains("title-1"),
+            "expected animation target clip id: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn merge_preflight_allows_non_overlapping_branch_clip_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_two_clip_durations(&otio, 240.0, 240.0);
+        let repo = open_or_init(dir.path()).unwrap();
+        let base = commit_current_timeline(&repo, "Initial", None).unwrap();
+        create_branch(&repo, "alt-tight", Some(&base.commit_hash)).unwrap();
+
+        write_otio_with_two_clip_durations(&otio, 240.0, 120.0);
+        commit_current_timeline(&repo, "Trim shot-b on main", None).unwrap();
+
+        checkout_branch(&repo, "alt-tight").unwrap();
+        write_otio_with_two_clip_durations(&otio, 120.0, 240.0);
+        commit_current_timeline(&repo, "Trim shot-a on alternate", None).unwrap();
+
+        let preflight = merge_preflight(&repo, "alt-tight", Some(DEFAULT_BRANCH)).unwrap();
+
+        assert!(preflight.is_mergeable);
+        assert_eq!(preflight.merge_base, base.commit_hash);
+        assert_eq!(
+            preflight.source_changed_clip_ids,
+            vec!["raw/a.mp4".to_string(), "shot-a".to_string()]
+        );
+        assert_eq!(
+            preflight.target_changed_clip_ids,
+            vec!["raw/b.mp4".to_string(), "shot-b".to_string()]
+        );
+        assert!(preflight.overlapping_clip_ids.is_empty());
+    }
+
+    #[test]
+    fn merge_refs_writes_two_parent_commit_for_non_overlapping_clip_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_two_clip_durations(&otio, 240.0, 240.0);
+        let repo = open_or_init(dir.path()).unwrap();
+        let base = commit_current_timeline(&repo, "Initial", None).unwrap();
+        create_branch(&repo, "alt-tight", Some(&base.commit_hash)).unwrap();
+
+        write_otio_with_two_clip_durations(&otio, 240.0, 120.0);
+        let main = commit_current_timeline(&repo, "Trim shot-b on main", None).unwrap();
+
+        checkout_branch(&repo, "alt-tight").unwrap();
+        write_otio_with_two_clip_durations(&otio, 120.0, 240.0);
+        let alternate = commit_current_timeline(&repo, "Trim shot-a on alternate", None).unwrap();
+
+        let merge = merge_refs(&repo, "alt-tight", Some(DEFAULT_BRANCH)).unwrap();
+
+        assert_eq!(merge.source_commit, alternate.commit_hash);
+        assert_eq!(merge.target_commit, main.commit_hash);
+        assert_eq!(merge.parents, vec![main.commit_hash, alternate.commit_hash]);
+        assert_eq!(
+            repo.inner.current_branch().unwrap().as_deref(),
+            Some(DEFAULT_BRANCH)
+        );
+
+        let merged_commit = repo.inner.read_commit(&merge.commit_hash).unwrap();
+        assert_eq!(merged_commit.parents, merge.parents);
+
+        let merged: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&otio).unwrap()).unwrap();
+        let children = merged["tracks"]["children"][0]["children"]
+            .as_array()
+            .unwrap();
+        assert_eq!(children[0]["name"].as_str(), Some("shot-a"));
+        assert_eq!(
+            children[0]["source_range"]["duration"]["value"].as_f64(),
+            Some(120.0)
+        );
+        assert_eq!(children[1]["name"].as_str(), Some("shot-b"));
+        assert_eq!(
+            children[1]["source_range"]["duration"]["value"].as_f64(),
+            Some(120.0)
+        );
     }
 
     #[test]

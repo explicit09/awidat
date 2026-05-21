@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Motion Graphics & Animation — Awidat gap analysis</title>
+<style>
+  :root{--bg:#0f1115;--panel:#161a22;--p2:#1c212c;--ink:#e7ecf3;--mute:#97a3b6;--line:#232a37;--good:#4ade80;--warn:#fbbf24;--bad:#f87171;--info:#60a5fa;--ac:#c4b5fd}
+  html,body{background:var(--bg);color:var(--ink)}
+  body{font:14px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0 auto;padding:32px 28px 56px;max-width:1040px}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.01em}
+  .sub{color:var(--mute);margin:0 0 22px}
+  h2{font-size:15px;margin:24px 0 10px;color:var(--ac);text-transform:uppercase;font-weight:600;letter-spacing:.02em}
+  p{margin:0 0 10px}
+  code{background:var(--p2);padding:1px 5px;border-radius:4px;font-size:12.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:0 0 14px}
+  .row{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:0}
+  .d{width:10px;height:10px;border-radius:50%;display:inline-block;margin-top:6px}
+  .d.g{background:var(--good)}.d.w{background:var(--warn)}.d.b{background:var(--bad)}.d.i{background:var(--info)}
+  .lab{color:var(--ink);font-weight:600}
+  .where{color:var(--mute);font-size:12.5px}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+  .card h3{margin:0 0 6px;font-size:14px;color:var(--ac)}
+  .path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mute);font-size:11.5px;word-break:break-all}
+  .gap{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .gap:last-child{border-bottom:0}
+  .area{color:var(--ink);font-weight:600}
+  .now,.move{color:var(--mute);font-size:13px}
+  ol{padding-left:18px;margin:6px 0 0}
+  ol li{margin:4px 0}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;background:var(--p2);color:var(--mute);margin-left:6px}
+  @media (max-width:720px){.cards,.gap{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<h1>Motion Graphics &amp; Animation</h1>
+<p class="sub">Awidat category 4 of 13 &middot; planner &rarr; proto &rarr; render &rarr; preview chain for making static shots feel dynamic.</p>
+
+<h2>What this covers</h2>
+<div class="panel">
+  <p>Keyframe data model, easing/bezier/spring curves, motion paths, transform parameters (position, scale, rotation, opacity, blur), tracking-driven motion, and animated graphic primitives (titles, lower-thirds, callouts, logo reveals) that an agent can plan, persist, and deterministically render. Transitions are owned by Category 5, pure VFX by Category 7, typography by Category 9.</p>
+</div>
+
+<h2>Status snapshot</h2>
+<div class="panel">
+  <div class="row"><span><span class="d g"></span></span><span><span class="lab">Keyframe model + curves</span> &mdash; Hold/Step/Linear/Bezier/Spring; 28 named easing functions; aligned/flat tangent modes; pre/post extrapolation; FFmpeg lowering with parity fixture.</span><span class="where">crates/proto/src/professional.rs, crates/render/src/animation.rs, fixtures/motion/animation-parity.json</span></div>
+  <div class="row"><span><span class="d g"></span></span><span><span class="lab">Emphasis planner</span> &mdash; <code>plan_emphasis</code> emits validated <code>ParameterAnimation</code> for scale_punch / slow_zoom / slide_in / rotate_nudge with beat-driven mode.</span><span class="where">crates/core/src/tools/plan_emphasis.rs</span></div>
+  <div class="row"><span><span class="d g"></span></span><span><span class="lab">Tracking package</span> &mdash; deterministic generator, reframe paths, mask/matte attachment, motion-blur shutter clamp.</span><span class="where">crates/render/src/professional.rs (lines 322, 415, 1239, 1822)</span></div>
+  <div class="row"><span><span class="d g"></span></span><span><span class="lab">Runtime parameter surface</span> &mdash; direct <code>title.*</code> / <code>overlay.*</code> paths plus canonical <code>awidat.blur</code>, <code>awidat.shake</code>, and <code>awidat.warp</code> params. The runtime also accepts <code>effects.&lt;effect_id&gt;.params.&lt;param&gt;</code> aliases for those in-tree effects.</span><span class="where">crates/proto/src/professional.rs:562-620</span></div>
+  <div class="row"><span><span class="d w"></span></span><span><span class="lab">Motion templates (9)</span> &mdash; lower-third, callout, title-reveal, punch-in-zoom, focus-highlight, pip-emphasis, product-insert-emphasis, shake-emphasis, logo-reveal. Lowered to titles + media overlays + procedural keyframes.</span><span class="where">crates/render/src/professional.rs:1561-1671, 1999-2106</span></div>
+  <div class="row"><span><span class="d w"></span></span><span><span class="lab">Motion paths</span> &mdash; 2-D x/y points but linear segments only; no bezier handles, no orient-along-path, no arc-length param.</span><span class="where">crates/render/src/animation.rs:216-277</span></div>
+  <div class="row"><span><span class="d w"></span></span><span><span class="lab">Text/title animation</span> &mdash; FadeInOut / SlideIn / FadeIn / None plus TextReveal / WriteOn progressive. No per-character or per-word stagger.</span><span class="where">crates/render/src/professional.rs:1539, 1912</span></div>
+  <div class="row"><span><span class="d b"></span></span><span><span class="lab">GPU acceleration for motion</span> &mdash; render-gpu is transitions-only (8 shaders); animation transforms lower to FFmpeg <code>scale/rotate/overlay/geq</code> expressions. Preview parity rides on string lowering.</span><span class="where">crates/render-gpu/src/lib.rs:30-117</span></div>
+  <div class="row"><span><span class="d b"></span></span><span><span class="lab">Effects crate</span> &mdash; single ~1080-LOC <code>lib.rs</code> with no per-effect modules and no declared animatable params.</span><span class="where">crates/effects/src/lib.rs</span></div>
+  <div class="row"><span><span class="d w"></span></span><span><span class="lab">Time-remap / speed-ramp</span> &mdash; clip-local render support and Cat 5 <code>TimeRemap</code> transition semantics exist; <code>plan_emphasis</code> still needs to emit against those primitives instead of gating <code>time_ramp</code>.</span><span class="where">crates/render/src/timeline.rs, crates/proto/src/transitions.rs, crates/core/src/tools/plan_emphasis.rs</span></div>
+  <div class="row"><span><span class="d i"></span></span><span><span class="lab">Overlay-animation skill</span> &mdash; asset workflow that generates motion graphics externally and inserts via the overlay pipeline; bypasses the in-engine animation system.</span><span class="where">skills/overlay-animation/SKILL.md</span></div>
+</div>
+
+<h2>Reference signals</h2>
+<div class="cards">
+  <div class="card">
+    <h3>opencut <span class="tag">closest peer</span></h3>
+    <p>Scalar/discrete channels with <code>leftHandle</code>/<code>rightHandle</code> <code>{dt,dv}</code>, <code>segmentToNext</code> (step/linear/bezier), <code>tangentMode</code> (auto/aligned/broken/flat), per-channel before/after extrapolation. Unified namespace: <code>transform.*</code>, <code>opacity</code>, <code>color</code>, <code>background.*</code>, <code>effects.&lt;id&gt;.params.&lt;p&gt;</code>.</p>
+    <p class="path">apps/web/src/animation/{types.ts, graph-channels.ts, effect-param-channel.ts}</p>
+  </div>
+  <div class="card">
+    <h3>revideo <span class="tag">code-first</span></h3>
+    <p>Generator-driven scenes: <code>tween()</code>, <code>spring()</code> with mass/stiffness/damping/initialVelocity, 28+ named easings (1:1 with Awidat's catalog). Lower-thirds are composed <code>Layout</code>/<code>Txt</code>/<code>Img</code> components, not a fixed template list. No FFmpeg expression lowering &mdash; playback in browser/headless renderer.</p>
+    <p class="path">packages/core/src/tweening/{tween.ts, spring.ts, timingFunctions.ts}, packages/2d/src/lib/components/</p>
+  </div>
+  <div class="card">
+    <h3>hyperframes <span class="tag">HTML/GSAP</span></h3>
+    <p>Parses real GSAP <code>set/to/from/fromTo</code> calls. <code>SUPPORTED_EASES</code> (<code>power1-4.{in,out,inOut}</code>, back, elastic, bounce, expo) is a direct subset of Awidat's easing set. Renders motion graphics through a headless DOM/GSAP engine.</p>
+    <p class="path">packages/core/src/parsers/gsapParser.ts, packages/engine/src/</p>
+  </div>
+  <div class="card">
+    <h3>twick <span class="tag">declarative</span></h3>
+    <p>Tiny <code>ElementAnimation</code> add-on: <code>name</code>, <code>interval</code>, <code>duration</code>, <code>intensity</code>, <code>animate</code> (enter/exit/both), <code>mode</code>, <code>direction</code>. Renderer interprets the named animation; no keyframes/curves. Weaker than Awidat for low-level control.</p>
+    <p class="path">packages/timeline/src/core/addOns/animation.ts</p>
+  </div>
+  <div class="card">
+    <h3>openshot-qt <span class="tag">preset library</span></h3>
+    <p>~30 Animate.css-derived presets (bounce, flash, pulse, rubberBand, shakeX/Y, swing, tada, fadeIn*, slideIn*, zoomIn*) stored as <code>(frame, value, easing_name)</code> tuples. <code>KEYFRAME_EASING</code> is CSS <code>cubic-bezier(x1,y1,x2,y2)</code> mapped to libopenshot handles. Easy to mine for Awidat emphasis presets.</p>
+    <p class="path">src/animation_presets.py</p>
+  </div>
+  <div class="card">
+    <h3>olive &amp; kdenlive <span class="tag">node graph / MLT</span></h3>
+    <p>Olive <code>NodeKeyframe</code>: Linear / Hold / Bezier with <code>QPointF</code> in/out handles &mdash; no Spring/Elastic interpolation kinds. Kdenlive stores <code>std::map&lt;GenTime, pair&lt;KeyframeType, QVariant&gt;&gt;</code> derived from MLT enums. Titler is a separate QGraphicsScene authoring subsystem (<code>src/titler/</code>).</p>
+    <p class="path">olive/app/node/keyframe.h, kdenlive/src/assets/keyframes/model/keyframemodel.hpp, kdenlive/src/titler/</p>
+  </div>
+</div>
+
+<h2>Top gaps</h2>
+<div class="panel">
+  <div class="gap"><div class="area">Runtime parameter surface</div><div class="now"><code>effects.&lt;effect_id&gt;.params.&lt;param&gt;</code> aliases work for executable in-tree blur, shake, and warp params.</div><div class="move">Keep expanding the registry as new effect modules declare animatable params.</div></div>
+  <div class="gap"><div class="area">Motion paths</div><div class="now">Linear segments between <code>MotionPathPoint</code>s.</div><div class="move">Per-point bezier handles + orient-along-path; reuse scalar bezier evaluator.</div></div>
+  <div class="gap"><div class="area">GPU pipeline scope</div><div class="now">Transitions-only (8 shaders); animations via FFmpeg expression strings.</div><div class="move">Generalize render-gpu to per-frame transform/composite pass driven by <code>RenderParameterAnimation</code>.</div></div>
+  <div class="gap"><div class="area">Tracker-attached overlays</div><div class="now">Tracking drives masks/mattes/reframe, but no <code>AnimationTarget::TrackerAttachment</code>.</div><div class="move">Add tracker-attached animation target so a callout can be glued to a tracked point.</div></div>
+  <div class="gap"><div class="area">Title stagger</div><div class="now">Block-level FadeIn / SlideIn / FadeInOut / TextReveal / WriteOn.</div><div class="move">Per-character &amp; per-word stagger primitive bound to the easing catalog.</div></div>
+  <div class="gap"><div class="area">Time-remap</div><div class="now">Absent; explicitly deferred in <code>plan_emphasis</code>.</div><div class="move">Clip-local keyframed playback rate.</div></div>
+  <div class="gap"><div class="area">Effects crate shape</div><div class="now">Single 1080-LOC <code>lib.rs</code> with no declared animatable params.</div><div class="move">Split into per-effect modules with explicit animatable params, wire into runtime surface.</div></div>
+  <div class="gap"><div class="area">Curve editor (UI)</div><div class="now">Not evident in <code>apps/desktop/</code> (unverified).</div><div class="move">Add a curve-graph editor so humans can sculpt agent-emitted curves.</div></div>
+</div>
+
+<h2>Suggested next moves</h2>
+<div class="panel">
+  <ol class="moves">
+    <li><strong>Keep expanding the effect-parameter registry.</strong> <code>effects.&lt;id&gt;.params.&lt;p&gt;</code> namespacing now exists for executable in-tree blur, shake, and warp params; new effects should declare animatable params through the same registry.</li>
+    <li><strong>Bezier motion paths.</strong> Add optional in/out handles per <code>MotionPathPoint</code> and "orient along path"; reuse the existing scalar bezier evaluator/sampler.</li>
+    <li><strong>TrackerAttachment animation target.</strong> New <code>AnimationTarget</code> variant that resolves to per-frame x/y from a tracking package, routed through overlay x/y lowering.</li>
+    <li><strong>Planner-visible time remap.</strong> Connect <code>plan_emphasis</code> to the existing clip-local retime support and Cat 5 <code>TimeRemap</code> transition primitive.</li>
+    <li><strong>Per-character/word title stagger.</strong> Extend <code>TitleAnimation</code> with <code>Stagger {unit, delay_s, easing}</code>; lower in <code>progressive_titles</code>.</li>
+    <li><strong>Generalize render-gpu.</strong> Add a transform/blur/opacity pass driven by <code>RenderParameterAnimation</code> so preview is shader-driven and matches export.</li>
+    <li><strong>Mine openshot-qt presets.</strong> Port a dozen Animate.css presets into <code>plan_emphasis</code>'s style palette.</li>
+  </ol>
+</div>
+
+</body>
+</html>

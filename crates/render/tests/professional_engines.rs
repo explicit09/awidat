@@ -937,6 +937,12 @@ fn particle_and_scene3d_nodes_persist_with_explicit_limitations() {
 
     assert_eq!(lowering.steps.len(), 1);
     assert_eq!(lowering.limitations.len(), 2);
+    assert!(lowering.limitations.iter().any(|limitation| {
+        limitation.node_id == "scene" && limitation.message.contains("future 3D scene runtime")
+    }));
+    assert!(lowering.limitations.iter().any(|limitation| {
+        limitation.node_id == "sparks" && limitation.message.contains("future particle runtime")
+    }));
     assert_eq!(inspection.unsupported_nodes, vec!["scene", "sparks"]);
 }
 

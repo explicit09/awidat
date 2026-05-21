@@ -40,6 +40,7 @@ impl AssetCatalog {
         let mut diagnostics = Vec::new();
         let mut ids = HashSet::new();
         let bin_ids: HashSet<&str> = self.bins.iter().map(|bin| bin.id.as_str()).collect();
+        validate_asset_bins(&self.bins, &bin_ids, &mut diagnostics);
         for asset in &self.assets {
             if asset.id.trim().is_empty() {
                 diagnostics.push(ProfessionalDiagnostic::error(
@@ -78,6 +79,63 @@ impl AssetCatalog {
         }
         diagnostics
     }
+}
+
+fn validate_asset_bins(
+    bins: &[AssetBin],
+    bin_ids: &HashSet<&str>,
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+) {
+    let mut seen = HashSet::new();
+    let parent_by_id: HashMap<&str, Option<&str>> = bins
+        .iter()
+        .map(|bin| (bin.id.as_str(), bin.parent_id.as_deref()))
+        .collect();
+    for bin in bins {
+        if bin.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::AssetCatalog,
+                "asset catalog contains a bin with an empty id",
+            ));
+            continue;
+        }
+        if !seen.insert(bin.id.as_str()) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::AssetCatalog,
+                format!("asset catalog contains duplicate bin id {}", bin.id),
+            ));
+        }
+        if let Some(parent_id) = bin.parent_id.as_deref() {
+            if parent_id == bin.id {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::AssetCatalog,
+                    format!("bin {} cannot be its own parent", bin.id),
+                ));
+            } else if !bin_ids.contains(parent_id) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::AssetCatalog,
+                    format!("bin {} references missing parent {}", bin.id, parent_id),
+                ));
+            } else if bin_parent_chain_has_cycle(bin.id.as_str(), &parent_by_id) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::AssetCatalog,
+                    format!("bin {} is part of a parent cycle", bin.id),
+                ));
+            }
+        }
+    }
+}
+
+fn bin_parent_chain_has_cycle(bin_id: &str, parent_by_id: &HashMap<&str, Option<&str>>) -> bool {
+    let mut seen = HashSet::new();
+    let mut current = Some(bin_id);
+    while let Some(id) = current {
+        if !seen.insert(id) {
+            return true;
+        }
+        current = parent_by_id.get(id).and_then(|parent| *parent);
+    }
+    false
 }
 
 /// Asset catalog query.
@@ -502,7 +560,16 @@ impl ParameterAnimation {
                 ));
             }
             if let Some(parameter) = parameter {
-                validate_parameter_animation_value(&mut diagnostics, &self.id, parameter, keyframe);
+                let value_parameter = match canonical_runtime_clip_parameter(parameter) {
+                    Some(canonical) => canonical,
+                    None => parameter,
+                };
+                validate_parameter_animation_value(
+                    &mut diagnostics,
+                    &self.id,
+                    value_parameter,
+                    keyframe,
+                );
             }
             if let Some(handles) = keyframe.bezier {
                 validate_bezier_handles(&mut diagnostics, &self.id, handles);
@@ -549,7 +616,7 @@ pub fn is_runtime_parameter_animation_target(target: &AnimationTarget) -> bool {
 /// Returns true when the named clip parameter is executable by the
 /// current preview/render runtime.
 pub fn is_runtime_clip_parameter(parameter: &str) -> bool {
-    RUNTIME_CLIP_PARAMETERS.contains(&parameter)
+    canonical_runtime_clip_parameter(parameter).is_some()
 }
 
 /// Returns true when the named track parameter is executable by the
@@ -580,6 +647,84 @@ pub const RUNTIME_CLIP_PARAMETERS: &[&str] = &[
     "awidat.warp.center_x",
     "awidat.warp.center_y",
 ];
+
+/// Runtime effect parameter exposed through the generic
+/// `effects.<effect_id>.params.<param>` namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeEffectParameter {
+    /// Stable effect id.
+    pub effect_id: &'static str,
+    /// Parameter name inside the effect.
+    pub param: &'static str,
+    /// Existing canonical runtime parameter path.
+    pub canonical: &'static str,
+}
+
+/// Effect parameters executable by the current preview/render runtime.
+pub const RUNTIME_EFFECT_PARAMETERS: &[RuntimeEffectParameter] = &[
+    RuntimeEffectParameter {
+        effect_id: "awidat.blur",
+        param: "radius_px",
+        canonical: "awidat.blur.radius_px",
+    },
+    RuntimeEffectParameter {
+        effect_id: "awidat.shake",
+        param: "intensity_px",
+        canonical: "awidat.shake.intensity_px",
+    },
+    RuntimeEffectParameter {
+        effect_id: "awidat.shake",
+        param: "frequency_hz",
+        canonical: "awidat.shake.frequency_hz",
+    },
+    RuntimeEffectParameter {
+        effect_id: "awidat.warp",
+        param: "k1",
+        canonical: "awidat.warp.k1",
+    },
+    RuntimeEffectParameter {
+        effect_id: "awidat.warp",
+        param: "k2",
+        canonical: "awidat.warp.k2",
+    },
+    RuntimeEffectParameter {
+        effect_id: "awidat.warp",
+        param: "center_x",
+        canonical: "awidat.warp.center_x",
+    },
+    RuntimeEffectParameter {
+        effect_id: "awidat.warp",
+        param: "center_y",
+        canonical: "awidat.warp.center_y",
+    },
+];
+
+/// Return the canonical runtime clip parameter for a direct path or
+/// generic effect namespace path.
+pub fn canonical_runtime_clip_parameter(parameter: &str) -> Option<&'static str> {
+    if let Some(runtime) = RUNTIME_CLIP_PARAMETERS
+        .iter()
+        .copied()
+        .find(|runtime| *runtime == parameter)
+    {
+        return Some(runtime);
+    }
+
+    let (effect_id, param) = parse_effect_parameter_alias(parameter)?;
+    RUNTIME_EFFECT_PARAMETERS
+        .iter()
+        .find(|runtime| runtime.effect_id == effect_id && runtime.param == param)
+        .map(|runtime| runtime.canonical)
+}
+
+fn parse_effect_parameter_alias(parameter: &str) -> Option<(&str, &str)> {
+    let rest = parameter.strip_prefix("effects.")?;
+    let (effect_id, param) = rest.split_once(".params.")?;
+    if effect_id.is_empty() || param.is_empty() {
+        return None;
+    }
+    Some((effect_id, param))
+}
 
 /// Track parameter paths executable by the current preview/render runtime.
 pub const RUNTIME_TRACK_PARAMETERS: &[&str] = &["volume", "volume_db"];
@@ -4354,4 +4499,157 @@ fn default_one() -> f64 {
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnostic_messages(catalog: AssetCatalog) -> Vec<String> {
+        catalog
+            .validate()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect()
+    }
+
+    #[test]
+    fn runtime_effect_parameter_aliases_are_executable() {
+        assert!(is_runtime_clip_parameter(
+            "effects.awidat.blur.params.radius_px"
+        ));
+        assert!(is_runtime_clip_parameter(
+            "effects.awidat.shake.params.intensity_px"
+        ));
+        assert!(is_runtime_clip_parameter(
+            "effects.awidat.shake.params.frequency_hz"
+        ));
+        assert!(is_runtime_clip_parameter("effects.awidat.warp.params.k1"));
+        assert!(is_runtime_clip_parameter(
+            "effects.awidat.warp.params.center_x"
+        ));
+
+        assert_eq!(
+            canonical_runtime_clip_parameter("effects.awidat.blur.params.radius_px"),
+            Some("awidat.blur.radius_px")
+        );
+        assert_eq!(
+            canonical_runtime_clip_parameter("effects.awidat.warp.params.center_y"),
+            Some("awidat.warp.center_y")
+        );
+        assert_eq!(
+            canonical_runtime_clip_parameter("effects.unknown.params.amount"),
+            None
+        );
+    }
+
+    #[test]
+    fn asset_catalog_rejects_duplicate_bin_ids() {
+        let messages = diagnostic_messages(AssetCatalog {
+            bins: vec![
+                AssetBin {
+                    id: "scene-1".into(),
+                    name: "Scene 1".into(),
+                    parent_id: None,
+                },
+                AssetBin {
+                    id: "scene-1".into(),
+                    name: "Duplicate".into(),
+                    parent_id: None,
+                },
+            ],
+            ..AssetCatalog::default()
+        });
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message == "asset catalog contains duplicate bin id scene-1" })
+        );
+    }
+
+    #[test]
+    fn runtime_effect_parameter_aliases_use_existing_value_validation() {
+        let animation = ParameterAnimation {
+            id: "bad-blur".to_string(),
+            target: AnimationTarget::ClipParameter {
+                clip_id: "clip-a".to_string(),
+                parameter: "effects.awidat.blur.params.radius_px".to_string(),
+            },
+            keyframes: vec![Keyframe::linear(0.0, -1.0)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        };
+
+        let diagnostics = animation.validate();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("must be non-negative")),
+            "expected blur alias to share canonical blur validation, got {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn asset_catalog_rejects_missing_bin_parent() {
+        let messages = diagnostic_messages(AssetCatalog {
+            bins: vec![AssetBin {
+                id: "takes".into(),
+                name: "Takes".into(),
+                parent_id: Some("missing".into()),
+            }],
+            ..AssetCatalog::default()
+        });
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message == "bin takes references missing parent missing" })
+        );
+    }
+
+    #[test]
+    fn asset_catalog_rejects_self_parent_bin() {
+        let messages = diagnostic_messages(AssetCatalog {
+            bins: vec![AssetBin {
+                id: "takes".into(),
+                name: "Takes".into(),
+                parent_id: Some("takes".into()),
+            }],
+            ..AssetCatalog::default()
+        });
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| message == "bin takes cannot be its own parent")
+        );
+    }
+
+    #[test]
+    fn asset_catalog_rejects_bin_parent_cycles() {
+        let messages = diagnostic_messages(AssetCatalog {
+            bins: vec![
+                AssetBin {
+                    id: "a".into(),
+                    name: "A".into(),
+                    parent_id: Some("b".into()),
+                },
+                AssetBin {
+                    id: "b".into(),
+                    name: "B".into(),
+                    parent_id: Some("a".into()),
+                },
+            ],
+            ..AssetCatalog::default()
+        });
+
+        assert!(messages.iter().any(|message| {
+            message == "bin a is part of a parent cycle"
+                || message == "bin b is part of a parent cycle"
+        }));
+    }
 }

@@ -272,6 +272,9 @@ For each returned phrase, emit `*** Insert Caption` ops with:
   the highest-energy beats
 - `safe_area`: mobile
 - `start_s` / `end_s`: tight to the word group, not the sentence
+- `word_timings_json`: the phrase's `word_timings` array when available,
+  so render can use transcript word starts for karaoke-style reveal instead
+  of uniform title-window splits
 
 This pass is mechanical but high-volume. Use `update_plan` to track
 which segments are captioned vs. pending.
