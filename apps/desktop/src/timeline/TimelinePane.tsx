@@ -27,6 +27,7 @@ import { getStrip, onThumbnailDecoded } from "./thumbnailCache";
 import { getBuckets, onWaveformDecoded } from "./waveformCache";
 import { useTimelineSelectionStore } from "../properties/store";
 import { shouldKeepMoveDraft } from "./moveDraft";
+import { collectSnapTargets, snapTime } from "./snap";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -40,6 +41,9 @@ const RULER_HEIGHT = 22;
 
 /** Padding inside each clip block. */
 const CLIP_PADDING_X = 6;
+
+/** Timeline-time snap tolerance for direct manipulation in the canvas. */
+const SNAP_TOLERANCE_S = 0.15;
 
 export function TimelinePane() {
   const projectReady = useProjectStore((s) => s.current !== null);
@@ -375,7 +379,7 @@ function TimelineCanvas({
       }
 
       if (userMove) {
-        drawMoveGhost(ctx, snapshot, userMove, pps);
+        drawMoveGhost(ctx, snapshot, currentTime, userMove, pps);
       }
     }
 
@@ -666,7 +670,7 @@ function TimelineCanvas({
     const dxPx = drag.currentX - drag.startX;
     const dyPx = drag.currentY - drag.startY;
     if (Math.hypot(dxPx, dyPx) < 5) return;
-    const dxS = pxDeltaToSourceDelta(dxPx, ppsRef.current);
+    const dxS = snapMoveDeltaS(snapshot, currentTime, drag, ppsRef.current);
     const primaryTrack = snapshot.tracks[drag.trackIndex];
     const primary = primaryTrack?.items.find(
       (item) => item.kind === "clip" && item.index === drag.clipIndex,
@@ -684,7 +688,6 @@ function TimelineCanvas({
               .map((item) => ({ trackIndex, item })),
           )
         : [{ trackIndex: drag.trackIndex, item: primary }];
-
     const seen = new Set<string>();
     const ops = movingClips
       .filter(({ item }) => {
@@ -694,16 +697,13 @@ function TimelineCanvas({
       })
       .map(({ trackIndex, item }) => {
         const track = snapshot.tracks[trackIndex];
-        const toPosition = targetPositionForMove(
-          track.items,
-          item.index,
-          item.track_start_s + dxS,
-        );
+        const targetStartS = item.track_start_s + dxS;
+        const toPosition = targetPositionForMove(track.items, item.index, targetStartS);
         return {
           kind: "move_clip" as const,
           anchor: { kind: "clip_uuid" as const, uuid: item.clip_uuid },
           toPosition,
-          atS: Math.max(0, item.track_start_s + dxS),
+          atS: Math.max(0, targetStartS),
           fromPosition: item.index,
           fromAtS: item.track_start_s,
         };
@@ -762,7 +762,14 @@ function TimelineCanvas({
       {userTrim && (
         <UserTrimTooltip drag={userTrim} pps={ppsRef.current} />
       )}
-      {userMove && <UserMoveTooltip drag={userMove} pps={ppsRef.current} />}
+      {userMove && (
+        <UserMoveTooltip
+          drag={userMove}
+          snapshot={snapshot}
+          currentTime={currentTime}
+          pps={ppsRef.current}
+        />
+      )}
     </div>
   );
 }
@@ -805,12 +812,16 @@ function UserTrimTooltip({
 
 function UserMoveTooltip({
   drag,
+  snapshot,
+  currentTime,
   pps,
 }: {
   drag: UserMoveDrag;
+  snapshot: TimelineSnapshot;
+  currentTime: number;
   pps: number;
 }) {
-  const dxS = (drag.currentX - drag.startX) / Math.max(0.001, pps);
+  const dxS = snapMoveDeltaS(snapshot, currentTime, drag, pps);
   return (
     <div className="user-trim-tooltip" style={{ left: drag.currentX }}>
       move {dxS >= 0 ? "+" : ""}
@@ -852,13 +863,51 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === "input" || tag === "textarea" || tag === "select";
 }
 
+function snapMoveDeltaS(
+  snapshot: TimelineSnapshot,
+  currentTime: number,
+  drag: UserMoveDrag,
+  pps: number,
+): number {
+  const dxS = (drag.currentX - drag.startX) / Math.max(0.001, pps);
+  const primary = snapshot.tracks[drag.trackIndex]?.items.find(
+    (item): item is Extract<TimelineItem, { kind: "clip" }> =>
+      item.kind === "clip" && item.index === drag.clipIndex,
+  );
+  if (!primary) return dxS;
+  const excluded =
+    drag.linkGroupId !== null
+      ? new Set(
+          snapshot.tracks.flatMap((track) =>
+            track.items
+              .filter(
+                (item): item is Extract<TimelineItem, { kind: "clip" }> =>
+                  item.kind === "clip" && item.link_group_id === drag.linkGroupId,
+              )
+              .map((item) => item.clip_uuid),
+          ),
+        )
+      : new Set([primary.clip_uuid]);
+  const targets = collectSnapTargets(snapshot, {
+    playheadS: currentTime,
+    excludeClipUuids: excluded,
+  });
+  const snappedStartS = snapTime(
+    primary.track_start_s + dxS,
+    targets,
+    SNAP_TOLERANCE_S,
+  );
+  return snappedStartS - primary.track_start_s;
+}
+
 function drawMoveGhost(
   ctx: CanvasRenderingContext2D,
   snapshot: TimelineSnapshot,
+  currentTime: number,
   drag: UserMoveDrag,
   pps: number,
 ) {
-  const dx = drag.currentX - drag.startX;
+  const dx = snapMoveDeltaS(snapshot, currentTime, drag, pps) * pps;
   const drawClip = (trackIndex: number, item: Extract<TimelineItem, { kind: "clip" }>) => {
     const x = Math.round(item.track_start_s * pps + dx);
     const y = RULER_HEIGHT + trackIndex * LANE_HEIGHT + 4;
