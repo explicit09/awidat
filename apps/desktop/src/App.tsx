@@ -34,6 +34,7 @@ import { NotesPanel } from "./notes/NotesPanel";
 import { useNotesStore } from "./notes/store";
 import { TranscriptSidebar } from "./transcript/TranscriptSidebar";
 import { VeditPanel } from "./vedit/VeditPanel";
+import { ScopeDock } from "./components/ScopeDock";
 import {
   ITEM_EVENT,
   MENU_COMMAND_EVENT,
@@ -52,6 +53,7 @@ function App() {
   const [showProperties, setShowProperties] = useState(true);
   const [showTimeline, setShowTimeline] = useState(true);
   const [showNotes, setShowNotes] = useState(true);
+  const [showScopes, setShowScopes] = useState(false);
   const current = useProjectStore((s) => s.current);
   const setCurrent = useProjectStore((s) => s.setCurrent);
   const refresh = useProjectStore((s) => s.refresh);
@@ -146,6 +148,8 @@ function App() {
         setShowProperties((v) => !v);
       } else if (id === MENU_COMMANDS.VIEW_NOTES) {
         setShowNotes((v) => !v);
+      } else if (id === MENU_COMMANDS.VIEW_SCOPES) {
+        setShowScopes((v) => !v);
       } else if (id === MENU_COMMANDS.VIEW_SIDEBAR) {
         setShowSidebar((v) => !v);
       } else if (id === MENU_COMMANDS.VIEW_CHAT) {
@@ -212,6 +216,7 @@ function App() {
         { id: MENU_COMMANDS.VIEW_TIMELINE, enabled: projectLoaded },
         { id: MENU_COMMANDS.VIEW_PROPERTIES, enabled: projectLoaded },
         { id: MENU_COMMANDS.VIEW_NOTES, enabled: projectLoaded },
+        { id: MENU_COMMANDS.VIEW_SCOPES, enabled: projectLoaded },
         { id: MENU_COMMANDS.VIEW_SIDEBAR, enabled: projectLoaded },
         { id: MENU_COMMANDS.VIEW_CHAT, enabled: projectLoaded },
         { id: MENU_COMMANDS.VIEW_TRANSCRIPT, enabled: projectLoaded },
@@ -341,6 +346,7 @@ function App() {
                   <MediaPane />
                 </div>
               )}
+              {showScopes && <ScopeDockContainer />}
               {showTimeline && <TimelinePane />}
             </div>
             )}
@@ -377,6 +383,18 @@ function App() {
       {!projectReady && <Composer projectReady={projectReady} />}
     </main>
   );
+}
+
+/// Connects the standalone `ScopeDock` to the media store. Splitting
+/// the lookup out of the dock itself keeps the component reusable
+/// from places that don't share this store (tests, future panels
+/// triggered from a clip context menu, etc).
+function ScopeDockContainer() {
+  const proxies = useMediaStore((s) => s.proxies);
+  const selectedStem = useMediaStore((s) => s.selectedStem);
+  const proxyPath =
+    proxies.find((p) => p.stem === selectedStem)?.proxy_path ?? null;
+  return <ScopeDock proxyPath={proxyPath} />;
 }
 
 export default App;

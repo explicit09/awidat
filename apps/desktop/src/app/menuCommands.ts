@@ -17,6 +17,7 @@ export const MENU_COMMANDS = {
   VIEW_TIMELINE: "view:timeline",
   VIEW_PROPERTIES: "view:properties",
   VIEW_NOTES: "view:notes",
+  VIEW_SCOPES: "view:scopes",
   VIEW_SIDEBAR: "view:sidebar",
   VIEW_CHAT: "view:chat",
   VIEW_TRANSCRIPT: "view:transcript",
