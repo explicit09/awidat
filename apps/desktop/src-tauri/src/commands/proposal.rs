@@ -588,6 +588,7 @@ fn build_diff_hints(
             | EdlOp::SetMotionTemplate { .. }
             | EdlOp::AttachComposition { .. }
             | EdlOp::SetTrackingPackage { .. }
+            | EdlOp::AuthorSubjectReframeFromTrack { .. }
             | EdlOp::SetColorFinishing { .. }
             | EdlOp::SetAudioFinishing { .. }
             | EdlOp::SelectDeliveryProfile { .. }
@@ -801,6 +802,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetMotionTemplate { .. } => "SetMotionTemplate",
         EdlOp::AttachComposition { .. } => "AttachComposition",
         EdlOp::SetTrackingPackage { .. } => "SetTrackingPackage",
+        EdlOp::AuthorSubjectReframeFromTrack { .. } => "AuthorSubjectReframeFromTrack",
         EdlOp::SetColorFinishing { .. } => "SetColorFinishing",
         EdlOp::SetAudioFinishing { .. } => "SetAudioFinishing",
         EdlOp::SelectDeliveryProfile { .. } => "SelectDeliveryProfile",

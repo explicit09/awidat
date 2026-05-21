@@ -30,6 +30,7 @@ use tokio::sync::{Mutex, oneshot};
 use tracing::{info, warn};
 
 mod manifest_io;
+pub mod media_files;
 mod sha;
 pub mod sidecar_io;
 
