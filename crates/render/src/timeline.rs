@@ -224,6 +224,8 @@ pub struct TimelineSegment {
     /// identical to `None` but the planner still emits the filter
     /// for explicitness).
     pub volume: Option<f64>,
+    /// Optional keyframed clip-local volume automation.
+    pub volume_automation: Option<AudioAutomationPlan>,
     /// Playback rate multiplier. `None` means no `awidat.speed`
     /// effect — the segment plays at 1×. The segment's contribution
     /// to the master timeline duration is `duration_s / factor` when
@@ -509,6 +511,8 @@ pub struct AudioClipPlan {
     pub duration_s: f64,
     /// Optional gain multiplier for the clip.
     pub volume: Option<f64>,
+    /// Optional keyframed clip-local volume automation.
+    pub volume_automation: Option<AudioAutomationPlan>,
     /// Optional playback speed multiplier.
     pub speed: Option<f64>,
     /// Optional fade-in duration in seconds.
@@ -586,6 +590,16 @@ pub struct AudioFxPlan {
     pub high_pass_hz: Option<f64>,
     /// Low-pass cutoff in Hz.
     pub low_pass_hz: Option<f64>,
+    /// Stereo pan position in [-1, 1], where -1 is left and 1 is right.
+    pub pan: Option<f64>,
+    /// Stereo balance in [-1, 1], where -1 attenuates right and 1 attenuates left.
+    pub balance: Option<f64>,
+    /// Enable FFmpeg adeclick click/pop repair.
+    pub adeclick: Option<bool>,
+    /// Enable FFmpeg adeclip clipped-sample repair.
+    pub adeclip: Option<bool>,
+    /// Project-relative or absolute arnndn/RNNoise model path.
+    pub arnndn_model: Option<String>,
     /// Parametric EQ bands.
     #[serde(default)]
     pub eq_bands: Vec<EqBandPlan>,
@@ -1156,7 +1170,8 @@ type TimelineFullPlan = (
 
 /// Walk `<project_root>/project.otio.json` and collect every
 /// video-track clip's `(asset, source_range)` in playback order.
-/// Skips Gap, Transition, and nested Stack children for v1.
+/// Skips Gap and Transition children; nested Stack children are flattened
+/// in playback order for render planning.
 ///
 /// Wraps [`collect_timeline_plan`] and drops the transitions +
 /// titles — preserved for callers that don't need either.
@@ -1421,8 +1436,25 @@ pub fn collect_timeline_full_plan(
                         composition,
                     ));
                 }
-                TrackChild::Gap(_) | TrackChild::Stack(_) => {
+                TrackChild::Gap(_) => {
                     pending_transition = None;
+                }
+                TrackChild::Stack(stack) => {
+                    pending_transition = None;
+                    if collect_nested_video_stack_segments(
+                        project_root,
+                        stack,
+                        &parameter_animations,
+                        timeline
+                            .metadata
+                            .awidat
+                            .as_ref()
+                            .and_then(|m| m.tracking_package.as_ref()),
+                        &mut consumed_animation_ids,
+                        &mut segs,
+                    )? {
+                        saw_clip_on_track = true;
+                    }
                 }
             }
         }
@@ -1877,6 +1909,104 @@ fn validate_renderable_composite_transition(
     Ok(())
 }
 
+fn collect_nested_video_stack_segments(
+    project_root: &Path,
+    stack: &awidat_proto::otio::Stack,
+    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    tracking_package: Option<&TrackingPackage>,
+    consumed_animation_ids: &mut BTreeSet<String>,
+    segs: &mut Vec<TimelineSegment>,
+) -> Result<bool, RenderTimelineError> {
+    let mut saw_clip = false;
+    for child in &stack.children {
+        match child {
+            StackChild::Clip(clip) => {
+                if let Some(segment) = collect_timeline_segment(
+                    project_root,
+                    clip,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                )? {
+                    segs.push(segment);
+                    saw_clip = true;
+                }
+            }
+            StackChild::Track(track)
+                if matches!(track.kind, TrackKind::Video)
+                    && !is_titles_track(track)
+                    && !is_annotations_track(track) =>
+            {
+                if collect_nested_video_track_segments(
+                    project_root,
+                    track,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                    segs,
+                )? {
+                    saw_clip = true;
+                }
+            }
+            StackChild::Stack(nested) => {
+                if collect_nested_video_stack_segments(
+                    project_root,
+                    nested,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                    segs,
+                )? {
+                    saw_clip = true;
+                }
+            }
+            StackChild::Track(_) | StackChild::Gap(_) => {}
+        }
+    }
+    Ok(saw_clip)
+}
+
+fn collect_nested_video_track_segments(
+    project_root: &Path,
+    track: &awidat_proto::otio::Track,
+    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    tracking_package: Option<&TrackingPackage>,
+    consumed_animation_ids: &mut BTreeSet<String>,
+    segs: &mut Vec<TimelineSegment>,
+) -> Result<bool, RenderTimelineError> {
+    let mut saw_clip = false;
+    for child in &track.children {
+        match child {
+            TrackChild::Clip(clip) => {
+                if let Some(segment) = collect_timeline_segment(
+                    project_root,
+                    clip,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                )? {
+                    segs.push(segment);
+                    saw_clip = true;
+                }
+            }
+            TrackChild::Stack(stack) => {
+                if collect_nested_video_stack_segments(
+                    project_root,
+                    stack,
+                    parameter_animations,
+                    tracking_package,
+                    consumed_animation_ids,
+                    segs,
+                )? {
+                    saw_clip = true;
+                }
+            }
+            TrackChild::Gap(_) | TrackChild::Transition(_) => {}
+        }
+    }
+    Ok(saw_clip)
+}
+
 fn collect_timeline_segment(
     project_root: &Path,
     clip: &awidat_proto::otio::Clip,
@@ -1934,6 +2064,8 @@ fn collect_timeline_segment(
     let warp_animation =
         select_warp_animation(parameter_animations, &clip_id, consumed_animation_ids);
     let warp = read_warp(clip).or_else(|| warp_animation.as_ref().map(|_| default_warp_plan()));
+    let audio_volume_automation = audio_volume_automation_for_clip(parameter_animations, &clip_id);
+    consumed_animation_ids.extend(audio_volume_automation.consumed_animation_ids.clone());
     Ok(Some(TimelineSegment {
         asset_path,
         clip_name: clip.name.clone(),
@@ -1951,6 +2083,7 @@ fn collect_timeline_segment(
             .map(|r| r.start_time.to_seconds() + r.duration.to_seconds()),
         mask_input_index: None,
         volume: read_effect_number(clip, "awidat.volume", "value"),
+        volume_automation: audio_volume_automation.automation,
         speed: read_effect_number(clip, "awidat.speed", "factor"),
         time_remap,
         color_correction: read_color_correction(clip),
@@ -2155,6 +2288,7 @@ fn collect_audio_track_plan(
 ) -> Result<AudioTrackAnimationSelection, RenderTimelineError> {
     let settings = parse_audio_track_settings(track);
     let mut items = Vec::new();
+    let mut consumed_animation_ids = BTreeSet::new();
     for tc in &track.children {
         match tc {
             TrackChild::Clip(clip) => {
@@ -2175,11 +2309,16 @@ fn collect_audio_track_plan(
                 }
                 let (fade_in_s, fade_out_s) = read_audio_fade(clip);
                 let audio_fx = read_clip_audio_fx(clip);
+                let clip_id = render_clip_id(clip);
+                let audio_volume_automation =
+                    audio_volume_automation_for_clip(animations, &clip_id);
+                consumed_animation_ids.extend(audio_volume_automation.consumed_animation_ids);
                 items.push(AudioTrackItemPlan::Clip(AudioClipPlan {
                     asset_path,
                     start_s: range.start_time.to_seconds(),
                     duration_s: range.duration.to_seconds(),
                     volume: read_effect_number(clip, "awidat.volume", "value"),
+                    volume_automation: audio_volume_automation.automation,
                     speed: read_effect_number(clip, "awidat.speed", "factor"),
                     fade_in_s,
                     fade_out_s,
@@ -2193,6 +2332,7 @@ fn collect_audio_track_plan(
         }
     }
     let automation_selection = audio_volume_automation_for_track(animations, &track.name);
+    consumed_animation_ids.extend(automation_selection.consumed_animation_ids);
     Ok(AudioTrackAnimationSelection {
         track: AudioTrackPlan {
             name: track.name.clone(),
@@ -2205,7 +2345,7 @@ fn collect_audio_track_plan(
             audio_fx: settings.audio_fx,
             items,
         },
-        consumed_animation_ids: automation_selection.consumed_animation_ids,
+        consumed_animation_ids,
     })
 }
 
@@ -2227,6 +2367,43 @@ fn audio_volume_automation_for_track(
             continue;
         };
         if track != track_name || !matches!(parameter.as_str(), "volume" | "volume_db") {
+            continue;
+        }
+        selection
+            .consumed_animation_ids
+            .insert(animation.id.clone());
+        if selection.automation.is_some() {
+            continue;
+        }
+        let expression = audio_volume_automation_expression(
+            parameter,
+            &animation.keyframes,
+            animation.pre_extrapolation,
+            animation.post_extrapolation,
+        );
+        selection.automation = Some(AudioAutomationPlan {
+            parameter: parameter.clone(),
+            expression,
+            keyframes: animation.keyframes.clone(),
+        });
+    }
+    selection
+}
+
+fn audio_volume_automation_for_clip(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+) -> AudioAutomationSelection {
+    let mut selection = AudioAutomationSelection::default();
+    for animation in animations {
+        let awidat_proto::professional::AnimationTarget::ClipParameter {
+            clip_id: target_clip_id,
+            parameter,
+        } = &animation.target
+        else {
+            continue;
+        };
+        if target_clip_id != clip_id || !matches!(parameter.as_str(), "volume" | "volume_db") {
             continue;
         }
         selection
@@ -2295,6 +2472,7 @@ fn synthesize_split_edit_audio_tracks(
             start_s: source_start_s,
             duration_s,
             volume: segment.volume,
+            volume_automation: segment.volume_automation.clone(),
             speed: segment.speed,
             fade_in_s: None,
             fade_out_s: None,
@@ -4896,8 +5074,16 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
     }
 
     // Volume next: applies to whatever the audio_label currently
-    // points at (raw input or speed-stretched stream).
-    if let Some(v) = seg.volume
+    // points at (raw input or speed-stretched stream). Clip-local
+    // automation takes precedence over scalar `awidat.volume`.
+    if let Some(automation) = seg.volume_automation.as_ref() {
+        let av = format!("[av{i}]");
+        filter.push_str(&format!(
+            "{audio_label}volume='{}':eval=frame{av};",
+            automation.expression
+        ));
+        audio_label = av;
+    } else if let Some(v) = seg.volume
         && (v - 1.0).abs() > 1e-9
     {
         let av = format!("[av{i}]");
@@ -4911,6 +5097,15 @@ fn audio_fx_filter_chain(plan: &AudioFxPlan) -> Option<String> {
     let mut filters = Vec::new();
 
     // cleanup
+    if plan.adeclick.unwrap_or(false) {
+        filters.push("adeclick".to_string());
+    }
+    if plan.adeclip.unwrap_or(false) {
+        filters.push("adeclip".to_string());
+    }
+    if let Some(model) = filter_string(plan.arnndn_model.as_deref()) {
+        filters.push(format!("arnndn=m={}", ffmpeg_filter_value_escape(model)));
+    }
     if let Some(freq) = positive(plan.high_pass_hz) {
         filters.push(format!("highpass=f={}", fmt_filter_num(freq)));
     }
@@ -4932,6 +5127,14 @@ fn audio_fx_filter_chain(plan: &AudioFxPlan) -> Option<String> {
             "bandstop=f={}:width_type=h:width=4",
             fmt_filter_num(freq * 2.0)
         ));
+    }
+
+    // stereo image
+    if let Some(pan) = unit_interval(plan.pan) {
+        filters.push(stereo_balance_filter(pan));
+    }
+    if let Some(balance) = unit_interval(plan.balance) {
+        filters.push(stereo_balance_filter(balance));
     }
 
     // EQ
@@ -4990,8 +5193,38 @@ fn finite(value: Option<f64>) -> Option<f64> {
     value.filter(|v| v.is_finite())
 }
 
+fn unit_interval(value: Option<f64>) -> Option<f64> {
+    finite(value).map(|v| v.clamp(-1.0, 1.0))
+}
+
 fn positive(value: Option<f64>) -> Option<f64> {
     value.filter(|v| v.is_finite() && *v > 0.0)
+}
+
+fn filter_string(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
+}
+
+fn stereo_balance_filter(value: f64) -> String {
+    let value = value.clamp(-1.0, 1.0);
+    let left_gain = if value > 0.0 { 1.0 - value } else { 1.0 };
+    let right_gain = if value < 0.0 { 1.0 + value } else { 1.0 };
+    format!(
+        "pan=stereo|c0={}*FL|c1={}*FR",
+        fmt_filter_num(left_gain),
+        fmt_filter_num(right_gain)
+    )
+}
+
+fn ffmpeg_filter_value_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '\\' | ':' | '\'' | ',' | ';' | '[' | ']') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 fn db_to_linear(db: f64) -> f64 {
@@ -8203,9 +8436,13 @@ fn plan_audio_mix_filter(
             && track.role != "dialogue"
         {
             let out = format!("[ducked{idx}]");
+            let ratio = ducking_sidechain_ratio(duck.amount_db);
             filter.push_str(&format!(
-                "{label}{sidechain}sidechaincompress=threshold=0.05:ratio=8:attack={}:release={}{};",
-                duck.attack_ms, duck.release_ms, out
+                "{label}{sidechain}sidechaincompress=threshold=0.05:ratio={}:attack={}:release={}{};",
+                fmt_filter_num(ratio),
+                fmt_filter_num(duck.attack_ms),
+                fmt_filter_num(duck.release_ms),
+                out
             ));
             mix_labels.push(out);
             continue;
@@ -8220,6 +8457,15 @@ fn plan_audio_mix_filter(
         mix_labels.len()
     ));
     "[finala]".into()
+}
+
+fn ducking_sidechain_ratio(amount_db: f64) -> f64 {
+    let reduction_db = if amount_db.is_finite() {
+        amount_db.abs().clamp(0.0, 60.0)
+    } else {
+        12.0
+    };
+    1.0 + reduction_db * (7.0 / 12.0)
 }
 
 fn plan_one_audio_track(
@@ -8264,7 +8510,14 @@ fn plan_one_audio_track(
                     filter.push_str(&format!("{label}{}{};", atempo_chain(factor), sped));
                     label = sped;
                 }
-                if let Some(v) = clip.volume
+                if let Some(automation) = clip.volume_automation.as_ref() {
+                    let vol = format!("[avol{track_index}_{item_index}]");
+                    filter.push_str(&format!(
+                        "{label}volume='{}':eval=frame{vol};",
+                        automation.expression
+                    ));
+                    label = vol;
+                } else if let Some(v) = clip.volume
                     && (v - 1.0).abs() > 1e-9
                 {
                     let vol = format!("[avol{track_index}_{item_index}]");
@@ -8664,6 +8917,31 @@ mod tests {
         let mut tl = Timeline::empty("p");
         let mut stack = Stack::empty("root");
         stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_nested_stack(dir: &Path) -> PathBuf {
+        let asset_rel = "raw/nested.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(asset_rel), b"stub").unwrap();
+        let mut clip = Clip::empty("nested-c1".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        clip.source_range = Some(OtioRange::new(
+            RationalTime::new(1.0 * 24.0, 24.0),
+            RationalTime::new(2.5 * 24.0, 24.0),
+        ));
+        let mut nested_track = Track::empty("Nested V1", TrackKind::Video);
+        nested_track.children.push(TrackChild::Clip(clip));
+        let mut nested_stack = Stack::empty("nested-stack");
+        nested_stack.children.push(StackChild::Track(nested_track));
+        let mut base_track = Track::empty("V1", TrackKind::Video);
+        base_track.children.push(TrackChild::Stack(nested_stack));
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(base_track));
         tl.tracks = stack;
         let otio_path = dir.join(files::OTIO);
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
@@ -9264,6 +9542,19 @@ mod tests {
     }
 
     #[test]
+    fn nested_stack_clip_is_collected_for_timeline_render() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_nested_stack(dir.path());
+
+        let segments = collect_timeline_segments(dir.path()).unwrap();
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].asset_path, dir.path().join("raw/nested.mp4"));
+        assert!((segments[0].start_s - 1.0).abs() < 0.001);
+        assert!((segments[0].duration_s - 2.5).abs() < 0.001);
+    }
+
+    #[test]
     fn timeline_render_spec_lowers_time_remap_curve_to_setpts() {
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project_with_time_remap(dir.path());
@@ -9800,6 +10091,40 @@ mod tests {
     }
 
     #[test]
+    fn base_clip_volume_db_animation_lowers_to_segment_audio_automation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "clip-volume".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "volume_db".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -18.0), Keyframe::linear(2.0, -3.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let (segments, _, _, _, _, _, _, _, limitations) =
+            collect_timeline_full_plan(dir.path()).unwrap();
+
+        assert!(limitations.is_empty());
+        assert_eq!(segments.len(), 1);
+        let automation = segments[0]
+            .volume_automation
+            .as_ref()
+            .expect("clip volume animation should lower");
+        assert_eq!(automation.parameter, "volume_db");
+        assert!(automation.expression.contains("pow(10\\,"));
+        assert_eq!(automation.keyframes.len(), 2);
+    }
+
+    #[test]
     fn missing_asset_returns_missing_asset_error() {
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project(dir.path());
@@ -9857,6 +10182,7 @@ mod tests {
                     start_s: 0.0,
                     duration_s: 2.0,
                     volume: Some(0.5),
+                    volume_automation: None,
                     speed: None,
                     fade_in_s: Some(0.1),
                     fade_out_s: Some(0.2),
@@ -9971,6 +10297,7 @@ mod tests {
                 start_s: 0.0,
                 duration_s: 4.0,
                 volume: None,
+                volume_automation: None,
                 speed: None,
                 fade_in_s: None,
                 fade_out_s: None,
@@ -10248,6 +10575,7 @@ mod tests {
                 start_s: 0.0,
                 duration_s: 2.0,
                 volume: None,
+                volume_automation: None,
                 speed: None,
                 fade_in_s: None,
                 fade_out_s: None,
@@ -10278,6 +10606,86 @@ mod tests {
     }
 
     #[test]
+    fn filter_planner_emits_clip_volume_automation_for_timeline_segment() {
+        let mut s = seg("/tmp/a.mp4", 0.0, 2.0);
+        s.volume = Some(0.25);
+        s.volume_automation = Some(AudioAutomationPlan {
+            parameter: "volume_db".into(),
+            expression: "pow(10\\,(if(lt(t\\,2)\\,-18+(-3--18)*((t-0)/(2-0))\\,-3))/20)".into(),
+            keyframes: vec![Keyframe::linear(0.0, -18.0), Keyframe::linear(2.0, -3.0)],
+        });
+
+        let plan = FilterPlanner::new(&[s], &[]).plan();
+
+        assert!(
+            plan.filter_complex.contains("volume='pow(10\\,"),
+            "expected clip-local volume automation in filter graph: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains(":eval=frame[av0]"),
+            "expected eval=frame clip-local volume automation label: {}",
+            plan.filter_complex
+        );
+        assert!(
+            !plan.filter_complex.contains("volume=0.25"),
+            "scalar volume should not also apply when clip automation exists: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn explicit_audio_track_emits_clip_volume_automation_filter() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "music".into(),
+            role: "music".into(),
+            volume: 1.0,
+            volume_automation: None,
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: PathBuf::from("/tmp/music.wav"),
+                start_s: 0.0,
+                duration_s: 2.0,
+                volume: Some(0.25),
+                volume_automation: Some(AudioAutomationPlan {
+                    parameter: "volume".into(),
+                    expression: "if(lt(t\\,2)\\,0.25\\,1)".into(),
+                    keyframes: vec![Keyframe::linear(0.0, 0.25), Keyframe::linear(2.0, 1.0)],
+                }),
+                speed: None,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_fx: None,
+            })],
+        }];
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("volume='if(lt(t\\,2)\\,0.25\\,1)':eval=frame[avol0_0]"),
+            "expected clip-local volume automation in explicit audio path: {filter}"
+        );
+        assert!(
+            !filter.contains("volume=0.25"),
+            "scalar volume should not also apply when clip automation exists: {filter}"
+        );
+    }
+
+    #[test]
     fn explicit_audio_track_volume_automation_uses_post_concat_track_time() {
         let segs = vec![seg("/tmp/a.mp4", 0.0, 6.0)];
         let audio_tracks = vec![AudioTrackPlan {
@@ -10300,6 +10708,7 @@ mod tests {
                     start_s: 0.0,
                     duration_s: 1.0,
                     volume: None,
+                    volume_automation: None,
                     speed: None,
                     fade_in_s: None,
                     fade_out_s: None,
@@ -10378,6 +10787,107 @@ mod tests {
         assert!(filter.contains("bandstop=f=60"));
         assert!(filter.contains("acompressor=threshold=-18dB:ratio=2.5"));
         assert!(filter.contains("loudnorm=I=-16:TP=-1.5:LRA=11"));
+    }
+
+    #[test]
+    fn filter_planner_audio_fx_emits_pan_cleanup_and_rnnoise_filters() {
+        let mut s = seg("/tmp/a.mp4", 0.0, 4.0);
+        s.audio_fx = Some(AudioFxPlan {
+            pan: Some(-0.5),
+            balance: Some(0.25),
+            adeclick: Some(true),
+            adeclip: Some(true),
+            arnndn_model: Some("models/rnnoise:voice.rnnn".into()),
+            ..Default::default()
+        });
+
+        let plan = FilterPlanner::new(&[s], &[]).plan();
+        let filter = plan.filter_complex;
+
+        assert!(
+            filter.contains("adeclick,adeclip,arnndn=m=models/rnnoise\\:voice.rnnn"),
+            "cleanup filters should be ordered before stereo shaping: {filter}"
+        );
+        assert!(
+            filter.contains("pan=stereo|c0=1*FL|c1=0.5*FR"),
+            "pan should lower to a stereo pan filter: {filter}"
+        );
+        assert!(
+            filter.contains("pan=stereo|c0=0.75*FL|c1=1*FR"),
+            "balance should lower to a stereo balance filter: {filter}"
+        );
+    }
+
+    #[test]
+    fn ducking_amount_db_changes_sidechain_compression_ratio() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 2.0)];
+        let audio_tracks = vec![
+            AudioTrackPlan {
+                name: "dialogue".into(),
+                role: "dialogue".into(),
+                volume: 1.0,
+                volume_automation: None,
+                muted: false,
+                solo: false,
+                ducking: None,
+                audio_fx: None,
+                items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                    asset_path: PathBuf::from("/tmp/dialogue.wav"),
+                    start_s: 0.0,
+                    duration_s: 2.0,
+                    volume: None,
+                    volume_automation: None,
+                    speed: None,
+                    fade_in_s: None,
+                    fade_out_s: None,
+                    audio_fx: None,
+                })],
+            },
+            AudioTrackPlan {
+                name: "music".into(),
+                role: "music".into(),
+                volume: 1.0,
+                volume_automation: None,
+                muted: false,
+                solo: false,
+                ducking: Some(DuckingPlan {
+                    enabled: true,
+                    amount_db: -6.0,
+                    attack_ms: 25.0,
+                    release_ms: 150.0,
+                }),
+                audio_fx: None,
+                items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                    asset_path: PathBuf::from("/tmp/music.wav"),
+                    start_s: 0.0,
+                    duration_s: 2.0,
+                    volume: None,
+                    volume_automation: None,
+                    speed: None,
+                    fade_in_s: None,
+                    fade_out_s: None,
+                    audio_fx: None,
+                })],
+            },
+        ];
+
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("sidechaincompress=threshold=0.05:ratio=4.5:attack=25:release=150"),
+            "ducking amount should tune the sidechain compressor ratio: {filter}"
+        );
     }
 
     #[test]
@@ -11141,6 +11651,7 @@ mod tests {
                 start_s: 0.0,
                 duration_s: 4.0,
                 volume: None,
+                volume_automation: None,
                 speed: None,
                 fade_in_s: None,
                 fade_out_s: None,
