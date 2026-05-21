@@ -5,16 +5,27 @@
 //! "More than N entries found" footer when truncated. Lifted near-verbatim.
 //!
 //! Scope: `raw` (source media), `renders` (engine outputs), or `all` (both).
+//!
+//! Optional bin filter (slice C2 / wave3-bin-aware): when `bin` is
+//! provided, the result is restricted to filesystem-discovered assets
+//! whose [`awidat_proto::professional::AssetRecord`] in the project
+//! catalog has a matching `bin_id`. A bin id of the synthetic form
+//! `role:<role>` (e.g. `role:audio`) filters on the asset's role rather
+//! than a user-defined bin — the same virtual buckets surfaced by
+//! [`crate::tools::list_bins`]. Unknown bin ids return zero results
+//! (not an error) so the model can probe.
 
 use std::path::Path;
 
 use async_trait::async_trait;
 use awidat_index::media_files::{MediaFile, MediaScanOptions, collect_project_media_files};
+use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tools::list_bins::{ROLE_BIN_PREFIX, role_id_for_record};
 
 /// Default limit. Codex `list_dir.rs:31-33`.
 const DEFAULT_LIMIT: usize = 25;
@@ -37,6 +48,12 @@ struct ListAssetsArgs {
     /// Max entries (default 25, hard cap 100).
     #[serde(default)]
     limit: Option<usize>,
+    /// Optional bin id filter. User-defined bin id from the project
+    /// catalog, or the synthetic form `role:<role>` for a built-in role
+    /// bucket (see `list_bins`). Backwards compatible: omitted ⇒ no
+    /// catalog filter, identical to pre-slice-C2 behavior.
+    #[serde(default)]
+    bin: Option<String>,
 }
 
 #[async_trait]
@@ -67,6 +84,10 @@ impl ToolHandler for ListAssetsTool {
                         "minimum": 1,
                         "maximum": 100,
                         "description": "Max entries. Default 25."
+                    },
+                    "bin": {
+                        "type": "string",
+                        "description": "Optional bin filter. User-defined bin id from the project catalog, or 'role:<role>' for a built-in role bucket (video|audio|still|graphic|caption|support). Call list_bins to discover available ids."
                     }
                 }
             }),
@@ -135,15 +156,27 @@ impl ToolHandler for ListAssetsTool {
         })?;
         entries.sort_by(|a, b| (&a.scope, &a.rel_path).cmp(&(&b.scope, &b.rel_path)));
 
+        // Optional catalog-backed bin filter. Read the project lazily —
+        // only when a `bin` arg was provided — so the common path stays
+        // identical to pre-slice-C2 behavior.
+        if let Some(bin) = args.bin.as_deref() {
+            entries = filter_by_bin(&ctx.project_root, entries, bin)?;
+        }
+
         let total = entries.len();
         let start = offset.saturating_sub(1).min(total);
         let end = (start + limit).min(total);
         let visible = &entries[start..end];
 
         let mut out = String::new();
-        out.push_str(&format!(
-            "scope={scope} total={total} offset={offset} limit={limit}\n"
-        ));
+        match args.bin.as_deref() {
+            Some(bin) => out.push_str(&format!(
+                "scope={scope} bin={bin} total={total} offset={offset} limit={limit}\n"
+            )),
+            None => out.push_str(&format!(
+                "scope={scope} total={total} offset={offset} limit={limit}\n"
+            )),
+        }
         for (i, e) in visible.iter().enumerate() {
             let idx = offset + i;
             let line = format!(
@@ -192,6 +225,52 @@ impl From<MediaFile> for AssetEntry {
             size_bytes: file.size_bytes,
         }
     }
+}
+
+/// Filter entries against the project's durable asset catalog.
+///
+/// Bin ids beginning with [`ROLE_BIN_PREFIX`] (e.g. `"role:audio"`)
+/// match the [`awidat_proto::professional::AssetRole`] of the catalog
+/// record, mirroring the synthetic role buckets surfaced by `list_bins`.
+/// Plain bin ids match `AssetRecord.bin_id`. Filesystem-discovered
+/// entries with no matching catalog record never match a bin filter.
+fn filter_by_bin(
+    project_root: &Path,
+    entries: Vec<AssetEntry>,
+    bin: &str,
+) -> Result<Vec<AssetEntry>, FunctionCallError> {
+    let project = Project::read(project_root).map_err(|e| {
+        FunctionCallError::RespondToModel(format!(
+            "list_assets: unable to read project for bin filter: {e}"
+        ))
+    })?;
+    let catalog = project
+        .timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .and_then(|meta| meta.asset_catalog.as_ref());
+    let Some(catalog) = catalog else {
+        // No catalog ⇒ nothing satisfies the filter.
+        return Ok(Vec::new());
+    };
+
+    let is_role_filter = bin.starts_with(ROLE_BIN_PREFIX);
+    let kept = entries
+        .into_iter()
+        .filter(|entry| {
+            let asset_id = format!("{}/{}", entry.scope, entry.rel_path);
+            let Some(record) = catalog.assets.iter().find(|r| r.id == asset_id) else {
+                return false;
+            };
+            if is_role_filter {
+                role_id_for_record(record) == bin
+            } else {
+                record.bin_id.as_deref() == Some(bin)
+            }
+        })
+        .collect();
+    Ok(kept)
 }
 
 fn human_size(bytes: u64) -> String {

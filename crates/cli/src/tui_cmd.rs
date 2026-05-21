@@ -17,7 +17,8 @@ use awidat_core::tools::{
     analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
     assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
     bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    color_scopes::ColorScopesTool, delegate::DelegateTool, delegate_all::DelegateAllTool,
+    color_scopes::ColorScopesTool, create_stringout::CreateStringoutTool, delegate::DelegateTool,
+    delegate_all::DelegateAllTool,
     diagnose_project_media::DiagnoseProjectMediaTool, download_yt_clip::DownloadYtClipTool,
     export_package::ExportPackageTool, find_beat::FindBeatTool,
     find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
@@ -26,7 +27,8 @@ use awidat_core::tools::{
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, import_media::ImportLocalTool,
     import_media::ImportUrlTool, inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool,
-    list_assets::ListAssetsTool, list_looks::ListLooksTool, list_markers::ListMarkersTool,
+    list_assets::ListAssetsTool, list_bins::ListBinsTool, list_looks::ListLooksTool,
+    list_markers::ListMarkersTool, list_stringouts::ListStringoutsTool,
     load_skill::LoadSkillTool, local_review_package::LocalReviewPackageTool,
     manage_assets::CreateBinTool, manage_assets::MarkSelectTool, manage_assets::MoveToBinTool,
     manage_assets::RateAssetTool, manage_assets::RenameAssetTool, manage_assets::TagAssetTool,
@@ -199,8 +201,11 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(ImportLocalTool));
     registry.register(Arc::new(ImportUrlTool));
     registry.register(Arc::new(ListAssetsTool));
+    registry.register(Arc::new(ListBinsTool));
     registry.register(Arc::new(ListLooksTool));
     registry.register(Arc::new(ListMarkersTool));
+    registry.register(Arc::new(ListStringoutsTool));
+    registry.register(Arc::new(CreateStringoutTool));
     registry.register(Arc::new(CreateBinTool));
     registry.register(Arc::new(MoveToBinTool));
     registry.register(Arc::new(RenameAssetTool));

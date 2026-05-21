@@ -23,7 +23,9 @@ use awidat_core::tools::{
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, import_media::ImportLocalTool,
     import_media::ImportUrlTool, inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool,
-    list_assets::ListAssetsTool, list_looks::ListLooksTool, list_markers::ListMarkersTool,
+    create_stringout::CreateStringoutTool,
+    list_assets::ListAssetsTool, list_bins::ListBinsTool, list_looks::ListLooksTool,
+    list_markers::ListMarkersTool, list_stringouts::ListStringoutsTool,
     load_skill::LoadSkillTool, local_review_package::LocalReviewPackageTool,
     manage_assets::CreateBinTool, manage_assets::MarkSelectTool, manage_assets::MoveToBinTool,
     manage_assets::RateAssetTool, manage_assets::RenameAssetTool, manage_assets::TagAssetTool,
@@ -146,8 +148,11 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(ImportLocalTool));
     registry.register(Arc::new(ImportUrlTool));
     registry.register(Arc::new(ListAssetsTool));
+    registry.register(Arc::new(ListBinsTool));
     registry.register(Arc::new(ListLooksTool));
     registry.register(Arc::new(ListMarkersTool));
+    registry.register(Arc::new(ListStringoutsTool));
+    registry.register(Arc::new(CreateStringoutTool));
     registry.register(Arc::new(CreateBinTool));
     registry.register(Arc::new(MoveToBinTool));
     registry.register(Arc::new(RenameAssetTool));
