@@ -4058,10 +4058,26 @@ impl<'a> FilterPlanner<'a> {
                 // current operation. For a chain, that first input is
                 // the already-shortened output of previous xfades.
                 let offset = (current_duration - t.duration_s).max(0.0);
+                // If the transition's composition carries a TimeRemap
+                // primitive, retime the outgoing tail and incoming
+                // head through `setpts` before feeding them to xfade.
+                // This is what makes `awidat.ramp_in_beat` actually
+                // feel like a speed ramp instead of just a flash —
+                // the xfade fallback covers the visual blend, the
+                // setpts covers the speed curve.
+                let next_v = inputs[next].0.clone();
+                let (from_v_retimed, to_v_retimed) = apply_time_remap_setpts_stage(
+                    &mut filter,
+                    transition_id,
+                    t,
+                    &current_v,
+                    &next_v,
+                    current_duration,
+                );
                 filter.push_str(&format!(
                     "{from_v}{to_v}xfade=transition={kind}:duration={dur}:offset={off}{out};",
-                    from_v = current_v,
-                    to_v = inputs[next].0,
+                    from_v = from_v_retimed,
+                    to_v = to_v_retimed,
                     kind = xfade_kind,
                     dur = t.duration_s,
                     off = offset,
@@ -4134,6 +4150,56 @@ fn reset_segment_pts(
     ));
     filter.push_str(&format!("{audio_label}asetpts=PTS-STARTPTS{audio_out};"));
     (video_out, audio_out)
+}
+
+/// Insert `setpts` retime stages for the outgoing tail and incoming
+/// head when a transition's composition recipe contains a TimeRemap
+/// primitive. Returns the labels the surrounding xfade emission
+/// should consume. When the composition has no TimeRemap (or the
+/// curve resolves to identity), passes the input labels through
+/// unchanged so the existing xfade emission stays byte-identical
+/// for non-speed-ramp transitions.
+///
+/// The outgoing tail starts at `outgoing_duration - t.duration_s`
+/// inside the staged outgoing stream; the incoming head starts at
+/// `0` inside the staged incoming stream. Frames outside the window
+/// pass through at identity so xfade still reads correctly-timed
+/// surrounding frames.
+fn apply_time_remap_setpts_stage(
+    filter: &mut String,
+    transition_id: usize,
+    transition: &TransitionPlan,
+    from_label: &str,
+    to_label: &str,
+    outgoing_duration_s: f64,
+) -> (String, String) {
+    let Some(composition) = transition.composition.as_ref() else {
+        return (from_label.to_string(), to_label.to_string());
+    };
+    let Some(curve) =
+        transitions::extract_time_remap_setpts(composition, transition.duration_s)
+    else {
+        return (from_label.to_string(), to_label.to_string());
+    };
+    // Skip when the warped curve never diverges meaningfully from
+    // realtime — emitting setpts would add filter graph cost without
+    // changing playback.
+    if curve.is_identity(1e-6) {
+        return (from_label.to_string(), to_label.to_string());
+    }
+
+    let from_window_start = (outgoing_duration_s - transition.duration_s).max(0.0);
+    let from_expr = time_remap_transition_setpts_expr(&curve, from_window_start);
+    let from_out = format!("[xtrv{transition_id}o]");
+    filter.push_str(&format!(
+        "{from_label}setpts='{from_expr}/TB'{from_out};"
+    ));
+
+    let to_expr = time_remap_transition_setpts_expr(&curve, 0.0);
+    let to_out = format!("[xtrv{transition_id}i]");
+    filter.push_str(&format!("{to_label}setpts='{to_expr}/TB'{to_out};"));
+
+    (from_out, to_out)
 }
 
 fn apply_hard_cut_audio_fade(
@@ -8275,6 +8341,74 @@ fn time_remap_setpts_expr(plan: &TimeRemapPlan) -> String {
         );
     }
     expr
+}
+
+/// Build the `setpts` expression for a TimeRemap transition window
+/// positioned at `window_start_s` seconds inside the input stream.
+///
+/// The expression keeps frames outside the window at identity (so
+/// `xfade` still sees correctly-timed surrounding content) and warps
+/// frames inside the window through the piecewise-linear samples
+/// produced by the proto helper. The returned string is the bare
+/// expression — callers wrap it in `setpts='<expr>/TB'`.
+///
+/// `window_start_s` may be `0.0` for the incoming clip's head retime
+/// or `outgoing_duration - transition_duration` for the outgoing
+/// tail retime.
+fn time_remap_transition_setpts_expr(
+    curve: &transitions::TimeRemapSetptsCurve,
+    window_start_s: f64,
+) -> String {
+    let time_var = "(PTS-STARTPTS)*TB";
+    let samples = &curve.samples;
+    // Build piecewise expression segment-by-segment, mirroring the
+    // shape of `time_remap_setpts_expr`. The final fallback branch is
+    // the last segment's linear extrapolation, so frames past the
+    // window land at `window_start_s + samples.last().t_out`.
+    let last_idx = samples.len() - 1;
+    let last_pair = (samples[last_idx - 1], samples[last_idx]);
+    let mut expr = time_remap_window_segment_expr(last_pair.0, last_pair.1, window_start_s, time_var);
+    for i in (0..last_idx - 1).rev() {
+        let pair = (samples[i], samples[i + 1]);
+        let segment_expr = time_remap_window_segment_expr(pair.0, pair.1, window_start_s, time_var);
+        let end_t_in = window_start_s + samples[i + 1].0;
+        expr = format!(
+            "if(lte({time_var}\\,{end})\\,{segment_expr}\\,{expr})",
+            end = fmt_filter_num(end_t_in),
+        );
+    }
+    // Outside the window (before window_start_s), frames pass through
+    // at identity so the surrounding clip plays at realtime.
+    if window_start_s > 0.0 {
+        expr = format!(
+            "if(lt({time_var}\\,{start})\\,{time_var}\\,{expr})",
+            start = fmt_filter_num(window_start_s),
+        );
+    }
+    expr
+}
+
+fn time_remap_window_segment_expr(
+    start: (f64, f64),
+    end: (f64, f64),
+    window_start_s: f64,
+    time_var: &str,
+) -> String {
+    let source_span = end.0 - start.0;
+    let timeline_span = end.1 - start.1;
+    let slope = if source_span.abs() > 1e-12 {
+        timeline_span / source_span
+    } else {
+        1.0
+    };
+    let start_t_in = window_start_s + start.0;
+    let start_t_out = window_start_s + start.1;
+    format!(
+        "{}+({time_var}-{})*{}",
+        fmt_filter_num(start_t_out),
+        fmt_filter_num(start_t_in),
+        fmt_filter_num(slope),
+    )
 }
 
 fn time_remap_segment_expr(start: TimeRemapPoint, end: TimeRemapPoint, time_var: &str) -> String {
