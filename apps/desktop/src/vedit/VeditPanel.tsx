@@ -15,7 +15,10 @@ type VeditDiffResponse = {
   fromRef: string;
   toRef: string;
   changeCount: number;
+  changedClipCount: number;
+  changedClipIds: string[];
   changes: unknown;
+  animationChanges: unknown;
 };
 
 export function VeditPanel() {

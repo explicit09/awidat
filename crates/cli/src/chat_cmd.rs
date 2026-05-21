@@ -36,9 +36,12 @@ use awidat_core::tools::{
     start_render::StartRenderTool, transcript_search::TranscriptSearchTool,
     transition_context::TransitionContextTool, update_plan::UpdatePlanTool,
     use_broll::UseBrollTool, validate_transition_choice::ValidateTransitionChoiceTool,
+    vedit_blame::VeditBlameTool, vedit_branch::VeditBranchTool,
+    vedit_changed_clip_ids::VeditChangedClipIdsTool, vedit_checkout::VeditCheckoutTool,
     vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
-    vedit_revert::VeditRevertTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
-    view_timeline::ViewTimelineTool,
+    vedit_merge_preflight::VeditMergePreflightTool, vedit_revert::VeditRevertTool,
+    vedit_show::VeditShowTool, vedit_tag::VeditTagTool, view_episode::ViewEpisodeTool,
+    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -178,8 +181,15 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(DownloadYtClipTool));
     registry.register(Arc::new(VeditCommitTool));
     registry.register(Arc::new(VeditDiffTool));
+    registry.register(Arc::new(VeditChangedClipIdsTool));
     registry.register(Arc::new(VeditLogTool));
+    registry.register(Arc::new(VeditMergePreflightTool));
     registry.register(Arc::new(VeditRevertTool));
+    registry.register(Arc::new(VeditBranchTool));
+    registry.register(Arc::new(VeditCheckoutTool));
+    registry.register(Arc::new(VeditTagTool));
+    registry.register(Arc::new(VeditShowTool));
+    registry.register(Arc::new(VeditBlameTool));
     registry.register(Arc::new(ClipSearchTool));
     registry.register(Arc::new(FindEyeContactTool));
     registry.register(Arc::new(FindSpeakerOncamTool));

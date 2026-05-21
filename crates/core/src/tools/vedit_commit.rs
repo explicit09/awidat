@@ -1,11 +1,9 @@
 //! `vedit_commit` tool — snapshot the project's `project.otio.json`
-//! as a vedit commit. Phase A.
+//! as an explicit vedit checkpoint.
 //!
-//! User-triggered in Phase A: agent calls this when the user asks
-//! "save this version" or "commit this." Phase B will additionally
-//! call into the same wrapper from the apply pipeline so every
-//! accepted envelope auto-commits — but the contract a tool exposes
-//! to the model is stable.
+//! Accepted edit envelopes already auto-commit through the apply
+//! pipeline. The agent calls this only when the user asks to save
+//! or commit an explicit checkpoint.
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -135,9 +133,9 @@ project content writes a new commit object (different timestamp) but \
 the underlying timeline isn't duplicated. There is no current \
 behavior for skipping no-op commits — the agent should not call this \
 unless something has actually changed since the last commit.\
-\n\nPhase A scope: user-triggered. Phase B will additionally auto-\
-commit on every accepted apply_edl envelope; the on-disk format is \
-the same so old Phase A commits remain valid.\
+\n\nAccepted apply_edl envelopes already auto-commit through the apply \
+pipeline. Use this tool for explicit save points, named checkpoints, \
+or metadata-only commits the user asked to preserve.\
 ";
 
 #[cfg(test)]
