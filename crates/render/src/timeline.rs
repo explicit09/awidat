@@ -3779,6 +3779,12 @@ pub struct FilterPlanner<'a> {
     transitions: &'a [TransitionPlan],
     titles: &'a [TitlePlan],
     broadcast_overlay: Option<&'a BroadcastOverlayPlan>,
+    /// When set, eligible captions (role=="caption" with non-empty
+    /// `word_timings`) are written as `.ass` files into this dir
+    /// and rendered via the `subtitles=` libass filter instead of
+    /// the drawtext fallback. When `None`, every title goes through
+    /// drawtext — that's the legacy path callers default to.
+    ass_workdir: Option<PathBuf>,
 }
 
 /// Output of [`FilterPlanner::plan`]. Carries everything the caller
@@ -3843,6 +3849,7 @@ impl<'a> FilterPlanner<'a> {
             transitions,
             titles,
             broadcast_overlay: None,
+            ass_workdir: None,
         }
     }
 
@@ -3859,7 +3866,18 @@ impl<'a> FilterPlanner<'a> {
             transitions,
             titles,
             broadcast_overlay,
+            ass_workdir: None,
         }
+    }
+
+    /// Opt eligible captions into the ASS / libass burn-in path.
+    /// `.ass` files for word-timed captions will be written under
+    /// `workdir` and referenced from the filter graph via
+    /// `subtitles=`. Titles that aren't libass-eligible (no word
+    /// timings, or non-caption role) keep the drawtext path.
+    pub(crate) fn with_ass_workdir(mut self, workdir: PathBuf) -> Self {
+        self.ass_workdir = Some(workdir);
+        self
     }
 
     /// Build the filter complex + output labels.
@@ -3934,13 +3952,15 @@ impl<'a> FilterPlanner<'a> {
         let mut filter = base.filter_complex.clone();
         filter.push(';');
         filter.push_str(&in_label);
-        // Comma-separate the drawtext filters so they all run on the
+        // Comma-separate the title filters so they all run on the
         // same input → single output. drawtext's `enable=` keeps each
-        // bounded to its window without cross-contamination.
+        // bounded to its window without cross-contamination, and
+        // libass `subtitles=` carries its own per-event start/end.
         let parts: Vec<String> = self
             .titles
             .iter()
-            .map(|title| format_drawtext_filter(title, self.broadcast_overlay))
+            .enumerate()
+            .map(|(index, title)| self.format_title_filter(title, index))
             .collect();
         filter.push_str(&parts.join(","));
         filter.push_str(&out_label);
@@ -3950,6 +3970,31 @@ impl<'a> FilterPlanner<'a> {
             video_out_label: out_label,
             audio_out_label: base.audio_out_label,
         }
+    }
+
+    /// Pick the right rendering substrate for one title:
+    ///   - libass `subtitles=` when [`crate::ass::is_libass_eligible`]
+    ///     is true and the planner has a workdir for ASS files
+    ///   - drawtext otherwise
+    ///
+    /// Fail-soft: if writing the ASS file errors, fall back to the
+    /// drawtext path rather than aborting the whole render.
+    fn format_title_filter(&self, title: &TitlePlan, index: usize) -> String {
+        if let Some(workdir) = self.ass_workdir.as_ref()
+            && crate::ass::is_libass_eligible(title)
+        {
+            match crate::ass::render_ass_file(title, workdir, index) {
+                Ok(path) => return crate::ass::ffmpeg_subtitles_filter_arg(&path),
+                Err(err) => {
+                    tracing::warn!(
+                        ?err,
+                        workdir = %workdir.display(),
+                        "FilterPlanner: ASS write failed; falling back to drawtext",
+                    );
+                }
+            }
+        }
+        format_drawtext_filter(title, self.broadcast_overlay)
     }
 
     fn append_broadcast_overlay(
@@ -8548,6 +8593,39 @@ pub fn build_timeline_argv_full_with_annotations(
     loudness_target: Option<LoudnessTargetPlan>,
     output_path: &Path,
 ) -> Vec<String> {
+    build_timeline_argv_full_with_annotations_and_ass(
+        segs,
+        transitions,
+        video_overlays,
+        annotations,
+        titles,
+        broadcast_overlay,
+        browser_broadcast_overlay,
+        loudness_target,
+        output_path,
+        None,
+    )
+}
+
+/// Same as [`build_timeline_argv_full_with_annotations`] but with an
+/// extra optional `ass_workdir`: when supplied, captions carrying
+/// per-word timings are written as `.ass` files there and rendered
+/// through the libass `subtitles=` filter instead of comma-chained
+/// drawtext. Kept crate-private so the public surface stays the
+/// drawtext-only legacy signature.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    video_overlays: &[VideoOverlayPlan],
+    annotations: &[AnnotationPlan],
+    titles: &[TitlePlan],
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    browser_broadcast_overlay: Option<&Path>,
+    loudness_target: Option<LoudnessTargetPlan>,
+    output_path: &Path,
+    ass_workdir: Option<&Path>,
+) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_matte_input =
         segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
@@ -8592,13 +8670,16 @@ pub fn build_timeline_argv_full_with_annotations(
         .is_none()
         .then_some(broadcast_overlay)
         .flatten();
-    let plan = FilterPlanner::with_titles_and_broadcast_overlay(
+    let mut planner = FilterPlanner::with_titles_and_broadcast_overlay(
         &[],
         &[],
         titles,
         ffmpeg_broadcast_overlay,
-    )
-    .decorate_video_filter(annotated.filter_complex, annotated.video_out_label);
+    );
+    if let Some(dir) = ass_workdir {
+        planner = planner.with_ass_workdir(dir.to_path_buf());
+    }
+    let plan = planner.decorate_video_filter(annotated.filter_complex, annotated.video_out_label);
     let mut filter_complex = plan.filter_complex;
     let video_out_label = if browser_broadcast_overlay.is_some() {
         let overlay_input = segs.len() + video_overlays.len();
@@ -8723,6 +8804,40 @@ pub fn build_timeline_argv_with_audio_tracks_and_annotations(
     audio_tracks: &[AudioTrackPlan],
     output_path: &Path,
 ) -> Vec<String> {
+    build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
+        segs,
+        transitions,
+        video_overlays,
+        annotations,
+        titles,
+        broadcast_overlay,
+        browser_broadcast_overlay,
+        loudness_target,
+        audio_tracks,
+        output_path,
+        None,
+    )
+}
+
+/// libass-aware variant of
+/// [`build_timeline_argv_with_audio_tracks_and_annotations`]. When
+/// `ass_workdir` is `Some`, eligible captions burn in via the
+/// libass `subtitles=` filter. Otherwise the function is identical
+/// to the public drawtext-only signature.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    video_overlays: &[VideoOverlayPlan],
+    annotations: &[AnnotationPlan],
+    titles: &[TitlePlan],
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    browser_broadcast_overlay: Option<&Path>,
+    loudness_target: Option<LoudnessTargetPlan>,
+    audio_tracks: &[AudioTrackPlan],
+    output_path: &Path,
+    ass_workdir: Option<&Path>,
+) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_matte_input =
         segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
@@ -8799,13 +8914,16 @@ pub fn build_timeline_argv_with_audio_tracks_and_annotations(
         .then_some(broadcast_overlay)
         .flatten();
     if !titles.is_empty() || ffmpeg_broadcast_overlay.is_some() {
-        let decorated = FilterPlanner::with_titles_and_broadcast_overlay(
+        let mut planner = FilterPlanner::with_titles_and_broadcast_overlay(
             &[],
             &[],
             titles,
             ffmpeg_broadcast_overlay,
-        )
-        .decorate_video_filter(filter, video_label.clone());
+        );
+        if let Some(dir) = ass_workdir {
+            planner = planner.with_ass_workdir(dir.to_path_buf());
+        }
+        let decorated = planner.decorate_video_filter(filter, video_label.clone());
         filter = decorated.filter_complex;
         video_label = decorated.video_out_label;
     }
@@ -9305,8 +9423,32 @@ fn build_timeline_render_spec_inner(
     } else {
         None
     };
+    // libass burn-in path: when any caption carries word timings we
+    // materialize `.ass` files under <renders>/.ass/<timestamp>/ so
+    // the ffmpeg `subtitles=` filter can find them. Drawtext stays
+    // the default for everything else.
+    let ass_workdir = if titles
+        .iter()
+        .any(crate::ass::is_libass_eligible)
+    {
+        let dir = renders_dir
+            .join(".ass")
+            .join(timestamp.to_string());
+        if let Err(err) = fs::create_dir_all(&dir) {
+            tracing::warn!(
+                ?err,
+                dir = %dir.display(),
+                "build_timeline_render_spec: failed to create ASS workdir; captions will fall back to drawtext",
+            );
+            None
+        } else {
+            Some(dir)
+        }
+    } else {
+        None
+    };
     let mut argv = if audio_tracks.is_empty() {
-        build_timeline_argv_full_with_annotations(
+        build_timeline_argv_full_with_annotations_and_ass(
             &segs,
             &transitions,
             &video_overlays,
@@ -9316,9 +9458,10 @@ fn build_timeline_render_spec_inner(
             browser_broadcast_overlay.as_deref(),
             loudness_target,
             &output_path,
+            ass_workdir.as_deref(),
         )
     } else {
-        build_timeline_argv_with_audio_tracks_and_annotations(
+        build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
             &segs,
             &transitions,
             &video_overlays,
@@ -9329,6 +9472,7 @@ fn build_timeline_render_spec_inner(
             loudness_target,
             &audio_tracks,
             &output_path,
+            ass_workdir.as_deref(),
         )
     };
     if let Some(section) = section {

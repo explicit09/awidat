@@ -37,6 +37,7 @@
 )]
 
 pub mod animation;
+pub(crate) mod ass;
 pub mod ffmpeg;
 pub mod frame_io;
 pub mod job;
