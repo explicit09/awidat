@@ -6,9 +6,10 @@
 //!
 //! Scope: `raw` (source media), `renders` (engine outputs), or `all` (both).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use async_trait::async_trait;
+use awidat_index::media_files::{MediaFile, MediaScanOptions, collect_project_media_files};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -96,22 +97,42 @@ impl ToolHandler for ListAssetsTool {
         }
         let limit = args.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
 
-        let mut entries: Vec<AssetEntry> = Vec::new();
-        match scope.as_str() {
-            "raw" => collect(&ctx.project_root.join("raw"), "raw", &mut entries),
-            "renders" => collect(&ctx.project_root.join("renders"), "renders", &mut entries),
-            "all" => {
-                collect(&ctx.project_root.join("raw"), "raw", &mut entries);
-                collect(&ctx.project_root.join("renders"), "renders", &mut entries);
-            }
+        let entries = match scope.as_str() {
+            "raw" => collect(
+                &ctx.project_root,
+                MediaScanOptions {
+                    include_raw: true,
+                    include_renders: false,
+                    max_files: None,
+                },
+            ),
+            "renders" => collect(
+                &ctx.project_root,
+                MediaScanOptions {
+                    include_raw: false,
+                    include_renders: true,
+                    max_files: None,
+                },
+            ),
+            "all" => collect(
+                &ctx.project_root,
+                MediaScanOptions {
+                    include_raw: true,
+                    include_renders: true,
+                    max_files: None,
+                },
+            ),
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "list_assets: scope '{other}' not recognized. Use one of: raw, renders, all."
                 )));
             }
-        }
+        };
 
         // Stable sort by (scope, relative_path).
+        let mut entries = entries.map_err(|e| {
+            FunctionCallError::RespondToModel(format!("list_assets: unable to scan assets: {e}"))
+        })?;
         entries.sort_by(|a, b| (&a.scope, &a.rel_path).cmp(&(&b.scope, &b.rel_path)));
 
         let total = entries.len();
@@ -152,35 +173,24 @@ struct AssetEntry {
     size_bytes: u64,
 }
 
-fn collect(root: &Path, scope_label: &str, out: &mut Vec<AssetEntry>) {
-    if !root.is_dir() {
-        return;
-    }
-    walk(root, root, scope_label, out);
+fn collect(root: &Path, options: MediaScanOptions) -> std::io::Result<Vec<AssetEntry>> {
+    collect_project_media_files(root, options)
+        .map(|files| files.into_iter().map(AssetEntry::from).collect())
 }
 
-fn walk(root: &Path, here: &Path, scope_label: &str, out: &mut Vec<AssetEntry>) {
-    let Ok(entries) = std::fs::read_dir(here) else {
-        return;
-    };
-    for ent in entries.flatten() {
-        let p = ent.path();
-        if p.is_dir() {
-            walk(root, &p, scope_label, out);
-            continue;
+impl From<MediaFile> for AssetEntry {
+    fn from(file: MediaFile) -> Self {
+        let scope_prefix = format!("{}/", file.scope);
+        let rel_path = file
+            .project_relative_path
+            .strip_prefix(&scope_prefix)
+            .unwrap_or(&file.project_relative_path)
+            .to_string();
+        Self {
+            scope: file.scope,
+            rel_path,
+            size_bytes: file.size_bytes,
         }
-        let Ok(meta) = ent.metadata() else { continue };
-        if !meta.is_file() {
-            continue;
-        }
-        let Ok(rel) = p.strip_prefix(root) else {
-            continue;
-        };
-        out.push(AssetEntry {
-            scope: scope_label.to_string(),
-            rel_path: rel.to_string_lossy().replace('\\', "/"),
-            size_bytes: meta.len(),
-        });
     }
 }
 
@@ -209,10 +219,6 @@ fn truncate(s: String, cap: usize) -> String {
     }
     format!("{}…", &s[..end])
 }
-
-// Suppress unused import.
-#[allow(dead_code)]
-fn _unused(_p: PathBuf) {}
 
 const DESCRIPTION: &str = "\
 List source assets and renders in the project. Returns a numbered, \

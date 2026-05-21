@@ -14,9 +14,9 @@
 
 use async_trait::async_trait;
 use awidat_config::Config;
+use awidat_index::media_files::collect_raw_media_inputs;
 use awidat_index::{AssetInput, PairOutcome};
 use awidat_mcp::ClientInfo;
-use awidat_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
@@ -214,38 +214,7 @@ fn format_report(
 }
 
 fn collect_assets(project_root: &std::path::Path) -> std::io::Result<Vec<AssetInput>> {
-    let raw_dir = project_root.join("raw");
-    if !raw_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    walk(project_root, &raw_dir, &mut out)?;
-    Ok(out)
-}
-
-fn walk(
-    project_root: &std::path::Path,
-    dir: &std::path::Path,
-    out: &mut Vec<AssetInput>,
-) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk(project_root, &path, out)?;
-        } else if path.is_file() {
-            let id = path
-                .strip_prefix(project_root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            out.push(AssetInput {
-                id: AssetId::new(id),
-                path,
-            });
-        }
-    }
-    Ok(())
+    collect_raw_media_inputs(project_root)
 }
 
 const DESCRIPTION: &str = "\
