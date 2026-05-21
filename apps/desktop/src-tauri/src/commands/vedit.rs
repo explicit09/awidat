@@ -545,6 +545,8 @@ pub(crate) fn desktop_commit_author() -> Option<awidat_core::vc::CommitAuthor> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     fn write_otio(project_root: &std::path::Path, duration: f64) {
         let value = serde_json::json!({
             "OTIO_SCHEMA": "Timeline.1",
