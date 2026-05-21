@@ -180,6 +180,38 @@ pub fn ensure_session_tag(repo: &Repo) -> Result<(), VcError> {
     Ok(())
 }
 
+/// Identity stamped on a commit. Wrapper-type around vedit's `Author`
+/// so callers don't reach into `vedit_core::commit` (see module-level
+/// rule 1: no `pub use vedit_core::*`).
+///
+/// Multi-seat editing, user-authored notes, and meaningful blame all
+/// rely on this carrying a real person's name when one is available.
+/// When `None` is passed to a `*_as` commit entry point, the default
+/// resolver kicks in — see [`resolve_commit_author`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitAuthor {
+    /// Display name, e.g. "Alice".
+    pub name: String,
+    /// Email, e.g. `alice@example.com`.
+    pub email: String,
+}
+
+impl CommitAuthor {
+    fn into_vedit(self) -> Author {
+        Author {
+            name: self.name,
+            email: self.email,
+        }
+    }
+
+    fn from_vedit(a: Author) -> Self {
+        Self {
+            name: a.name,
+            email: a.email,
+        }
+    }
+}
+
 /// Commit the current `project.otio.json` with an awidat-shaped
 /// message.
 ///
@@ -193,10 +225,29 @@ pub fn ensure_session_tag(repo: &Repo) -> Result<(), VcError> {
 /// (vedit content-addresses), but does write a new commit object
 /// (different timestamp). Use `is_workdir_dirty` if you want to skip
 /// no-op commits.
+///
+/// This shim preserves the pre-author-override signature for existing
+/// call sites. The author is resolved by [`resolve_commit_author`]
+/// (env vars `AWIDAT_USER_NAME` / `AWIDAT_USER_EMAIL`, falling back
+/// to the "awidat agent" default). To stamp an explicit identity,
+/// call [`commit_current_timeline_as`].
 pub fn commit_current_timeline(
     repo: &Repo,
     header: &str,
     agent_reasoning: Option<&str>,
+) -> Result<CommitOutcome, VcError> {
+    commit_current_timeline_as(repo, header, agent_reasoning, None)
+}
+
+/// Same as [`commit_current_timeline`] but lets the caller stamp an
+/// explicit identity on the commit. Used by code paths that know the
+/// user (desktop session, multi-seat note authoring). Passing `None`
+/// is identical to [`commit_current_timeline`] — env vars then default.
+pub fn commit_current_timeline_as(
+    repo: &Repo,
+    header: &str,
+    agent_reasoning: Option<&str>,
+    author_override: Option<CommitAuthor>,
 ) -> Result<CommitOutcome, VcError> {
     let bytes = std::fs::read(&repo.project_otio)
         .map_err(|e| VcError::Project(format!("reading {}: {e}", repo.project_otio.display())))?;
@@ -205,7 +256,7 @@ pub fn commit_current_timeline(
 
     let timeline_hash = repo.inner.write_timeline(&value).map_err(vedit_err)?;
     let message = format_commit_message(header, agent_reasoning);
-    let author = awidat_author();
+    let author = resolve_commit_author(author_override);
     let commit_hash = repo
         .inner
         .commit(&timeline_hash, author, &message)
@@ -277,8 +328,20 @@ pub fn auto_commit_apply(
     op_descriptions: &[String],
     agent_reasoning: Option<&str>,
 ) -> Result<CommitOutcome, VcError> {
+    auto_commit_apply_as(repo, op_descriptions, agent_reasoning, None)
+}
+
+/// Same as [`auto_commit_apply`] but lets the caller stamp an explicit
+/// identity on the commit. Hot path: the desktop's apply_edl handler
+/// knows the seat-holder; the agent's apply_edl handler may not.
+pub fn auto_commit_apply_as(
+    repo: &Repo,
+    op_descriptions: &[String],
+    agent_reasoning: Option<&str>,
+    author_override: Option<CommitAuthor>,
+) -> Result<CommitOutcome, VcError> {
     let header = compose_auto_header(op_descriptions);
-    commit_current_timeline(repo, &header, agent_reasoning)
+    commit_current_timeline_as(repo, &header, agent_reasoning, author_override)
 }
 
 /// Build a one-line header from a list of op descriptions.
@@ -322,16 +385,66 @@ fn truncate_chars(s: &str, max: usize) -> String {
     out
 }
 
-/// Author stamped on every commit awidat writes. Generic on purpose
-/// — we don't want vedit telling users this is "their" commit when
-/// it's actually the agent acting on their behalf. The user-attribution
-/// question (one author per session? one per turn?) is a Phase B
-/// question.
-fn awidat_author() -> Author {
+/// Default author when no override or env config is present. Generic
+/// on purpose — when the agent is acting on the user's behalf and
+/// nobody has declared themselves, the commit is the agent's, not a
+/// fake personal stamp.
+fn default_awidat_author() -> Author {
     Author {
         name: "awidat agent".to_string(),
         email: "agent@awidat.local".to_string(),
     }
+}
+
+/// Environment variables consulted as a runtime fallback for commit
+/// attribution. Both must be set; a half-configured pair (just the
+/// name, or just the email) is treated as not configured so blame
+/// views never end up with a real name and a stale or guessed email.
+const ENV_USER_NAME: &str = "AWIDAT_USER_NAME";
+const ENV_USER_EMAIL: &str = "AWIDAT_USER_EMAIL";
+
+/// Resolve which `Author` to stamp on a commit, in priority order:
+///
+/// 1. `author_override` — the call-site identity (multi-seat editing,
+///    user-authored notes, anything that already knows the user).
+/// 2. `AWIDAT_USER_NAME` + `AWIDAT_USER_EMAIL` env vars — useful for
+///    CLI / TUI sessions where the user is identifiable from process
+///    env (`git`-style configuration).
+/// 3. The "awidat agent" default — anonymous attribution, matches
+///    pre-slice behavior for backward compat.
+///
+/// Kept private so the priority chain stays a single decision point;
+/// callers go through `commit_current_timeline[_as]` / `merge_refs[_as]`
+/// rather than picking an author themselves.
+fn resolve_commit_author(author_override: Option<CommitAuthor>) -> Author {
+    resolve_commit_author_with_env(author_override, |k| std::env::var(k).ok())
+}
+
+/// Same priority chain as [`resolve_commit_author`], but takes the env
+/// source as a callback so tests can drive the env-var pathway without
+/// mutating process-global state (Rust 2024 requires `unsafe` for
+/// `std::env::set_var`, which is forbidden workspace-wide).
+fn resolve_commit_author_with_env<F>(
+    author_override: Option<CommitAuthor>,
+    env_lookup: F,
+) -> Author
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(explicit) = author_override {
+        return explicit.into_vedit();
+    }
+    if let (Some(name), Some(email)) = (env_lookup(ENV_USER_NAME), env_lookup(ENV_USER_EMAIL)) {
+        let name = name.trim();
+        let email = email.trim();
+        if !name.is_empty() && !email.is_empty() {
+            return Author {
+                name: name.to_string(),
+                email: email.to_string(),
+            };
+        }
+    }
+    default_awidat_author()
 }
 
 /// Diff between two refs. Default: `session-start..HEAD`. The agent
@@ -889,6 +1002,18 @@ pub fn merge_refs(
     source_ref: &str,
     target_ref: Option<&str>,
 ) -> Result<MergeOutcome, VcError> {
+    merge_refs_as(repo, source_ref, target_ref, None)
+}
+
+/// Same as [`merge_refs`] but stamps an explicit identity on the merge
+/// commit. Passing `None` falls back to [`resolve_commit_author`]
+/// (env vars, then the "awidat agent" default).
+pub fn merge_refs_as(
+    repo: &Repo,
+    source_ref: &str,
+    target_ref: Option<&str>,
+    author_override: Option<CommitAuthor>,
+) -> Result<MergeOutcome, VcError> {
     let preflight = merge_preflight(repo, source_ref, target_ref)?;
     if !preflight.is_mergeable {
         return Err(VcError::Vedit(format!(
@@ -929,7 +1054,12 @@ pub fn merge_refs(
     ];
     let commit_hash = repo
         .inner
-        .commit_with_parents(&timeline_hash, parents.clone(), awidat_author(), &message)
+        .commit_with_parents(
+            &timeline_hash,
+            parents.clone(),
+            resolve_commit_author(author_override),
+            &message,
+        )
         .map_err(vedit_err)?;
 
     Ok(MergeOutcome {
@@ -1321,6 +1451,7 @@ pub fn log(repo: &Repo, limit: usize) -> Result<Vec<LogEntry>, VcError> {
             full_message: commit.message,
             timeline_hash: commit.timeline,
             parents: commit.parents,
+            author: CommitAuthor::from_vedit(commit.author),
         })
         .collect();
     Ok(trimmed)
@@ -1341,6 +1472,9 @@ pub struct LogEntry {
     pub timeline_hash: String,
     /// Parent commit hashes (1 = normal, 0 = initial, 2+ = merge).
     pub parents: Vec<String>,
+    /// Identity stamped on the commit. Backward-compat: pre-slice
+    /// commits read back as `awidat agent <agent@awidat.local>`.
+    pub author: CommitAuthor,
 }
 
 fn header_line(message: &str) -> String {
@@ -2245,5 +2379,78 @@ mod tests {
             v["metadata"]["awidat"]["anchors"]["shot-a"]["transcript_snippet"].as_str(),
             Some("hello world")
         );
+    }
+
+    // ---- author-resolver priority chain --------------------------------
+    // Exercises `resolve_commit_author_with_env` directly because Rust
+    // 2024's `std::env::set_var` is `unsafe` and the workspace forbids
+    // unsafe code. Driving the env via a callback keeps the test
+    // deterministic without touching process-global state.
+
+    fn env_from(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'static {
+        let map: BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        move |k: &str| map.get(k).cloned()
+    }
+
+    #[test]
+    fn resolver_prefers_explicit_override_over_env_and_default() {
+        let env = env_from(&[
+            (ENV_USER_NAME, "Bob"),
+            (ENV_USER_EMAIL, "bob@example.com"),
+        ]);
+        let carol = CommitAuthor {
+            name: "Carol".to_string(),
+            email: "carol@example.com".to_string(),
+        };
+        let resolved = resolve_commit_author_with_env(Some(carol), env);
+        assert_eq!(resolved.name, "Carol");
+        assert_eq!(resolved.email, "carol@example.com");
+    }
+
+    #[test]
+    fn resolver_uses_env_vars_when_no_override_present() {
+        let env = env_from(&[
+            (ENV_USER_NAME, "Bob"),
+            (ENV_USER_EMAIL, "bob@example.com"),
+        ]);
+        let resolved = resolve_commit_author_with_env(None, env);
+        assert_eq!(resolved.name, "Bob");
+        assert_eq!(resolved.email, "bob@example.com");
+    }
+
+    #[test]
+    fn resolver_falls_back_to_default_when_env_partial_or_missing() {
+        // Both unset -> default.
+        let none_env = |_: &str| None::<String>;
+        let resolved = resolve_commit_author_with_env(None, none_env);
+        assert_eq!(resolved.name, "awidat agent");
+        assert_eq!(resolved.email, "agent@awidat.local");
+
+        // Only the name set -> still default; we refuse to invent an
+        // email or pair a real name with a missing one.
+        let half_env = env_from(&[(ENV_USER_NAME, "Bob")]);
+        let resolved = resolve_commit_author_with_env(None, half_env);
+        assert_eq!(resolved.name, "awidat agent");
+        assert_eq!(resolved.email, "agent@awidat.local");
+
+        // Whitespace-only env values -> treat as unset.
+        let ws_env = env_from(&[(ENV_USER_NAME, "   "), (ENV_USER_EMAIL, "  ")]);
+        let resolved = resolve_commit_author_with_env(None, ws_env);
+        assert_eq!(resolved.name, "awidat agent");
+        assert_eq!(resolved.email, "agent@awidat.local");
+    }
+
+    #[test]
+    fn resolver_trims_env_values() {
+        let env = env_from(&[
+            (ENV_USER_NAME, "  Bob  "),
+            (ENV_USER_EMAIL, "\tbob@example.com\n"),
+        ]);
+        let resolved = resolve_commit_author_with_env(None, env);
+        assert_eq!(resolved.name, "Bob");
+        assert_eq!(resolved.email, "bob@example.com");
     }
 }
