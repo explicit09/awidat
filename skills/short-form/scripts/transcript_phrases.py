@@ -121,6 +121,14 @@ def group_words_into_phrases(
             "end_s": round(float(current[-1]["end_s"]), 3),
             "speaker": current[0].get("speaker"),
             "word_count": len(current),
+            "word_timings": [
+                {
+                    "text": str(word["word"]).strip(),
+                    "start_s": round(float(word["start_s"]), 3),
+                    "end_s": round(float(word["end_s"]), 3),
+                }
+                for word in current
+            ],
         })
         current.clear()
 

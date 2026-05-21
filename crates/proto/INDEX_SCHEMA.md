@@ -29,6 +29,8 @@ engine and an indexer is the *sidecar JSON shape* defined here.
 │   │   └── ep-014-cam-a.mp4.json
 │   ├── audio-energy/
 │   │   └── ep-014-audio.wav.json
+│   ├── beats/
+│   │   └── ep-014-audio.wav.json
 │   └── speaker-emotion/        # added in v1.5; engine notices via manifest
 │       └── ep-014-audio.wav.json
 └── ...
@@ -131,7 +133,7 @@ still a usable project.
 Indexer ids are lowercase, hyphen-separated, no whitespace, no slashes:
 
 - `whisper`, `whisperx` ✓
-- `audio-energy`, `speaker-emotion` ✓
+- `audio-energy`, `beats`, `speaker-emotion` ✓
 - `Whisper` ✗ (not lowercase)
 - `audio_energy` ✗ (use hyphen)
 - `audio/energy` ✗ (no slashes)

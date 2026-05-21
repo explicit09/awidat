@@ -2715,6 +2715,10 @@ fn parse_title_plan(
         .get("rich_segments")
         .and_then(|value| serde_json::from_value::<Vec<RichTextSegment>>(value.clone()).ok())
         .unwrap_or_default();
+    let word_timings = m
+        .get("word_timings")
+        .and_then(|value| serde_json::from_value::<Vec<CaptionWordTiming>>(value.clone()).ok())
+        .unwrap_or_default();
     let clip_id = render_clip_id(clip);
     let animation_selection =
         render_animations_for_clip_with_limitations(parameter_animations, &clip_id, "title");
@@ -2732,6 +2736,7 @@ fn parse_title_plan(
         role,
         safe_area,
         rich_segments,
+        word_timings,
         animations,
     };
     Some((plan, animation_selection))
@@ -3388,8 +3393,21 @@ pub struct TitlePlan {
     pub safe_area: Option<String>,
     /// Optional inline rich-text runs.
     pub rich_segments: Vec<RichTextSegment>,
+    /// Optional transcript word timings for word-accurate caption reveal.
+    pub word_timings: Vec<CaptionWordTiming>,
     /// Supported Phase 3A parameter animations attached to this title.
     pub animations: Vec<RenderParameterAnimation>,
+}
+
+/// One transcript word timing attached to a caption title.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct CaptionWordTiming {
+    /// Word text.
+    pub text: String,
+    /// Word start in master-timeline seconds.
+    pub start_s: f64,
+    /// Word end in master-timeline seconds.
+    pub end_s: f64,
 }
 
 /// One styled inline run inside a rich title.
@@ -6194,6 +6212,9 @@ fn format_drawtext_filter(
     t: &TitlePlan,
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
 ) -> String {
+    if !t.word_timings.is_empty() {
+        return format_word_timed_drawtext_filters(t, broadcast_overlay);
+    }
     if !t.rich_segments.is_empty() && t.reveal == TextReveal::None {
         return format_rich_drawtext_filters(t, broadcast_overlay);
     }
@@ -6551,6 +6572,70 @@ fn format_revealed_drawtext_filters(
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_word_timed_drawtext_filters(
+    t: &TitlePlan,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let steps = word_timed_reveal_steps(t);
+    steps
+        .iter()
+        .map(|step| {
+            format_drawtext_filter_with_text(
+                t,
+                &step.text,
+                step.start_s,
+                step.end_s,
+                broadcast_overlay,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+struct WordTimedRevealStep {
+    text: String,
+    start_s: f64,
+    end_s: f64,
+}
+
+fn word_timed_reveal_steps(t: &TitlePlan) -> Vec<WordTimedRevealStep> {
+    let valid_words = t
+        .word_timings
+        .iter()
+        .filter(|word| {
+            !word.text.trim().is_empty()
+                && word.start_s.is_finite()
+                && word.end_s.is_finite()
+                && word.start_s >= t.start_s
+                && word.start_s < t.end_s
+                && word.end_s >= word.start_s
+        })
+        .collect::<Vec<_>>();
+    if valid_words.is_empty() {
+        return Vec::new();
+    }
+
+    let mut steps = Vec::with_capacity(valid_words.len());
+    let mut prefix_words = Vec::with_capacity(valid_words.len());
+    for (index, word) in valid_words.iter().enumerate() {
+        prefix_words.push(word.text.trim());
+        let start_s = word.start_s.max(t.start_s);
+        let end_s = valid_words
+            .get(index + 1)
+            .map(|next| next.start_s.min(t.end_s))
+            .unwrap_or(t.end_s);
+        if end_s <= start_s {
+            continue;
+        }
+        steps.push(WordTimedRevealStep {
+            text: prefix_words.join(" "),
+            start_s,
+            end_s,
+        });
+    }
+    steps
 }
 
 fn reveal_steps(text: &str, reveal: TextReveal) -> Vec<String> {
@@ -11888,6 +11973,7 @@ mod tests {
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
@@ -11937,6 +12023,7 @@ mod tests {
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         }];
         let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
@@ -11984,6 +12071,7 @@ mod tests {
                 role: "title".into(),
                 safe_area: None,
                 rich_segments: Vec::new(),
+                word_timings: Vec::new(),
                 animations: Vec::new(),
             },
             TitlePlan {
@@ -11999,6 +12087,7 @@ mod tests {
                 role: "caption".into(),
                 safe_area: Some("mobile".into()),
                 rich_segments: Vec::new(),
+                word_timings: Vec::new(),
                 animations: Vec::new(),
             },
         ];
@@ -12028,6 +12117,7 @@ mod tests {
             role: "title".into(),
             safe_area: None,
 rich_segments: Vec::new(),
+word_timings: Vec::new(),
 animations: Vec::new(),
         };
 
@@ -12129,6 +12219,7 @@ animations: Vec::new(),
             role: "caption".into(),
             safe_area: Some("mobile".into()),
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         }];
 
@@ -12238,6 +12329,7 @@ animations: Vec::new(),
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         }];
 
@@ -12439,6 +12531,57 @@ animations: Vec::new(),
     }
 
     #[test]
+    fn word_timed_caption_reveal_uses_transcript_timing_windows() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut title = title(TitleAnimation::None, TitlePosition::Bottom);
+        title.role = "caption".into();
+        title.text = "This changed everything".into();
+        title.start_s = 1.0;
+        title.end_s = 2.5;
+        title.word_timings = vec![
+            CaptionWordTiming {
+                text: "This".into(),
+                start_s: 1.0,
+                end_s: 1.2,
+            },
+            CaptionWordTiming {
+                text: "changed".into(),
+                start_s: 1.24,
+                end_s: 1.5,
+            },
+            CaptionWordTiming {
+                text: "everything".into(),
+                start_s: 1.55,
+                end_s: 1.9,
+            },
+        ];
+
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+
+        assert!(
+            plan.filter_complex.contains("drawtext=text='This'")
+                && plan.filter_complex.contains("drawtext=text='This changed'")
+                && plan
+                    .filter_complex
+                    .contains("drawtext=text='This changed everything'"),
+            "word-timed captions should render cumulative word prefixes: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex
+                .contains("enable='between(t\\,1\\,1.24)'")
+                && plan
+                    .filter_complex
+                    .contains("enable='between(t\\,1.24\\,1.55)'")
+                && plan
+                    .filter_complex
+                    .contains("enable='between(t\\,1.55\\,2.5)'"),
+            "word-timed captions should use transcript word starts, not uniform steps: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
     fn reveal_steps_keep_grapheme_clusters_intact() {
         assert_eq!(
             reveal_steps("👩\u{200d}💻", TextReveal::Typewriter),
@@ -12466,6 +12609,7 @@ animations: Vec::new(),
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         };
         let overlay = BroadcastOverlayPlan {
@@ -13618,6 +13762,7 @@ animations: Vec::new(),
             role: "title".into(),
             safe_area: None,
             rich_segments: Vec::new(),
+            word_timings: Vec::new(),
             animations: Vec::new(),
         }
     }

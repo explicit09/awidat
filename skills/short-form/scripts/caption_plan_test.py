@@ -186,6 +186,27 @@ class TranscriptPhraseTests(unittest.TestCase):
 
         self.assertEqual([p["text"] for p in phrases], ["One quick beat", "Next line"])
 
+    def test_caption_plan_preserves_word_timings_for_renderer(self) -> None:
+        caption_plan = load_script("caption_plan")
+        phrases = caption_plan.build_caption_phrases(
+            [
+                {"word": "This", "start_s": 1.0, "end_s": 1.2},
+                {"word": "changed", "start_s": 1.24, "end_s": 1.5},
+                {"word": "everything", "start_s": 1.55, "end_s": 1.9},
+            ],
+            max_words=4,
+        )
+
+        self.assertEqual(phrases[0]["text"], "This changed everything")
+        self.assertEqual(
+            phrases[0]["word_timings"],
+            [
+                {"text": "This", "start_s": 1.0, "end_s": 1.2},
+                {"text": "changed", "start_s": 1.24, "end_s": 1.5},
+                {"text": "everything", "start_s": 1.55, "end_s": 1.9},
+            ],
+        )
+
     def test_caption_plan_exports_srt_with_timestamping_and_sanitized_arrows(self) -> None:
         caption_plan = load_script("caption_plan")
         phrases = [

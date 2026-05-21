@@ -255,6 +255,14 @@ const RECIPES: &[IndexerRecipe] = &[
         group: IndexerGroup::Navigation,
     },
     IndexerRecipe {
+        name: "beats",
+        package: "beats-mcp",
+        env: &[],
+        depends_on: &[],
+        resource_class: IndexerResourceClass::Light,
+        group: IndexerGroup::Navigation,
+    },
+    IndexerRecipe {
         name: "scenedetect",
         package: "scenedetect-mcp",
         env: &[],
@@ -388,12 +396,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn eleven_default_indexers_registered() {
+    fn twelve_default_indexers_registered() {
         let cfg = with_defaults();
-        assert_eq!(cfg.mcp.servers.len(), 11);
+        assert_eq!(cfg.mcp.servers.len(), 12);
         let names: Vec<&str> = cfg.mcp.servers.iter().map(|s| s.name.as_str()).collect();
         // Spot-check that the headline indexers are present.
         assert!(names.contains(&"whisper"));
+        assert!(names.contains(&"beats"));
         assert!(names.contains(&"clip"));
         assert!(names.contains(&"editorial-moments"));
         assert!(names.contains(&"face"));
@@ -434,6 +443,10 @@ mod tests {
         );
         assert_eq!(
             cfg.find_server("audio-energy").unwrap().resource_class,
+            IndexerResourceClass::Light
+        );
+        assert_eq!(
+            cfg.find_server("beats").unwrap().resource_class,
             IndexerResourceClass::Light
         );
         assert_eq!(
@@ -478,6 +491,7 @@ mod tests {
         // No-dep indexers: spot-check.
         for name in [
             "audio-energy",
+            "beats",
             "scenedetect",
             "whisper",
             "clip",
