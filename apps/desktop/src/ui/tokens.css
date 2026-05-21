@@ -1,0 +1,280 @@
+@import "tailwindcss";
+
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+
+/*
+ * Awidat design tokens. Values pulled directly from the canonical design spec at
+ * ~/Downloads/Awidat UI Design Concept.md. When the spec moves, the source of
+ * truth for tokens lives there; this file is its implementation.
+ */
+
+@theme {
+  /* surfaces */
+  --color-surface-page: #070A0F;
+  --color-surface-app: #0B0F14;
+  --color-surface-panel: #111827;
+  --color-surface-panel-hover: #162033;
+  --color-surface-panel-active: #1A2436;
+  --color-surface-card: #17212F;
+  --color-surface-card-hover: #1D2A3A;
+  --color-surface-card-active: #223247;
+  --color-surface-modal: #1F2937;
+  --color-surface-modal-hover: #273449;
+  --color-surface-modal-active: #2F3D52;
+  --color-surface-hover: #1B2635;
+  --color-surface-input: #0E1623;
+  --color-surface-input-hover: #121D2D;
+  --color-surface-input-active: #172238;
+  --color-surface-selected: #10243A;
+  --color-surface-selected-hover: #14304D;
+  --color-surface-selected-active: #183A5E;
+
+  /* borders */
+  --color-border: #374151;
+  --color-border-subtle: #243041;
+  --color-border-strong: #4B5563;
+  --color-border-focus: #38BDF8;
+  --color-border-active: #14B8A6;
+
+  /* text */
+  --color-text-primary: #E5E7EB;
+  --color-text-secondary: #9CA3AF;
+  --color-text-muted: #6B7280;
+  --color-text-disabled: #4B5563;
+  --color-text-inverse: #061014;
+  --color-text-on-accent: #ECFEFF;
+  --color-text-on-danger: #FEF2F2;
+
+  /* brand */
+  --color-brand: #14B8A6;
+  --color-brand-hover: #2DD4BF;
+  --color-brand-active: #0F766E;
+  --color-brand-secondary: #38BDF8;
+  --color-brand-secondary-hover: #7DD3FC;
+  --color-brand-secondary-active: #0284C7;
+  --color-brand-purple: #8B5CF6;
+  --color-brand-purple-hover: #A78BFA;
+  --color-brand-purple-active: #6D28D9;
+
+  /* semantic base */
+  --color-success: #22C55E;
+  --color-success-hover: #4ADE80;
+  --color-success-active: #15803D;
+  --color-warning: #F59E0B;
+  --color-risk: #F97316;
+  --color-danger: #EF4444;
+  --color-failure: #DC2626;
+  --color-processing: #3B82F6;
+  --color-info: #3B82F6;
+
+  /* status pills — fill / border / text / dot */
+  --color-pill-proposed-fill: #0B2A3D;
+  --color-pill-proposed-border: #0EA5E9;
+  --color-pill-proposed-text: #7DD3FC;
+  --color-pill-proposed-dot: #38BDF8;
+
+  --color-pill-pending-fill: #3A2605;
+  --color-pill-pending-border: #D97706;
+  --color-pill-pending-text: #FCD34D;
+  --color-pill-pending-dot: #F59E0B;
+
+  --color-pill-accepted-fill: #0B2F1A;
+  --color-pill-accepted-border: #16A34A;
+  --color-pill-accepted-text: #86EFAC;
+  --color-pill-accepted-dot: #22C55E;
+
+  --color-pill-rejected-fill: #3A1111;
+  --color-pill-rejected-border: #DC2626;
+  --color-pill-rejected-text: #FCA5A5;
+  --color-pill-rejected-dot: #EF4444;
+
+  --color-pill-reviewing-fill: #281A4D;
+  --color-pill-reviewing-border: #7C3AED;
+  --color-pill-reviewing-text: #C4B5FD;
+  --color-pill-reviewing-dot: #8B5CF6;
+
+  --color-pill-processing-fill: #0B1F3A;
+  --color-pill-processing-border: #2563EB;
+  --color-pill-processing-text: #93C5FD;
+  --color-pill-processing-dot: #3B82F6;
+
+  --color-pill-ready-fill: #0D2D26;
+  --color-pill-ready-border: #14B8A6;
+  --color-pill-ready-text: #99F6E4;
+  --color-pill-ready-dot: #2DD4BF;
+
+  --color-pill-failed-fill: #450A0A;
+  --color-pill-failed-border: #B91C1C;
+  --color-pill-failed-text: #FECACA;
+  --color-pill-failed-dot: #DC2626;
+
+  --color-pill-warning-fill: #3A2605;
+  --color-pill-warning-border: #D97706;
+  --color-pill-warning-text: #FCD34D;
+  --color-pill-warning-dot: #F59E0B;
+
+  --color-pill-missing-fill: #1F2937;
+  --color-pill-missing-border: #6B7280;
+  --color-pill-missing-text: #D1D5DB;
+  --color-pill-missing-dot: #9CA3AF;
+
+  --color-pill-revised-fill: #1E1B4B;
+  --color-pill-revised-border: #6366F1;
+  --color-pill-revised-text: #C7D2FE;
+  --color-pill-revised-dot: #818CF8;
+
+  /* data viz */
+  --color-viz-speaker-a: #3B82F6;
+  --color-viz-speaker-b: #8B5CF6;
+  --color-viz-accepted: #22C55E;
+  --color-viz-pending: #F59E0B;
+  --color-viz-rejected: #EF4444;
+  --color-viz-warning: #FACC15;
+  --color-viz-audio: #64748B;
+  --color-viz-playhead: #38BDF8;
+
+  /* typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  --text-display: 2rem;          /* 32 */
+  --text-display--line-height: 2.5rem;
+  --text-display--letter-spacing: -0.04em;
+  --text-display--font-weight: 700;
+
+  --text-h1: 1.5rem;             /* 24 */
+  --text-h1--line-height: 2rem;
+  --text-h1--letter-spacing: -0.03em;
+  --text-h1--font-weight: 700;
+
+  --text-h2: 1.125rem;           /* 18 */
+  --text-h2--line-height: 1.625rem;
+  --text-h2--letter-spacing: -0.02em;
+  --text-h2--font-weight: 600;
+
+  --text-h3: 0.9375rem;          /* 15 */
+  --text-h3--line-height: 1.375rem;
+  --text-h3--letter-spacing: -0.01em;
+  --text-h3--font-weight: 600;
+
+  --text-body: 0.875rem;         /* 14 */
+  --text-body--line-height: 1.375rem;
+  --text-body--font-weight: 400;
+
+  --text-body-sm: 0.8125rem;     /* 13 */
+  --text-body-sm--line-height: 1.25rem;
+  --text-body-sm--font-weight: 400;
+
+  --text-label: 0.75rem;         /* 12 */
+  --text-label--line-height: 1rem;
+  --text-label--letter-spacing: 0.02em;
+  --text-label--font-weight: 600;
+
+  --text-caption: 0.6875rem;     /* 11 */
+  --text-caption--line-height: 1rem;
+  --text-caption--letter-spacing: 0.01em;
+  --text-caption--font-weight: 500;
+
+  --text-micro: 0.625rem;        /* 10 */
+  --text-micro--line-height: 0.875rem;
+  --text-micro--letter-spacing: 0.03em;
+  --text-micro--font-weight: 500;
+
+  --text-timecode: 0.8125rem;    /* 13 mono */
+  --text-timecode--line-height: 1.125rem;
+  --text-timecode--font-weight: 500;
+
+  /* spacing — Tailwind already ships 0/1/2/3/4/5/6/8/10/12/16; we keep its 4px base. */
+
+  /* radius */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  /* motion */
+  --ease-fast: cubic-bezier(0.2, 0, 0, 1);
+  --ease-snap: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* layout sizing (px) */
+  --layout-chrome-h: 44px;
+  --layout-lens-h: 44px;
+  --layout-rail-w: 320px;
+  --layout-inspector-w: 320px;
+  --layout-footer-h: 32px;
+  --layout-btn-h: 36px;
+  --layout-btn-h-compact: 28px;
+  --layout-pill-h: 22px;
+  --layout-row-h-timeline: 32px;
+  --layout-row-h-transcript: 48px;
+}
+
+/* base reset and global typography */
+@layer base {
+  :root {
+    color-scheme: dark;
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    background-color: var(--color-surface-app);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+
+  /* a focus ring that respects keyboard-only users */
+  :focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 1px;
+    border-radius: var(--radius-xs);
+  }
+}
+
+/* glow tokens — used by primitives that need active/warning/danger emphasis */
+@layer utilities {
+  .glow-active {
+    box-shadow:
+      0 0 0 1px rgba(20, 184, 166, 0.35),
+      0 0 24px rgba(20, 184, 166, 0.12);
+  }
+  .glow-warning {
+    box-shadow:
+      0 0 0 1px rgba(245, 158, 11, 0.35),
+      0 0 24px rgba(245, 158, 11, 0.10);
+  }
+  .glow-danger {
+    box-shadow:
+      0 0 0 1px rgba(239, 68, 68, 0.35),
+      0 0 24px rgba(239, 68, 68, 0.10);
+  }
+  .elev-1 { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24); }
+  .elev-2 { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); }
+  .elev-3 { box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
