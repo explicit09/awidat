@@ -27,6 +27,7 @@ pub mod id {
     pub const VIEW_TIMELINE: &str = "view:timeline";
     pub const VIEW_PROPERTIES: &str = "view:properties";
     pub const VIEW_NOTES: &str = "view:notes";
+    pub const VIEW_SCOPES: &str = "view:scopes";
     pub const VIEW_SIDEBAR: &str = "view:sidebar";
     pub const VIEW_CHAT: &str = "view:chat";
     pub const VIEW_TRANSCRIPT: &str = "view:transcript";
@@ -307,6 +308,7 @@ fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
     let timeline = item(app, id::VIEW_TIMELINE, "Timeline", false, None)?;
     let properties = item(app, id::VIEW_PROPERTIES, "Properties", false, None)?;
     let notes = item(app, id::VIEW_NOTES, "Notes", false, None)?;
+    let scopes = item(app, id::VIEW_SCOPES, "Color Scopes", false, None)?;
     let sidebar = item(app, id::VIEW_SIDEBAR, "Sidebar", false, None)?;
     let chat = item(app, id::VIEW_CHAT, "Chat", false, None)?;
     let transcript = item(app, id::VIEW_TRANSCRIPT, "Transcript", false, None)?;
@@ -345,6 +347,7 @@ fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
         .item(&timeline)
         .item(&properties)
         .item(&notes)
+        .item(&scopes)
         .separator()
         .item(&sidebar)
         .item(&chat)
@@ -450,6 +453,7 @@ fn frontend_command_ids() -> &'static [&'static str] {
         id::VIEW_TIMELINE,
         id::VIEW_PROPERTIES,
         id::VIEW_NOTES,
+        id::VIEW_SCOPES,
         id::VIEW_SIDEBAR,
         id::VIEW_CHAT,
         id::VIEW_TRANSCRIPT,

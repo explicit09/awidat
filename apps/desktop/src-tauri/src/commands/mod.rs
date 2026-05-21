@@ -2,6 +2,7 @@
 //! them all via `generate_handler!`.
 
 pub mod auto_insert;
+pub mod color_scopes;
 pub mod dismissal;
 pub mod history;
 pub mod import;

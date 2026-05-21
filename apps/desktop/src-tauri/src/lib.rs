@@ -149,6 +149,7 @@ pub fn run() {
             commands::vedit::blame_vedit_clip,
             commands::vedit::restore_vedit_ref,
             commands::review::author_local_review_package,
+            commands::color_scopes::get_color_scopes,
         ])
         .run(tauri::generate_context!());
 

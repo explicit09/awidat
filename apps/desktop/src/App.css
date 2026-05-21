@@ -5190,3 +5190,92 @@ button {
   background: rgba(210, 228, 246, 0.03);
   color: #a9b7c5;
 }
+
+/* ScopeDock — color-scope panel in the workspace center. */
+.scope-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: #0d1015;
+  color: #cfd6e0;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 11px;
+}
+.scope-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.scope-dock-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.scope-dock-toggle:hover {
+  color: #ffffff;
+}
+.scope-dock-status {
+  opacity: 0.55;
+  margin-left: 4px;
+}
+.scope-dock-close {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.55;
+}
+.scope-dock-close:hover {
+  opacity: 1;
+}
+.scope-dock-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.scope-dock-error {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(255, 80, 80, 0.08);
+  color: #ffb4b4;
+}
+.scope-dock-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.scope-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+}
+.scope-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 256px;
+  background: #0a0c10;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  image-rendering: pixelated;
+}
+.scope-figure figcaption {
+  opacity: 0.65;
+  font-size: 10px;
+}
+.scope-dock-collapsed .scope-dock-body {
+  display: none;
+}
