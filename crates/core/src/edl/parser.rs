@@ -56,7 +56,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay, Author Subject Reframe From Track"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Time Remap, Set Freeze, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay, Author Subject Reframe From Track"
     )]
     UnknownOp {
         /// Line number.
@@ -242,6 +242,8 @@ enum OpKind {
     SetTrackAudioFx,
     SetEffect,
     SetSpeed,
+    SetTimeRemap,
+    SetFreeze,
     SetColorCorrection,
     ApplyLut,
     RemoveLut,
@@ -297,6 +299,8 @@ impl OpBuilder {
             "Set Track Audio FX" => OpKind::SetTrackAudioFx,
             "Set Effect" => OpKind::SetEffect,
             "Set Speed" => OpKind::SetSpeed,
+            "Set Time Remap" => OpKind::SetTimeRemap,
+            "Set Freeze" => OpKind::SetFreeze,
             "Set Color Correction" => OpKind::SetColorCorrection,
             "Apply LUT" => OpKind::ApplyLut,
             "Remove LUT" => OpKind::RemoveLut,
@@ -807,6 +811,39 @@ impl OpBuilder {
                     }
                 })?;
                 Ok(EdlOp::SetSpeed { anchor, factor })
+            }
+            OpKind::SetTimeRemap => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let curve =
+                    take_required_json::<Vec<serde_json::Value>>(&mut fields, "curve_json", head)?;
+                Ok(EdlOp::SetTimeRemap { anchor, curve })
+            }
+            OpKind::SetFreeze => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let freeze_at_source_s = take_field_f64(&mut fields, "freeze_at_source_s")
+                    .ok_or_else(|| EdlParseError::MissingField {
+                        line: head,
+                        field: "freeze_at_source_s".into(),
+                    })?;
+                let duration_s = take_field_f64(&mut fields, "duration_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "duration_s".into(),
+                    }
+                })?;
+                Ok(EdlOp::SetFreeze {
+                    anchor,
+                    freeze_at_source_s,
+                    duration_s,
+                    freeze_position: take_field_string(&mut fields, "freeze_position"),
+                    audio_behavior: take_field_string(&mut fields, "audio_behavior"),
+                })
             }
             OpKind::SetColorCorrection => {
                 let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
@@ -2493,6 +2530,58 @@ mod tests {
                 assert!((factor - 2.0).abs() < 1e-9);
             }
             other => panic!("want SetSpeed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_set_time_remap() {
+        let text = "\
+*** Begin EDL
+*** Set Time Remap
+@@ anchor: clip_uuid=clip-2
++ curve_json: [{\"source_time_s\":0,\"timeline_time_s\":0},{\"source_time_s\":2,\"timeline_time_s\":3}]
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetTimeRemap { anchor, curve } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-2"));
+                assert_eq!(curve.len(), 2);
+                assert_eq!(curve[1]["source_time_s"], serde_json::json!(2));
+                assert_eq!(curve[1]["timeline_time_s"], serde_json::json!(3));
+            }
+            other => panic!("want SetTimeRemap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_set_freeze() {
+        let text = "\
+*** Begin EDL
+*** Set Freeze
+@@ anchor: clip_uuid=clip-2
++ freeze_at_source_s: 1.2
++ duration_s: 0.8
++ freeze_position: at
++ audio_behavior: silence
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::SetFreeze {
+                anchor,
+                freeze_at_source_s,
+                duration_s,
+                freeze_position,
+                audio_behavior,
+            } => {
+                assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-2"));
+                assert!((freeze_at_source_s - 1.2).abs() < 1e-9);
+                assert!((duration_s - 0.8).abs() < 1e-9);
+                assert_eq!(freeze_position.as_deref(), Some("at"));
+                assert_eq!(audio_behavior.as_deref(), Some("silence"));
+            }
+            other => panic!("want SetFreeze, got {other:?}"),
         }
     }
 
