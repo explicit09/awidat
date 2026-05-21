@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "license": "CC0-1.0",
+  "notes": "Synthetic starter pack. Generated from ffmpeg lavfi sources (sine/aevalsrc). Public domain. See LICENSE.",
+  "entries": [
+    {
+      "slug": "whoosh_hype",
+      "path": "sfx/whoosh_hype.wav",
+      "kind": "sfx",
+      "mood": ["hype", "transition", "energetic", "whoosh"],
+      "duration_s": 0.6,
+      "license": "CC0-1.0"
+    },
+    {
+      "slug": "riser_tension",
+      "path": "sfx/riser_tension.wav",
+      "kind": "sfx",
+      "mood": ["tension", "build", "riser", "suspense"],
+      "duration_s": 1.2,
+      "license": "CC0-1.0"
+    },
+    {
+      "slug": "impact_hit",
+      "path": "sfx/impact_hit.wav",
+      "kind": "sfx",
+      "mood": ["impact", "punch", "hit", "dramatic"],
+      "duration_s": 0.4,
+      "license": "CC0-1.0"
+    },
+    {
+      "slug": "ambient_hum",
+      "path": "sfx/ambient_hum.wav",
+      "kind": "ambience",
+      "mood": ["ambient", "calm", "hum", "background", "drone"],
+      "duration_s": 3.0,
+      "license": "CC0-1.0"
+    },
+    {
+      "slug": "ui_click",
+      "path": "sfx/ui_click.wav",
+      "kind": "sfx",
+      "mood": ["ui", "click", "tick", "neutral"],
+      "duration_s": 0.08,
+      "license": "CC0-1.0"
+    }
+  ]
+}

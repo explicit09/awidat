@@ -223,6 +223,12 @@ and makes everything after it correct.\
 \n\nKey tools:\
 \n- view_episode: map of the project (assets + which indexers ran).\
 \n- find_beat / find_moment / inspect_moment: editorial moment lookup.\
+\n- find_audio_asset(kind, mood?, max_duration_s?): pull a candidate \
+SFX / music / ambience clip from the bundled audio library, ranked by \
+mood-tag overlap. Pair with find_beat to anchor a whoosh / riser / \
+impact on the actual beat; returns absolute paths suitable for \
+apply_edl. Empty result = pack absent; surface that as 'no SFX \
+library available yet', not as a tool failure.\
 \n- find_episode_start: determine the publishable episode start; use \
 this for podcast/interview top trims instead of guessing from the \
 first transcript page.\
