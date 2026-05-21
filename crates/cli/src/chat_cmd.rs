@@ -18,7 +18,8 @@ use awidat_core::tools::{
     diagnose_project_media::DiagnoseProjectMediaTool, download_yt_clip::DownloadYtClipTool,
     export_package::ExportPackageTool, find_beat::FindBeatTool,
     find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
-    find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
+    find_audio_asset::FindAudioAssetTool, find_dead_air::FindDeadAirTool,
+    find_episode_start::FindEpisodeStartTool,
     find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, import_media::ImportLocalTool,
@@ -136,6 +137,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(DiagnoseProjectMediaTool));
     registry.register(Arc::new(FindMomentTool));
     registry.register(Arc::new(FindBlackFramesTool));
+    registry.register(Arc::new(FindAudioAssetTool));
     registry.register(Arc::new(FindDeadAirTool));
     registry.register(Arc::new(FindEpisodeStartTool));
     registry.register(Arc::new(FindFillerWordsTool));

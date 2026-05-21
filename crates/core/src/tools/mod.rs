@@ -20,6 +20,7 @@ pub mod export_package;
 pub mod find_beat;
 pub mod find_black_frames;
 pub mod find_broll_opportunities;
+pub mod find_audio_asset;
 pub mod find_dead_air;
 pub mod find_episode_start;
 pub mod find_eye_contact;
