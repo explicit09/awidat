@@ -210,6 +210,40 @@ impl CommitAuthor {
             email: a.email,
         }
     }
+
+    /// Resolve a [`CommitAuthor`] from the runtime env (`AWIDAT_USER_NAME`
+    /// + `AWIDAT_USER_EMAIL`). Returns `None` when either is unset or
+    /// blank, so callers can explicitly fall back to the default-resolver
+    /// chain by passing `None` into `*_as` entry points.
+    ///
+    /// Useful at handler entry points (e.g. the desktop `apply_edl`
+    /// write path) where the call site wants to stamp a real identity on
+    /// the commit but does not yet have a richer in-process identity
+    /// source (no seat-holder struct, no Tauri identity state).
+    pub fn from_env() -> Option<Self> {
+        Self::from_env_with(|k| std::env::var(k).ok())
+    }
+
+    /// Same as [`CommitAuthor::from_env`] but takes the env source as a
+    /// callback so tests can drive the env-var pathway without mutating
+    /// process-global state (Rust 2024 requires `unsafe` for
+    /// `std::env::set_var`, which is forbidden workspace-wide).
+    pub fn from_env_with<F>(env_lookup: F) -> Option<Self>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let name = env_lookup(ENV_USER_NAME)?;
+        let email = env_lookup(ENV_USER_EMAIL)?;
+        let name = name.trim();
+        let email = email.trim();
+        if name.is_empty() || email.is_empty() {
+            return None;
+        }
+        Some(Self {
+            name: name.to_string(),
+            email: email.to_string(),
+        })
+    }
 }
 
 /// Commit the current `project.otio.json` with an awidat-shaped

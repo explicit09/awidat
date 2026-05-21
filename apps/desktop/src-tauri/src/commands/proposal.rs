@@ -196,6 +196,12 @@ pub async fn accept_proposal(
             .iter()
             .map(|a| a.description.clone())
             .collect();
+        // Resolve the seat-holder identity once, at the handler
+        // entry point, so the spawn_blocking closure carries an
+        // owned `CommitAuthor`. Without this the auto-commit hook
+        // would stamp every desktop apply_edl as "awidat agent" even
+        // though the user is the one driving the keyboard.
+        let seat_author = crate::commands::vedit::desktop_commit_author();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let mut project =
                 Project::read(&project_root).map_err(|e| format!("project read: {e}"))?;
@@ -206,12 +212,17 @@ pub async fn accept_proposal(
 
             // Phase B auto-commit (desktop-writes path). Mirrors the
             // agent-side hook in `apply_edl.rs`. Best-effort: failures
-            // are logged but never unwind the disk write.
+            // are logged but never unwind the disk write. The `_as`
+            // variant stamps the seat-holder on the commit; passing
+            // `None` for the author falls back to the env + default chain.
             match awidat_core::vc::open_or_init(&project_root) {
                 Ok(repo) => {
-                    if let Err(e) =
-                        awidat_core::vc::auto_commit_apply(&repo, &applied_descriptions, None)
-                    {
+                    if let Err(e) = awidat_core::vc::auto_commit_apply_as(
+                        &repo,
+                        &applied_descriptions,
+                        None,
+                        seat_author,
+                    ) {
                         tracing::warn!(
                             error = %e,
                             "vedit auto-commit failed (desktop-writes path)"

@@ -438,10 +438,14 @@ pub async fn restore_vedit_ref(
     let restored = awidat_core::vc::restore_working_timeline(&repo, &refstr)
         .map_err(|e| format!("restore vedit ref: {e}"))?;
     let header = format!("Restore timeline to {}", short_hash(&restored.commit_hash));
-    let audit = awidat_core::vc::commit_current_timeline(
+    // Restore is user-initiated from the desktop history panel — stamp
+    // the seat-holder on the audit commit so blame views show who
+    // rolled the timeline back.
+    let audit = awidat_core::vc::commit_current_timeline_as(
         &repo,
         &header,
         Some("Restored project.otio.json from the desktop timeline history panel."),
+        desktop_commit_author(),
     )
     .map_err(|e| format!("commit restore audit: {e}"))?;
     emit_timeline_changed(&app, &project_root);
@@ -517,6 +521,26 @@ fn diff_response(diff: awidat_core::vc::CommittedDiff) -> Result<VeditDiffRespon
         changes,
         animation_changes,
     })
+}
+
+/// Resolve the [`awidat_core::vc::CommitAuthor`] to stamp on a
+/// desktop-initiated commit.
+///
+/// Desktop sessions are real-user sessions: the seat-holder is the
+/// person on the keyboard. Until we wire a richer in-process identity
+/// (Tauri state, profile, etc.) the env vars `AWIDAT_USER_NAME` /
+/// `AWIDAT_USER_EMAIL` are the only signal — `git`-style configuration
+/// for the seat. When neither is set the caller passes `None` and the
+/// `*_as` variants fall back to the "awidat agent" default, matching
+/// pre-slice behavior.
+///
+/// Kept in `vedit.rs` so all desktop call sites (the apply_edl write
+/// path in `proposal.rs`, the auto-insert path in `auto_insert.rs`,
+/// the restore-audit commit here) share one decision point — DRY rule:
+/// every piece of logic should have a single, unambiguous,
+/// authoritative representation.
+pub(crate) fn desktop_commit_author() -> Option<awidat_core::vc::CommitAuthor> {
+    awidat_core::vc::CommitAuthor::from_env()
 }
 
 #[cfg(test)]
@@ -623,5 +647,103 @@ mod tests {
         assert_eq!(response.change_count, 1);
         assert_eq!(response.changed_clip_count, 2);
         assert_eq!(response.changed_clip_ids, ["raw/foo.mp4", "shot-a"]);
+    }
+
+    // ---- desktop author attribution -----------------------------------
+    // Regression guard for the follow-up to A3: the desktop apply_edl
+    // write paths (and the restore-audit commit) must stamp the
+    // env-configured seat-holder on the commit, NOT the "awidat agent"
+    // default. We exercise the author-resolution helper directly +
+    // the `_as` commit entry point — the same code path the handlers
+    // use after this slice.
+
+    #[test]
+    fn desktop_commit_author_resolves_from_env_callback() {
+        let env = |k: &str| match k {
+            "AWIDAT_USER_NAME" => Some("Alice".to_string()),
+            "AWIDAT_USER_EMAIL" => Some("alice@example.com".to_string()),
+            _ => None,
+        };
+        let author = awidat_core::vc::CommitAuthor::from_env_with(env)
+            .expect("env-resolved author must be present");
+        assert_eq!(author.name, "Alice");
+        assert_eq!(author.email, "alice@example.com");
+    }
+
+    #[test]
+    fn desktop_commit_author_is_none_when_env_unset() {
+        let env = |_: &str| None::<String>;
+        assert!(awidat_core::vc::CommitAuthor::from_env_with(env).is_none());
+    }
+
+    #[test]
+    fn desktop_commit_author_is_none_when_env_partial() {
+        // Half-configured env (only the name) must NOT pair a real
+        // name with a missing email — mirror resolver semantics.
+        let half_env = |k: &str| match k {
+            "AWIDAT_USER_NAME" => Some("Alice".to_string()),
+            _ => None,
+        };
+        assert!(awidat_core::vc::CommitAuthor::from_env_with(half_env).is_none());
+    }
+
+    #[test]
+    fn auto_commit_apply_as_attributes_to_env_seat_holder_not_agent() {
+        // Mirror what the desktop write path does after this slice:
+        // resolve the seat author from env, then call the `_as` entry
+        // point so the commit is stamped with the user, not the agent.
+        let dir = tempfile::tempdir().unwrap();
+        write_otio(dir.path(), 240.0);
+        let repo = awidat_core::vc::open_or_init(dir.path()).unwrap();
+
+        let env = |k: &str| match k {
+            "AWIDAT_USER_NAME" => Some("Alice".to_string()),
+            "AWIDAT_USER_EMAIL" => Some("alice@example.com".to_string()),
+            _ => None,
+        };
+        let seat_author = awidat_core::vc::CommitAuthor::from_env_with(env);
+        assert!(seat_author.is_some(), "env should resolve to an author");
+
+        let descriptions = vec!["Trim shot-a by 1.0s".to_string()];
+        let outcome = awidat_core::vc::auto_commit_apply_as(
+            &repo,
+            &descriptions,
+            Some("desktop apply_edl test"),
+            seat_author,
+        )
+        .expect("auto_commit_apply_as");
+
+        let entries = awidat_core::vc::log(&repo, 1).unwrap();
+        let head = entries.first().expect("at least one commit");
+        assert_eq!(head.commit_hash, outcome.commit_hash);
+        assert_eq!(
+            head.author.name, "Alice",
+            "desktop apply_edl must attribute to the seat-holder, not 'awidat agent'"
+        );
+        assert_eq!(head.author.email, "alice@example.com");
+    }
+
+    #[test]
+    fn auto_commit_apply_as_falls_back_to_default_when_no_seat_author() {
+        // Negative control: when env is empty the helper returns None,
+        // and the `_as` resolver chain falls back to the default.
+        let dir = tempfile::tempdir().unwrap();
+        write_otio(dir.path(), 240.0);
+        let repo = awidat_core::vc::open_or_init(dir.path()).unwrap();
+
+        let none_env = |_: &str| None::<String>;
+        let seat_author = awidat_core::vc::CommitAuthor::from_env_with(none_env);
+        assert!(seat_author.is_none());
+
+        awidat_core::vc::auto_commit_apply_as(
+            &repo,
+            &["Trim shot-a by 0.5s".to_string()],
+            None,
+            seat_author,
+        )
+        .unwrap();
+        let head = awidat_core::vc::log(&repo, 1).unwrap().pop().unwrap();
+        assert_eq!(head.author.name, "awidat agent");
+        assert_eq!(head.author.email, "agent@awidat.local");
     }
 }

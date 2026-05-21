@@ -126,6 +126,10 @@ async fn insert_asset(
     // hold the tokio runtime on either.
     let project_root = project_root.to_path_buf();
     let asset_abs_path = asset_abs_path.to_path_buf();
+    // Auto-insert runs as a user-initiated side effect of import, so
+    // attribute the resulting vedit commit to the seat-holder rather
+    // than the agent default.
+    let seat_author = crate::commands::vedit::desktop_commit_author();
     tokio::task::spawn_blocking(move || -> Result<bool, String> {
         let project =
             Project::read(&project_root).map_err(|e| format!("auto-insert: read project: {e}"))?;
@@ -183,10 +187,11 @@ async fn insert_asset(
         // same audit trail as explicit apply_edl/proposal writes.
         match awidat_core::vc::open_or_init(&project_root) {
             Ok(repo) => {
-                if let Err(e) = awidat_core::vc::auto_commit_apply(
+                if let Err(e) = awidat_core::vc::auto_commit_apply_as(
                     &repo,
                     &applied_descriptions,
                     Some("Auto-inserted the first imported asset onto the empty timeline."),
+                    seat_author,
                 ) {
                     tracing::warn!(
                         error = %e,
@@ -236,6 +241,10 @@ async fn insert_media(
     let asset_abs_path = asset_abs_path.to_path_buf();
     let has_video = probe.has_video;
     let has_audio = probe.has_audio;
+    // Resolve seat-holder identity before crossing the spawn_blocking
+    // boundary so the auto-commit is attributed to the user, not the
+    // agent default.
+    let seat_author = crate::commands::vedit::desktop_commit_author();
     tokio::task::spawn_blocking(move || -> Result<bool, String> {
         let project =
             Project::read(&project_root).map_err(|e| format!("auto-insert: read project: {e}"))?;
@@ -308,10 +317,11 @@ async fn insert_media(
             .map_err(|e| format!("auto-insert: write project: {e}"))?;
 
         if let Ok(repo) = awidat_core::vc::open_or_init(&project_root)
-            && let Err(e) = awidat_core::vc::auto_commit_apply(
+            && let Err(e) = awidat_core::vc::auto_commit_apply_as(
                 &repo,
                 &applied_descriptions,
                 Some("Auto-inserted imported media onto the timeline."),
+                seat_author,
             )
         {
             tracing::warn!(error = %e, "vedit auto-commit failed (auto-insert media path)");
