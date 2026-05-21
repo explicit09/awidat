@@ -971,14 +971,21 @@ fn read_time_remap(
         ));
     }
     for pair in points.windows(2) {
+        // Source axis must be strictly increasing — zero or negative slope
+        // there would encode a reverse / duplicate sample, which the setpts
+        // mapping cannot represent.
         if pair[1].source_time_s <= pair[0].source_time_s {
             return Err(invalid(
                 "curve source_time_s values must be strictly increasing".to_string(),
             ));
         }
-        if pair[1].timeline_time_s <= pair[0].timeline_time_s {
+        // Output (timeline) axis is allowed to stay flat: a zero-slope
+        // segment expresses a freeze plateau (source advances, output holds).
+        // Negative slope is still illegal — it would scrub the timeline
+        // backwards, which the renderer does not support.
+        if pair[1].timeline_time_s < pair[0].timeline_time_s {
             return Err(invalid(
-                "curve timeline_time_s values must be strictly increasing".to_string(),
+                "curve timeline_time_s values must be non-decreasing".to_string(),
             ));
         }
     }
@@ -9533,6 +9540,43 @@ mod tests {
         otio_path
     }
 
+    /// Fixture with a freeze-plateau time_remap curve: source advances from
+    /// 1s -> 2s while the timeline output stays flat at 1s. The validator must
+    /// accept zero-slope on the OUTPUT axis (freeze) while continuing to reject
+    /// zero-slope on the SOURCE axis (reverse).
+    fn write_fixture_project_with_time_remap_freeze_plateau(dir: &Path) -> PathBuf {
+        let asset_rel = "raw/x.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(asset_rel), b"stub").unwrap();
+        let mut clip = Clip::empty("c1".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        // Source range covers 0..3s so the curve's source axis (0,1,2,3) fits.
+        clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(3.0 * 24.0, 24.0),
+        ));
+        let mut effect = Effect::new("awidat.time_remap");
+        effect.metadata.insert(
+            "curve".into(),
+            serde_json::json!([
+                {"source_time_s": 0.0, "timeline_time_s": 0.0},
+                {"source_time_s": 1.0, "timeline_time_s": 1.0},
+                {"source_time_s": 2.0, "timeline_time_s": 1.0},
+                {"source_time_s": 3.0, "timeline_time_s": 2.0}
+            ]),
+        );
+        clip.effects.push(effect);
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip));
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
     fn write_fixture_project_with_overlay_animation(
         dir: &Path,
         animation: ParameterAnimation,
@@ -10072,6 +10116,64 @@ mod tests {
         assert!(
             filter.contains("[0:a:0]atempo="),
             "time remap should keep audio duration aligned with the remapped video: {filter}"
+        );
+    }
+
+    /// A freeze plateau in a time_remap curve has zero slope on the
+    /// timeline axis (output stays constant while source advances). The
+    /// validator must accept this — it expresses a held frame, not a
+    /// reverse — and the renderer must still emit a valid setpts graph.
+    #[test]
+    fn timeline_render_spec_accepts_time_remap_freeze_plateau() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_time_remap_freeze_plateau(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path())
+            .expect("freeze-plateau curve must validate as a legal time remap");
+        let filter = filter_complex_from_argv(&spec.args);
+
+        // Plateau spans timeline output 1.0..1.0, then ramps to 2.0 — total 2.0s.
+        assert_eq!(spec.total_duration_s, Some(2.0));
+        assert!(
+            filter.contains("setpts="),
+            "freeze-plateau curve should still lower to setpts: {filter}"
+        );
+    }
+
+    /// Zero-slope on the SOURCE axis encodes a reverse (or duplicate sample) —
+    /// the renderer cannot express that with a single-valued setpts mapping,
+    /// so the validator must keep rejecting it even after the output-axis
+    /// relaxation that allows freeze plateaus.
+    #[test]
+    fn timeline_render_spec_rejects_time_remap_zero_source_slope() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio_path = write_fixture_project(dir.path());
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+            panic!("expected video track");
+        };
+        let TrackChild::Clip(clip) = &mut track.children[0] else {
+            panic!("expected fixture clip");
+        };
+        let mut effect = Effect::new("awidat.time_remap");
+        effect.metadata.insert(
+            "curve".into(),
+            serde_json::json!([
+                {"source_time_s": 0.0, "timeline_time_s": 0.0},
+                {"source_time_s": 1.0, "timeline_time_s": 1.0},
+                // Source axis stays at 1.0 while timeline advances — illegal.
+                {"source_time_s": 1.0, "timeline_time_s": 2.0}
+            ]),
+        );
+        clip.effects.push(effect);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
+        let err = build_timeline_render_spec(dir.path())
+            .expect_err("zero-slope on source axis must remain rejected");
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("source_time_s"),
+            "rejection should call out the source axis: {message}"
         );
     }
 
