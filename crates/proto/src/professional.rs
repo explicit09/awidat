@@ -40,6 +40,7 @@ impl AssetCatalog {
         let mut diagnostics = Vec::new();
         let mut ids = HashSet::new();
         let bin_ids: HashSet<&str> = self.bins.iter().map(|bin| bin.id.as_str()).collect();
+        validate_asset_bins(&self.bins, &bin_ids, &mut diagnostics);
         for asset in &self.assets {
             if asset.id.trim().is_empty() {
                 diagnostics.push(ProfessionalDiagnostic::error(
@@ -78,6 +79,63 @@ impl AssetCatalog {
         }
         diagnostics
     }
+}
+
+fn validate_asset_bins(
+    bins: &[AssetBin],
+    bin_ids: &HashSet<&str>,
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+) {
+    let mut seen = HashSet::new();
+    let parent_by_id: HashMap<&str, Option<&str>> = bins
+        .iter()
+        .map(|bin| (bin.id.as_str(), bin.parent_id.as_deref()))
+        .collect();
+    for bin in bins {
+        if bin.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::AssetCatalog,
+                "asset catalog contains a bin with an empty id",
+            ));
+            continue;
+        }
+        if !seen.insert(bin.id.as_str()) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::AssetCatalog,
+                format!("asset catalog contains duplicate bin id {}", bin.id),
+            ));
+        }
+        if let Some(parent_id) = bin.parent_id.as_deref() {
+            if parent_id == bin.id {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::AssetCatalog,
+                    format!("bin {} cannot be its own parent", bin.id),
+                ));
+            } else if !bin_ids.contains(parent_id) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::AssetCatalog,
+                    format!("bin {} references missing parent {}", bin.id, parent_id),
+                ));
+            } else if bin_parent_chain_has_cycle(bin.id.as_str(), &parent_by_id) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::AssetCatalog,
+                    format!("bin {} is part of a parent cycle", bin.id),
+                ));
+            }
+        }
+    }
+}
+
+fn bin_parent_chain_has_cycle(bin_id: &str, parent_by_id: &HashMap<&str, Option<&str>>) -> bool {
+    let mut seen = HashSet::new();
+    let mut current = Some(bin_id);
+    while let Some(id) = current {
+        if !seen.insert(id) {
+            return true;
+        }
+        current = parent_by_id.get(id).and_then(|parent| *parent);
+    }
+    false
 }
 
 /// Asset catalog query.
@@ -4354,4 +4412,102 @@ fn default_one() -> f64 {
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn diagnostic_messages(catalog: AssetCatalog) -> Vec<String> {
+        catalog
+            .validate()
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect()
+    }
+
+    #[test]
+    fn asset_catalog_rejects_duplicate_bin_ids() {
+        let messages = diagnostic_messages(AssetCatalog {
+            bins: vec![
+                AssetBin {
+                    id: "scene-1".into(),
+                    name: "Scene 1".into(),
+                    parent_id: None,
+                },
+                AssetBin {
+                    id: "scene-1".into(),
+                    name: "Duplicate".into(),
+                    parent_id: None,
+                },
+            ],
+            ..AssetCatalog::default()
+        });
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message == "asset catalog contains duplicate bin id scene-1" })
+        );
+    }
+
+    #[test]
+    fn asset_catalog_rejects_missing_bin_parent() {
+        let messages = diagnostic_messages(AssetCatalog {
+            bins: vec![AssetBin {
+                id: "takes".into(),
+                name: "Takes".into(),
+                parent_id: Some("missing".into()),
+            }],
+            ..AssetCatalog::default()
+        });
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| { message == "bin takes references missing parent missing" })
+        );
+    }
+
+    #[test]
+    fn asset_catalog_rejects_self_parent_bin() {
+        let messages = diagnostic_messages(AssetCatalog {
+            bins: vec![AssetBin {
+                id: "takes".into(),
+                name: "Takes".into(),
+                parent_id: Some("takes".into()),
+            }],
+            ..AssetCatalog::default()
+        });
+
+        assert!(
+            messages
+                .iter()
+                .any(|message| message == "bin takes cannot be its own parent")
+        );
+    }
+
+    #[test]
+    fn asset_catalog_rejects_bin_parent_cycles() {
+        let messages = diagnostic_messages(AssetCatalog {
+            bins: vec![
+                AssetBin {
+                    id: "a".into(),
+                    name: "A".into(),
+                    parent_id: Some("b".into()),
+                },
+                AssetBin {
+                    id: "b".into(),
+                    name: "B".into(),
+                    parent_id: Some("a".into()),
+                },
+            ],
+            ..AssetCatalog::default()
+        });
+
+        assert!(messages.iter().any(|message| {
+            message == "bin a is part of a parent cycle"
+                || message == "bin b is part of a parent cycle"
+        }));
+    }
 }
