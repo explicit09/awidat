@@ -14,10 +14,18 @@ pub const VOLUME: &str = "awidat.volume";
 pub const SPEED: &str = "awidat.speed";
 /// Clip-level curve-based time remap effect id.
 pub const TIME_REMAP: &str = "awidat.time_remap";
+/// Clip-level freeze-frame insertion effect id.
+pub const FREEZE: &str = "awidat.freeze";
 /// Clip-level color correction effect id.
 pub const COLOR_CORRECTION: &str = "awidat.color_correction";
 /// Clip-level blur effect id.
 pub const BLUR: &str = "awidat.blur";
+/// Clip-level chroma key effect id.
+pub const CHROMA_KEY: &str = "awidat.chroma_key";
+/// Clip-level luma key effect id.
+pub const LUMA_KEY: &str = "awidat.luma_key";
+/// Clip-level static region blur effect id.
+pub const REGION_BLUR: &str = "awidat.region_blur";
 /// Clip-level 3D LUT effect id.
 pub const LUT: &str = "awidat.lut";
 /// Clip-level atomic color-pipeline effect id. Carries the full
@@ -42,15 +50,36 @@ pub const AUDIO_FX: &str = "awidat.audio_fx";
 
 const VOLUME_PARAMS: &[ParamDef] = &[ParamDef::number("value", true, Some(0.0), None, None)];
 
-const SPEED_PARAMS: &[ParamDef] = &[ParamDef::number(
-    "factor",
-    true,
-    Some(f64::MIN_POSITIVE),
-    None,
-    None,
-)];
+const SPEED_PARAMS: &[ParamDef] = &[
+    ParamDef::number("factor", true, Some(f64::MIN_POSITIVE), None, None),
+    ParamDef::bool("reverse", false, Some(ParamDefault::Bool(false))),
+    ParamDef::bool("maintain_pitch", false, Some(ParamDefault::Bool(true))),
+    ParamDef::string_choice(
+        "frame_blending",
+        false,
+        Some(ParamDefault::String("nearest")),
+        &["nearest", "blend", "flow"],
+    ),
+];
 
 const TIME_REMAP_PARAMS: &[ParamDef] = &[ParamDef::json("curve", true, None)];
+
+const FREEZE_PARAMS: &[ParamDef] = &[
+    ParamDef::number("freeze_at_source_s", true, Some(0.0), None, None),
+    ParamDef::number("duration_s", true, Some(f64::MIN_POSITIVE), None, None),
+    ParamDef::string_choice(
+        "freeze_position",
+        false,
+        Some(ParamDefault::String("at")),
+        &["at"],
+    ),
+    ParamDef::string_choice(
+        "audio_behavior",
+        false,
+        Some(ParamDefault::String("silence")),
+        &["silence"],
+    ),
+];
 
 const COLOR_PARAMS: &[ParamDef] = &[
     ParamDef::number("exposure_ev", false, Some(-4.0), Some(4.0), None),
@@ -69,6 +98,68 @@ const BLUR_PARAMS: &[ParamDef] = &[ParamDef::number(
     Some(100.0),
     Some(ParamDefault::Number(8.0)),
 )];
+
+const CHROMA_KEY_PARAMS: &[ParamDef] = &[
+    ParamDef::string("key_color", true, None),
+    ParamDef::number(
+        "similarity",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.1)),
+    ),
+    ParamDef::number(
+        "blend",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.0)),
+    ),
+    ParamDef::number(
+        "despill_amount",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.0)),
+    ),
+];
+
+const LUMA_KEY_PARAMS: &[ParamDef] = &[
+    ParamDef::number(
+        "threshold",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.5)),
+    ),
+    ParamDef::number(
+        "softness",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.1)),
+    ),
+];
+
+const REGION_BLUR_PARAMS: &[ParamDef] = &[
+    ParamDef::string_choice(
+        "shape",
+        false,
+        Some(ParamDefault::String("rect")),
+        &["rect", "ellipse"],
+    ),
+    ParamDef::number("x", true, Some(0.0), Some(1.0), None),
+    ParamDef::number("y", true, Some(0.0), Some(1.0), None),
+    ParamDef::number("width", true, Some(f64::MIN_POSITIVE), Some(1.0), None),
+    ParamDef::number("height", true, Some(f64::MIN_POSITIVE), Some(1.0), None),
+    ParamDef::number(
+        "radius_px",
+        false,
+        Some(0.0),
+        Some(100.0),
+        Some(ParamDefault::Number(12.0)),
+    ),
+];
 
 const LUT_PARAMS: &[ParamDef] = &[
     ParamDef::string("lut_path", true, None),
@@ -220,6 +311,12 @@ const VIDEO_OVERLAY_PARAMS: &[ParamDef] = &[
         Some(ParamDefault::Number(0.0)),
     ),
     ParamDef::bool("motion_blur", false, Some(ParamDefault::Bool(false))),
+    ParamDef::string_choice(
+        "blend_mode",
+        false,
+        Some(ParamDefault::String("normal")),
+        &["normal", "multiply", "screen"],
+    ),
     ParamDef::number(
         "motion_blur_shutter_s",
         false,
@@ -354,6 +451,18 @@ pub const EFFECTS: &[EffectDef] = &[
         params: TIME_REMAP_PARAMS,
     },
     EffectDef {
+        id: FREEZE,
+        display_name: "Freeze Frame",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Both,
+        phase: EffectPhase::Clip,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: FREEZE_PARAMS,
+    },
+    EffectDef {
         id: COLOR_CORRECTION,
         display_name: "Color Correction",
         scope: EffectScope::Clip,
@@ -376,6 +485,42 @@ pub const EFFECTS: &[EffectDef] = &[
         backend: BackendKind::FfmpegNative,
         min_present_params: 0,
         params: BLUR_PARAMS,
+    },
+    EffectDef {
+        id: CHROMA_KEY,
+        display_name: "Chroma Key",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Clip,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: CHROMA_KEY_PARAMS,
+    },
+    EffectDef {
+        id: LUMA_KEY,
+        display_name: "Luma Key",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Clip,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: LUMA_KEY_PARAMS,
+    },
+    EffectDef {
+        id: REGION_BLUR,
+        display_name: "Region Blur",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Clip,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: REGION_BLUR_PARAMS,
     },
     EffectDef {
         id: LUT,
@@ -649,6 +794,8 @@ pub struct ParamDef {
     pub max: Option<f64>,
     /// Default inserted when omitted.
     pub default: Option<ParamDefault>,
+    /// Accepted string values when this parameter is an enumerated string.
+    pub choices: Option<&'static [&'static str]>,
 }
 
 impl ParamDef {
@@ -667,6 +814,7 @@ impl ParamDef {
             min,
             max,
             default,
+            choices: None,
         }
     }
 
@@ -691,6 +839,7 @@ impl ParamDef {
                 None => None,
             },
             default,
+            choices: None,
         }
     }
 
@@ -703,6 +852,25 @@ impl ParamDef {
             min: None,
             max: None,
             default,
+            choices: None,
+        }
+    }
+
+    /// Define a string parameter constrained to a static set of choices.
+    pub const fn string_choice(
+        key: &'static str,
+        required: bool,
+        default: Option<ParamDefault>,
+        choices: &'static [&'static str],
+    ) -> Self {
+        Self {
+            key,
+            kind: ParamKind::String,
+            required,
+            min: None,
+            max: None,
+            default,
+            choices: Some(choices),
         }
     }
 
@@ -715,6 +883,7 @@ impl ParamDef {
             min: None,
             max: None,
             default,
+            choices: None,
         }
     }
 
@@ -727,6 +896,7 @@ impl ParamDef {
             min: None,
             max: None,
             default,
+            choices: None,
         }
     }
 
@@ -739,15 +909,24 @@ impl ParamDef {
             ParamKind::Number => validate_number(effect_id, self, value),
             ParamKind::Integer => validate_integer(effect_id, self, value),
             ParamKind::String => {
-                if value.as_str().is_some() {
-                    Ok(())
-                } else {
-                    Err(ValidationError::WrongType {
+                let Some(raw) = value.as_str() else {
+                    return Err(ValidationError::WrongType {
                         effect_id,
                         param: self.key,
                         expected: "string",
-                    })
+                    });
+                };
+                if let Some(choices) = self.choices
+                    && !choices.contains(&raw)
+                {
+                    return Err(ValidationError::InvalidChoice {
+                        effect_id,
+                        param: self.key,
+                        value: raw.to_string(),
+                        choices,
+                    });
                 }
+                Ok(())
             }
             ParamKind::Bool => {
                 if value.as_bool().is_some() {
@@ -958,6 +1137,18 @@ pub enum ValidationError {
         min: Option<f64>,
         /// Inclusive maximum.
         max: Option<f64>,
+    },
+    /// String value is not one of the accepted choices.
+    #[error("effect {effect_id:?} parameter {param:?} value {value:?} is not an accepted choice")]
+    InvalidChoice {
+        /// Effect id.
+        effect_id: &'static str,
+        /// Parameter key.
+        param: &'static str,
+        /// Supplied string value.
+        value: String,
+        /// Accepted values.
+        choices: &'static [&'static str],
     },
     /// A static default could not be converted to JSON.
     #[error("invalid effect registry default")]
@@ -1189,6 +1380,193 @@ mod tests {
         );
         let (_, normalized) = must_normalize(TIME_REMAP, &params);
         assert!(normalized.get("curve").and_then(Value::as_array).is_some());
+    }
+
+    #[test]
+    fn freeze_accepts_hold_controls() {
+        let mut params = Map::new();
+        params.insert("freeze_at_source_s".into(), Value::from(1.2));
+        params.insert("duration_s".into(), Value::from(0.8));
+        params.insert("freeze_position".into(), Value::from("at"));
+        params.insert("audio_behavior".into(), Value::from("silence"));
+
+        let (_, normalized) = must_normalize(FREEZE, &params);
+
+        assert_eq!(
+            normalized.get("freeze_at_source_s").and_then(Value::as_f64),
+            Some(1.2)
+        );
+        assert_eq!(
+            normalized.get("duration_s").and_then(Value::as_f64),
+            Some(0.8)
+        );
+        assert_eq!(
+            normalized.get("freeze_position").and_then(Value::as_str),
+            Some("at")
+        );
+        assert_eq!(
+            normalized.get("audio_behavior").and_then(Value::as_str),
+            Some("silence")
+        );
+    }
+
+    #[test]
+    fn freeze_rejects_non_positive_duration() {
+        let mut params = Map::new();
+        params.insert("freeze_at_source_s".into(), Value::from(1.2));
+        params.insert("duration_s".into(), Value::from(0.0));
+
+        let err = must_reject(FREEZE, &params);
+
+        assert!(matches!(
+            err,
+            ValidationError::OutOfRange {
+                effect_id: FREEZE,
+                param: "duration_s",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn chroma_key_accepts_bounded_controls() {
+        let mut params = Map::new();
+        params.insert("key_color".into(), Value::from("#00ff00"));
+        params.insert("similarity".into(), Value::from(0.18));
+        params.insert("blend".into(), Value::from(0.04));
+        params.insert("despill_amount".into(), Value::from(0.25));
+
+        let (_, normalized) = must_normalize(CHROMA_KEY, &params);
+
+        assert_eq!(
+            normalized.get("key_color").and_then(Value::as_str),
+            Some("#00ff00")
+        );
+        assert_eq!(
+            normalized.get("similarity").and_then(Value::as_f64),
+            Some(0.18)
+        );
+        assert_eq!(normalized.get("blend").and_then(Value::as_f64), Some(0.04));
+        assert_eq!(
+            normalized.get("despill_amount").and_then(Value::as_f64),
+            Some(0.25)
+        );
+    }
+
+    #[test]
+    fn luma_key_rejects_invalid_threshold() {
+        let mut params = Map::new();
+        params.insert("threshold".into(), Value::from(1.5));
+
+        let err = must_reject(LUMA_KEY, &params);
+
+        assert!(matches!(
+            err,
+            ValidationError::OutOfRange {
+                effect_id: LUMA_KEY,
+                param: "threshold",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn region_blur_accepts_rectangular_and_elliptical_regions() {
+        for shape in ["rect", "ellipse"] {
+            let mut params = Map::new();
+            params.insert("shape".into(), Value::from(shape));
+            params.insert("x".into(), Value::from(0.1));
+            params.insert("y".into(), Value::from(0.2));
+            params.insert("width".into(), Value::from(0.3));
+            params.insert("height".into(), Value::from(0.4));
+            params.insert("radius_px".into(), Value::from(12.0));
+
+            let (_, normalized) = must_normalize(REGION_BLUR, &params);
+
+            assert_eq!(normalized.get("shape").and_then(Value::as_str), Some(shape));
+            assert_eq!(
+                normalized.get("radius_px").and_then(Value::as_f64),
+                Some(12.0)
+            );
+        }
+    }
+
+    #[test]
+    fn video_overlay_accepts_blend_modes() {
+        let mut params = Map::new();
+        params.insert("blend_mode".into(), Value::from("multiply"));
+
+        let (_, normalized) = must_normalize(VIDEO_OVERLAY, &params);
+
+        assert_eq!(
+            normalized.get("blend_mode").and_then(Value::as_str),
+            Some("multiply")
+        );
+    }
+
+    #[test]
+    fn speed_accepts_retime_quality_controls() {
+        let mut params = Map::new();
+        params.insert("factor".into(), Value::from(0.5));
+        params.insert("reverse".into(), Value::from(true));
+        params.insert("maintain_pitch".into(), Value::from(false));
+        params.insert("frame_blending".into(), Value::from("blend"));
+
+        let (_, normalized) = must_normalize(SPEED, &params);
+
+        assert_eq!(normalized.get("factor").and_then(Value::as_f64), Some(0.5));
+        assert_eq!(
+            normalized.get("reverse").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            normalized.get("maintain_pitch").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            normalized.get("frame_blending").and_then(Value::as_str),
+            Some("blend")
+        );
+    }
+
+    #[test]
+    fn speed_defaults_retime_quality_controls() {
+        let mut params = Map::new();
+        params.insert("factor".into(), Value::from(1.25));
+
+        let (_, normalized) = must_normalize(SPEED, &params);
+
+        assert_eq!(
+            normalized.get("reverse").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            normalized.get("maintain_pitch").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            normalized.get("frame_blending").and_then(Value::as_str),
+            Some("nearest")
+        );
+    }
+
+    #[test]
+    fn speed_rejects_unknown_frame_blending_mode() {
+        let mut params = Map::new();
+        params.insert("factor".into(), Value::from(1.0));
+        params.insert("frame_blending".into(), Value::from("teleport"));
+
+        let err = must_reject(SPEED, &params);
+
+        assert!(matches!(
+            err,
+            ValidationError::InvalidChoice {
+                effect_id: SPEED,
+                param: "frame_blending",
+                value,
+                ..
+            } if value == "teleport"
+        ));
     }
 
     #[test]
