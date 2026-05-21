@@ -4,8 +4,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
-use awidat_proto::professional::{DeliveryPreflightInput, DeliveryProfile, PreflightReport};
+use awidat_proto::otio::{MediaReference, StackChild, TimeRange, TrackChild, TrackKind};
+use awidat_proto::professional::{
+    AudioExportSettings, DeliveryPreflightInput, DeliveryProfile, ExportMode, ExportOutputSettings,
+    ExportPreset, HardwareAccelerationPolicy, PreflightReport, VideoExportSettings,
+};
 use awidat_proto::project::Project;
 use awidat_proto::subtitle::{
     SubtitleCue, format_srt as format_subtitle_srt, format_vtt as format_subtitle_vtt,
@@ -24,6 +27,9 @@ pub struct ExportPackageTool;
 struct ExportPackageArgs {
     /// youtube | shorts | podcast | custom | turnover
     format: String,
+    /// off | auto | require
+    #[serde(default)]
+    hardware_acceleration: Option<String>,
 }
 
 #[async_trait]
@@ -43,6 +49,11 @@ impl ToolHandler for ExportPackageTool {
                         "type": "string",
                         "enum": ["youtube", "shorts", "podcast", "custom", "turnover"],
                         "description": "Package preset. youtube/custom render MP4 + SRT/VTT/chapters/metadata; shorts uses the current timeline format; podcast adds audio metadata sidecars; turnover writes conform-oriented JSON/CSV without rendering."
+                    },
+                    "hardware_acceleration": {
+                        "type": "string",
+                        "enum": ["off", "auto", "require"],
+                        "description": "Video encoder policy for rendered packages. off uses the preset software codec, auto maps to native hardware when supported, require fails if the preset codec has no native hardware mapping."
                     }
                 },
                 "required": ["format"]
@@ -74,6 +85,7 @@ impl ToolHandler for ExportPackageTool {
                 args.format
             )));
         }
+        let hardware_policy = parse_hardware_acceleration(args.hardware_acceleration.as_deref())?;
 
         let package_dir = ctx.project_root.join("renders").join("package");
         tokio::fs::create_dir_all(&package_dir).await.map_err(|e| {
@@ -151,6 +163,14 @@ impl ToolHandler for ExportPackageTool {
             *last = mp4_path.to_string_lossy().to_string();
         }
         spec.output_path = mp4_path.clone();
+        let export_preset =
+            package_export_preset_for_format(&args.format, &project, hardware_policy);
+        spec = awidat_render::professional::apply_export_preset_to_spec(spec, &export_preset)
+            .map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "export_package: export preset failed: {e}"
+                ))
+            })?;
         let preflight =
             build_package_preflight_report(&project, &args.format, &cues, spec.total_duration_s);
         write_json(&preflight_path, &preflight).await?;
@@ -192,6 +212,8 @@ impl ToolHandler for ExportPackageTool {
             },
             "preflight_profile_id": preflight.profile_id,
             "preflight_finding_count": preflight.findings.len(),
+            "export_preset_id": export_preset.id,
+            "hardware_acceleration": format!("{:?}", hardware_policy).to_lowercase(),
             "cue_count": cues.len(),
             "chapter_count": chapters.len(),
             "subtitle_timing": "timeline_relative",
@@ -211,9 +233,24 @@ impl ToolHandler for ExportPackageTool {
             "format": args.format,
             "package_dir": package_dir,
             "artifacts": metadata["artifacts"],
+            "export_preset_id": metadata["export_preset_id"],
+            "hardware_acceleration": metadata["hardware_acceleration"],
             "next_step": format!("Call poll_render(job_id=\"{job_id}\") to track the final MP4. Subtitle and metadata sidecars are already written.")
         });
         Ok(ToolOutput::text(body.to_string()))
+    }
+}
+
+fn parse_hardware_acceleration(
+    value: Option<&str>,
+) -> Result<HardwareAccelerationPolicy, FunctionCallError> {
+    match value.unwrap_or("off") {
+        "off" => Ok(HardwareAccelerationPolicy::Off),
+        "auto" => Ok(HardwareAccelerationPolicy::Auto),
+        "require" => Ok(HardwareAccelerationPolicy::Require),
+        other => Err(FunctionCallError::RespondToModel(format!(
+            "export_package: hardware_acceleration '{other}' not recognized. Use off, auto, or require."
+        ))),
     }
 }
 
@@ -509,6 +546,7 @@ async fn write_turnover_package(
     let clips = collect_turnover_clips(project);
     let transitions = collect_turnover_transitions(project);
     let source_assets = collect_turnover_source_assets(project, &clips);
+    let frame_rate = turnover_frame_rate(project);
     let manifest = TurnoverManifest {
         schema_version: "awidat.turnover.v1".into(),
         package_kind: "department_turnover".into(),
@@ -538,7 +576,7 @@ async fn write_turnover_package(
     .map_err(io_err("write turnover cut list"))?;
     tokio::fs::write(
         &cmx3600_path,
-        format_turnover_cmx3600_edl(&manifest.project_name, &manifest.clips),
+        format_turnover_cmx3600_edl(&manifest.project_name, &manifest.clips, frame_rate),
     )
     .await
     .map_err(io_err("write turnover cmx3600 edl"))?;
@@ -989,7 +1027,11 @@ fn format_turnover_cut_list_csv(clips: &[TurnoverClip]) -> String {
     out
 }
 
-fn format_turnover_cmx3600_edl(project_name: &str, clips: &[TurnoverClip]) -> String {
+fn format_turnover_cmx3600_edl(
+    project_name: &str,
+    clips: &[TurnoverClip],
+    frame_rate: u64,
+) -> String {
     let mut out = format!("TITLE: {}\nFCM: NON-DROP FRAME\n\n", edl_text(project_name));
     for (event_number, clip) in (1_u32..).zip(clips.iter().filter(|clip| {
         clip.active
@@ -1003,10 +1045,10 @@ fn format_turnover_cmx3600_edl(project_name: &str, clips: &[TurnoverClip]) -> St
         out.push_str(&format!(
             "{event_number:03}  {:<8} V     C        {} {} {} {}\n",
             edl_reel_name(clip.asset.as_deref().unwrap_or_default()),
-            edl_timecode(source_in),
-            edl_timecode(source_out),
-            edl_timecode(clip.timeline_start_s),
-            edl_timecode(clip.timeline_end_s)
+            edl_timecode(source_in, frame_rate),
+            edl_timecode(source_out, frame_rate),
+            edl_timecode(clip.timeline_start_s, frame_rate),
+            edl_timecode(clip.timeline_end_s, frame_rate)
         ));
         out.push_str(&format!(
             "* FROM CLIP NAME: {}\n",
@@ -1049,8 +1091,8 @@ fn edl_reel_name(asset: &str) -> String {
     reel
 }
 
-fn edl_timecode(seconds: f64) -> String {
-    let frame_rate = 24_u64;
+fn edl_timecode(seconds: f64, frame_rate: u64) -> String {
+    let frame_rate = frame_rate.clamp(1, 120);
     let total_frames = (seconds.max(0.0) * frame_rate as f64).round() as u64;
     let frames = total_frames % frame_rate;
     let total_seconds = total_frames / frame_rate;
@@ -1059,6 +1101,68 @@ fn edl_timecode(seconds: f64) -> String {
     let mins = total_minutes % 60;
     let hours = total_minutes / 60;
     format!("{hours:02}:{mins:02}:{secs:02}:{frames:02}")
+}
+
+fn turnover_frame_rate(project: &Project) -> u64 {
+    if let Some(rate) = project
+        .timeline
+        .global_start_time
+        .as_ref()
+        .and_then(|time| normalize_edl_frame_rate(time.rate))
+    {
+        return rate;
+    }
+
+    for stack_child in &project.timeline.tracks.children {
+        if let Some(rate) = stack_child_frame_rate(stack_child) {
+            return rate;
+        }
+    }
+    24
+}
+
+fn stack_child_frame_rate(child: &StackChild) -> Option<u64> {
+    match child {
+        StackChild::Track(track) => track
+            .source_range
+            .as_ref()
+            .and_then(time_range_frame_rate)
+            .or_else(|| track.children.iter().find_map(track_child_frame_rate)),
+        StackChild::Stack(stack) => stack
+            .source_range
+            .as_ref()
+            .and_then(time_range_frame_rate)
+            .or_else(|| stack.children.iter().find_map(stack_child_frame_rate)),
+        StackChild::Clip(clip) => clip.source_range.as_ref().and_then(time_range_frame_rate),
+        StackChild::Gap(gap) => time_range_frame_rate(&gap.source_range),
+    }
+}
+
+fn track_child_frame_rate(child: &TrackChild) -> Option<u64> {
+    match child {
+        TrackChild::Clip(clip) => clip.source_range.as_ref().and_then(time_range_frame_rate),
+        TrackChild::Gap(gap) => time_range_frame_rate(&gap.source_range),
+        TrackChild::Transition(transition) => normalize_edl_frame_rate(transition.in_offset.rate)
+            .or_else(|| normalize_edl_frame_rate(transition.out_offset.rate)),
+        TrackChild::Stack(stack) => stack
+            .source_range
+            .as_ref()
+            .and_then(time_range_frame_rate)
+            .or_else(|| stack.children.iter().find_map(stack_child_frame_rate)),
+    }
+}
+
+fn time_range_frame_rate(range: &TimeRange) -> Option<u64> {
+    normalize_edl_frame_rate(range.duration.rate)
+        .or_else(|| normalize_edl_frame_rate(range.start_time.rate))
+}
+
+fn normalize_edl_frame_rate(rate: f64) -> Option<u64> {
+    if rate.is_finite() && rate > 0.0 {
+        Some(rate.round().clamp(1.0, 120.0) as u64)
+    } else {
+        None
+    }
 }
 
 fn edl_text(value: &str) -> String {
@@ -1178,6 +1282,32 @@ fn build_package_preflight_report(
         safe_area_violations: delivery_safe_area_violations(project),
     };
     profile.run_preflight(input)
+}
+
+fn package_export_preset_for_format(
+    format: &str,
+    project: &Project,
+    hardware_acceleration: HardwareAccelerationPolicy,
+) -> ExportPreset {
+    let mut preset = match format {
+        "shorts" => ExportPreset::vertical_short_form(),
+        _ => {
+            let profile = delivery_profile_for_format(format, project);
+            let bitrate_kbps = profile.video_bitrate_kbps.unwrap_or(12_000);
+            ExportPreset {
+                id: format!("package_{}", profile.id),
+                name: format!("{} Package Export", profile.name),
+                mode: ExportMode::AudioVideo,
+                profile,
+                output: ExportOutputSettings::mp4(),
+                video: Some(VideoExportSettings::h264(bitrate_kbps)),
+                audio: Some(AudioExportSettings::aac(192)),
+                range: Default::default(),
+            }
+        }
+    };
+    preset.output.hardware_acceleration = hardware_acceleration;
+    preset
 }
 
 fn delivery_profile_for_format(format: &str, project: &Project) -> DeliveryProfile {
@@ -1510,7 +1640,9 @@ Export a delivery package under renders/package/: final MP4 render job, \
 timeline-relative SRT, VTT, chapter text, package metadata JSON, \
 thumbnail candidate JSON, or a turnover package for sound/color/VFX \
 review. Burned-in Insert Caption overlays remain part of rendered \
-exports; SRT/VTT are separate delivery artifacts.";
+exports; SRT/VTT are separate delivery artifacts. Rendered packages \
+lower through an ExportPreset and can request hardware_acceleration \
+off, auto, or require.";
 
 #[cfg(test)]
 mod tests {
@@ -1830,6 +1962,53 @@ mod tests {
         assert!(csv.contains("link_group_id,audio_lead_s,audio_trail_s,markers"));
         assert!(csv.contains("link-1,0.125,0.500"));
         assert!(csv.contains("\"note, \"\"sync\"\"@0.250+0.500\""));
+    }
+
+    #[test]
+    fn cmx3600_timecode_uses_project_frame_rate() {
+        let clips = vec![TurnoverClip {
+            clip_id: "c-1".into(),
+            clip_name: "shot".into(),
+            track: "V1".into(),
+            track_kind: "video".into(),
+            asset: Some("raw/cam-a.mov".into()),
+            timeline_start_s: 0.0,
+            timeline_end_s: 1.0,
+            source_start_s: Some(10.0),
+            source_end_s: Some(11.0),
+            source_available_start_s: None,
+            source_available_end_s: None,
+            handle_in_s: None,
+            handle_out_s: None,
+            duration_s: 1.0,
+            active: true,
+            effects: Vec::new(),
+            markers: Vec::new(),
+            link_group_id: None,
+            audio_lead_s: None,
+            audio_trail_s: None,
+        }];
+
+        let edl = format_turnover_cmx3600_edl("fps-test", &clips, 30);
+
+        assert!(edl.contains("00:00:10:00 00:00:11:00 00:00:00:00 00:00:01:00"));
+        assert_eq!(edl_timecode(0.5, 30), "00:00:00:15");
+    }
+
+    #[test]
+    fn package_export_preset_for_shorts_uses_vertical_delivery_settings() {
+        let project = project_with_timeline(Timeline::empty("shorts-preset-test"));
+
+        let preset =
+            package_export_preset_for_format("shorts", &project, HardwareAccelerationPolicy::Off);
+
+        assert_eq!(preset.id, "vertical_short_form");
+        assert_eq!(preset.profile.width, 1080);
+        assert_eq!(preset.profile.height, 1920);
+        assert_eq!(
+            preset.output.hardware_acceleration,
+            HardwareAccelerationPolicy::Off
+        );
     }
 
     #[test]

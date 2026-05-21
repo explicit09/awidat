@@ -14,6 +14,7 @@ use awidat_core::tools::{
     analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
     assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
     bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
+    color_scopes::ColorScopesTool,
     diagnose_project_media::DiagnoseProjectMediaTool, download_yt_clip::DownloadYtClipTool,
     export_package::ExportPackageTool, find_beat::FindBeatTool,
     find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
@@ -31,6 +32,7 @@ use awidat_core::tools::{
     plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
     poll_render::PollRenderTool, proxy_media::GenerateProxyTool, proxy_media::ProxyStatusTool,
     read_index::ReadIndexTool, relink_media::RelinkMediaTool,
+    plan_reframe::PlanReframeTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transcript_search::TranscriptSearchTool,
@@ -68,9 +70,11 @@ with surrounding transcript + dependencies). Prefer these over \
 find_moment when the user asks for editorial intent.\
 \n  - **Vision** (only useful when view_episode shows the matching \
 indexer ran): clip_search (free-text frame search), shot_summary, \
-broll_candidates, find_speaker_oncam, find_eye_contact.\
+broll_candidates, find_speaker_oncam, find_eye_contact, plan_reframe \
+(static vertical/social crop fragment from subject-center evidence).\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index, \
-inspect_clip, view_frame.\
+inspect_clip, view_frame, color_scopes (histogram/waveform/parade/vectorscope \
+evidence for one frame).\
 \n  - **Edit quality**: assess_edit_quality before risky trims/splits; it recommends hard cut, recut, J/L split edit, b-roll, or motivated transition. transition_context assembles handles, transcript, frames, and continuity context before choosing a visible transition; plan_transition turns that packet into a hard-cut or visible-transition proposal. assess_continuity is the lower-level rule breakdown.\
 \n  - **Editing**: apply_edl (Trim, Untrim, Delete, Split, Insert, Insert PiP). \
 For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
@@ -150,6 +154,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(TagAssetTool));
     registry.register(Arc::new(RateAssetTool));
     registry.register(Arc::new(MarkSelectTool));
+    registry.register(Arc::new(ColorScopesTool));
     registry.register(Arc::new(PollRenderTool));
     registry.register(Arc::new(ProxyStatusTool));
     registry.register(Arc::new(GenerateProxyTool));
@@ -164,6 +169,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(ReviewLookRegionsTool));
     registry.register(Arc::new(PlanEmphasisTool));
     registry.register(Arc::new(PlanMulticamTool));
+    registry.register(Arc::new(PlanReframeTool));
     registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(TransitionContextTool));

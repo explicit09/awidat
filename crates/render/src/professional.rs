@@ -14,12 +14,12 @@ use awidat_proto::professional::{
     AudioMeterReading, AudioRole, CapabilityArea, ColorFinishingState, CompositionGraph,
     CompositionNode, CompositionNodeType, CoordinateSpace, DeliveryPreflightInput, DeliveryProfile,
     Easing, ExportPreset, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity,
-    GradeStack, GradeStage, Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar,
-    MotionGraphicsTemplate, MotionPackage, PackageManifest, ParameterAnimation, PreflightReport,
-    ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS, ReframeKeyframe, ReframePath,
-    ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract, StreamExportMode,
-    TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar, TrackingPackage,
-    canonical_runtime_clip_parameter, is_runtime_clip_parameter,
+    GradeStack, GradeStage, HardwareAccelerationPolicy, Keyframe, KeyframeInterpolation, MaskSidecar,
+    MatteSidecar, MotionGraphicsTemplate, MotionPackage, PackageManifest, ParameterAnimation,
+    PreflightReport, ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS, ReframeKeyframe,
+    ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract,
+    StreamExportMode, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar,
+    TrackingPackage, canonical_runtime_clip_parameter, is_runtime_clip_parameter,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -3018,7 +3018,12 @@ pub fn apply_export_preset_to_spec(
         ]);
     }
     if let Some(video) = &preset.video {
-        args.extend(["-c:v".into(), video.codec.clone()]);
+        let codec = export_video_codec_for_policy(
+            &video.codec,
+            preset.output.hardware_acceleration,
+            &preset.id,
+        )?;
+        args.extend(["-c:v".into(), codec]);
         if let Some(bitrate) = video.bitrate_kbps.or(preset.profile.video_bitrate_kbps) {
             args.extend(["-b:v".into(), format!("{bitrate}k")]);
         }
@@ -3034,9 +3039,63 @@ pub fn apply_export_preset_to_spec(
         args.extend(["-ar".into(), audio.sample_rate_hz.to_string()]);
         args.extend(["-ac".into(), audio.channels.to_string()]);
     }
+    if preset.output.container == "mp4" || preset.output.extension == "mp4" {
+        args.extend(["-movflags".into(), "+faststart".into()]);
+    }
     args.extend(["-f".into(), preset.output.container.clone()]);
     spec.args.splice(insertion..insertion, args);
     Ok(spec)
+}
+
+fn export_video_codec_for_policy(
+    codec: &str,
+    policy: HardwareAccelerationPolicy,
+    preset_id: &str,
+) -> Result<String, ProfessionalEngineError> {
+    match policy {
+        HardwareAccelerationPolicy::Off => Ok(codec.to_string()),
+        HardwareAccelerationPolicy::Auto => Ok(native_hardware_codec(codec)
+            .map(str::to_string)
+            .unwrap_or_else(|| codec.to_string())),
+        HardwareAccelerationPolicy::Require => native_hardware_codec(codec)
+            .map(str::to_string)
+            .ok_or_else(|| ProfessionalEngineError::InvalidExportPreset {
+                preset_id: preset_id.to_string(),
+                message: format!(
+                    "hardware acceleration was required but no native hardware codec mapping exists for {codec}"
+                ),
+            }),
+    }
+}
+
+fn native_hardware_codec(codec: &str) -> Option<&'static str> {
+    match codec {
+        "h264_videotoolbox" => Some("h264_videotoolbox"),
+        "hevc_videotoolbox" => Some("hevc_videotoolbox"),
+        "h264_nvenc" => Some("h264_nvenc"),
+        "hevc_nvenc" => Some("hevc_nvenc"),
+        "h264_qsv" => Some("h264_qsv"),
+        "hevc_qsv" => Some("hevc_qsv"),
+        "h264_amf" => Some("h264_amf"),
+        "hevc_amf" => Some("hevc_amf"),
+        "h264_vaapi" => Some("h264_vaapi"),
+        "hevc_vaapi" => Some("hevc_vaapi"),
+        _ => native_software_codec_mapping(codec),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_software_codec_mapping(codec: &str) -> Option<&'static str> {
+    match codec {
+        "libx264" => Some("h264_videotoolbox"),
+        "libx265" | "libx265_hevc" => Some("hevc_videotoolbox"),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_software_codec_mapping(_codec: &str) -> Option<&'static str> {
+    None
 }
 
 /// Lower a stream-level export contract into deterministic FFmpeg arguments.

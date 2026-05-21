@@ -36,6 +36,7 @@ use awidat_core::tools::{
     vedit_checkout::VeditCheckoutTool, vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool,
     vedit_log::VeditLogTool, vedit_merge_preflight::VeditMergePreflightTool,
     vedit_revert::VeditRevertTool, vedit_show::VeditShowTool, vedit_tag::VeditTagTool,
+    plan_reframe::PlanReframeTool,
     view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
@@ -81,6 +82,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(ReviewLookRegionsTool));
     registry.register(Arc::new(PlanEmphasisTool));
     registry.register(Arc::new(PlanMulticamTool));
+    registry.register(Arc::new(PlanReframeTool));
     registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(TransitionContextTool));
@@ -194,5 +196,6 @@ mod tests {
     fn desktop_registry_includes_plan_emphasis() {
         let registry = build_registry();
         assert!(registry.get("plan_emphasis").is_some());
+        assert!(registry.get("plan_reframe").is_some());
     }
 }

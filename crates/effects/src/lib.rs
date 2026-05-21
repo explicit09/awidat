@@ -540,11 +540,12 @@ pub const EFFECTS: &[EffectDef] = &[
         scope: EffectScope::Clip,
         media_kind: MediaKind::Video,
         phase: EffectPhase::Clip,
-        // Schema is stable but the render lowering arrives in a
-        // follow-up — until then the effect is metadata-only.
+        // Render supports the color-management/LUT chain plus the v1
+        // masked look-LUT subset. Unsupported mask combinations still
+        // surface explicit render limitations.
         support: SupportStatus::Experimental,
         stack_policy: StackPolicy::ReplaceSameId,
-        backend: BackendKind::SemanticOnly,
+        backend: BackendKind::FfmpegNative,
         min_present_params: 0,
         params: COLOR_PIPELINE_PARAMS,
     },
@@ -1601,6 +1602,16 @@ mod tests {
             Some(1.0),
             "look_strength should default to 1.0",
         );
+    }
+
+    #[test]
+    fn color_pipeline_registry_advertises_ffmpeg_backend() {
+        let definition = match lookup(COLOR_PIPELINE) {
+            Some(definition) => definition,
+            None => panic!("color pipeline effect is registered"),
+        };
+
+        assert_eq!(definition.backend, BackendKind::FfmpegNative);
     }
 
     #[test]

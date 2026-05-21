@@ -6,6 +6,7 @@ tier: finishing
 tools_allowlist:
   - read_index
   - view_frame
+  - color_scopes
   - view_timeline
   - inspect_clip
   - start_look_region_pass
@@ -224,6 +225,12 @@ without touching color correction or audio effects. If the LUT is
 missing, report the missing project-relative path rather than applying an
 external render script.
 
+Parser validation is intentionally strongest for `.cube` and `.3dl`.
+The graph validator parses those two before accepting the EDL. `.dat`,
+`.m3d`, and `.csp` are extension-accepted render paths that rely on the
+FFmpeg LUT filters rather than in-tree parsers; do not describe them as
+parser-validated.
+
 ### 4. Verify graph and render
 
 After applying a batch:
@@ -239,6 +246,12 @@ Confirm the diff shows `awidat.color_correction` or `awidat.lut` effects
 on the intended clips. Render at least a timeline preview for user-facing
 finishing work. If render fails, fix the graph or report the exact
 filter/LUT blocker.
+
+Use `color_scopes` on representative frames when the decision depends on
+objective color evidence. It returns luma histogram, RGB histogram,
+luma waveform, RGB parade, and Cb/Cr vectorscope data for a single
+frame. Pair it with `view_frame` when summarizing exposure, channel
+balance, clipping risk, or chroma spread.
 
 When comparing an uncorrected render against a corrected render, generate
 a rendered contact sheet from the actual render outputs:
