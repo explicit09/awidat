@@ -29,7 +29,8 @@ use awidat_core::tools::{
     load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
     plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
     plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
-    plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    plan_reframe::PlanReframeTool, plan_transition::PlanTransitionTool,
+    poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transition_context::TransitionContextTool,
@@ -69,7 +70,8 @@ holding a phone\", \"dark room\"), shot_summary (visual structure \
 overview), broll_candidates (cutaway/B-roll hunting — wide/no-face \
 + steady + sharp), find_speaker_oncam (when is speaker X's face \
 visible — needs whisper diarization + face), find_eye_contact \
-(direct-address moments).\
+(direct-address moments), plan_reframe (static vertical/social crop \
+fragment from subject-center evidence).\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index \
 (any indexer channel), inspect_clip (one clip's metadata), \
 view_frame (extract a frame at a timestamp).\
@@ -196,6 +198,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(ReviewLookRegionsTool));
     registry.register(Arc::new(PlanEmphasisTool));
     registry.register(Arc::new(PlanMulticamTool));
+    registry.register(Arc::new(PlanReframeTool));
     registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(TransitionContextTool));

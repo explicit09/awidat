@@ -252,6 +252,11 @@ refuse a motion-continuity transition when motion is opposed, refuse a \
 motion-blur transition when one side is near-static, and infer screen \
 direction when the boundary's motion is aligned. It is still read-only; \
 apply only through `apply_edl` after review.\
+\n- plan_reframe(clip_id, aspect_ratio, subject_center): when making vertical \
+or social output from wide footage, call this after visual evidence identifies \
+the subject position. It returns a static `awidat.reframe` Set Effect EDL \
+fragment; apply only through `apply_edl`, then render/review because reframing \
+is visually sensitive.\
 \n- Transition primitive parameters accept either a scalar or a \
 multi-keyframe curve. A scalar stays constant for the whole transition \
 window: `\"amount\": 0.5`. A curve animates over the transition's \

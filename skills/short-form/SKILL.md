@@ -10,6 +10,7 @@ tools_allowlist:
   - find_filler_words
   - find_broll_opportunities
   - find_speaker_oncam
+  - plan_reframe
   - apply_edl
   - view_timeline
   - vedit_diff
@@ -42,11 +43,12 @@ they're not options.
   silent-autoplay is the dominant viewing mode.
 - **B-roll cadence**: proactive, every 2–4 seconds. Visual variety
   is what keeps the scroll-stop.
-- **Aspect**: 9:16. When source is 16:9, use center-crop or smart-crop
-  driven by `find_speaker_oncam`. When `metadata.awidat.tracking_package`
-  includes `reframe_paths`, prefer the reviewed path over a generic
-  center crop and preserve its smoothing, safe-area, and evidence-track
-  metadata through render handoff.
+- **Aspect**: 9:16. When source is 16:9, use `find_speaker_oncam`
+  or face/gaze evidence to identify the subject, then call `plan_reframe`
+  and apply its `awidat.reframe` EDL fragment. If a future reviewed
+  `reframe_path` is available, prefer that path over a static crop and
+  preserve its smoothing, safe-area, and evidence-track metadata through
+  render handoff.
 
 ## The 5-step playbook
 
@@ -85,10 +87,13 @@ waste effort.
 
 Emit `*** Set Output Format` with `aspect_ratio: 9:16`, the target
 platform when known, and `safe_area: mobile` before the caption pass.
-If a subject-aware `reframe_path` exists for the selected clip, attach
-that path as the crop contract instead of describing the crop in prose.
-Reject paths with unsorted keyframes, centers outside 0..=1, scale below
-1.0, or low confidence unless the user explicitly approves manual review.
+For each selected 16:9 clip that needs vertical delivery, call
+`plan_reframe(clip_id=<clip>, aspect_ratio="9:16", subject_center=<evidence>)`
+and hand its `edl_fragment` to `apply_edl`. If a reviewed subject-aware
+`reframe_path` exists for the selected clip, attach that path as the crop
+contract instead of using a static `awidat.reframe` effect. Reject paths
+with unsorted keyframes, centers outside 0..=1, scale below 1.0, or low
+confidence unless the user explicitly approves manual review.
 
 ### 3. Tighten
 
