@@ -157,3 +157,11 @@ bytemuck = { version = "1", features = ["derive"] }
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# CI test binaries (esp. awidat-render-gpu with the full wgpu graph) link
+# into objects so large with the default `debuginfo=2` that ubuntu-latest
+# GitHub runners regularly hit `ld: Bus error` / disk-full during the link
+# phase. Cutting test debuginfo to line tables only keeps useful panic
+# backtraces while shrinking the linked output substantially.
+[profile.test]
+debug = "line-tables-only"
