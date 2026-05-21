@@ -30,6 +30,7 @@ pub mod inspect_clip;
 pub mod inspect_moment;
 pub mod list_assets;
 pub mod list_looks;
+pub mod list_markers;
 pub mod load_skill;
 pub mod plan_emphasis;
 pub mod plan_look_regions;

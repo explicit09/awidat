@@ -22,7 +22,7 @@ use awidat_core::tools::{
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_looks::ListLooksTool,
-    load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
+    list_markers::ListMarkersTool, load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
     plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
     plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
     plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
@@ -50,7 +50,7 @@ surfaces avoidable errors to the user. The single discovery call is \
 cheap and makes everything after it correct.\
 \n\nYou have the full editorial toolset, organized by purpose:\
 \n  - **Discovery / map**: view_episode (compact map of the project — \
-includes which vision indexers have run), view_timeline, list_assets, \
+includes which vision indexers have run), view_timeline, list_markers, list_assets, \
 find_episode_start (publishable podcast/interview start; rejects \
 pre-roll and rehearsed intros).\
 \n  - **Editorial index**: find_beat (typed editorial moments — \
@@ -132,6 +132,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(InspectClipTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(ListLooksTool));
+    registry.register(Arc::new(ListMarkersTool));
     registry.register(Arc::new(PollRenderTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));
