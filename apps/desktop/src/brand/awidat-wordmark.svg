@@ -1,7 +1,8 @@
 <svg width="184" height="32" viewBox="0 0 184 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Awidat">
   <g transform="translate(0,2)">
     <path d="M14 0L28 26H21L14 13.5L7 26H0L14 0Z" fill="#14B8A6"/>
-    <path d="M14 13.5L21 26H7L14 13.5Z" fill="#38BDF8" fill-opacity="0.78"/>
+    <path d="M14 4.7L21.5 22.5H18.7L14 13.7L9.3 22.5H6.5L14 4.7Z" fill="#22C55E"/>
+    <circle cx="14" cy="23.4" r="1.8" fill="#38BDF8"/>
   </g>
   <text x="36" y="22" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700" letter-spacing="-0.03em" fill="#E5E7EB">Awidat</text>
 </svg>
