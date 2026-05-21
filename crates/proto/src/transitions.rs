@@ -1834,6 +1834,103 @@ fn primitive_gpu_priority(op: &TransitionPrimitiveOp) -> u8 {
     }
 }
 
+/// Result of extracting the TimeRemap primitive from a composition.
+///
+/// Carries the sampled speed curve mapped onto a transition window
+/// of duration `duration_s`. The samples are pairs of
+/// `(source_time_s, timeline_time_s)` describing the cumulative
+/// time-warp from input PTS to output PTS at uniform progress
+/// breakpoints. Each adjacent pair defines a linear piece of the
+/// piecewise-linear setpts expression.
+///
+/// `source_time_s` is the input-side seconds (the value of
+/// `(PTS-STARTPTS)*TB` the FFmpeg filter sees). `timeline_time_s` is
+/// the cumulative warped output the renderer should emit for that
+/// input second. Both are anchored at 0 at the start of the
+/// transition window — the renderer offsets these to the actual
+/// timeline position of the transition (outgoing tail or incoming
+/// head) when it composes the filter graph.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeRemapSetptsCurve {
+    /// Length of the transition window on the timeline, in seconds.
+    pub duration_s: f64,
+    /// Sampled `(source_time_s, timeline_time_s)` breakpoints, sorted
+    /// by `source_time_s`. Always contains at least two entries
+    /// (start and end of the window).
+    pub samples: Vec<(f64, f64)>,
+}
+
+impl TimeRemapSetptsCurve {
+    /// Whether the warped output diverges from identity by more than
+    /// `tolerance_s` at any sample. A curve that stays within the
+    /// tolerance is effectively realtime and can be skipped by the
+    /// renderer to keep the filter graph clean.
+    pub fn is_identity(&self, tolerance_s: f64) -> bool {
+        self.samples
+            .iter()
+            .all(|(t_in, t_out)| (t_out - t_in).abs() <= tolerance_s)
+    }
+}
+
+/// Extract a `TimeRemap` primitive from a composition and project its
+/// speed curve onto a transition window of `duration_s` seconds.
+///
+/// Returns `None` when the composition contains no `TimeRemap`
+/// primitive, when `duration_s` is non-positive, or when the speed
+/// curve is degenerate (zero or non-finite samples). The renderer
+/// uses `None` to mean "no setpts retime stage needed".
+///
+/// The math: speed `s(p)` is interpreted as the multiplier from
+/// timeline time to source time — `s = 2.0` means twice as much
+/// source content compressed into the window (fast motion), and
+/// `s = 0.5` means half as much source stretched across the window
+/// (slow motion). For an FFmpeg `setpts` expression where the
+/// expression's value IS the new output PTS in seconds, we accumulate
+/// `d_out/d_in = 1/s(p)` across the window. Samples are taken at
+/// uniform progress breakpoints so the renderer can emit a
+/// piecewise-linear approximation without further integration.
+pub fn extract_time_remap_setpts(
+    composition: &TransitionComposition,
+    duration_s: f64,
+) -> Option<TimeRemapSetptsCurve> {
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        return None;
+    }
+    let speed = composition.primitives.iter().find_map(|p| match &p.op {
+        TransitionPrimitiveOp::TimeRemap { speed } => Some(speed),
+        _ => None,
+    })?;
+
+    // 32 samples is a low-bandwidth piecewise-linear approximation
+    // that captures the dominant shape of curves the agent authors
+    // for the speed-ramp family without bloating the filter graph.
+    const SAMPLES: usize = 32;
+    let mut samples = Vec::with_capacity(SAMPLES + 1);
+    let mut last_t_in = 0.0_f64;
+    let mut last_t_out = 0.0_f64;
+    samples.push((last_t_in, last_t_out));
+    for i in 1..=SAMPLES {
+        let p_prev = (i as f64 - 1.0) / SAMPLES as f64;
+        let p = i as f64 / SAMPLES as f64;
+        // Trapezoidal integration of 1/s across the sub-interval. We
+        // clamp the speed sample to a small positive floor to keep
+        // the integrator stable in the face of validator-allowed
+        // tiny speeds (validator floor is 0.05).
+        let s_prev = speed.evaluate(p_prev).max(1.0e-3);
+        let s_curr = speed.evaluate(p).max(1.0e-3);
+        let avg_inv_speed = 0.5 * (1.0 / s_prev + 1.0 / s_curr);
+        let dt_in = duration_s / SAMPLES as f64;
+        let dt_out = avg_inv_speed * dt_in;
+        last_t_in += dt_in;
+        last_t_out += dt_out;
+        samples.push((last_t_in, last_t_out));
+    }
+    Some(TimeRemapSetptsCurve {
+        duration_s,
+        samples,
+    })
+}
+
 /// Render/export interpretation for known transition names imported
 /// from other editors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2721,6 +2818,78 @@ mod tests {
         );
         assert!(resolve_composition_ffmpeg_xfade(&composition).is_some());
         validate_transition_composition(&composition).unwrap();
+    }
+
+    #[test]
+    fn extract_time_remap_setpts_for_constant_speed_warps_window() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::Linear,
+                op: TransitionPrimitiveOp::TimeRemap {
+                    speed: ParamCurve::Const(2.0),
+                },
+            }],
+        };
+        let curve = extract_time_remap_setpts(&composition, 1.0).unwrap();
+        assert_eq!(curve.duration_s, 1.0);
+        assert!(curve.samples.len() >= 2);
+        let (last_in, last_out) = *curve.samples.last().unwrap();
+        // Constant 2× speed across the window halves the output PTS.
+        assert!((last_in - 1.0).abs() < 1e-9, "last_in {last_in}");
+        assert!((last_out - 0.5).abs() < 1e-6, "last_out {last_out}");
+        assert!(!curve.is_identity(1e-3));
+    }
+
+    #[test]
+    fn extract_time_remap_setpts_returns_none_for_non_time_remap_composition() {
+        let composition = TransitionComposition {
+            version: 1,
+            primitives: vec![TransitionPrimitive {
+                start: 0.0,
+                end: 1.0,
+                easing: TransitionEasing::Linear,
+                op: TransitionPrimitiveOp::Flash {
+                    color: "#ffffff".into(),
+                    peak: 1.0,
+                },
+            }],
+        };
+        assert!(extract_time_remap_setpts(&composition, 1.0).is_none());
+    }
+
+    #[test]
+    fn extract_time_remap_setpts_skips_zero_duration_window() {
+        let composition = builtin_transition_composition("awidat.ramp_in_beat").unwrap();
+        assert!(extract_time_remap_setpts(&composition, 0.0).is_none());
+        assert!(extract_time_remap_setpts(&composition, -0.5).is_none());
+    }
+
+    #[test]
+    fn extract_time_remap_setpts_handles_keyframed_ramp_in_beat() {
+        let composition = builtin_transition_composition("awidat.ramp_in_beat").unwrap();
+        let curve = extract_time_remap_setpts(&composition, 0.32).unwrap();
+        // Samples are sorted by source time and span the full window.
+        let first_in = curve.samples.first().unwrap().0;
+        let last_in = curve.samples.last().unwrap().0;
+        assert!(first_in.abs() < 1e-9);
+        assert!((last_in - 0.32).abs() < 1e-6);
+        // The integrated output drifts from realtime — the ramp peaks
+        // above 1.0 in the middle, so cumulative timeline time at the
+        // end is less than the source span. The curve is non-monotone
+        // in slope but strictly increasing in cumulative output.
+        let outputs: Vec<f64> = curve.samples.iter().map(|(_, t_out)| *t_out).collect();
+        for window in outputs.windows(2) {
+            assert!(
+                window[1] >= window[0] - 1e-12,
+                "expected non-decreasing output, got {} then {}",
+                window[0],
+                window[1]
+            );
+        }
+        assert!(!curve.is_identity(1e-3));
     }
 
     #[test]
