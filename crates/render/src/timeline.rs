@@ -35,6 +35,7 @@ use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::animation::{
     MotionPathCoordinate, is_phase_3a_parameter, keyframes_to_ffmpeg_expr_with_extrapolation,
@@ -431,6 +432,46 @@ pub enum VideoOverlayMode {
         /// Fractional output margin.
         margin_pct: f64,
     },
+}
+
+/// Render-time annotation extracted from virtual `awidat.annotation` clips.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnnotationPlan {
+    /// Primitive to draw or apply.
+    pub kind: AnnotationKind,
+    /// Start time on the master timeline.
+    pub start_s: f64,
+    /// End time on the master timeline.
+    pub end_s: f64,
+    /// Normalized x coordinate.
+    pub x: f64,
+    /// Normalized y coordinate.
+    pub y: f64,
+    /// Normalized width.
+    pub width: f64,
+    /// Normalized height.
+    pub height: f64,
+    /// Stroke/accent color.
+    pub color: String,
+    /// Stroke width in pixels.
+    pub stroke_width: u32,
+    /// Optional review label.
+    pub label: Option<String>,
+}
+
+/// Render-time annotation primitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationKind {
+    /// Rectangle outline.
+    Rectangle,
+    /// Circle/ellipse approximation.
+    Circle,
+    /// Arrow callout.
+    Arrow,
+    /// Corner bracket callout.
+    Bracket,
+    /// Blur a rectangular region.
+    Blur,
 }
 
 /// Render-time audio clip span extracted from an OTIO audio track.
@@ -879,6 +920,7 @@ type TimelineFullPlan = (
     Vec<TransitionPlan>,
     Vec<VideoOverlayPlan>,
     Vec<TitlePlan>,
+    Vec<AnnotationPlan>,
     Option<BroadcastOverlayPlan>,
     Vec<AudioTrackPlan>,
     Option<LoudnessTargetPlan>,
@@ -894,7 +936,7 @@ type TimelineFullPlan = (
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -910,7 +952,7 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -933,9 +975,10 @@ pub fn collect_timeline_full_plan(
         }
     })?;
     let mut graph_binding_limitations = Vec::new();
+    let frame_rate = timeline_frame_rate(&timeline);
     let parameter_animations = collect_effective_parameter_animations(
         timeline.metadata.awidat.as_ref(),
-        timeline_frame_rate(&timeline),
+        frame_rate,
         &mut graph_binding_limitations,
     );
     let corner_pin_filters = collect_corner_pin_filters(
@@ -956,6 +999,7 @@ pub fn collect_timeline_full_plan(
     let mut transitions = Vec::new();
     let mut video_overlays = Vec::new();
     let mut titles = Vec::new();
+    let mut annotations = Vec::new();
     let mut audio_tracks = Vec::new();
     let mut render_limitations = graph_binding_limitations;
     let mut consumed_animation_ids = BTreeSet::new();
@@ -974,18 +1018,20 @@ pub fn collect_timeline_full_plan(
         if !matches!(track.kind, TrackKind::Video) {
             continue;
         }
-        if is_titles_track(track) {
-            // Walk titles separately; don't try to read media off it.
+        if is_titles_track(track) || is_annotations_track(track) {
+            // Walk virtual overlay tracks separately; don't try to read media off them.
             for tc in &track.children {
                 let TrackChild::Clip(clip) = tc else { continue };
-                let Some((plan, animation_selection)) =
+                if let Some((plan, animation_selection)) =
                     parse_title_plan(clip, &parameter_animations)
-                else {
-                    continue;
-                };
-                render_limitations.extend(animation_selection.limitations);
-                consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
-                titles.push(plan);
+                {
+                    render_limitations.extend(animation_selection.limitations);
+                    consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
+                    titles.push(plan);
+                }
+                if let Some(annotation) = parse_annotation_plan(clip) {
+                    annotations.push(annotation);
+                }
             }
             continue;
         }
@@ -1137,6 +1183,13 @@ pub fn collect_timeline_full_plan(
             });
         }
     }
+    apply_dynamic_title_keywords(
+        &mut titles,
+        &segs,
+        timeline.metadata.awidat.as_ref(),
+        project_root,
+        frame_rate,
+    );
     let broadcast_overlay = timeline
         .metadata
         .awidat
@@ -1165,6 +1218,7 @@ pub fn collect_timeline_full_plan(
         transitions,
         video_overlays,
         titles,
+        annotations,
         broadcast_overlay,
         audio_tracks,
         loudness_target,
@@ -2107,6 +2161,18 @@ fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
     track.name == "Titles"
 }
 
+fn is_annotations_track(track: &awidat_proto::otio::Track) -> bool {
+    if track
+        .metadata
+        .get("awidat_track_role")
+        .and_then(|v| v.as_str())
+        == Some("annotations")
+    {
+        return true;
+    }
+    track.name == "Annotations"
+}
+
 /// Parse one synthesized title-clip into a [`TitlePlan`]. Returns
 /// `None` if the clip carries no awidat.title effect or required
 /// metadata is missing — the render walk just skips invalid titles
@@ -2180,6 +2246,10 @@ fn parse_title_plan(
         .get("safe_area")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let rich_segments = m
+        .get("rich_segments")
+        .and_then(|value| serde_json::from_value::<Vec<RichTextSegment>>(value.clone()).ok())
+        .unwrap_or_default();
     let clip_id = render_clip_id(clip);
     let animation_selection =
         render_animations_for_clip_with_limitations(parameter_animations, &clip_id, "title");
@@ -2196,9 +2266,193 @@ fn parse_title_plan(
         reveal,
         role,
         safe_area,
+        rich_segments,
         animations,
     };
     Some((plan, animation_selection))
+}
+
+fn parse_annotation_plan(clip: &awidat_proto::otio::Clip) -> Option<AnnotationPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.annotation")?;
+    let metadata = &effect.metadata;
+    let kind = match metadata.get("kind").and_then(|value| value.as_str())? {
+        "rectangle" => AnnotationKind::Rectangle,
+        "circle" => AnnotationKind::Circle,
+        "arrow" => AnnotationKind::Arrow,
+        "bracket" => AnnotationKind::Bracket,
+        "blur" => AnnotationKind::Blur,
+        _ => return None,
+    };
+    let start_s = metadata
+        .get("start_s")
+        .and_then(serde_json::Value::as_f64)?;
+    let end_s = metadata.get("end_s").and_then(serde_json::Value::as_f64)?;
+    let x = metadata.get("x").and_then(serde_json::Value::as_f64)?;
+    let y = metadata.get("y").and_then(serde_json::Value::as_f64)?;
+    let width = metadata.get("width").and_then(serde_json::Value::as_f64)?;
+    let height = metadata.get("height").and_then(serde_json::Value::as_f64)?;
+    if end_s <= start_s || !valid_annotation_region(x, y, width, height) {
+        return None;
+    }
+    Some(AnnotationPlan {
+        kind,
+        start_s,
+        end_s,
+        x,
+        y,
+        width,
+        height,
+        color: metadata
+            .get("color")
+            .and_then(|value| value.as_str())
+            .unwrap_or("#FFCC00")
+            .to_string(),
+        stroke_width: metadata
+            .get("stroke_width")
+            .and_then(serde_json::Value::as_u64)
+            .map(|value| value as u32)
+            .filter(|value| *value > 0)
+            .unwrap_or(4),
+        label: metadata
+            .get("label")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+    })
+}
+
+fn valid_annotation_region(x: f64, y: f64, width: f64, height: f64) -> bool {
+    [x, y, width, height].into_iter().all(f64::is_finite)
+        && x >= 0.0
+        && y >= 0.0
+        && width > 0.0
+        && height > 0.0
+        && x + width <= 1.0
+        && y + height <= 1.0
+}
+
+fn apply_dynamic_title_keywords(
+    titles: &mut [TitlePlan],
+    segments: &[TimelineSegment],
+    metadata: Option<&AwidatTimelineMetadata>,
+    project_root: &Path,
+    frame_rate: f64,
+) {
+    for title in titles {
+        if !title.text.contains('#') {
+            continue;
+        }
+        title.text = resolve_dynamic_title_text(
+            &title.text,
+            title.start_s,
+            segments,
+            metadata,
+            project_root,
+            frame_rate,
+        );
+    }
+}
+
+fn resolve_dynamic_title_text(
+    text: &str,
+    timeline_s: f64,
+    segments: &[TimelineSegment],
+    metadata: Option<&AwidatTimelineMetadata>,
+    project_root: &Path,
+    frame_rate: f64,
+) -> String {
+    let frame = timeline_frame_number(timeline_s, frame_rate);
+    let filename = active_segment_at(segments, timeline_s)
+        .and_then(|segment| segment.asset_path.file_name())
+        .and_then(|filename| filename.to_str())
+        .or_else(|| project_root.file_name().and_then(|name| name.to_str()))
+        .unwrap_or_default();
+    let chapter_title = active_chapter_title(metadata, timeline_s).unwrap_or_default();
+    let speaker = metadata_dynamic_string(metadata, "speaker_label")
+        .or_else(|| metadata_dynamic_string(metadata, "speaker"))
+        .unwrap_or_default();
+    text.replace("#timecode#", &format_timecode(frame, frame_rate))
+        .replace("#frame#", &frame.to_string())
+        .replace("#filename#", filename)
+        .replace("#chapter_title#", &chapter_title)
+        .replace("#speaker#", &speaker)
+        .replace(
+            "#date#",
+            &chrono::Local::now().format("%Y-%m-%d").to_string(),
+        )
+}
+
+fn timeline_frame_number(timeline_s: f64, frame_rate: f64) -> u64 {
+    let safe_time = if timeline_s.is_finite() {
+        timeline_s.max(0.0)
+    } else {
+        0.0
+    };
+    let safe_rate = if frame_rate.is_finite() && frame_rate > 0.0 {
+        frame_rate
+    } else {
+        24.0
+    };
+    (safe_time * safe_rate).round() as u64
+}
+
+fn format_timecode(frame: u64, frame_rate: f64) -> String {
+    let frames_per_second = frame_rate.round().max(1.0) as u64;
+    let total_seconds = frame / frames_per_second;
+    let frame_remainder = frame % frames_per_second;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02}:{frame_remainder:02}")
+}
+
+fn active_segment_at(segments: &[TimelineSegment], timeline_s: f64) -> Option<&TimelineSegment> {
+    let mut cursor_s = 0.0_f64;
+    for segment in segments {
+        let duration_s = effective_duration(segment);
+        let end_s = cursor_s + duration_s;
+        if timeline_s >= cursor_s && timeline_s < end_s {
+            return Some(segment);
+        }
+        cursor_s = end_s;
+    }
+    segments.last().filter(|segment| {
+        (timeline_s - cursor_s).abs() < f64::EPSILON && effective_duration(segment) > 0.0
+    })
+}
+
+fn active_chapter_title(
+    metadata: Option<&AwidatTimelineMetadata>,
+    timeline_s: f64,
+) -> Option<String> {
+    metadata
+        .and_then(|metadata| metadata.broadcast_overlay.as_ref())
+        .and_then(|overlay| {
+            overlay
+                .chapters
+                .iter()
+                .filter(|chapter| chapter.time_seconds <= timeline_s)
+                .max_by(|left, right| left.time_seconds.total_cmp(&right.time_seconds))
+        })
+        .map(|chapter| chapter.text.clone())
+}
+
+fn metadata_dynamic_string(metadata: Option<&AwidatTimelineMetadata>, key: &str) -> Option<String> {
+    let metadata = metadata?;
+    metadata
+        .extra
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            metadata
+                .extra
+                .get("dynamic_text")
+                .and_then(|dynamic| dynamic.get(key))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_string)
 }
 
 fn render_clip_id(clip: &awidat_proto::otio::Clip) -> String {
@@ -2574,8 +2828,23 @@ pub struct TitlePlan {
     pub role: String,
     /// Optional safe-area profile carried by caption nodes.
     pub safe_area: Option<String>,
+    /// Optional inline rich-text runs.
+    pub rich_segments: Vec<RichTextSegment>,
     /// Supported Phase 3A parameter animations attached to this title.
     pub animations: Vec<RenderParameterAnimation>,
+}
+
+/// One styled inline run inside a rich title.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct RichTextSegment {
+    /// Text for this run.
+    pub text: String,
+    /// Optional run color. Falls back to the title color.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Optional run weight. Falls back to the title weight.
+    #[serde(default)]
+    pub font_weight: Option<TitleWeight>,
 }
 
 /// Text reveal/write-on mode for title overlays.
@@ -2605,7 +2874,8 @@ pub enum TitlePosition {
 }
 
 /// Mirrors `awidat_core::edl::op::TitleWeight`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TitleWeight {
     /// Regular weight.
     Normal,
@@ -3177,6 +3447,178 @@ fn append_video_overlays(
         video_out_label: current,
         audio_out_label: base.audio_out_label,
     }
+}
+
+fn append_annotations(base: FilterPlan, annotations: &[AnnotationPlan]) -> FilterPlan {
+    if annotations.is_empty() {
+        return base;
+    }
+    let mut filter = base.filter_complex;
+    let mut current = base.video_out_label;
+    for (idx, annotation) in annotations.iter().enumerate() {
+        let next = format!("[annotation_v{idx}]");
+        if !filter.ends_with(';') && !filter.is_empty() {
+            filter.push(';');
+        }
+        filter.push_str(&annotation_filter(&current, &next, annotation, idx));
+        current = next;
+    }
+    FilterPlan {
+        filter_complex: filter,
+        video_out_label: current,
+        audio_out_label: base.audio_out_label,
+    }
+}
+
+fn annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+    idx: usize,
+) -> String {
+    match annotation.kind {
+        AnnotationKind::Rectangle => rectangle_annotation_filter(in_label, out_label, annotation),
+        AnnotationKind::Blur => blur_annotation_filter(in_label, out_label, annotation, idx),
+        AnnotationKind::Circle => circle_annotation_filter(in_label, out_label, annotation),
+        AnnotationKind::Arrow => arrow_annotation_filter(in_label, out_label, annotation),
+        AnnotationKind::Bracket => bracket_annotation_filter(in_label, out_label, annotation),
+    }
+}
+
+fn rectangle_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+) -> String {
+    let color = annotation_filter_color(&annotation.color);
+    format!(
+        "{in_label}drawbox=x=iw*{x}:y=ih*{y}:w=iw*{width}:h=ih*{height}:color={color}:t={stroke}:enable='between(t\\,{start}\\,{end})'{out_label}",
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        width = fmt_filter_num(annotation.width),
+        height = fmt_filter_num(annotation.height),
+        color = color,
+        stroke = annotation.stroke_width,
+        start = fmt_filter_num(annotation.start_s),
+        end = fmt_filter_num(annotation.end_s),
+    )
+}
+
+fn blur_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+    idx: usize,
+) -> String {
+    let keep = format!("[annotation_keep{idx}]");
+    let source = format!("[annotation_src{idx}]");
+    let blur = format!("[annotation_blur{idx}]");
+    format!(
+        "{in_label}split{keep}{source};\
+         {source}crop=w=iw*{width}:h=ih*{height}:x=iw*{x}:y=ih*{y},boxblur=12{blur};\
+         {keep}{blur}overlay=x=main_w*{x}:y=main_h*{y}:enable='between(t\\,{start}\\,{end})'{out_label}",
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        width = fmt_filter_num(annotation.width),
+        height = fmt_filter_num(annotation.height),
+        start = fmt_filter_num(annotation.start_s),
+        end = fmt_filter_num(annotation.end_s),
+    )
+}
+
+fn circle_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+) -> String {
+    let size = format!("h*{}", fmt_filter_num(annotation.height));
+    let color = annotation_filter_color(&annotation.color);
+    format!(
+        "{in_label}drawtext=text='○':fontsize={size}:fontcolor={color}:x=w*{x}:y=h*{y}:enable='between(t\\,{start}\\,{end})'{out_label}",
+        color = color,
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        start = fmt_filter_num(annotation.start_s),
+        end = fmt_filter_num(annotation.end_s),
+    )
+}
+
+fn arrow_annotation_filter(in_label: &str, out_label: &str, annotation: &AnnotationPlan) -> String {
+    let size = format!("h*{}", fmt_filter_num(annotation.height.max(0.04)));
+    let color = annotation_filter_color(&annotation.color);
+    format!(
+        "{in_label}drawtext=text='→':fontsize={size}:fontcolor={color}:x=w*{x}:y=h*{y}:enable='between(t\\,{start}\\,{end})'{out_label}",
+        color = color,
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        start = fmt_filter_num(annotation.start_s),
+        end = fmt_filter_num(annotation.end_s),
+    )
+}
+
+fn bracket_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+) -> String {
+    let color = annotation_filter_color(&annotation.color);
+    let top = format!(
+        "[annotation_bracket_top{}]",
+        annotation_label_suffix(annotation)
+    );
+    let left = format!(
+        "[annotation_bracket_left{}]",
+        annotation_label_suffix(annotation)
+    );
+    let right = format!(
+        "[annotation_bracket_right{}]",
+        annotation_label_suffix(annotation)
+    );
+    let common = format!(
+        ":color={}:t={}:enable='between(t\\,{}\\,{})'",
+        color,
+        annotation.stroke_width,
+        fmt_filter_num(annotation.start_s),
+        fmt_filter_num(annotation.end_s)
+    );
+    format!(
+        "{in_label}drawbox=x=iw*{x}:y=ih*{y}:w=iw*{width}:h=1{common}{top};\
+         {top}drawbox=x=iw*{x}:y=ih*{y}:w=1:h=ih*{height}{common}{left};\
+         {left}drawbox=x=iw*({x}+{width}):y=ih*{y}:w=1:h=ih*{height}{common}{right};\
+         {right}copy{out_label}",
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        width = fmt_filter_num(annotation.width),
+        height = fmt_filter_num(annotation.height),
+        common = common,
+    )
+}
+
+fn annotation_filter_color(raw: &str) -> &str {
+    if valid_filter_color(raw) {
+        raw
+    } else {
+        "#FFCC00"
+    }
+}
+
+fn valid_filter_color(raw: &str) -> bool {
+    let color = raw.trim();
+    if color.is_empty() || color != raw {
+        return false;
+    }
+    if let Some(hex) = color.strip_prefix('#') {
+        return matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit());
+    }
+    color.chars().all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn annotation_label_suffix(annotation: &AnnotationPlan) -> String {
+    format!(
+        "_{:.0}_{:.0}",
+        annotation.start_s * 1000.0,
+        annotation.end_s * 1000.0
+    )
 }
 
 fn apply_overlay_corner_pin_filter(
@@ -4682,6 +5124,9 @@ fn format_drawtext_filter(
     t: &TitlePlan,
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
 ) -> String {
+    if !t.rich_segments.is_empty() && t.reveal == TextReveal::None {
+        return format_rich_drawtext_filters(t, broadcast_overlay);
+    }
     if t.reveal != TextReveal::None {
         return format_revealed_drawtext_filters(t, broadcast_overlay);
     }
@@ -4695,22 +5140,15 @@ fn format_drawtext_filter_with_text(
     end_s: f64,
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
 ) -> String {
-    let escaped_text = drawtext_escape(text);
+    let wrapped_text = auto_wrap_title_text(text, t.font_size);
+    let escaped_text = drawtext_escape(&wrapped_text);
     let resting_y = match t.position {
         TitlePosition::Top => "h*0.05".to_string(),
         TitlePosition::Center => "(h-text_h)/2".to_string(),
         TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
     };
     let resting_x = "(w-text_w)/2".to_string();
-    let weight_attr = match t.font_weight {
-        TitleWeight::Normal => "",
-        // ffmpeg drawtext doesn't have a `font_weight=` flag — bold
-        // is communicated via the fontfile itself. Without a custom
-        // bold font bundle, we approximate bold by stroking the
-        // text with the same color (`borderw` adds a thicker outline,
-        // which visually thickens the strokes).
-        TitleWeight::Bold => ":borderw=2",
-    };
+    let weight_attr = title_weight_drawtext_attr(t.font_weight);
     let fontfile = pick_fontfile_attr();
     let anim = apply_title_animation(t, &resting_x, &resting_y);
     let alpha = if has_title_animation(t, "title.opacity") {
@@ -4769,6 +5207,234 @@ fn format_drawtext_filter_with_text(
         alpha = alpha,
         start = start_s,
         end = end_s,
+    )
+}
+
+fn title_weight_drawtext_attr(font_weight: TitleWeight) -> &'static str {
+    match font_weight {
+        TitleWeight::Normal => "",
+        // ffmpeg drawtext doesn't have a `font_weight=` flag. Without a
+        // custom bold font bundle, approximate bold by stroking the text.
+        TitleWeight::Bold => ":borderw=2",
+    }
+}
+
+fn format_rich_drawtext_filters(
+    title: &TitlePlan,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let full_text = title
+        .rich_segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<String>();
+    if full_text.is_empty() {
+        return String::new();
+    }
+    let total_width = approximate_text_width_px(&full_text, title.font_size);
+    let mut offset = 0.0_f64;
+    title
+        .rich_segments
+        .iter()
+        .filter(|segment| !segment.text.is_empty())
+        .map(|segment| {
+            let run_width = approximate_text_width_px(&segment.text, title.font_size);
+            let filter =
+                format_rich_drawtext_run(title, segment, total_width, offset, broadcast_overlay);
+            offset += run_width;
+            filter
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_rich_drawtext_run(
+    title: &TitlePlan,
+    segment: &RichTextSegment,
+    total_width_px: f64,
+    offset_px: f64,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let mut run = title.clone();
+    run.text = segment.text.clone();
+    run.color = segment.color.clone().unwrap_or_else(|| title.color.clone());
+    run.font_weight = segment.font_weight.unwrap_or(title.font_weight);
+    run.rich_segments.clear();
+    let base_x = format!(
+        "(w-{total})/2+{offset}",
+        total = fmt_px(total_width_px),
+        offset = fmt_px(offset_px)
+    );
+    format_drawtext_filter_with_position(&run, &segment.text, &base_x, broadcast_overlay)
+}
+
+fn format_drawtext_filter_with_position(
+    t: &TitlePlan,
+    text: &str,
+    resting_x: &str,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let wrapped_text = auto_wrap_title_text(text, t.font_size);
+    let escaped_text = drawtext_escape(&wrapped_text);
+    let resting_y = match t.position {
+        TitlePosition::Top => "h*0.05".to_string(),
+        TitlePosition::Center => "(h-text_h)/2".to_string(),
+        TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
+    };
+    let weight_attr = title_weight_drawtext_attr(t.font_weight);
+    let fontfile = pick_fontfile_attr();
+    let anim = apply_title_animation(t, resting_x, &resting_y);
+    let alpha = if has_title_animation(t, "title.opacity") {
+        format!(
+            ":alpha='{}'",
+            title_animation_value_expr(t, "title.opacity", "1")
+        )
+    } else {
+        anim.alpha
+    };
+    format!(
+        "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{weight}\
+         :x={x}:y={y}{alpha}:enable='between(t\\,{start}\\,{end})'",
+        text = escaped_text,
+        font = fontfile,
+        size = t.font_size,
+        color = t.color,
+        weight = weight_attr,
+        x = anim.x,
+        y = anim.y,
+        alpha = alpha,
+        start = t.start_s,
+        end = t.end_s,
+    )
+}
+
+fn approximate_text_width_px(text: &str, font_size: u32) -> f64 {
+    text.graphemes(true).map(glyph_width_factor).sum::<f64>() * font_size as f64
+}
+
+fn auto_wrap_title_text(text: &str, font_size: u32) -> String {
+    if text.contains('\n') {
+        return text.to_string();
+    }
+    let max_chars = title_wrap_max_chars(font_size);
+    if grapheme_count(text) <= max_chars {
+        return text.to_string();
+    }
+    wrap_text_by_words(text, max_chars)
+}
+
+fn title_wrap_max_chars(font_size: u32) -> usize {
+    const TITLE_SAFE_WIDTH_PX: f64 = 1500.0;
+    let average_glyph_width = (font_size.max(1) as f64 * 0.55).max(1.0);
+    (TITLE_SAFE_WIDTH_PX / average_glyph_width).floor().max(8.0) as usize
+}
+
+fn wrap_text_by_words(text: &str, max_chars: usize) -> String {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut pending_space = false;
+    for token in text.split_word_bounds() {
+        if token.chars().all(char::is_whitespace) {
+            pending_space |= !current.is_empty();
+            continue;
+        }
+        append_wrapped_token(&mut lines, &mut current, token, pending_space, max_chars);
+        pending_space = false;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        text.to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn append_wrapped_token(
+    lines: &mut Vec<String>,
+    current: &mut String,
+    token: &str,
+    pending_space: bool,
+    max_chars: usize,
+) {
+    let token_len = grapheme_count(token);
+    if token_len > max_chars {
+        if !current.is_empty() {
+            lines.push(std::mem::take(current));
+        }
+        push_grapheme_chunks(lines, current, token, max_chars);
+        return;
+    }
+
+    let space_len = usize::from(pending_space && !current.is_empty());
+    let next_len = grapheme_count(current) + space_len + token_len;
+    if current.is_empty() || next_len <= max_chars {
+        if space_len == 1 {
+            current.push(' ');
+        }
+        current.push_str(token);
+    } else {
+        lines.push(std::mem::take(current));
+        current.push_str(token);
+    }
+}
+
+fn push_grapheme_chunks(
+    lines: &mut Vec<String>,
+    current: &mut String,
+    token: &str,
+    max_chars: usize,
+) {
+    for grapheme in token.graphemes(true) {
+        if grapheme_count(current) >= max_chars {
+            lines.push(std::mem::take(current));
+        }
+        current.push_str(grapheme);
+    }
+}
+
+fn grapheme_count(text: &str) -> usize {
+    text.graphemes(true).count()
+}
+
+fn glyph_width_factor(grapheme: &str) -> f64 {
+    let Some(ch) = grapheme.chars().next() else {
+        return 0.0;
+    };
+    if is_ascii_narrow(ch) {
+        0.28
+    } else if is_ascii_wide(ch) {
+        0.78
+    } else if ch.is_ascii_whitespace() {
+        0.33
+    } else if ch.is_ascii_punctuation() {
+        0.35
+    } else if ch.is_ascii_alphanumeric() {
+        0.55
+    } else if is_cjk(ch) || grapheme.chars().count() > 1 {
+        1.0
+    } else {
+        0.65
+    }
+}
+
+fn is_ascii_narrow(ch: char) -> bool {
+    matches!(ch, 'i' | 'j' | 'l' | 'I' | '!' | '|' | '\'' | '`')
+}
+
+fn is_ascii_wide(ch: char) -> bool {
+    matches!(ch, 'm' | 'w' | 'M' | 'W' | '@' | '#' | '%' | '&')
+}
+
+fn is_cjk(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x3040..=0x30FF
+            | 0xAC00..=0xD7AF
     )
 }
 
@@ -5895,6 +6561,7 @@ fn drawtext_escape(s: &str) -> String {
             '\'' => "\\'".to_string(),
             ':' => "\\:".to_string(),
             ',' => "\\,".to_string(),
+            '\n' => "\\n".to_string(),
             other => other.to_string(),
         })
         .collect()
@@ -6119,6 +6786,33 @@ pub fn build_timeline_argv_full(
     loudness_target: Option<LoudnessTargetPlan>,
     output_path: &Path,
 ) -> Vec<String> {
+    build_timeline_argv_full_with_annotations(
+        segs,
+        transitions,
+        video_overlays,
+        &[],
+        titles,
+        broadcast_overlay,
+        browser_broadcast_overlay,
+        loudness_target,
+        output_path,
+    )
+}
+
+/// Build FFmpeg arguments with media overlays, annotation overlays, titles,
+/// broadcast overlay, and optional final loudness processing.
+#[allow(clippy::too_many_arguments)]
+pub fn build_timeline_argv_full_with_annotations(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    video_overlays: &[VideoOverlayPlan],
+    annotations: &[AnnotationPlan],
+    titles: &[TitlePlan],
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    browser_broadcast_overlay: Option<&Path>,
+    loudness_target: Option<LoudnessTargetPlan>,
+    output_path: &Path,
+) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
     let first_matte_input =
         segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
@@ -6136,14 +6830,7 @@ pub fn build_timeline_argv_full(
         ]);
     }
     for overlay in &video_overlays {
-        argv.extend([
-            "-ss".into(),
-            format!("{}", overlay.segment.start_s),
-            "-t".into(),
-            format!("{}", overlay.segment.duration_s),
-            "-i".into(),
-            overlay.segment.asset_path.to_string_lossy().into_owned(),
-        ]);
+        append_video_overlay_input_args(&mut argv, &overlay.segment);
     }
     if let Some(path) = browser_broadcast_overlay {
         argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
@@ -6160,6 +6847,7 @@ pub fn build_timeline_argv_full(
     }
     let base = FilterPlanner::new(&segs, transitions).plan();
     let media = append_video_overlays(base, &video_overlays, segs.len());
+    let annotated = append_annotations(media, annotations);
     let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
         &[]
     } else {
@@ -6175,7 +6863,7 @@ pub fn build_timeline_argv_full(
         titles,
         ffmpeg_broadcast_overlay,
     )
-    .decorate_video_filter(media.filter_complex, media.video_out_label);
+    .decorate_video_filter(annotated.filter_complex, annotated.video_out_label);
     let mut filter_complex = plan.filter_complex;
     let video_out_label = if browser_broadcast_overlay.is_some() {
         let overlay_input = segs.len() + video_overlays.len();
@@ -6191,7 +6879,7 @@ pub fn build_timeline_argv_full(
     };
     let audio_out_label = append_timeline_loudness_filter(
         &mut filter_complex,
-        media.audio_out_label,
+        annotated.audio_out_label,
         loudness_target,
     );
     argv.extend([
@@ -6221,6 +6909,40 @@ pub fn build_timeline_argv_full(
     argv
 }
 
+fn append_video_overlay_input_args(argv: &mut Vec<String>, segment: &TimelineSegment) {
+    if still_graphic_asset(&segment.asset_path) {
+        argv.extend([
+            "-loop".into(),
+            "1".into(),
+            "-t".into(),
+            format!("{}", segment.duration_s),
+            "-i".into(),
+            segment.asset_path.to_string_lossy().into_owned(),
+        ]);
+    } else {
+        argv.extend([
+            "-ss".into(),
+            format!("{}", segment.start_s),
+            "-t".into(),
+            format!("{}", segment.duration_s),
+            "-i".into(),
+            segment.asset_path.to_string_lossy().into_owned(),
+        ]);
+    }
+}
+
+fn still_graphic_asset(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "svg" | "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "bmp"
+            )
+        })
+        .unwrap_or(false)
+}
+
 /// Build an ffmpeg argv for explicit audio-track mixing plus video timeline rendering.
 /// Build an ffmpeg argv for timelines with first-class audio tracks.
 /// Video streams are rendered video-only and final audio is mixed from
@@ -6230,6 +6952,35 @@ pub fn build_timeline_argv_with_audio_tracks(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
     video_overlays: &[VideoOverlayPlan],
+    titles: &[TitlePlan],
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    browser_broadcast_overlay: Option<&Path>,
+    loudness_target: Option<LoudnessTargetPlan>,
+    audio_tracks: &[AudioTrackPlan],
+    output_path: &Path,
+) -> Vec<String> {
+    build_timeline_argv_with_audio_tracks_and_annotations(
+        segs,
+        transitions,
+        video_overlays,
+        &[],
+        titles,
+        broadcast_overlay,
+        browser_broadcast_overlay,
+        loudness_target,
+        audio_tracks,
+        output_path,
+    )
+}
+
+/// Build FFmpeg arguments for explicit audio-track timelines with media
+/// overlays, annotation overlays, titles, and optional loudness processing.
+#[allow(clippy::too_many_arguments)]
+pub fn build_timeline_argv_with_audio_tracks_and_annotations(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    video_overlays: &[VideoOverlayPlan],
+    annotations: &[AnnotationPlan],
     titles: &[TitlePlan],
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
     browser_broadcast_overlay: Option<&Path>,
@@ -6254,14 +7005,7 @@ pub fn build_timeline_argv_with_audio_tracks(
         ]);
     }
     for overlay in &video_overlays {
-        argv.extend([
-            "-ss".into(),
-            format!("{}", overlay.segment.start_s),
-            "-t".into(),
-            format!("{}", overlay.segment.duration_s),
-            "-i".into(),
-            overlay.segment.asset_path.to_string_lossy().into_owned(),
-        ]);
+        append_video_overlay_input_args(&mut argv, &overlay.segment);
     }
     if let Some(path) = browser_broadcast_overlay {
         argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
@@ -6307,8 +7051,9 @@ pub fn build_timeline_argv_with_audio_tracks(
         &video_overlays,
         segs.len(),
     );
-    filter = media.filter_complex;
-    let mut video_label = media.video_out_label;
+    let annotated = append_annotations(media, annotations);
+    filter = annotated.filter_complex;
+    let mut video_label = annotated.video_out_label;
     let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
         &[]
     } else {
@@ -6728,6 +7473,7 @@ fn build_timeline_render_spec_inner(
         transitions,
         video_overlays,
         titles,
+        annotations,
         broadcast_overlay,
         audio_tracks,
         loudness_target,
@@ -6784,10 +7530,11 @@ fn build_timeline_render_spec_inner(
         None
     };
     let mut argv = if audio_tracks.is_empty() {
-        build_timeline_argv_full(
+        build_timeline_argv_full_with_annotations(
             &segs,
             &transitions,
             &video_overlays,
+            &annotations,
             &titles,
             broadcast_overlay.as_ref(),
             browser_broadcast_overlay.as_deref(),
@@ -6795,10 +7542,11 @@ fn build_timeline_render_spec_inner(
             &output_path,
         )
     } else {
-        build_timeline_argv_with_audio_tracks(
+        build_timeline_argv_with_audio_tracks_and_annotations(
             &segs,
             &transitions,
             &video_overlays,
+            &annotations,
             &titles,
             broadcast_overlay.as_ref(),
             browser_broadcast_overlay.as_deref(),
@@ -7876,7 +8624,7 @@ mod tests {
             },
         );
 
-        let (_, _, video_overlays, _, _, _, _, limitations) =
+        let (_, _, video_overlays, _, _, _, _, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert_eq!(video_overlays.len(), 1);
@@ -7975,7 +8723,7 @@ mod tests {
             },
         );
 
-        let (_, _, _, _, _, audio_tracks, _, limitations) =
+        let (_, _, _, _, _, _, audio_tracks, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -9438,6 +10186,7 @@ mod tests {
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
+            rich_segments: Vec::new(),
             animations: Vec::new(),
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
@@ -9473,6 +10222,51 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_title_keywords_resolve_from_timeline_context() {
+        let mut titles = vec![TitlePlan {
+            text: "#timecode# #frame# #filename# #chapter_title# #speaker#".into(),
+            start_s: 5.0,
+            end_s: 8.0,
+            position: TitlePosition::Top,
+            font_size: 64,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Normal,
+            animation: TitleAnimation::None,
+            reveal: TextReveal::None,
+            role: "title".into(),
+            safe_area: None,
+            rich_segments: Vec::new(),
+            animations: Vec::new(),
+        }];
+        let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
+        let mut overlay = awidat_proto::awidat_meta::BroadcastOverlayConfig::default();
+        overlay.chapters = vec![awidat_proto::awidat_meta::BroadcastTimedEntry {
+            time_seconds: 3.0,
+            text: "Deep Dive".into(),
+        }];
+        let mut metadata = awidat_proto::awidat_meta::AwidatTimelineMetadata {
+            broadcast_overlay: Some(overlay),
+            ..Default::default()
+        };
+        metadata
+            .extra
+            .insert("speaker_label".into(), serde_json::json!("HOST"));
+
+        apply_dynamic_title_keywords(
+            &mut titles,
+            &segs,
+            Some(&metadata),
+            Path::new("/tmp/project"),
+            24.0,
+        );
+
+        assert_eq!(
+            titles[0].text,
+            "00:00:05:00 120 interview.mov Deep Dive HOST"
+        );
+    }
+
+    #[test]
     fn filter_planner_chains_multiple_titles_with_commas() {
         let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
         let titles = vec![
@@ -9488,6 +10282,7 @@ mod tests {
                 reveal: TextReveal::None,
                 role: "title".into(),
                 safe_area: None,
+                rich_segments: Vec::new(),
                 animations: Vec::new(),
             },
             TitlePlan {
@@ -9502,6 +10297,7 @@ mod tests {
                 reveal: TextReveal::None,
                 role: "caption".into(),
                 safe_area: Some("mobile".into()),
+                rich_segments: Vec::new(),
                 animations: Vec::new(),
             },
         ];
@@ -9513,6 +10309,95 @@ mod tests {
         assert!(plan.filter_complex.contains("borderw=2"));
         // Mobile-safe captions sit higher than generic bottom titles.
         assert!(plan.filter_complex.contains("y=h*0.75"));
+    }
+
+    #[test]
+    fn long_title_text_auto_wraps_before_drawtext() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let title = TitlePlan {
+            text: "This is a deliberately long title that should wrap before it runs beyond the safe title width".into(),
+            start_s: 0.0,
+            end_s: 3.0,
+            position: TitlePosition::Bottom,
+            font_size: 72,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Bold,
+            animation: TitleAnimation::FadeIn,
+            reveal: TextReveal::None,
+            role: "title".into(),
+            safe_area: None,
+rich_segments: Vec::new(),
+animations: Vec::new(),
+        };
+
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+
+        assert!(
+            plan.filter_complex.contains("\\n"),
+            "long title should be wrapped in the drawtext payload: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn cjk_title_text_wraps_without_spaces() {
+        let text = "天地玄黄宇宙洪荒".repeat(8);
+
+        let wrapped = auto_wrap_title_text(&text, 72);
+
+        assert!(
+            wrapped.contains('\n'),
+            "CJK titles without spaces should still wrap: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn rich_title_width_estimate_accounts_for_proportional_glyphs() {
+        let narrow = approximate_text_width_px("iiiiiiii", 72);
+        let wide = approximate_text_width_px("mmmmmmmm", 72);
+
+        assert!(
+            narrow < wide,
+            "narrow glyph runs should not use the same width as wide glyph runs"
+        );
+    }
+
+    #[test]
+    fn rich_title_segments_render_as_independent_drawtext_runs() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut title = title(TitleAnimation::None, TitlePosition::Bottom);
+        title.text = "Launch now".into();
+        title.rich_segments = vec![
+            RichTextSegment {
+                text: "Launch".into(),
+                color: Some("#FFFFFF".into()),
+                font_weight: Some(TitleWeight::Bold),
+            },
+            RichTextSegment {
+                text: " now".into(),
+                color: Some("#FFCC00".into()),
+                font_weight: Some(TitleWeight::Normal),
+            },
+        ];
+
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+
+        assert!(
+            plan.filter_complex.contains("drawtext=text='Launch'")
+                && plan.filter_complex.contains("drawtext=text=' now'"),
+            "rich title should render each run separately: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains("fontcolor=#FFCC00"),
+            "rich title should preserve per-run color: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains("x=(w-"),
+            "rich title should use centered run offsets: {}",
+            plan.filter_complex
+        );
     }
 
     #[test]
@@ -9542,6 +10427,7 @@ mod tests {
             reveal: TextReveal::None,
             role: "caption".into(),
             safe_area: Some("mobile".into()),
+            rich_segments: Vec::new(),
             animations: Vec::new(),
         }];
 
@@ -9570,6 +10456,255 @@ mod tests {
         assert!(
             filter.contains("[media_overlay_v0]drawtext="),
             "caption drawtext should consume the composited overlay output: {filter}"
+        );
+    }
+
+    #[test]
+    fn svg_overlay_inputs_are_looped_like_still_graphics() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/brand/logo.svg", 0.0, 4.0),
+            track_start_s: 1.0,
+            mode: VideoOverlayMode::PiP {
+                corner: "top_right".into(),
+                scale: 0.2,
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: Vec::new(),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &overlays,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let args = argv.join(" ");
+
+        assert!(
+            args.contains("-loop 1 -t 4 -i /tmp/brand/logo.svg"),
+            "SVG overlays should be held for their clip duration instead of decoded as a single frame: {args}"
+        );
+    }
+
+    #[test]
+    fn annotation_primitives_render_after_media_before_titles() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/logo.svg", 0.0, 4.0),
+            track_start_s: 1.0,
+            mode: VideoOverlayMode::FullFrame,
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: Vec::new(),
+        }];
+        let annotations = vec![AnnotationPlan {
+            kind: AnnotationKind::Rectangle,
+            start_s: 1.0,
+            end_s: 4.0,
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.25,
+            color: "#FFCC00".into(),
+            stroke_width: 6,
+            label: None,
+        }];
+        let titles = vec![TitlePlan {
+            text: "Caption".into(),
+            start_s: 1.0,
+            end_s: 4.0,
+            position: TitlePosition::Bottom,
+            font_size: 48,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Bold,
+            animation: TitleAnimation::None,
+            reveal: TextReveal::None,
+            role: "title".into(),
+            safe_area: None,
+            rich_segments: Vec::new(),
+            animations: Vec::new(),
+        }];
+
+        let argv = build_timeline_argv_full_with_annotations(
+            &segs,
+            &[],
+            &overlays,
+            &annotations,
+            &titles,
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+        let Some(media_pos) = filter.find("[media_overlay_v0]") else {
+            panic!("media overlay");
+        };
+        let Some(annotation_pos) = filter.find("drawbox=x=iw*0.1") else {
+            panic!("annotation drawbox");
+        };
+        let Some(title_pos) = filter.find("drawtext=text='Caption'") else {
+            panic!("title drawtext");
+        };
+
+        assert!(media_pos < annotation_pos);
+        assert!(annotation_pos < title_pos);
+        assert!(
+            filter.contains("color=#FFCC00:t=6:enable='between(t\\,1\\,4)'"),
+            "annotation should carry color, stroke, and timing: {filter}"
+        );
+    }
+
+    #[test]
+    fn annotation_color_filter_options_are_not_injected() {
+        let annotations = vec![AnnotationPlan {
+            kind: AnnotationKind::Rectangle,
+            start_s: 1.0,
+            end_s: 4.0,
+            x: 0.1,
+            y: 0.1,
+            width: 0.2,
+            height: 0.2,
+            color: "red:t=fill".into(),
+            stroke_width: 6,
+            label: None,
+        }];
+        let plan = append_annotations(
+            FilterPlan {
+                filter_complex: "[0:v]null[base_v]".into(),
+                video_out_label: "[base_v]".into(),
+                audio_out_label: "[outa]".into(),
+            },
+            &annotations,
+        );
+
+        assert!(
+            !plan.filter_complex.contains("color=red:t=fill"),
+            "annotation color must not be able to inject filter options: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn blur_annotation_lowers_to_boxblur_region_overlay() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let annotations = vec![AnnotationPlan {
+            kind: AnnotationKind::Blur,
+            start_s: 1.0,
+            end_s: 4.0,
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.25,
+            color: "#FFCC00".into(),
+            stroke_width: 6,
+            label: None,
+        }];
+
+        let argv = build_timeline_argv_full_with_annotations(
+            &segs,
+            &[],
+            &[],
+            &annotations,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("crop=w=iw*0.3:h=ih*0.25:x=iw*0.1:y=ih*0.2"),
+            "blur annotation should crop the normalized region: {filter}"
+        );
+        assert!(
+            filter.contains("boxblur=12"),
+            "blur annotation should blur the cropped region: {filter}"
+        );
+        assert!(
+            filter.contains("overlay=x=main_w*0.1:y=main_h*0.2:enable='between(t\\,1\\,4)'"),
+            "blur annotation should overlay the blurred region back in time: {filter}"
+        );
+    }
+
+    #[test]
+    fn circle_arrow_and_bracket_annotations_lower_to_draw_filters() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let annotations = vec![
+            AnnotationPlan {
+                kind: AnnotationKind::Circle,
+                start_s: 1.0,
+                end_s: 4.0,
+                x: 0.1,
+                y: 0.2,
+                width: 0.3,
+                height: 0.25,
+                color: "#FFCC00".into(),
+                stroke_width: 6,
+                label: None,
+            },
+            AnnotationPlan {
+                kind: AnnotationKind::Arrow,
+                start_s: 1.0,
+                end_s: 4.0,
+                x: 0.2,
+                y: 0.3,
+                width: 0.3,
+                height: 0.1,
+                color: "#FFCC00".into(),
+                stroke_width: 6,
+                label: None,
+            },
+            AnnotationPlan {
+                kind: AnnotationKind::Bracket,
+                start_s: 1.0,
+                end_s: 4.0,
+                x: 0.3,
+                y: 0.2,
+                width: 0.2,
+                height: 0.25,
+                color: "#FFCC00".into(),
+                stroke_width: 6,
+                label: None,
+            },
+        ];
+
+        let argv = build_timeline_argv_full_with_annotations(
+            &segs,
+            &[],
+            &[],
+            &annotations,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(filter.contains("drawtext=text='○'"));
+        assert!(filter.contains("drawtext=text='→'"));
+        assert!(
+            filter.contains("annotation_bracket_top")
+                && filter.contains("annotation_bracket_left")
+                && filter.contains("annotation_bracket_right"),
+            "bracket annotation should lower to three drawbox sides: {filter}"
         );
     }
 
@@ -9617,6 +10752,7 @@ mod tests {
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
+            rich_segments: Vec::new(),
             animations: Vec::new(),
         };
         let overlay = BroadcastOverlayPlan {
@@ -10206,6 +11342,72 @@ mod tests {
         assert!(output_path.exists());
     }
 
+    #[test]
+    fn ffmpeg_smoke_renders_annotation_and_rich_title() {
+        let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("base.mp4");
+        let output_path = dir.path().join("annotation-rich-title.mp4");
+        write_synthetic_video(&ffmpeg, &base_path, "blue");
+
+        let segs = vec![seg(&base_path.to_string_lossy(), 0.0, 1.0)];
+        let annotations = vec![AnnotationPlan {
+            kind: AnnotationKind::Rectangle,
+            start_s: 0.0,
+            end_s: 1.0,
+            x: 0.1,
+            y: 0.1,
+            width: 0.4,
+            height: 0.35,
+            color: "#FFCC00".into(),
+            stroke_width: 4,
+            label: None,
+        }];
+        let mut title = title(TitleAnimation::None, TitlePosition::Bottom);
+        title.start_s = 0.0;
+        title.end_s = 1.0;
+        title.text = "Launch now".into();
+        title.rich_segments = vec![
+            RichTextSegment {
+                text: "Launch".into(),
+                color: Some("#FFFFFF".into()),
+                font_weight: Some(TitleWeight::Bold),
+            },
+            RichTextSegment {
+                text: " now".into(),
+                color: Some("#FFCC00".into()),
+                font_weight: Some(TitleWeight::Normal),
+            },
+        ];
+
+        let argv = build_timeline_argv_full_with_annotations(
+            &segs,
+            &[],
+            &[],
+            &annotations,
+            &[title],
+            None,
+            None,
+            None,
+            &output_path,
+        );
+        let output = std::process::Command::new(ffmpeg)
+            .args(&argv)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "ffmpeg smoke failed\nargv: {}\nstderr:\n{}",
+            argv.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output_path.exists());
+    }
+
     fn write_synthetic_video(ffmpeg: &Path, path: &Path, color: &str) {
         let output = std::process::Command::new(ffmpeg)
             .args([
@@ -10539,6 +11741,7 @@ mod tests {
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
+            rich_segments: Vec::new(),
             animations: Vec::new(),
         }
     }

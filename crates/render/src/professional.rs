@@ -1255,6 +1255,8 @@ pub struct FilledMotionTemplate {
     pub name: String,
     /// Slot values keyed by slot id.
     pub slots: BTreeMap<String, Value>,
+    /// Slot definitions copied from the source template.
+    pub slot_defs: Vec<TemplateSlot>,
     /// Safe-area rules copied from the template.
     pub safe_areas: Vec<awidat_proto::professional::SafeAreaRule>,
 }
@@ -1572,6 +1574,7 @@ pub fn fill_motion_template(
         template_id: template.id.clone(),
         name: template.name.clone(),
         slots: values,
+        slot_defs: template.slots.clone(),
         safe_areas: template.safe_areas.clone(),
     })
 }
@@ -1617,13 +1620,14 @@ pub fn lower_motion_template(
 ) -> MotionTemplateRender {
     let mut render = MotionTemplateRender {
         safe_area_violations: validate_motion_safe_areas(filled),
+        limitations: unsupported_motion_template_slot_limitations(filled),
         ..MotionTemplateRender::default()
     };
     let name = text_slot(filled, "name")
         .or_else(|| text_slot(filled, "text"))
         .or_else(|| text_slot(filled, "title"))
         .unwrap_or_else(|| filled.name.clone());
-    let subtitle = text_slot(filled, "title").filter(|text| text != &name);
+    let subtitle = text_slot(filled, "subtitle");
     match timing.animation {
         TemplateAnimation::TextReveal | TemplateAnimation::WriteOn => {
             render.titles.extend(progressive_titles(&name, timing));
@@ -1663,6 +1667,37 @@ pub fn lower_motion_template(
         .parameter_animations
         .extend(template_parameter_animations(filled, timing));
     render
+}
+
+fn unsupported_motion_template_slot_limitations(
+    filled: &FilledMotionTemplate,
+) -> Vec<RenderLimitation> {
+    filled
+        .slot_defs
+        .iter()
+        .filter(|slot| {
+            filled.slots.contains_key(&slot.id) && !motion_template_slot_is_lowered(slot)
+        })
+        .map(|slot| RenderLimitation {
+            node_id: format!("{}:{}", filled.template_id, slot.id),
+            severity: FindingSeverity::Warning,
+            message: format!(
+                "motion template {} slot {} ({:?}) is filled but has no current render lowering",
+                filled.template_id, slot.id, slot.kind
+            ),
+        })
+        .collect()
+}
+
+fn motion_template_slot_is_lowered(slot: &TemplateSlot) -> bool {
+    match slot.kind {
+        TemplateSlotKind::Text => {
+            matches!(slot.id.as_str(), "name" | "text" | "title" | "subtitle")
+        }
+        TemplateSlotKind::Number => matches!(slot.id.as_str(), "scale" | "intensity"),
+        TemplateSlotKind::TargetClip | TemplateSlotKind::SafeAreaProfile => true,
+        TemplateSlotKind::Image | TemplateSlotKind::Video | TemplateSlotKind::Color => false,
+    }
 }
 
 fn template_parameter_animations(
@@ -1828,6 +1863,7 @@ fn title_plan(
         reveal: TextReveal::None,
         role: "motion_template".into(),
         safe_area: Some("title_safe".into()),
+        rich_segments: Vec::new(),
         animations: Vec::new(),
     }
 }

@@ -813,6 +813,83 @@ fn motion_template_fill_validates_slots_and_lowers_text_reveal_titles() {
 }
 
 #[test]
+fn motion_template_preserves_explicit_duplicate_subtitle() {
+    let template = match built_in_motion_templates()
+        .into_iter()
+        .find(|template| template.id == "lower-third")
+    {
+        Some(template) => template,
+        None => panic!("lower-third template"),
+    };
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("clip-a")),
+            ("text", json!("Ada")),
+            ("subtitle", json!("Ada")),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("filled template: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 1.0,
+            end_s: 4.0,
+            animation: TemplateAnimation::Opacity,
+        },
+    );
+
+    assert_eq!(render.titles.len(), 2);
+    assert_eq!(render.titles[0].text, "Ada");
+    assert_eq!(render.titles[1].text, "Ada");
+}
+
+#[test]
+fn motion_template_reports_unsupported_filled_graphic_slots() {
+    let template = match built_in_motion_templates()
+        .into_iter()
+        .find(|template| template.id == "product-insert-emphasis")
+    {
+        Some(template) => template,
+        None => panic!("product-insert-emphasis template"),
+    };
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("clip-a")),
+            ("image_asset", json!("logo.svg")),
+            ("scale", json!(1.15)),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("filled template: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 1.0,
+            end_s: 4.0,
+            animation: TemplateAnimation::Transform,
+        },
+    );
+
+    assert!(
+        render.limitations.iter().any(|limitation| {
+            limitation.node_id == "product-insert-emphasis:image_asset"
+                && limitation.message.contains("image_asset")
+        }),
+        "expected a limitation for the unsupported image slot: {:?}",
+        render.limitations
+    );
+}
+
+#[test]
 fn text_reveal_keeps_combining_mark_graphemes_together() {
     let template = match built_in_motion_templates()
         .into_iter()
