@@ -24,6 +24,7 @@ members = [
     "packages/whisper-mcp",
     "packages/scenedetect-mcp",
     "packages/audio-energy-mcp",
+    "packages/beats-mcp",
     "packages/topic-mcp",
     "packages/editorial-moments-mcp",
     "packages/clip-mcp",

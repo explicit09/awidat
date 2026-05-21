@@ -15,6 +15,7 @@ members = [
     "audio-energy-mcp",
     "awidat-mcp",
     "awidat-python-workspace",
+    "beats-mcp",
     "clip-mcp",
     "color-analysis-mcp",
     "composition-mcp",
@@ -237,6 +238,19 @@ requires-dist = [
 name = "awidat-python-workspace"
 version = "0.0.0"
 source = { virtual = "." }
+
+[[package]]
+name = "beats-mcp"
+version = "0.1.0"
+source = { editable = "packages/beats-mcp" }
+dependencies = [
+    { name = "awidat-mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "awidat-mcp", editable = "packages/awidat-mcp" },
+]
 
 [[package]]
 name = "certifi"
