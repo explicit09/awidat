@@ -454,10 +454,7 @@ mod tests {
         loop {
             // Borrow the frame, copy into a small buffer so we can drop
             // the provider borrow before awaiting the encoder push.
-            let owned: Option<Vec<u8>> = match provider.next_frame().await.unwrap() {
-                Some(frame) => Some(frame.to_vec()),
-                None => None,
-            };
+            let owned: Option<Vec<u8>> = provider.next_frame().await.unwrap().map(<[u8]>::to_vec);
             let Some(frame) = owned else {
                 break;
             };

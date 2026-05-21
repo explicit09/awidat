@@ -619,7 +619,7 @@ fn ffmpeg_sampled_spring_progress(raw: &str, spring: SpringParameters) -> String
 }
 
 fn sampled_progress_expr(raw: &str, value_at: impl Fn(f64) -> f64) -> String {
-    const SAMPLES: usize = 16;
+    const SAMPLES: usize = 64;
     let mut fallback = value_at(1.0).to_string();
     for index in (0..SAMPLES).rev() {
         let start = index as f64 / SAMPLES as f64;
@@ -639,6 +639,11 @@ mod tests {
     use awidat_proto::professional::{Easing, KeyframeInterpolation};
     use serde::Deserialize;
     use std::path::PathBuf;
+
+    #[test]
+    fn overlay_rotation_is_runtime_supported() {
+        assert!(is_phase_3a_parameter("overlay.rotation_deg"));
+    }
 
     #[derive(Deserialize)]
     struct AnimationParityFixture {
@@ -794,6 +799,33 @@ mod tests {
 
         assert!(value.is_finite());
         assert!((0.0..=1.0).contains(&value));
+    }
+
+    #[test]
+    fn ffmpeg_spring_progress_uses_high_resolution_sampling() {
+        let keyframes = vec![
+            Keyframe {
+                time_s: 0.0,
+                value: 0.0,
+                interpolation: KeyframeInterpolation::Spring,
+                easing: Easing::Linear,
+                bezier: None,
+                tangent_mode: Default::default(),
+                spring: Some(SpringParameters {
+                    mass: 1.0,
+                    stiffness: 200.0,
+                    damping: 8.0,
+                }),
+            },
+            Keyframe::linear(1.0, 1.0),
+        ];
+
+        let expr = keyframes_to_ffmpeg_expr(&keyframes, "t");
+
+        assert!(
+            expr.contains("0.984375") && expr.matches("if(lt(((t-0)/(1-0))\\,").count() >= 64,
+            "spring FFmpeg lowering should sample at least 64 segments: {expr}"
+        );
     }
 
     #[test]

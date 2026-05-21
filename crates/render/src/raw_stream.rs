@@ -409,7 +409,7 @@ impl RawStreamComposer {
             let outgoing_duration_s = outgoing_transition.map(|t| t.duration_s).unwrap_or(0.0);
             let pure_duration =
                 (seg.duration_s - incoming_duration_s - outgoing_duration_s).max(0.0);
-            let pure_frames = ((pure_duration * self.fps as f64).round() as u32).max(0);
+            let pure_frames = (pure_duration * self.fps as f64).round() as u32;
 
             // Emit pure frames from the current segment.
             let provider = current_provider
@@ -434,10 +434,10 @@ impl RawStreamComposer {
             // segment for its overlap window. Otherwise the current
             // segment is finished — close its provider so the next
             // loop iteration opens a fresh one for the next segment.
-            if outgoing_transition.is_none() {
-                if let Some(p) = current_provider.take() {
-                    p.close().await?;
-                }
+            if outgoing_transition.is_none()
+                && let Some(p) = current_provider.take()
+            {
+                p.close().await?;
             }
             if let Some(t) = outgoing_transition {
                 let next_seg = &segments[i + 1];
@@ -445,10 +445,7 @@ impl RawStreamComposer {
 
                 // Lazily build / swap the renderer when the requested
                 // shader changes.
-                let needs_new_renderer = match current_shader {
-                    Some(s) if s == t.shader => false,
-                    _ => true,
-                };
+                let needs_new_renderer = !matches!(current_shader, Some(s) if s == t.shader);
                 if needs_new_renderer {
                     renderer = Some(GpuTransitionRenderer::new(t.shader)?);
                     current_shader = Some(t.shader);
@@ -972,13 +969,11 @@ mod tests {
         let threshold_ratio = 0.95;
         assert!(
             middle < early * threshold_ratio,
-            "middle blur ({middle:.2}) should be <{:.2} of early ({early:.2})",
-            threshold_ratio
+            "middle blur ({middle:.2}) should be <{threshold_ratio:.2} of early ({early:.2})"
         );
         assert!(
             middle < late * threshold_ratio,
-            "middle blur ({middle:.2}) should be <{:.2} of late ({late:.2})",
-            threshold_ratio
+            "middle blur ({middle:.2}) should be <{threshold_ratio:.2} of late ({late:.2})"
         );
     }
 
