@@ -343,6 +343,33 @@ pub enum EdlOp {
         /// Speed multiplier. Must be finite and `> 0.0`.
         factor: f64,
     },
+    /// Set a clip-level time remap curve. The apply layer stamps an
+    /// `awidat.time_remap` Effect on the clip; render can then lower the
+    /// keyed curve into retiming filters. Re-applying replaces the prior
+    /// time remap.
+    SetTimeRemap {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Ordered curve points from `curve_json`.
+        curve: Vec<serde_json::Value>,
+    },
+    /// Insert a held frame at a clip-local source time. The apply layer
+    /// stamps an `awidat.freeze` Effect on the clip and render splices
+    /// the hold into the segment.
+    SetFreeze {
+        /// Anchor identifying the clip.
+        anchor: Anchor,
+        /// Source time, in seconds, where the frame is held.
+        freeze_at_source_s: f64,
+        /// Hold duration inserted into the timeline.
+        duration_s: f64,
+        /// Placement mode. Currently `at`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        freeze_position: Option<String>,
+        /// Audio fill behavior for the inserted hold. Currently `silence`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        audio_behavior: Option<String>,
+    },
     /// Set clip-level color correction controls. The apply layer stamps
     /// an `awidat.color_correction` Effect on the clip; render converts
     /// those normalized controls into FFmpeg video filters before speed,

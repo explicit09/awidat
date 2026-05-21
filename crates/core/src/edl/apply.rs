@@ -365,6 +365,26 @@ fn apply_one(
         EdlOp::SetSpeed { anchor, factor } => {
             apply_set_speed(working, index, anchor, *factor, ctx, locator)
         }
+        EdlOp::SetTimeRemap { anchor, curve } => {
+            apply_set_time_remap(working, index, anchor, curve, ctx, locator)
+        }
+        EdlOp::SetFreeze {
+            anchor,
+            freeze_at_source_s,
+            duration_s,
+            freeze_position,
+            audio_behavior,
+        } => apply_set_freeze(
+            working,
+            index,
+            anchor,
+            *freeze_at_source_s,
+            *duration_s,
+            freeze_position.as_deref(),
+            audio_behavior.as_deref(),
+            ctx,
+            locator,
+        ),
         EdlOp::SetColorCorrection {
             anchor,
             exposure_ev,
@@ -718,6 +738,8 @@ fn resolve_locator_for_op(
         | EdlOp::SetClipAudioFx { anchor, .. }
         | EdlOp::SetEffect { anchor, .. }
         | EdlOp::SetSpeed { anchor, .. }
+        | EdlOp::SetTimeRemap { anchor, .. }
+        | EdlOp::SetFreeze { anchor, .. }
         | EdlOp::SetColorCorrection { anchor, .. }
         | EdlOp::ApplyLut { anchor, .. }
         | EdlOp::RemoveLut { anchor }
@@ -5601,6 +5623,73 @@ fn apply_set_speed(
     Ok(format!(
         "set speed on clip {clip_name:?} to {factor:.3}× (timeline duration scales by 1/factor)"
     ))
+}
+
+fn apply_set_time_remap(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    curve: &[serde_json::Value],
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "curve".to_string(),
+        serde_json::Value::Array(curve.to_vec()),
+    );
+    apply_set_effect(
+        working,
+        index,
+        anchor,
+        awidat_effects::TIME_REMAP,
+        &params,
+        None,
+        ctx,
+        locator,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_set_freeze(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    freeze_at_source_s: f64,
+    duration_s: f64,
+    freeze_position: Option<&str>,
+    audio_behavior: Option<&str>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let mut params = serde_json::Map::new();
+    params.insert(
+        "freeze_at_source_s".to_string(),
+        serde_json::json!(freeze_at_source_s),
+    );
+    params.insert("duration_s".to_string(), serde_json::json!(duration_s));
+    if let Some(freeze_position) = freeze_position {
+        params.insert(
+            "freeze_position".to_string(),
+            serde_json::Value::String(freeze_position.to_string()),
+        );
+    }
+    if let Some(audio_behavior) = audio_behavior {
+        params.insert(
+            "audio_behavior".to_string(),
+            serde_json::Value::String(audio_behavior.to_string()),
+        );
+    }
+    apply_set_effect(
+        working,
+        index,
+        anchor,
+        awidat_effects::FREEZE,
+        &params,
+        None,
+        ctx,
+        locator,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -11070,6 +11159,78 @@ mod tests {
             .and_then(|v| v.as_f64())
             .unwrap();
         assert!((f - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_set_time_remap_stamps_time_remap_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetTimeRemap {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                curve: vec![
+                    serde_json::json!({"source_time_s": 0.0, "timeline_time_s": 0.0}),
+                    serde_json::json!({"source_time_s": 2.0, "timeline_time_s": 3.0}),
+                ],
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.time_remap");
+        let curve = clip.effects[0]
+            .metadata
+            .get("curve")
+            .and_then(|value| value.as_array())
+            .unwrap();
+        assert_eq!(curve.len(), 2);
+        assert_eq!(curve[1]["source_time_s"], serde_json::json!(2.0));
+        assert_eq!(curve[1]["timeline_time_s"], serde_json::json!(3.0));
+    }
+
+    #[test]
+    fn apply_set_freeze_stamps_freeze_effect() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetFreeze {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                freeze_at_source_s: 1.2,
+                duration_s: 0.8,
+                freeze_position: Some("at".into()),
+                audio_behavior: Some("silence".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        assert_eq!(clip.effects.len(), 1);
+        assert_eq!(clip.effects[0].effect_name, "awidat.freeze");
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("freeze_at_source_s")
+                .and_then(|value| value.as_f64()),
+            Some(1.2)
+        );
+        assert_eq!(
+            clip.effects[0]
+                .metadata
+                .get("duration_s")
+                .and_then(|value| value.as_f64()),
+            Some(0.8)
+        );
     }
 
     #[test]

@@ -11,10 +11,17 @@ use awidat_proto::otio::{
 };
 use awidat_proto::project::files;
 use awidat_render::build_timeline_render_spec;
+use serde_json::{Map, Value};
 use std::fs;
 use std::path::Path;
 
 fn write_project_with_speed_effect(dir: &Path, factor: f64) {
+    let mut metadata = Map::new();
+    metadata.insert("factor".to_string(), serde_json::json!(factor));
+    write_project_with_speed_metadata(dir, metadata);
+}
+
+fn write_project_with_speed_metadata(dir: &Path, metadata: Map<String, Value>) {
     let asset_a = "raw/a.mp4";
     fs::create_dir_all(dir.join("raw")).unwrap();
     fs::write(dir.join(asset_a), b"stub").unwrap();
@@ -27,9 +34,7 @@ fn write_project_with_speed_effect(dir: &Path, factor: f64) {
         RationalTime::new(4.0 * 24.0, 24.0),
     ));
     let mut speed_effect = Effect::new("awidat.speed");
-    speed_effect
-        .metadata
-        .insert("factor".to_string(), serde_json::json!(factor));
+    speed_effect.metadata = metadata;
     clip_a.effects.push(speed_effect);
 
     let mut track = Track::empty("V1", TrackKind::Video);
@@ -84,5 +89,110 @@ fn project_with_0_5x_speed_doubles_total_duration() {
     assert!(
         (dur - 8.0).abs() < 1e-6,
         "expected total duration 8.0s after 0.5× speed, got {dur}",
+    );
+}
+
+#[test]
+fn project_with_reverse_speed_emits_reverse_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut metadata = Map::new();
+    metadata.insert("factor".into(), serde_json::json!(2.0));
+    metadata.insert("reverse".into(), serde_json::json!(true));
+    write_project_with_speed_metadata(dir.path(), metadata);
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+
+    assert!(
+        cmd.contains("[0:v:0]reverse,setpts=0.5*PTS[sv0]"),
+        "expected reverse before setpts in argv, got: {cmd}",
+    );
+    assert!(
+        cmd.contains("[0:a:0]areverse,atempo=2[sa0]"),
+        "expected areverse before atempo in argv, got: {cmd}",
+    );
+    let dur = spec.total_duration_s.unwrap();
+    assert!(
+        (dur - 2.0).abs() < 1e-6,
+        "expected total duration 2.0s after reversed 2x speed, got {dur}",
+    );
+}
+
+#[test]
+fn project_with_speed_can_disable_pitch_preservation() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut metadata = Map::new();
+    metadata.insert("factor".into(), serde_json::json!(1.5));
+    metadata.insert("maintain_pitch".into(), serde_json::json!(false));
+    write_project_with_speed_metadata(dir.path(), metadata);
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+
+    assert!(
+        cmd.contains("[0:a:0]asetrate=sample_rate*1.5,aresample=sample_rate[sa0]"),
+        "expected sample-rate retime when maintain_pitch=false, got: {cmd}",
+    );
+    assert!(
+        !cmd.contains("[0:a:0]atempo=1.5[sa0]"),
+        "maintain_pitch=false should not use atempo: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_blend_frame_blending_emits_interpolation_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut metadata = Map::new();
+    metadata.insert("factor".into(), serde_json::json!(0.5));
+    metadata.insert("frame_blending".into(), serde_json::json!("blend"));
+    write_project_with_speed_metadata(dir.path(), metadata);
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+
+    assert!(
+        cmd.contains("setpts=2*PTS,tblend=all_mode=average,framerate=fps=30000/1001[sv0]"),
+        "expected blend interpolation after setpts, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_flow_frame_blending_emits_minterpolate() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut metadata = Map::new();
+    metadata.insert("factor".into(), serde_json::json!(0.5));
+    metadata.insert("frame_blending".into(), serde_json::json!("flow"));
+    write_project_with_speed_metadata(dir.path(), metadata);
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+
+    assert!(
+        cmd.contains(
+            "setpts=2*PTS,minterpolate=mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=30000/1001[sv0]"
+        ),
+        "expected flow interpolation after setpts, got: {cmd}",
+    );
+}
+
+#[test]
+fn project_with_default_frame_blending_emits_nearest_only() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_with_speed_effect(dir.path(), 0.5);
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+
+    assert!(
+        cmd.contains("[0:v:0]setpts=2*PTS[sv0]"),
+        "expected nearest setpts-only retime, got: {cmd}",
+    );
+    assert!(
+        !cmd.contains("tblend="),
+        "nearest mode should not blend: {cmd}"
+    );
+    assert!(
+        !cmd.contains("minterpolate="),
+        "nearest mode should not use optical flow: {cmd}",
     );
 }

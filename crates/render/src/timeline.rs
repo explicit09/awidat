@@ -228,19 +228,24 @@ pub struct TimelineSegment {
     pub volume: Option<f64>,
     /// Optional keyframed clip-local volume automation.
     pub volume_automation: Option<AudioAutomationPlan>,
-    /// Playback rate multiplier. `None` means no `awidat.speed`
-    /// effect — the segment plays at 1×. The segment's contribution
-    /// to the master timeline duration is `duration_s / factor` when
-    /// `factor` is `Some`.
-    pub speed: Option<f64>,
+    /// Optional constant-speed retime controls read from `awidat.speed`.
+    pub speed: Option<SpeedPlan>,
     /// Optional source-local → timeline-local retime curve.
     pub time_remap: Option<TimeRemapPlan>,
+    /// Optional inserted freeze-frame hold.
+    pub freeze: Option<FreezePlan>,
     /// Optional clip-level color correction controls, read from the
     /// `awidat.color_correction` effect.
     pub color_correction: Option<ColorCorrectionPlan>,
     /// Optional clip-level blur controls, read from the
     /// `awidat.blur` effect.
     pub blur: Option<BlurPlan>,
+    /// Optional clip-level chroma key controls.
+    pub chroma_key: Option<ChromaKeyPlan>,
+    /// Optional clip-level luma key controls.
+    pub luma_key: Option<LumaKeyPlan>,
+    /// Optional clip-level static region blur controls.
+    pub region_blur: Option<RegionBlurPlan>,
     /// Optional clip-level blur radius animation, read from a runtime
     /// `awidat.blur.radius_px` parameter animation.
     pub blur_radius_animation: Option<RenderParameterAnimation>,
@@ -282,6 +287,8 @@ pub struct TimelineSegment {
     pub color_pipeline: Option<ColorPipelinePlan>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
+    /// Optional full-frame overlay blend mode.
+    pub overlay_blend_mode: Option<String>,
     /// Incoming audio lead for J-cut export, in seconds.
     pub audio_lead_s: Option<f64>,
     /// Outgoing audio trail for L-cut export, in seconds.
@@ -515,14 +522,60 @@ pub struct AudioClipPlan {
     pub volume: Option<f64>,
     /// Optional keyframed clip-local volume automation.
     pub volume_automation: Option<AudioAutomationPlan>,
-    /// Optional playback speed multiplier.
-    pub speed: Option<f64>,
+    /// Optional constant-speed retime controls.
+    pub speed: Option<SpeedPlan>,
     /// Optional fade-in duration in seconds.
     pub fade_in_s: Option<f64>,
     /// Optional fade-out duration in seconds.
     pub fade_out_s: Option<f64>,
     /// Optional FFmpeg-native audio FX chain.
     pub audio_fx: Option<AudioFxPlan>,
+}
+
+/// Constant-speed retime controls read from `awidat.speed`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpeedPlan {
+    /// Playback rate multiplier.
+    pub factor: f64,
+    /// Reverse playback before timeline-speed normalization.
+    pub reverse: bool,
+    /// Preserve pitch with `atempo` when true; retime sample rate when false.
+    pub maintain_pitch: bool,
+    /// Frame interpolation quality mode.
+    pub frame_blending: FrameBlending,
+}
+
+impl SpeedPlan {
+    /// Build a default forward, pitch-preserving speed plan.
+    pub fn new(factor: f64) -> Self {
+        Self {
+            factor,
+            reverse: false,
+            maintain_pitch: true,
+            frame_blending: FrameBlending::Nearest,
+        }
+    }
+}
+
+/// Frame interpolation mode for speed/time-remap lowering.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FrameBlending {
+    /// Current FFmpeg `setpts` behavior.
+    #[default]
+    Nearest,
+    /// Frame-blended interpolation.
+    Blend,
+    /// Motion-compensated interpolation.
+    Flow,
+}
+
+/// Clip-level freeze-frame hold extracted from `awidat.freeze`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FreezePlan {
+    /// Source time, in seconds, where the frame is held.
+    pub freeze_at_source_s: f64,
+    /// Hold duration inserted into the timeline.
+    pub duration_s: f64,
 }
 
 /// Render-time item on an audio track.
@@ -662,6 +715,52 @@ pub struct BlurPlan {
     pub radius_px: f64,
 }
 
+/// Clip-level chroma key controls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChromaKeyPlan {
+    /// FFmpeg color literal accepted by `chromakey`, usually `0xRRGGBB`.
+    pub key_color: String,
+    /// Color-distance threshold.
+    pub similarity: f64,
+    /// Edge blend softness.
+    pub blend: f64,
+}
+
+/// Clip-level luma key controls.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LumaKeyPlan {
+    /// Luma threshold in `0..=1`.
+    pub threshold: f64,
+    /// Edge softness in `0..=1`.
+    pub softness: f64,
+}
+
+/// Static region blur controls.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionBlurPlan {
+    /// Region shape.
+    pub shape: RegionBlurShape,
+    /// Normalized left edge.
+    pub x: f64,
+    /// Normalized top edge.
+    pub y: f64,
+    /// Normalized width.
+    pub width: f64,
+    /// Normalized height.
+    pub height: f64,
+    /// Blur radius in pixels.
+    pub radius_px: f64,
+}
+
+/// Supported static region blur shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionBlurShape {
+    /// Rectangular crop bounds.
+    Rect,
+    /// Ellipse inscribed inside the crop bounds.
+    Ellipse,
+}
+
 /// Clip-level scale/crop controls for simple punch-ins and reframes.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ReframePlan {
@@ -768,6 +867,18 @@ fn read_effect_number(
         .and_then(serde_json::Value::as_f64)
 }
 
+fn read_effect_bool(
+    clip: &awidat_proto::otio::Clip,
+    effect_name: &str,
+    field: &str,
+) -> Option<bool> {
+    clip.effects
+        .iter()
+        .find(|e| e.effect_name == effect_name)
+        .and_then(|e| e.metadata.get(field))
+        .and_then(serde_json::Value::as_bool)
+}
+
 fn read_effect_string(
     clip: &awidat_proto::otio::Clip,
     effect_name: &str,
@@ -779,6 +890,25 @@ fn read_effect_string(
         .and_then(|e| e.metadata.get(field))
         .and_then(|v| v.as_str())
         .map(str::to_string)
+}
+
+fn read_speed(clip: &awidat_proto::otio::Clip) -> Option<SpeedPlan> {
+    let factor = read_effect_number(clip, "awidat.speed", "factor")?;
+    if !factor.is_finite() || factor <= 0.0 {
+        return None;
+    }
+    let frame_blending = match read_effect_string(clip, "awidat.speed", "frame_blending").as_deref()
+    {
+        Some("blend") => FrameBlending::Blend,
+        Some("flow") => FrameBlending::Flow,
+        _ => FrameBlending::Nearest,
+    };
+    Some(SpeedPlan {
+        factor,
+        reverse: read_effect_bool(clip, "awidat.speed", "reverse").unwrap_or(false),
+        maintain_pitch: read_effect_bool(clip, "awidat.speed", "maintain_pitch").unwrap_or(true),
+        frame_blending,
+    })
 }
 
 fn read_time_remap(
@@ -855,6 +985,28 @@ fn read_time_remap(
     Ok(Some(TimeRemapPlan { points }))
 }
 
+fn read_freeze(clip: &awidat_proto::otio::Clip) -> Option<FreezePlan> {
+    let freeze_at_source_s = read_effect_number(clip, "awidat.freeze", "freeze_at_source_s")?;
+    let duration_s = read_effect_number(clip, "awidat.freeze", "duration_s")?;
+    let freeze_position =
+        read_effect_string(clip, "awidat.freeze", "freeze_position").unwrap_or_else(|| "at".into());
+    let audio_behavior = read_effect_string(clip, "awidat.freeze", "audio_behavior")
+        .unwrap_or_else(|| "silence".into());
+    if !freeze_at_source_s.is_finite()
+        || freeze_at_source_s < 0.0
+        || !duration_s.is_finite()
+        || duration_s <= 0.0
+        || freeze_position != "at"
+        || audio_behavior != "silence"
+    {
+        return None;
+    }
+    Some(FreezePlan {
+        freeze_at_source_s,
+        duration_s,
+    })
+}
+
 fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrectionPlan> {
     let effect = clip
         .effects
@@ -889,6 +1041,101 @@ fn read_blur(clip: &awidat_proto::otio::Clip) -> Option<BlurPlan> {
     Some(BlurPlan {
         radius_px: radius_px.clamp(0.0, 100.0),
     })
+}
+
+fn read_chroma_key(clip: &awidat_proto::otio::Clip) -> Option<ChromaKeyPlan> {
+    let key_color = read_effect_string(clip, "awidat.chroma_key", "key_color")?;
+    let similarity = read_effect_number(clip, "awidat.chroma_key", "similarity").unwrap_or(0.1);
+    let blend = read_effect_number(clip, "awidat.chroma_key", "blend").unwrap_or(0.0);
+    if !similarity.is_finite() || !blend.is_finite() {
+        return None;
+    }
+    Some(ChromaKeyPlan {
+        key_color: normalize_ffmpeg_color(&key_color),
+        similarity: similarity.clamp(0.0, 1.0),
+        blend: blend.clamp(0.0, 1.0),
+    })
+}
+
+fn read_luma_key(clip: &awidat_proto::otio::Clip) -> Option<LumaKeyPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.luma_key")?;
+    let threshold = effect
+        .metadata
+        .get("threshold")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.5);
+    let softness = effect
+        .metadata
+        .get("softness")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.1);
+    if !threshold.is_finite() || !softness.is_finite() {
+        return None;
+    }
+    Some(LumaKeyPlan {
+        threshold: threshold.clamp(0.0, 1.0),
+        softness: softness.clamp(0.0, 1.0),
+    })
+}
+
+fn read_region_blur(clip: &awidat_proto::otio::Clip) -> Option<RegionBlurPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.region_blur")?;
+    let m = &effect.metadata;
+    let x = m.get("x").and_then(serde_json::Value::as_f64)?;
+    let y = m.get("y").and_then(serde_json::Value::as_f64)?;
+    let width = m.get("width").and_then(serde_json::Value::as_f64)?;
+    let height = m.get("height").and_then(serde_json::Value::as_f64)?;
+    let radius_px = m
+        .get("radius_px")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(12.0);
+    if !x.is_finite()
+        || !y.is_finite()
+        || !width.is_finite()
+        || !height.is_finite()
+        || !radius_px.is_finite()
+        || width <= 0.0
+        || height <= 0.0
+        || radius_px <= 0.0
+    {
+        return None;
+    }
+    let shape = match m
+        .get("shape")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("rect")
+    {
+        "ellipse" => RegionBlurShape::Ellipse,
+        _ => RegionBlurShape::Rect,
+    };
+    Some(RegionBlurPlan {
+        shape,
+        x: x.clamp(0.0, 1.0),
+        y: y.clamp(0.0, 1.0),
+        width: width.clamp(f64::MIN_POSITIVE, 1.0),
+        height: height.clamp(f64::MIN_POSITIVE, 1.0),
+        radius_px: radius_px.clamp(0.0, 100.0),
+    })
+}
+
+fn normalize_ffmpeg_color(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some(hex) = trimmed.strip_prefix('#') {
+        format!("0x{hex}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn read_overlay_blend_mode(clip: &awidat_proto::otio::Clip) -> Option<String> {
+    let blend_mode = read_effect_string(clip, "awidat.video_overlay", "blend_mode")?;
+    matches!(blend_mode.as_str(), "multiply" | "screen").then_some(blend_mode)
 }
 
 fn read_hdr_transfer(clip: &awidat_proto::otio::Clip) -> Option<HdrTransfer> {
@@ -2086,10 +2333,14 @@ fn collect_timeline_segment(
         mask_input_index: None,
         volume: read_effect_number(clip, "awidat.volume", "value"),
         volume_automation: audio_volume_automation.automation,
-        speed: read_effect_number(clip, "awidat.speed", "factor"),
+        speed: read_speed(clip),
         time_remap,
+        freeze: read_freeze(clip),
         color_correction: read_color_correction(clip),
         blur: read_blur(clip),
+        chroma_key: read_chroma_key(clip),
+        luma_key: read_luma_key(clip),
+        region_blur: read_region_blur(clip),
         blur_radius_animation: select_clip_effect_animation(
             parameter_animations,
             &clip_id,
@@ -2109,6 +2360,7 @@ fn collect_timeline_segment(
         lut_strength,
         color_pipeline,
         audio_fx: read_clip_audio_fx(clip),
+        overlay_blend_mode: read_overlay_blend_mode(clip),
         audio_lead_s: clip
             .metadata
             .awidat
@@ -2321,7 +2573,7 @@ fn collect_audio_track_plan(
                     duration_s: range.duration.to_seconds(),
                     volume: read_effect_number(clip, "awidat.volume", "value"),
                     volume_automation: audio_volume_automation.automation,
-                    speed: read_effect_number(clip, "awidat.speed", "factor"),
+                    speed: read_speed(clip),
                     fade_in_s,
                     fade_out_s,
                     audio_fx,
@@ -4000,10 +4252,19 @@ fn append_video_overlays(
         } else {
             (String::new(), transformed_label)
         };
-        let overlay_filter = format!(
-            "{ref_label}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
-            overlay_video_label = opacity_filter.1,
-        );
+        let overlay_filter = if let (VideoOverlayMode::FullFrame, Some(blend_mode)) =
+            (&overlay.mode, overlay.segment.overlay_blend_mode.as_deref())
+        {
+            format!(
+                "{ref_label}{overlay_video_label}blend=all_mode={blend_mode}:all_opacity=1:enable='between(t\\,{start}\\,{end})'{next}",
+                overlay_video_label = opacity_filter.1,
+            )
+        } else {
+            format!(
+                "{ref_label}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
+                overlay_video_label = opacity_filter.1,
+            )
+        };
         filter.push_str(&format!(
             "{pts_label}{current}scale2ref={scale_expr}{scaled_label}{ref_label};\
              {rotation_filter}\
@@ -4931,16 +5192,12 @@ fn stage_overlay_video_input(
             expr = time_remap_setpts_expr(time_remap),
         ));
         video_label = sv;
-    } else if let Some(factor) = seg.speed
-        && (factor - 1.0).abs() > 1e-9
-        && factor > 0.0
+    } else if let Some(speed) = seg.speed
+        && speed_needs_filter(speed)
     {
         let sv = format!("[media_overlay_sv{input_idx}]");
         filter.push(';');
-        filter.push_str(&format!(
-            "{video_label}setpts={inv}*PTS{sv}",
-            inv = 1.0 / factor,
-        ));
+        filter.push_str(&format!("{video_label}{}{sv}", speed_video_filter(speed)));
         video_label = sv;
     }
     video_label
@@ -4987,6 +5244,33 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
     );
     if blurred_label != video_label {
         video_label = blurred_label;
+    }
+    if let Some(chroma_key) = seg.chroma_key.as_ref() {
+        let kv = format!("[ckv{i}]");
+        filter.push_str(&format!(
+            "{video_label}{}{kv};",
+            chroma_key_filter_chain(chroma_key)
+        ));
+        video_label = kv;
+    }
+    if let Some(luma_key) = seg.luma_key {
+        let kv = format!("[lkv{i}]");
+        filter.push_str(&format!(
+            "{video_label}{}{kv};",
+            luma_key_filter_chain(luma_key)
+        ));
+        video_label = kv;
+    }
+    if let Some(region_blur) = seg.region_blur {
+        let rv = format!("[rbv{i}]");
+        filter.push_str(&region_blur_filter_block(
+            &video_label,
+            &rv,
+            &i.to_string(),
+            region_blur,
+        ));
+        filter.push(';');
+        video_label = rv;
     }
 
     if let Some(plan) = seg.color_pipeline.as_ref() {
@@ -5059,6 +5343,13 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         audio_label = fx_label;
     }
 
+    if let Some(freeze) = seg.freeze {
+        let (fv, fa) =
+            append_freeze_frame_filters(filter, i, &video_label, &audio_label, seg, freeze);
+        video_label = fv;
+        audio_label = fa;
+    }
+
     // Speed/time-remap after color/audio cleanup: setpts on video, atempo
     // (possibly chained) on audio. Variable time remap uses an average
     // audio tempo to keep stream duration aligned with the retimed video.
@@ -5077,20 +5368,15 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
             filter.push_str(&format!("{audio_label}{chain}{sa};"));
             audio_label = sa;
         }
-    } else if let Some(factor) = seg.speed
-        && (factor - 1.0).abs() > 1e-9
-        && factor > 0.0
+    } else if let Some(speed) = seg.speed
+        && speed_needs_filter(speed)
     {
         let sv = format!("[sv{i}]");
-        filter.push_str(&format!(
-            "{video_label}setpts={inv}*PTS{sv};",
-            inv = 1.0 / factor,
-        ));
+        filter.push_str(&format!("{video_label}{}{sv};", speed_video_filter(speed)));
         video_label = sv;
 
         let sa = format!("[sa{i}]");
-        let chain = atempo_chain(factor);
-        filter.push_str(&format!("{audio_label}{chain}{sa};"));
+        filter.push_str(&format!("{audio_label}{}{sa};", speed_audio_filter(speed)));
         audio_label = sa;
     }
 
@@ -5112,6 +5398,99 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         audio_label = av;
     }
     (video_label, audio_label)
+}
+
+fn chroma_key_filter_chain(plan: &ChromaKeyPlan) -> String {
+    format!(
+        "chromakey={}:{}:{}",
+        plan.key_color,
+        fmt_filter_num(plan.similarity),
+        fmt_filter_num(plan.blend),
+    )
+}
+
+fn luma_key_filter_chain(plan: LumaKeyPlan) -> String {
+    format!(
+        "format=rgba,lumakey=threshold={}:softness={}",
+        fmt_filter_num(plan.threshold),
+        fmt_filter_num(plan.softness),
+    )
+}
+
+fn region_blur_filter_block(
+    input_label: &str,
+    output_label: &str,
+    suffix: &str,
+    plan: RegionBlurPlan,
+) -> String {
+    let base = format!("[rb_base{suffix}]");
+    let src = format!("[rb_src{suffix}]");
+    let crop = format!("[rb_crop{suffix}]");
+    let shape_filter = match plan.shape {
+        RegionBlurShape::Rect => String::new(),
+        RegionBlurShape::Ellipse => ",format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(pow((X-W/2)/(W/2)\\,2)+pow((Y-H/2)/(H/2)\\,2)\\,1)\\,255\\,0)'".to_string(),
+    };
+    format!(
+        "{input_label}split=2{base}{src};\
+{src}crop=w=iw*{w}:h=ih*{h}:x=iw*{x}:y=ih*{y},boxblur={radius}{shape_filter}{crop};\
+{base}{crop}overlay=x=main_w*{x}:y=main_h*{y}{output_label}",
+        x = fmt_filter_num(plan.x),
+        y = fmt_filter_num(plan.y),
+        w = fmt_filter_num(plan.width),
+        h = fmt_filter_num(plan.height),
+        radius = fmt_filter_num(plan.radius_px),
+    )
+}
+
+fn append_freeze_frame_filters(
+    filter: &mut String,
+    i: usize,
+    video_label: &str,
+    audio_label: &str,
+    seg: &TimelineSegment,
+    freeze: FreezePlan,
+) -> (String, String) {
+    let freeze_at = (freeze.freeze_at_source_s - seg.start_s).clamp(0.0, seg.duration_s);
+    let frame_end = (freeze_at + (1.0 / 24.0)).min(seg.duration_s);
+    let clip_end = seg.duration_s;
+
+    let vpre_src = format!("[fvpre_src{i}]");
+    let vhold_src = format!("[fvhold_src{i}]");
+    let vpost_src = format!("[fvpost_src{i}]");
+    let vpre = format!("[fvpre{i}]");
+    let vhold = format!("[fvhold{i}]");
+    let vpost = format!("[fvpost{i}]");
+    let fv = format!("[fv{i}]");
+    filter.push_str(&format!(
+        "{video_label}split=3{vpre_src}{vhold_src}{vpost_src};\
+{vpre_src}trim=0:{freeze_at},setpts=PTS-STARTPTS{vpre};\
+{vhold_src}trim={freeze_at}:{frame_end},setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration={hold}{vhold};\
+{vpost_src}trim={freeze_at}:{clip_end},setpts=PTS-STARTPTS{vpost};\
+{vpre}{vhold}{vpost}concat=n=3:v=1:a=0{fv};",
+        freeze_at = fmt_filter_num(freeze_at),
+        frame_end = fmt_filter_num(frame_end),
+        hold = fmt_filter_num(freeze.duration_s),
+        clip_end = fmt_filter_num(clip_end),
+    ));
+
+    let apre_src = format!("[fapre_src{i}]");
+    let apost_src = format!("[fapost_src{i}]");
+    let apre = format!("[fapre{i}]");
+    let silence = format!("[fasilence{i}]");
+    let apost = format!("[fapost{i}]");
+    let fa = format!("[fa{i}]");
+    filter.push_str(&format!(
+        "{audio_label}asplit=2{apre_src}{apost_src};\
+{apre_src}atrim=0:{freeze_at},asetpts=PTS-STARTPTS{apre};\
+anullsrc=channel_layout=stereo:sample_rate=48000,atrim=0:{hold}{silence};\
+{apost_src}atrim={freeze_at}:{clip_end},asetpts=PTS-STARTPTS{apost};\
+{apre}{silence}{apost}concat=n=3:v=0:a=1{fa};",
+        freeze_at = fmt_filter_num(freeze_at),
+        hold = fmt_filter_num(freeze.duration_s),
+        clip_end = fmt_filter_num(clip_end),
+    ));
+
+    (fv, fa)
 }
 
 fn audio_fx_filter_chain(plan: &AudioFxPlan) -> Option<String> {
@@ -7812,10 +8191,11 @@ fn pick_sponsor_fontfile_attr() -> String {
 /// `awidat.time_remap` curve or `awidat.speed` factor. A 4s clip at
 /// 2× plays in 2s; at 0.5× it plays in 8s.
 fn effective_duration(seg: &TimelineSegment) -> f64 {
+    let freeze_duration = seg.freeze.map(|freeze| freeze.duration_s).unwrap_or(0.0);
     if let Some(time_remap) = seg.time_remap.as_ref() {
-        time_remap.timeline_time_at_source(seg.duration_s)
+        time_remap.timeline_time_at_source(seg.duration_s) + freeze_duration
     } else {
-        seg.duration_s / segment_speed(seg)
+        (seg.duration_s + freeze_duration) / segment_speed(seg)
     }
 }
 
@@ -7831,8 +8211,47 @@ fn segment_speed(seg: &TimelineSegment) -> f64 {
         }
     }
     match seg.speed {
-        Some(f) if f > 0.0 => f,
+        Some(speed) if speed.factor > 0.0 => speed.factor,
         _ => 1.0,
+    }
+}
+
+fn speed_needs_filter(speed: SpeedPlan) -> bool {
+    speed.reverse || ((speed.factor - 1.0).abs() > 1e-9 && speed.factor > 0.0)
+}
+
+fn speed_video_filter(speed: SpeedPlan) -> String {
+    let mut filter = format!("setpts={}*PTS", 1.0 / speed.factor);
+    match speed.frame_blending {
+        FrameBlending::Nearest => {}
+        FrameBlending::Blend => {
+            filter.push_str(",tblend=all_mode=average,framerate=fps=30000/1001");
+        }
+        FrameBlending::Flow => {
+            filter.push_str(",minterpolate=mi_mode=mci:mc_mode=aobmc:vsbmc=1:fps=30000/1001");
+        }
+    }
+    if speed.reverse {
+        let setpts = filter;
+        format!("reverse,{setpts}")
+    } else {
+        filter
+    }
+}
+
+fn speed_audio_filter(speed: SpeedPlan) -> String {
+    let retime = if speed.maintain_pitch {
+        atempo_chain(speed.factor)
+    } else {
+        format!(
+            "asetrate=sample_rate*{},aresample=sample_rate",
+            fmt_filter_num(speed.factor)
+        )
+    };
+    if speed.reverse {
+        format!("areverse,{retime}")
+    } else {
+        retime
     }
 }
 
@@ -8364,10 +8783,10 @@ fn audio_track_duration(track: &AudioTrackPlan) -> f64 {
         .iter()
         .map(|item| match item {
             AudioTrackItemPlan::Clip(c) => {
-                if let Some(factor) = c.speed
-                    && factor > 0.0
+                if let Some(speed) = c.speed
+                    && speed.factor > 0.0
                 {
-                    return c.duration_s / factor;
+                    return c.duration_s / speed.factor;
                 }
                 c.duration_s
             }
@@ -8452,15 +8871,11 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push_str(&format!("{video_label}{chain}{sv};"));
         video_label = sv;
     }
-    if let Some(factor) = seg.speed
-        && (factor - 1.0).abs() > 1e-9
-        && factor > 0.0
+    if let Some(speed) = seg.speed
+        && speed_needs_filter(speed)
     {
         let sv = format!("[sv{i}]");
-        filter.push_str(&format!(
-            "{video_label}setpts={inv}*PTS{sv};",
-            inv = 1.0 / factor,
-        ));
+        filter.push_str(&format!("{video_label}{}{sv};", speed_video_filter(speed)));
         video_label = sv;
     }
     video_label
@@ -8590,12 +9005,11 @@ fn plan_one_audio_track(
                     filter.push_str(&format!("{label}{chain}{fx_label};"));
                     label = fx_label;
                 }
-                if let Some(factor) = clip.speed
-                    && (factor - 1.0).abs() > 1e-9
-                    && factor > 0.0
+                if let Some(speed) = clip.speed
+                    && speed_needs_filter(speed)
                 {
                     let sped = format!("[aspeed{track_index}_{item_index}]");
-                    filter.push_str(&format!("{label}{}{};", atempo_chain(factor), sped));
+                    filter.push_str(&format!("{label}{}{sped};", speed_audio_filter(speed)));
                     label = sped;
                 }
                 if let Some(automation) = clip.volume_automation.as_ref() {
@@ -10892,7 +11306,7 @@ mod tests {
             loudnorm_tp: Some(-1.5),
             ..Default::default()
         });
-        s.speed = Some(1.1);
+        s.speed = Some(SpeedPlan::new(1.1));
         s.volume = Some(0.8);
         let plan = FilterPlanner::new(&[s], &[]).plan();
         let filter = plan.filter_complex;
@@ -11010,7 +11424,7 @@ mod tests {
     #[test]
     fn filter_planner_emits_setpts_and_atempo_for_speed_segment() {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
         let plan = FilterPlanner::new(&[s0, s1], &[]).plan();
         // setpts on video with 1/factor.
@@ -11064,7 +11478,7 @@ mod tests {
     fn filter_planner_chains_atempo_for_extreme_speed() {
         // factor=4.0 → atempo=2.0 twice (2.0 × 2.0 = 4.0).
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(4.0);
+        s0.speed = Some(SpeedPlan::new(4.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex.contains("atempo=2,atempo=2"),
@@ -11077,7 +11491,7 @@ mod tests {
     fn filter_planner_chains_atempo_for_slow_speed() {
         // factor=0.25 → atempo=0.5 twice (0.5 × 0.5 = 0.25).
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(0.25);
+        s0.speed = Some(SpeedPlan::new(0.25));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex.contains("atempo=0.5,atempo=0.5"),
@@ -11091,7 +11505,7 @@ mod tests {
         // 4s @ 2× = 2s effective. xfade duration 0.5 → offset 1.5
         // (effective − transition.duration).
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let s1 = seg("/tmp/b.mp4", 0.0, 3.0);
         let trans = vec![trans(0, 1, 0.5)];
         let plan = FilterPlanner::new(&[s0, s1], &trans).plan();
@@ -11107,7 +11521,7 @@ mod tests {
         // Both effects on the same segment: setpts/atempo run first,
         // then volume runs on the time-stretched audio.
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         s0.volume = Some(0.5);
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         // atempo runs first (input [0:a:0] → [sa0]).
@@ -11136,7 +11550,7 @@ mod tests {
             shadows: None,
             highlights: Some(-0.3),
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
@@ -11190,7 +11604,7 @@ mod tests {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
         s0.lut_path = Some(PathBuf::from("/tmp/luts/show-look.cube"));
         s0.lut_interpolation = Some("tetrahedral".into());
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
@@ -11839,7 +12253,7 @@ mod tests {
             x: 0.25,
             y: -0.5,
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex.contains(
@@ -11868,7 +12282,7 @@ mod tests {
             intensity_px: 6.0,
             frequency_hz: 10.0,
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex.contains(
@@ -11899,7 +12313,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex
@@ -11937,7 +12351,7 @@ mod tests {
             intensity_px: 5.0,
             frequency_hz: 8.0,
         });
-        s0.speed = Some(2.0);
+        s0.speed = Some(SpeedPlan::new(2.0));
         let plan = FilterPlanner::new(&[s0], &[]).plan();
         assert!(
             plan.filter_complex

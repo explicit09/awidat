@@ -1696,7 +1696,7 @@ pub fn lower_composition_graph(graph: &CompositionGraph) -> CompositionLowering 
             None => lowering.limitations.push(RenderLimitation {
                 node_id: node.id.clone(),
                 severity: FindingSeverity::Warning,
-                message: format!("node {:?} has no current render lowering", node.node_type),
+                message: composition_node_limitation_message(node.node_type),
             }),
         }
     }
@@ -1780,6 +1780,18 @@ fn composition_node_needs_future_runtime(node_type: CompositionNodeType) -> bool
             | CompositionNodeType::Scene3d
             | CompositionNodeType::ParticleEmitter
     )
+}
+
+fn composition_node_limitation_message(node_type: CompositionNodeType) -> String {
+    match node_type {
+        CompositionNodeType::Scene3d => {
+            "Scene3d nodes require a future 3D scene runtime; no executable FFmpeg lowering was emitted".into()
+        }
+        CompositionNodeType::ParticleEmitter => {
+            "ParticleEmitter nodes require a future particle runtime; no executable FFmpeg lowering was emitted".into()
+        }
+        _ => format!("node {node_type:?} has no current render lowering"),
+    }
 }
 
 fn string_param<'a>(node: &'a CompositionNode, key: &str) -> Option<&'a str> {
