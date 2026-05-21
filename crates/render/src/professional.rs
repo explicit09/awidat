@@ -3142,6 +3142,7 @@ pub fn apply_export_preset_to_spec(
         if let Some(frame_rate) = video.frame_rate {
             args.extend(["-r".into(), format!("{frame_rate}")]);
         }
+        args.extend(codec_specific_extras(&video.codec));
     }
     if let Some(audio) = &preset.audio {
         args.extend(["-c:a".into(), audio.codec.clone()]);
@@ -3208,6 +3209,33 @@ fn native_software_codec_mapping(codec: &str) -> Option<&'static str> {
 #[cfg(not(target_os = "macos"))]
 fn native_software_codec_mapping(_codec: &str) -> Option<&'static str> {
     None
+}
+
+/// Codec-specific FFmpeg flags appended after `-c:v <codec>` / `-b:v`.
+///
+/// The selected values follow the MVP slice for the export-codec catalog:
+/// libx265 gets a sensible CRF/preset envelope, prores_ks gets the
+/// HQ profile and 10-bit 4:2:2 pixel format. Codecs without listed
+/// extras (libx264, hardware variants, png, etc.) get an empty list so
+/// the existing argv shape is preserved.
+fn codec_specific_extras(codec: &str) -> Vec<String> {
+    match codec {
+        "libx265" => vec![
+            "-preset".into(),
+            "medium".into(),
+            "-crf".into(),
+            "23".into(),
+        ],
+        "prores_ks" => vec![
+            "-profile:v".into(),
+            "3".into(),
+            "-pix_fmt".into(),
+            "yuv422p10le".into(),
+        ],
+        // TODO(overnight-wave1-export-codecs): DNxHR (`dnxhd`) and AV1
+        // (`libsvtav1` / `libaom-av1`) extras land in a follow-up slice.
+        _ => Vec::new(),
+    }
 }
 
 /// Lower a stream-level export contract into deterministic FFmpeg arguments.

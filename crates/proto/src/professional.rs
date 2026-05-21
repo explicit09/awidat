@@ -3549,6 +3549,76 @@ impl ExportPreset {
         }
     }
 
+    /// Broadcast / archive HEVC (H.265) 1080p preset. CRF 23 / preset
+    /// medium are baked into the FFmpeg argv lowering — the preset itself
+    /// only declares the codec, container, and bitrate envelope.
+    pub fn archival_hevc() -> Self {
+        Self {
+            id: "archival_hevc_1080p".into(),
+            name: "Archival HEVC 1080p".into(),
+            mode: ExportMode::AudioVideo,
+            profile: DeliveryProfile {
+                id: "archival_hevc_1080p".into(),
+                name: "Archival HEVC 1080p".into(),
+                platform: Some("archive".into()),
+                aspect_ratio: "16:9".into(),
+                width: 1920,
+                height: 1080,
+                video_bitrate_kbps: Some(10_000),
+                loudness_lufs: Some(-23.0),
+                preflight_checks: vec![
+                    PreflightCheckKind::AspectRatio,
+                    PreflightCheckKind::Bitrate,
+                    PreflightCheckKind::Loudness,
+                    PreflightCheckKind::Metadata,
+                ],
+            },
+            output: ExportOutputSettings::mp4(),
+            video: Some(VideoExportSettings::libx265(10_000)),
+            audio: Some(AudioExportSettings::aac(192)),
+            range: ExportRange::default(),
+        }
+    }
+
+    /// Apple ProRes 422 HQ 1080p mastering preset. The MOV container and
+    /// `yuv422p10le` 10-bit 4:2:2 pixel format are required by ProRes HQ
+    /// (`-profile:v 3`); the FFmpeg argv lowering supplies those flags.
+    pub fn archival_prores() -> Self {
+        Self {
+            id: "archival_prores_hq_1080p".into(),
+            name: "Apple ProRes 422 HQ 1080p".into(),
+            mode: ExportMode::AudioVideo,
+            profile: DeliveryProfile {
+                id: "archival_prores_hq_1080p".into(),
+                name: "Apple ProRes 422 HQ 1080p".into(),
+                platform: Some("mastering".into()),
+                aspect_ratio: "16:9".into(),
+                width: 1920,
+                height: 1080,
+                video_bitrate_kbps: None,
+                loudness_lufs: Some(-23.0),
+                preflight_checks: vec![
+                    PreflightCheckKind::AspectRatio,
+                    PreflightCheckKind::Loudness,
+                    PreflightCheckKind::Metadata,
+                ],
+            },
+            output: ExportOutputSettings {
+                extension: "mov".into(),
+                container: "mov".into(),
+                hardware_acceleration: HardwareAccelerationPolicy::Off,
+            },
+            video: Some(VideoExportSettings::prores_ks()),
+            audio: Some(AudioExportSettings {
+                codec: "pcm_s24le".into(),
+                bitrate_kbps: None,
+                sample_rate_hz: 48_000,
+                channels: 2,
+            }),
+            range: ExportRange::default(),
+        }
+    }
+
     /// Image sequence preset for frame-accurate review or external finishing.
     pub fn image_sequence() -> Self {
         Self {
@@ -3978,6 +4048,33 @@ impl VideoExportSettings {
             frame_rate: None,
         }
     }
+
+    /// HEVC (H.265) video settings. The export preset wiring contributes
+    /// the CRF / preset flags; this constructor only declares the codec
+    /// identity and target bitrate.
+    pub fn libx265(bitrate_kbps: u32) -> Self {
+        Self {
+            codec: "libx265".into(),
+            bitrate_kbps: Some(bitrate_kbps),
+            frame_rate: None,
+        }
+    }
+
+    /// Apple ProRes (via FFmpeg's `prores_ks` encoder). ProRes is a
+    /// constant-quality intra codec — bitrate is implied by the profile,
+    /// so no bitrate is recorded here.
+    pub fn prores_ks() -> Self {
+        Self {
+            codec: "prores_ks".into(),
+            bitrate_kbps: None,
+            frame_rate: None,
+        }
+    }
+
+    // TODO(overnight-wave1-export-codecs): add DNxHR (`dnxhd`) and AV1
+    // (`libsvtav1` / `libaom-av1`) constructors once the broader preset
+    // catalog needs them — current MVP slice intentionally covers only
+    // HEVC + ProRes.
 }
 
 /// Audio codec settings for an export preset.
