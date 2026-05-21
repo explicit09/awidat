@@ -16,9 +16,10 @@ use awidat_proto::professional::{
     Easing, ExportPreset, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity,
     GradeStack, GradeStage, Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar,
     MotionGraphicsTemplate, MotionPackage, PackageManifest, ParameterAnimation, PreflightReport,
-    ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS, ReframePath, ReframeSmoothing, ReviewStatus,
-    SafeAreaRule, StreamExportContract, StreamExportMode, TemplateSlot, TemplateSlotKind,
-    TrackKind, TrackSample, TrackSidecar, TrackingPackage, is_runtime_clip_parameter,
+    ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS, ReframeKeyframe, ReframePath,
+    ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract, StreamExportMode,
+    TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar, TrackingPackage,
+    is_runtime_clip_parameter,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -194,6 +195,38 @@ pub struct TrackedInsertPlan {
     /// Generated `overlay.x` and `overlay.y` animations for the insert clip.
     pub generated_animations: Vec<ParameterAnimation>,
     /// Review summary callers can surface before accepting the insert.
+    pub review: TrackingReviewPackage,
+}
+
+/// Agent/UI request to author a subject-aware reframe path from observed boxes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubjectReframeRequest {
+    /// Timeline clip id receiving the reframe path.
+    pub clip_id: String,
+    /// Delivery aspect ratio label, e.g. `9:16`.
+    pub aspect_ratio: String,
+    /// Source media width in pixels.
+    pub source_width: u32,
+    /// Source media height in pixels.
+    pub source_height: u32,
+    /// Target canvas width in pixels.
+    pub target_width: u32,
+    /// Target canvas height in pixels.
+    pub target_height: u32,
+    /// Observation frame rate.
+    pub frame_rate: f64,
+    /// Smoothing policy for generated crop centers.
+    pub smoothing: ReframeSmoothing,
+    /// Optional safe-area policy label.
+    pub safe_area: Option<String>,
+}
+
+/// Authored subject reframe path and review summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubjectReframePlan {
+    /// Stable reframe path id.
+    pub reframe_id: String,
+    /// Review summary callers can surface before accepting the path.
     pub review: TrackingReviewPackage,
 }
 
@@ -449,6 +482,155 @@ pub fn author_tracked_insert(
     })
 }
 
+/// Author a subject-aware crop/reframe path from observed tracker boxes.
+pub fn author_subject_reframe_path(
+    package: &mut TrackingPackage,
+    request: SubjectReframeRequest,
+    observations: Vec<TrackerObservation>,
+) -> Result<SubjectReframePlan, ProfessionalEngineError> {
+    validate_subject_reframe_request(&request)?;
+    if observations.is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "author_subject_reframe_path".into(),
+            message: "at least one subject observation is required".into(),
+        });
+    }
+    let mut keyframes = Vec::with_capacity(observations.len());
+    let scale = reframe_scale_for_aspect(&request);
+    for observation in observations {
+        validate_tracker_region(observation.region, &request.clip_id)?;
+        if !observation.confidence.is_finite() {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: "author_subject_reframe_path".into(),
+                message: "subject observation confidence must be finite".into(),
+            });
+        }
+        keyframes.push(ReframeKeyframe {
+            time_s: observation.frame as f64 / request.frame_rate,
+            center: [
+                stable_tracker_coordinate(observation.region.x + observation.region.width / 2.0),
+                stable_tracker_coordinate(observation.region.y + observation.region.height / 2.0),
+            ],
+            scale,
+            confidence: Some(observation.confidence.clamp(0.0, 1.0)),
+        });
+    }
+    keyframes.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+    store_subject_reframe_path(package, request, keyframes, "subject-observations".into())
+}
+
+/// Author a subject-aware crop/reframe path from an existing normalized tracker.
+pub fn author_subject_reframe_path_from_track(
+    package: &mut TrackingPackage,
+    track_id: &str,
+    request: SubjectReframeRequest,
+) -> Result<SubjectReframePlan, ProfessionalEngineError> {
+    validate_subject_reframe_request(&request)?;
+    let track = package
+        .tracks
+        .iter()
+        .find(|track| track.id == track_id)
+        .ok_or_else(|| ProfessionalEngineError::MissingTrack(track_id.to_string()))?;
+    if track.coordinate_space != CoordinateSpace::Normalized {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: track_id.to_string(),
+            message: "subject reframe requires normalized tracker coordinate space".into(),
+        });
+    }
+    let scale = reframe_scale_for_aspect(&request);
+    let mut keyframes = Vec::new();
+    for sample in track
+        .samples
+        .iter()
+        .filter(|sample| !sample.points.is_empty())
+    {
+        let center = tracker_sample_center(sample, track_id)?;
+        let confidence = sample
+            .confidence
+            .or(track.confidence)
+            .filter(|confidence| confidence.is_finite())
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        keyframes.push(ReframeKeyframe {
+            time_s: sample.frame as f64 / request.frame_rate,
+            center,
+            scale,
+            confidence: Some(confidence),
+        });
+    }
+    if keyframes.is_empty() {
+        return Err(ProfessionalEngineError::MissingTrack(track_id.to_string()));
+    }
+    keyframes.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+    store_subject_reframe_path(package, request, keyframes, track_id.to_string())
+}
+
+fn store_subject_reframe_path(
+    package: &mut TrackingPackage,
+    request: SubjectReframeRequest,
+    keyframes: Vec<ReframeKeyframe>,
+    evidence_track_id: String,
+) -> Result<SubjectReframePlan, ProfessionalEngineError> {
+    let reframe_id = subject_reframe_id(&request);
+    let path = ReframePath {
+        id: reframe_id.clone(),
+        clip_id: request.clip_id,
+        aspect_ratio: request.aspect_ratio,
+        source_width: request.source_width,
+        source_height: request.source_height,
+        target_width: request.target_width,
+        target_height: request.target_height,
+        keyframes,
+        smoothing: request.smoothing,
+        evidence_track_id: Some(evidence_track_id),
+        safe_area: request.safe_area,
+    };
+    if let Some(existing) = package
+        .reframe_paths
+        .iter_mut()
+        .find(|candidate| candidate.id == reframe_id)
+    {
+        *existing = path;
+    } else {
+        package.reframe_paths.push(path);
+    }
+    Ok(SubjectReframePlan {
+        reframe_id,
+        review: summarize_tracking_package(package),
+    })
+}
+
+fn tracker_sample_center(
+    sample: &TrackSample,
+    binding_id: &str,
+) -> Result<[f64; 2], ProfessionalEngineError> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for point in &sample.points {
+        if !point[0].is_finite()
+            || !point[1].is_finite()
+            || !(0.0..=1.0).contains(&point[0])
+            || !(0.0..=1.0).contains(&point[1])
+        {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: binding_id.to_string(),
+                message: "tracker samples for subject reframe must be finite normalized points"
+                    .into(),
+            });
+        }
+        min_x = min_x.min(point[0]);
+        min_y = min_y.min(point[1]);
+        max_x = max_x.max(point[0]);
+        max_y = max_y.max(point[1]);
+    }
+    Ok([
+        stable_tracker_coordinate((min_x + max_x) / 2.0),
+        stable_tracker_coordinate((min_y + max_y) / 2.0),
+    ])
+}
+
 /// Summarize a tracking package into rows suitable for UI or agent review.
 pub fn summarize_tracking_package(package: &TrackingPackage) -> TrackingReviewPackage {
     TrackingReviewPackage {
@@ -459,6 +641,54 @@ pub fn summarize_tracking_package(package: &TrackingPackage) -> TrackingReviewPa
             .map(tracking_review_reframe)
             .collect(),
     }
+}
+
+fn validate_subject_reframe_request(
+    request: &SubjectReframeRequest,
+) -> Result<(), ProfessionalEngineError> {
+    if request.clip_id.trim().is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "author_subject_reframe_path".into(),
+            message: "clip_id is required".into(),
+        });
+    }
+    if request.aspect_ratio.trim().is_empty()
+        || request.source_width == 0
+        || request.source_height == 0
+        || request.target_width == 0
+        || request.target_height == 0
+        || !request.frame_rate.is_finite()
+        || request.frame_rate <= 0.0
+    {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "author_subject_reframe_path".into(),
+            message: "aspect ratio, source/target dimensions, and positive frame_rate are required"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
+fn reframe_scale_for_aspect(request: &SubjectReframeRequest) -> f64 {
+    let source_aspect = f64::from(request.source_width) / f64::from(request.source_height);
+    let target_aspect = f64::from(request.target_width) / f64::from(request.target_height);
+    if target_aspect <= source_aspect {
+        source_aspect / target_aspect
+    } else {
+        target_aspect / source_aspect
+    }
+    .max(1.0)
+}
+
+fn subject_reframe_id(request: &SubjectReframeRequest) -> String {
+    let aspect = request
+        .aspect_ratio
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    format!("reframe-{}-{aspect}", request.clip_id)
 }
 
 fn tracked_insert_binding_graph(track_id: &str, overlay_clip_id: &str) -> CompositionGraph {
@@ -1335,6 +1565,62 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             previewable: true,
             renderable: true,
             validation: EffectParameterValidation::NonNegative,
+        },
+        EffectParameterCapability {
+            effect: "awidat.blur",
+            parameter: "radius_px",
+            unit: "px",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::NonNegative,
+        },
+        EffectParameterCapability {
+            effect: "awidat.shake",
+            parameter: "intensity_px",
+            unit: "px",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::NonNegative,
+        },
+        EffectParameterCapability {
+            effect: "awidat.shake",
+            parameter: "frequency_hz",
+            unit: "hz",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::Positive,
+        },
+        EffectParameterCapability {
+            effect: "awidat.warp",
+            parameter: "k1",
+            unit: "coefficient",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::AnyFinite,
+        },
+        EffectParameterCapability {
+            effect: "awidat.warp",
+            parameter: "k2",
+            unit: "coefficient",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::AnyFinite,
+        },
+        EffectParameterCapability {
+            effect: "awidat.warp",
+            parameter: "center_x",
+            unit: "normalized",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::Normalized,
+        },
+        EffectParameterCapability {
+            effect: "awidat.warp",
+            parameter: "center_y",
+            unit: "normalized",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::Normalized,
         },
         EffectParameterCapability {
             effect: "awidat.volume",

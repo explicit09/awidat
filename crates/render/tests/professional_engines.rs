@@ -15,18 +15,18 @@ use awidat_proto::professional::{
     TemplateSlotKind, TrackKind, TrackSample, TrackSidecar, TrackingPackage,
 };
 use awidat_render::professional::{
-    DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
-    TrackCorrection, TrackedInsertRequest, TrackerObservation, TrackerRegion, TrackingEvidence,
-    TrackingRequest, apply_delivery_profile_to_spec, apply_export_preset_to_spec,
-    apply_motion_package, author_tracked_insert, built_in_motion_templates,
-    diagnose_effect_parameter_animation, effect_parameter_capability_matrix, ensure_tracker,
-    ensure_tracker_from_observations, evaluate_expression_links, fill_motion_template,
-    generate_tracking_package, inspect_composition_graph, lower_audio_finishing,
-    lower_composition_graph, lower_grade_stack, lower_motion_template, lower_reframe_path,
-    lower_surface_track_corner_pin, lower_surface_track_corner_pin_bindings,
-    lower_track_bound_overlay, lower_tracker_parameter_bindings, motion_package_summary,
-    plan_delivery_queue_item, plan_stream_export_args, summarize_color_finishing,
-    summarize_tracking_package,
+    DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, SubjectReframeRequest,
+    TemplateAnimation, TrackCorrection, TrackedInsertRequest, TrackerObservation, TrackerRegion,
+    TrackingEvidence, TrackingRequest, apply_delivery_profile_to_spec, apply_export_preset_to_spec,
+    apply_motion_package, author_subject_reframe_path, author_subject_reframe_path_from_track,
+    author_tracked_insert, built_in_motion_templates, diagnose_effect_parameter_animation,
+    effect_parameter_capability_matrix, ensure_tracker, ensure_tracker_from_observations,
+    evaluate_expression_links, fill_motion_template, generate_tracking_package,
+    inspect_composition_graph, lower_audio_finishing, lower_composition_graph, lower_grade_stack,
+    lower_motion_template, lower_reframe_path, lower_surface_track_corner_pin,
+    lower_surface_track_corner_pin_bindings, lower_track_bound_overlay,
+    lower_tracker_parameter_bindings, motion_package_summary, plan_delivery_queue_item,
+    plan_stream_export_args, summarize_color_finishing, summarize_tracking_package,
 };
 use awidat_render::{RenderJobSpec, TitleAnimation, TitlePosition};
 use serde_json::json;
@@ -608,6 +608,132 @@ fn reframe_path_lowers_to_deterministic_crop_expression() {
 }
 
 #[test]
+fn author_subject_reframe_path_creates_reviewable_path_from_observations() {
+    let mut package = TrackingPackage::default();
+    let plan = match author_subject_reframe_path(
+        &mut package,
+        SubjectReframeRequest {
+            clip_id: "clip-speaker".into(),
+            aspect_ratio: "9:16".into(),
+            source_width: 1920,
+            source_height: 1080,
+            target_width: 1080,
+            target_height: 1920,
+            frame_rate: 30.0,
+            smoothing: ReframeSmoothing::Gentle,
+            safe_area: Some("mobile".into()),
+        },
+        vec![
+            TrackerObservation {
+                frame: 0,
+                region: TrackerRegion::from_xywh(0.25, 0.2, 0.2, 0.3),
+                confidence: 0.92,
+            },
+            TrackerObservation {
+                frame: 30,
+                region: TrackerRegion::from_xywh(0.45, 0.25, 0.2, 0.3),
+                confidence: 0.88,
+            },
+        ],
+    ) {
+        Ok(plan) => plan,
+        Err(err) => panic!("subject reframe path should author: {err}"),
+    };
+
+    assert_eq!(plan.reframe_id, "reframe-clip-speaker-9-16");
+    assert_eq!(package.reframe_paths.len(), 1);
+    let path = &package.reframe_paths[0];
+    assert_eq!(path.clip_id, "clip-speaker");
+    assert_eq!(path.aspect_ratio, "9:16");
+    assert_eq!(
+        path.evidence_track_id.as_deref(),
+        Some("subject-observations")
+    );
+    assert_eq!(path.keyframes.len(), 2);
+    assert_eq!(path.keyframes[0].time_s, 0.0);
+    assert_eq!(path.keyframes[1].time_s, 1.0);
+    assert_eq!(path.keyframes[0].center, [0.35, 0.35]);
+    assert_eq!(path.keyframes[1].center, [0.55, 0.4]);
+    assert!((path.keyframes[0].scale - 3.1604938271604937).abs() < 1e-9);
+
+    assert_eq!(plan.review.reframe_paths.len(), 1);
+    assert_eq!(
+        plan.review.reframe_paths[0].reframe_id,
+        "reframe-clip-speaker-9-16"
+    );
+    assert!(!plan.review.reframe_paths[0].requires_correction);
+
+    let lowering = match lower_reframe_path(&package, &plan.reframe_id) {
+        Ok(lowering) => lowering,
+        Err(err) => panic!("authored reframe should lower: {err}"),
+    };
+    assert!(lowering.expression.contains("clip=clip-speaker"));
+    assert!(lowering.expression.contains("safe_area=mobile"));
+}
+
+#[test]
+fn author_subject_reframe_path_from_track_uses_existing_tracker_samples() {
+    let mut package = TrackingPackage::default();
+    let handle = match ensure_tracker_from_observations(
+        &mut package,
+        TrackingRequest {
+            clip_id: "clip-speaker".into(),
+            kind: TrackKind::Surface,
+            region: TrackerRegion::from_xywh(0.20, 0.20, 0.20, 0.30),
+            start_frame: 0,
+            end_frame: 30,
+        },
+        vec![
+            TrackerObservation {
+                frame: 0,
+                region: TrackerRegion::from_xywh(0.20, 0.20, 0.20, 0.30),
+                confidence: 0.91,
+            },
+            TrackerObservation {
+                frame: 30,
+                region: TrackerRegion::from_xywh(0.50, 0.30, 0.20, 0.30),
+                confidence: 0.89,
+            },
+        ],
+    ) {
+        Ok(handle) => handle,
+        Err(err) => panic!("tracker should author: {err}"),
+    };
+
+    let plan = match author_subject_reframe_path_from_track(
+        &mut package,
+        &handle.track_id,
+        SubjectReframeRequest {
+            clip_id: "clip-speaker".into(),
+            aspect_ratio: "9:16".into(),
+            source_width: 1920,
+            source_height: 1080,
+            target_width: 1080,
+            target_height: 1920,
+            frame_rate: 30.0,
+            smoothing: ReframeSmoothing::Moderate,
+            safe_area: Some("mobile".into()),
+        },
+    ) {
+        Ok(plan) => plan,
+        Err(err) => panic!("tracked subject reframe should author: {err}"),
+    };
+
+    assert_eq!(plan.reframe_id, "reframe-clip-speaker-9-16");
+    assert_eq!(package.reframe_paths.len(), 1);
+    let path = &package.reframe_paths[0];
+    assert_eq!(
+        path.evidence_track_id.as_deref(),
+        Some(handle.track_id.as_str())
+    );
+    assert_eq!(path.keyframes.len(), 2);
+    assert_eq!(path.keyframes[0].center, [0.3, 0.35]);
+    assert_eq!(path.keyframes[1].center, [0.6, 0.45]);
+    assert_eq!(path.keyframes[1].time_s, 1.0);
+    assert!(!plan.review.reframe_paths[0].requires_correction);
+}
+
+#[test]
 fn expression_link_cycle_is_rejected() {
     let links = vec![
         expression_link(
@@ -1169,6 +1295,42 @@ fn effect_parameter_registry_reports_units_and_validation() {
     assert_eq!(blur.unit, "px");
     assert!(blur.previewable);
     assert!(blur.renderable);
+
+    let shake = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.shake" && entry.parameter == "intensity_px")
+    {
+        Some(entry) => entry,
+        None => panic!("shake intensity capability"),
+    };
+
+    assert_eq!(shake.unit, "px");
+    assert!(shake.previewable);
+    assert!(shake.renderable);
+
+    let clip_blur = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.blur" && entry.parameter == "radius_px")
+    {
+        Some(entry) => entry,
+        None => panic!("clip blur capability"),
+    };
+
+    assert_eq!(clip_blur.unit, "px");
+    assert!(clip_blur.previewable);
+    assert!(clip_blur.renderable);
+
+    let warp = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.warp" && entry.parameter == "k1")
+    {
+        Some(entry) => entry,
+        None => panic!("warp k1 capability"),
+    };
+
+    assert_eq!(warp.unit, "coefficient");
+    assert!(warp.previewable);
+    assert!(warp.renderable);
 
     let invalid = ParameterAnimation {
         id: "anim-bad-scale".into(),

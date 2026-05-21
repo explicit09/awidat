@@ -12,8 +12,8 @@ use awidat_proto::awidat_meta::{BroadcastOverlayConfig, SemanticCutSpec, SplitEd
 use awidat_proto::professional::{
     AssetCatalog, AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
     MotionGraphicsTemplate, ParameterAnimation, PipelineReadinessReport, PlannerPassContract,
-    PreflightReport, ProposalPackage, SourceRange, SourceSelect, Stringout, TrackingPackage,
-    WorkflowLens,
+    PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange, SourceSelect, Stringout,
+    TrackingPackage, WorkflowLens,
 };
 use awidat_proto::transitions::SemanticTransitionSpec;
 use serde::{Deserialize, Serialize};
@@ -603,6 +603,29 @@ pub enum EdlOp {
     SetTrackingPackage {
         /// Tracking package.
         package: TrackingPackage,
+    },
+    /// Author a subject-aware reframe path from an existing tracker.
+    AuthorSubjectReframeFromTrack {
+        /// Existing tracker id in the stored tracking package.
+        track_id: String,
+        /// Timeline clip id receiving the reframe path.
+        clip_id: String,
+        /// Delivery aspect ratio label, e.g. `9:16`.
+        aspect_ratio: String,
+        /// Source media width in pixels.
+        source_width: u32,
+        /// Source media height in pixels.
+        source_height: u32,
+        /// Target canvas width in pixels.
+        target_width: u32,
+        /// Target canvas height in pixels.
+        target_height: u32,
+        /// Tracker sample frame rate.
+        frame_rate: f64,
+        /// Smoothing policy for generated crop centers.
+        smoothing: ReframeSmoothing,
+        /// Optional safe-area policy label.
+        safe_area: Option<String>,
     },
     /// Store color finishing workflow state.
     SetColorFinishing {

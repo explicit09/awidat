@@ -16,6 +16,8 @@ pub const SPEED: &str = "awidat.speed";
 pub const TIME_REMAP: &str = "awidat.time_remap";
 /// Clip-level color correction effect id.
 pub const COLOR_CORRECTION: &str = "awidat.color_correction";
+/// Clip-level blur effect id.
+pub const BLUR: &str = "awidat.blur";
 /// Clip-level 3D LUT effect id.
 pub const LUT: &str = "awidat.lut";
 /// Clip-level atomic color-pipeline effect id. Carries the full
@@ -29,6 +31,10 @@ pub const TITLE: &str = "awidat.title";
 pub const VIDEO_OVERLAY: &str = "awidat.video_overlay";
 /// Clip-level punch-in / reframing effect id.
 pub const REFRAME: &str = "awidat.reframe";
+/// Clip-level lens warp effect id.
+pub const WARP: &str = "awidat.warp";
+/// Clip-level procedural camera shake effect id.
+pub const SHAKE: &str = "awidat.shake";
 /// Per-clip audio fade effect id.
 pub const AUDIO_FADE: &str = "awidat.audio_fade";
 /// FFmpeg-native clip/track audio processing effect id.
@@ -55,6 +61,14 @@ const COLOR_PARAMS: &[ParamDef] = &[
     ParamDef::number("shadows", false, Some(-1.0), Some(1.0), None),
     ParamDef::number("highlights", false, Some(-1.0), Some(1.0), None),
 ];
+
+const BLUR_PARAMS: &[ParamDef] = &[ParamDef::number(
+    "radius_px",
+    false,
+    Some(0.0),
+    Some(100.0),
+    Some(ParamDefault::Number(8.0)),
+)];
 
 const LUT_PARAMS: &[ParamDef] = &[
     ParamDef::string("lut_path", true, None),
@@ -233,6 +247,54 @@ const REFRAME_PARAMS: &[ParamDef] = &[
     ),
 ];
 
+const WARP_PARAMS: &[ParamDef] = &[
+    ParamDef::number(
+        "k1",
+        false,
+        Some(-1.0),
+        Some(1.0),
+        Some(ParamDefault::Number(-0.08)),
+    ),
+    ParamDef::number(
+        "k2",
+        false,
+        Some(-1.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.0)),
+    ),
+    ParamDef::number(
+        "center_x",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.5)),
+    ),
+    ParamDef::number(
+        "center_y",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.5)),
+    ),
+];
+
+const SHAKE_PARAMS: &[ParamDef] = &[
+    ParamDef::number(
+        "intensity_px",
+        false,
+        Some(0.0),
+        Some(200.0),
+        Some(ParamDefault::Number(8.0)),
+    ),
+    ParamDef::number(
+        "frequency_hz",
+        false,
+        Some(0.1),
+        Some(60.0),
+        Some(ParamDefault::Number(12.0)),
+    ),
+];
+
 const AUDIO_FADE_PARAMS: &[ParamDef] = &[
     ParamDef::number("fade_in_s", false, Some(0.0), None, None),
     ParamDef::number("fade_out_s", false, Some(0.0), None, None),
@@ -304,6 +366,18 @@ pub const EFFECTS: &[EffectDef] = &[
         params: COLOR_PARAMS,
     },
     EffectDef {
+        id: BLUR,
+        display_name: "Blur",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Clip,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: BLUR_PARAMS,
+    },
+    EffectDef {
         id: LUT,
         display_name: "3D LUT",
         scope: EffectScope::Clip,
@@ -364,6 +438,30 @@ pub const EFFECTS: &[EffectDef] = &[
         backend: BackendKind::FfmpegNative,
         min_present_params: 0,
         params: REFRAME_PARAMS,
+    },
+    EffectDef {
+        id: WARP,
+        display_name: "Warp",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Transform,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: WARP_PARAMS,
+    },
+    EffectDef {
+        id: SHAKE,
+        display_name: "Shake",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Transform,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: SHAKE_PARAMS,
     },
     EffectDef {
         id: AUDIO_FADE,
@@ -991,6 +1089,91 @@ mod tests {
                 .and_then(Value::as_f64),
             Some(0.02)
         );
+    }
+
+    #[test]
+    fn shake_defaults_and_validates_motion_params() {
+        let effect = must_lookup("awidat.shake");
+        assert_eq!(effect.display_name, "Shake");
+        assert_eq!(effect.phase, EffectPhase::Transform);
+
+        let (_, normalized) = must_normalize("awidat.shake", &Map::new());
+        assert_eq!(
+            normalized.get("intensity_px").and_then(Value::as_f64),
+            Some(8.0)
+        );
+        assert_eq!(
+            normalized.get("frequency_hz").and_then(Value::as_f64),
+            Some(12.0)
+        );
+
+        let mut params = Map::new();
+        params.insert("intensity_px".into(), Value::from(-1.0));
+        let err = must_reject("awidat.shake", &params);
+        assert!(matches!(
+            err,
+            ValidationError::OutOfRange {
+                effect_id: "awidat.shake",
+                param: "intensity_px",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn blur_defaults_and_validates_radius() {
+        let effect = must_lookup("awidat.blur");
+        assert_eq!(effect.display_name, "Blur");
+        assert_eq!(effect.phase, EffectPhase::Clip);
+
+        let (_, normalized) = must_normalize("awidat.blur", &Map::new());
+        assert_eq!(
+            normalized.get("radius_px").and_then(Value::as_f64),
+            Some(8.0)
+        );
+
+        let mut params = Map::new();
+        params.insert("radius_px".into(), Value::from(-1.0));
+        let err = must_reject("awidat.blur", &params);
+        assert!(matches!(
+            err,
+            ValidationError::OutOfRange {
+                effect_id: "awidat.blur",
+                param: "radius_px",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn warp_defaults_and_validates_lens_params() {
+        let effect = must_lookup("awidat.warp");
+        assert_eq!(effect.display_name, "Warp");
+        assert_eq!(effect.phase, EffectPhase::Transform);
+
+        let (_, normalized) = must_normalize("awidat.warp", &Map::new());
+        assert_eq!(normalized.get("k1").and_then(Value::as_f64), Some(-0.08));
+        assert_eq!(normalized.get("k2").and_then(Value::as_f64), Some(0.0));
+        assert_eq!(
+            normalized.get("center_x").and_then(Value::as_f64),
+            Some(0.5)
+        );
+        assert_eq!(
+            normalized.get("center_y").and_then(Value::as_f64),
+            Some(0.5)
+        );
+
+        let mut params = Map::new();
+        params.insert("center_x".into(), Value::from(1.5));
+        let err = must_reject("awidat.warp", &params);
+        assert!(matches!(
+            err,
+            ValidationError::OutOfRange {
+                effect_id: "awidat.warp",
+                param: "center_x",
+                ..
+            }
+        ));
     }
 
     #[test]

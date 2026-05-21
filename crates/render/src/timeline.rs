@@ -29,7 +29,7 @@ use awidat_proto::awidat_meta::{
     AwidatTimelineMetadata, BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle,
 };
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
-use awidat_proto::professional::MaskOperation;
+use awidat_proto::professional::{MaskOperation, ReframePath, TrackingPackage};
 use awidat_proto::project::{files, read_otio_timeline};
 use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
@@ -38,8 +38,8 @@ use thiserror::Error;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::animation::{
-    MotionPathCoordinate, is_phase_3a_parameter, keyframes_to_ffmpeg_expr_with_extrapolation,
-    motion_path_to_ffmpeg_expr,
+    MotionPathCoordinate, evaluate_keyframes_with_modes, is_phase_3a_parameter,
+    keyframes_to_ffmpeg_expr_with_extrapolation, motion_path_to_ffmpeg_expr_with_keyframes,
 };
 use crate::job::{RenderJobSpec, RenderPlanLimitation};
 use crate::output_safety::{OutputPathPolicy, validate_render_output_path};
@@ -234,11 +234,34 @@ pub struct TimelineSegment {
     /// Optional clip-level color correction controls, read from the
     /// `awidat.color_correction` effect.
     pub color_correction: Option<ColorCorrectionPlan>,
+    /// Optional clip-level blur controls, read from the
+    /// `awidat.blur` effect.
+    pub blur: Option<BlurPlan>,
+    /// Optional clip-level blur radius animation, read from a runtime
+    /// `awidat.blur.radius_px` parameter animation.
+    pub blur_radius_animation: Option<RenderParameterAnimation>,
     /// Optional HDR transfer metadata, read from `awidat.source_color`.
     pub hdr_transfer: Option<HdrTransfer>,
     /// Optional clip-level reframe / punch-in controls, read from the
     /// `awidat.reframe` effect.
     pub reframe: Option<ReframePlan>,
+    /// Optional subject-aware reframe path, read from the tracking package.
+    pub reframe_path: Option<ReframePathPlan>,
+    /// Optional clip-level lens warp controls, read from the
+    /// `awidat.warp` effect.
+    pub warp: Option<WarpPlan>,
+    /// Optional animated lens warp controls, read from
+    /// `awidat.warp.*` parameter animations.
+    pub warp_animation: Option<WarpAnimationPlan>,
+    /// Optional procedural handheld shake controls, read from the
+    /// `awidat.shake` effect.
+    pub shake: Option<ShakePlan>,
+    /// Optional animated shake intensity, read from
+    /// `awidat.shake.intensity_px`.
+    pub shake_intensity_animation: Option<RenderParameterAnimation>,
+    /// Optional animated shake frequency, read from
+    /// `awidat.shake.frequency_hz`.
+    pub shake_frequency_animation: Option<RenderParameterAnimation>,
     /// Optional absolute LUT path, read from the `awidat.lut` effect.
     pub lut_path: Option<PathBuf>,
     /// Optional FFmpeg `lut3d` interpolation mode.
@@ -616,6 +639,13 @@ pub struct ColorCorrectionPlan {
     pub highlights: Option<f64>,
 }
 
+/// Clip-level Gaussian blur controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BlurPlan {
+    /// Blur radius in source pixels.
+    pub radius_px: f64,
+}
+
 /// Clip-level scale/crop controls for simple punch-ins and reframes.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ReframePlan {
@@ -625,6 +655,85 @@ pub struct ReframePlan {
     pub x: f64,
     /// Vertical crop bias in `[-1, 1]`: `-1` top, `0` center, `1` bottom.
     pub y: f64,
+}
+
+/// Subject-aware center crop authored from a tracking package.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReframePathPlan {
+    /// Stable reframe path id.
+    pub reframe_id: String,
+    /// Ordered crop center/scale samples in clip-local time.
+    pub keyframes: Vec<ReframePathKeyframePlan>,
+}
+
+/// One renderable crop sample from a subject-aware reframe path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReframePathKeyframePlan {
+    /// Clip-local time in seconds.
+    pub time_s: f64,
+    /// Normalized crop center x in `0..1`.
+    pub center_x: f64,
+    /// Normalized crop center y in `0..1`.
+    pub center_y: f64,
+    /// Crop zoom scale.
+    pub scale: f64,
+}
+
+/// Clip-level lens warp controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WarpPlan {
+    /// Quadratic radial distortion coefficient.
+    pub k1: f64,
+    /// Double-quadratic radial distortion coefficient.
+    pub k2: f64,
+    /// Relative distortion center on the x axis.
+    pub center_x: f64,
+    /// Relative distortion center on the y axis.
+    pub center_y: f64,
+}
+
+/// Animated lens warp controls selected from runtime parameter animations.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WarpAnimationPlan {
+    /// Animated quadratic radial distortion coefficient.
+    pub k1: Option<RenderParameterAnimation>,
+    /// Animated double-quadratic radial distortion coefficient.
+    pub k2: Option<RenderParameterAnimation>,
+    /// Animated relative distortion center on the x axis.
+    pub center_x: Option<RenderParameterAnimation>,
+    /// Animated relative distortion center on the y axis.
+    pub center_y: Option<RenderParameterAnimation>,
+}
+
+impl WarpAnimationPlan {
+    fn has_any(&self) -> bool {
+        self.k1.is_some() || self.k2.is_some() || self.center_x.is_some() || self.center_y.is_some()
+    }
+}
+
+/// Clip-level procedural camera shake controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ShakePlan {
+    /// Maximum horizontal/vertical displacement in source pixels.
+    pub intensity_px: f64,
+    /// Oscillation frequency in Hertz.
+    pub frequency_hz: f64,
+}
+
+fn default_shake_plan() -> ShakePlan {
+    ShakePlan {
+        intensity_px: 8.0,
+        frequency_hz: 12.0,
+    }
+}
+
+fn default_warp_plan() -> WarpPlan {
+    WarpPlan {
+        k1: -0.08,
+        k2: 0.0,
+        center_x: 0.5,
+        center_y: 0.5,
+    }
 }
 
 /// Pull a numeric metadata field off the first effect on `clip` whose
@@ -748,6 +857,24 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
     Some(plan)
 }
 
+fn read_blur(clip: &awidat_proto::otio::Clip) -> Option<BlurPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.blur")?;
+    let radius_px = effect
+        .metadata
+        .get("radius_px")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(8.0);
+    if !radius_px.is_finite() || radius_px <= 0.0 {
+        return None;
+    }
+    Some(BlurPlan {
+        radius_px: radius_px.clamp(0.0, 100.0),
+    })
+}
+
 fn read_hdr_transfer(clip: &awidat_proto::otio::Clip) -> Option<HdrTransfer> {
     let raw = read_effect_string(clip, "awidat.source_color", "transfer")
         .or_else(|| read_effect_string(clip, "awidat.source_color", "hdr_transfer"))?;
@@ -778,6 +905,105 @@ fn read_reframe(clip: &awidat_proto::otio::Clip) -> Option<ReframePlan> {
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0)
             .clamp(-1.0, 1.0),
+    })
+}
+
+fn read_reframe_path(package: Option<&TrackingPackage>, clip_id: &str) -> Option<ReframePathPlan> {
+    package?
+        .reframe_paths
+        .iter()
+        .find(|path| path.clip_id == clip_id)
+        .and_then(reframe_path_plan)
+}
+
+fn reframe_path_plan(path: &ReframePath) -> Option<ReframePathPlan> {
+    let mut keyframes = path
+        .keyframes
+        .iter()
+        .filter_map(|keyframe| {
+            let center_x = keyframe.center[0];
+            let center_y = keyframe.center[1];
+            let scale = keyframe.scale;
+            (keyframe.time_s.is_finite()
+                && center_x.is_finite()
+                && center_y.is_finite()
+                && scale.is_finite()
+                && scale > 1.0)
+                .then_some(ReframePathKeyframePlan {
+                    time_s: keyframe.time_s,
+                    center_x: center_x.clamp(0.0, 1.0),
+                    center_y: center_y.clamp(0.0, 1.0),
+                    scale: scale.clamp(1.0, 8.0),
+                })
+        })
+        .collect::<Vec<_>>();
+    keyframes.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+    (!keyframes.is_empty()).then_some(ReframePathPlan {
+        reframe_id: path.id.clone(),
+        keyframes,
+    })
+}
+
+fn read_shake(clip: &awidat_proto::otio::Clip) -> Option<ShakePlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.shake")?;
+    let m = &effect.metadata;
+    let intensity_px = m
+        .get("intensity_px")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(8.0);
+    let frequency_hz = m
+        .get("frequency_hz")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(12.0);
+    if !intensity_px.is_finite()
+        || !frequency_hz.is_finite()
+        || intensity_px <= 0.0
+        || frequency_hz <= 0.0
+    {
+        return None;
+    }
+    Some(ShakePlan {
+        intensity_px: intensity_px.clamp(0.0, 200.0),
+        frequency_hz: frequency_hz.clamp(0.1, 60.0),
+    })
+}
+
+fn read_warp(clip: &awidat_proto::otio::Clip) -> Option<WarpPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.warp")?;
+    let m = &effect.metadata;
+    let k1 = m
+        .get("k1")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(-0.08);
+    let k2 = m
+        .get("k2")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let center_x = m
+        .get("center_x")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.5);
+    let center_y = m
+        .get("center_y")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.5);
+    if !k1.is_finite() || !k2.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+        return None;
+    }
+    if k1.abs() <= 1e-9 && k2.abs() <= 1e-9 {
+        return None;
+    }
+    Some(WarpPlan {
+        k1: k1.clamp(-1.0, 1.0),
+        k2: k2.clamp(-1.0, 1.0),
+        center_x: center_x.clamp(0.0, 1.0),
+        center_y: center_y.clamp(0.0, 1.0),
     })
 }
 
@@ -1041,7 +1267,18 @@ pub fn collect_timeline_full_plan(
             for tc in &track.children {
                 match tc {
                     TrackChild::Clip(clip) => {
-                        let Some(segment) = collect_timeline_segment(project_root, clip)? else {
+                        let Some(segment) = collect_timeline_segment(
+                            project_root,
+                            clip,
+                            &parameter_animations,
+                            timeline
+                                .metadata
+                                .awidat
+                                .as_ref()
+                                .and_then(|m| m.tracking_package.as_ref()),
+                            &mut consumed_animation_ids,
+                        )?
+                        else {
                             continue;
                         };
                         let mode = read_video_overlay_mode(clip);
@@ -1099,7 +1336,18 @@ pub fn collect_timeline_full_plan(
         for tc in &track.children {
             match tc {
                 TrackChild::Clip(clip) => {
-                    let Some(segment) = collect_timeline_segment(project_root, clip)? else {
+                    let Some(segment) = collect_timeline_segment(
+                        project_root,
+                        clip,
+                        &parameter_animations,
+                        timeline
+                            .metadata
+                            .awidat
+                            .as_ref()
+                            .and_then(|m| m.tracking_package.as_ref()),
+                        &mut consumed_animation_ids,
+                    )?
+                    else {
                         pending_transition = None;
                         continue;
                     };
@@ -1632,6 +1880,9 @@ fn validate_renderable_composite_transition(
 fn collect_timeline_segment(
     project_root: &Path,
     clip: &awidat_proto::otio::Clip,
+    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    tracking_package: Option<&TrackingPackage>,
+    consumed_animation_ids: &mut BTreeSet<String>,
 ) -> Result<Option<TimelineSegment>, RenderTimelineError> {
     let MediaReference::External(ext) = &clip.media_reference else {
         return Ok(None);
@@ -1663,6 +1914,26 @@ fn collect_timeline_segment(
         .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
     let color_pipeline = read_color_pipeline(clip, project_root)?;
     let time_remap = read_time_remap(clip)?;
+    let clip_id = render_clip_id(clip);
+    let shake_intensity_animation = select_clip_effect_animation(
+        parameter_animations,
+        &clip_id,
+        "awidat.shake.intensity_px",
+        consumed_animation_ids,
+    );
+    let shake_frequency_animation = select_clip_effect_animation(
+        parameter_animations,
+        &clip_id,
+        "awidat.shake.frequency_hz",
+        consumed_animation_ids,
+    );
+    let shake = read_shake(clip).or_else(|| {
+        (shake_intensity_animation.is_some() || shake_frequency_animation.is_some())
+            .then(default_shake_plan)
+    });
+    let warp_animation =
+        select_warp_animation(parameter_animations, &clip_id, consumed_animation_ids);
+    let warp = read_warp(clip).or_else(|| warp_animation.as_ref().map(|_| default_warp_plan()));
     Ok(Some(TimelineSegment {
         asset_path,
         clip_name: clip.name.clone(),
@@ -1683,8 +1954,21 @@ fn collect_timeline_segment(
         speed: read_effect_number(clip, "awidat.speed", "factor"),
         time_remap,
         color_correction: read_color_correction(clip),
+        blur: read_blur(clip),
+        blur_radius_animation: select_clip_effect_animation(
+            parameter_animations,
+            &clip_id,
+            "awidat.blur.radius_px",
+            consumed_animation_ids,
+        ),
         hdr_transfer: read_hdr_transfer(clip),
         reframe: read_reframe(clip),
+        reframe_path: read_reframe_path(tracking_package, &clip_id),
+        warp,
+        warp_animation,
+        shake,
+        shake_intensity_animation,
+        shake_frequency_animation,
         lut_path,
         lut_interpolation,
         lut_strength,
@@ -2563,6 +2847,65 @@ fn render_animations_for_clip_with_limitations(
         });
     });
     selection
+}
+
+fn select_clip_effect_animation(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+    parameter: &str,
+    consumed_animation_ids: &mut BTreeSet<String>,
+) -> Option<RenderParameterAnimation> {
+    let animation = animations.iter().find(|animation| {
+        matches!(
+            &animation.target,
+            awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: target_clip_id,
+                parameter: target_parameter,
+            } if target_clip_id == clip_id && target_parameter == parameter
+        )
+    })?;
+    consumed_animation_ids.insert(animation.id.clone());
+    Some(RenderParameterAnimation {
+        parameter: parameter.to_string(),
+        keyframes: animation.keyframes.clone(),
+        pre_extrapolation: animation.pre_extrapolation,
+        post_extrapolation: animation.post_extrapolation,
+        motion_path: animation.motion_path.clone(),
+    })
+}
+
+fn select_warp_animation(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+    consumed_animation_ids: &mut BTreeSet<String>,
+) -> Option<WarpAnimationPlan> {
+    let plan = WarpAnimationPlan {
+        k1: select_clip_effect_animation(
+            animations,
+            clip_id,
+            "awidat.warp.k1",
+            consumed_animation_ids,
+        ),
+        k2: select_clip_effect_animation(
+            animations,
+            clip_id,
+            "awidat.warp.k2",
+            consumed_animation_ids,
+        ),
+        center_x: select_clip_effect_animation(
+            animations,
+            clip_id,
+            "awidat.warp.center_x",
+            consumed_animation_ids,
+        ),
+        center_y: select_clip_effect_animation(
+            animations,
+            clip_id,
+            "awidat.warp.center_y",
+            consumed_animation_ids,
+        ),
+    };
+    plan.has_any().then_some(plan)
 }
 
 fn overlay_blur_radius_limitations(
@@ -4200,10 +4543,17 @@ fn overlay_motion_path_expr(
         .animations
         .iter()
         .find(|animation| animation.parameter == "overlay.position")
-        .and_then(|animation| animation.motion_path.as_ref())
-        .map(|path| {
+        .and_then(|animation| {
+            let path = animation.motion_path.as_ref()?;
             let local_time_var = format!("({time_var}-{})", overlay.track_start_s);
-            motion_path_to_ffmpeg_expr(path, coordinate, &local_time_var)
+            Some(motion_path_to_ffmpeg_expr_with_keyframes(
+                path,
+                &animation.keyframes,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+                coordinate,
+                &local_time_var,
+            ))
         })
 }
 
@@ -4313,6 +4663,16 @@ fn stage_overlay_video_input(
         filter.push_str(&format!("{video_label}{chain}{cv}"));
         video_label = cv;
     }
+    let blurred_label = append_clip_blur_filter(
+        filter,
+        &video_label,
+        &format!("media_overlay{input_idx}"),
+        seg.blur,
+        seg.blur_radius_animation.as_ref(),
+    );
+    if blurred_label != video_label {
+        video_label = blurred_label;
+    }
     if let Some(plan) = seg.color_pipeline.as_ref() {
         if plan.has_any_lut() {
             let cv = format!("[media_overlay_cpv{input_idx}]");
@@ -4338,13 +4698,31 @@ fn stage_overlay_video_input(
         ));
         video_label = lv;
     }
-    if let Some(reframe) = seg.reframe.as_ref()
-        && let Some(chain) = reframe_filter_chain(reframe)
-    {
+    if let Some(chain) = segment_reframe_filter_chain(seg) {
         let rv = format!("[media_overlay_rv{input_idx}]");
         filter.push(';');
         filter.push_str(&format!("{video_label}{chain}{rv}"));
         video_label = rv;
+    }
+    if let Some(warp) = seg.warp.as_ref()
+        && let Some(chain) = warp_filter_chain(warp, seg.warp_animation.as_ref(), input_idx)
+    {
+        let wv = format!("[media_overlay_wv{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!("{video_label}{chain}{wv}"));
+        video_label = wv;
+    }
+    if let Some(shake) = seg.shake.as_ref()
+        && let Some(chain) = animated_shake_filter_chain(
+            shake,
+            seg.shake_intensity_animation.as_ref(),
+            seg.shake_frequency_animation.as_ref(),
+        )
+    {
+        let sv = format!("[media_overlay_shv{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!("{video_label}{chain}{sv}"));
+        video_label = sv;
     }
     if let Some(time_remap) = seg.time_remap.as_ref() {
         let sv = format!("[media_overlay_trv{input_idx}]");
@@ -4401,6 +4779,16 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         filter.push_str(&format!("{video_label}{chain}{cv};"));
         video_label = cv;
     }
+    let blurred_label = append_clip_blur_filter(
+        filter,
+        &video_label,
+        &i.to_string(),
+        seg.blur,
+        seg.blur_radius_animation.as_ref(),
+    );
+    if blurred_label != video_label {
+        video_label = blurred_label;
+    }
 
     if let Some(plan) = seg.color_pipeline.as_ref() {
         if plan.has_any_lut() {
@@ -4437,12 +4825,28 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         video_label = lv;
     }
 
-    if let Some(reframe) = seg.reframe.as_ref()
-        && let Some(chain) = reframe_filter_chain(reframe)
-    {
+    if let Some(chain) = segment_reframe_filter_chain(seg) {
         let rv = format!("[rv{i}]");
         filter.push_str(&format!("{video_label}{chain}{rv};"));
         video_label = rv;
+    }
+    if let Some(warp) = seg.warp.as_ref()
+        && let Some(chain) = warp_filter_chain(warp, seg.warp_animation.as_ref(), i)
+    {
+        let wv = format!("[wv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{wv};"));
+        video_label = wv;
+    }
+    if let Some(shake) = seg.shake.as_ref()
+        && let Some(chain) = animated_shake_filter_chain(
+            shake,
+            seg.shake_intensity_animation.as_ref(),
+            seg.shake_frequency_animation.as_ref(),
+        )
+    {
+        let sv = format!("[shv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{sv};"));
+        video_label = sv;
     }
 
     // Audio repair runs before speed/fades/gain/loudness on each clip:
@@ -4856,6 +5260,62 @@ fn color_filter_chain(plan: &ColorCorrectionPlan) -> Option<String> {
     }
 }
 
+fn blur_filter_chain(plan: BlurPlan) -> Option<String> {
+    if !plan.radius_px.is_finite() || plan.radius_px <= 0.0 {
+        return None;
+    }
+    Some(format!(
+        "gblur=sigma={}",
+        fmt_filter_num(plan.radius_px.clamp(0.0, 100.0))
+    ))
+}
+
+fn append_clip_blur_filter(
+    filter: &mut String,
+    input_label: &str,
+    suffix: &str,
+    static_blur: Option<BlurPlan>,
+    radius_animation: Option<&RenderParameterAnimation>,
+) -> String {
+    if let Some(animation) = radius_animation {
+        if !filter.is_empty() && !filter.ends_with(';') {
+            filter.push(';');
+        }
+        let video_label = format!("[clip_blur{suffix}_video]");
+        let radius_src_label = format!("[clip_blur{suffix}_radiussrc]");
+        let radius_label = format!("[clip_blur{suffix}_radius]");
+        let out_label = format!("[clip_blur{suffix}_out]");
+        let radius_expr = clip_blur_radius_expr(animation, "T");
+        filter.push_str(&format!(
+            "{input_label}split=2{video_label}{radius_src_label};\
+             {radius_src_label}format=gray,geq=lum='{radius_expr}'{radius_label};\
+             {video_label}{radius_label}varblur=min_r=0:max_r=100:planes=15{out_label};",
+        ));
+        return out_label;
+    }
+    if let Some(blur) = static_blur
+        && let Some(chain) = blur_filter_chain(blur)
+    {
+        if !filter.is_empty() && !filter.ends_with(';') {
+            filter.push(';');
+        }
+        let out_label = format!("[blv{suffix}]");
+        filter.push_str(&format!("{input_label}{chain}{out_label};"));
+        return out_label;
+    }
+    input_label.to_string()
+}
+
+fn clip_blur_radius_expr(animation: &RenderParameterAnimation, time_var: &str) -> String {
+    let blur_px = keyframes_to_ffmpeg_expr_with_extrapolation(
+        &animation.keyframes,
+        time_var,
+        animation.pre_extrapolation,
+        animation.post_extrapolation,
+    );
+    format!("min(max(({blur_px}),0),100)")
+}
+
 fn fmt_filter_num(value: f64) -> String {
     let mut s = format!("{value:.6}");
     while s.contains('.') && s.ends_with('0') {
@@ -4881,6 +5341,276 @@ fn reframe_filter_chain(plan: &ReframePlan) -> Option<String> {
         x = fmt_filter_num(x),
         y = fmt_filter_num(y),
     ))
+}
+
+fn segment_reframe_filter_chain(seg: &TimelineSegment) -> Option<String> {
+    seg.reframe_path
+        .as_ref()
+        .and_then(reframe_path_filter_chain)
+        .or_else(|| seg.reframe.as_ref().and_then(reframe_filter_chain))
+}
+
+fn reframe_path_filter_chain(plan: &ReframePathPlan) -> Option<String> {
+    let first = plan.keyframes.first()?;
+    let zoom = first.scale.clamp(1.0, 8.0);
+    if !zoom.is_finite() || zoom <= 1.0 {
+        return None;
+    }
+    let x_expr = reframe_path_axis_expr(plan, |keyframe| keyframe.center_x);
+    let y_expr = reframe_path_axis_expr(plan, |keyframe| keyframe.center_y);
+    Some(format!(
+        "scale=ceil(iw*{zoom}/2)*2:ceil(ih*{zoom}/2)*2:eval=frame,\
+         crop=iw/{zoom}:ih/{zoom}:x=(in_w-out_w)*({x_expr}):y=(in_h-out_h)*({y_expr})",
+        zoom = fmt_filter_num(zoom),
+    ))
+}
+
+fn reframe_path_axis_expr(
+    plan: &ReframePathPlan,
+    value: fn(&ReframePathKeyframePlan) -> f64,
+) -> String {
+    let keyframes = plan
+        .keyframes
+        .iter()
+        .map(|keyframe| {
+            awidat_proto::professional::Keyframe::linear(
+                keyframe.time_s,
+                value(keyframe).clamp(0.0, 1.0),
+            )
+        })
+        .collect::<Vec<_>>();
+    keyframes_to_ffmpeg_expr_with_extrapolation(
+        &keyframes,
+        "t",
+        awidat_proto::professional::ExtrapolationMode::Hold,
+        awidat_proto::professional::ExtrapolationMode::Hold,
+    )
+}
+
+fn warp_filter_chain(
+    plan: &WarpPlan,
+    animation: Option<&WarpAnimationPlan>,
+    segment_index: usize,
+) -> Option<String> {
+    if !plan.k1.is_finite()
+        || !plan.k2.is_finite()
+        || !plan.center_x.is_finite()
+        || !plan.center_y.is_finite()
+    {
+        return None;
+    }
+    let k1 = initial_animation_value(animation.and_then(|plan| plan.k1.as_ref()))
+        .unwrap_or(plan.k1)
+        .clamp(-1.0, 1.0);
+    let k2 = initial_animation_value(animation.and_then(|plan| plan.k2.as_ref()))
+        .unwrap_or(plan.k2)
+        .clamp(-1.0, 1.0);
+    let center_x = initial_animation_value(animation.and_then(|plan| plan.center_x.as_ref()))
+        .unwrap_or(plan.center_x)
+        .clamp(0.0, 1.0);
+    let center_y = initial_animation_value(animation.and_then(|plan| plan.center_y.as_ref()))
+        .unwrap_or(plan.center_y)
+        .clamp(0.0, 1.0);
+    if k1.abs() <= 1e-9 && k2.abs() <= 1e-9 {
+        return None;
+    }
+    if let Some(animation) = animation {
+        let filter_id = format!("warp{segment_index}");
+        let commands = warp_sendcmd_commands(animation, &filter_id)?;
+        let lens = format!(
+            "lenscorrection@{filter_id}=cx={}:cy={}:k1={}:k2={}:i=bilinear",
+            fmt_filter_num(center_x),
+            fmt_filter_num(center_y),
+            fmt_filter_num(k1),
+            fmt_filter_num(k2),
+        );
+        return Some(format!("sendcmd=c='{commands}',{lens}"));
+    }
+    Some(format!(
+        "lenscorrection=cx={}:cy={}:k1={}:k2={}:i=bilinear",
+        fmt_filter_num(center_x),
+        fmt_filter_num(center_y),
+        fmt_filter_num(k1),
+        fmt_filter_num(k2),
+    ))
+}
+
+fn warp_sendcmd_commands(animation: &WarpAnimationPlan, filter_id: &str) -> Option<String> {
+    let mut commands = Vec::new();
+    append_warp_parameter_commands(
+        &mut commands,
+        filter_id,
+        "k1",
+        animation.k1.as_ref(),
+        -1.0,
+        1.0,
+    );
+    append_warp_parameter_commands(
+        &mut commands,
+        filter_id,
+        "k2",
+        animation.k2.as_ref(),
+        -1.0,
+        1.0,
+    );
+    append_warp_parameter_commands(
+        &mut commands,
+        filter_id,
+        "cx",
+        animation.center_x.as_ref(),
+        0.0,
+        1.0,
+    );
+    append_warp_parameter_commands(
+        &mut commands,
+        filter_id,
+        "cy",
+        animation.center_y.as_ref(),
+        0.0,
+        1.0,
+    );
+    (!commands.is_empty()).then(|| commands.join(";"))
+}
+
+fn append_warp_parameter_commands(
+    commands: &mut Vec<String>,
+    filter_id: &str,
+    command: &str,
+    animation: Option<&RenderParameterAnimation>,
+    min: f64,
+    max: f64,
+) {
+    let Some(animation) = animation else {
+        return;
+    };
+    commands.extend(
+        warp_parameter_command_samples(animation)
+            .into_iter()
+            .filter_map(|time_s| {
+                let value = evaluate_keyframes_with_modes(
+                    &animation.keyframes,
+                    time_s,
+                    animation.pre_extrapolation,
+                    animation.post_extrapolation,
+                )?;
+                value.is_finite().then(|| {
+                    format!(
+                        "{} {filter_id} {command} {}",
+                        fmt_filter_num(time_s.max(0.0)),
+                        fmt_filter_num(value.clamp(min, max))
+                    )
+                })
+            }),
+    );
+}
+
+fn warp_parameter_command_samples(animation: &RenderParameterAnimation) -> Vec<f64> {
+    const SAMPLES_PER_SECOND: f64 = 16.0;
+    const MAX_SAMPLES_PER_SEGMENT: usize = 64;
+    let mut samples = Vec::new();
+    for pair in animation.keyframes.windows(2) {
+        let start = pair[0].time_s;
+        let end = pair[1].time_s;
+        if !start.is_finite() || !end.is_finite() {
+            continue;
+        }
+        samples.push(start.max(0.0));
+        if end <= start {
+            continue;
+        }
+        let steps = ((end - start) * SAMPLES_PER_SECOND).ceil() as usize;
+        let steps = steps.clamp(1, MAX_SAMPLES_PER_SEGMENT);
+        for index in 1..steps {
+            let time_s = start + (end - start) * index as f64 / steps as f64;
+            if time_s > start && time_s < end {
+                samples.push(time_s.max(0.0));
+            }
+        }
+    }
+    if let Some(last) = animation
+        .keyframes
+        .last()
+        .filter(|keyframe| keyframe.time_s.is_finite())
+    {
+        samples.push(last.time_s.max(0.0));
+    }
+    samples.sort_by(f64::total_cmp);
+    samples.dedup_by(|a, b| (*a - *b).abs() <= 1e-6);
+    samples
+}
+
+fn initial_animation_value(animation: Option<&RenderParameterAnimation>) -> Option<f64> {
+    animation?
+        .keyframes
+        .iter()
+        .find(|keyframe| keyframe.value.is_finite())
+        .map(|keyframe| keyframe.value)
+}
+
+fn animated_shake_filter_chain(
+    plan: &ShakePlan,
+    intensity_animation: Option<&RenderParameterAnimation>,
+    frequency_animation: Option<&RenderParameterAnimation>,
+) -> Option<String> {
+    if !plan.intensity_px.is_finite()
+        || !plan.frequency_hz.is_finite()
+        || plan.intensity_px <= 0.0
+        || plan.frequency_hz <= 0.0
+    {
+        return None;
+    }
+    let intensity = max_animation_value(intensity_animation).unwrap_or(plan.intensity_px);
+    let intensity = intensity.clamp(0.0, 200.0);
+    let pad = intensity.ceil() as u32;
+    if pad == 0 {
+        return None;
+    }
+    let intensity_expr = intensity_animation
+        .map(|animation| {
+            format!(
+                "min(max(({}),0),200)",
+                keyframes_to_ffmpeg_expr_with_extrapolation(
+                    &animation.keyframes,
+                    "t",
+                    animation.pre_extrapolation,
+                    animation.post_extrapolation,
+                )
+            )
+        })
+        .unwrap_or_else(|| fmt_filter_num(plan.intensity_px.clamp(0.0, 200.0)));
+    let frequency_expr = frequency_animation
+        .map(|animation| {
+            format!(
+                "min(max(({}),0.1),60)",
+                keyframes_to_ffmpeg_expr_with_extrapolation(
+                    &animation.keyframes,
+                    "t",
+                    animation.pre_extrapolation,
+                    animation.post_extrapolation,
+                )
+            )
+        })
+        .unwrap_or_else(|| fmt_filter_num(plan.frequency_hz.clamp(0.1, 60.0)));
+    let y_frequency_expr = if frequency_animation.is_some() {
+        format!("({frequency_expr})*0.73")
+    } else {
+        fmt_filter_num(plan.frequency_hz.clamp(0.1, 60.0) * 0.73)
+    };
+    let x_expr = format!("{intensity_expr}*sin(2*PI*{frequency_expr}*t)");
+    let y_expr = format!("{intensity_expr}*cos(2*PI*{y_frequency_expr}*t)");
+    let crop_margin = pad * 2;
+    Some(format!(
+        "pad=iw+{crop_margin}:ih+{crop_margin}:{pad}:{pad},\
+         crop=w=iw-{crop_margin}:h=ih-{crop_margin}:x={pad}+{x_expr}:y={pad}+{y_expr}",
+    ))
+}
+
+fn max_animation_value(animation: Option<&RenderParameterAnimation>) -> Option<f64> {
+    animation?
+        .keyframes
+        .iter()
+        .filter_map(|keyframe| keyframe.value.is_finite().then_some(keyframe.value))
+        .max_by(f64::total_cmp)
 }
 
 fn filter_escape_single_quoted(s: &str) -> String {
@@ -5547,10 +6277,17 @@ fn title_motion_path_expr(title: &TitlePlan, coordinate: MotionPathCoordinate) -
         .animations
         .iter()
         .find(|animation| animation.parameter == "title.position")
-        .and_then(|animation| animation.motion_path.as_ref())
-        .map(|path| {
+        .and_then(|animation| {
+            let path = animation.motion_path.as_ref()?;
             let local_time_var = format!("(t-{})", title.start_s);
-            motion_path_to_ffmpeg_expr(path, coordinate, &local_time_var)
+            Some(motion_path_to_ffmpeg_expr_with_keyframes(
+                path,
+                &animation.keyframes,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+                coordinate,
+                &local_time_var,
+            ))
         })
 }
 
@@ -7327,6 +8064,16 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push_str(&format!("{video_label}{chain}{cv};"));
         video_label = cv;
     }
+    let blurred_label = append_clip_blur_filter(
+        filter,
+        &video_label,
+        &i.to_string(),
+        seg.blur,
+        seg.blur_radius_animation.as_ref(),
+    );
+    if blurred_label != video_label {
+        video_label = blurred_label;
+    }
     if let Some(plan) = seg.color_pipeline.as_ref() {
         if plan.has_any_lut() {
             let cv = format!("[cpv{i}]");
@@ -7361,12 +8108,28 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push(';');
         video_label = lv;
     }
-    if let Some(reframe) = seg.reframe.as_ref()
-        && let Some(chain) = reframe_filter_chain(reframe)
-    {
+    if let Some(chain) = segment_reframe_filter_chain(seg) {
         let rv = format!("[rv{i}]");
         filter.push_str(&format!("{video_label}{chain}{rv};"));
         video_label = rv;
+    }
+    if let Some(warp) = seg.warp.as_ref()
+        && let Some(chain) = warp_filter_chain(warp, seg.warp_animation.as_ref(), i)
+    {
+        let wv = format!("[wv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{wv};"));
+        video_label = wv;
+    }
+    if let Some(shake) = seg.shake.as_ref()
+        && let Some(chain) = animated_shake_filter_chain(
+            shake,
+            seg.shake_intensity_animation.as_ref(),
+            seg.shake_frequency_animation.as_ref(),
+        )
+    {
+        let sv = format!("[shv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{sv};"));
+        video_label = sv;
     }
     if let Some(factor) = seg.speed
         && (factor - 1.0).abs() > 1e-9
@@ -7880,8 +8643,9 @@ mod tests {
     use awidat_proto::professional::{
         BezierHandles, CompositionGraph, CompositionNode, CompositionNodeType, Easing,
         ExtrapolationMode, Keyframe, KeyframeInterpolation, MaskKeyframe, MaskOperation,
-        MaskSidecar, MatteSidecar, ParameterAnimation, TrackKind as ProfessionalTrackKind,
-        TrackSample, TrackSidecar, TrackingPackage,
+        MaskSidecar, MatteSidecar, ParameterAnimation, ReframeKeyframe, ReframePath,
+        ReframeSmoothing, TrackKind as ProfessionalTrackKind, TrackSample, TrackSidecar,
+        TrackingPackage,
     };
     use std::fs;
 
@@ -7902,6 +8666,43 @@ mod tests {
         stack.children.push(StackChild::Track(track));
         tl.tracks = stack;
         let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_reframe_path(dir: &Path) -> PathBuf {
+        let otio_path = write_fixture_project(dir);
+        let mut tl = read_otio_timeline(&otio_path, &mut Vec::new()).expect("fixture should parse");
+        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        metadata.tracking_package = Some(TrackingPackage {
+            reframe_paths: vec![ReframePath {
+                id: "reframe-c1-9-16".into(),
+                clip_id: "c1".into(),
+                aspect_ratio: "9:16".into(),
+                source_width: 1920,
+                source_height: 1080,
+                target_width: 1080,
+                target_height: 1920,
+                keyframes: vec![
+                    ReframeKeyframe {
+                        time_s: 0.0,
+                        center: [0.30, 0.35],
+                        scale: 3.1604938271604937,
+                        confidence: Some(0.91),
+                    },
+                    ReframeKeyframe {
+                        time_s: 1.0,
+                        center: [0.60, 0.45],
+                        scale: 3.1604938271604937,
+                        confidence: Some(0.89),
+                    },
+                ],
+                smoothing: ReframeSmoothing::Moderate,
+                evidence_track_id: Some("speaker-face".into()),
+                safe_area: Some("mobile".into()),
+            }],
+            ..TrackingPackage::default()
+        });
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
         otio_path
     }
@@ -8482,6 +9283,36 @@ mod tests {
     }
 
     #[test]
+    fn timeline_render_spec_applies_tracking_reframe_path_to_matching_clip() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_reframe_path(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(
+            filter.contains("scale=ceil(iw*3.160494/2)*2"),
+            "missing subject reframe scale: {filter}"
+        );
+        assert!(
+            filter.contains("crop=iw/3.160494:ih/3.160494"),
+            "missing subject reframe crop: {filter}"
+        );
+        assert!(
+            filter.contains("x=(in_w-out_w)*(if(lt(t\\,0)"),
+            "missing dynamic x center expression: {filter}"
+        );
+        assert!(
+            filter.contains("0.3+(0.6-0.3)*"),
+            "missing x keyframe interpolation: {filter}"
+        );
+        assert!(
+            filter.contains("0.35+(0.45-0.35)*"),
+            "missing y keyframe interpolation: {filter}"
+        );
+    }
+
+    #[test]
     fn timeline_render_spec_lowers_tracker_bind_graph_to_overlay_animation() {
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project_with_tracker_bound_overlay(dir.path());
@@ -8817,6 +9648,120 @@ mod tests {
         assert_eq!(
             spec.limitations[0].animation_id.as_deref(),
             Some("anim-base-brightness")
+        );
+    }
+
+    #[test]
+    fn base_clip_blur_radius_animation_lowers_to_varblur_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-base-blur".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "awidat.blur.radius_px".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(spec.limitations.is_empty());
+        assert!(
+            filter.contains("varblur=min_r=0:max_r=100:planes=15"),
+            "animated clip blur should lower through a radius-map varblur filter: {filter}"
+        );
+        assert!(
+            filter.contains("geq=lum='min(max(("),
+            "animated clip blur should drive the radius map from keyframes: {filter}"
+        );
+    }
+
+    #[test]
+    fn base_clip_shake_intensity_animation_lowers_to_dynamic_crop_expression() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-base-shake".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "awidat.shake.intensity_px".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 14.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(spec.limitations.is_empty());
+        assert!(
+            filter.contains("pad=iw+28:ih+28:14:14"),
+            "animated shake should allocate padding from peak keyframe intensity: {filter}"
+        );
+        assert!(
+            filter.contains("sin(2*PI*12*t)"),
+            "animated shake should use the default shake frequency without a stamped effect: {filter}"
+        );
+        assert!(
+            filter.contains("if(lt(t\\,0)\\,0"),
+            "animated shake should drive displacement from keyframes: {filter}"
+        );
+    }
+
+    #[test]
+    fn base_clip_warp_k1_animation_lowers_to_sendcmd_lenscorrection() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-base-warp".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "awidat.warp.k1".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -0.15), Keyframe::linear(1.0, 0.05)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(spec.limitations.is_empty());
+        assert!(
+            filter.contains("sendcmd=c='0 warp0 k1 -0.15"),
+            "animated warp should command lenscorrection from first keyframe: {filter}"
+        );
+        assert!(
+            filter.contains("1 warp0 k1 0.05"),
+            "animated warp should command lenscorrection through final keyframe: {filter}"
+        );
+        assert!(
+            filter.contains("0.5 warp0 k1 -0.05"),
+            "animated warp should sample interpolated values between keyframes: {filter}"
+        );
+        assert!(
+            filter.contains("lenscorrection@warp0=cx=0.5:cy=0.5:k1=-0.15:k2=0:i=bilinear"),
+            "animated warp should initialize lenscorrection from first keyframe/defaults: {filter}"
         );
     }
 
@@ -10284,6 +11229,102 @@ mod tests {
         assert!(
             plan.filter_complex.contains("[sv0][sa0]concat"),
             "post-reframe/post-speed labels should feed concat, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_shake_before_speed_and_concat() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.shake = Some(ShakePlan {
+            intensity_px: 6.0,
+            frequency_hz: 10.0,
+        });
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex.contains(
+                "[0:v:0]pad=iw+12:ih+12:6:6,\
+                 crop=w=iw-12:h=ih-12:x=6+6*sin(2*PI*10*t):y=6+6*cos(2*PI*7.3*t)[shv0]"
+            ),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[shv0]setpts=0.5*PTS[sv0]"),
+            "shake should feed speed, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[sv0][sa0]concat"),
+            "post-shake/post-speed labels should feed concat, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_clip_blur_before_reframe_and_speed() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.blur = Some(BlurPlan { radius_px: 4.5 });
+        s0.reframe = Some(ReframePlan {
+            zoom: 1.2,
+            x: 0.0,
+            y: 0.0,
+        });
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0]gblur=sigma=4.5[blv0];"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[blv0]scale=ceil(iw*1.2/2)*2"),
+            "blur should feed reframe, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[rv0]setpts=0.5*PTS[sv0]"),
+            "reframe should feed speed, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_warp_after_reframe_before_shake_and_speed() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.reframe = Some(ReframePlan {
+            zoom: 1.2,
+            x: 0.0,
+            y: 0.0,
+        });
+        s0.warp = Some(WarpPlan {
+            k1: -0.12,
+            k2: 0.03,
+            center_x: 0.45,
+            center_y: 0.55,
+        });
+        s0.shake = Some(ShakePlan {
+            intensity_px: 5.0,
+            frequency_hz: 8.0,
+        });
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[rv0]lenscorrection=cx=0.45:cy=0.55:k1=-0.12:k2=0.03:i=bilinear[wv0];"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[wv0]pad=iw+10:ih+10:5:5"),
+            "warp should feed shake, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[shv0]setpts=0.5*PTS[sv0]"),
+            "shake should feed speed, got: {}",
             plan.filter_complex,
         );
     }
@@ -11918,11 +12959,15 @@ animations: Vec::new(),
                         time_s: 0.0,
                         x: -0.2,
                         y: 0.0,
+                        outgoing_control: None,
+                        incoming_control: None,
                     },
                     awidat_proto::professional::MotionPathPoint {
                         time_s: 1.0,
                         x: 0.2,
                         y: 0.4,
+                        outgoing_control: None,
+                        incoming_control: None,
                     },
                 ],
             }),
@@ -11947,6 +12992,72 @@ animations: Vec::new(),
         assert!(
             filter.contains("y=((h-text_h)/2)+h*(if(lt((t-1)"),
             "title.position path should drive y offset: {filter}"
+        );
+    }
+
+    #[test]
+    fn title_motion_path_uses_keyframe_progress_curve() {
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.animations = vec![RenderParameterAnimation {
+            parameter: "title.position".to_string(),
+            keyframes: vec![
+                Keyframe {
+                    time_s: 0.0,
+                    value: 0.0,
+                    interpolation: KeyframeInterpolation::Bezier,
+                    easing: Easing::Linear,
+                    bezier: Some(BezierHandles {
+                        out_x: 0.25,
+                        out_y: 0.9,
+                        in_x: 0.75,
+                        in_y: 0.1,
+                    }),
+                    tangent_mode: Default::default(),
+                    spring: None,
+                },
+                Keyframe::linear(1.0, 1.0),
+            ],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: Some(awidat_proto::professional::MotionPath {
+                points: vec![
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 0.0,
+                        x: -0.2,
+                        y: 0.0,
+                        outgoing_control: None,
+                        incoming_control: None,
+                    },
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 1.0,
+                        x: 0.2,
+                        y: 0.4,
+                        outgoing_control: None,
+                        incoming_control: None,
+                    },
+                ],
+            }),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &[],
+            &[],
+            &[],
+            &[title],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("min(max("),
+            "motion path should clamp keyframed progress before sampling path: {filter}"
+        );
+        assert!(
+            filter.contains("0.03125") && filter.contains("0.96875"),
+            "bezier progress should be sampled into the motion-path expression: {filter}"
         );
     }
 

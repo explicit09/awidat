@@ -2,7 +2,8 @@
 
 use awidat_proto::professional::{
     BezierHandles, Easing, ExtrapolationMode, Keyframe, KeyframeInterpolation, MotionPath,
-    MotionPathPoint, ParameterAnimation, SpringParameters, TangentMode, is_runtime_clip_parameter,
+    MotionPathControlPoint, MotionPathPoint, ParameterAnimation, SpringParameters, TangentMode,
+    is_runtime_clip_parameter,
 };
 
 /// Returns true for parameter paths supported by the Phase 3A render/preview runtime.
@@ -17,6 +18,21 @@ pub fn evaluate_keyframes(keyframes: &[Keyframe], local_time_s: f64) -> Option<f
         local_time_s,
         ExtrapolationMode::Hold,
         ExtrapolationMode::Hold,
+    )
+}
+
+/// Evaluates sorted keyframes with explicit pre/post extrapolation behavior.
+pub fn evaluate_keyframes_with_modes(
+    keyframes: &[Keyframe],
+    local_time_s: f64,
+    pre_extrapolation: ExtrapolationMode,
+    post_extrapolation: ExtrapolationMode,
+) -> Option<f64> {
+    evaluate_keyframes_with_extrapolation(
+        keyframes,
+        local_time_s,
+        pre_extrapolation,
+        post_extrapolation,
     )
 }
 
@@ -228,12 +244,24 @@ pub fn evaluate_motion_path(path: &MotionPath, local_time_s: f64) -> Option<(f64
             return Some((current.x, current.y));
         }
         let progress = (local_time_s - current.time_s) / (next.time_s - current.time_s);
-        return Some((
-            current.x + (next.x - current.x) * progress,
-            current.y + (next.y - current.y) * progress,
-        ));
+        return Some(motion_path_segment_point(current, next, progress));
     }
     path.points.last().map(|point| (point.x, point.y))
+}
+
+/// Evaluates a persisted animation's motion path, using the animation value
+/// as normalized path progress when keyframes are present.
+pub fn evaluate_animation_motion_path(
+    animation: &ParameterAnimation,
+    local_time_s: f64,
+) -> Option<(f64, f64)> {
+    let path = animation.motion_path.as_ref()?;
+    if animation.keyframes.is_empty() {
+        return evaluate_motion_path(path, local_time_s);
+    }
+    let progress = evaluate_animation(animation, local_time_s)?;
+    let path_time_s = motion_path_time_for_progress(path, progress)?;
+    evaluate_motion_path(path, path_time_s)
 }
 
 /// Converts a motion path coordinate to an FFmpeg expression.
@@ -257,11 +285,16 @@ pub fn motion_path_to_ffmpeg_expr(
         } else {
             let start_value = motion_path_coordinate_value(current, coordinate);
             let end_value = motion_path_coordinate_value(next, coordinate);
-            format!(
-                "{start_value}+({end_value}-{start_value})*((({time_var}-{start})/({end}-{start})))",
+            let progress = format!(
+                "(({time_var}-{start})/({end}-{start}))",
                 start = current.time_s,
                 end = next.time_s,
-            )
+            );
+            if motion_path_segment_has_controls(current, next) {
+                motion_path_cubic_expr(current, next, coordinate, &progress)
+            } else {
+                format!("{start_value}+({end_value}-{start_value})*{progress}")
+            }
         };
         fallback = format!(
             "if(lt({time_var}\\,{end})\\,{value}\\,{fallback})",
@@ -274,6 +307,38 @@ pub fn motion_path_to_ffmpeg_expr(
         first_time = first.time_s,
         first_value = motion_path_coordinate_value(first, coordinate),
     )
+}
+
+/// Converts a motion path coordinate to an FFmpeg expression, using keyframes
+/// as normalized path progress when present.
+pub fn motion_path_to_ffmpeg_expr_with_keyframes(
+    path: &MotionPath,
+    keyframes: &[Keyframe],
+    pre_extrapolation: ExtrapolationMode,
+    post_extrapolation: ExtrapolationMode,
+    coordinate: MotionPathCoordinate,
+    time_var: &str,
+) -> String {
+    if keyframes.is_empty() {
+        return motion_path_to_ffmpeg_expr(path, coordinate, time_var);
+    }
+    let Some(first) = path.points.first() else {
+        return "0".to_string();
+    };
+    let Some(last) = path.points.last() else {
+        return "0".to_string();
+    };
+    let progress_expr = keyframes_to_ffmpeg_expr_with_extrapolation(
+        keyframes,
+        time_var,
+        pre_extrapolation,
+        post_extrapolation,
+    );
+    let path_time_expr = format!(
+        "{}+({}-{})*min(max({progress_expr}\\,0)\\,1)",
+        first.time_s, last.time_s, first.time_s
+    );
+    motion_path_to_ffmpeg_expr(path, coordinate, &path_time_expr)
 }
 
 /// Axis selector for motion path expression lowering.
@@ -290,6 +355,83 @@ fn motion_path_coordinate_value(point: MotionPathPoint, coordinate: MotionPathCo
         MotionPathCoordinate::X => point.x,
         MotionPathCoordinate::Y => point.y,
     }
+}
+
+fn motion_path_segment_has_controls(current: MotionPathPoint, next: MotionPathPoint) -> bool {
+    current.outgoing_control.is_some() || next.incoming_control.is_some()
+}
+
+fn motion_path_segment_point(
+    current: MotionPathPoint,
+    next: MotionPathPoint,
+    progress: f64,
+) -> (f64, f64) {
+    if !motion_path_segment_has_controls(current, next) {
+        return (
+            current.x + (next.x - current.x) * progress,
+            current.y + (next.y - current.y) * progress,
+        );
+    }
+    let outgoing = current.outgoing_control.unwrap_or(MotionPathControlPoint {
+        x: current.x,
+        y: current.y,
+    });
+    let incoming = next.incoming_control.unwrap_or(MotionPathControlPoint {
+        x: next.x,
+        y: next.y,
+    });
+    (
+        cubic_bezier_value(current.x, outgoing.x, incoming.x, next.x, progress),
+        cubic_bezier_value(current.y, outgoing.y, incoming.y, next.y, progress),
+    )
+}
+
+fn cubic_bezier_value(start: f64, control_1: f64, control_2: f64, end: f64, progress: f64) -> f64 {
+    let inverse = 1.0 - progress;
+    inverse.powi(3) * start
+        + 3.0 * inverse.powi(2) * progress * control_1
+        + 3.0 * inverse * progress.powi(2) * control_2
+        + progress.powi(3) * end
+}
+
+fn motion_path_cubic_expr(
+    current: MotionPathPoint,
+    next: MotionPathPoint,
+    coordinate: MotionPathCoordinate,
+    progress: &str,
+) -> String {
+    let start = motion_path_coordinate_value(current, coordinate);
+    let outgoing = current
+        .outgoing_control
+        .map(|control| motion_path_control_value(control, coordinate))
+        .unwrap_or(start);
+    let end = motion_path_coordinate_value(next, coordinate);
+    let incoming = next
+        .incoming_control
+        .map(|control| motion_path_control_value(control, coordinate))
+        .unwrap_or(end);
+    format!(
+        "pow(1-{progress}\\,3)*{start}+3*pow(1-{progress}\\,2)*{progress}*{outgoing}+3*(1-{progress})*pow({progress}\\,2)*{incoming}+pow({progress}\\,3)*{end}"
+    )
+}
+
+fn motion_path_control_value(
+    control: MotionPathControlPoint,
+    coordinate: MotionPathCoordinate,
+) -> f64 {
+    match coordinate {
+        MotionPathCoordinate::X => control.x,
+        MotionPathCoordinate::Y => control.y,
+    }
+}
+
+fn motion_path_time_for_progress(path: &MotionPath, progress: f64) -> Option<f64> {
+    if !progress.is_finite() {
+        return None;
+    }
+    let first = path.points.first()?;
+    let last = path.points.last()?;
+    Some(first.time_s + (last.time_s - first.time_s) * progress.clamp(0.0, 1.0))
 }
 
 fn ffmpeg_extrapolated_endpoint(
@@ -871,16 +1013,155 @@ mod tests {
                     time_s: 0.0,
                     x: -0.2,
                     y: 0.0,
+                    outgoing_control: None,
+                    incoming_control: None,
                 },
                 awidat_proto::professional::MotionPathPoint {
                     time_s: 1.0,
                     x: 0.2,
                     y: 0.4,
+                    outgoing_control: None,
+                    incoming_control: None,
                 },
             ],
         };
 
         assert_eq!(evaluate_motion_path(&path, 0.5), Some((0.0, 0.2)));
+    }
+
+    #[test]
+    fn evaluates_motion_path_spatial_bezier_segment() {
+        let path =
+            awidat_proto::professional::MotionPath {
+                points: vec![
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 0.0,
+                        x: 0.0,
+                        y: 0.0,
+                        outgoing_control: Some(
+                            awidat_proto::professional::MotionPathControlPoint { x: 0.0, y: 1.0 },
+                        ),
+                        incoming_control: None,
+                    },
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 1.0,
+                        x: 1.0,
+                        y: 1.0,
+                        outgoing_control: None,
+                        incoming_control: Some(
+                            awidat_proto::professional::MotionPathControlPoint { x: 1.0, y: 0.0 },
+                        ),
+                    },
+                ],
+            };
+
+        let midpoint = evaluate_motion_path(&path, 0.5).expect("path should evaluate");
+
+        assert_eq!(midpoint, (0.5, 0.5));
+        assert_eq!(evaluate_motion_path(&path, 0.25), Some((0.15625, 0.4375)));
+    }
+
+    #[test]
+    fn motion_path_ffmpeg_expression_lowers_spatial_bezier_segment() {
+        let path =
+            awidat_proto::professional::MotionPath {
+                points: vec![
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 0.0,
+                        x: 0.0,
+                        y: 0.0,
+                        outgoing_control: Some(
+                            awidat_proto::professional::MotionPathControlPoint { x: 0.0, y: 1.0 },
+                        ),
+                        incoming_control: None,
+                    },
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 1.0,
+                        x: 1.0,
+                        y: 1.0,
+                        outgoing_control: None,
+                        incoming_control: Some(
+                            awidat_proto::professional::MotionPathControlPoint { x: 1.0, y: 0.0 },
+                        ),
+                    },
+                ],
+            };
+
+        let expression = motion_path_to_ffmpeg_expr(&path, MotionPathCoordinate::X, "t");
+
+        assert!(
+            expression.contains("3*pow(1-((t-0)/(1-0))\\,2)*((t-0)/(1-0))*0"),
+            "expected cubic Bezier term in FFmpeg expression: {expression}"
+        );
+        assert!(
+            expression.contains("pow(((t-0)/(1-0))\\,3)*1"),
+            "expected cubic endpoint in FFmpeg expression: {expression}"
+        );
+    }
+
+    #[test]
+    fn evaluates_motion_path_with_animation_progress_easing() {
+        let animation = ParameterAnimation {
+            id: "move-eased".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-a".into(),
+                parameter: "title.position".into(),
+            },
+            keyframes: vec![
+                Keyframe {
+                    time_s: 0.0,
+                    value: 0.0,
+                    interpolation: KeyframeInterpolation::Bezier,
+                    easing: Easing::Linear,
+                    bezier: Some(BezierHandles {
+                        out_x: 0.25,
+                        out_y: 0.9,
+                        in_x: 0.75,
+                        in_y: 0.1,
+                    }),
+                    tangent_mode: TangentMode::Auto,
+                    spring: None,
+                },
+                Keyframe::linear(1.0, 1.0),
+            ],
+            metadata_only: false,
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: Some(awidat_proto::professional::MotionPath {
+                points: vec![
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 0.0,
+                        x: -0.2,
+                        y: 0.0,
+                        outgoing_control: None,
+                        incoming_control: None,
+                    },
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 1.0,
+                        x: 0.2,
+                        y: 0.4,
+                        outgoing_control: None,
+                        incoming_control: None,
+                    },
+                ],
+            }),
+            rationale: None,
+        };
+
+        let eased = evaluate_animation_motion_path(&animation, 0.25).unwrap();
+        let linear_at_same_time =
+            evaluate_motion_path(animation.motion_path.as_ref().unwrap(), 0.25)
+                .expect("path should evaluate");
+
+        assert_ne!(eased, linear_at_same_time);
+        assert!(
+            eased.0 > linear_at_same_time.0,
+            "bezier progress should advance farther along x than raw linear time"
+        );
+        assert!(
+            eased.1 > linear_at_same_time.1,
+            "bezier progress should advance farther along y than raw linear time"
+        );
     }
 
     #[test]

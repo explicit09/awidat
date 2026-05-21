@@ -572,6 +572,13 @@ pub const RUNTIME_CLIP_PARAMETERS: &[&str] = &[
     "overlay.scale",
     "overlay.rotation_deg",
     "overlay.blur",
+    "awidat.blur.radius_px",
+    "awidat.shake.intensity_px",
+    "awidat.shake.frequency_hz",
+    "awidat.warp.k1",
+    "awidat.warp.k2",
+    "awidat.warp.center_x",
+    "awidat.warp.center_y",
 ];
 
 /// Track parameter paths executable by the current preview/render runtime.
@@ -707,6 +714,19 @@ fn validate_motion_path(
                 format!("parameter animation {animation_id} has a non-finite motion path point"),
             ));
         }
+        for control in [point.outgoing_control, point.incoming_control]
+            .into_iter()
+            .flatten()
+        {
+            if !control.x.is_finite() || !control.y.is_finite() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::ParameterAnimation,
+                    format!(
+                        "parameter animation {animation_id} has a non-finite motion path control point"
+                    ),
+                ));
+            }
+        }
     }
 }
 
@@ -738,11 +758,33 @@ fn validate_parameter_animation_value(
                 ),
             ));
         }
-        "overlay.blur" if keyframe.value < 0.0 => {
+        "overlay.blur" | "awidat.blur.radius_px" | "awidat.shake.intensity_px"
+            if keyframe.value < 0.0 =>
+        {
             diagnostics.push(ProfessionalDiagnostic::error(
                 CapabilityArea::ParameterAnimation,
                 format!(
                     "parameter animation {animation_id} target {parameter} value {} must be non-negative",
+                    keyframe.value
+                ),
+            ));
+        }
+        "awidat.shake.frequency_hz" if keyframe.value <= 0.0 => {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} target {parameter} value {} must be positive",
+                    keyframe.value
+                ),
+            ));
+        }
+        "awidat.warp.center_x" | "awidat.warp.center_y"
+            if !(0.0..=1.0).contains(&keyframe.value) =>
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} target {parameter} value {} must be in [0, 1]",
                     keyframe.value
                 ),
             ));
@@ -893,6 +935,21 @@ pub struct MotionPath {
 pub struct MotionPathPoint {
     /// Time in seconds.
     pub time_s: f64,
+    /// Horizontal offset in viewport-width units.
+    pub x: f64,
+    /// Vertical offset in viewport-height units.
+    pub y: f64,
+    /// Optional outgoing spatial control point for the segment after this point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outgoing_control: Option<MotionPathControlPoint>,
+    /// Optional incoming spatial control point for the segment before this point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incoming_control: Option<MotionPathControlPoint>,
+}
+
+/// Absolute 2D control point for a cubic spatial motion-path segment.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MotionPathControlPoint {
     /// Horizontal offset in viewport-width units.
     pub x: f64,
     /// Vertical offset in viewport-height units.

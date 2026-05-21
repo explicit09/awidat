@@ -27,6 +27,7 @@ use awidat_proto::awidat_meta::{
     cut_boundary_key,
 };
 use awidat_proto::otio::{Clip, StackChild, Timeline, TrackChild, TrackKind};
+use awidat_render::professional::{SubjectReframeRequest, author_subject_reframe_path_from_track};
 use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
@@ -594,6 +595,33 @@ fn apply_one(
                 package.mattes.len()
             ))
         }
+        EdlOp::AuthorSubjectReframeFromTrack {
+            track_id,
+            clip_id,
+            aspect_ratio,
+            source_width,
+            source_height,
+            target_width,
+            target_height,
+            frame_rate,
+            smoothing,
+            safe_area,
+        } => apply_author_subject_reframe_from_track(
+            working,
+            index,
+            track_id,
+            SubjectReframeRequest {
+                clip_id: clip_id.clone(),
+                aspect_ratio: aspect_ratio.clone(),
+                source_width: *source_width,
+                source_height: *source_height,
+                target_width: *target_width,
+                target_height: *target_height,
+                frame_rate: *frame_rate,
+                smoothing: *smoothing,
+                safe_area: safe_area.clone(),
+            },
+        ),
         EdlOp::SetColorFinishing { state } => {
             let meta = timeline_awidat_metadata(working);
             meta.color_finishing = Some(state.clone());
@@ -708,6 +736,7 @@ fn resolve_locator_for_op(
         | EdlOp::SetMotionTemplate { .. }
         | EdlOp::AttachComposition { .. }
         | EdlOp::SetTrackingPackage { .. }
+        | EdlOp::AuthorSubjectReframeFromTrack { .. }
         | EdlOp::SetColorFinishing { .. }
         | EdlOp::SetAudioFinishing { .. }
         | EdlOp::SelectDeliveryProfile { .. }
@@ -725,6 +754,35 @@ fn required_locator(index: usize, locator: Option<ClipLocator>) -> Result<ClipLo
         index,
         message: "internal error: anchored op applied without a resolved locator".into(),
     })
+}
+
+fn apply_author_subject_reframe_from_track(
+    working: &mut Timeline,
+    index: usize,
+    track_id: &str,
+    request: SubjectReframeRequest,
+) -> Result<String, ApplyError> {
+    let clip_id = request.clip_id.clone();
+    let meta = timeline_awidat_metadata(working);
+    let package = meta
+        .tracking_package
+        .as_mut()
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: "author subject reframe requires an existing tracking package".into(),
+        })?;
+    let plan =
+        author_subject_reframe_path_from_track(package, track_id, request).map_err(|err| {
+            ApplyError::Invalid {
+                index,
+                message: format!("author subject reframe failed: {err}"),
+            }
+        })?;
+
+    Ok(format!(
+        "authored subject reframe path {} for clip {} from tracker {}",
+        plan.reframe_id, clip_id, track_id
+    ))
 }
 
 fn apply_set_parameter_animation(
@@ -6461,7 +6519,10 @@ mod tests {
         Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
         Track, TrackChild, TrackKind,
     };
-    use awidat_proto::professional::SourceRange;
+    use awidat_proto::professional::{
+        CoordinateSpace, ReframeSmoothing, SourceRange, TrackKind as ProfessionalTrackKind,
+        TrackSample, TrackSidecar, TrackingPackage,
+    };
 
     fn timeline_with_three_clips() -> Timeline {
         let mut tl = Timeline::empty("test");
@@ -9355,6 +9416,130 @@ mod tests {
     }
 
     #[test]
+    fn apply_set_effect_stamps_shake_defaults() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.shake".into(),
+                params: serde_json::Map::new(),
+                rationale: Some("add handheld emphasis".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let effect = clip
+            .effects
+            .iter()
+            .find(|effect| effect.effect_name == "awidat.shake")
+            .expect("shake effect should be stamped");
+        assert_eq!(effect.name, "Shake");
+        assert_eq!(
+            effect.metadata.get("intensity_px").and_then(|v| v.as_f64()),
+            Some(8.0)
+        );
+        assert_eq!(
+            effect.metadata.get("frequency_hz").and_then(|v| v.as_f64()),
+            Some(12.0)
+        );
+        assert_eq!(
+            effect.metadata.get("rationale").and_then(|v| v.as_str()),
+            Some("add handheld emphasis")
+        );
+    }
+
+    #[test]
+    fn apply_set_effect_stamps_blur_defaults() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.blur".into(),
+                params: serde_json::Map::new(),
+                rationale: Some("soften distracting background".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let effect = clip
+            .effects
+            .iter()
+            .find(|effect| effect.effect_name == "awidat.blur")
+            .expect("blur effect should be stamped");
+        assert_eq!(effect.name, "Blur");
+        assert_eq!(
+            effect.metadata.get("radius_px").and_then(|v| v.as_f64()),
+            Some(8.0)
+        );
+        assert_eq!(
+            effect.metadata.get("rationale").and_then(|v| v.as_str()),
+            Some("soften distracting background")
+        );
+    }
+
+    #[test]
+    fn apply_set_effect_stamps_warp_defaults() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetEffect {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                effect: "awidat.warp".into(),
+                params: serde_json::Map::new(),
+                rationale: Some("add stylized lens bend".into()),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(clip) = &t.children[1] else {
+            panic!()
+        };
+        let effect = clip
+            .effects
+            .iter()
+            .find(|effect| effect.effect_name == "awidat.warp")
+            .expect("warp effect should be stamped");
+        assert_eq!(effect.name, "Warp");
+        assert_eq!(
+            effect.metadata.get("k1").and_then(|v| v.as_f64()),
+            Some(-0.08)
+        );
+        assert_eq!(
+            effect.metadata.get("k2").and_then(|v| v.as_f64()),
+            Some(0.0)
+        );
+        assert_eq!(
+            effect.metadata.get("center_x").and_then(|v| v.as_f64()),
+            Some(0.5)
+        );
+        assert_eq!(
+            effect.metadata.get("center_y").and_then(|v| v.as_f64()),
+            Some(0.5)
+        );
+        assert_eq!(
+            effect.metadata.get("rationale").and_then(|v| v.as_str()),
+            Some("add stylized lens bend")
+        );
+    }
+
+    #[test]
     fn apply_set_effect_replaces_same_id_effect() {
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
@@ -9449,6 +9634,192 @@ mod tests {
                 .iter()
                 .any(|e| e.effect_name == "awidat.color_correction")
         );
+    }
+
+    #[test]
+    fn apply_set_parameter_animation_accepts_runtime_blur_effect_parameter() {
+        let tl = timeline_with_three_clips();
+        let animation = awidat_proto::professional::ParameterAnimation {
+            id: "anim-blur-radius".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-1".into(),
+                parameter: "awidat.blur.radius_px".into(),
+            },
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                awidat_proto::professional::Keyframe::linear(1.0, 12.0),
+            ],
+            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetParameterAnimation {
+                animation: animation.clone(),
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        assert!(outcome.applied[0].description.contains("anim-blur-radius"));
+        assert_eq!(
+            new_tl
+                .metadata
+                .awidat
+                .as_ref()
+                .unwrap()
+                .parameter_animations,
+            vec![animation]
+        );
+    }
+
+    #[test]
+    fn apply_set_parameter_animation_accepts_runtime_shake_effect_parameter() {
+        let tl = timeline_with_three_clips();
+        let animation = awidat_proto::professional::ParameterAnimation {
+            id: "anim-shake-intensity".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-1".into(),
+                parameter: "awidat.shake.intensity_px".into(),
+            },
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                awidat_proto::professional::Keyframe::linear(1.0, 14.0),
+            ],
+            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetParameterAnimation {
+                animation: animation.clone(),
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("anim-shake-intensity")
+        );
+        assert_eq!(
+            new_tl
+                .metadata
+                .awidat
+                .as_ref()
+                .unwrap()
+                .parameter_animations,
+            vec![animation]
+        );
+    }
+
+    #[test]
+    fn apply_set_parameter_animation_accepts_runtime_warp_effect_parameter() {
+        let tl = timeline_with_three_clips();
+        let animation = awidat_proto::professional::ParameterAnimation {
+            id: "anim-warp-k1".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-1".into(),
+                parameter: "awidat.warp.k1".into(),
+            },
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, -0.15),
+                awidat_proto::professional::Keyframe::linear(1.0, 0.05),
+            ],
+            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetParameterAnimation {
+                animation: animation.clone(),
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        assert!(outcome.applied[0].description.contains("anim-warp-k1"));
+        assert_eq!(
+            new_tl
+                .metadata
+                .awidat
+                .as_ref()
+                .unwrap()
+                .parameter_animations,
+            vec![animation]
+        );
+    }
+
+    #[test]
+    fn apply_author_subject_reframe_from_track_stores_renderable_path() {
+        let mut tl = timeline_with_three_clips();
+        tl.metadata.awidat.as_mut().unwrap().tracking_package = Some(TrackingPackage {
+            tracks: vec![TrackSidecar {
+                id: "speaker-track".into(),
+                asset_id: "clip-1".into(),
+                kind: ProfessionalTrackKind::Surface,
+                coordinate_space: CoordinateSpace::Normalized,
+                samples: vec![
+                    TrackSample {
+                        frame: 0,
+                        points: vec![[0.20, 0.20], [0.40, 0.20], [0.40, 0.50], [0.20, 0.50]],
+                        confidence: Some(0.91),
+                    },
+                    TrackSample {
+                        frame: 30,
+                        points: vec![[0.50, 0.30], [0.70, 0.30], [0.70, 0.60], [0.50, 0.60]],
+                        confidence: Some(0.89),
+                    },
+                ],
+                confidence: Some(0.9),
+            }],
+            ..TrackingPackage::default()
+        });
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::AuthorSubjectReframeFromTrack {
+                track_id: "speaker-track".into(),
+                clip_id: "clip-1".into(),
+                aspect_ratio: "9:16".into(),
+                source_width: 1920,
+                source_height: 1080,
+                target_width: 1080,
+                target_height: 1920,
+                frame_rate: 30.0,
+                smoothing: ReframeSmoothing::Moderate,
+                safe_area: Some("mobile".into()),
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("authored subject reframe path reframe-clip-1-9-16")
+        );
+        let package = new_tl
+            .metadata
+            .awidat
+            .as_ref()
+            .unwrap()
+            .tracking_package
+            .as_ref()
+            .unwrap();
+        assert_eq!(package.reframe_paths.len(), 1);
+        let path = &package.reframe_paths[0];
+        assert_eq!(path.clip_id, "clip-1");
+        assert_eq!(path.evidence_track_id.as_deref(), Some("speaker-track"));
+        assert_eq!(path.keyframes.len(), 2);
+        assert_eq!(path.keyframes[0].center, [0.3, 0.35]);
+        assert_eq!(path.keyframes[1].center, [0.6, 0.45]);
+        assert_eq!(path.keyframes[1].time_s, 1.0);
     }
 
     #[test]
