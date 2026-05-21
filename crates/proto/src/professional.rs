@@ -3172,6 +3172,41 @@ pub struct AudioMeterReading {
     pub clipping: bool,
 }
 
+/// Master-bus two-pass loudnorm settings.
+///
+/// When present on the timeline-level render spec, the orchestrator runs
+/// the EBU-compliant FFmpeg two-pass workflow: measure first with
+/// `print_format=json`, parse the measured values off stderr, then apply
+/// with those values plugged into the master audio filter chain.
+///
+/// Single-pass `loudnorm` (via `LoudnessTargetPlan` / `AudioFxPlan`)
+/// remains the default; this struct is purely additive.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MasterLoudnorm {
+    /// Integrated loudness target in LUFS (negative).
+    pub target_lufs: f32,
+    /// Loudness range target in LU.
+    pub target_lra: f32,
+    /// True peak ceiling in dBTP (negative or zero).
+    pub target_tp: f32,
+}
+
+impl MasterLoudnorm {
+    /// EBU R128 broadcast preset: -23 LUFS, 7 LU range, -1 dBTP ceiling.
+    pub const EBU_R128: Self = Self {
+        target_lufs: -23.0,
+        target_lra: 7.0,
+        target_tp: -1.0,
+    };
+
+    /// Streaming preset: -16 LUFS, 11 LU range, -1.5 dBTP ceiling.
+    pub const STREAMING: Self = Self {
+        target_lufs: -16.0,
+        target_lra: 11.0,
+        target_tp: -1.5,
+    };
+}
+
 /// Explicit procedural link from a source parameter/signal to a target parameter.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExpressionLink {
