@@ -50,6 +50,7 @@ pub mod raw_stream_audio;
 pub mod raw_stream_render;
 pub mod timeline;
 
+pub use ass::{build_ass_document_for_test, default_caption_font_name, resolve_caption_font_name};
 pub use ffmpeg::{
     BlackFrameRange, FfmpegError, MediaProbe, MotionSignal, SilenceRange, TranscodeProgress,
     TranscodeProgressCallback, extract_frame, extract_frame_complex, extract_frame_filtered,
