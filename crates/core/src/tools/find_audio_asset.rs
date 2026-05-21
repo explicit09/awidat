@@ -154,15 +154,19 @@ impl ToolHandler for FindAudioAssetTool {
             }
         };
 
-        let mut results =
-            find_audio_assets(&pack_root, &args.kind, args.mood.as_deref(), args.max_duration_s)
-                .map_err(|e| {
-                    FunctionCallError::RespondToModel(format!(
-                        "find_audio_asset: failed to load audio pack at \
+        let mut results = find_audio_assets(
+            &pack_root,
+            &args.kind,
+            args.mood.as_deref(),
+            args.max_duration_s,
+        )
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "find_audio_asset: failed to load audio pack at \
                          {}: {e}",
-                        pack_root.display()
-                    ))
-                })?;
+                pack_root.display()
+            ))
+        })?;
 
         let more_available = results.len() > max_results;
         results.truncate(max_results);

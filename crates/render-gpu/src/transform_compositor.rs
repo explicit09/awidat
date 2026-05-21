@@ -176,10 +176,7 @@ impl TransformCompositor {
     }
 
     /// Internal helper that owns the full compose path.
-    fn compose_sync(
-        &self,
-        spec: &CompositorFrameSpec,
-    ) -> Result<CompositorFrame, CompositorError> {
+    fn compose_sync(&self, spec: &CompositorFrameSpec) -> Result<CompositorFrame, CompositorError> {
         if spec.output_width == 0 || spec.output_height == 0 {
             return Err(CompositorError::BadOutputSize {
                 width: spec.output_width,
@@ -355,8 +352,7 @@ impl TransformCompositor {
 
         let view = slice.get_mapped_range();
         let row_bytes = (spec.output_width * 4) as usize;
-        let mut rgba =
-            Vec::with_capacity(row_bytes * spec.output_height as usize);
+        let mut rgba = Vec::with_capacity(row_bytes * spec.output_height as usize);
         for row in 0..(spec.output_height as usize) {
             let start = row * (padded_bytes_per_row as usize);
             rgba.extend_from_slice(&view[start..start + row_bytes]);
@@ -423,4 +419,3 @@ mod tests {
         assert!(matches!(err, CompositorError::BadOutputSize { .. }));
     }
 }
-

@@ -604,14 +604,13 @@ fn apply_preset_to_argv(
         output_path: output_path.to_path_buf(),
         limitations: Vec::new(),
     };
-    let lowered = awidat_render::professional::apply_export_preset_to_spec(spec, preset).map_err(
-        |e| {
+    let lowered =
+        awidat_render::professional::apply_export_preset_to_spec(spec, preset).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "start_render: failed to apply export preset '{}': {e}",
                 preset.id
             ))
-        },
-    )?;
+        })?;
     Ok(lowered.args)
 }
 

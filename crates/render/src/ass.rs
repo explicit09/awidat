@@ -40,7 +40,10 @@ pub(crate) fn is_libass_eligible(title: &TitlePlan) -> bool {
     if title.word_timings.is_empty() {
         return false;
     }
-    matches!(title.role.as_str(), "caption" | "captions" | "subtitle" | "subtitles")
+    matches!(
+        title.role.as_str(),
+        "caption" | "captions" | "subtitle" | "subtitles"
+    )
 }
 
 /// Render `title` to a `.ass` file inside `workdir`. Returns the
@@ -118,7 +121,7 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
         TitlePosition::Bottom => 2,
     };
     let margin_v = match title.position {
-        TitlePosition::Top => 54,    // ~5% of 1080
+        TitlePosition::Top => 54, // ~5% of 1080
         TitlePosition::Center => 0,
         TitlePosition::Bottom => 162, // ~15% of 1080 (above the safe edge)
     };
@@ -192,9 +195,7 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
         text.push_str(&format!("{{\\k{dur_cs}}}{glyphs}"));
     }
 
-    vec![format!(
-        "Dialogue: 0,{start},{end},Caption,,0,0,0,,{text}",
-    )]
+    vec![format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{text}",)]
 }
 
 /// ASS uses `H:MM:SS.cc` (centiseconds). Source seconds are master
@@ -232,7 +233,12 @@ pub(crate) fn hex_to_ass_color(hex: &str) -> String {
     let parse = |start: usize| u8::from_str_radix(trimmed.get(start..start + 2)?, 16).ok();
     let (r, g, b, a) = match trimmed.len() {
         6 => (parse(0), parse(2), parse(4), Some(0x00)),
-        8 => (parse(0), parse(2), parse(4), parse(6).map(|alpha| 0xFF - alpha)),
+        8 => (
+            parse(0),
+            parse(2),
+            parse(4),
+            parse(6).map(|alpha| 0xFF - alpha),
+        ),
         _ => (None, None, None, None),
     };
     match (r, g, b, a) {
@@ -418,8 +424,14 @@ mod tests {
         assert!(doc.contains("world"));
         // Karaoke durations should be word durations in centiseconds
         // (1.6 - 1.0 = 60cs ; 2.4 - 1.6 = 80cs).
-        assert!(doc.contains("\\k60"), "expected hello duration 60cs in: {doc}");
-        assert!(doc.contains("\\k80"), "expected world duration 80cs in: {doc}");
+        assert!(
+            doc.contains("\\k60"),
+            "expected hello duration 60cs in: {doc}"
+        );
+        assert!(
+            doc.contains("\\k80"),
+            "expected world duration 80cs in: {doc}"
+        );
     }
 
     #[test]

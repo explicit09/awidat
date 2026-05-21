@@ -58,7 +58,10 @@ async fn list_stringouts_empty_then_after_creation() {
 
     // Empty up front.
     let out = ListStringoutsTool
-        .handle(invoke("list_stringouts", serde_json::json!({})), ctx_at(dir.path()))
+        .handle(
+            invoke("list_stringouts", serde_json::json!({})),
+            ctx_at(dir.path()),
+        )
         .await
         .unwrap();
     assert!(out.content.contains("total=0"));
@@ -94,7 +97,10 @@ async fn list_stringouts_empty_then_after_creation() {
         .unwrap();
 
     let out = ListStringoutsTool
-        .handle(invoke("list_stringouts", serde_json::json!({})), ctx_at(dir.path()))
+        .handle(
+            invoke("list_stringouts", serde_json::json!({})),
+            ctx_at(dir.path()),
+        )
         .await
         .unwrap();
     assert!(
@@ -165,7 +171,10 @@ async fn list_bins_includes_user_defined_and_built_in_roles() {
     init_project_with_bins(dir.path());
 
     let out = ListBinsTool
-        .handle(invoke("list_bins", serde_json::json!({})), ctx_at(dir.path()))
+        .handle(
+            invoke("list_bins", serde_json::json!({})),
+            ctx_at(dir.path()),
+        )
         .await
         .unwrap();
     // User-defined.
@@ -192,7 +201,10 @@ async fn list_bins_on_empty_project_still_lists_role_buckets() {
     Project::init(dir.path()).unwrap();
 
     let out = ListBinsTool
-        .handle(invoke("list_bins", serde_json::json!({})), ctx_at(dir.path()))
+        .handle(
+            invoke("list_bins", serde_json::json!({})),
+            ctx_at(dir.path()),
+        )
         .await
         .unwrap();
     // No user-defined bins yet but role buckets always appear.

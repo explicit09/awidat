@@ -19,7 +19,7 @@
 use std::path::Path;
 
 use awidat_core::vc::{
-    commit_current_timeline, commit_current_timeline_as, log, open_or_init, CommitAuthor,
+    CommitAuthor, commit_current_timeline, commit_current_timeline_as, log, open_or_init,
 };
 
 fn write_minimal_otio(path: &Path, name: &str) {

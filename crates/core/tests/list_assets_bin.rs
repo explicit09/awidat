@@ -9,7 +9,9 @@
 //!     should be able to probe).
 
 use awidat_core::FunctionCallError;
-use awidat_core::media_catalog_mutation::{create_bin, ensure_awidat_metadata, move_asset_to_bin, upsert_asset};
+use awidat_core::media_catalog_mutation::{
+    create_bin, ensure_awidat_metadata, move_asset_to_bin, upsert_asset,
+};
 use awidat_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
 use awidat_core::tools::list_assets::ListAssetsTool;
 use awidat_proto::professional::{AssetReadiness, AssetRecord, AssetRole};

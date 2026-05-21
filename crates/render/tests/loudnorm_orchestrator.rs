@@ -213,8 +213,7 @@ fn orchestrator_errors_when_pass1_stderr_has_no_json_block() {
     let err = run_master_loudnorm_render(dir.path(), &runner).unwrap_err();
     let msg = format!("{err}");
     assert!(
-        msg.contains("loudnorm measurement JSON not found")
-            || msg.contains("MeasureJsonNotFound"),
+        msg.contains("loudnorm measurement JSON not found") || msg.contains("MeasureJsonNotFound"),
         "expected MeasureJsonNotFound, got: {msg}"
     );
     // Pass 2 must not have been submitted.

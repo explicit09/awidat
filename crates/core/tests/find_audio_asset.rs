@@ -142,8 +142,8 @@ async fn tool_handle_returns_json_with_results_and_resolves_default_pack() {
         .await
         .unwrap_or_else(|e| panic!("tool should succeed: {e:?}"));
 
-    let body: serde_json::Value =
-        serde_json::from_str(&out.content).unwrap_or_else(|e| panic!("tool should return JSON: {e}"));
+    let body: serde_json::Value = serde_json::from_str(&out.content)
+        .unwrap_or_else(|e| panic!("tool should return JSON: {e}"));
     let results = body["results"]
         .as_array()
         .unwrap_or_else(|| panic!("results must be array, body={body}"));

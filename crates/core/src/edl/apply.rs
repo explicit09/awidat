@@ -3181,8 +3181,7 @@ fn apply_split(
         let Some(range) = clip.source_range.as_ref() else {
             return Err(ApplyError::Invalid {
                 index,
-                message:
-                    "clip has no source_range; cannot split a clip with implicit range".into(),
+                message: "clip has no source_range; cannot split a clip with implicit range".into(),
             });
         };
         let clip_timeline_start_s: f64 = track.children[..locator.child_index]
@@ -3196,8 +3195,7 @@ fn apply_split(
     // snapped timeline-time back to a source-time so the rest of the
     // split logic can stay in source coordinates.
     let snapped_at_s = if snap.is_some() {
-        let snapped_timeline_s =
-            resolve_snap_time(working, index, projected_timeline_s, snap)?;
+        let snapped_timeline_s = resolve_snap_time(working, index, projected_timeline_s, snap)?;
         at_s + (snapped_timeline_s - projected_timeline_s)
     } else {
         at_s
@@ -10530,7 +10528,10 @@ mod tests {
         // The insert lands exactly at the clip-0/clip-1 boundary
         // because snap pulled 4.96 → 5.0; no gap is needed.
         let TrackChild::Clip(inserted) = &t.children[1] else {
-            panic!("expected inserted clip at position 1, got {:?}", t.children[1])
+            panic!(
+                "expected inserted clip at position 1, got {:?}",
+                t.children[1]
+            )
         };
         assert_eq!(inserted.name, "snap-inserted");
         let TrackChild::Clip(c2) = &t.children[2] else {

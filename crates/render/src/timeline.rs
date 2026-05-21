@@ -4221,8 +4221,7 @@ fn apply_time_remap_setpts_stage(
     let Some(composition) = transition.composition.as_ref() else {
         return (from_label.to_string(), to_label.to_string());
     };
-    let Some(curve) =
-        transitions::extract_time_remap_setpts(composition, transition.duration_s)
+    let Some(curve) = transitions::extract_time_remap_setpts(composition, transition.duration_s)
     else {
         return (from_label.to_string(), to_label.to_string());
     };
@@ -4236,9 +4235,7 @@ fn apply_time_remap_setpts_stage(
     let from_window_start = (outgoing_duration_s - transition.duration_s).max(0.0);
     let from_expr = time_remap_transition_setpts_expr(&curve, from_window_start);
     let from_out = format!("[xtrv{transition_id}o]");
-    filter.push_str(&format!(
-        "{from_label}setpts='{from_expr}/TB'{from_out};"
-    ));
+    filter.push_str(&format!("{from_label}setpts='{from_expr}/TB'{from_out};"));
 
     let to_expr = time_remap_transition_setpts_expr(&curve, 0.0);
     let to_out = format!("[xtrv{transition_id}i]");
@@ -8412,7 +8409,8 @@ fn time_remap_transition_setpts_expr(
     // window land at `window_start_s + samples.last().t_out`.
     let last_idx = samples.len() - 1;
     let last_pair = (samples[last_idx - 1], samples[last_idx]);
-    let mut expr = time_remap_window_segment_expr(last_pair.0, last_pair.1, window_start_s, time_var);
+    let mut expr =
+        time_remap_window_segment_expr(last_pair.0, last_pair.1, window_start_s, time_var);
     for i in (0..last_idx - 1).rev() {
         let pair = (samples[i], samples[i + 1]);
         let segment_expr = time_remap_window_segment_expr(pair.0, pair.1, window_start_s, time_var);
@@ -9427,13 +9425,8 @@ fn build_timeline_render_spec_inner(
     // materialize `.ass` files under <renders>/.ass/<timestamp>/ so
     // the ffmpeg `subtitles=` filter can find them. Drawtext stays
     // the default for everything else.
-    let ass_workdir = if titles
-        .iter()
-        .any(crate::ass::is_libass_eligible)
-    {
-        let dir = renders_dir
-            .join(".ass")
-            .join(timestamp.to_string());
+    let ass_workdir = if titles.iter().any(crate::ass::is_libass_eligible) {
+        let dir = renders_dir.join(".ass").join(timestamp.to_string());
         if let Err(err) = fs::create_dir_all(&dir) {
             tracing::warn!(
                 ?err,

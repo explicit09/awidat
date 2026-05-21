@@ -458,10 +458,7 @@ fn resolve_commit_author(author_override: Option<CommitAuthor>) -> Author {
 /// source as a callback so tests can drive the env-var pathway without
 /// mutating process-global state (Rust 2024 requires `unsafe` for
 /// `std::env::set_var`, which is forbidden workspace-wide).
-fn resolve_commit_author_with_env<F>(
-    author_override: Option<CommitAuthor>,
-    env_lookup: F,
-) -> Author
+fn resolve_commit_author_with_env<F>(author_override: Option<CommitAuthor>, env_lookup: F) -> Author
 where
     F: Fn(&str) -> Option<String>,
 {
@@ -2431,10 +2428,7 @@ mod tests {
 
     #[test]
     fn resolver_prefers_explicit_override_over_env_and_default() {
-        let env = env_from(&[
-            (ENV_USER_NAME, "Bob"),
-            (ENV_USER_EMAIL, "bob@example.com"),
-        ]);
+        let env = env_from(&[(ENV_USER_NAME, "Bob"), (ENV_USER_EMAIL, "bob@example.com")]);
         let carol = CommitAuthor {
             name: "Carol".to_string(),
             email: "carol@example.com".to_string(),
@@ -2446,10 +2440,7 @@ mod tests {
 
     #[test]
     fn resolver_uses_env_vars_when_no_override_present() {
-        let env = env_from(&[
-            (ENV_USER_NAME, "Bob"),
-            (ENV_USER_EMAIL, "bob@example.com"),
-        ]);
+        let env = env_from(&[(ENV_USER_NAME, "Bob"), (ENV_USER_EMAIL, "bob@example.com")]);
         let resolved = resolve_commit_author_with_env(None, env);
         assert_eq!(resolved.name, "Bob");
         assert_eq!(resolved.email, "bob@example.com");

@@ -116,9 +116,7 @@ fn word_timed_caption_emits_libass_subtitles_filter() {
             // `subtitles=` value runs up to the next filter-arg
             // separator (`:`), filter-chain separator (`,`), label
             // start (`[`), graph separator (`;`), or end of arg.
-            let end = s
-                .find([':', ',', '[', ';', ' '])
-                .unwrap_or(s.len());
+            let end = s.find([':', ',', '[', ';', ' ']).unwrap_or(s.len());
             s[..end].to_string()
         })
         .expect("subtitles= argument should carry a path");

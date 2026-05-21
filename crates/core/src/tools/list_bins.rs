@@ -75,9 +75,7 @@ impl ToolHandler for ListBinsTool {
         // doesn't exist yet (e.g. fresh init), gracefully degrade to just
         // the role buckets.
         let project = Project::read(&ctx.project_root).map_err(|e| {
-            FunctionCallError::RespondToModel(format!(
-                "list_bins: unable to read project: {e}"
-            ))
+            FunctionCallError::RespondToModel(format!("list_bins: unable to read project: {e}"))
         })?;
 
         let mut lines: Vec<String> = Vec::new();
@@ -195,7 +193,10 @@ mod tests {
     async fn lists_only_role_buckets_on_empty_project() {
         let dir = tempfile::tempdir().unwrap();
         Project::init(dir.path()).unwrap();
-        let out = ListBinsTool.handle(invoke(), ctx_at(dir.path())).await.unwrap();
+        let out = ListBinsTool
+            .handle(invoke(), ctx_at(dir.path()))
+            .await
+            .unwrap();
         assert!(out.content.contains("total=6"));
         assert!(out.content.contains("role:video"));
         assert!(out.content.contains("role:audio"));
@@ -215,7 +216,10 @@ mod tests {
         create_bin(meta, "broll".into(), "B-roll".into(), None).unwrap();
         project.write(dir.path()).unwrap();
 
-        let out = ListBinsTool.handle(invoke(), ctx_at(dir.path())).await.unwrap();
+        let out = ListBinsTool
+            .handle(invoke(), ctx_at(dir.path()))
+            .await
+            .unwrap();
         assert!(out.content.contains("total=8")); // 6 role + 2 user
         assert!(out.content.contains("kind=user id=scene-1"));
         assert!(out.content.contains("kind=user id=broll"));

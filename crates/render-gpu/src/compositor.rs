@@ -203,11 +203,7 @@ pub struct CompositorFrameSpec<'a> {
 impl<'a> CompositorFrameSpec<'a> {
     /// Convenience: build a spec containing a single layer occupying
     /// the entire output frame at native size.
-    pub fn single_layer(
-        output_width: u32,
-        output_height: u32,
-        layer: LayerSpec<'a>,
-    ) -> Self {
+    pub fn single_layer(output_width: u32, output_height: u32, layer: LayerSpec<'a>) -> Self {
         Self {
             output_width,
             output_height,

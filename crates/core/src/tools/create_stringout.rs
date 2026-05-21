@@ -108,9 +108,7 @@ impl ToolHandler for CreateStringoutTool {
         meta.stringouts.push(stringout);
 
         project.write(&ctx.project_root).map_err(|e| {
-            FunctionCallError::Fatal(format!(
-                "create_stringout: unable to write project: {e}"
-            ))
+            FunctionCallError::Fatal(format!("create_stringout: unable to write project: {e}"))
         })?;
 
         Ok(ToolOutput::text(
@@ -205,17 +203,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         Project::init(dir.path()).unwrap();
         CreateStringoutTool
-            .handle(
-                invoke(serde_json::json!({"id": "x"})),
-                ctx_at(dir.path()),
-            )
+            .handle(invoke(serde_json::json!({"id": "x"})), ctx_at(dir.path()))
             .await
             .unwrap();
         let err = CreateStringoutTool
-            .handle(
-                invoke(serde_json::json!({"id": "x"})),
-                ctx_at(dir.path()),
-            )
+            .handle(invoke(serde_json::json!({"id": "x"})), ctx_at(dir.path()))
             .await
             .unwrap_err();
         assert!(matches!(

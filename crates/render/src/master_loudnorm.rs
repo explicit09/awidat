@@ -151,9 +151,10 @@ pub fn parse_loudnorm_measure_json(stderr: &str) -> Result<MeasuredLoudnorm, Mas
             serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| {
                 MasterLoudnormError::MeasureJsonIncomplete(format!("{key} not f64"))
             }),
-            serde_json::Value::String(s) => s.trim().parse::<f64>().map_err(|e| {
-                MasterLoudnormError::MeasureJsonIncomplete(format!("{key}: {e}"))
-            }),
+            serde_json::Value::String(s) => s
+                .trim()
+                .parse::<f64>()
+                .map_err(|e| MasterLoudnormError::MeasureJsonIncomplete(format!("{key}: {e}"))),
             other => Err(MasterLoudnormError::MeasureJsonIncomplete(format!(
                 "{key} unexpected JSON type: {other:?}"
             ))),
@@ -200,8 +201,8 @@ fn locate_json_block(s: &str) -> Option<(usize, usize)> {
 pub fn build_master_loudnorm_measure_spec(
     project_root: &Path,
 ) -> Result<RenderJobSpec, MasterLoudnormError> {
-    let settings = read_master_loudnorm_plan(project_root)?
-        .ok_or(MasterLoudnormError::MissingSettings)?;
+    let settings =
+        read_master_loudnorm_plan(project_root)?.ok_or(MasterLoudnormError::MissingSettings)?;
     let mut base = build_timeline_render_spec(project_root)?;
     let target_filter = loudnorm_filter_measure(&settings);
     inject_master_loudnorm_filter(&mut base.args, &target_filter);
@@ -215,8 +216,8 @@ pub fn build_master_loudnorm_apply_spec(
     project_root: &Path,
     measured: MeasuredLoudnorm,
 ) -> Result<RenderJobSpec, MasterLoudnormError> {
-    let settings = read_master_loudnorm_plan(project_root)?
-        .ok_or(MasterLoudnormError::MissingSettings)?;
+    let settings =
+        read_master_loudnorm_plan(project_root)?.ok_or(MasterLoudnormError::MissingSettings)?;
     let mut base = build_timeline_render_spec(project_root)?;
     let target_filter = loudnorm_filter_apply(&settings, &measured);
     inject_master_loudnorm_filter(&mut base.args, &target_filter);
@@ -439,27 +440,25 @@ impl RenderJobRunner for JobManagerRunner {
     fn run(&self, spec: &RenderJobSpec) -> Result<RenderRunnerOutput, RenderJobRunnerError> {
         let manager = self.manager.clone();
         let spec = spec.clone();
-        let status: JobStatus = self
-            .runtime
-            .block_on(async move {
-                let id = manager
-                    .start(spec)
+        let status: JobStatus = self.runtime.block_on(async move {
+            let id = manager
+                .start(spec)
+                .await
+                .map_err(|e| RenderJobRunnerError::Failed(e.to_string()))?;
+            loop {
+                let status = manager
+                    .status(&id)
                     .await
                     .map_err(|e| RenderJobRunnerError::Failed(e.to_string()))?;
-                loop {
-                    let status = manager
-                        .status(&id)
-                        .await
-                        .map_err(|e| RenderJobRunnerError::Failed(e.to_string()))?;
-                    if matches!(
-                        status.state,
-                        JobState::Done | JobState::Failed | JobState::Cancelled
-                    ) {
-                        return Ok::<JobStatus, RenderJobRunnerError>(status);
-                    }
-                    tokio::time::sleep(JOB_POLL_INTERVAL).await;
+                if matches!(
+                    status.state,
+                    JobState::Done | JobState::Failed | JobState::Cancelled
+                ) {
+                    return Ok::<JobStatus, RenderJobRunnerError>(status);
                 }
-            })?;
+                tokio::time::sleep(JOB_POLL_INTERVAL).await;
+            }
+        })?;
 
         if !matches!(status.state, JobState::Done) {
             return Err(RenderJobRunnerError::Failed(format!(
@@ -585,7 +584,10 @@ mod tests {
             .filter(|w| w[0] == "-map")
             .map(|w| w[1].clone())
             .collect::<Vec<_>>();
-        assert!(audio_map.contains(&"[mastera]".to_string()), "{audio_map:?}");
+        assert!(
+            audio_map.contains(&"[mastera]".to_string()),
+            "{audio_map:?}"
+        );
         assert!(!audio_map.contains(&"[outa]".to_string()), "{audio_map:?}");
     }
 

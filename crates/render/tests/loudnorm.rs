@@ -13,14 +13,14 @@
 
 #![allow(clippy::unwrap_used)]
 
+use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::otio::{
     Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange, Timeline,
     Track, TrackChild, TrackKind,
 };
-use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::project::files;
 use awidat_render::{
-    build_master_loudnorm_apply_spec, build_master_loudnorm_measure_spec, MeasuredLoudnorm,
+    MeasuredLoudnorm, build_master_loudnorm_apply_spec, build_master_loudnorm_measure_spec,
 };
 use std::fs;
 use std::path::Path;
@@ -163,9 +163,21 @@ fn parse_loudnorm_measure_json_extracts_values() {
 }
 "#;
     let m = awidat_render::parse_loudnorm_measure_json(stderr).unwrap();
-    assert!((m.measured_i - -19.74).abs() < 1e-6, "measured_i={}", m.measured_i);
-    assert!((m.measured_lra - 7.30).abs() < 1e-6, "measured_lra={}", m.measured_lra);
-    assert!((m.measured_tp - -3.10).abs() < 1e-6, "measured_tp={}", m.measured_tp);
+    assert!(
+        (m.measured_i - -19.74).abs() < 1e-6,
+        "measured_i={}",
+        m.measured_i
+    );
+    assert!(
+        (m.measured_lra - 7.30).abs() < 1e-6,
+        "measured_lra={}",
+        m.measured_lra
+    );
+    assert!(
+        (m.measured_tp - -3.10).abs() < 1e-6,
+        "measured_tp={}",
+        m.measured_tp
+    );
     assert!(
         (m.measured_thresh - -29.92).abs() < 1e-6,
         "measured_thresh={}",
