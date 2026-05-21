@@ -127,10 +127,10 @@ await check("proposal stage's lens nav exposes all 9 lenses", async () => {
   await page.close();
 });
 
-await check("every non-proposal stage shows StageStub", async () => {
+await check("Intent + Deliver stages show StageStub (Phase 2.10)", async () => {
   const { page } = await makePage();
   await page.goto(URL, { waitUntil: "networkidle" });
-  for (const stage of ["Intent", "Indexing", "Review", "Revise", "Deliver"]) {
+  for (const stage of ["Intent", "Deliver"]) {
     await setStage(page, stage);
     const body = await page.textContent("body");
     assert.ok(
@@ -138,6 +138,38 @@ await check("every non-proposal stage shows StageStub", async () => {
       `${stage} stub missing primary CTA`,
     );
   }
+  await page.close();
+});
+
+await check("Review stage shows the transcript surface (Phase 3.2)", async () => {
+  const { page } = await makePage();
+  await page.goto(URL, { waitUntil: "networkidle" });
+  await setStage(page, "Review");
+  const body = await page.textContent("body");
+  assert.ok(body.includes("No transcript yet"), "Review surface empty state missing");
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/04-review.png`, fullPage: false });
+  await page.close();
+});
+
+await check("Revise stage shows the revision composer (Phase 3.4)", async () => {
+  const { page } = await makePage();
+  await page.goto(URL, { waitUntil: "networkidle" });
+  await setStage(page, "Revise");
+  const body = await page.textContent("body");
+  assert.ok(body.includes("Revise the working timeline"), "Revise surface title missing");
+  assert.ok(body.includes("Ask agent"), "Revise CTA missing");
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/05-revise.png`, fullPage: false });
+  await page.close();
+});
+
+await check("Indexing stage shows the batch review surface (Phase 3.3)", async () => {
+  const { page } = await makePage();
+  await page.goto(URL, { waitUntil: "networkidle" });
+  await setStage(page, "Indexing");
+  const body = await page.textContent("body");
+  assert.ok(body.includes("Agent command history"), "Batch review missing");
+  assert.ok(body.includes("Batch insights"), "Insights pane missing");
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/06-indexing.png`, fullPage: false });
   await page.close();
 });
 

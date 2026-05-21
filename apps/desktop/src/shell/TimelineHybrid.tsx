@@ -1,6 +1,14 @@
 import { Filter, MoreHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
-import { Inline, Pill, Stack, cn, type PillStatus } from "../ui";
+import {
+  ChannelLanes,
+  Inline,
+  Pill,
+  Stack,
+  cn,
+  type ChannelLane,
+  type PillStatus,
+} from "../ui";
 
 /**
  * TimelineHybrid — the bottom surface from the design spec (Screen 2 + Screen 4).
@@ -70,6 +78,8 @@ export type TimelineHybridProps = {
   currentTimeS?: number;
   /** Per-cut changes counter shown in the "Changes" tab pill (e.g. 12). */
   changeCount?: number;
+  /** Channel lanes shown on the Transcript sub-tab (sentiment, energy, etc.). */
+  channelLanes?: ChannelLane[];
   /** Allows the parent to slot custom content per tab (overrides built-in lane render). */
   contentForTab?: Partial<Record<TimelineTab, ReactNode>>;
 };
@@ -87,6 +97,7 @@ export function TimelineHybrid({
   diff = [],
   currentTimeS = 0,
   changeCount = 0,
+  channelLanes = [],
   contentForTab,
 }: TimelineHybridProps) {
   return (
@@ -159,6 +170,7 @@ export function TimelineHybrid({
             transcript={transcript}
             diff={diff}
             currentTimeS={currentTimeS}
+            channelLanes={channelLanes}
           />
         )}
       </div>
@@ -241,6 +253,7 @@ type DefaultTabBodyProps = {
   transcript: TranscriptCell[];
   diff: DiffChip[];
   currentTimeS: number;
+  channelLanes: ChannelLane[];
 };
 
 function DefaultTabBody({
@@ -252,6 +265,7 @@ function DefaultTabBody({
   transcript,
   diff,
   currentTimeS,
+  channelLanes,
 }: DefaultTabBodyProps) {
   if (tab === "timeline") {
     return (
@@ -268,13 +282,22 @@ function DefaultTabBody({
   }
   if (tab === "transcript") {
     return (
-      <Stack gap="2" className="p-4 overflow-y-auto h-full">
+      <Stack gap="3" className="p-4 overflow-y-auto h-full">
         <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-          Transcript — semantic edit surface
+          Channel lanes
         </span>
-        <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-          Sentence-level transcript editing lands in Phase 3.2 (Review lens semantic affordances).
-        </span>
+        {channelLanes.length > 0 ? (
+          <ChannelLanes
+            durationS={durationS}
+            lanes={channelLanes}
+            currentTimeS={currentTimeS}
+          />
+        ) : (
+          <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
+            No signals computed yet — sentiment, energy, and confidence lanes
+            appear here once the indexing pipeline produces them.
+          </span>
+        )}
       </Stack>
     );
   }
@@ -295,7 +318,7 @@ function TimelineLanes({
   transcript,
   diff,
   currentTimeS,
-}: Omit<DefaultTabBodyProps, "tab">) {
+}: Omit<DefaultTabBodyProps, "tab" | "channelLanes">) {
   const safeDuration = durationS > 0 ? durationS : 1;
   const playheadPct = Math.max(0, Math.min(100, (currentTimeS / safeDuration) * 100));
 

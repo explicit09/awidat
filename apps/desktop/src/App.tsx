@@ -17,10 +17,13 @@ import { useProjectStore } from "./app/state";
 import { useMediaStore } from "./media/store";
 import {
   AppShell,
+  BatchReviewSurface,
   CommandRail,
   LensNav,
   PreviewSurface,
   ProposalInspector,
+  ReviewLensSurface,
+  ReviseSurface,
   StageIndicator,
   StageStub,
   TimelineHybrid,
@@ -101,9 +104,12 @@ function App() {
     }));
   }, [activeProposal]);
 
-  // The PROPOSAL stage is the working surface. All other stages render
-  // the StageStub until Phase 3/4 builds them.
+  // Stage routing — Proposal is the main working surface; Review,
+  // Revise, Indexing, Deliver each take over the center pane with
+  // their own surface. Intent still routes to the StageStub.
   const isProposalStage = stage === "proposal";
+  const isReviewStage = stage === "review";
+  const isReviseStage = stage === "revise";
 
   return (
     <AppShell
@@ -179,6 +185,21 @@ function App() {
             durationS={timelineDuration}
             isPlaying={isPlaying}
           />
+        ) : isReviewStage ? (
+          <ReviewLensSurface
+            durationS={timelineDuration}
+            currentTimeS={currentTimeS}
+          />
+        ) : isReviseStage ? (
+          <ReviseSurface
+            suggestions={[
+              "Tighten the open by lifting the host's welcome.",
+              "Make this section slower.",
+              "Use fewer transitions.",
+            ]}
+          />
+        ) : stage === "indexing" ? (
+          <BatchReviewSurface />
         ) : (
           <StageStub stage={stage} onPrimaryAction={() => setStage("proposal")} />
         )

@@ -36,5 +36,11 @@ export {
   type PreflightSeverity,
   type PreflightFindingRowProps,
 } from "./components/PreflightFindingRow";
+export {
+  ChannelLanes,
+  type ChannelLane,
+  type ChannelLanesProps,
+  type LaneSegment,
+} from "./components/ChannelLanes";
 
 export { cn } from "./cn";
