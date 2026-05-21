@@ -55,9 +55,27 @@ call `vedit_diff` and verify the diff matches the beat plan.
 
 Use `awidat.cross_dissolve` or `SMPTE_Dissolve` for soft phrase
 changes, `awidat.fade_black` only for intentional starts/ends or
-chapter resets, and speed accents only on drops or action peaks. Do not
-use legacy `awidat.fade_in/out` between ordinary adjacent clips, and do
-not add decorative transitions unsupported by `apply_edl`.
+chapter resets, and speed accents only on drops or action peaks. To plan
+speed accents, run:
+
+```bash
+python3 <skill-root>/scripts/speed_ramp_plan.py \
+  --beats beats.json \
+  --duration-s 60 \
+  --accent-every 4 \
+  --slow-factor 0.4 \
+  --fast-factor 1.3 \
+  --ramp-window-s 0.18 \
+  --edl-anchor "clip:<clip-name>" \
+  --rationale "speed accents on downbeats"
+```
+
+The script outputs an `awidat.time_remap` effect plan with a concrete
+`curve` and, when `--edl-anchor` is present, prints an applyable
+`Set Effect` operation. That path works today; switch to the dedicated
+`Set Time Remap` EDL op once that op is available. Do not use legacy
+`awidat.fade_in/out` between ordinary adjacent clips, and do not add
+decorative transitions unsupported by `apply_edl`.
 
 ### 4. Verify
 
