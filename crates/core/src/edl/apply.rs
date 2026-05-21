@@ -149,8 +149,8 @@ fn apply_one(
             apply_trim(working, index, anchor, *start, *end, ctx, locator)
         }
         EdlOp::DeleteClip { anchor } => apply_delete(working, index, anchor, ctx, locator),
-        EdlOp::SplitClip { anchor, at_s } => {
-            apply_split(working, index, anchor, *at_s, ctx, locator)
+        EdlOp::SplitClip { anchor, at_s, snap } => {
+            apply_split(working, index, anchor, *at_s, snap.as_ref(), ctx, locator)
         }
         EdlOp::UntrimClip { anchor, start, end } => {
             apply_untrim(working, index, anchor, *start, *end, ctx, locator)
@@ -160,10 +160,12 @@ fn apply_one(
             track,
             track_kind,
             at_position,
+            at_s,
             start,
             end,
             name,
             link_group_id,
+            snap,
         } => apply_insert_clip(
             working,
             index,
@@ -171,10 +173,12 @@ fn apply_one(
             track,
             *track_kind,
             *at_position,
+            *at_s,
             *start,
             *end,
             name.as_deref(),
             link_group_id.as_deref(),
+            snap.as_ref(),
         ),
         EdlOp::InsertBRoll {
             anchor,
@@ -1663,8 +1667,10 @@ fn apply_append_clip(
         track,
         Some(InsertTrackKind::Auto),
         None,
+        None,
         Some(range.start_s),
         Some(range.end_s),
+        None,
         None,
         None,
     )
@@ -2826,13 +2832,22 @@ fn apply_insert_clip(
     track_name: &str,
     track_kind_hint: Option<InsertTrackKind>,
     at_position: Option<usize>,
+    at_s: Option<f64>,
     start_s: Option<f64>,
     end_s: Option<f64>,
     name_override: Option<&str>,
     link_group_id: Option<&str>,
+    snap: Option<&SnapOptions>,
 ) -> Result<String, ApplyError> {
     use awidat_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, TimeRange, Track,
+    };
+
+    // Snap resolution runs against the un-mutated timeline so the
+    // current track edges/markers are visible to the proposer.
+    let snapped_at_s = match at_s {
+        Some(requested) => Some(resolve_snap_time(working, index, requested, snap)?),
+        None => None,
     };
 
     // Find or create the named track.
@@ -2869,6 +2884,16 @@ fn apply_insert_clip(
             ),
         });
     }
+    if let Some(at_s) = snapped_at_s {
+        if !at_s.is_finite() || at_s < 0.0 {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!(
+                    "insert: at_s must be a finite non-negative timeline time, got {at_s}"
+                ),
+            });
+        }
+    }
     let rate = 24.0_f64;
     let source_range = TimeRange::new(
         RationalTime::new(start * rate, rate),
@@ -2879,7 +2904,8 @@ fn apply_insert_clip(
         let StackChild::Track(track) = &working.tracks.children[track_idx] else {
             return None;
         };
-        if at_position.is_none() && matches!(track.kind, TrackKind::Audio) {
+        if at_position.is_none() && snapped_at_s.is_none() && matches!(track.kind, TrackKind::Audio)
+        {
             linked_clip_track_time(working, id, TrackKind::Video)
         } else {
             None
@@ -2893,7 +2919,42 @@ fn apply_insert_clip(
         });
     };
 
-    if let Some(target_time_s) = linked_video_start_s {
+    // Timeline-time placement takes precedence over `at_position`.
+    // Walk existing children to find the child index whose start matches
+    // the requested cursor; pad with a gap when the cursor extends
+    // past the track's end. Anchors that land mid-clip fall back to
+    // the nearest boundary at or before the cursor (the agent is
+    // expected to snap to a true edge — mid-clip inserts would
+    // otherwise require a split first, which this op does not do).
+    let timeline_pos = if let Some(target_time_s) = snapped_at_s {
+        let mut cursor_s = 0.0_f64;
+        let mut position = track.children.len();
+        for (idx, child) in track.children.iter().enumerate() {
+            if (cursor_s - target_time_s).abs() <= 0.001 {
+                position = idx;
+                break;
+            }
+            cursor_s += child_duration(child);
+        }
+        // Past the end → pad with a gap so the clip lands exactly at
+        // `target_time_s`.
+        if position == track.children.len() && cursor_s + 0.001 < target_time_s {
+            track
+                .children
+                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    target_time_s - cursor_s,
+                    rate,
+                )));
+            position = track.children.len();
+        }
+        Some(position)
+    } else {
+        None
+    };
+
+    if timeline_pos.is_none()
+        && let Some(target_time_s) = linked_video_start_s
+    {
         let cursor_s = track_cursor(track);
         if cursor_s + 0.001 < target_time_s {
             track
@@ -2906,7 +2967,8 @@ fn apply_insert_clip(
     }
 
     // Build the clip.
-    let position = at_position
+    let position = timeline_pos
+        .or(at_position)
         .unwrap_or(track.children.len())
         .min(track.children.len());
     let chosen_name = name_override
@@ -3094,11 +3156,53 @@ fn apply_split(
     index: usize,
     anchor: &Anchor,
     at_s: f64,
+    snap: Option<&SnapOptions>,
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
     let _ = (anchor, ctx);
     let locator = required_locator(index, locator)?;
+    // Compute the timeline-time projection of `at_s` (source-time)
+    // before borrowing the track mutably so we can run the snap
+    // proposer against the whole timeline.
+    let projected_timeline_s = {
+        let StackChild::Track(track) = &working.tracks.children[locator.track_index] else {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "anchor resolved to a non-track stack child".into(),
+            });
+        };
+        let TrackChild::Clip(clip) = &track.children[locator.child_index] else {
+            return Err(ApplyError::Invalid {
+                index,
+                message: "anchor resolved to a non-clip track child".into(),
+            });
+        };
+        let Some(range) = clip.source_range.as_ref() else {
+            return Err(ApplyError::Invalid {
+                index,
+                message:
+                    "clip has no source_range; cannot split a clip with implicit range".into(),
+            });
+        };
+        let clip_timeline_start_s: f64 = track.children[..locator.child_index]
+            .iter()
+            .map(child_duration)
+            .sum();
+        let source_start_s = range.start_time.to_seconds();
+        clip_timeline_start_s + (at_s - source_start_s)
+    };
+    // Run snap on the timeline-time projection, then translate the
+    // snapped timeline-time back to a source-time so the rest of the
+    // split logic can stay in source coordinates.
+    let snapped_at_s = if snap.is_some() {
+        let snapped_timeline_s =
+            resolve_snap_time(working, index, projected_timeline_s, snap)?;
+        at_s + (snapped_timeline_s - projected_timeline_s)
+    } else {
+        at_s
+    };
+    let at_s = snapped_at_s;
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
@@ -8269,6 +8373,7 @@ mod tests {
                     text: "bravo".into(),
                 },
                 at_s: 2.0,
+                snap: None,
             }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -8333,6 +8438,7 @@ mod tests {
                     uuid: "parent-uuid".into(),
                 },
                 at_s: 2.0,
+                snap: None,
             }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -8383,6 +8489,7 @@ mod tests {
                         uuid: "clip-1".into(),
                     },
                     at_s: 2.5,
+                    snap: None,
                 },
             ],
         };
@@ -8446,6 +8553,7 @@ mod tests {
                         uuid: "clip-1".into(),
                     },
                     at_s: 2.5,
+                    snap: None,
                 },
             ],
         };
@@ -8502,10 +8610,12 @@ mod tests {
                 track: "V1".into(),
                 track_kind: None,
                 at_position: None,
+                at_s: None,
                 start: Some(0.0),
                 end: Some(3.0),
                 name: None,
                 link_group_id: None,
+                snap: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -8529,6 +8639,7 @@ mod tests {
                     text: "bravo".into(),
                 },
                 at_s: 7.0,
+                snap: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -8556,6 +8667,7 @@ mod tests {
                         text: "bravo".into(),
                     },
                     at_s: 2.0,
+                    snap: None,
                 },
                 // After the first split, bravo-b ([2s, 5s]) is the
                 // right piece. Split it again at 4s to isolate the
@@ -8565,6 +8677,7 @@ mod tests {
                         uuid: "clip-1-b".into(),
                     },
                     at_s: 4.0,
+                    snap: None,
                 },
                 // Lift the now-isolated middle, leaving timeline timing intact.
                 EdlOp::DeleteClip {
@@ -8764,10 +8877,12 @@ mod tests {
                 track: "V1".into(),
                 track_kind: None,
                 at_position: None,
+                at_s: None,
                 start: Some(0.0),
                 end: Some(56.47),
                 name: None,
                 link_group_id: None,
+                snap: None,
             }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -8795,10 +8910,12 @@ mod tests {
                 track: "V1".into(),
                 track_kind: None,
                 at_position: None,
+                at_s: None,
                 start: Some(0.0),
                 end: Some(2.0),
                 name: Some("intro".into()),
                 link_group_id: None,
+                snap: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -8822,10 +8939,12 @@ mod tests {
                 track: "V1".into(),
                 track_kind: None,
                 at_position: Some(1),
+                at_s: None,
                 start: Some(0.0),
                 end: Some(1.0),
                 name: Some("inserted".into()),
                 link_group_id: None,
+                snap: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -8848,10 +8967,12 @@ mod tests {
                 track: "V1".into(),
                 track_kind: None,
                 at_position: Some(1),
+                at_s: None,
                 start: Some(0.0),
                 end: Some(1.0),
                 name: None,
                 link_group_id: None,
+                snap: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -8893,20 +9014,24 @@ mod tests {
                     track: "Video 1".into(),
                     track_kind: Some(InsertTrackKind::Video),
                     at_position: None,
+                    at_s: None,
                     start: Some(0.0),
                     end: Some(5.0),
                     name: None,
                     link_group_id: Some("lg-1".into()),
+                    snap: None,
                 },
                 EdlOp::InsertClip {
                     asset: "raw/second.mp4".into(),
                     track: "A1".into(),
                     track_kind: Some(InsertTrackKind::Audio),
                     at_position: None,
+                    at_s: None,
                     start: Some(0.0),
                     end: Some(5.0),
                     name: None,
                     link_group_id: Some("lg-1".into()),
+                    snap: None,
                 },
             ],
         };
@@ -8930,10 +9055,12 @@ mod tests {
                 track: "V1".into(),
                 track_kind: None,
                 at_position: None,
+                at_s: None,
                 start: Some(5.0),
                 end: Some(5.0),
                 name: None,
                 link_group_id: None,
+                snap: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -8955,10 +9082,12 @@ mod tests {
                 track: "A1".into(),
                 track_kind: Some(InsertTrackKind::Audio),
                 at_position: None,
+                at_s: None,
                 start: Some(0.0),
                 end: Some(10.0),
                 name: None,
                 link_group_id: Some("lg-test".into()),
+                snap: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -10304,6 +10433,110 @@ mod tests {
         .unwrap();
 
         assert!((snapped - 6.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn apply_split_clip_snaps_at_s_to_marker_within_tolerance() {
+        // Build a timeline with three 5s clips on V1. The middle clip
+        // ("bravo snippet") spans timeline [5.0..10.0] and source
+        // [0.0..5.0]. Stamp a marker at clip-local 2.0s so the timeline
+        // position is 5.0 + 2.0 = 7.0s. The agent asks to split at
+        // source-time 1.96s — the corresponding timeline time is
+        // 6.96s, which is 0.04s from the marker. With a 0.1s
+        // tolerance, snap should pull the split to source-time 2.0s.
+        let mut tl = timeline_with_three_clips();
+        let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        let TrackChild::Clip(bravo) = &mut track.children[1] else {
+            panic!("expected clip")
+        };
+        bravo.markers.push(awidat_proto::otio::Marker::new(
+            "snap here",
+            TimeRange::new(
+                RationalTime::new(2.0 * 24.0, 24.0),
+                RationalTime::new(0.0, 24.0),
+            ),
+        ));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SplitClip {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "bravo snippet".into(),
+                },
+                at_s: 1.96,
+                snap: Some(SnapOptions {
+                    enabled: true,
+                    tolerance_s: 0.1,
+                    targets: vec![SnapTargetKind::Marker],
+                }),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        // After splitting bravo at source 2.0s, the left piece keeps
+        // [0.0..2.0] (2s duration) and the right piece holds [2.0..5.0]
+        // (3s duration).
+        let TrackChild::Clip(left) = &t.children[1] else {
+            panic!("expected left split clip")
+        };
+        let TrackChild::Clip(right) = &t.children[2] else {
+            panic!("expected right split clip")
+        };
+        let left_dur = left.source_range.as_ref().unwrap().duration.to_seconds();
+        let right_dur = right.source_range.as_ref().unwrap().duration.to_seconds();
+        assert!(
+            (left_dur - 2.0).abs() < 0.001,
+            "left duration should snap to 2s, got {left_dur}",
+        );
+        assert!(
+            (right_dur - 3.0).abs() < 0.001,
+            "right duration should snap to 3s, got {right_dur}",
+        );
+    }
+
+    #[test]
+    fn apply_insert_clip_snaps_at_s_to_clip_edge() {
+        // Three 5s clips on V1 → timeline edges at 0, 5, 10, 15.
+        // Insert with at_s = 4.96s and a 0.1s tolerance + ClipEdge
+        // snap target → snaps to 5.0s, placing the new clip
+        // immediately after clip-0 (position 1).
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/inserted.mp4".into(),
+                track: "V1".into(),
+                track_kind: None,
+                at_position: None,
+                at_s: Some(4.96),
+                start: Some(0.0),
+                end: Some(2.0),
+                name: Some("snap-inserted".into()),
+                link_group_id: None,
+                snap: Some(SnapOptions {
+                    enabled: true,
+                    tolerance_s: 0.1,
+                    targets: vec![SnapTargetKind::ClipEdge],
+                }),
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!("expected track")
+        };
+        // Expect: [clip-0 (5s), snap-inserted (2s), clip-1, clip-2].
+        // The insert lands exactly at the clip-0/clip-1 boundary
+        // because snap pulled 4.96 → 5.0; no gap is needed.
+        let TrackChild::Clip(inserted) = &t.children[1] else {
+            panic!("expected inserted clip at position 1, got {:?}", t.children[1])
+        };
+        assert_eq!(inserted.name, "snap-inserted");
+        let TrackChild::Clip(c2) = &t.children[2] else {
+            panic!("expected clip-1 at position 2")
+        };
+        assert_eq!(c2.name, "clip-1");
     }
 
     #[test]

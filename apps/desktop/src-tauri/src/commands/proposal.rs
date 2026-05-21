@@ -899,6 +899,7 @@ mod tests {
                     uuid: "clip-0".into(),
                 },
                 at_s: 1.0,
+                snap: None,
             }],
         };
         let adj = EditAdjustment {

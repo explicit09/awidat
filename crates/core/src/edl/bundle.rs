@@ -145,6 +145,7 @@ mod tests {
             ops: vec![EdlOp::SplitClip {
                 anchor: anchor("clip-a"),
                 at_s: 5.0,
+                snap: None,
             }],
         };
         let bundled = bundle_with_dissolve(env, anchor("clip-a"), anchor("clip-b"), Some(0.5));
@@ -234,6 +235,7 @@ mod tests {
             ops: vec![EdlOp::SplitClip {
                 anchor: anchor("clip-a"),
                 at_s: 5.0,
+                snap: None,
             }],
         };
         let bundled =
@@ -252,6 +254,7 @@ mod tests {
             ops: vec![EdlOp::SplitClip {
                 anchor: anchor("a"),
                 at_s: 2.0,
+                snap: None,
             }],
         };
         let delete_env = EdlEnvelope {
