@@ -19,7 +19,7 @@ use awidat_proto::professional::{
     ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS, ReframeKeyframe, ReframePath,
     ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract, StreamExportMode,
     TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar, TrackingPackage,
-    is_runtime_clip_parameter,
+    canonical_runtime_clip_parameter, is_runtime_clip_parameter,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -1041,6 +1041,9 @@ fn lower_tracker_binding_node(
             ),
         });
     }
+    let target_parameter = canonical_runtime_clip_parameter(&target_parameter)
+        .map(str::to_string)
+        .unwrap_or(target_parameter);
     let channel = string_param(node, "channel")
         .map(str::to_string)
         .unwrap_or_else(|| inferred_tracker_channel(&target_parameter).to_string());
@@ -2459,8 +2462,11 @@ fn render_animation_for_template_overlay(
     if clip_id != target_clip || !parameter.starts_with("overlay.") {
         return None;
     }
+    let parameter = canonical_runtime_clip_parameter(parameter)
+        .map(str::to_string)
+        .unwrap_or_else(|| parameter.clone());
     Some(RenderParameterAnimation {
-        parameter: parameter.clone(),
+        parameter,
         keyframes: animation.keyframes.clone(),
         pre_extrapolation: animation.pre_extrapolation,
         post_extrapolation: animation.post_extrapolation,

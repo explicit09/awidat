@@ -9676,6 +9676,49 @@ mod tests {
     }
 
     #[test]
+    fn apply_set_parameter_animation_accepts_runtime_blur_effect_alias() {
+        let tl = timeline_with_three_clips();
+        let animation = awidat_proto::professional::ParameterAnimation {
+            id: "anim-blur-radius-alias".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-1".into(),
+                parameter: "effects.awidat.blur.params.radius_px".into(),
+            },
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                awidat_proto::professional::Keyframe::linear(1.0, 12.0),
+            ],
+            pre_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            post_extrapolation: awidat_proto::professional::ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        };
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SetParameterAnimation {
+                animation: animation.clone(),
+            }],
+        };
+
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("anim-blur-radius-alias")
+        );
+        assert_eq!(
+            new_tl
+                .metadata
+                .awidat
+                .as_ref()
+                .unwrap()
+                .parameter_animations,
+            vec![animation]
+        );
+    }
+
+    #[test]
     fn apply_set_parameter_animation_accepts_runtime_shake_effect_parameter() {
         let tl = timeline_with_three_clips();
         let animation = awidat_proto::professional::ParameterAnimation {
