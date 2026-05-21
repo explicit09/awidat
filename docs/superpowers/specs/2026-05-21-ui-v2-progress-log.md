@@ -43,6 +43,43 @@ got done, what failed, what's next.
 
 ## Loop event log
 
+## Phase 4.2 — Indexing pipeline backend audit
+
+Of the 9 indexing tasks the design spec names, the current backend has:
+
+| Task                  | Backend status                                                |
+|-----------------------|----------------------------------------------------------------|
+| Transcripts           | ✅ Wired (`whisper` indexer in `crates/index/src/lib.rs`)       |
+| Scenes                | ✅ Wired (`scenedetect`)                                        |
+| Audio analysis        | 🟡 Partial — used by `find_dead_air`, `find_filler_words` (no top-level indexer) |
+| Face detection        | 🟡 Used by `find_speaker_oncam`, `find_eye_contact` (no top-level indexer) |
+| Motion analysis       | ❌ No first-class indexer                                       |
+| Color analysis        | 🟡 Has tools (`color_scopes.rs`, `list_looks.rs`) — no indexer  |
+| Silence detection     | 🟡 Used by `find_dead_air` — no top-level indexer               |
+| Speaker diarization   | 🟡 Schema exists (`TranscriptSpeaker`) — pipeline TBD          |
+| Caption readiness     | 🟡 Derivable from transcript completeness — no explicit signal  |
+
+The IndexingDashboard component renders all 9 rows. Missing ones surface as
+`status: "missing"` with "Pending — not yet computed" copy so the UX is honest
+about what isn't computed yet. The named-indexer additions are out of scope for
+Phase 4 and tracked separately.
+
+## Phase 4.4 — Delivery preflight backend (deferred)
+
+The DeliverySurface (Phase 4.3) renders preflight findings + render summary
+from a shape the backend will populate. Today there's only `start_timeline_render`
+producing one mp4; per-target packaging + preflight checks need:
+
+- Per-target preset metadata (aspect ratio, codec, captions, cover frame export).
+- Preflight checker (loudness target, caption length, safe-area, etc.).
+- Multi-output render queue (one render → many target artifacts).
+
+These are real backend tasks but they're not on the foundation-rewrite critical
+path. The UI is ready when they ship. Logged here and skipped to keep the loop
+moving toward Phase 5.
+
+## Loop event log
+
 | Time | Phase | Event |
 |------|-------|-------|
 | start | 2.5 | Beginning Preview/Review surface. |

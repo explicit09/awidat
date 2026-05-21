@@ -127,17 +127,15 @@ await check("proposal stage's lens nav exposes all 9 lenses", async () => {
   await page.close();
 });
 
-await check("Intent + Deliver stages show StageStub (Phase 2.10)", async () => {
+await check("Intent stage shows StageStub (Phase 2.10)", async () => {
   const { page } = await makePage();
   await page.goto(URL, { waitUntil: "networkidle" });
-  for (const stage of ["Intent", "Deliver"]) {
-    await setStage(page, stage);
-    const body = await page.textContent("body");
-    assert.ok(
-      body.includes("Open Proposal stage"),
-      `${stage} stub missing primary CTA`,
-    );
-  }
+  await setStage(page, "Intent");
+  const body = await page.textContent("body");
+  assert.ok(
+    body.includes("Open Proposal stage"),
+    "Intent stub missing primary CTA",
+  );
   await page.close();
 });
 
@@ -162,14 +160,51 @@ await check("Revise stage shows the revision composer (Phase 3.4)", async () => 
   await page.close();
 });
 
-await check("Indexing stage shows the batch review surface (Phase 3.3)", async () => {
+await check("Indexing stage shows the dashboard (Phase 4.1)", async () => {
   const { page } = await makePage();
   await page.goto(URL, { waitUntil: "networkidle" });
   await setStage(page, "Indexing");
   const body = await page.textContent("body");
-  assert.ok(body.includes("Agent command history"), "Batch review missing");
-  assert.ok(body.includes("Batch insights"), "Insights pane missing");
+  assert.ok(body.includes("Indexing pipeline"), "Indexing pipeline header missing");
+  assert.ok(body.includes("Ask agent for first cut"), "Hand-off CTA missing");
   await page.screenshot({ path: `${SCREENSHOT_DIR}/06-indexing.png`, fullPage: false });
+  await page.close();
+});
+
+await check("Indexing dashboard names all 9 indexing tasks", async () => {
+  const { page } = await makePage();
+  await page.goto(URL, { waitUntil: "networkidle" });
+  await setStage(page, "Indexing");
+  const body = await page.textContent("body");
+  for (const task of [
+    "Transcripts",
+    "Scenes",
+    "Audio analysis",
+    "Face detection",
+    "Motion analysis",
+    "Color analysis",
+    "Silence detection",
+    "Speaker diarization",
+    "Caption readiness",
+  ]) {
+    assert.ok(body.includes(task), `indexing task "${task}" missing`);
+  }
+  await page.close();
+});
+
+await check("Deliver stage shows the delivery surface (Phase 4.3)", async () => {
+  const { page } = await makePage();
+  await page.goto(URL, { waitUntil: "networkidle" });
+  await setStage(page, "Deliver");
+  const body = await page.textContent("body");
+  assert.ok(body.includes("Targets"), "Delivery targets pane missing");
+  assert.ok(body.includes("Preflight"), "Preflight pane missing");
+  assert.ok(body.includes("Render summary"), "Render summary missing");
+  // 6 target presets all named
+  for (const t of ["YouTube", "TikTok", "Instagram", "Captions", "Cover", "Custom frame"]) {
+    assert.ok(body.includes(t), `delivery target "${t}" missing`);
+  }
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/07-deliver.png`, fullPage: false });
   await page.close();
 });
 

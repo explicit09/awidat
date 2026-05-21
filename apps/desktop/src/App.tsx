@@ -17,8 +17,9 @@ import { useProjectStore } from "./app/state";
 import { useMediaStore } from "./media/store";
 import {
   AppShell,
-  BatchReviewSurface,
   CommandRail,
+  DeliverySurface,
+  IndexingDashboard,
   LensNav,
   PreviewSurface,
   ProposalInspector,
@@ -199,7 +200,13 @@ function App() {
             ]}
           />
         ) : stage === "indexing" ? (
-          <BatchReviewSurface />
+          <IndexingDashboard
+            projectName={current ? projectName(current) : undefined}
+            ready={false}
+            onAskAgent={() => setStage("proposal")}
+          />
+        ) : stage === "deliver" ? (
+          <DeliverySurface />
         ) : (
           <StageStub stage={stage} onPrimaryAction={() => setStage("proposal")} />
         )
