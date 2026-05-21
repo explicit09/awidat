@@ -396,7 +396,8 @@ impl OpBuilder {
                         field: "at_s".into(),
                     }
                 })?;
-                Ok(EdlOp::SplitClip { anchor, at_s })
+                let snap = parse_snap_options(&mut fields, head)?;
+                Ok(EdlOp::SplitClip { anchor, at_s, snap })
             }
             OpKind::UntrimClip => Ok(EdlOp::UntrimClip {
                 anchor: self.anchor.ok_or_else(|| EdlParseError::MissingField {
@@ -419,18 +420,28 @@ impl OpBuilder {
                         field: "track".into(),
                     }
                 })?;
+                let track_kind = take_field_string(&mut fields, "track_kind")
+                    .as_deref()
+                    .map(|raw| parse_insert_track_kind(raw, head))
+                    .transpose()?;
+                let at_position = take_field_usize(&mut fields, "at_position");
+                let at_s = take_field_f64(&mut fields, "at_s");
+                let start = take_field_f64(&mut fields, "start");
+                let end = take_field_f64(&mut fields, "end");
+                let name = take_field_string(&mut fields, "name");
+                let link_group_id = take_field_string(&mut fields, "link_group_id");
+                let snap = parse_snap_options(&mut fields, head)?;
                 Ok(EdlOp::InsertClip {
                     asset,
                     track,
-                    track_kind: take_field_string(&mut fields, "track_kind")
-                        .as_deref()
-                        .map(|raw| parse_insert_track_kind(raw, head))
-                        .transpose()?,
-                    at_position: take_field_usize(&mut fields, "at_position"),
-                    start: take_field_f64(&mut fields, "start"),
-                    end: take_field_f64(&mut fields, "end"),
-                    name: take_field_string(&mut fields, "name"),
-                    link_group_id: take_field_string(&mut fields, "link_group_id"),
+                    track_kind,
+                    at_position,
+                    at_s,
+                    start,
+                    end,
+                    name,
+                    link_group_id,
+                    snap,
                 })
             }
             OpKind::InsertBRoll => {

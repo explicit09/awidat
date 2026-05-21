@@ -59,6 +59,15 @@ pub enum EdlOp {
         /// Cut point, in seconds into the source media. Must lie
         /// strictly inside the clip's source_range or the op fails.
         at_s: f64,
+        /// Optional snap behavior for the split point. When enabled,
+        /// the snap proposer interprets the cut in timeline-time (by
+        /// projecting through the anchor clip's source/timeline offset),
+        /// looks for nearby clip edges / markers / playhead within
+        /// `tolerance_s`, and reuses that snapped time. The chosen
+        /// timeline-time is converted back to a source-time before the
+        /// split runs, so callers still pass `at_s` in source seconds.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        snap: Option<SnapOptions>,
     },
     /// Reset / extend a previously-trimmed clip's source range. This
     /// is the inverse-direction op of `Trim Clip` — Trim can only
@@ -112,6 +121,12 @@ pub enum EdlOp {
         track_kind: Option<InsertTrackKind>,
         /// Where in the track to insert. `None` = append.
         at_position: Option<usize>,
+        /// Optional absolute timeline-time placement in seconds. When
+        /// set, the insert lands at this timeline cursor (padding the
+        /// track with a gap as needed) and takes precedence over
+        /// `at_position`. This is the field the snap proposer adjusts.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        at_s: Option<f64>,
         /// Source-media start in seconds. Defaults to 0.
         start: Option<f64>,
         /// Source-media end in seconds. Defaults to the asset's
@@ -125,6 +140,10 @@ pub enum EdlOp {
         /// imported from the same source asset.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         link_group_id: Option<String>,
+        /// Optional snap behavior for `at_s`. Snap targets and tolerance
+        /// match `MoveClip`'s semantics. Ignored when `at_s` is `None`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        snap: Option<SnapOptions>,
     },
     /// Insert b-roll over an anchor moment. Currently F2; carried in the
     /// type so the parser/handler signatures stay stable.

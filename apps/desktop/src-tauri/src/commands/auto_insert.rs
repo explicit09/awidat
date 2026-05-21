@@ -153,10 +153,12 @@ async fn insert_asset(
                 track: "Video 1".into(),
                 track_kind: None,
                 at_position: None,
+                at_s: None,
                 start: Some(0.0),
                 end: Some(duration_s),
                 name: None,
                 link_group_id: None,
+                snap: None,
             }],
         };
 
@@ -266,10 +268,12 @@ async fn insert_media(
                 track: "Video 1".into(),
                 track_kind: Some(InsertTrackKind::Video),
                 at_position: None,
+                at_s: None,
                 start: Some(0.0),
                 end: Some(duration_s),
                 name: None,
                 link_group_id: link_group_id.clone(),
+                snap: None,
             });
         }
         if has_audio {
@@ -278,10 +282,12 @@ async fn insert_media(
                 track: "A1".into(),
                 track_kind: Some(InsertTrackKind::Audio),
                 at_position: None,
+                at_s: None,
                 start: Some(0.0),
                 end: Some(duration_s),
                 name: None,
                 link_group_id,
+                snap: None,
             });
         }
 
