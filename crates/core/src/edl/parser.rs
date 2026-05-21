@@ -37,9 +37,10 @@ use awidat_proto::professional::{
 use thiserror::Error;
 
 use super::op::{
-    Anchor, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand, InsertTrackKind, PiPCorner,
-    ProfessionalTimelineEdit, TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment,
-    TransitionBetween,
+    Anchor, AnnotationKind, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand,
+    InsertTrackKind, MotionTemplateAnimation, PiPCorner, ProfessionalTimelineEdit, RichTextSegment,
+    TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
+    valid_graphic_color,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -245,8 +246,11 @@ enum OpKind {
     ApplyLut,
     RemoveLut,
     InsertTitle,
+    InsertRichTitle,
+    InstantiateMotionTemplate,
     SetTitle,
     InsertCaption,
+    InsertAnnotation,
     SetOutputFormat,
     SetLoudnessTarget,
     SetPackageMetadata,
@@ -296,8 +300,13 @@ impl OpBuilder {
             "Apply LUT" => OpKind::ApplyLut,
             "Remove LUT" => OpKind::RemoveLut,
             "Insert Title" => OpKind::InsertTitle,
+            "Insert Rich Title" => OpKind::InsertRichTitle,
+            "Instantiate Motion Template" | "Insert Motion Template" => {
+                OpKind::InstantiateMotionTemplate
+            }
             "Set Title" => OpKind::SetTitle,
             "Insert Caption" => OpKind::InsertCaption,
+            "Insert Annotation" => OpKind::InsertAnnotation,
             "Set Output Format" => OpKind::SetOutputFormat,
             "Set Loudness Target" => OpKind::SetLoudnessTarget,
             "Set Package Metadata" => OpKind::SetPackageMetadata,
@@ -890,6 +899,76 @@ impl OpBuilder {
                     animation,
                 })
             }
+            OpKind::InsertRichTitle => {
+                let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "start_s".into(),
+                    }
+                })?;
+                let end_s = take_field_f64(&mut fields, "end_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "end_s".into(),
+                    }
+                })?;
+                let segments =
+                    take_required_json::<Vec<RichTextSegment>>(&mut fields, "segments_json", head)?;
+                let position = parse_title_position(
+                    take_field_string(&mut fields, "position").as_deref(),
+                    head,
+                )?
+                .unwrap_or(TitlePosition::Center);
+                let font_size = take_field_usize(&mut fields, "font_size")
+                    .map(|n| n as u32)
+                    .unwrap_or(64);
+                let animation = parse_title_animation(
+                    take_field_string(&mut fields, "animation").as_deref(),
+                    head,
+                )?
+                .unwrap_or(TitleAnimation::None);
+                Ok(EdlOp::InsertRichTitle {
+                    start_s,
+                    end_s,
+                    segments,
+                    position,
+                    font_size,
+                    animation,
+                })
+            }
+            OpKind::InstantiateMotionTemplate => {
+                let template_id =
+                    take_field_string(&mut fields, "template_id").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "template_id".into(),
+                        }
+                    })?;
+                let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "start_s".into(),
+                    }
+                })?;
+                let end_s = take_field_f64(&mut fields, "end_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "end_s".into(),
+                    }
+                })?;
+                let animation = parse_motion_template_animation(
+                    take_field_string(&mut fields, "animation").as_deref(),
+                    head,
+                )?
+                .unwrap_or(MotionTemplateAnimation::None);
+                Ok(EdlOp::InstantiateMotionTemplate {
+                    template_id,
+                    start_s,
+                    end_s,
+                    animation,
+                    slot_values: take_required_json(&mut fields, "slot_values_json", head)?,
+                })
+            }
             OpKind::SetTitle => {
                 let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
                     line: head,
@@ -963,6 +1042,75 @@ impl OpBuilder {
                     font_size,
                     color,
                     safe_area,
+                })
+            }
+            OpKind::InsertAnnotation => {
+                let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "start_s".into(),
+                    }
+                })?;
+                let end_s = take_field_f64(&mut fields, "end_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "end_s".into(),
+                    }
+                })?;
+                let kind = parse_annotation_kind(
+                    take_field_string(&mut fields, "kind")
+                        .as_deref()
+                        .ok_or_else(|| EdlParseError::MissingField {
+                            line: head,
+                            field: "kind".into(),
+                        })?,
+                    head,
+                )?;
+                let x = take_field_f64(&mut fields, "x").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "x".into(),
+                    }
+                })?;
+                let y = take_field_f64(&mut fields, "y").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "y".into(),
+                    }
+                })?;
+                let width = take_field_f64(&mut fields, "width").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "width".into(),
+                    }
+                })?;
+                let height = take_field_f64(&mut fields, "height").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "height".into(),
+                    }
+                })?;
+                let color = parse_annotation_color(
+                    take_field_string(&mut fields, "color")
+                        .unwrap_or_else(|| "#FFCC00".into())
+                        .as_str(),
+                    head,
+                )?;
+                let stroke_width = take_field_usize(&mut fields, "stroke_width")
+                    .map(|n| n as u32)
+                    .unwrap_or(4);
+                let label = take_field_string(&mut fields, "label");
+                Ok(EdlOp::InsertAnnotation {
+                    start_s,
+                    end_s,
+                    kind,
+                    x,
+                    y,
+                    width,
+                    height,
+                    color,
+                    stroke_width,
+                    label,
                 })
             }
             OpKind::SetOutputFormat => {
@@ -1273,6 +1421,53 @@ fn parse_title_animation(
                     .into(),
         }),
     }
+}
+
+fn parse_motion_template_animation(
+    raw: Option<&str>,
+    line: usize,
+) -> Result<Option<MotionTemplateAnimation>, EdlParseError> {
+    match raw {
+        None => Ok(None),
+        Some("none") => Ok(Some(MotionTemplateAnimation::None)),
+        Some("opacity") => Ok(Some(MotionTemplateAnimation::Opacity)),
+        Some("transform") => Ok(Some(MotionTemplateAnimation::Transform)),
+        Some("text_reveal") => Ok(Some(MotionTemplateAnimation::TextReveal)),
+        Some("write_on") => Ok(Some(MotionTemplateAnimation::WriteOn)),
+        Some(other) => Err(EdlParseError::BadField {
+            line,
+            raw: format!("animation: {other}"),
+            message: "must be 'none', 'opacity', 'transform', 'text_reveal', or 'write_on'".into(),
+        }),
+    }
+}
+
+fn parse_annotation_kind(raw: &str, line: usize) -> Result<AnnotationKind, EdlParseError> {
+    match raw {
+        "rectangle" => Ok(AnnotationKind::Rectangle),
+        "circle" => Ok(AnnotationKind::Circle),
+        "arrow" => Ok(AnnotationKind::Arrow),
+        "bracket" => Ok(AnnotationKind::Bracket),
+        "blur" => Ok(AnnotationKind::Blur),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("kind: {other}"),
+            message: "must be 'rectangle', 'circle', 'arrow', 'bracket', or 'blur'".into(),
+        }),
+    }
+}
+
+fn parse_annotation_color(raw: &str, line: usize) -> Result<String, EdlParseError> {
+    if valid_graphic_color(raw) {
+        return Ok(raw.to_string());
+    }
+    Err(EdlParseError::BadField {
+        line,
+        raw: format!("color: {raw}"),
+        message:
+            "annotation color must be #RGB/#RGBA/#RRGGBB/#RRGGBBAA hex or an alphanumeric color name"
+                .into(),
+    })
 }
 
 fn parse_transition_alignment(

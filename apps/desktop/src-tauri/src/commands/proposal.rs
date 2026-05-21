@@ -593,8 +593,11 @@ fn build_diff_hints(
             | EdlOp::SetWorkflowLens { .. }
             | EdlOp::SetPipelineReadiness { .. }
             | EdlOp::InsertTitle { .. }
+            | EdlOp::InsertRichTitle { .. }
+            | EdlOp::InstantiateMotionTemplate { .. }
             | EdlOp::SetTitle { .. }
             | EdlOp::InsertCaption { .. }
+            | EdlOp::InsertAnnotation { .. }
             | EdlOp::SetOutputFormat { .. }
             | EdlOp::SetLoudnessTarget { .. }
             | EdlOp::SetPackageMetadata { .. } => {}
@@ -801,8 +804,11 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetWorkflowLens { .. } => "SetWorkflowLens",
         EdlOp::SetPipelineReadiness { .. } => "SetPipelineReadiness",
         EdlOp::InsertTitle { .. } => "InsertTitle",
+        EdlOp::InsertRichTitle { .. } => "InsertRichTitle",
+        EdlOp::InstantiateMotionTemplate { .. } => "InstantiateMotionTemplate",
         EdlOp::SetTitle { .. } => "SetTitle",
         EdlOp::InsertCaption { .. } => "InsertCaption",
+        EdlOp::InsertAnnotation { .. } => "InsertAnnotation",
         EdlOp::SetOutputFormat { .. } => "SetOutputFormat",
         EdlOp::SetLoudnessTarget { .. } => "SetLoudnessTarget",
         EdlOp::SetPackageMetadata { .. } => "SetPackageMetadata",
