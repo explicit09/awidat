@@ -253,6 +253,8 @@ mod tests {
             broll_query: None,
             broll_previews: None,
             broll_anchor: None,
+            author: None,
+            comment_text: None,
         }
     }
 
