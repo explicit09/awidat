@@ -1261,10 +1261,10 @@ fn declared_backends(transition: &BuiltinTransition) -> Vec<TransitionBackend> {
     if transition.ffmpeg_xfade.is_some() {
         backends.push(TransitionBackend::Ffmpeg);
     }
-    if let Some(composition) = builtin_transition_composition(transition.id) {
-        if resolve_composition_gpu_shader(&composition).is_some() {
-            backends.push(TransitionBackend::Glsl);
-        }
+    if let Some(composition) = builtin_transition_composition(transition.id)
+        && resolve_composition_gpu_shader(&composition).is_some()
+    {
+        backends.push(TransitionBackend::Glsl);
     }
     backends
 }
@@ -2168,8 +2168,7 @@ fn validate_luma_mask_kind(idx: usize, kind: &str) -> Result<(), TransitionLooku
     }
     Err(TransitionLookupError::InvalidSpec {
         message: format!(
-            "primitive #{idx} luma_mask kind {kind:?} is not one of {:?}",
-            LUMA_MASK_KINDS
+            "primitive #{idx} luma_mask kind {kind:?} is not one of {LUMA_MASK_KINDS:?}"
         ),
     })
 }

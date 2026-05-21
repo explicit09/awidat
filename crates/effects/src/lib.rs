@@ -12,6 +12,8 @@ use thiserror::Error;
 pub const VOLUME: &str = "awidat.volume";
 /// Per-clip playback speed effect id.
 pub const SPEED: &str = "awidat.speed";
+/// Clip-level curve-based time remap effect id.
+pub const TIME_REMAP: &str = "awidat.time_remap";
 /// Clip-level color correction effect id.
 pub const COLOR_CORRECTION: &str = "awidat.color_correction";
 /// Clip-level 3D LUT effect id.
@@ -41,6 +43,8 @@ const SPEED_PARAMS: &[ParamDef] = &[ParamDef::number(
     None,
     None,
 )];
+
+const TIME_REMAP_PARAMS: &[ParamDef] = &[ParamDef::json("curve", true, None)];
 
 const COLOR_PARAMS: &[ParamDef] = &[
     ParamDef::number("exposure_ev", false, Some(-4.0), Some(4.0), None),
@@ -91,12 +95,11 @@ const LUT_PARAMS: &[ParamDef] = &[
 // - `look_strength`: optional 0..=1 blend; defaults to 1.0.
 // - `output_transform_lut`: optional working-to-display ODT.
 //
-// Mask slot (Stage 9, schema-only):
+// Mask slot:
 // - `mask_source`: optional project-relative path to a mask asset
-//   (PNG with alpha, grayscale image, or video). Reserved for
-//   regional grading — apply-time validation accepts it, but render
-//   reports a `mask_not_implemented` limitation until the
-//   split→mask→lut3d→overlay path lands.
+//   (PNG with alpha, grayscale image, or video). Render supports the
+//   v1 masked look-LUT path and reports explicit limitations for mask
+//   combinations outside that scope.
 const COLOR_PIPELINE_PARAMS: &[ParamDef] = &[
     ParamDef::string("clip_input_space", true, None),
     ParamDef::string("working_space", false, None),
@@ -195,6 +198,21 @@ const VIDEO_OVERLAY_PARAMS: &[ParamDef] = &[
     ParamDef::string("corner", false, None),
     ParamDef::number("scale", false, Some(0.01), Some(1.0), None),
     ParamDef::number("margin_pct", false, Some(0.0), Some(0.5), None),
+    ParamDef::number(
+        "rotation_deg",
+        false,
+        Some(-360.0),
+        Some(360.0),
+        Some(ParamDefault::Number(0.0)),
+    ),
+    ParamDef::bool("motion_blur", false, Some(ParamDefault::Bool(false))),
+    ParamDef::number(
+        "motion_blur_shutter_s",
+        false,
+        Some(0.0),
+        Some(0.2),
+        Some(ParamDefault::Number(1.0 / 60.0)),
+    ),
 ];
 
 const REFRAME_PARAMS: &[ParamDef] = &[
@@ -260,6 +278,18 @@ pub const EFFECTS: &[EffectDef] = &[
         backend: BackendKind::FfmpegNative,
         min_present_params: 0,
         params: SPEED_PARAMS,
+    },
+    EffectDef {
+        id: TIME_REMAP,
+        display_name: "Time Remap",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Both,
+        phase: EffectPhase::Clip,
+        support: SupportStatus::Experimental,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: TIME_REMAP_PARAMS,
     },
     EffectDef {
         id: COLOR_CORRECTION,
@@ -930,6 +960,52 @@ mod tests {
             normalized.get("font_size").and_then(Value::as_i64),
             Some(64)
         );
+    }
+
+    #[test]
+    fn video_overlay_accepts_rotation_degrees() {
+        let mut params = Map::new();
+        params.insert("mode".into(), Value::from("pip"));
+        params.insert("rotation_deg".into(), Value::from(12.5));
+        let (_, normalized) = must_normalize(VIDEO_OVERLAY, &params);
+        assert_eq!(
+            normalized.get("rotation_deg").and_then(Value::as_f64),
+            Some(12.5)
+        );
+    }
+
+    #[test]
+    fn video_overlay_accepts_transform_motion_blur() {
+        let mut params = Map::new();
+        params.insert("mode".into(), Value::from("pip"));
+        params.insert("motion_blur".into(), Value::from(true));
+        params.insert("motion_blur_shutter_s".into(), Value::from(0.02));
+        let (_, normalized) = must_normalize(VIDEO_OVERLAY, &params);
+        assert_eq!(
+            normalized.get("motion_blur").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            normalized
+                .get("motion_blur_shutter_s")
+                .and_then(Value::as_f64),
+            Some(0.02)
+        );
+    }
+
+    #[test]
+    fn time_remap_accepts_curve_points() {
+        let mut params = Map::new();
+        params.insert(
+            "curve".into(),
+            serde_json::json!([
+                {"source_time_s": 0.0, "timeline_time_s": 0.0},
+                {"source_time_s": 1.0, "timeline_time_s": 2.5},
+                {"source_time_s": 2.0, "timeline_time_s": 3.5}
+            ]),
+        );
+        let (_, normalized) = must_normalize(TIME_REMAP, &params);
+        assert!(normalized.get("curve").and_then(Value::as_array).is_some());
     }
 
     #[test]

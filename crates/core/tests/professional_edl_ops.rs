@@ -162,7 +162,10 @@ fn set_parameter_animation_rejects_runtime_unsupported_target_by_default() {
         }],
     };
 
-    let err = apply(&timeline, &envelope, &AnchorContext::empty()).unwrap_err();
+    let err = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(_) => panic!("unsupported target should be rejected"),
+        Err(err) => err,
+    };
 
     assert!(
         err.to_string()
@@ -197,8 +200,13 @@ fn set_parameter_animation_preserves_unsupported_target_when_metadata_only() {
         }],
     };
 
-    let (timeline, outcome) = apply(&timeline, &envelope, &AnchorContext::empty()).unwrap();
-    let metadata = timeline.metadata.awidat.expect("timeline metadata missing");
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(err) => panic!("metadata-only animation should apply: {err}"),
+    };
+    let Some(metadata) = timeline.metadata.awidat else {
+        panic!("timeline metadata missing");
+    };
 
     assert_eq!(outcome.applied.len(), 1);
     assert_eq!(metadata.parameter_animations.len(), 1);
@@ -223,8 +231,13 @@ fn set_parameter_animation_accepts_track_volume_db_automation() {
         }],
     };
 
-    let (timeline, outcome) = apply(&timeline, &envelope, &AnchorContext::empty()).unwrap();
-    let metadata = timeline.metadata.awidat.expect("timeline metadata missing");
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(err) => panic!("track volume automation should apply: {err}"),
+    };
+    let Some(metadata) = timeline.metadata.awidat else {
+        panic!("timeline metadata missing");
+    };
 
     assert_eq!(outcome.applied.len(), 1);
     assert_eq!(metadata.parameter_animations.len(), 1);

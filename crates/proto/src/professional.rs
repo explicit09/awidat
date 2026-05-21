@@ -531,6 +531,7 @@ impl ParameterAnimation {
     }
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -569,6 +570,7 @@ pub const RUNTIME_CLIP_PARAMETERS: &[&str] = &[
     "overlay.y",
     "overlay.position",
     "overlay.scale",
+    "overlay.rotation_deg",
 ];
 
 /// Track parameter paths executable by the current preview/render runtime.
@@ -655,6 +657,7 @@ fn validate_tangent_modes(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn aligned_tangents(
     previous_time: f64,
     previous_value: f64,
@@ -765,7 +768,9 @@ pub enum AnimationTarget {
     TrackParameter {
         /// Track id/name.
         track: String,
-        /// Parameter path.
+        /// Parameter path. Keyframe times are track-local seconds in the rendered track stream:
+        /// `t=0` is the beginning of the track after clips/gaps are concatenated, not the absolute
+        /// timeline time of an individual source clip.
         parameter: String,
     },
 }
@@ -1255,6 +1260,8 @@ pub enum CompositionNodeType {
     Color,
     /// Tracker binding.
     TrackerBind,
+    /// Four-corner perspective/corner-pin distortion driven by a surface track.
+    CornerPin,
     /// 3D scene container.
     Scene3d,
     /// Particle emitter.
