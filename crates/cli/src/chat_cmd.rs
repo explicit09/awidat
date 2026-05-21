@@ -20,19 +20,24 @@ use awidat_core::tools::{
     find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
     find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_looks::ListLooksTool,
-    load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
-    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
-    plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
-    plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    find_speaker_oncam::FindSpeakerOncamTool, import_media::ImportLocalTool,
+    import_media::ImportUrlTool, inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool,
+    list_assets::ListAssetsTool, list_looks::ListLooksTool, load_skill::LoadSkillTool,
+    manage_assets::CreateBinTool, manage_assets::MarkSelectTool, manage_assets::MoveToBinTool,
+    manage_assets::RateAssetTool, manage_assets::RenameAssetTool, manage_assets::TagAssetTool,
+    plan_emphasis::PlanEmphasisTool, plan_look_regions::PlanLookRegionsTool,
+    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
+    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
+    poll_render::PollRenderTool, proxy_media::GenerateProxyTool, proxy_media::ProxyStatusTool,
+    read_index::ReadIndexTool, relink_media::RelinkMediaTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
-    start_render::StartRenderTool, transition_context::TransitionContextTool,
-    update_plan::UpdatePlanTool, use_broll::UseBrollTool,
-    validate_transition_choice::ValidateTransitionChoiceTool, vedit_commit::VeditCommitTool,
-    vedit_diff::VeditDiffTool, vedit_log::VeditLogTool, vedit_revert::VeditRevertTool,
-    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    start_render::StartRenderTool, transcript_search::TranscriptSearchTool,
+    transition_context::TransitionContextTool, update_plan::UpdatePlanTool,
+    use_broll::UseBrollTool, validate_transition_choice::ValidateTransitionChoiceTool,
+    vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
+    vedit_revert::VeditRevertTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
+    view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, SessionEvent, ToolRegistry};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -130,11 +135,23 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(AssessContinuityTool));
     registry.register(Arc::new(AssessEditQualityTool));
     registry.register(Arc::new(InspectClipTool));
+    registry.register(Arc::new(ImportLocalTool));
+    registry.register(Arc::new(ImportUrlTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(ListLooksTool));
+    registry.register(Arc::new(CreateBinTool));
+    registry.register(Arc::new(MoveToBinTool));
+    registry.register(Arc::new(RenameAssetTool));
+    registry.register(Arc::new(TagAssetTool));
+    registry.register(Arc::new(RateAssetTool));
+    registry.register(Arc::new(MarkSelectTool));
     registry.register(Arc::new(PollRenderTool));
+    registry.register(Arc::new(ProxyStatusTool));
+    registry.register(Arc::new(GenerateProxyTool));
     registry.register(Arc::new(ReadIndexTool));
+    registry.register(Arc::new(RelinkMediaTool));
     registry.register(Arc::new(RequestUserInputTool));
+    registry.register(Arc::new(TranscriptSearchTool));
     registry.register(Arc::new(StartRenderTool));
     registry.register(Arc::new(ExportPackageTool));
     registry.register(Arc::new(StartLookRegionPassTool));
