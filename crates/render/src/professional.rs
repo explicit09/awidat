@@ -2607,6 +2607,7 @@ fn title_plan(
         role: "motion_template".into(),
         safe_area: Some("title_safe".into()),
         rich_segments: Vec::new(),
+        word_timings: Vec::new(),
         animations: Vec::new(),
     }
 }

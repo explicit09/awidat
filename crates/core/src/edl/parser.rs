@@ -37,10 +37,10 @@ use awidat_proto::professional::{
 use thiserror::Error;
 
 use super::op::{
-    Anchor, AnnotationKind, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand,
-    InsertTrackKind, MotionTemplateAnimation, PiPCorner, ProfessionalTimelineEdit, RichTextSegment,
-    TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
-    valid_graphic_color,
+    Anchor, AnnotationKind, AudioFxConfig, BRollPosition, CaptionWordTiming, EdlEnvelope, EdlOp,
+    EqBand, InsertTrackKind, MotionTemplateAnimation, PiPCorner, ProfessionalTimelineEdit,
+    RichTextSegment, TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment,
+    TransitionBetween, valid_graphic_color,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -1036,6 +1036,12 @@ impl OpBuilder {
                     .unwrap_or_else(|| "#FFFFFF".to_string());
                 let safe_area =
                     take_field_string(&mut fields, "safe_area").unwrap_or_else(|| "mobile".into());
+                let word_timings = take_field_json::<Vec<CaptionWordTiming>>(
+                    &mut fields,
+                    "word_timings_json",
+                    head,
+                )?
+                .unwrap_or_default();
                 Ok(EdlOp::InsertCaption {
                     start_s,
                     end_s,
@@ -1044,6 +1050,7 @@ impl OpBuilder {
                     font_size,
                     color,
                     safe_area,
+                    word_timings,
                 })
             }
             OpKind::InsertAnnotation => {
@@ -2725,6 +2732,7 @@ mod tests {
                 font_size,
                 color,
                 safe_area,
+                word_timings,
             } => {
                 assert!((start_s - 1.0).abs() < 1e-9);
                 assert!((end_s - 2.4).abs() < 1e-9);
@@ -2733,6 +2741,29 @@ mod tests {
                 assert_eq!(*font_size, 52);
                 assert_eq!(color, "#FFFFFF");
                 assert_eq!(safe_area, "mobile");
+                assert!(word_timings.is_empty());
+            }
+            other => panic!("want InsertCaption, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_insert_caption_with_word_timings_json() {
+        let text = "\
+*** Begin EDL
+*** Insert Caption
++ start_s: 1.0
++ end_s: 2.4
++ text: \"This changed everything\"
++ word_timings_json: [{\"text\":\"This\",\"start_s\":1.0,\"end_s\":1.2},{\"text\":\"changed\",\"start_s\":1.24,\"end_s\":1.5}]
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        match &env.ops[0] {
+            EdlOp::InsertCaption { word_timings, .. } => {
+                assert_eq!(word_timings.len(), 2);
+                assert_eq!(word_timings[0].text, "This");
+                assert!((word_timings[1].start_s - 1.24).abs() < 1e-9);
             }
             other => panic!("want InsertCaption, got {other:?}"),
         }

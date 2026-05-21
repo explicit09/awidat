@@ -724,9 +724,11 @@ no `awidat.title` effect.\
 \n  - **Insert Caption**: `+ start_s: <seconds>`, `+ end_s: <seconds>`, \
 `+ text: \"<string>\"` (required). Optional `+ position: <top|center|bottom>` \
 (default `bottom`), `+ font_size: <px>` (default 52), `+ color: <#RRGGBB>` \
-(default `#FFFFFF`), `+ safe_area: <profile>` (default `mobile`). Captions \
-are graph nodes on the Titles track with `role=\"caption\"`; do not burn \
-captions by writing a separate render script.\
+(default `#FFFFFF`), `+ safe_area: <profile>` (default `mobile`), \
+`+ word_timings_json: [{\"text\":\"word\",\"start_s\":1.0,\"end_s\":1.2}]` \
+(optional transcript word timings for per-word reveal). Captions are graph \
+nodes on the Titles track with `role=\"caption\"`; do not burn captions by \
+writing a separate render script.\
 \n  - **Set Output Format**: `+ aspect_ratio: <16:9|9:16|1:1|4:5>` \
 (required). Optional `+ platform: <name>` and `+ safe_area: <profile>`. \
 Stores delivery format intent on `timeline.metadata.awidat.extra.output_format`.\

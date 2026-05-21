@@ -493,6 +493,9 @@ pub enum EdlOp {
         color: String,
         /// Safe-area profile such as `"mobile"` or `"standard"`.
         safe_area: String,
+        /// Optional transcript word timings for per-word caption reveal.
+        #[serde(default)]
+        word_timings: Vec<CaptionWordTiming>,
     },
     /// Insert a first-class annotation overlay such as a rectangle,
     /// circle, arrow, bracket, or blur region. Coordinates are
@@ -660,6 +663,17 @@ pub enum EdlOp {
         #[serde(default)]
         planner_passes: Vec<PlannerPassContract>,
     },
+}
+
+/// One transcript word timing carried by an inserted caption overlay.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CaptionWordTiming {
+    /// Word text as emitted by the transcript sidecar.
+    pub text: String,
+    /// Word start in master-timeline seconds.
+    pub start_s: f64,
+    /// Word end in master-timeline seconds.
+    pub end_s: f64,
 }
 
 /// Return true when a graphic color can be passed to FFmpeg filters without

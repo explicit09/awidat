@@ -471,8 +471,18 @@ fn apply_one(
             font_size,
             color,
             safe_area,
+            word_timings,
         } => apply_insert_caption(
-            working, index, *start_s, *end_s, text, *position, *font_size, color, safe_area,
+            working,
+            index,
+            *start_s,
+            *end_s,
+            text,
+            *position,
+            *font_size,
+            color,
+            safe_area,
+            word_timings,
         ),
         EdlOp::InsertAnnotation {
             start_s,
@@ -5621,6 +5631,7 @@ fn apply_insert_caption(
     font_size: u32,
     color: &str,
     safe_area: &str,
+    word_timings: &[super::op::CaptionWordTiming],
 ) -> Result<String, ApplyError> {
     if safe_area.trim().is_empty() {
         return Err(ApplyError::Invalid {
@@ -5628,13 +5639,40 @@ fn apply_insert_caption(
             message: "insert_caption: safe_area must be non-empty".into(),
         });
     }
+    for word in word_timings {
+        if word.text.trim().is_empty()
+            || !word.start_s.is_finite()
+            || !word.end_s.is_finite()
+            || word.end_s < word.start_s
+        {
+            return Err(ApplyError::Invalid {
+                index,
+                message:
+                    "insert_caption: word_timings must have non-empty text and finite ordered times"
+                        .into(),
+            });
+        }
+    }
+    let extra_metadata = if word_timings.is_empty() {
+        None
+    } else {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "word_timings".to_string(),
+            serde_json::to_value(word_timings).map_err(|e| ApplyError::Invalid {
+                index,
+                message: format!("insert_caption: failed to serialize word_timings: {e}"),
+            })?,
+        );
+        Some(metadata)
+    };
     apply_insert_text_overlay(
         working,
         index,
         "caption",
         Some(safe_area),
         None,
-        None,
+        extra_metadata,
         start_s,
         end_s,
         text,
@@ -10669,6 +10707,7 @@ mod tests {
                 font_size: 52,
                 color: "#FFFFFF".into(),
                 safe_area: "mobile".into(),
+                word_timings: Vec::new(),
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -10692,6 +10731,51 @@ mod tests {
         assert_eq!(
             effect.metadata.get("position").and_then(|v| v.as_str()),
             Some("bottom"),
+        );
+    }
+
+    #[test]
+    fn apply_insert_caption_persists_word_timings_metadata() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertCaption {
+                start_s: 1.0,
+                end_s: 2.5,
+                text: "This changed everything".into(),
+                position: super::super::op::TitlePosition::Bottom,
+                font_size: 52,
+                color: "#FFFFFF".into(),
+                safe_area: "mobile".into(),
+                word_timings: vec![
+                    super::super::op::CaptionWordTiming {
+                        text: "This".into(),
+                        start_s: 1.0,
+                        end_s: 1.2,
+                    },
+                    super::super::op::CaptionWordTiming {
+                        text: "changed".into(),
+                        start_s: 1.24,
+                        end_s: 1.5,
+                    },
+                ],
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(titles) = &new_tl.tracks.children[1] else {
+            panic!("expected titles track")
+        };
+        let TrackChild::Clip(caption_clip) = &titles.children[0] else {
+            panic!("expected caption clip")
+        };
+        let timings = caption_clip.effects[0]
+            .metadata
+            .get("word_timings")
+            .and_then(|value| value.as_array())
+            .expect("word_timings metadata");
+        assert_eq!(timings.len(), 2);
+        assert_eq!(
+            timings[0].get("text").and_then(|value| value.as_str()),
+            Some("This")
         );
     }
 
