@@ -1013,9 +1013,22 @@ function TimelineVideoOverlay({
   isPlaying: boolean;
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const [previewHeightPx, setPreviewHeightPx] = useState<number | null>(null);
   const [src, setSrc] = useState<string | null>(() =>
     cachedMediaStreamUrl(overlay.proxyPath) ?? null,
   );
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    const layer = element?.parentElement;
+    if (!layer) return;
+    const update = () => setPreviewHeightPx(layer.getBoundingClientRect().height);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(layer);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const cached = cachedMediaStreamUrl(overlay.proxyPath);
@@ -1064,13 +1077,13 @@ function TimelineVideoOverlay({
       muted
       playsInline
       preload="auto"
-      style={videoOverlayStyle(overlay, timelineTime)}
+      style={videoOverlayStyle({ ...overlay, previewHeightPx }, timelineTime)}
     />
   );
 }
 
 function videoOverlayStyle(
-  overlay: VideoOverlaySegment,
+  overlay: VideoOverlaySegment & { previewHeightPx?: number | null },
   timelineTime: number,
 ): React.CSSProperties {
   return buildVideoOverlayStyle(overlay, timelineTime);

@@ -46,6 +46,7 @@ use crate::output_safety::{OutputPathPolicy, validate_render_output_path};
 
 const TIMELINE_RENDER_WIDTH: u32 = 1920;
 const TIMELINE_RENDER_HEIGHT: u32 = 1080;
+const OVERLAY_BLUR_MAX_RADIUS_PX: f64 = 24.0;
 
 /// Errors building a timeline-render spec.
 #[derive(Debug, Error)]
@@ -2548,6 +2549,11 @@ fn render_animations_for_clip_with_limitations(
             });
             return;
         }
+        if parameter == "overlay.blur" {
+            selection
+                .limitations
+                .extend(overlay_blur_radius_limitations(animation));
+        }
         selection.animations.push(RenderParameterAnimation {
             parameter: parameter.clone(),
             keyframes: animation.keyframes.clone(),
@@ -2557,6 +2563,34 @@ fn render_animations_for_clip_with_limitations(
         });
     });
     selection
+}
+
+fn overlay_blur_radius_limitations(
+    animation: &awidat_proto::professional::ParameterAnimation,
+) -> Vec<RenderPlanLimitation> {
+    animation
+        .keyframes
+        .iter()
+        .filter(|keyframe| {
+            keyframe.value.is_finite() && keyframe.value > OVERLAY_BLUR_MAX_RADIUS_PX
+        })
+        .map(|keyframe| RenderPlanLimitation {
+            kind: "overlay_blur_radius_clamped".to_string(),
+            animation_id: Some(animation.id.clone()),
+            clip_id: match &animation.target {
+                awidat_proto::professional::AnimationTarget::ClipParameter { clip_id, .. } => {
+                    Some(clip_id.clone())
+                }
+                _ => None,
+            },
+            parameter: Some("overlay.blur".to_string()),
+            message: format!(
+                "render clamps overlay.blur keyframe value {} to maximum supported radius {} px",
+                keyframe.value,
+                fmt_filter_num(OVERLAY_BLUR_MAX_RADIUS_PX)
+            ),
+        })
+        .collect()
 }
 
 fn tracker_bind_coverage_limitations(
@@ -3412,6 +3446,8 @@ fn append_video_overlays(
             apply_overlay_mask_filter(overlay, idx, &transformed_label);
         let (matte_filter, transformed_label) =
             apply_overlay_matte_filter(overlay, idx, &transformed_label);
+        let (blur_filter, transformed_label) =
+            apply_overlay_blur_filter(overlay, idx, &transformed_label);
         let opacity_filter = if has_overlay_animation(overlay, "overlay.opacity") {
             let opacity = overlay_animation_value_expr(overlay, "overlay.opacity", "1", "T");
             let alpha_label = format!("[media_overlay_alpha{idx}]");
@@ -3432,12 +3468,14 @@ fn append_video_overlays(
              {corner_pin_filter}\
              {mask_filter}\
              {matte_filter}\
+             {blur_filter}\
              {opacity_filter}\
              {overlay_filter}",
             rotation_filter = rotation_filter,
             corner_pin_filter = corner_pin_filter,
             mask_filter = mask_filter,
             matte_filter = matte_filter,
+            blur_filter = blur_filter,
             opacity_filter = opacity_filter.0,
         ));
         current = next;
@@ -3969,6 +4007,15 @@ fn motion_blurred_overlay_transform_filter(
             &mut filter,
             &overlay_video_label,
         );
+        let blur_time_var = offset_time_var("T", offset);
+        let overlay_video_label = apply_overlay_sample_blur_filter(
+            context.overlay,
+            context.idx,
+            sample_idx,
+            &mut filter,
+            &overlay_video_label,
+            &blur_time_var,
+        );
         let (sample_x, sample_y) =
             overlay_position_exprs(context.overlay, has_rotation, &sample_time_var);
         let alpha_label = &alpha_labels[sample_idx];
@@ -4066,6 +4113,63 @@ fn overlay_motion_blur_alpha_expr(overlay: &VideoOverlayPlan, offset: f64, weigh
     } else {
         format!("alpha(X,Y)*{weight}")
     }
+}
+
+fn apply_overlay_blur_filter(
+    overlay: &VideoOverlayPlan,
+    idx: usize,
+    input_label: &str,
+) -> (String, String) {
+    if !has_overlay_animation(overlay, "overlay.blur") {
+        return (String::new(), input_label.to_string());
+    }
+    let video_label = format!("[media_overlay_blurvideo{idx}]");
+    let radius_src_label = format!("[media_overlay_blurradiussrc{idx}]");
+    let radius_label = format!("[media_overlay_blurradius{idx}]");
+    let out_label = format!("[media_overlay_softblur{idx}]");
+    let radius_expr = overlay_blur_radius_expr(overlay, "T");
+    let radius = fmt_filter_num(OVERLAY_BLUR_MAX_RADIUS_PX);
+    (
+        format!(
+            "{input_label}format=rgba,split=2{video_label}{radius_src_label};\
+             {radius_src_label}format=gray,geq=lum='{radius_expr}'{radius_label};\
+             {video_label}{radius_label}varblur=min_r=0:max_r={radius}:planes=15{out_label};"
+        ),
+        out_label,
+    )
+}
+
+fn apply_overlay_sample_blur_filter(
+    overlay: &VideoOverlayPlan,
+    overlay_idx: usize,
+    sample_idx: usize,
+    filter: &mut String,
+    input_label: &str,
+    time_var: &str,
+) -> String {
+    if !has_overlay_animation(overlay, "overlay.blur") {
+        return input_label.to_string();
+    }
+    let video_label = format!("[media_overlay_blur{overlay_idx}_video{sample_idx}]");
+    let radius_src_label = format!("[media_overlay_blur{overlay_idx}_radiussrc{sample_idx}]");
+    let radius_label = format!("[media_overlay_blur{overlay_idx}_radius{sample_idx}]");
+    let out_label = format!("[media_overlay_blur{overlay_idx}_soft{sample_idx}]");
+    let radius_expr = overlay_blur_radius_expr(overlay, time_var);
+    let radius = fmt_filter_num(OVERLAY_BLUR_MAX_RADIUS_PX);
+    filter.push_str(&format!(
+        "{input_label}format=rgba,split=2{video_label}{radius_src_label};\
+         {radius_src_label}format=gray,geq=lum='{radius_expr}'{radius_label};\
+         {video_label}{radius_label}varblur=min_r=0:max_r={radius}:planes=15{out_label};"
+    ));
+    out_label
+}
+
+fn overlay_blur_radius_expr(overlay: &VideoOverlayPlan, time_var: &str) -> String {
+    let blur_px = overlay_animation_value_expr(overlay, "overlay.blur", "0", time_var);
+    format!(
+        "min(max(({blur_px}),0),{})",
+        fmt_filter_num(OVERLAY_BLUR_MAX_RADIUS_PX)
+    )
 }
 
 fn has_overlay_transform_motion(overlay: &VideoOverlayPlan) -> bool {
@@ -5479,21 +5583,34 @@ fn format_revealed_drawtext_filters(
 fn reveal_steps(text: &str, reveal: TextReveal) -> Vec<String> {
     match reveal {
         TextReveal::None => vec![text.to_string()],
-        TextReveal::Typewriter => text
-            .char_indices()
-            .map(|(index, character)| {
-                let end = index + character.len_utf8();
+        TextReveal::Typewriter => UnicodeSegmentation::grapheme_indices(text, true)
+            .map(|(index, grapheme)| {
+                let end = index + grapheme.len();
                 text[..end].to_string()
             })
             .collect(),
         TextReveal::Word => {
             let mut steps = Vec::new();
             let mut end = 0;
-            for word in text.split_whitespace() {
-                if let Some(relative) = text[end..].find(word) {
-                    end += relative + word.len();
+            let mut saw_word = false;
+            for grapheme in UnicodeSegmentation::graphemes(text, true) {
+                end += grapheme.len();
+                if grapheme.chars().all(char::is_whitespace) {
+                    saw_word = false;
+                    continue;
+                }
+                saw_word = true;
+                let next_is_boundary = text[end..]
+                    .chars()
+                    .next()
+                    .map(char::is_whitespace)
+                    .unwrap_or(true);
+                if next_is_boundary {
                     steps.push(text[..end].to_string());
                 }
+            }
+            if steps.is_empty() && saw_word {
+                steps.push(text.to_string());
             }
             steps
         }
@@ -10738,6 +10855,18 @@ animations: Vec::new(),
     }
 
     #[test]
+    fn reveal_steps_keep_grapheme_clusters_intact() {
+        assert_eq!(
+            reveal_steps("👩\u{200d}💻", TextReveal::Typewriter),
+            vec!["👩\u{200d}💻".to_string()]
+        );
+        assert_eq!(
+            reveal_steps("👩\u{200d}💻 dev", TextReveal::Word),
+            vec!["👩\u{200d}💻".to_string(), "👩\u{200d}💻 dev".to_string()]
+        );
+    }
+
+    #[test]
     fn long_form_broadcast_overlay_suppresses_generic_titles() {
         let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
         let title = TitlePlan {
@@ -10966,6 +11095,99 @@ animations: Vec::new(),
         assert!(
             filter.contains("scale2ref=w=main_w*0.3*(") && filter.contains(":eval=frame"),
             "animated overlay scale should be evaluated per frame: {filter}"
+        );
+    }
+
+    #[test]
+    fn overlay_blur_animation_uses_keyframed_radius_map() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.5,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: vec![RenderParameterAnimation {
+                parameter: "overlay.blur".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                    awidat_proto::professional::Keyframe::linear(1.0, 12.0),
+                ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+            }],
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("varblur=min_r=0:max_r=24"),
+            "overlay blur should use a radius-map blur, not blend a fixed blurred stream: {filter}"
+        );
+        assert!(
+            filter.contains("geq=lum='min(max(("),
+            "overlay blur should drive the radius map from keyframes: {filter}"
+        );
+        assert!(
+            !filter.contains("blend=all_expr="),
+            "overlay blur should not approximate radius by blending sharp and fully blurred streams: {filter}"
+        );
+        assert!(
+            filter.contains("(T-0.5)"),
+            "overlay blur should evaluate keyframes in overlay-local time: {filter}"
+        );
+    }
+
+    #[test]
+    fn oversized_overlay_blur_animation_surfaces_clamp_limitation() {
+        let animations = vec![awidat_proto::professional::ParameterAnimation {
+            id: "big-blur".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "overlay-a".into(),
+                parameter: "overlay.blur".into(),
+            },
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                awidat_proto::professional::Keyframe::linear(1.0, 32.0),
+            ],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        }];
+
+        let selection =
+            render_animations_for_clip_with_limitations(&animations, "overlay-a", "overlay");
+
+        assert_eq!(selection.animations.len(), 1);
+        assert!(
+            selection.limitations.iter().any(|limitation| {
+                limitation.kind == "overlay_blur_radius_clamped"
+                    && limitation.parameter.as_deref() == Some("overlay.blur")
+                    && limitation.message.contains("32")
+            }),
+            "oversized blur should surface a clamp limitation: {:?}",
+            selection.limitations
         );
     }
 

@@ -170,11 +170,21 @@ const runtimeParityValues = evaluateAnimations(
       ],
       rationale: null,
     },
+    {
+      id: "blur",
+      target: { clip_id: "clip-a", parameter: "overlay.blur" },
+      keyframes: [
+        { time_s: 0, value: 0, interpolation: "linear", easing: "linear" },
+        { time_s: 1, value: 8, interpolation: "linear", easing: "linear" },
+      ],
+      rationale: null,
+    },
   ],
   0.5,
 );
 assert.equal(runtimeParityValues["title.font_size"], 42);
 assert.equal(runtimeParityValues["overlay.rotation_deg"], 6);
+assert.equal(runtimeParityValues["overlay.blur"], 4);
 
 const pipStyle = videoOverlayStyle(
   {
@@ -184,6 +194,7 @@ const pipStyle = videoOverlayStyle(
     marginPct: 0.04,
     zIndex: 1,
     timelineStart: 10,
+    previewHeightPx: 540,
     animations: [
       {
         id: "pip-punch",
@@ -200,6 +211,31 @@ const pipStyle = videoOverlayStyle(
 );
 assert.equal(pipStyle.width, "25%");
 assert.match(pipStyle.transform, /scale\(1\.1\)/);
+
+const blurredPipStyle = videoOverlayStyle(
+  {
+    mode: "pip",
+    corner: "top_right",
+    scale: 0.25,
+    marginPct: 0.04,
+    zIndex: 1,
+    timelineStart: 10,
+    previewHeightPx: 540,
+    animations: [
+      {
+        id: "pip-blur",
+        target: { clip_id: "clip-a", parameter: "overlay.blur" },
+        keyframes: [
+          { time_s: 0, value: 0, interpolation: "linear", easing: "linear" },
+          { time_s: 1, value: 6, interpolation: "linear", easing: "linear" },
+        ],
+        rationale: null,
+      },
+    ],
+  },
+  10.5,
+);
+assert.equal(blurredPipStyle.filter, "blur(1.5px)");
 
 const fixturePath = new URL("../../../fixtures/motion/animation-parity.json", import.meta.url);
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
