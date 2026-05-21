@@ -4,6 +4,7 @@ import {
   evaluateAnimationValueForTest,
   evaluateAnimations,
 } from "../dist-test/timeline/animation.js";
+import { videoOverlayStyle } from "../dist-test/media/videoOverlayStyle.js";
 
 const fade = {
   id: "fade",
@@ -148,6 +149,57 @@ const pathValues = evaluateAnimations(
 );
 assert.equal(pathValues["overlay.x"], 0);
 assert.equal(pathValues["overlay.y"], 0.2);
+
+const runtimeParityValues = evaluateAnimations(
+  [
+    {
+      id: "font-size",
+      target: { clip_id: "clip-a", parameter: "title.font_size" },
+      keyframes: [
+        { time_s: 0, value: 36, interpolation: "linear", easing: "linear" },
+        { time_s: 1, value: 48, interpolation: "linear", easing: "linear" },
+      ],
+      rationale: null,
+    },
+    {
+      id: "rotation",
+      target: { clip_id: "clip-a", parameter: "overlay.rotation_deg" },
+      keyframes: [
+        { time_s: 0, value: 0, interpolation: "linear", easing: "linear" },
+        { time_s: 1, value: 12, interpolation: "linear", easing: "linear" },
+      ],
+      rationale: null,
+    },
+  ],
+  0.5,
+);
+assert.equal(runtimeParityValues["title.font_size"], 42);
+assert.equal(runtimeParityValues["overlay.rotation_deg"], 6);
+
+const pipStyle = videoOverlayStyle(
+  {
+    mode: "pip",
+    corner: "top_right",
+    scale: 0.25,
+    marginPct: 0.04,
+    zIndex: 1,
+    timelineStart: 10,
+    animations: [
+      {
+        id: "pip-punch",
+        target: { clip_id: "clip-a", parameter: "overlay.scale" },
+        keyframes: [
+          { time_s: 0, value: 1, interpolation: "linear", easing: "linear" },
+          { time_s: 1, value: 1.2, interpolation: "linear", easing: "linear" },
+        ],
+        rationale: null,
+      },
+    ],
+  },
+  10.5,
+);
+assert.equal(pipStyle.width, "25%");
+assert.match(pipStyle.transform, /scale\(1\.1\)/);
 
 const fixturePath = new URL("../../../fixtures/motion/animation-parity.json", import.meta.url);
 const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));

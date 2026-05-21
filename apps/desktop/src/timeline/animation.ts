@@ -33,11 +33,13 @@ const PHASE_3A_PARAMETERS = new Set([
   "title.x",
   "title.y",
   "title.position",
+  "title.font_size",
   "overlay.opacity",
   "overlay.x",
   "overlay.y",
   "overlay.position",
   "overlay.scale",
+  "overlay.rotation_deg",
 ]);
 
 export function isPhase3AParameter(parameter: string): boolean {

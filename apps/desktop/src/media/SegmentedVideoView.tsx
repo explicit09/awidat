@@ -54,6 +54,7 @@ import {
 } from "../timeline/store";
 import type { TimelineParameterAnimation } from "../protocol";
 import { clampOpacity, evaluateAnimations } from "../timeline/animation";
+import { videoOverlayStyle as buildVideoOverlayStyle } from "./videoOverlayStyle";
 import {
   findActiveSegment,
   type PreviewTransition,
@@ -1072,58 +1073,7 @@ function videoOverlayStyle(
   overlay: VideoOverlaySegment,
   timelineTime: number,
 ): React.CSSProperties {
-  const zIndex = 10 + overlay.zIndex;
-  const animated = evaluateAnimations(
-    overlay.animations,
-    timelineTime - overlay.timelineStart,
-  );
-  const opacity = clampOpacity(animated["overlay.opacity"] ?? 1);
-  const xOffset = animated["overlay.x"] ?? 0;
-  const yOffset = animated["overlay.y"] ?? 0;
-  const scaleMultiplier = animated["overlay.scale"] ?? 1;
-  if (overlay.mode === "full_frame") {
-    return {
-      position: "absolute",
-      inset: 0,
-      width: "100%",
-      height: "100%",
-      objectFit: "contain",
-      opacity,
-      transform: `translate(${xOffset * 100}vw, ${yOffset * 100}vh) scale(${scaleMultiplier})`,
-      zIndex,
-    };
-  }
-  const size = `${overlay.scale * scaleMultiplier * 100}%`;
-  const margin = `${overlay.marginPct * 100}%`;
-  return {
-    position: "absolute",
-    width: size,
-    height: "auto",
-    maxHeight: `calc(100% - (${margin} * 2))`,
-    objectFit: "contain",
-    borderRadius: 6,
-    boxShadow: "0 10px 28px rgba(0, 0, 0, 0.42)",
-    opacity,
-    transform: `translate(${xOffset * 100}vw, ${yOffset * 100}vh)`,
-    zIndex,
-    ...cornerStyle(overlay.corner, margin),
-  };
-}
-
-function cornerStyle(
-  corner: VideoOverlaySegment["corner"],
-  margin: string,
-): React.CSSProperties {
-  switch (corner) {
-    case "top_left":
-      return { top: margin, left: margin };
-    case "top_right":
-      return { top: margin, right: margin };
-    case "bottom_left":
-      return { bottom: margin, left: margin };
-    case "bottom_right":
-      return { bottom: margin, right: margin };
-  }
+  return buildVideoOverlayStyle(overlay, timelineTime);
 }
 
 type BroadcastOverlayConfig = NonNullable<TimelineSnapshot["broadcast_overlay"]>;
