@@ -150,6 +150,55 @@ const pathValues = evaluateAnimations(
 assert.equal(pathValues["overlay.x"], 0);
 assert.equal(pathValues["overlay.y"], 0.2);
 
+const curvedPathValues = evaluateAnimations(
+  [
+    {
+      id: "curved-path",
+      target: { clip_id: "clip-a", parameter: "overlay.position" },
+      keyframes: [],
+      motion_path: {
+        points: [
+          { time_s: 0, x: 0, y: 0, outgoing_control: { x: 0, y: 1 } },
+          { time_s: 1, x: 1, y: 1, incoming_control: { x: 1, y: 0 } },
+        ],
+      },
+      rationale: null,
+    },
+  ],
+  0.25,
+);
+assert.equal(curvedPathValues["overlay.x"], 0.15625);
+assert.equal(curvedPathValues["overlay.y"], 0.4375);
+
+const easedPathValues = evaluateAnimations(
+  [
+    {
+      id: "eased-path",
+      target: { clip_id: "clip-a", parameter: "overlay.position" },
+      keyframes: [
+        {
+          time_s: 0,
+          value: 0,
+          interpolation: "bezier",
+          easing: "linear",
+          bezier: { out_x: 0.25, out_y: 0.9, in_x: 0.75, in_y: 0.1 },
+        },
+        { time_s: 1, value: 1, interpolation: "linear", easing: "linear" },
+      ],
+      motion_path: {
+        points: [
+          { time_s: 0, x: -0.2, y: 0 },
+          { time_s: 1, x: 0.2, y: 0.4 },
+        ],
+      },
+      rationale: null,
+    },
+  ],
+  0.25,
+);
+assert.ok(easedPathValues["overlay.x"] > -0.1);
+assert.ok(easedPathValues["overlay.y"] > 0.1);
+
 const runtimeParityValues = evaluateAnimations(
   [
     {

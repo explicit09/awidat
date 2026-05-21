@@ -515,6 +515,18 @@ fn timeline_animation_for_clip(
                         time_s: point.time_s,
                         x: point.x,
                         y: point.y,
+                        outgoing_control: point.outgoing_control.map(|control| {
+                            awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                                x: control.x,
+                                y: control.y,
+                            }
+                        }),
+                        incoming_control: point.incoming_control.map(|control| {
+                            awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                                x: control.x,
+                                y: control.y,
+                            }
+                        }),
                     })
                     .collect(),
             }

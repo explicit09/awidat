@@ -21,6 +21,7 @@ export type { TimelineAnimationTarget } from "./generated/TimelineAnimationTarge
 export type { TimelineBezierHandles } from "./generated/TimelineBezierHandles";
 export type { TimelineKeyframe } from "./generated/TimelineKeyframe";
 export type { TimelineMotionPath } from "./generated/TimelineMotionPath";
+export type { TimelineMotionPathControlPoint } from "./generated/TimelineMotionPathControlPoint";
 export type { TimelineMotionPathPoint } from "./generated/TimelineMotionPathPoint";
 export type { TimelineSpringParameters } from "./generated/TimelineSpringParameters";
 export type { TimelineCutBoundary } from "./generated/TimelineCutBoundary";

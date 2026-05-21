@@ -41,6 +41,13 @@ export const RUNTIME_CLIP_PARAMETERS = [
   "overlay.scale",
   "overlay.rotation_deg",
   "overlay.blur",
+  "awidat.blur.radius_px",
+  "awidat.shake.intensity_px",
+  "awidat.shake.frequency_hz",
+  "awidat.warp.k1",
+  "awidat.warp.k2",
+  "awidat.warp.center_x",
+  "awidat.warp.center_y",
 ] as const;
 
 const PHASE_3A_PARAMETERS = new Set<string>(RUNTIME_CLIP_PARAMETERS);
@@ -124,20 +131,72 @@ function evaluateMotionPath(
 ): { x: number; y: number } | null {
   const points = animation.motion_path?.points ?? [];
   if (points.length === 0) return null;
-  if (localTimeS <= points[0].time_s) return { x: points[0].x, y: points[0].y };
+  const pathTimeS =
+    animation.keyframes.length > 0
+      ? motionPathTimeForProgress(animation, points, localTimeS)
+      : localTimeS;
+  if (pathTimeS === null) return null;
+  if (pathTimeS <= points[0].time_s) return { x: points[0].x, y: points[0].y };
   for (let index = 0; index < points.length - 1; index += 1) {
     const current = points[index];
     const next = points[index + 1];
-    if (localTimeS > next.time_s) continue;
+    if (pathTimeS > next.time_s) continue;
     if (next.time_s <= current.time_s) return { x: current.x, y: current.y };
-    const progress = (localTimeS - current.time_s) / (next.time_s - current.time_s);
+    const progress = (pathTimeS - current.time_s) / (next.time_s - current.time_s);
+    return motionPathSegmentPoint(current, next, progress);
+  }
+  const last = points[points.length - 1];
+  return { x: last.x, y: last.y };
+}
+
+type MotionPathPoint = NonNullable<TimelineParameterAnimation["motion_path"]>["points"][number];
+
+function motionPathSegmentPoint(
+  current: MotionPathPoint,
+  next: MotionPathPoint,
+  progress: number,
+): { x: number; y: number } {
+  if (!current.outgoing_control && !next.incoming_control) {
     return {
       x: current.x + (next.x - current.x) * progress,
       y: current.y + (next.y - current.y) * progress,
     };
   }
+  const outgoing = current.outgoing_control ?? { x: current.x, y: current.y };
+  const incoming = next.incoming_control ?? { x: next.x, y: next.y };
+  return {
+    x: cubicBezierValue(current.x, outgoing.x, incoming.x, next.x, progress),
+    y: cubicBezierValue(current.y, outgoing.y, incoming.y, next.y, progress),
+  };
+}
+
+function cubicBezierValue(
+  start: number,
+  control1: number,
+  control2: number,
+  end: number,
+  progress: number,
+): number {
+  const inverse = 1 - progress;
+  return (
+    inverse ** 3 * start +
+    3 * inverse ** 2 * progress * control1 +
+    3 * inverse * progress ** 2 * control2 +
+    progress ** 3 * end
+  );
+}
+
+function motionPathTimeForProgress(
+  animation: TimelineParameterAnimation,
+  points: NonNullable<TimelineParameterAnimation["motion_path"]>["points"],
+  localTimeS: number,
+): number | null {
+  const progress = evaluateAnimationValue(animation, localTimeS);
+  if (progress === null || !Number.isFinite(progress)) return null;
+  const first = points[0];
   const last = points[points.length - 1];
-  return { x: last.x, y: last.y };
+  const clampedProgress = Math.max(0, Math.min(1, progress));
+  return first.time_s + (last.time_s - first.time_s) * clampedProgress;
 }
 
 export function clampOpacity(value: number): number {

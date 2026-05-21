@@ -224,6 +224,93 @@
               },
             ],
           },
+          {
+            name: "Titles",
+            kind: "video",
+            role: "titles",
+            audio: null,
+            items: [
+              {
+                kind: "clip",
+                index: 0,
+                name: "Opening Title",
+                clip_uuid: "clip-title-1",
+                track_start_s: 2,
+                duration_s: 4,
+                asset_id: null,
+                source_start_s: 0,
+                proxy_path: null,
+                thumbnail_dir: null,
+                waveform_path: null,
+                volume: null,
+                speed: null,
+                fade_in_s: null,
+                fade_out_s: null,
+                link_group_id: null,
+                has_video: false,
+                has_audio: false,
+                color_correction: null,
+                lut_path: null,
+                title: {
+                  text: "Opening Title",
+                  position: "center",
+                  font_size: 64,
+                  color: "#FFFFFF",
+                  font_weight: "bold",
+                  animation: "none",
+                  reveal: "none",
+                },
+                video_overlay: null,
+                animations: [
+                  {
+                    id: "title-drift-existing",
+                    target: {
+                      clip_id: "clip-title-1",
+                      parameter: "title.position",
+                    },
+                    keyframes: [
+                      {
+                        time_s: 0,
+                        value: 0,
+                        interpolation: "bezier",
+                        easing: "ease_in_out",
+                        bezier: {
+                          out_x: 0.2,
+                          out_y: 0,
+                          in_x: 0.8,
+                          in_y: 1,
+                        },
+                        tangent_mode: "aligned",
+                        spring: null,
+                      },
+                      {
+                        time_s: 4,
+                        value: 1,
+                        interpolation: "linear",
+                        easing: "linear",
+                        bezier: null,
+                        tangent_mode: "auto",
+                        spring: null,
+                      },
+                    ],
+                    pre_extrapolation: "hold",
+                    post_extrapolation: "hold",
+                    motion_path: {
+                      points: [
+                        { time_s: 0, x: -0.04, y: 0.02 },
+                        { time_s: 4, x: 0.04, y: -0.02 },
+                      ],
+                    },
+                    rationale: "Existing title drift.",
+                  },
+                ],
+                audio_lead_s: null,
+                audio_trail_s: null,
+                split_edit_reason: null,
+                split_edit_confidence: null,
+              },
+            ],
+          },
         ],
       };
 
@@ -413,6 +500,10 @@
       } else if (scenario === "density") {
         window.setTimeout(() => {
           useTimelineSelectionStore.getState().select({ trackIndex: 0, clipIndex: 5 });
+        }, 250);
+      } else if (scenario === "title-motion") {
+        window.setTimeout(() => {
+          useTimelineSelectionStore.getState().select({ trackIndex: 1, clipIndex: 0 });
         }, 250);
       }
     </script>

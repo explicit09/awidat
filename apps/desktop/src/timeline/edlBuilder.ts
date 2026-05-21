@@ -19,9 +19,18 @@
 // accepts any f64-parseable number, but we round here so the EDL
 // text stays readable in the Show-EDL toggle.
 
+import type { TimelineParameterAnimation } from "../protocol";
+
 export type EdlAnchor =
   | { kind: "clip_uuid"; uuid: string }
   | { kind: "transcript_snippet"; text: string };
+
+export type EdlParameterAnimation = Omit<TimelineParameterAnimation, "target"> & {
+  target: TimelineParameterAnimation["target"] & {
+    kind: "clip_parameter";
+  };
+  metadata_only?: boolean;
+};
 
 export type EdlAudioFx = {
   highPassHz?: number;
@@ -150,6 +159,7 @@ export type EdlOp =
       strength?: number;
     }
   | { kind: "remove_lut"; anchor: EdlAnchor }
+  | { kind: "set_parameter_animation"; animation: EdlParameterAnimation }
   | {
       kind: "insert_title";
       startS: number;
@@ -355,6 +365,10 @@ function appendOp(lines: string[], op: EdlOp): void {
     case "remove_lut":
       lines.push("*** Remove LUT");
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      break;
+    case "set_parameter_animation":
+      lines.push("*** Set Parameter Animation");
+      lines.push(`+ animation_json: ${JSON.stringify(op.animation)}`);
       break;
     case "insert_title":
       lines.push("*** Insert Title");
