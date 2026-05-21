@@ -34,6 +34,7 @@ pub mod load_skill;
 pub mod plan_emphasis;
 pub mod plan_look_regions;
 pub mod plan_multicam;
+pub mod plan_reframe;
 pub mod plan_transition;
 pub mod poll_render;
 pub mod read_index;

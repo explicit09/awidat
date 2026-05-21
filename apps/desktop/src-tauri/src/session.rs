@@ -22,7 +22,8 @@ use awidat_core::tools::{
     load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
     plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
     plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
-    plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
+    plan_reframe::PlanReframeTool, plan_transition::PlanTransitionTool,
+    poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transition_context::TransitionContextTool,
@@ -61,6 +62,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(ReviewLookRegionsTool));
     registry.register(Arc::new(PlanEmphasisTool));
     registry.register(Arc::new(PlanMulticamTool));
+    registry.register(Arc::new(PlanReframeTool));
     registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(TransitionContextTool));
@@ -166,5 +168,6 @@ mod tests {
     fn desktop_registry_includes_plan_emphasis() {
         let registry = build_registry();
         assert!(registry.get("plan_emphasis").is_some());
+        assert!(registry.get("plan_reframe").is_some());
     }
 }
