@@ -14084,6 +14084,21 @@ animations: Vec::new(),
         let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
             return;
         };
+        // Some CI ffmpeg builds (e.g. Homebrew ffmpeg 8.1 on macOS at
+        // time of writing) ship without `drawtext` because libfreetype
+        // wasn't linked. Skip rather than fail the suite on those hosts.
+        let probe = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-filters"])
+            .output();
+        let has_drawtext = probe
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("drawtext"))
+            .unwrap_or(false);
+        if !has_drawtext {
+            eprintln!(
+                "skipping ffmpeg_smoke_renders_annotation_and_rich_title: drawtext filter unavailable"
+            );
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let base_path = dir.path().join("base.mp4");
         let output_path = dir.path().join("annotation-rich-title.mp4");
