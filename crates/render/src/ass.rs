@@ -125,7 +125,7 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
     out.push_str(&format!(
         "Style: Caption,{font},{size},{primary},{secondary},{outline},{back},\
          {bold},0,0,0,100,100,0,0,1,3,2,{alignment},80,80,{margin_v},1\n",
-        font = ass_default_fontname(),
+        font = default_caption_font_name(),
         size = title.font_size,
         primary = primary,
         secondary = secondary,
@@ -261,13 +261,91 @@ fn escape_ass_text(input: &str) -> String {
     out
 }
 
-/// libass falls back to system fonts when this name isn't bundled.
-/// We don't ship a font yet, so we name the same generic family
-/// the drawtext path probes — keeps captions visually similar
-/// between the two code paths when both are in flight (e.g.,
-/// drawtext for short titles, libass for word-timed captions).
-fn ass_default_fontname() -> &'static str {
-    "Arial"
+/// Environment variable that, when set and non-empty, short-circuits
+/// the host font probe and pins the ASS `Fontname` to whatever the
+/// caller wants. Documented as `AWIDAT_CAPTION_FONT` for users.
+const CAPTION_FONT_ENV: &str = "AWIDAT_CAPTION_FONT";
+
+/// Ordered probe list of `(font_file_on_disk, family_name_for_ass)`.
+/// We check each file path; the first one that resolves means the
+/// host ships that family, so libass's fontconfig step at render
+/// time will be able to find it too. Last entry is the universal
+/// libass fallback alias `"Sans Serif"` (always returned if nothing
+/// else hit) — libass treats this as a generic family name.
+///
+/// Layered platform-first so the most idiomatic choice wins on each
+/// host: macOS → Helvetica Neue, Linux → DejaVu Sans, Windows →
+/// Segoe UI. "Inter" and "Arial" are cross-platform fallbacks.
+const CAPTION_FONT_CANDIDATES: &[(&str, &str)] = &[
+    // macOS
+    ("/System/Library/Fonts/HelveticaNeue.ttc", "Helvetica Neue"),
+    ("/System/Library/Fonts/Helvetica.ttc", "Helvetica"),
+    ("/Library/Fonts/Inter.ttc", "Inter"),
+    ("/System/Library/Fonts/Supplemental/Arial.ttf", "Arial"),
+    // Linux
+    (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "DejaVu Sans",
+    ),
+    ("/usr/share/fonts/TTF/DejaVuSans.ttf", "DejaVu Sans"),
+    (
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "Liberation Sans",
+    ),
+    ("/usr/share/fonts/inter/Inter-Regular.ttf", "Inter"),
+    // Windows
+    ("C:\\Windows\\Fonts\\segoeui.ttf", "Segoe UI"),
+    ("C:\\Windows\\Fonts\\arial.ttf", "Arial"),
+];
+
+/// Universal libass fallback when no probed candidate hits. libass
+/// treats `"Sans Serif"` as a generic family alias, so this still
+/// produces *some* rendering rather than dropping captions on a
+/// stripped-down container.
+const CAPTION_FONT_FALLBACK: &str = "Sans Serif";
+
+/// Resolve the ASS `Fontname` to write into the `Style:` row.
+///
+/// Order of resolution:
+///   1. `env_getter("AWIDAT_CAPTION_FONT")` returning `Some(name)`
+///      with a non-empty (after trim) value — that wins, no probing.
+///   2. First entry in [`CAPTION_FONT_CANDIDATES`] whose file path
+///      exists on disk → return its family name.
+///   3. [`CAPTION_FONT_FALLBACK`] (`"Sans Serif"`).
+///
+/// Injecting `env_getter` (instead of calling `std::env::var`
+/// directly) lets tests drive every branch without touching the
+/// process env — `std::env::set_var` is `unsafe` in edition 2024
+/// and the workspace forbids `unsafe`.
+pub fn resolve_caption_font_name<F>(env_getter: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(raw) = env_getter(CAPTION_FONT_ENV) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    for (path, family) in CAPTION_FONT_CANDIDATES {
+        if std::path::Path::new(path).is_file() {
+            return (*family).to_string();
+        }
+    }
+    CAPTION_FONT_FALLBACK.to_string()
+}
+
+/// Production wrapper around [`resolve_caption_font_name`] that
+/// reads `AWIDAT_CAPTION_FONT` from the real process env.
+pub fn default_caption_font_name() -> String {
+    resolve_caption_font_name(|key| std::env::var(key).ok())
+}
+
+/// Test-visible re-export of [`build_ass_document`] so integration
+/// tests in `crates/render/tests/` can assert on the writer output
+/// without the whole timeline scaffolding.
+pub fn build_ass_document_for_test(title: &TitlePlan) -> String {
+    build_ass_document(title)
 }
 
 /// ffmpeg's `subtitles=` filter parses its argument as a key/value
