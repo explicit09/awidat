@@ -11,6 +11,7 @@ pub mod attempt_completion;
 pub mod bash;
 pub mod broll_candidates;
 pub mod clip_search;
+pub mod color_scopes;
 pub mod delegate;
 pub mod delegate_all;
 pub mod diagnose_project_media;

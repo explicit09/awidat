@@ -14,15 +14,15 @@ use awidat_core::tools::{
     analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
     assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
     bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    diagnose_project_media::DiagnoseProjectMediaTool, download_yt_clip::DownloadYtClipTool,
-    export_package::ExportPackageTool, find_beat::FindBeatTool,
-    find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
-    find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
-    find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
-    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_looks::ListLooksTool,
-    load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
+    color_scopes::ColorScopesTool, diagnose_project_media::DiagnoseProjectMediaTool,
+    download_yt_clip::DownloadYtClipTool, export_package::ExportPackageTool,
+    find_beat::FindBeatTool, find_black_frames::FindBlackFramesTool,
+    find_broll_opportunities::FindBrollOpportunitiesTool, find_dead_air::FindDeadAirTool,
+    find_episode_start::FindEpisodeStartTool, find_eye_contact::FindEyeContactTool,
+    find_false_starts::FindFalseStartsTool, find_filler_words::FindFillerWordsTool,
+    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
+    inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool, list_assets::ListAssetsTool,
+    list_looks::ListLooksTool, load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
     plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
     plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
     plan_transition::PlanTransitionTool, poll_render::PollRenderTool, read_index::ReadIndexTool,
@@ -61,7 +61,8 @@ find_moment when the user asks for editorial intent.\
 indexer ran): clip_search (free-text frame search), shot_summary, \
 broll_candidates, find_speaker_oncam, find_eye_contact.\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index, \
-inspect_clip, view_frame.\
+inspect_clip, view_frame, color_scopes (histogram/waveform/parade/vectorscope \
+evidence for one frame).\
 \n  - **Edit quality**: assess_edit_quality before risky trims/splits; it recommends hard cut, recut, J/L split edit, b-roll, or motivated transition. transition_context assembles handles, transcript, frames, and continuity context before choosing a visible transition; plan_transition turns that packet into a hard-cut or visible-transition proposal. assess_continuity is the lower-level rule breakdown.\
 \n  - **Editing**: apply_edl (Trim, Untrim, Delete, Split, Insert, Insert PiP). \
 For `@@ anchor: clip_uuid=...`, use the clip anchor shown by \
@@ -132,6 +133,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(InspectClipTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(ListLooksTool));
+    registry.register(Arc::new(ColorScopesTool));
     registry.register(Arc::new(PollRenderTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));
