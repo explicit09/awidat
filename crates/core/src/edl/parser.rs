@@ -31,15 +31,16 @@ use awidat_proto::awidat_meta::{
 use awidat_proto::professional::{
     AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
     MotionGraphicsTemplate, ParameterAnimation, PipelineReadinessReport, PlannerPassContract,
-    PreflightReport, ProposalPackage, SourceRange, SourceSelect, Stringout, TrackingPackage,
-    WorkflowLens,
+    PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange, SourceSelect, Stringout,
+    TrackingPackage, WorkflowLens,
 };
 use thiserror::Error;
 
 use super::op::{
-    Anchor, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand, InsertTrackKind, PiPCorner,
-    ProfessionalTimelineEdit, TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment,
-    TransitionBetween,
+    Anchor, AnnotationKind, AudioFxConfig, BRollPosition, EdlEnvelope, EdlOp, EqBand,
+    InsertTrackKind, MotionTemplateAnimation, PiPCorner, ProfessionalTimelineEdit, RichTextSegment,
+    TitleAnimation, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
+    valid_graphic_color,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -55,7 +56,7 @@ pub enum EdlParseError {
     /// Heading line that doesn't match a known op.
     #[error(
         "line {line}: unknown op heading {heading:?}; expected one of: \
-             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay"
+             Trim Clip, Delete Clip, Split Clip, Untrim Clip, Insert Clip, Insert BRoll, Insert PiP, Move Clip, Insert Transition, Delete Transition, Set Cut Intent, Set Volume, Set Audio Fade, Set Audio Lead, Set Audio Trail, Set Track Audio, Set Ducking, Set Sync Group, Set Clip Audio FX, Set Track Audio FX, Set Effect, Set Speed, Set Color Correction, Apply LUT, Remove LUT, Insert Title, Set Title, Insert Caption, Set Output Format, Set Loudness Target, Set Package Metadata, Set Broadcast Overlay, Author Subject Reframe From Track"
     )]
     UnknownOp {
         /// Line number.
@@ -245,8 +246,11 @@ enum OpKind {
     ApplyLut,
     RemoveLut,
     InsertTitle,
+    InsertRichTitle,
+    InstantiateMotionTemplate,
     SetTitle,
     InsertCaption,
+    InsertAnnotation,
     SetOutputFormat,
     SetLoudnessTarget,
     SetPackageMetadata,
@@ -259,6 +263,7 @@ enum OpKind {
     SetMotionTemplate,
     AttachComposition,
     SetTrackingPackage,
+    AuthorSubjectReframeFromTrack,
     SetColorFinishing,
     SetAudioFinishing,
     SelectDeliveryProfile,
@@ -296,8 +301,13 @@ impl OpBuilder {
             "Apply LUT" => OpKind::ApplyLut,
             "Remove LUT" => OpKind::RemoveLut,
             "Insert Title" => OpKind::InsertTitle,
+            "Insert Rich Title" => OpKind::InsertRichTitle,
+            "Instantiate Motion Template" | "Insert Motion Template" => {
+                OpKind::InstantiateMotionTemplate
+            }
             "Set Title" => OpKind::SetTitle,
             "Insert Caption" => OpKind::InsertCaption,
+            "Insert Annotation" => OpKind::InsertAnnotation,
             "Set Output Format" => OpKind::SetOutputFormat,
             "Set Loudness Target" => OpKind::SetLoudnessTarget,
             "Set Package Metadata" => OpKind::SetPackageMetadata,
@@ -310,6 +320,7 @@ impl OpBuilder {
             "Set Motion Template" => OpKind::SetMotionTemplate,
             "Attach Composition" => OpKind::AttachComposition,
             "Set Tracking Package" => OpKind::SetTrackingPackage,
+            "Author Subject Reframe From Track" => OpKind::AuthorSubjectReframeFromTrack,
             "Set Color Finishing" => OpKind::SetColorFinishing,
             "Set Audio Finishing" => OpKind::SetAudioFinishing,
             "Select Delivery Profile" => OpKind::SelectDeliveryProfile,
@@ -890,6 +901,76 @@ impl OpBuilder {
                     animation,
                 })
             }
+            OpKind::InsertRichTitle => {
+                let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "start_s".into(),
+                    }
+                })?;
+                let end_s = take_field_f64(&mut fields, "end_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "end_s".into(),
+                    }
+                })?;
+                let segments =
+                    take_required_json::<Vec<RichTextSegment>>(&mut fields, "segments_json", head)?;
+                let position = parse_title_position(
+                    take_field_string(&mut fields, "position").as_deref(),
+                    head,
+                )?
+                .unwrap_or(TitlePosition::Center);
+                let font_size = take_field_usize(&mut fields, "font_size")
+                    .map(|n| n as u32)
+                    .unwrap_or(64);
+                let animation = parse_title_animation(
+                    take_field_string(&mut fields, "animation").as_deref(),
+                    head,
+                )?
+                .unwrap_or(TitleAnimation::None);
+                Ok(EdlOp::InsertRichTitle {
+                    start_s,
+                    end_s,
+                    segments,
+                    position,
+                    font_size,
+                    animation,
+                })
+            }
+            OpKind::InstantiateMotionTemplate => {
+                let template_id =
+                    take_field_string(&mut fields, "template_id").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "template_id".into(),
+                        }
+                    })?;
+                let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "start_s".into(),
+                    }
+                })?;
+                let end_s = take_field_f64(&mut fields, "end_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "end_s".into(),
+                    }
+                })?;
+                let animation = parse_motion_template_animation(
+                    take_field_string(&mut fields, "animation").as_deref(),
+                    head,
+                )?
+                .unwrap_or(MotionTemplateAnimation::None);
+                Ok(EdlOp::InstantiateMotionTemplate {
+                    template_id,
+                    start_s,
+                    end_s,
+                    animation,
+                    slot_values: take_required_json(&mut fields, "slot_values_json", head)?,
+                })
+            }
             OpKind::SetTitle => {
                 let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
                     line: head,
@@ -963,6 +1044,75 @@ impl OpBuilder {
                     font_size,
                     color,
                     safe_area,
+                })
+            }
+            OpKind::InsertAnnotation => {
+                let start_s = take_field_f64(&mut fields, "start_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "start_s".into(),
+                    }
+                })?;
+                let end_s = take_field_f64(&mut fields, "end_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "end_s".into(),
+                    }
+                })?;
+                let kind = parse_annotation_kind(
+                    take_field_string(&mut fields, "kind")
+                        .as_deref()
+                        .ok_or_else(|| EdlParseError::MissingField {
+                            line: head,
+                            field: "kind".into(),
+                        })?,
+                    head,
+                )?;
+                let x = take_field_f64(&mut fields, "x").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "x".into(),
+                    }
+                })?;
+                let y = take_field_f64(&mut fields, "y").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "y".into(),
+                    }
+                })?;
+                let width = take_field_f64(&mut fields, "width").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "width".into(),
+                    }
+                })?;
+                let height = take_field_f64(&mut fields, "height").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "height".into(),
+                    }
+                })?;
+                let color = parse_annotation_color(
+                    take_field_string(&mut fields, "color")
+                        .unwrap_or_else(|| "#FFCC00".into())
+                        .as_str(),
+                    head,
+                )?;
+                let stroke_width = take_field_usize(&mut fields, "stroke_width")
+                    .map(|n| n as u32)
+                    .unwrap_or(4);
+                let label = take_field_string(&mut fields, "label");
+                Ok(EdlOp::InsertAnnotation {
+                    start_s,
+                    end_s,
+                    kind,
+                    x,
+                    y,
+                    width,
+                    height,
+                    color,
+                    stroke_width,
+                    label,
                 })
             }
             OpKind::SetOutputFormat => {
@@ -1049,6 +1199,78 @@ impl OpBuilder {
             OpKind::SetTrackingPackage => Ok(EdlOp::SetTrackingPackage {
                 package: take_required_json::<TrackingPackage>(&mut fields, "package_json", head)?,
             }),
+            OpKind::AuthorSubjectReframeFromTrack => {
+                let source_width =
+                    take_field_u32(&mut fields, "source_width").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "source_width".into(),
+                        }
+                    })?;
+                let source_height =
+                    take_field_u32(&mut fields, "source_height").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "source_height".into(),
+                        }
+                    })?;
+                let target_width =
+                    take_field_u32(&mut fields, "target_width").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "target_width".into(),
+                        }
+                    })?;
+                let target_height =
+                    take_field_u32(&mut fields, "target_height").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "target_height".into(),
+                        }
+                    })?;
+                let frame_rate = take_field_f64(&mut fields, "frame_rate").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "frame_rate".into(),
+                    }
+                })?;
+                Ok(EdlOp::AuthorSubjectReframeFromTrack {
+                    track_id: take_field_string(&mut fields, "track_id").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "track_id".into(),
+                        }
+                    })?,
+                    clip_id: take_field_string(&mut fields, "clip_id").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "clip_id".into(),
+                        }
+                    })?,
+                    aspect_ratio: take_field_string(&mut fields, "aspect_ratio").ok_or_else(
+                        || EdlParseError::MissingField {
+                            line: head,
+                            field: "aspect_ratio".into(),
+                        },
+                    )?,
+                    source_width,
+                    source_height,
+                    target_width,
+                    target_height,
+                    frame_rate,
+                    smoothing: take_field_string(&mut fields, "smoothing")
+                        .as_deref()
+                        .map(parse_reframe_smoothing)
+                        .transpose()
+                        .map_err(|message| EdlParseError::BadField {
+                            line: head,
+                            raw: "smoothing".into(),
+                            message,
+                        })?
+                        .unwrap_or_default(),
+                    safe_area: take_field_string(&mut fields, "safe_area"),
+                })
+            }
             OpKind::SetColorFinishing => Ok(EdlOp::SetColorFinishing {
                 state: take_required_json::<ColorFinishingState>(&mut fields, "state_json", head)?,
             }),
@@ -1275,6 +1497,53 @@ fn parse_title_animation(
     }
 }
 
+fn parse_motion_template_animation(
+    raw: Option<&str>,
+    line: usize,
+) -> Result<Option<MotionTemplateAnimation>, EdlParseError> {
+    match raw {
+        None => Ok(None),
+        Some("none") => Ok(Some(MotionTemplateAnimation::None)),
+        Some("opacity") => Ok(Some(MotionTemplateAnimation::Opacity)),
+        Some("transform") => Ok(Some(MotionTemplateAnimation::Transform)),
+        Some("text_reveal") => Ok(Some(MotionTemplateAnimation::TextReveal)),
+        Some("write_on") => Ok(Some(MotionTemplateAnimation::WriteOn)),
+        Some(other) => Err(EdlParseError::BadField {
+            line,
+            raw: format!("animation: {other}"),
+            message: "must be 'none', 'opacity', 'transform', 'text_reveal', or 'write_on'".into(),
+        }),
+    }
+}
+
+fn parse_annotation_kind(raw: &str, line: usize) -> Result<AnnotationKind, EdlParseError> {
+    match raw {
+        "rectangle" => Ok(AnnotationKind::Rectangle),
+        "circle" => Ok(AnnotationKind::Circle),
+        "arrow" => Ok(AnnotationKind::Arrow),
+        "bracket" => Ok(AnnotationKind::Bracket),
+        "blur" => Ok(AnnotationKind::Blur),
+        other => Err(EdlParseError::BadField {
+            line,
+            raw: format!("kind: {other}"),
+            message: "must be 'rectangle', 'circle', 'arrow', 'bracket', or 'blur'".into(),
+        }),
+    }
+}
+
+fn parse_annotation_color(raw: &str, line: usize) -> Result<String, EdlParseError> {
+    if valid_graphic_color(raw) {
+        return Ok(raw.to_string());
+    }
+    Err(EdlParseError::BadField {
+        line,
+        raw: format!("color: {raw}"),
+        message:
+            "annotation color must be #RGB/#RGBA/#RRGGBB/#RRGGBBAA hex or an alphanumeric color name"
+                .into(),
+    })
+}
+
 fn parse_transition_alignment(
     raw: &str,
     line: usize,
@@ -1411,6 +1680,11 @@ fn take_field_usize(fields: &mut Vec<(String, FieldValue)>, key: &str) -> Option
     }
 }
 
+fn take_field_u32(fields: &mut Vec<(String, FieldValue)>, key: &str) -> Option<u32> {
+    let value = take_field_usize(fields, key)?;
+    u32::try_from(value).ok()
+}
+
 fn take_field_string(fields: &mut Vec<(String, FieldValue)>, key: &str) -> Option<String> {
     let pos = fields.iter().rposition(|(k, _)| k == key)?;
     let (_, v) = fields.remove(pos);
@@ -1432,6 +1706,18 @@ fn take_field_bool(fields: &mut Vec<(String, FieldValue)>, key: &str) -> Option<
         FieldValue::Number(n) if (n - 1.0).abs() < f64::EPSILON => Some(true),
         FieldValue::Number(n) if n.abs() < f64::EPSILON => Some(false),
         FieldValue::Number(_) => None,
+    }
+}
+
+fn parse_reframe_smoothing(raw: &str) -> Result<ReframeSmoothing, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(ReframeSmoothing::None),
+        "gentle" => Ok(ReframeSmoothing::Gentle),
+        "moderate" => Ok(ReframeSmoothing::Moderate),
+        "strong" => Ok(ReframeSmoothing::Strong),
+        other => Err(format!(
+            "unknown reframe smoothing {other:?}; expected none, gentle, moderate, or strong"
+        )),
     }
 }
 
@@ -1643,6 +1929,53 @@ mod tests {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "clip-0"));
             }
             other => panic!("want DeleteClip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_author_subject_reframe_from_track() {
+        let text = "\
+*** Begin EDL
+*** Author Subject Reframe From Track
++ track_id: speaker-track
++ clip_id: clip-1
++ aspect_ratio: 9:16
++ source_width: 1920
++ source_height: 1080
++ target_width: 1080
++ target_height: 1920
++ frame_rate: 30
++ smoothing: moderate
++ safe_area: mobile
+*** End EDL
+";
+        let env = parse(text).unwrap();
+        assert_eq!(env.len(), 1);
+        match &env.ops[0] {
+            EdlOp::AuthorSubjectReframeFromTrack {
+                track_id,
+                clip_id,
+                aspect_ratio,
+                source_width,
+                source_height,
+                target_width,
+                target_height,
+                frame_rate,
+                smoothing,
+                safe_area,
+            } => {
+                assert_eq!(track_id, "speaker-track");
+                assert_eq!(clip_id, "clip-1");
+                assert_eq!(aspect_ratio, "9:16");
+                assert_eq!(*source_width, 1920);
+                assert_eq!(*source_height, 1080);
+                assert_eq!(*target_width, 1080);
+                assert_eq!(*target_height, 1920);
+                assert_eq!(*frame_rate, 30.0);
+                assert_eq!(*smoothing, ReframeSmoothing::Moderate);
+                assert_eq!(safe_area.as_deref(), Some("mobile"));
+            }
+            other => panic!("want AuthorSubjectReframeFromTrack, got {other:?}"),
         }
     }
 

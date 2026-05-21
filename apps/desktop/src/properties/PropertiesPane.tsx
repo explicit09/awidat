@@ -14,6 +14,7 @@ import type { TimelineItem, TimelineTrack } from "../timeline/store";
 import { useTimelineSelectionStore } from "./store";
 import { useMediaStore } from "../media/store";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
+import { MotionAnimationControl } from "./MotionAnimationControl";
 
 /** Default values when a clip carries no awidat.volume / awidat.speed effect.
  *  Surface as "1.0" so the slider/input shows unity rather than empty. */
@@ -177,14 +178,19 @@ export function PropertiesPane() {
           </Field>
         </PanelSection>
         {item.title ? (
-          <PanelSection title="Title">
-            <TitleEditor
-              clipUuid={item.clip_uuid}
-              title={item.title}
-              startS={trackStart}
-              endS={trackEnd}
-            />
-          </PanelSection>
+          <>
+            <PanelSection title="Title">
+              <TitleEditor
+                clipUuid={item.clip_uuid}
+                title={item.title}
+                startS={trackStart}
+                endS={trackEnd}
+              />
+            </PanelSection>
+            <PanelSection title="Motion">
+              <MotionAnimationControl clip={item} />
+            </PanelSection>
+          </>
         ) : (
           <>
             <PanelSection title="Visual">
@@ -214,6 +220,11 @@ export function PropertiesPane() {
                 confidence={item.split_edit_confidence}
               />
             </PanelSection>
+            {(item.animations?.length ?? 0) > 0 && (
+              <PanelSection title="Motion">
+                <MotionAnimationControl clip={item} />
+              </PanelSection>
+            )}
             <PanelSection title="Timing">
               <SpeedControl clipUuid={item.clip_uuid} factor={item.speed} />
             </PanelSection>

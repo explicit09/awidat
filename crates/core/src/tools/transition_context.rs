@@ -427,6 +427,8 @@ fn visual_signals_packet(signals: &BoundaryVisualSignals) -> serde_json::Value {
 
 fn side_signals_packet(side: &SideSignals) -> serde_json::Value {
     serde_json::json!({
+        "subject_center": side.subject_center,
+        "face_center": side.face_center,
         "motion_magnitude": side.motion_magnitude.map(round3),
         "motion_direction": side.motion_direction.map(|d| d.as_str()),
         "whip_pan_score": side.whip_pan_score.map(round3),
@@ -656,7 +658,7 @@ mod tests {
             dir.path(),
             "raw/a.mp4",
             serde_json::json!([
-                {"start_s": 0.0, "end_s": 10.0, "motion_magnitude": 0.6, "dominant_direction": "left", "whip_pan_score": 0.7}
+                {"start_s": 0.0, "end_s": 10.0, "motion_magnitude": 0.6, "dominant_direction": "left", "whip_pan_score": 0.7, "subject_center": [0.36, 0.4], "face_center": [0.36, 0.22]}
             ]),
         );
         write_shot_sidecar(
@@ -700,8 +702,14 @@ mod tests {
                 .and_then(|v| v.as_f64()),
             Some(0.7)
         );
+        assert_eq!(
+            body.pointer("/visual_signals/outgoing/subject_center/0")
+                .and_then(|v| v.as_f64()),
+            Some(0.36)
+        );
         assert!(
-            !body.pointer("/missing_signals")
+            !body
+                .pointer("/missing_signals")
                 .and_then(|v| v.as_array())
                 .is_some_and(|signals| signals.iter().any(|s| s == "motion_direction"))
         );

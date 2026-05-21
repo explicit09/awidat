@@ -20,22 +20,33 @@
 //! `Transition.1` nodes; unsupported or invalid placements fail before
 //! FFmpeg is invoked.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use awidat_proto::awidat_meta::{BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle};
+use awidat_proto::awidat_meta::{
+    AwidatTimelineMetadata, BroadcastHost, BroadcastOverlayConfig, BroadcastOverlayStyle,
+};
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
+use awidat_proto::professional::{MaskOperation, ReframePath, TrackingPackage};
 use awidat_proto::project::{files, read_otio_timeline};
 use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
 use serde::Deserialize;
 use thiserror::Error;
+use unicode_segmentation::UnicodeSegmentation;
 
-use crate::animation::{is_phase_3a_parameter, keyframes_to_ffmpeg_expr};
+use crate::animation::{
+    MotionPathCoordinate, evaluate_keyframes_with_modes, is_phase_3a_parameter,
+    keyframes_to_ffmpeg_expr_with_extrapolation, motion_path_to_ffmpeg_expr_with_keyframes,
+};
 use crate::job::{RenderJobSpec, RenderPlanLimitation};
 use crate::output_safety::{OutputPathPolicy, validate_render_output_path};
+
+const TIMELINE_RENDER_WIDTH: u32 = 1920;
+const TIMELINE_RENDER_HEIGHT: u32 = 1080;
+const OVERLAY_BLUR_MAX_RADIUS_PX: f64 = 24.0;
 
 /// Errors building a timeline-render spec.
 #[derive(Debug, Error)]
@@ -111,6 +122,16 @@ pub enum RenderTimelineError {
     InvalidTransitionMetadata {
         /// Transition kind or Awidat id from OTIO.
         kind: String,
+        /// Detailed metadata failure.
+        message: String,
+    },
+    /// Awidat clip effect metadata is malformed or outside the supported API.
+    #[error("invalid clip effect {effect:?} on clip '{clip_name}': {message}")]
+    InvalidClipEffectMetadata {
+        /// Clip name from OTIO.
+        clip_name: String,
+        /// Effect id such as `awidat.time_remap`.
+        effect: String,
         /// Detailed metadata failure.
         message: String,
     },
@@ -194,6 +215,8 @@ pub struct TimelineSegment {
     pub source_available_start_s: Option<f64>,
     /// Optional source-media upper bound from OTIO available_range.
     pub source_available_end_s: Option<f64>,
+    /// Optional FFmpeg input index for a renderable mask source.
+    pub mask_input_index: Option<usize>,
     /// Linear gain multiplier for this segment's audio. `None` means
     /// no `awidat.volume` effect is on the underlying clip — the
     /// FilterPlanner skips emitting a `volume=` filter and the audio
@@ -206,14 +229,39 @@ pub struct TimelineSegment {
     /// to the master timeline duration is `duration_s / factor` when
     /// `factor` is `Some`.
     pub speed: Option<f64>,
+    /// Optional source-local → timeline-local retime curve.
+    pub time_remap: Option<TimeRemapPlan>,
     /// Optional clip-level color correction controls, read from the
     /// `awidat.color_correction` effect.
     pub color_correction: Option<ColorCorrectionPlan>,
+    /// Optional clip-level blur controls, read from the
+    /// `awidat.blur` effect.
+    pub blur: Option<BlurPlan>,
+    /// Optional clip-level blur radius animation, read from a runtime
+    /// `awidat.blur.radius_px` parameter animation.
+    pub blur_radius_animation: Option<RenderParameterAnimation>,
     /// Optional HDR transfer metadata, read from `awidat.source_color`.
     pub hdr_transfer: Option<HdrTransfer>,
     /// Optional clip-level reframe / punch-in controls, read from the
     /// `awidat.reframe` effect.
     pub reframe: Option<ReframePlan>,
+    /// Optional subject-aware reframe path, read from the tracking package.
+    pub reframe_path: Option<ReframePathPlan>,
+    /// Optional clip-level lens warp controls, read from the
+    /// `awidat.warp` effect.
+    pub warp: Option<WarpPlan>,
+    /// Optional animated lens warp controls, read from
+    /// `awidat.warp.*` parameter animations.
+    pub warp_animation: Option<WarpAnimationPlan>,
+    /// Optional procedural handheld shake controls, read from the
+    /// `awidat.shake` effect.
+    pub shake: Option<ShakePlan>,
+    /// Optional animated shake intensity, read from
+    /// `awidat.shake.intensity_px`.
+    pub shake_intensity_animation: Option<RenderParameterAnimation>,
+    /// Optional animated shake frequency, read from
+    /// `awidat.shake.frequency_hz`.
+    pub shake_frequency_animation: Option<RenderParameterAnimation>,
     /// Optional absolute LUT path, read from the `awidat.lut` effect.
     pub lut_path: Option<PathBuf>,
     /// Optional FFmpeg `lut3d` interpolation mode.
@@ -234,6 +282,53 @@ pub struct TimelineSegment {
     pub audio_lead_s: Option<f64>,
     /// Outgoing audio trail for L-cut export, in seconds.
     pub audio_trail_s: Option<f64>,
+}
+
+/// Clip-level curve-based time remap extracted from `awidat.time_remap`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TimeRemapPlan {
+    /// Strictly increasing source-local to timeline-local mapping points.
+    pub points: Vec<TimeRemapPoint>,
+}
+
+impl TimeRemapPlan {
+    fn timeline_time_at_source(&self, source_time_s: f64) -> f64 {
+        let first = self.points[0];
+        if source_time_s <= first.source_time_s {
+            return first.timeline_time_s;
+        }
+        for pair in self.points.windows(2) {
+            let start = pair[0];
+            let end = pair[1];
+            if source_time_s <= end.source_time_s {
+                return interpolate_time_remap_segment(start, end, source_time_s);
+            }
+        }
+        let len = self.points.len();
+        interpolate_time_remap_segment(self.points[len - 2], self.points[len - 1], source_time_s)
+    }
+}
+
+/// One point on a clip-local time-remap curve.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimeRemapPoint {
+    /// Source-local seconds in the decoded clip.
+    pub source_time_s: f64,
+    /// Output timeline-local seconds for that source frame.
+    pub timeline_time_s: f64,
+}
+
+fn interpolate_time_remap_segment(
+    start: TimeRemapPoint,
+    end: TimeRemapPoint,
+    source_time_s: f64,
+) -> f64 {
+    let source_span = end.source_time_s - start.source_time_s;
+    if source_span <= 0.0 {
+        return start.timeline_time_s;
+    }
+    let timeline_span = end.timeline_time_s - start.timeline_time_s;
+    start.timeline_time_s + (source_time_s - start.source_time_s) * timeline_span / source_span
 }
 
 /// Render-time plan for an `awidat.color_pipeline` effect.
@@ -271,10 +366,9 @@ pub struct ColorPipelinePlan {
     /// Optional working-to-display ODT (3D LUT, project-relative).
     pub output_transform_lut: Option<PathBuf>,
     /// Optional regional-grading mask source (PNG with alpha,
-    /// grayscale image, or video). Reserved schema slot — render
-    /// does not apply masking yet; presence surfaces a
-    /// `mask_not_implemented` [`RenderPlanLimitation`] so the agent
-    /// sees the field is being ignored.
+    /// grayscale image, or video). Render supports the v1 masked
+    /// look-LUT path and surfaces a limitation for combinations
+    /// outside that supported scope.
     pub mask_source: Option<PathBuf>,
 }
 
@@ -299,8 +393,53 @@ pub struct VideoOverlayPlan {
     pub track_start_s: f64,
     /// Visual layout mode.
     pub mode: VideoOverlayMode,
+    /// Static clockwise rotation in degrees, applied before compositing.
+    pub rotation_deg: f64,
+    /// Optional transform-derived temporal blur for animated overlay motion.
+    pub motion_blur: Option<OverlayMotionBlurPlan>,
+    /// Optional graph-derived perspective/corner-pin filter for the overlay.
+    pub corner_pin_filter: Option<String>,
+    /// Optional graph-derived matte alpha source for this overlay.
+    pub matte_source: Option<PathBuf>,
+    /// Optional FFmpeg input index assigned to `matte_source`.
+    pub matte_input_index: Option<usize>,
+    /// Optional graph-derived alpha mask bounds for this overlay.
+    pub mask: Option<OverlayMaskPlan>,
     /// Supported Phase 3A parameter animations attached to this overlay.
     pub animations: Vec<RenderParameterAnimation>,
+}
+
+/// Render-time alpha mask lowered from a graph `mask` node.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayMaskPlan {
+    /// Normalized alpha-gate keyframes derived from mask path bounds.
+    pub keyframes: Vec<OverlayMaskKeyframe>,
+    /// Mask combination operation from the tracking package sidecar.
+    pub operation: MaskOperation,
+}
+
+/// One render-time alpha mask keyframe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayMaskKeyframe {
+    /// Clip-local time in seconds.
+    pub time_s: f64,
+    /// Left bound as a normalized fraction of overlay width.
+    pub x0: f64,
+    /// Top bound as a normalized fraction of overlay height.
+    pub y0: f64,
+    /// Right bound as a normalized fraction of overlay width.
+    pub x1: f64,
+    /// Bottom bound as a normalized fraction of overlay height.
+    pub y1: f64,
+    /// Alpha multiplier applied inside the mask bounds.
+    pub opacity: f64,
+}
+
+/// Render settings for transform-derived overlay motion blur.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverlayMotionBlurPlan {
+    /// Exposure duration sampled around the current frame, in seconds.
+    pub shutter_s: f64,
 }
 
 /// Visual layout mode for upper-track media overlays.
@@ -317,6 +456,46 @@ pub enum VideoOverlayMode {
         /// Fractional output margin.
         margin_pct: f64,
     },
+}
+
+/// Render-time annotation extracted from virtual `awidat.annotation` clips.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnnotationPlan {
+    /// Primitive to draw or apply.
+    pub kind: AnnotationKind,
+    /// Start time on the master timeline.
+    pub start_s: f64,
+    /// End time on the master timeline.
+    pub end_s: f64,
+    /// Normalized x coordinate.
+    pub x: f64,
+    /// Normalized y coordinate.
+    pub y: f64,
+    /// Normalized width.
+    pub width: f64,
+    /// Normalized height.
+    pub height: f64,
+    /// Stroke/accent color.
+    pub color: String,
+    /// Stroke width in pixels.
+    pub stroke_width: u32,
+    /// Optional review label.
+    pub label: Option<String>,
+}
+
+/// Render-time annotation primitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationKind {
+    /// Rectangle outline.
+    Rectangle,
+    /// Circle/ellipse approximation.
+    Circle,
+    /// Arrow callout.
+    Arrow,
+    /// Corner bracket callout.
+    Bracket,
+    /// Blur a rectangular region.
+    Blur,
 }
 
 /// Render-time audio clip span extracted from an OTIO audio track.
@@ -460,6 +639,13 @@ pub struct ColorCorrectionPlan {
     pub highlights: Option<f64>,
 }
 
+/// Clip-level Gaussian blur controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BlurPlan {
+    /// Blur radius in source pixels.
+    pub radius_px: f64,
+}
+
 /// Clip-level scale/crop controls for simple punch-ins and reframes.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ReframePlan {
@@ -469,6 +655,85 @@ pub struct ReframePlan {
     pub x: f64,
     /// Vertical crop bias in `[-1, 1]`: `-1` top, `0` center, `1` bottom.
     pub y: f64,
+}
+
+/// Subject-aware center crop authored from a tracking package.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReframePathPlan {
+    /// Stable reframe path id.
+    pub reframe_id: String,
+    /// Ordered crop center/scale samples in clip-local time.
+    pub keyframes: Vec<ReframePathKeyframePlan>,
+}
+
+/// One renderable crop sample from a subject-aware reframe path.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReframePathKeyframePlan {
+    /// Clip-local time in seconds.
+    pub time_s: f64,
+    /// Normalized crop center x in `0..1`.
+    pub center_x: f64,
+    /// Normalized crop center y in `0..1`.
+    pub center_y: f64,
+    /// Crop zoom scale.
+    pub scale: f64,
+}
+
+/// Clip-level lens warp controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WarpPlan {
+    /// Quadratic radial distortion coefficient.
+    pub k1: f64,
+    /// Double-quadratic radial distortion coefficient.
+    pub k2: f64,
+    /// Relative distortion center on the x axis.
+    pub center_x: f64,
+    /// Relative distortion center on the y axis.
+    pub center_y: f64,
+}
+
+/// Animated lens warp controls selected from runtime parameter animations.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WarpAnimationPlan {
+    /// Animated quadratic radial distortion coefficient.
+    pub k1: Option<RenderParameterAnimation>,
+    /// Animated double-quadratic radial distortion coefficient.
+    pub k2: Option<RenderParameterAnimation>,
+    /// Animated relative distortion center on the x axis.
+    pub center_x: Option<RenderParameterAnimation>,
+    /// Animated relative distortion center on the y axis.
+    pub center_y: Option<RenderParameterAnimation>,
+}
+
+impl WarpAnimationPlan {
+    fn has_any(&self) -> bool {
+        self.k1.is_some() || self.k2.is_some() || self.center_x.is_some() || self.center_y.is_some()
+    }
+}
+
+/// Clip-level procedural camera shake controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ShakePlan {
+    /// Maximum horizontal/vertical displacement in source pixels.
+    pub intensity_px: f64,
+    /// Oscillation frequency in Hertz.
+    pub frequency_hz: f64,
+}
+
+fn default_shake_plan() -> ShakePlan {
+    ShakePlan {
+        intensity_px: 8.0,
+        frequency_hz: 12.0,
+    }
+}
+
+fn default_warp_plan() -> WarpPlan {
+    WarpPlan {
+        k1: -0.08,
+        k2: 0.0,
+        center_x: 0.5,
+        center_y: 0.5,
+    }
 }
 
 /// Pull a numeric metadata field off the first effect on `clip` whose
@@ -500,6 +765,80 @@ fn read_effect_string(
         .map(str::to_string)
 }
 
+fn read_time_remap(
+    clip: &awidat_proto::otio::Clip,
+) -> Result<Option<TimeRemapPlan>, RenderTimelineError> {
+    let Some(effect) = clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.time_remap")
+    else {
+        return Ok(None);
+    };
+    let invalid = |message: String| RenderTimelineError::InvalidClipEffectMetadata {
+        clip_name: clip.name.clone(),
+        effect: effect.effect_name.clone(),
+        message,
+    };
+    let curve = effect
+        .metadata
+        .get("curve")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| invalid("curve must be an array".to_string()))?;
+    if curve.len() < 2 {
+        return Err(invalid(
+            "curve must contain at least two time-remap points".to_string(),
+        ));
+    }
+    let mut points = Vec::with_capacity(curve.len());
+    for (idx, item) in curve.iter().enumerate() {
+        let point = item
+            .as_object()
+            .ok_or_else(|| invalid(format!("curve point #{idx} must be an object")))?;
+        let source_time_s = point
+            .get("source_time_s")
+            .and_then(serde_json::Value::as_f64)
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "curve point #{idx} needs finite non-negative source_time_s"
+                ))
+            })?;
+        let timeline_time_s = point
+            .get("timeline_time_s")
+            .and_then(serde_json::Value::as_f64)
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or_else(|| {
+                invalid(format!(
+                    "curve point #{idx} needs finite non-negative timeline_time_s"
+                ))
+            })?;
+        points.push(TimeRemapPoint {
+            source_time_s,
+            timeline_time_s,
+        });
+    }
+    let first = points[0];
+    if first.source_time_s.abs() > 1e-9 || first.timeline_time_s.abs() > 1e-9 {
+        return Err(invalid(
+            "curve must start at source_time_s=0 and timeline_time_s=0".to_string(),
+        ));
+    }
+    for pair in points.windows(2) {
+        if pair[1].source_time_s <= pair[0].source_time_s {
+            return Err(invalid(
+                "curve source_time_s values must be strictly increasing".to_string(),
+            ));
+        }
+        if pair[1].timeline_time_s <= pair[0].timeline_time_s {
+            return Err(invalid(
+                "curve timeline_time_s values must be strictly increasing".to_string(),
+            ));
+        }
+    }
+    Ok(Some(TimeRemapPlan { points }))
+}
+
 fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrectionPlan> {
     let effect = clip
         .effects
@@ -516,6 +855,24 @@ fn read_color_correction(clip: &awidat_proto::otio::Clip) -> Option<ColorCorrect
         highlights: m.get("highlights").and_then(serde_json::Value::as_f64),
     };
     Some(plan)
+}
+
+fn read_blur(clip: &awidat_proto::otio::Clip) -> Option<BlurPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.blur")?;
+    let radius_px = effect
+        .metadata
+        .get("radius_px")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(8.0);
+    if !radius_px.is_finite() || radius_px <= 0.0 {
+        return None;
+    }
+    Some(BlurPlan {
+        radius_px: radius_px.clamp(0.0, 100.0),
+    })
 }
 
 fn read_hdr_transfer(clip: &awidat_proto::otio::Clip) -> Option<HdrTransfer> {
@@ -548,6 +905,105 @@ fn read_reframe(clip: &awidat_proto::otio::Clip) -> Option<ReframePlan> {
             .and_then(serde_json::Value::as_f64)
             .unwrap_or(0.0)
             .clamp(-1.0, 1.0),
+    })
+}
+
+fn read_reframe_path(package: Option<&TrackingPackage>, clip_id: &str) -> Option<ReframePathPlan> {
+    package?
+        .reframe_paths
+        .iter()
+        .find(|path| path.clip_id == clip_id)
+        .and_then(reframe_path_plan)
+}
+
+fn reframe_path_plan(path: &ReframePath) -> Option<ReframePathPlan> {
+    let mut keyframes = path
+        .keyframes
+        .iter()
+        .filter_map(|keyframe| {
+            let center_x = keyframe.center[0];
+            let center_y = keyframe.center[1];
+            let scale = keyframe.scale;
+            (keyframe.time_s.is_finite()
+                && center_x.is_finite()
+                && center_y.is_finite()
+                && scale.is_finite()
+                && scale > 1.0)
+                .then_some(ReframePathKeyframePlan {
+                    time_s: keyframe.time_s,
+                    center_x: center_x.clamp(0.0, 1.0),
+                    center_y: center_y.clamp(0.0, 1.0),
+                    scale: scale.clamp(1.0, 8.0),
+                })
+        })
+        .collect::<Vec<_>>();
+    keyframes.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+    (!keyframes.is_empty()).then_some(ReframePathPlan {
+        reframe_id: path.id.clone(),
+        keyframes,
+    })
+}
+
+fn read_shake(clip: &awidat_proto::otio::Clip) -> Option<ShakePlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.shake")?;
+    let m = &effect.metadata;
+    let intensity_px = m
+        .get("intensity_px")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(8.0);
+    let frequency_hz = m
+        .get("frequency_hz")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(12.0);
+    if !intensity_px.is_finite()
+        || !frequency_hz.is_finite()
+        || intensity_px <= 0.0
+        || frequency_hz <= 0.0
+    {
+        return None;
+    }
+    Some(ShakePlan {
+        intensity_px: intensity_px.clamp(0.0, 200.0),
+        frequency_hz: frequency_hz.clamp(0.1, 60.0),
+    })
+}
+
+fn read_warp(clip: &awidat_proto::otio::Clip) -> Option<WarpPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|e| e.effect_name == "awidat.warp")?;
+    let m = &effect.metadata;
+    let k1 = m
+        .get("k1")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(-0.08);
+    let k2 = m
+        .get("k2")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    let center_x = m
+        .get("center_x")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.5);
+    let center_y = m
+        .get("center_y")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.5);
+    if !k1.is_finite() || !k2.is_finite() || !center_x.is_finite() || !center_y.is_finite() {
+        return None;
+    }
+    if k1.abs() <= 1e-9 && k2.abs() <= 1e-9 {
+        return None;
+    }
+    Some(WarpPlan {
+        k1: k1.clamp(-1.0, 1.0),
+        k2: k2.clamp(-1.0, 1.0),
+        center_x: center_x.clamp(0.0, 1.0),
+        center_y: center_y.clamp(0.0, 1.0),
     })
 }
 
@@ -611,9 +1067,10 @@ fn read_color_pipeline(
         .get("mask_source")
         .and_then(serde_json::Value::as_str)
         .map(|raw| project_root.join(raw));
-    // We don't require the mask to exist on disk yet — render
-    // doesn't read it, and failing here would block a forward-
-    // compatible workflow where the agent stages the mask later.
+    // We don't require the mask to exist on disk while parsing
+    // metadata. The render plan adds supported mask sources as
+    // explicit inputs, so filesystem failures remain render-time
+    // diagnostics like other media assets.
     Ok(Some(ColorPipelinePlan {
         clip_input_space,
         working_space: string_field("working_space"),
@@ -690,6 +1147,7 @@ type TimelineFullPlan = (
     Vec<TransitionPlan>,
     Vec<VideoOverlayPlan>,
     Vec<TitlePlan>,
+    Vec<AnnotationPlan>,
     Option<BroadcastOverlayPlan>,
     Vec<AudioTrackPlan>,
     Option<LoudnessTargetPlan>,
@@ -705,7 +1163,7 @@ type TimelineFullPlan = (
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -721,7 +1179,7 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -743,19 +1201,34 @@ pub fn collect_timeline_full_plan(
             message: e.to_string(),
         }
     })?;
-    let parameter_animations: &[awidat_proto::professional::ParameterAnimation] = timeline
-        .metadata
-        .awidat
-        .as_ref()
-        .map(|metadata| metadata.parameter_animations.as_slice())
-        .unwrap_or(&[]);
+    let mut graph_binding_limitations = Vec::new();
+    let frame_rate = timeline_frame_rate(&timeline);
+    let parameter_animations = collect_effective_parameter_animations(
+        timeline.metadata.awidat.as_ref(),
+        frame_rate,
+        &mut graph_binding_limitations,
+    );
+    let corner_pin_filters = collect_corner_pin_filters(
+        timeline.metadata.awidat.as_ref(),
+        &mut graph_binding_limitations,
+    );
+    let overlay_matte_sources = collect_overlay_matte_sources(
+        project_root,
+        timeline.metadata.awidat.as_ref(),
+        &mut graph_binding_limitations,
+    );
+    let overlay_masks = collect_overlay_masks(
+        timeline.metadata.awidat.as_ref(),
+        &mut graph_binding_limitations,
+    );
 
     let mut segs = Vec::new();
     let mut transitions = Vec::new();
     let mut video_overlays = Vec::new();
     let mut titles = Vec::new();
+    let mut annotations = Vec::new();
     let mut audio_tracks = Vec::new();
-    let mut render_limitations = Vec::new();
+    let mut render_limitations = graph_binding_limitations;
     let mut consumed_animation_ids = BTreeSet::new();
     let mut saw_base_video_track = false;
     for child in &timeline.tracks.children {
@@ -763,24 +1236,29 @@ pub fn collect_timeline_full_plan(
             continue;
         };
         if matches!(track.kind, TrackKind::Audio) {
-            audio_tracks.push(collect_audio_track_plan(project_root, track)?);
+            let audio_selection =
+                collect_audio_track_plan(project_root, track, &parameter_animations)?;
+            consumed_animation_ids.extend(audio_selection.consumed_animation_ids);
+            audio_tracks.push(audio_selection.track);
             continue;
         }
         if !matches!(track.kind, TrackKind::Video) {
             continue;
         }
-        if is_titles_track(track) {
-            // Walk titles separately; don't try to read media off it.
+        if is_titles_track(track) || is_annotations_track(track) {
+            // Walk virtual overlay tracks separately; don't try to read media off them.
             for tc in &track.children {
                 let TrackChild::Clip(clip) = tc else { continue };
-                let Some((plan, animation_selection)) =
-                    parse_title_plan(clip, parameter_animations)
-                else {
-                    continue;
-                };
-                render_limitations.extend(animation_selection.limitations);
-                consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
-                titles.push(plan);
+                if let Some((plan, animation_selection)) =
+                    parse_title_plan(clip, &parameter_animations)
+                {
+                    render_limitations.extend(animation_selection.limitations);
+                    consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
+                    titles.push(plan);
+                }
+                if let Some(annotation) = parse_annotation_plan(clip) {
+                    annotations.push(annotation);
+                }
             }
             continue;
         }
@@ -789,22 +1267,49 @@ pub fn collect_timeline_full_plan(
             for tc in &track.children {
                 match tc {
                     TrackChild::Clip(clip) => {
-                        let Some(segment) = collect_timeline_segment(project_root, clip)? else {
+                        let Some(segment) = collect_timeline_segment(
+                            project_root,
+                            clip,
+                            &parameter_animations,
+                            timeline
+                                .metadata
+                                .awidat
+                                .as_ref()
+                                .and_then(|m| m.tracking_package.as_ref()),
+                            &mut consumed_animation_ids,
+                        )?
+                        else {
                             continue;
                         };
                         let mode = read_video_overlay_mode(clip);
                         let clip_id = render_clip_id(clip);
                         let animation_selection = render_animations_for_clip_with_limitations(
-                            parameter_animations,
+                            &parameter_animations,
                             &clip_id,
                             "overlay",
                         );
                         render_limitations.extend(animation_selection.limitations);
+                        render_limitations.extend(tracker_bind_coverage_limitations(
+                            &parameter_animations,
+                            &clip_id,
+                            track_cursor_s,
+                            effective_duration(&segment),
+                        ));
                         consumed_animation_ids.extend(animation_selection.consumed_animation_ids);
                         video_overlays.push(VideoOverlayPlan {
                             segment,
                             track_start_s: track_cursor_s,
                             mode,
+                            rotation_deg: read_video_overlay_rotation_deg(clip),
+                            motion_blur: read_video_overlay_motion_blur_with_limitations(
+                                clip,
+                                &clip_id,
+                                &mut render_limitations,
+                            ),
+                            corner_pin_filter: corner_pin_filters.get(&clip_id).cloned(),
+                            matte_source: overlay_matte_sources.get(&clip_id).cloned(),
+                            matte_input_index: None,
+                            mask: overlay_masks.get(&clip_id).cloned(),
                             animations: animation_selection.animations,
                         });
                         if let Some(range) = clip.source_range.as_ref() {
@@ -831,7 +1336,18 @@ pub fn collect_timeline_full_plan(
         for tc in &track.children {
             match tc {
                 TrackChild::Clip(clip) => {
-                    let Some(segment) = collect_timeline_segment(project_root, clip)? else {
+                    let Some(segment) = collect_timeline_segment(
+                        project_root,
+                        clip,
+                        &parameter_animations,
+                        timeline
+                            .metadata
+                            .awidat
+                            .as_ref()
+                            .and_then(|m| m.tracking_package.as_ref()),
+                        &mut consumed_animation_ids,
+                    )?
+                    else {
                         pending_transition = None;
                         continue;
                     };
@@ -916,6 +1432,13 @@ pub fn collect_timeline_full_plan(
             });
         }
     }
+    apply_dynamic_title_keywords(
+        &mut titles,
+        &segs,
+        timeline.metadata.awidat.as_ref(),
+        project_root,
+        frame_rate,
+    );
     let broadcast_overlay = timeline
         .metadata
         .awidat
@@ -934,7 +1457,7 @@ pub fn collect_timeline_full_plan(
         audio_tracks = synthesize_split_edit_audio_tracks(&segs)?;
     }
     render_limitations.extend(unconsumed_animation_limitations(
-        parameter_animations,
+        &parameter_animations,
         &consumed_animation_ids,
     ));
     render_limitations.extend(mask_source_limitations(&segs));
@@ -944,11 +1467,366 @@ pub fn collect_timeline_full_plan(
         transitions,
         video_overlays,
         titles,
+        annotations,
         broadcast_overlay,
         audio_tracks,
         loudness_target,
         render_limitations,
     ))
+}
+
+fn collect_effective_parameter_animations(
+    metadata: Option<&AwidatTimelineMetadata>,
+    frame_rate: f64,
+    limitations: &mut Vec<RenderPlanLimitation>,
+) -> Vec<awidat_proto::professional::ParameterAnimation> {
+    let Some(metadata) = metadata else {
+        return Vec::new();
+    };
+    let mut animations = metadata.parameter_animations.clone();
+    let Some(package) = metadata.tracking_package.as_ref() else {
+        return animations;
+    };
+    for graph in &metadata.composition_graphs {
+        match crate::professional::lower_tracker_parameter_bindings(package, graph, frame_rate) {
+            Ok(mut generated) => animations.append(&mut generated),
+            Err(err) => limitations.push(RenderPlanLimitation {
+                kind: "tracker_bind_not_rendered".to_string(),
+                animation_id: None,
+                clip_id: None,
+                parameter: None,
+                message: format!(
+                    "render ignored tracker bindings in composition graph {}: {err}",
+                    graph.id
+                ),
+            }),
+        }
+    }
+    animations
+}
+
+fn collect_corner_pin_filters(
+    metadata: Option<&AwidatTimelineMetadata>,
+    limitations: &mut Vec<RenderPlanLimitation>,
+) -> BTreeMap<String, String> {
+    let Some(metadata) = metadata else {
+        return BTreeMap::new();
+    };
+    let Some(package) = metadata.tracking_package.as_ref() else {
+        return BTreeMap::new();
+    };
+    let mut filters = BTreeMap::new();
+    for graph in &metadata.composition_graphs {
+        match crate::professional::lower_surface_track_corner_pin_bindings(
+            package,
+            graph,
+            TIMELINE_RENDER_WIDTH,
+            TIMELINE_RENDER_HEIGHT,
+        ) {
+            Ok(lowerings) => {
+                for lowering in lowerings {
+                    filters.insert(lowering.target_clip_id, lowering.filter);
+                }
+            }
+            Err(err) => limitations.push(RenderPlanLimitation {
+                kind: "corner_pin_not_rendered".to_string(),
+                animation_id: None,
+                clip_id: None,
+                parameter: None,
+                message: format!(
+                    "render ignored corner-pin bindings in composition graph {}: {err}",
+                    graph.id
+                ),
+            }),
+        }
+    }
+    filters
+}
+
+fn collect_overlay_matte_sources(
+    project_root: &Path,
+    metadata: Option<&AwidatTimelineMetadata>,
+    limitations: &mut Vec<RenderPlanLimitation>,
+) -> BTreeMap<String, PathBuf> {
+    let Some(metadata) = metadata else {
+        return BTreeMap::new();
+    };
+    let has_matte_nodes = metadata.composition_graphs.iter().any(|graph| {
+        graph
+            .nodes
+            .iter()
+            .any(|node| node.node_type == awidat_proto::professional::CompositionNodeType::Matte)
+    });
+    let Some(package) = metadata.tracking_package.as_ref() else {
+        if has_matte_nodes {
+            limitations.push(RenderPlanLimitation {
+                kind: "matte_not_rendered".to_string(),
+                animation_id: None,
+                clip_id: None,
+                parameter: None,
+                message: "render ignored matte nodes because no tracking package was present"
+                    .to_string(),
+            });
+        }
+        return BTreeMap::new();
+    };
+    let mut sources = BTreeMap::new();
+    for graph in &metadata.composition_graphs {
+        for node in graph
+            .nodes
+            .iter()
+            .filter(|node| node.node_type == awidat_proto::professional::CompositionNodeType::Matte)
+        {
+            let Some(matte_id) = node
+                .params
+                .get("matte_id")
+                .and_then(serde_json::Value::as_str)
+            else {
+                limitations.push(matte_node_limitation(
+                    graph,
+                    node,
+                    "missing required string parameter matte_id",
+                ));
+                continue;
+            };
+            let Some(target_clip_id) = node
+                .params
+                .get("target_clip_id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            else {
+                limitations.push(matte_node_limitation(
+                    graph,
+                    node,
+                    "missing required string parameter target_clip_id",
+                ));
+                continue;
+            };
+            let Some(matte) = package.mattes.iter().find(|matte| matte.id == matte_id) else {
+                limitations.push(matte_node_limitation(
+                    graph,
+                    node,
+                    &format!("matte {matte_id:?} was not found in the tracking package"),
+                ));
+                continue;
+            };
+            if matte.alpha_source.trim().is_empty() {
+                limitations.push(matte_node_limitation(
+                    graph,
+                    node,
+                    &format!("matte {matte_id:?} has an empty alpha source"),
+                ));
+                continue;
+            }
+            let source = PathBuf::from(&matte.alpha_source);
+            let source = if source.is_absolute() {
+                source
+            } else {
+                project_root.join(source)
+            };
+            sources.insert(target_clip_id.to_string(), source);
+        }
+    }
+    sources
+}
+
+fn matte_node_limitation(
+    graph: &awidat_proto::professional::CompositionGraph,
+    node: &awidat_proto::professional::CompositionNode,
+    message: &str,
+) -> RenderPlanLimitation {
+    RenderPlanLimitation {
+        kind: "matte_not_rendered".to_string(),
+        animation_id: None,
+        clip_id: None,
+        parameter: Some("composition.matte".to_string()),
+        message: format!(
+            "render ignored matte node {} in composition graph {}: {message}",
+            node.id, graph.id
+        ),
+    }
+}
+
+fn collect_overlay_masks(
+    metadata: Option<&AwidatTimelineMetadata>,
+    limitations: &mut Vec<RenderPlanLimitation>,
+) -> BTreeMap<String, OverlayMaskPlan> {
+    let Some(metadata) = metadata else {
+        return BTreeMap::new();
+    };
+    let has_mask_nodes = metadata.composition_graphs.iter().any(|graph| {
+        graph
+            .nodes
+            .iter()
+            .any(|node| node.node_type == awidat_proto::professional::CompositionNodeType::Mask)
+    });
+    let Some(package) = metadata.tracking_package.as_ref() else {
+        if has_mask_nodes {
+            limitations.push(RenderPlanLimitation {
+                kind: "mask_not_rendered".to_string(),
+                animation_id: None,
+                clip_id: None,
+                parameter: None,
+                message: "render ignored mask nodes because no tracking package was present"
+                    .to_string(),
+            });
+        }
+        return BTreeMap::new();
+    };
+
+    let mut masks = BTreeMap::new();
+    for graph in &metadata.composition_graphs {
+        for node in graph
+            .nodes
+            .iter()
+            .filter(|node| node.node_type == awidat_proto::professional::CompositionNodeType::Mask)
+        {
+            let Some(mask_id) = node
+                .params
+                .get("mask_id")
+                .and_then(serde_json::Value::as_str)
+            else {
+                limitations.push(mask_node_limitation(
+                    graph,
+                    node,
+                    "missing required string parameter mask_id",
+                ));
+                continue;
+            };
+            let Some(target_clip_id) = node
+                .params
+                .get("target_clip_id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            else {
+                limitations.push(mask_node_limitation(
+                    graph,
+                    node,
+                    "missing required string parameter target_clip_id",
+                ));
+                continue;
+            };
+            let Some(mask) = package.masks.iter().find(|mask| mask.id == mask_id) else {
+                limitations.push(mask_node_limitation(
+                    graph,
+                    node,
+                    &format!("mask {mask_id:?} was not found in the tracking package"),
+                ));
+                continue;
+            };
+            let mut keyframes = Vec::new();
+            for keyframe in &mask.keyframes {
+                if keyframe.points.len() < 2 {
+                    continue;
+                }
+                if !keyframe.time_s.is_finite() {
+                    keyframes.clear();
+                    break;
+                }
+                let Some((x0, y0, x1, y1)) = normalized_points_bounds(&keyframe.points) else {
+                    keyframes.clear();
+                    break;
+                };
+                keyframes.push(OverlayMaskKeyframe {
+                    time_s: keyframe.time_s,
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    opacity: keyframe.opacity.clamp(0.0, 1.0),
+                });
+            }
+            keyframes.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+            if keyframes.is_empty() {
+                limitations.push(mask_node_limitation(
+                    graph,
+                    node,
+                    &format!("mask {mask_id:?} has no renderable normalized keyframe path"),
+                ));
+                continue;
+            }
+            masks.insert(
+                target_clip_id.to_string(),
+                OverlayMaskPlan {
+                    keyframes,
+                    operation: mask.operation,
+                },
+            );
+        }
+    }
+    masks
+}
+
+fn normalized_points_bounds(points: &[[f64; 2]]) -> Option<(f64, f64, f64, f64)> {
+    let mut x0 = f64::INFINITY;
+    let mut y0 = f64::INFINITY;
+    let mut x1 = f64::NEG_INFINITY;
+    let mut y1 = f64::NEG_INFINITY;
+    for [x, y] in points {
+        if !x.is_finite() || !y.is_finite() || !(0.0..=1.0).contains(x) || !(0.0..=1.0).contains(y)
+        {
+            return None;
+        }
+        x0 = x0.min(*x);
+        y0 = y0.min(*y);
+        x1 = x1.max(*x);
+        y1 = y1.max(*y);
+    }
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1, y1))
+}
+
+fn mask_node_limitation(
+    graph: &awidat_proto::professional::CompositionGraph,
+    node: &awidat_proto::professional::CompositionNode,
+    message: &str,
+) -> RenderPlanLimitation {
+    RenderPlanLimitation {
+        kind: "mask_not_rendered".to_string(),
+        animation_id: None,
+        clip_id: None,
+        parameter: Some("composition.mask".to_string()),
+        message: format!(
+            "render ignored mask node {} in composition graph {}: {message}",
+            node.id, graph.id
+        ),
+    }
+}
+
+fn timeline_frame_rate(timeline: &awidat_proto::otio::Timeline) -> f64 {
+    timeline
+        .tracks
+        .children
+        .iter()
+        .find_map(stack_child_frame_rate)
+        .unwrap_or(30.0)
+}
+
+fn stack_child_frame_rate(child: &StackChild) -> Option<f64> {
+    match child {
+        StackChild::Track(track) => track.children.iter().find_map(track_child_frame_rate),
+        StackChild::Stack(stack) => stack.children.iter().find_map(stack_child_frame_rate),
+        StackChild::Clip(clip) => clip_source_range_rate(clip),
+        StackChild::Gap(gap) => positive_rate(gap.source_range.duration.rate),
+    }
+}
+
+fn track_child_frame_rate(child: &TrackChild) -> Option<f64> {
+    match child {
+        TrackChild::Clip(clip) => clip_source_range_rate(clip),
+        TrackChild::Gap(gap) => positive_rate(gap.source_range.duration.rate),
+        TrackChild::Transition(transition) => positive_rate(transition.in_offset.rate),
+        TrackChild::Stack(stack) => stack.children.iter().find_map(stack_child_frame_rate),
+    }
+}
+
+fn clip_source_range_rate(clip: &awidat_proto::otio::Clip) -> Option<f64> {
+    clip.source_range
+        .as_ref()
+        .and_then(|range| positive_rate(range.duration.rate))
+}
+
+fn positive_rate(rate: f64) -> Option<f64> {
+    (rate.is_finite() && rate > 0.0).then_some(rate)
 }
 
 fn read_transition_composition(
@@ -1002,6 +1880,9 @@ fn validate_renderable_composite_transition(
 fn collect_timeline_segment(
     project_root: &Path,
     clip: &awidat_proto::otio::Clip,
+    parameter_animations: &[awidat_proto::professional::ParameterAnimation],
+    tracking_package: Option<&TrackingPackage>,
+    consumed_animation_ids: &mut BTreeSet<String>,
 ) -> Result<Option<TimelineSegment>, RenderTimelineError> {
     let MediaReference::External(ext) = &clip.media_reference else {
         return Ok(None);
@@ -1032,6 +1913,27 @@ fn collect_timeline_segment(
     let lut_strength = read_effect_number(clip, "awidat.lut", "strength")
         .filter(|s| s.is_finite() && (0.0..=1.0).contains(s));
     let color_pipeline = read_color_pipeline(clip, project_root)?;
+    let time_remap = read_time_remap(clip)?;
+    let clip_id = render_clip_id(clip);
+    let shake_intensity_animation = select_clip_effect_animation(
+        parameter_animations,
+        &clip_id,
+        "awidat.shake.intensity_px",
+        consumed_animation_ids,
+    );
+    let shake_frequency_animation = select_clip_effect_animation(
+        parameter_animations,
+        &clip_id,
+        "awidat.shake.frequency_hz",
+        consumed_animation_ids,
+    );
+    let shake = read_shake(clip).or_else(|| {
+        (shake_intensity_animation.is_some() || shake_frequency_animation.is_some())
+            .then(default_shake_plan)
+    });
+    let warp_animation =
+        select_warp_animation(parameter_animations, &clip_id, consumed_animation_ids);
+    let warp = read_warp(clip).or_else(|| warp_animation.as_ref().map(|_| default_warp_plan()));
     Ok(Some(TimelineSegment {
         asset_path,
         clip_name: clip.name.clone(),
@@ -1047,11 +1949,26 @@ fn collect_timeline_segment(
             .available_range
             .as_ref()
             .map(|r| r.start_time.to_seconds() + r.duration.to_seconds()),
+        mask_input_index: None,
         volume: read_effect_number(clip, "awidat.volume", "value"),
         speed: read_effect_number(clip, "awidat.speed", "factor"),
+        time_remap,
         color_correction: read_color_correction(clip),
+        blur: read_blur(clip),
+        blur_radius_animation: select_clip_effect_animation(
+            parameter_animations,
+            &clip_id,
+            "awidat.blur.radius_px",
+            consumed_animation_ids,
+        ),
         hdr_transfer: read_hdr_transfer(clip),
         reframe: read_reframe(clip),
+        reframe_path: read_reframe_path(tracking_package, &clip_id),
+        warp,
+        warp_animation,
+        shake,
+        shake_intensity_animation,
+        shake_frequency_animation,
         lut_path,
         lut_interpolation,
         lut_strength,
@@ -1175,10 +2092,67 @@ fn read_video_overlay_mode(clip: &awidat_proto::otio::Clip) -> VideoOverlayMode 
     }
 }
 
+fn read_video_overlay_rotation_deg(clip: &awidat_proto::otio::Clip) -> f64 {
+    clip.effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.video_overlay")
+        .and_then(|effect| effect.metadata.get("rotation_deg"))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.0)
+        .clamp(-360.0, 360.0)
+}
+
+fn read_video_overlay_motion_blur_with_limitations(
+    clip: &awidat_proto::otio::Clip,
+    clip_id: &str,
+    limitations: &mut Vec<RenderPlanLimitation>,
+) -> Option<OverlayMotionBlurPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.video_overlay")?;
+    if !effect
+        .metadata
+        .get("motion_blur")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let authored_shutter_s = effect
+        .metadata
+        .get("motion_blur_shutter_s")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let mut shutter_s = authored_shutter_s.unwrap_or(1.0 / 60.0);
+    if shutter_s > 0.2 {
+        limitations.push(RenderPlanLimitation {
+            kind: "motion_blur_shutter_clamped".to_string(),
+            animation_id: None,
+            clip_id: Some(clip_id.to_string()),
+            parameter: Some("overlay.motion_blur_shutter_s".to_string()),
+            message: format!(
+                "render clamped overlay motion blur shutter from {}s to 0.2s",
+                fmt_filter_num(shutter_s)
+            ),
+        });
+        shutter_s = 0.2;
+    }
+    Some(OverlayMotionBlurPlan { shutter_s })
+}
+
+#[derive(Debug)]
+struct AudioTrackAnimationSelection {
+    track: AudioTrackPlan,
+    consumed_animation_ids: BTreeSet<String>,
+}
+
 fn collect_audio_track_plan(
     project_root: &Path,
     track: &awidat_proto::otio::Track,
-) -> Result<AudioTrackPlan, RenderTimelineError> {
+    animations: &[awidat_proto::professional::ParameterAnimation],
+) -> Result<AudioTrackAnimationSelection, RenderTimelineError> {
     let settings = parse_audio_track_settings(track);
     let mut items = Vec::new();
     for tc in &track.children {
@@ -1218,17 +2192,81 @@ fn collect_audio_track_plan(
             TrackChild::Transition(_) | TrackChild::Stack(_) => {}
         }
     }
-    Ok(AudioTrackPlan {
-        name: track.name.clone(),
-        role: settings.role,
-        volume: settings.volume,
-        volume_automation: None,
-        muted: settings.muted,
-        solo: settings.solo,
-        ducking: settings.ducking,
-        audio_fx: settings.audio_fx,
-        items,
+    let automation_selection = audio_volume_automation_for_track(animations, &track.name);
+    Ok(AudioTrackAnimationSelection {
+        track: AudioTrackPlan {
+            name: track.name.clone(),
+            role: settings.role,
+            volume: settings.volume,
+            volume_automation: automation_selection.automation,
+            muted: settings.muted,
+            solo: settings.solo,
+            ducking: settings.ducking,
+            audio_fx: settings.audio_fx,
+            items,
+        },
+        consumed_animation_ids: automation_selection.consumed_animation_ids,
     })
+}
+
+#[derive(Debug, Default)]
+struct AudioAutomationSelection {
+    automation: Option<AudioAutomationPlan>,
+    consumed_animation_ids: BTreeSet<String>,
+}
+
+fn audio_volume_automation_for_track(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    track_name: &str,
+) -> AudioAutomationSelection {
+    let mut selection = AudioAutomationSelection::default();
+    for animation in animations {
+        let awidat_proto::professional::AnimationTarget::TrackParameter { track, parameter } =
+            &animation.target
+        else {
+            continue;
+        };
+        if track != track_name || !matches!(parameter.as_str(), "volume" | "volume_db") {
+            continue;
+        }
+        selection
+            .consumed_animation_ids
+            .insert(animation.id.clone());
+        if selection.automation.is_some() {
+            continue;
+        }
+        let expression = audio_volume_automation_expression(
+            parameter,
+            &animation.keyframes,
+            animation.pre_extrapolation,
+            animation.post_extrapolation,
+        );
+        selection.automation = Some(AudioAutomationPlan {
+            parameter: parameter.clone(),
+            expression,
+            keyframes: animation.keyframes.clone(),
+        });
+    }
+    selection
+}
+
+fn audio_volume_automation_expression(
+    parameter: &str,
+    keyframes: &[awidat_proto::professional::Keyframe],
+    pre_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    post_extrapolation: awidat_proto::professional::ExtrapolationMode,
+) -> String {
+    let value_expr = keyframes_to_ffmpeg_expr_with_extrapolation(
+        keyframes,
+        "t",
+        pre_extrapolation,
+        post_extrapolation,
+    );
+    if parameter == "volume_db" {
+        format!("pow(10\\,({value_expr})/20)")
+    } else {
+        value_expr
+    }
 }
 
 fn synthesize_split_edit_audio_tracks(
@@ -1408,6 +2446,18 @@ fn is_titles_track(track: &awidat_proto::otio::Track) -> bool {
     track.name == "Titles"
 }
 
+fn is_annotations_track(track: &awidat_proto::otio::Track) -> bool {
+    if track
+        .metadata
+        .get("awidat_track_role")
+        .and_then(|v| v.as_str())
+        == Some("annotations")
+    {
+        return true;
+    }
+    track.name == "Annotations"
+}
+
 /// Parse one synthesized title-clip into a [`TitlePlan`]. Returns
 /// `None` if the clip carries no awidat.title effect or required
 /// metadata is missing — the render walk just skips invalid titles
@@ -1466,6 +2516,12 @@ fn parse_title_plan(
         "slide_out" => TitleAnimation::SlideOut,
         _ => TitleAnimation::None,
     };
+    let reveal = match m.get("reveal").and_then(|v| v.as_str()).unwrap_or("none") {
+        "typewriter" => TextReveal::Typewriter,
+        "word" => TextReveal::Word,
+        "line" => TextReveal::Line,
+        _ => TextReveal::None,
+    };
     let role = m
         .get("role")
         .and_then(|v| v.as_str())
@@ -1475,6 +2531,10 @@ fn parse_title_plan(
         .get("safe_area")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let rich_segments = m
+        .get("rich_segments")
+        .and_then(|value| serde_json::from_value::<Vec<RichTextSegment>>(value.clone()).ok())
+        .unwrap_or_default();
     let clip_id = render_clip_id(clip);
     let animation_selection =
         render_animations_for_clip_with_limitations(parameter_animations, &clip_id, "title");
@@ -1488,11 +2548,196 @@ fn parse_title_plan(
         color,
         font_weight,
         animation,
+        reveal,
         role,
         safe_area,
+        rich_segments,
         animations,
     };
     Some((plan, animation_selection))
+}
+
+fn parse_annotation_plan(clip: &awidat_proto::otio::Clip) -> Option<AnnotationPlan> {
+    let effect = clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.annotation")?;
+    let metadata = &effect.metadata;
+    let kind = match metadata.get("kind").and_then(|value| value.as_str())? {
+        "rectangle" => AnnotationKind::Rectangle,
+        "circle" => AnnotationKind::Circle,
+        "arrow" => AnnotationKind::Arrow,
+        "bracket" => AnnotationKind::Bracket,
+        "blur" => AnnotationKind::Blur,
+        _ => return None,
+    };
+    let start_s = metadata
+        .get("start_s")
+        .and_then(serde_json::Value::as_f64)?;
+    let end_s = metadata.get("end_s").and_then(serde_json::Value::as_f64)?;
+    let x = metadata.get("x").and_then(serde_json::Value::as_f64)?;
+    let y = metadata.get("y").and_then(serde_json::Value::as_f64)?;
+    let width = metadata.get("width").and_then(serde_json::Value::as_f64)?;
+    let height = metadata.get("height").and_then(serde_json::Value::as_f64)?;
+    if end_s <= start_s || !valid_annotation_region(x, y, width, height) {
+        return None;
+    }
+    Some(AnnotationPlan {
+        kind,
+        start_s,
+        end_s,
+        x,
+        y,
+        width,
+        height,
+        color: metadata
+            .get("color")
+            .and_then(|value| value.as_str())
+            .unwrap_or("#FFCC00")
+            .to_string(),
+        stroke_width: metadata
+            .get("stroke_width")
+            .and_then(serde_json::Value::as_u64)
+            .map(|value| value as u32)
+            .filter(|value| *value > 0)
+            .unwrap_or(4),
+        label: metadata
+            .get("label")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+    })
+}
+
+fn valid_annotation_region(x: f64, y: f64, width: f64, height: f64) -> bool {
+    [x, y, width, height].into_iter().all(f64::is_finite)
+        && x >= 0.0
+        && y >= 0.0
+        && width > 0.0
+        && height > 0.0
+        && x + width <= 1.0
+        && y + height <= 1.0
+}
+
+fn apply_dynamic_title_keywords(
+    titles: &mut [TitlePlan],
+    segments: &[TimelineSegment],
+    metadata: Option<&AwidatTimelineMetadata>,
+    project_root: &Path,
+    frame_rate: f64,
+) {
+    for title in titles {
+        if !title.text.contains('#') {
+            continue;
+        }
+        title.text = resolve_dynamic_title_text(
+            &title.text,
+            title.start_s,
+            segments,
+            metadata,
+            project_root,
+            frame_rate,
+        );
+    }
+}
+
+fn resolve_dynamic_title_text(
+    text: &str,
+    timeline_s: f64,
+    segments: &[TimelineSegment],
+    metadata: Option<&AwidatTimelineMetadata>,
+    project_root: &Path,
+    frame_rate: f64,
+) -> String {
+    let frame = timeline_frame_number(timeline_s, frame_rate);
+    let filename = active_segment_at(segments, timeline_s)
+        .and_then(|segment| segment.asset_path.file_name())
+        .and_then(|filename| filename.to_str())
+        .or_else(|| project_root.file_name().and_then(|name| name.to_str()))
+        .unwrap_or_default();
+    let chapter_title = active_chapter_title(metadata, timeline_s).unwrap_or_default();
+    let speaker = metadata_dynamic_string(metadata, "speaker_label")
+        .or_else(|| metadata_dynamic_string(metadata, "speaker"))
+        .unwrap_or_default();
+    text.replace("#timecode#", &format_timecode(frame, frame_rate))
+        .replace("#frame#", &frame.to_string())
+        .replace("#filename#", filename)
+        .replace("#chapter_title#", &chapter_title)
+        .replace("#speaker#", &speaker)
+        .replace(
+            "#date#",
+            &chrono::Local::now().format("%Y-%m-%d").to_string(),
+        )
+}
+
+fn timeline_frame_number(timeline_s: f64, frame_rate: f64) -> u64 {
+    let safe_time = if timeline_s.is_finite() {
+        timeline_s.max(0.0)
+    } else {
+        0.0
+    };
+    let safe_rate = if frame_rate.is_finite() && frame_rate > 0.0 {
+        frame_rate
+    } else {
+        24.0
+    };
+    (safe_time * safe_rate).round() as u64
+}
+
+fn format_timecode(frame: u64, frame_rate: f64) -> String {
+    let frames_per_second = frame_rate.round().max(1.0) as u64;
+    let total_seconds = frame / frames_per_second;
+    let frame_remainder = frame % frames_per_second;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02}:{frame_remainder:02}")
+}
+
+fn active_segment_at(segments: &[TimelineSegment], timeline_s: f64) -> Option<&TimelineSegment> {
+    let mut cursor_s = 0.0_f64;
+    for segment in segments {
+        let duration_s = effective_duration(segment);
+        let end_s = cursor_s + duration_s;
+        if timeline_s >= cursor_s && timeline_s < end_s {
+            return Some(segment);
+        }
+        cursor_s = end_s;
+    }
+    segments.last().filter(|segment| {
+        (timeline_s - cursor_s).abs() < f64::EPSILON && effective_duration(segment) > 0.0
+    })
+}
+
+fn active_chapter_title(
+    metadata: Option<&AwidatTimelineMetadata>,
+    timeline_s: f64,
+) -> Option<String> {
+    metadata
+        .and_then(|metadata| metadata.broadcast_overlay.as_ref())
+        .and_then(|overlay| {
+            overlay
+                .chapters
+                .iter()
+                .filter(|chapter| chapter.time_seconds <= timeline_s)
+                .max_by(|left, right| left.time_seconds.total_cmp(&right.time_seconds))
+        })
+        .map(|chapter| chapter.text.clone())
+}
+
+fn metadata_dynamic_string(metadata: Option<&AwidatTimelineMetadata>, key: &str) -> Option<String> {
+    let metadata = metadata?;
+    metadata
+        .extra
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            metadata
+                .extra
+                .get("dynamic_text")
+                .and_then(|dynamic| dynamic.get(key))
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_string)
 }
 
 fn render_clip_id(clip: &awidat_proto::otio::Clip) -> String {
@@ -1512,6 +2757,12 @@ pub struct RenderParameterAnimation {
     pub parameter: String,
     /// Clip-local keyframes.
     pub keyframes: Vec<awidat_proto::professional::Keyframe>,
+    /// Behavior before the first keyframe.
+    pub pre_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    /// Behavior after the last keyframe.
+    pub post_extrapolation: awidat_proto::professional::ExtrapolationMode,
+    /// Optional 2D path for position animations.
+    pub motion_path: Option<awidat_proto::professional::MotionPath>,
 }
 
 #[derive(Debug, Default)]
@@ -1582,12 +2833,152 @@ fn render_animations_for_clip_with_limitations(
             });
             return;
         }
+        if parameter == "overlay.blur" {
+            selection
+                .limitations
+                .extend(overlay_blur_radius_limitations(animation));
+        }
         selection.animations.push(RenderParameterAnimation {
             parameter: parameter.clone(),
             keyframes: animation.keyframes.clone(),
+            pre_extrapolation: animation.pre_extrapolation,
+            post_extrapolation: animation.post_extrapolation,
+            motion_path: animation.motion_path.clone(),
         });
     });
     selection
+}
+
+fn select_clip_effect_animation(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+    parameter: &str,
+    consumed_animation_ids: &mut BTreeSet<String>,
+) -> Option<RenderParameterAnimation> {
+    let animation = animations.iter().find(|animation| {
+        matches!(
+            &animation.target,
+            awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: target_clip_id,
+                parameter: target_parameter,
+            } if target_clip_id == clip_id && target_parameter == parameter
+        )
+    })?;
+    consumed_animation_ids.insert(animation.id.clone());
+    Some(RenderParameterAnimation {
+        parameter: parameter.to_string(),
+        keyframes: animation.keyframes.clone(),
+        pre_extrapolation: animation.pre_extrapolation,
+        post_extrapolation: animation.post_extrapolation,
+        motion_path: animation.motion_path.clone(),
+    })
+}
+
+fn select_warp_animation(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+    consumed_animation_ids: &mut BTreeSet<String>,
+) -> Option<WarpAnimationPlan> {
+    let plan = WarpAnimationPlan {
+        k1: select_clip_effect_animation(
+            animations,
+            clip_id,
+            "awidat.warp.k1",
+            consumed_animation_ids,
+        ),
+        k2: select_clip_effect_animation(
+            animations,
+            clip_id,
+            "awidat.warp.k2",
+            consumed_animation_ids,
+        ),
+        center_x: select_clip_effect_animation(
+            animations,
+            clip_id,
+            "awidat.warp.center_x",
+            consumed_animation_ids,
+        ),
+        center_y: select_clip_effect_animation(
+            animations,
+            clip_id,
+            "awidat.warp.center_y",
+            consumed_animation_ids,
+        ),
+    };
+    plan.has_any().then_some(plan)
+}
+
+fn overlay_blur_radius_limitations(
+    animation: &awidat_proto::professional::ParameterAnimation,
+) -> Vec<RenderPlanLimitation> {
+    animation
+        .keyframes
+        .iter()
+        .filter(|keyframe| {
+            keyframe.value.is_finite() && keyframe.value > OVERLAY_BLUR_MAX_RADIUS_PX
+        })
+        .map(|keyframe| RenderPlanLimitation {
+            kind: "overlay_blur_radius_clamped".to_string(),
+            animation_id: Some(animation.id.clone()),
+            clip_id: match &animation.target {
+                awidat_proto::professional::AnimationTarget::ClipParameter { clip_id, .. } => {
+                    Some(clip_id.clone())
+                }
+                _ => None,
+            },
+            parameter: Some("overlay.blur".to_string()),
+            message: format!(
+                "render clamps overlay.blur keyframe value {} to maximum supported radius {} px",
+                keyframe.value,
+                fmt_filter_num(OVERLAY_BLUR_MAX_RADIUS_PX)
+            ),
+        })
+        .collect()
+}
+
+fn tracker_bind_coverage_limitations(
+    animations: &[awidat_proto::professional::ParameterAnimation],
+    clip_id: &str,
+    track_start_s: f64,
+    duration_s: f64,
+) -> Vec<RenderPlanLimitation> {
+    animations
+        .iter()
+        .filter(|animation| animation.id.starts_with("tracker-bind-"))
+        .filter_map(|animation| {
+            let awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: target_clip_id,
+                parameter,
+            } = &animation.target
+            else {
+                return None;
+            };
+            if target_clip_id != clip_id || !parameter.starts_with("overlay.") {
+                return None;
+            }
+            let first = animation.keyframes.first()?;
+            let last = animation.keyframes.last()?;
+            let starts_late = first.time_s > 1e-6;
+            let ends_early = last.time_s + 1e-6 < duration_s;
+            if !starts_late && !ends_early {
+                return None;
+            }
+            Some(RenderPlanLimitation {
+                kind: "tracker_bind_coverage_shortfall".to_string(),
+                animation_id: Some(animation.id.clone()),
+                clip_id: Some(clip_id.to_string()),
+                parameter: Some(parameter.clone()),
+                message: format!(
+                    "tracker-bound animation {} covers clip-local {}s..{}s, but overlay window is timeline {}s..{}s; Hold extrapolation is applied outside the tracked range",
+                    animation.id,
+                    fmt_filter_num(first.time_s),
+                    fmt_filter_num(last.time_s),
+                    fmt_filter_num(track_start_s),
+                    fmt_filter_num(track_start_s + duration_s),
+                ),
+            })
+        })
+        .collect()
 }
 
 fn unconsumed_animation_limitations(
@@ -1641,28 +3032,105 @@ fn log_clip_without_shaper_limitations(segs: &[TimelineSegment]) -> Vec<RenderPl
         .collect()
 }
 
-/// Surface a `mask_not_implemented` limitation for every segment
-/// whose `color_pipeline.mask_source` is set. The mask itself is
-/// stamped on the OTIO and validated at apply time, but render's
-/// `color_pipeline_filter_block` does not honor it yet — the agent
-/// needs to know its regional grading request was a no-op.
+/// Surface a limitation for every masked color-pipeline combination
+/// outside render's supported v1 scope. The current executable path
+/// supports a single masked look LUT; more complex LUT chains and
+/// mask-only pipelines stay explicit so the agent knows the request
+/// was not silently honored.
 fn mask_source_limitations(segs: &[TimelineSegment]) -> Vec<RenderPlanLimitation> {
     segs.iter()
         .filter_map(|seg| {
             let plan = seg.color_pipeline.as_ref()?;
             let mask = plan.mask_source.as_ref()?;
+            if is_renderable_masked_color_pipeline(plan) {
+                return None;
+            }
+            let kind = if plan.look_lut.is_some() {
+                "mask_in_complex_chain"
+            } else {
+                "mask_not_implemented"
+            };
             Some(RenderPlanLimitation {
-                kind: "mask_not_implemented".to_string(),
+                kind: kind.to_string(),
                 animation_id: None,
                 clip_id: Some(seg.clip_name.clone()),
                 parameter: Some("color_pipeline.mask_source".to_string()),
                 message: format!(
-                    "render ignored awidat.color_pipeline.mask_source {} on clip {:?}: regional grading is reserved but not yet implemented \
-                     (see docs/color-pipeline/render-mask-lowering.md for the implementation plan)",
+                    "render ignored awidat.color_pipeline.mask_source {} on clip {:?}: this masked color-pipeline combination is not renderable yet \
+                     (see docs/color-pipeline/render-mask-lowering.md for the supported v1 scope)",
                     mask.display(),
                     seg.clip_name,
                 ),
             })
+        })
+        .collect()
+}
+
+fn is_renderable_masked_color_pipeline(plan: &ColorPipelinePlan) -> bool {
+    plan.mask_source.is_some()
+        && plan.look_lut.is_some()
+        && plan.input_transform_lut.is_none()
+        && plan.shaper_lut.is_none()
+        && plan.output_transform_lut.is_none()
+}
+
+fn renderable_mask_source(seg: &TimelineSegment) -> Option<&Path> {
+    let plan = seg.color_pipeline.as_ref()?;
+    if is_renderable_masked_color_pipeline(plan) {
+        plan.mask_source.as_deref()
+    } else {
+        None
+    }
+}
+
+fn renderable_mask_count(segs: &[TimelineSegment]) -> usize {
+    segs.iter()
+        .filter(|segment| renderable_mask_source(segment).is_some())
+        .count()
+}
+
+fn renderable_overlay_matte_count(video_overlays: &[VideoOverlayPlan]) -> usize {
+    video_overlays
+        .iter()
+        .filter(|overlay| overlay.matte_source.is_some())
+        .count()
+}
+
+fn assign_overlay_matte_input_indices(
+    video_overlays: &[VideoOverlayPlan],
+    first_matte_input: usize,
+) -> Vec<VideoOverlayPlan> {
+    let mut next_matte_input = first_matte_input;
+    video_overlays
+        .iter()
+        .cloned()
+        .map(|mut overlay| {
+            if overlay.matte_source.is_some() {
+                overlay.matte_input_index = Some(next_matte_input);
+                next_matte_input += 1;
+            } else {
+                overlay.matte_input_index = None;
+            }
+            overlay
+        })
+        .collect()
+}
+
+fn assign_mask_input_indices(
+    segs: &[TimelineSegment],
+    first_mask_input: usize,
+) -> Vec<TimelineSegment> {
+    let mut next_mask_input = first_mask_input;
+    segs.iter()
+        .cloned()
+        .map(|mut seg| {
+            if renderable_mask_source(&seg).is_some() {
+                seg.mask_input_index = Some(next_mask_input);
+                next_mask_input += 1;
+            } else {
+                seg.mask_input_index = None;
+            }
+            seg
         })
         .collect()
 }
@@ -1731,12 +3199,42 @@ pub struct TitlePlan {
     pub font_weight: TitleWeight,
     /// Entry / exit animation.
     pub animation: TitleAnimation,
+    /// Text reveal/write-on behavior.
+    pub reveal: TextReveal,
     /// Overlay role, usually `"title"` or `"caption"`.
     pub role: String,
     /// Optional safe-area profile carried by caption nodes.
     pub safe_area: Option<String>,
+    /// Optional inline rich-text runs.
+    pub rich_segments: Vec<RichTextSegment>,
     /// Supported Phase 3A parameter animations attached to this title.
     pub animations: Vec<RenderParameterAnimation>,
+}
+
+/// One styled inline run inside a rich title.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct RichTextSegment {
+    /// Text for this run.
+    pub text: String,
+    /// Optional run color. Falls back to the title color.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Optional run weight. Falls back to the title weight.
+    #[serde(default)]
+    pub font_weight: Option<TitleWeight>,
+}
+
+/// Text reveal/write-on mode for title overlays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextReveal {
+    /// Show the full string for the whole title window.
+    None,
+    /// Reveal one Unicode scalar at a time.
+    Typewriter,
+    /// Reveal one whitespace-delimited word at a time.
+    Word,
+    /// Reveal one line at a time.
+    Line,
 }
 
 /// Mirrors `awidat_core::edl::op::TitlePosition` to avoid a render
@@ -1753,7 +3251,8 @@ pub enum TitlePosition {
 }
 
 /// Mirrors `awidat_core::edl::op::TitleWeight`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TitleWeight {
     /// Regular weight.
     Normal,
@@ -2252,77 +3751,75 @@ fn append_video_overlays(
         let start = overlay.track_start_s;
         let end = overlay.track_start_s + effective_duration(&overlay.segment);
         let overlay_input = stage_overlay_video_input(&mut filter, input_idx, &overlay.segment);
-        let scale_multiplier = overlay_animation_value_expr(overlay, "overlay.scale", "1", "t");
-        let (scale_expr, x_expr, y_expr) = match &overlay.mode {
-            VideoOverlayMode::FullFrame => {
-                let scale_expr = if has_overlay_animation(overlay, "overlay.scale") {
-                    format!(
-                        "w=main_w*({scale_multiplier}):h=main_h*({scale_multiplier}):eval=frame"
-                    )
-                } else {
-                    "w=main_w:h=main_h".to_string()
-                };
-                (scale_expr, "0".to_string(), "0".to_string())
-            }
-            VideoOverlayMode::PiP {
-                corner,
-                scale,
-                margin_pct,
-            } => {
-                let margin_x = format!("main_w*{margin_pct}");
-                let margin_y = format!("main_h*{margin_pct}");
-                let x = match corner.as_str() {
-                    "top_left" | "bottom_left" => margin_x,
-                    _ => format!("main_w-overlay_w-main_w*{margin_pct}"),
-                };
-                let y = match corner.as_str() {
-                    "top_left" | "top_right" => margin_y,
-                    _ => format!("main_h-overlay_h-main_h*{margin_pct}"),
-                };
-                let scale_expr = if has_overlay_animation(overlay, "overlay.scale") {
-                    format!("w=main_w*{scale}*({scale_multiplier}):h=-2:eval=frame")
-                } else {
-                    format!("w=main_w*{scale}:h=-2")
-                };
-                (scale_expr, x, y)
-            }
-        };
-        let x_expr = if has_overlay_animation(overlay, "overlay.x") {
-            format!(
-                "({})+main_w*({})",
-                x_expr,
-                overlay_animation_value_expr(overlay, "overlay.x", "0", "t")
-            )
+        filter.push(';');
+        filter.push_str(&format!(
+            "{overlay_input}setpts=PTS-STARTPTS+{start}/TB{pts_label};"
+        ));
+        if let Some(overlay_filter) =
+            motion_blurred_overlay_transform_filter(MotionBlurTransformContext {
+                idx,
+                overlay,
+                source_label: &pts_label,
+                base_label: &current,
+                start,
+                end,
+                out_label: &next,
+            })
+        {
+            filter.push_str(&overlay_filter);
+            current = next;
+            continue;
+        }
+        let rotation_deg = overlay_rotation_deg_expr(overlay, "t");
+        let has_rotation = rotation_deg.is_some();
+        let scale_expr = overlay_scale_expr(overlay, "t");
+        let (x_expr, y_expr) = overlay_position_exprs(overlay, has_rotation, "t");
+        let (rotation_filter, rotated_label) = if let Some(rotation_deg) = rotation_deg {
+            let rotated_label = format!("[media_overlay_rot{idx}]");
+            let filter = format!(
+                "{scaled_label}format=rgba,rotate='(PI/180)*({rotation_deg})':ow='hypot(iw\\,ih)':oh='hypot(iw\\,ih)':c=none{rotated_label};"
+            );
+            (filter, rotated_label)
         } else {
-            x_expr
+            (String::new(), scaled_label.clone())
         };
-        let y_expr = if has_overlay_animation(overlay, "overlay.y") {
-            format!(
-                "({})+main_h*({})",
-                y_expr,
-                overlay_animation_value_expr(overlay, "overlay.y", "0", "t")
-            )
-        } else {
-            y_expr
-        };
+        let (corner_pin_filter, transformed_label) =
+            apply_overlay_corner_pin_filter(overlay, idx, &rotated_label);
+        let (mask_filter, transformed_label) =
+            apply_overlay_mask_filter(overlay, idx, &transformed_label);
+        let (matte_filter, transformed_label) =
+            apply_overlay_matte_filter(overlay, idx, &transformed_label);
+        let (blur_filter, transformed_label) =
+            apply_overlay_blur_filter(overlay, idx, &transformed_label);
         let opacity_filter = if has_overlay_animation(overlay, "overlay.opacity") {
             let opacity = overlay_animation_value_expr(overlay, "overlay.opacity", "1", "T");
             let alpha_label = format!("[media_overlay_alpha{idx}]");
             let filter = format!(
-                "{scaled_label}format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({opacity})'{alpha_label};"
+                "{transformed_label}format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*({opacity})'{alpha_label};"
             );
             (filter, alpha_label)
         } else {
-            (String::new(), scaled_label.clone())
+            (String::new(), transformed_label)
         };
-        filter.push(';');
-        filter.push_str(&format!(
-            "{overlay_input}setpts=PTS-STARTPTS+{start}/TB{pts_label};\
-             {pts_label}{current}scale2ref={scale_expr}{scaled_label}{ref_label};\
-             {opacity_filter}\
-             {ref_label}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
-            opacity_filter = opacity_filter.0,
+        let overlay_filter = format!(
+            "{ref_label}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
             overlay_video_label = opacity_filter.1,
+        );
+        filter.push_str(&format!(
+            "{pts_label}{current}scale2ref={scale_expr}{scaled_label}{ref_label};\
+             {rotation_filter}\
+             {corner_pin_filter}\
+             {mask_filter}\
+             {matte_filter}\
+             {blur_filter}\
+             {opacity_filter}\
+             {overlay_filter}",
+            rotation_filter = rotation_filter,
+            corner_pin_filter = corner_pin_filter,
+            mask_filter = mask_filter,
+            matte_filter = matte_filter,
+            blur_filter = blur_filter,
+            opacity_filter = opacity_filter.0,
         ));
         current = next;
     }
@@ -2333,11 +3830,754 @@ fn append_video_overlays(
     }
 }
 
+fn append_annotations(base: FilterPlan, annotations: &[AnnotationPlan]) -> FilterPlan {
+    if annotations.is_empty() {
+        return base;
+    }
+    let mut filter = base.filter_complex;
+    let mut current = base.video_out_label;
+    for (idx, annotation) in annotations.iter().enumerate() {
+        let next = format!("[annotation_v{idx}]");
+        if !filter.ends_with(';') && !filter.is_empty() {
+            filter.push(';');
+        }
+        filter.push_str(&annotation_filter(&current, &next, annotation, idx));
+        current = next;
+    }
+    FilterPlan {
+        filter_complex: filter,
+        video_out_label: current,
+        audio_out_label: base.audio_out_label,
+    }
+}
+
+fn annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+    idx: usize,
+) -> String {
+    match annotation.kind {
+        AnnotationKind::Rectangle => rectangle_annotation_filter(in_label, out_label, annotation),
+        AnnotationKind::Blur => blur_annotation_filter(in_label, out_label, annotation, idx),
+        AnnotationKind::Circle => circle_annotation_filter(in_label, out_label, annotation),
+        AnnotationKind::Arrow => arrow_annotation_filter(in_label, out_label, annotation),
+        AnnotationKind::Bracket => bracket_annotation_filter(in_label, out_label, annotation),
+    }
+}
+
+fn rectangle_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+) -> String {
+    let color = annotation_filter_color(&annotation.color);
+    format!(
+        "{in_label}drawbox=x=iw*{x}:y=ih*{y}:w=iw*{width}:h=ih*{height}:color={color}:t={stroke}:enable='between(t\\,{start}\\,{end})'{out_label}",
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        width = fmt_filter_num(annotation.width),
+        height = fmt_filter_num(annotation.height),
+        color = color,
+        stroke = annotation.stroke_width,
+        start = fmt_filter_num(annotation.start_s),
+        end = fmt_filter_num(annotation.end_s),
+    )
+}
+
+fn blur_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+    idx: usize,
+) -> String {
+    let keep = format!("[annotation_keep{idx}]");
+    let source = format!("[annotation_src{idx}]");
+    let blur = format!("[annotation_blur{idx}]");
+    format!(
+        "{in_label}split{keep}{source};\
+         {source}crop=w=iw*{width}:h=ih*{height}:x=iw*{x}:y=ih*{y},boxblur=12{blur};\
+         {keep}{blur}overlay=x=main_w*{x}:y=main_h*{y}:enable='between(t\\,{start}\\,{end})'{out_label}",
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        width = fmt_filter_num(annotation.width),
+        height = fmt_filter_num(annotation.height),
+        start = fmt_filter_num(annotation.start_s),
+        end = fmt_filter_num(annotation.end_s),
+    )
+}
+
+fn circle_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+) -> String {
+    let size = format!("h*{}", fmt_filter_num(annotation.height));
+    let color = annotation_filter_color(&annotation.color);
+    format!(
+        "{in_label}drawtext=text='○':fontsize={size}:fontcolor={color}:x=w*{x}:y=h*{y}:enable='between(t\\,{start}\\,{end})'{out_label}",
+        color = color,
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        start = fmt_filter_num(annotation.start_s),
+        end = fmt_filter_num(annotation.end_s),
+    )
+}
+
+fn arrow_annotation_filter(in_label: &str, out_label: &str, annotation: &AnnotationPlan) -> String {
+    let size = format!("h*{}", fmt_filter_num(annotation.height.max(0.04)));
+    let color = annotation_filter_color(&annotation.color);
+    format!(
+        "{in_label}drawtext=text='→':fontsize={size}:fontcolor={color}:x=w*{x}:y=h*{y}:enable='between(t\\,{start}\\,{end})'{out_label}",
+        color = color,
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        start = fmt_filter_num(annotation.start_s),
+        end = fmt_filter_num(annotation.end_s),
+    )
+}
+
+fn bracket_annotation_filter(
+    in_label: &str,
+    out_label: &str,
+    annotation: &AnnotationPlan,
+) -> String {
+    let color = annotation_filter_color(&annotation.color);
+    let top = format!(
+        "[annotation_bracket_top{}]",
+        annotation_label_suffix(annotation)
+    );
+    let left = format!(
+        "[annotation_bracket_left{}]",
+        annotation_label_suffix(annotation)
+    );
+    let right = format!(
+        "[annotation_bracket_right{}]",
+        annotation_label_suffix(annotation)
+    );
+    let common = format!(
+        ":color={}:t={}:enable='between(t\\,{}\\,{})'",
+        color,
+        annotation.stroke_width,
+        fmt_filter_num(annotation.start_s),
+        fmt_filter_num(annotation.end_s)
+    );
+    format!(
+        "{in_label}drawbox=x=iw*{x}:y=ih*{y}:w=iw*{width}:h=1{common}{top};\
+         {top}drawbox=x=iw*{x}:y=ih*{y}:w=1:h=ih*{height}{common}{left};\
+         {left}drawbox=x=iw*({x}+{width}):y=ih*{y}:w=1:h=ih*{height}{common}{right};\
+         {right}copy{out_label}",
+        x = fmt_filter_num(annotation.x),
+        y = fmt_filter_num(annotation.y),
+        width = fmt_filter_num(annotation.width),
+        height = fmt_filter_num(annotation.height),
+        common = common,
+    )
+}
+
+fn annotation_filter_color(raw: &str) -> &str {
+    if valid_filter_color(raw) {
+        raw
+    } else {
+        "#FFCC00"
+    }
+}
+
+fn valid_filter_color(raw: &str) -> bool {
+    let color = raw.trim();
+    if color.is_empty() || color != raw {
+        return false;
+    }
+    if let Some(hex) = color.strip_prefix('#') {
+        return matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit());
+    }
+    color.chars().all(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn annotation_label_suffix(annotation: &AnnotationPlan) -> String {
+    format!(
+        "_{:.0}_{:.0}",
+        annotation.start_s * 1000.0,
+        annotation.end_s * 1000.0
+    )
+}
+
+fn apply_overlay_corner_pin_filter(
+    overlay: &VideoOverlayPlan,
+    idx: usize,
+    input_label: &str,
+) -> (String, String) {
+    let Some(filter_expr) = overlay.corner_pin_filter.as_ref() else {
+        return (String::new(), input_label.to_string());
+    };
+    let corner_pin_label = format!("[media_overlay_corner_pin{idx}]");
+    (
+        format!("{input_label}{filter_expr}{corner_pin_label};"),
+        corner_pin_label,
+    )
+}
+
+fn apply_overlay_matte_filter(
+    overlay: &VideoOverlayPlan,
+    idx: usize,
+    input_label: &str,
+) -> (String, String) {
+    let Some(matte_input_index) = overlay.matte_input_index else {
+        return (String::new(), input_label.to_string());
+    };
+    let matte_rgba = format!("[media_overlay_matte_rgba{idx}]");
+    let matte_scaled = format!("[media_overlay_matte_scaled{idx}]");
+    let matte_ref = format!("[media_overlay_matte_ref{idx}]");
+    let matte_label = format!("[media_overlay_matte{idx}]");
+    let (matte_source_filter, matte_stream_label) = overlay_matte_source_filter(
+        overlay,
+        matte_input_index,
+        "[media_overlay_matte_gray",
+        idx,
+        None,
+    );
+    (
+        format!(
+            "{input_label}format=rgba{matte_rgba};\
+             {matte_source_filter}\
+             {matte_stream_label}{matte_rgba}scale2ref=w=main_w:h=main_h{matte_scaled}{matte_ref};\
+             {matte_ref}{matte_scaled}alphamerge=shortest=1{matte_label};"
+        ),
+        matte_label,
+    )
+}
+
+fn overlay_matte_source_filter(
+    overlay: &VideoOverlayPlan,
+    matte_input_index: usize,
+    gray_label_prefix: &str,
+    overlay_idx: usize,
+    sample_idx: Option<usize>,
+) -> (String, String) {
+    let gray_label = match sample_idx {
+        Some(sample_idx) => format!("{gray_label_prefix}{overlay_idx}_{sample_idx}]"),
+        None => format!("{gray_label_prefix}{overlay_idx}]"),
+    };
+    if overlay_matte_source_is_still(overlay) {
+        let loop_label = match sample_idx {
+            Some(sample_idx) => format!("[media_overlay_blur{overlay_idx}_matte_loop{sample_idx}]"),
+            None => format!("[media_overlay_matte_loop{overlay_idx}]"),
+        };
+        (
+            format!("[{matte_input_index}:v:0]format=gray,loop=-1:1{loop_label};"),
+            loop_label,
+        )
+    } else {
+        (
+            format!("[{matte_input_index}:v:0]format=gray{gray_label};"),
+            gray_label,
+        )
+    }
+}
+
+fn overlay_matte_source_is_still(overlay: &VideoOverlayPlan) -> bool {
+    overlay
+        .matte_source
+        .as_ref()
+        .and_then(|path| path.extension())
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "tif" | "tiff"
+            )
+        })
+        .unwrap_or(true)
+}
+
+fn apply_overlay_mask_filter(
+    overlay: &VideoOverlayPlan,
+    idx: usize,
+    input_label: &str,
+) -> (String, String) {
+    let Some(mask) = overlay.mask.as_ref() else {
+        return (String::new(), input_label.to_string());
+    };
+    let mask_label = format!("[media_overlay_mask{idx}]");
+    let alpha_expr = overlay_mask_alpha_expr(mask, &format!("(T-{})", overlay.track_start_s));
+    (
+        format!(
+            "{input_label}format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*{alpha_expr}'{mask_label};"
+        ),
+        mask_label,
+    )
+}
+
+fn overlay_mask_alpha_expr(mask: &OverlayMaskPlan, time_var: &str) -> String {
+    let x0 = overlay_mask_keyframe_value_expr(mask, |keyframe| keyframe.x0, time_var);
+    let y0 = overlay_mask_keyframe_value_expr(mask, |keyframe| keyframe.y0, time_var);
+    let x1 = overlay_mask_keyframe_value_expr(mask, |keyframe| keyframe.x1, time_var);
+    let y1 = overlay_mask_keyframe_value_expr(mask, |keyframe| keyframe.y1, time_var);
+    let opacity = overlay_mask_keyframe_value_expr(mask, |keyframe| keyframe.opacity, time_var);
+    let inside = format!("between(X\\,W*{x0}\\,W*{x1})*between(Y\\,H*{y0}\\,H*{y1})");
+    match mask.operation {
+        MaskOperation::Add | MaskOperation::Intersect => {
+            format!("if({inside}\\,{opacity}\\,0)")
+        }
+        MaskOperation::Subtract => format!("if({inside}\\,0\\,1)"),
+    }
+}
+
+fn overlay_mask_keyframe_value_expr(
+    mask: &OverlayMaskPlan,
+    value: fn(&OverlayMaskKeyframe) -> f64,
+    time_var: &str,
+) -> String {
+    let keyframes = mask
+        .keyframes
+        .iter()
+        .map(|keyframe| {
+            awidat_proto::professional::Keyframe::linear(keyframe.time_s, value(keyframe))
+        })
+        .collect::<Vec<_>>();
+    let expr = keyframes_to_ffmpeg_expr_with_extrapolation(
+        &keyframes,
+        time_var,
+        awidat_proto::professional::ExtrapolationMode::Hold,
+        awidat_proto::professional::ExtrapolationMode::Hold,
+    );
+    if keyframes.len() == 1 {
+        fmt_filter_num(value(&mask.keyframes[0]))
+    } else {
+        expr
+    }
+}
+
+fn overlay_scale_expr(overlay: &VideoOverlayPlan, time_var: &str) -> String {
+    let scale_multiplier = overlay_animation_value_expr(overlay, "overlay.scale", "1", time_var);
+    match &overlay.mode {
+        VideoOverlayMode::FullFrame => {
+            if has_overlay_animation(overlay, "overlay.scale") {
+                format!("w=main_w*({scale_multiplier}):h=main_h*({scale_multiplier}):eval=frame")
+            } else {
+                "w=main_w:h=main_h".to_string()
+            }
+        }
+        VideoOverlayMode::PiP { scale, .. } => {
+            if has_overlay_animation(overlay, "overlay.scale") {
+                format!("w=main_w*{scale}*({scale_multiplier}):h=-2:eval=frame")
+            } else {
+                format!("w=main_w*{scale}:h=-2")
+            }
+        }
+    }
+}
+
+fn overlay_position_exprs(
+    overlay: &VideoOverlayPlan,
+    has_rotation: bool,
+    time_var: &str,
+) -> (String, String) {
+    let (base_x, base_y) = match &overlay.mode {
+        VideoOverlayMode::FullFrame => {
+            if has_rotation {
+                (
+                    "(main_w-overlay_w)/2".to_string(),
+                    "(main_h-overlay_h)/2".to_string(),
+                )
+            } else {
+                ("0".to_string(), "0".to_string())
+            }
+        }
+        VideoOverlayMode::PiP {
+            corner, margin_pct, ..
+        } => {
+            let margin_x = format!("main_w*{margin_pct}");
+            let margin_y = format!("main_h*{margin_pct}");
+            let x = match corner.as_str() {
+                "top_left" | "bottom_left" => margin_x,
+                _ => format!("main_w-overlay_w-main_w*{margin_pct}"),
+            };
+            let y = match corner.as_str() {
+                "top_left" | "top_right" => margin_y,
+                _ => format!("main_h-overlay_h-main_h*{margin_pct}"),
+            };
+            (x, y)
+        }
+    };
+    let x_expr = if has_overlay_animation(overlay, "overlay.position") {
+        format!(
+            "({base_x})+main_w*({})",
+            overlay_motion_path_expr(overlay, MotionPathCoordinate::X, time_var)
+                .unwrap_or_else(|| "0".to_string())
+        )
+    } else if has_overlay_animation(overlay, "overlay.x") {
+        format!(
+            "({base_x})+main_w*({})",
+            overlay_animation_value_expr(overlay, "overlay.x", "0", time_var)
+        )
+    } else {
+        base_x
+    };
+    let y_expr = if has_overlay_animation(overlay, "overlay.position") {
+        format!(
+            "({base_y})+main_h*({})",
+            overlay_motion_path_expr(overlay, MotionPathCoordinate::Y, time_var)
+                .unwrap_or_else(|| "0".to_string())
+        )
+    } else if has_overlay_animation(overlay, "overlay.y") {
+        format!(
+            "({base_y})+main_h*({})",
+            overlay_animation_value_expr(overlay, "overlay.y", "0", time_var)
+        )
+    } else {
+        base_y
+    };
+    (x_expr, y_expr)
+}
+
+struct MotionBlurTransformContext<'a> {
+    idx: usize,
+    overlay: &'a VideoOverlayPlan,
+    source_label: &'a str,
+    base_label: &'a str,
+    start: f64,
+    end: f64,
+    out_label: &'a str,
+}
+
+fn motion_blurred_overlay_transform_filter(
+    context: MotionBlurTransformContext<'_>,
+) -> Option<String> {
+    let blur = context.overlay.motion_blur.as_ref()?;
+    if !has_overlay_transform_motion(context.overlay) {
+        return None;
+    }
+    let half_shutter = (blur.shutter_s / 2.0).clamp(0.0, 0.1);
+    if half_shutter <= f64::EPSILON {
+        return None;
+    }
+
+    let sample_labels = [
+        format!("[media_overlay_blur{}_src0]", context.idx),
+        format!("[media_overlay_blur{}_src1]", context.idx),
+        format!("[media_overlay_blur{}_src2]", context.idx),
+    ];
+    let base_labels = [
+        format!("[media_overlay_blur{}_base0]", context.idx),
+        format!("[media_overlay_blur{}_base1]", context.idx),
+        format!("[media_overlay_blur{}_base2]", context.idx),
+    ];
+    let scaled_labels = [
+        format!("[media_overlay_blur{}_scaled0]", context.idx),
+        format!("[media_overlay_blur{}_scaled1]", context.idx),
+        format!("[media_overlay_blur{}_scaled2]", context.idx),
+    ];
+    let ref_labels = [
+        format!("[media_overlay_blur{}_ref0]", context.idx),
+        format!("[media_overlay_blur{}_ref1]", context.idx),
+        format!("[media_overlay_blur{}_ref2]", context.idx),
+    ];
+    let rotated_labels = [
+        format!("[media_overlay_blur{}_rot0]", context.idx),
+        format!("[media_overlay_blur{}_rot1]", context.idx),
+        format!("[media_overlay_blur{}_rot2]", context.idx),
+    ];
+    let alpha_labels = [
+        format!("[media_overlay_blur{}_alpha0]", context.idx),
+        format!("[media_overlay_blur{}_alpha1]", context.idx),
+        format!("[media_overlay_blur{}_alpha2]", context.idx),
+    ];
+    let composite_labels = [
+        format!("[media_overlay_blur{}_v0]", context.idx),
+        format!("[media_overlay_blur{}_v1]", context.idx),
+    ];
+    let offsets = [-half_shutter, 0.0, half_shutter];
+    let weight = fmt_filter_num(1.0 / offsets.len() as f64);
+    let mut filter = format!(
+        "{source_label}split=3{}{}{};{base_label}split=3{}{}{};",
+        sample_labels[0],
+        sample_labels[1],
+        sample_labels[2],
+        base_labels[0],
+        base_labels[1],
+        base_labels[2],
+        source_label = context.source_label,
+        base_label = context.base_label,
+    );
+    let mut current_base = String::new();
+
+    for (sample_idx, offset) in offsets.into_iter().enumerate() {
+        let sample_time_var = offset_time_var("t", offset);
+        let sample_scale = overlay_scale_expr(context.overlay, &sample_time_var);
+        filter.push_str(&format!(
+            "{}{}scale2ref={sample_scale}{}{};",
+            sample_labels[sample_idx],
+            base_labels[sample_idx],
+            scaled_labels[sample_idx],
+            ref_labels[sample_idx],
+        ));
+        if sample_idx == 0 {
+            current_base = ref_labels[sample_idx].clone();
+        } else {
+            filter.push_str(&format!("{}nullsink;", ref_labels[sample_idx]));
+        }
+        let rotation_deg = overlay_rotation_deg_expr(context.overlay, &sample_time_var);
+        let has_rotation = rotation_deg.is_some();
+        let overlay_video_label = if let Some(rotation_deg) = rotation_deg {
+            filter.push_str(&format!(
+                "{}format=rgba,rotate='(PI/180)*({rotation_deg})':ow='hypot(iw\\,ih)':oh='hypot(iw\\,ih)':c=none{};",
+                scaled_labels[sample_idx],
+                rotated_labels[sample_idx],
+            ));
+            rotated_labels[sample_idx].clone()
+        } else {
+            scaled_labels[sample_idx].clone()
+        };
+        let overlay_video_label = apply_overlay_sample_corner_pin_filter(
+            context.overlay,
+            context.idx,
+            sample_idx,
+            &mut filter,
+            &overlay_video_label,
+        );
+        let overlay_video_label = apply_overlay_sample_mask_filter(
+            context.overlay,
+            context.idx,
+            sample_idx,
+            &mut filter,
+            &overlay_video_label,
+        );
+        let overlay_video_label = apply_overlay_sample_matte_filter(
+            context.overlay,
+            context.idx,
+            sample_idx,
+            &mut filter,
+            &overlay_video_label,
+        );
+        let blur_time_var = offset_time_var("T", offset);
+        let overlay_video_label = apply_overlay_sample_blur_filter(
+            context.overlay,
+            context.idx,
+            sample_idx,
+            &mut filter,
+            &overlay_video_label,
+            &blur_time_var,
+        );
+        let (sample_x, sample_y) =
+            overlay_position_exprs(context.overlay, has_rotation, &sample_time_var);
+        let alpha_label = &alpha_labels[sample_idx];
+        let alpha_expr = overlay_motion_blur_alpha_expr(context.overlay, offset, &weight);
+        filter.push_str(&format!(
+            "{overlay_video_label}format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='{alpha_expr}'{alpha_label};",
+        ));
+        let next_label = if sample_idx == offsets.len() - 1 {
+            context.out_label.to_string()
+        } else {
+            composite_labels[sample_idx].clone()
+        };
+        filter.push_str(&format!(
+            "{current_base}{alpha_label}overlay=x={sample_x}:y={sample_y}:enable='between(t\\,{start}\\,{end})'{next_label};",
+            start = context.start,
+            end = context.end,
+        ));
+        current_base = next_label;
+    }
+    Some(filter.trim_end_matches(';').to_string())
+}
+
+fn apply_overlay_sample_corner_pin_filter(
+    overlay: &VideoOverlayPlan,
+    overlay_idx: usize,
+    sample_idx: usize,
+    filter: &mut String,
+    input_label: &str,
+) -> String {
+    let Some(filter_expr) = overlay.corner_pin_filter.as_ref() else {
+        return input_label.to_string();
+    };
+    let corner_pin_label = format!("[media_overlay_blur{overlay_idx}_pin{sample_idx}]");
+    filter.push_str(&format!("{input_label}{filter_expr}{corner_pin_label};"));
+    corner_pin_label
+}
+
+fn apply_overlay_sample_matte_filter(
+    overlay: &VideoOverlayPlan,
+    overlay_idx: usize,
+    sample_idx: usize,
+    filter: &mut String,
+    input_label: &str,
+) -> String {
+    let Some(matte_input_index) = overlay.matte_input_index else {
+        return input_label.to_string();
+    };
+    let matte_rgba = format!("[media_overlay_blur{overlay_idx}_matte_rgba{sample_idx}]");
+    let matte_scaled = format!("[media_overlay_blur{overlay_idx}_matte_scaled{sample_idx}]");
+    let matte_ref = format!("[media_overlay_blur{overlay_idx}_matte_ref{sample_idx}]");
+    let matte_label = format!("[media_overlay_blur{overlay_idx}_matte{sample_idx}]");
+    let (matte_source_filter, matte_stream_label) = overlay_matte_source_filter(
+        overlay,
+        matte_input_index,
+        "[media_overlay_blur_matte_gray",
+        overlay_idx,
+        Some(sample_idx),
+    );
+    filter.push_str(&format!(
+        "{input_label}format=rgba{matte_rgba};\
+         {matte_source_filter}\
+         {matte_stream_label}{matte_rgba}scale2ref=w=main_w:h=main_h{matte_scaled}{matte_ref};\
+         {matte_ref}{matte_scaled}alphamerge=shortest=1{matte_label};"
+    ));
+    matte_label
+}
+
+fn apply_overlay_sample_mask_filter(
+    overlay: &VideoOverlayPlan,
+    overlay_idx: usize,
+    sample_idx: usize,
+    filter: &mut String,
+    input_label: &str,
+) -> String {
+    let Some(mask) = overlay.mask.as_ref() else {
+        return input_label.to_string();
+    };
+    let mask_label = format!("[media_overlay_blur{overlay_idx}_mask{sample_idx}]");
+    let alpha_expr = overlay_mask_alpha_expr(mask, &format!("(T-{})", overlay.track_start_s));
+    filter.push_str(&format!(
+        "{input_label}format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*{alpha_expr}'{mask_label};"
+    ));
+    mask_label
+}
+
+fn overlay_motion_blur_alpha_expr(overlay: &VideoOverlayPlan, offset: f64, weight: &str) -> String {
+    if has_overlay_animation(overlay, "overlay.opacity") {
+        let opacity = overlay_animation_value_expr(
+            overlay,
+            "overlay.opacity",
+            "1",
+            &offset_time_var("T", offset),
+        );
+        format!("alpha(X,Y)*({opacity})*{weight}")
+    } else {
+        format!("alpha(X,Y)*{weight}")
+    }
+}
+
+fn apply_overlay_blur_filter(
+    overlay: &VideoOverlayPlan,
+    idx: usize,
+    input_label: &str,
+) -> (String, String) {
+    if !has_overlay_animation(overlay, "overlay.blur") {
+        return (String::new(), input_label.to_string());
+    }
+    let video_label = format!("[media_overlay_blurvideo{idx}]");
+    let radius_src_label = format!("[media_overlay_blurradiussrc{idx}]");
+    let radius_label = format!("[media_overlay_blurradius{idx}]");
+    let out_label = format!("[media_overlay_softblur{idx}]");
+    let radius_expr = overlay_blur_radius_expr(overlay, "T");
+    let radius = fmt_filter_num(OVERLAY_BLUR_MAX_RADIUS_PX);
+    (
+        format!(
+            "{input_label}format=rgba,split=2{video_label}{radius_src_label};\
+             {radius_src_label}format=gray,geq=lum='{radius_expr}'{radius_label};\
+             {video_label}{radius_label}varblur=min_r=0:max_r={radius}:planes=15{out_label};"
+        ),
+        out_label,
+    )
+}
+
+fn apply_overlay_sample_blur_filter(
+    overlay: &VideoOverlayPlan,
+    overlay_idx: usize,
+    sample_idx: usize,
+    filter: &mut String,
+    input_label: &str,
+    time_var: &str,
+) -> String {
+    if !has_overlay_animation(overlay, "overlay.blur") {
+        return input_label.to_string();
+    }
+    let video_label = format!("[media_overlay_blur{overlay_idx}_video{sample_idx}]");
+    let radius_src_label = format!("[media_overlay_blur{overlay_idx}_radiussrc{sample_idx}]");
+    let radius_label = format!("[media_overlay_blur{overlay_idx}_radius{sample_idx}]");
+    let out_label = format!("[media_overlay_blur{overlay_idx}_soft{sample_idx}]");
+    let radius_expr = overlay_blur_radius_expr(overlay, time_var);
+    let radius = fmt_filter_num(OVERLAY_BLUR_MAX_RADIUS_PX);
+    filter.push_str(&format!(
+        "{input_label}format=rgba,split=2{video_label}{radius_src_label};\
+         {radius_src_label}format=gray,geq=lum='{radius_expr}'{radius_label};\
+         {video_label}{radius_label}varblur=min_r=0:max_r={radius}:planes=15{out_label};"
+    ));
+    out_label
+}
+
+fn overlay_blur_radius_expr(overlay: &VideoOverlayPlan, time_var: &str) -> String {
+    let blur_px = overlay_animation_value_expr(overlay, "overlay.blur", "0", time_var);
+    format!(
+        "min(max(({blur_px}),0),{})",
+        fmt_filter_num(OVERLAY_BLUR_MAX_RADIUS_PX)
+    )
+}
+
+fn has_overlay_transform_motion(overlay: &VideoOverlayPlan) -> bool {
+    has_overlay_animation(overlay, "overlay.position")
+        || has_overlay_animation(overlay, "overlay.x")
+        || has_overlay_animation(overlay, "overlay.y")
+        || has_overlay_animation(overlay, "overlay.scale")
+        || has_overlay_animation(overlay, "overlay.rotation_deg")
+}
+
+fn offset_time_var(base: &str, offset_s: f64) -> String {
+    if offset_s.abs() <= f64::EPSILON {
+        return base.to_string();
+    }
+    if offset_s.is_sign_negative() {
+        format!("{base}-{}", fmt_filter_num(offset_s.abs()))
+    } else {
+        format!("{base}+{}", fmt_filter_num(offset_s))
+    }
+}
+
+fn overlay_motion_path_expr(
+    overlay: &VideoOverlayPlan,
+    coordinate: MotionPathCoordinate,
+    time_var: &str,
+) -> Option<String> {
+    overlay
+        .animations
+        .iter()
+        .find(|animation| animation.parameter == "overlay.position")
+        .and_then(|animation| {
+            let path = animation.motion_path.as_ref()?;
+            let local_time_var = format!("({time_var}-{})", overlay.track_start_s);
+            Some(motion_path_to_ffmpeg_expr_with_keyframes(
+                path,
+                &animation.keyframes,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+                coordinate,
+                &local_time_var,
+            ))
+        })
+}
+
 fn has_overlay_animation(overlay: &VideoOverlayPlan, parameter: &str) -> bool {
     overlay
         .animations
         .iter()
         .any(|animation| animation.parameter == parameter)
+}
+
+fn overlay_rotation_deg_expr(overlay: &VideoOverlayPlan, time_var: &str) -> Option<String> {
+    if has_overlay_animation(overlay, "overlay.rotation_deg") {
+        return Some(overlay_animation_value_expr(
+            overlay,
+            "overlay.rotation_deg",
+            "0",
+            time_var,
+        ));
+    }
+    if overlay.rotation_deg.abs() > f64::EPSILON {
+        Some(fmt_filter_num(overlay.rotation_deg))
+    } else {
+        None
+    }
 }
 
 fn overlay_animation_value_expr(
@@ -2352,7 +4592,12 @@ fn overlay_animation_value_expr(
         .find(|animation| animation.parameter == parameter)
         .map(|animation| {
             let local_time_var = format!("({time_var}-{})", overlay.track_start_s);
-            keyframes_to_ffmpeg_expr(&animation.keyframes, &local_time_var)
+            keyframes_to_ffmpeg_expr_with_extrapolation(
+                &animation.keyframes,
+                &local_time_var,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+            )
         })
         .unwrap_or_else(|| fallback.to_string())
 }
@@ -2418,6 +4663,16 @@ fn stage_overlay_video_input(
         filter.push_str(&format!("{video_label}{chain}{cv}"));
         video_label = cv;
     }
+    let blurred_label = append_clip_blur_filter(
+        filter,
+        &video_label,
+        &format!("media_overlay{input_idx}"),
+        seg.blur,
+        seg.blur_radius_animation.as_ref(),
+    );
+    if blurred_label != video_label {
+        video_label = blurred_label;
+    }
     if let Some(plan) = seg.color_pipeline.as_ref() {
         if plan.has_any_lut() {
             let cv = format!("[media_overlay_cpv{input_idx}]");
@@ -2443,15 +4698,41 @@ fn stage_overlay_video_input(
         ));
         video_label = lv;
     }
-    if let Some(reframe) = seg.reframe.as_ref()
-        && let Some(chain) = reframe_filter_chain(reframe)
-    {
+    if let Some(chain) = segment_reframe_filter_chain(seg) {
         let rv = format!("[media_overlay_rv{input_idx}]");
         filter.push(';');
         filter.push_str(&format!("{video_label}{chain}{rv}"));
         video_label = rv;
     }
-    if let Some(factor) = seg.speed
+    if let Some(warp) = seg.warp.as_ref()
+        && let Some(chain) = warp_filter_chain(warp, seg.warp_animation.as_ref(), input_idx)
+    {
+        let wv = format!("[media_overlay_wv{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!("{video_label}{chain}{wv}"));
+        video_label = wv;
+    }
+    if let Some(shake) = seg.shake.as_ref()
+        && let Some(chain) = animated_shake_filter_chain(
+            shake,
+            seg.shake_intensity_animation.as_ref(),
+            seg.shake_frequency_animation.as_ref(),
+        )
+    {
+        let sv = format!("[media_overlay_shv{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!("{video_label}{chain}{sv}"));
+        video_label = sv;
+    }
+    if let Some(time_remap) = seg.time_remap.as_ref() {
+        let sv = format!("[media_overlay_trv{input_idx}]");
+        filter.push(';');
+        filter.push_str(&format!(
+            "{video_label}setpts='{expr}/TB'{sv}",
+            expr = time_remap_setpts_expr(time_remap),
+        ));
+        video_label = sv;
+    } else if let Some(factor) = seg.speed
         && (factor - 1.0).abs() > 1e-9
         && factor > 0.0
     {
@@ -2498,16 +4779,35 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         filter.push_str(&format!("{video_label}{chain}{cv};"));
         video_label = cv;
     }
+    let blurred_label = append_clip_blur_filter(
+        filter,
+        &video_label,
+        &i.to_string(),
+        seg.blur,
+        seg.blur_radius_animation.as_ref(),
+    );
+    if blurred_label != video_label {
+        video_label = blurred_label;
+    }
 
     if let Some(plan) = seg.color_pipeline.as_ref() {
         if plan.has_any_lut() {
             let cv = format!("[cpv{i}]");
-            filter.push_str(&color_pipeline_filter_block(
-                &video_label,
-                &cv,
-                &i.to_string(),
-                plan,
-            ));
+            let block = if let Some(mask_input_index) = seg.mask_input_index {
+                masked_color_pipeline_filter_block(
+                    &video_label,
+                    &cv,
+                    &i.to_string(),
+                    plan,
+                    mask_input_index,
+                )
+                .unwrap_or_else(|| {
+                    color_pipeline_filter_block(&video_label, &cv, &i.to_string(), plan)
+                })
+            } else {
+                color_pipeline_filter_block(&video_label, &cv, &i.to_string(), plan)
+            };
+            filter.push_str(&block);
             filter.push(';');
             video_label = cv;
         }
@@ -2525,12 +4825,28 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         video_label = lv;
     }
 
-    if let Some(reframe) = seg.reframe.as_ref()
-        && let Some(chain) = reframe_filter_chain(reframe)
-    {
+    if let Some(chain) = segment_reframe_filter_chain(seg) {
         let rv = format!("[rv{i}]");
         filter.push_str(&format!("{video_label}{chain}{rv};"));
         video_label = rv;
+    }
+    if let Some(warp) = seg.warp.as_ref()
+        && let Some(chain) = warp_filter_chain(warp, seg.warp_animation.as_ref(), i)
+    {
+        let wv = format!("[wv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{wv};"));
+        video_label = wv;
+    }
+    if let Some(shake) = seg.shake.as_ref()
+        && let Some(chain) = animated_shake_filter_chain(
+            shake,
+            seg.shake_intensity_animation.as_ref(),
+            seg.shake_frequency_animation.as_ref(),
+        )
+    {
+        let sv = format!("[shv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{sv};"));
+        video_label = sv;
     }
 
     // Audio repair runs before speed/fades/gain/loudness on each clip:
@@ -2544,9 +4860,25 @@ fn stage_segment_inputs(filter: &mut String, i: usize, seg: &TimelineSegment) ->
         audio_label = fx_label;
     }
 
-    // Speed after color/audio cleanup: setpts on video, atempo
-    // (possibly chained) on audio.
-    if let Some(factor) = seg.speed
+    // Speed/time-remap after color/audio cleanup: setpts on video, atempo
+    // (possibly chained) on audio. Variable time remap uses an average
+    // audio tempo to keep stream duration aligned with the retimed video.
+    if let Some(time_remap) = seg.time_remap.as_ref() {
+        let sv = format!("[trv{i}]");
+        filter.push_str(&format!(
+            "{video_label}setpts='{expr}/TB'{sv};",
+            expr = time_remap_setpts_expr(time_remap),
+        ));
+        video_label = sv;
+
+        let factor = segment_speed(seg);
+        if (factor - 1.0).abs() > 1e-9 && factor > 0.0 {
+            let sa = format!("[tra{i}]");
+            let chain = atempo_chain(factor);
+            filter.push_str(&format!("{audio_label}{chain}{sa};"));
+            audio_label = sa;
+        }
+    } else if let Some(factor) = seg.speed
         && (factor - 1.0).abs() > 1e-9
         && factor > 0.0
     {
@@ -2928,6 +5260,62 @@ fn color_filter_chain(plan: &ColorCorrectionPlan) -> Option<String> {
     }
 }
 
+fn blur_filter_chain(plan: BlurPlan) -> Option<String> {
+    if !plan.radius_px.is_finite() || plan.radius_px <= 0.0 {
+        return None;
+    }
+    Some(format!(
+        "gblur=sigma={}",
+        fmt_filter_num(plan.radius_px.clamp(0.0, 100.0))
+    ))
+}
+
+fn append_clip_blur_filter(
+    filter: &mut String,
+    input_label: &str,
+    suffix: &str,
+    static_blur: Option<BlurPlan>,
+    radius_animation: Option<&RenderParameterAnimation>,
+) -> String {
+    if let Some(animation) = radius_animation {
+        if !filter.is_empty() && !filter.ends_with(';') {
+            filter.push(';');
+        }
+        let video_label = format!("[clip_blur{suffix}_video]");
+        let radius_src_label = format!("[clip_blur{suffix}_radiussrc]");
+        let radius_label = format!("[clip_blur{suffix}_radius]");
+        let out_label = format!("[clip_blur{suffix}_out]");
+        let radius_expr = clip_blur_radius_expr(animation, "T");
+        filter.push_str(&format!(
+            "{input_label}split=2{video_label}{radius_src_label};\
+             {radius_src_label}format=gray,geq=lum='{radius_expr}'{radius_label};\
+             {video_label}{radius_label}varblur=min_r=0:max_r=100:planes=15{out_label};",
+        ));
+        return out_label;
+    }
+    if let Some(blur) = static_blur
+        && let Some(chain) = blur_filter_chain(blur)
+    {
+        if !filter.is_empty() && !filter.ends_with(';') {
+            filter.push(';');
+        }
+        let out_label = format!("[blv{suffix}]");
+        filter.push_str(&format!("{input_label}{chain}{out_label};"));
+        return out_label;
+    }
+    input_label.to_string()
+}
+
+fn clip_blur_radius_expr(animation: &RenderParameterAnimation, time_var: &str) -> String {
+    let blur_px = keyframes_to_ffmpeg_expr_with_extrapolation(
+        &animation.keyframes,
+        time_var,
+        animation.pre_extrapolation,
+        animation.post_extrapolation,
+    );
+    format!("min(max(({blur_px}),0),100)")
+}
+
 fn fmt_filter_num(value: f64) -> String {
     let mut s = format!("{value:.6}");
     while s.contains('.') && s.ends_with('0') {
@@ -2953,6 +5341,276 @@ fn reframe_filter_chain(plan: &ReframePlan) -> Option<String> {
         x = fmt_filter_num(x),
         y = fmt_filter_num(y),
     ))
+}
+
+fn segment_reframe_filter_chain(seg: &TimelineSegment) -> Option<String> {
+    seg.reframe_path
+        .as_ref()
+        .and_then(reframe_path_filter_chain)
+        .or_else(|| seg.reframe.as_ref().and_then(reframe_filter_chain))
+}
+
+fn reframe_path_filter_chain(plan: &ReframePathPlan) -> Option<String> {
+    let first = plan.keyframes.first()?;
+    let zoom = first.scale.clamp(1.0, 8.0);
+    if !zoom.is_finite() || zoom <= 1.0 {
+        return None;
+    }
+    let x_expr = reframe_path_axis_expr(plan, |keyframe| keyframe.center_x);
+    let y_expr = reframe_path_axis_expr(plan, |keyframe| keyframe.center_y);
+    Some(format!(
+        "scale=ceil(iw*{zoom}/2)*2:ceil(ih*{zoom}/2)*2:eval=frame,\
+         crop=iw/{zoom}:ih/{zoom}:x=(in_w-out_w)*({x_expr}):y=(in_h-out_h)*({y_expr})",
+        zoom = fmt_filter_num(zoom),
+    ))
+}
+
+fn reframe_path_axis_expr(
+    plan: &ReframePathPlan,
+    value: fn(&ReframePathKeyframePlan) -> f64,
+) -> String {
+    let keyframes = plan
+        .keyframes
+        .iter()
+        .map(|keyframe| {
+            awidat_proto::professional::Keyframe::linear(
+                keyframe.time_s,
+                value(keyframe).clamp(0.0, 1.0),
+            )
+        })
+        .collect::<Vec<_>>();
+    keyframes_to_ffmpeg_expr_with_extrapolation(
+        &keyframes,
+        "t",
+        awidat_proto::professional::ExtrapolationMode::Hold,
+        awidat_proto::professional::ExtrapolationMode::Hold,
+    )
+}
+
+fn warp_filter_chain(
+    plan: &WarpPlan,
+    animation: Option<&WarpAnimationPlan>,
+    segment_index: usize,
+) -> Option<String> {
+    if !plan.k1.is_finite()
+        || !plan.k2.is_finite()
+        || !plan.center_x.is_finite()
+        || !plan.center_y.is_finite()
+    {
+        return None;
+    }
+    let k1 = initial_animation_value(animation.and_then(|plan| plan.k1.as_ref()))
+        .unwrap_or(plan.k1)
+        .clamp(-1.0, 1.0);
+    let k2 = initial_animation_value(animation.and_then(|plan| plan.k2.as_ref()))
+        .unwrap_or(plan.k2)
+        .clamp(-1.0, 1.0);
+    let center_x = initial_animation_value(animation.and_then(|plan| plan.center_x.as_ref()))
+        .unwrap_or(plan.center_x)
+        .clamp(0.0, 1.0);
+    let center_y = initial_animation_value(animation.and_then(|plan| plan.center_y.as_ref()))
+        .unwrap_or(plan.center_y)
+        .clamp(0.0, 1.0);
+    if k1.abs() <= 1e-9 && k2.abs() <= 1e-9 {
+        return None;
+    }
+    if let Some(animation) = animation {
+        let filter_id = format!("warp{segment_index}");
+        let commands = warp_sendcmd_commands(animation, &filter_id)?;
+        let lens = format!(
+            "lenscorrection@{filter_id}=cx={}:cy={}:k1={}:k2={}:i=bilinear",
+            fmt_filter_num(center_x),
+            fmt_filter_num(center_y),
+            fmt_filter_num(k1),
+            fmt_filter_num(k2),
+        );
+        return Some(format!("sendcmd=c='{commands}',{lens}"));
+    }
+    Some(format!(
+        "lenscorrection=cx={}:cy={}:k1={}:k2={}:i=bilinear",
+        fmt_filter_num(center_x),
+        fmt_filter_num(center_y),
+        fmt_filter_num(k1),
+        fmt_filter_num(k2),
+    ))
+}
+
+fn warp_sendcmd_commands(animation: &WarpAnimationPlan, filter_id: &str) -> Option<String> {
+    let mut commands = Vec::new();
+    append_warp_parameter_commands(
+        &mut commands,
+        filter_id,
+        "k1",
+        animation.k1.as_ref(),
+        -1.0,
+        1.0,
+    );
+    append_warp_parameter_commands(
+        &mut commands,
+        filter_id,
+        "k2",
+        animation.k2.as_ref(),
+        -1.0,
+        1.0,
+    );
+    append_warp_parameter_commands(
+        &mut commands,
+        filter_id,
+        "cx",
+        animation.center_x.as_ref(),
+        0.0,
+        1.0,
+    );
+    append_warp_parameter_commands(
+        &mut commands,
+        filter_id,
+        "cy",
+        animation.center_y.as_ref(),
+        0.0,
+        1.0,
+    );
+    (!commands.is_empty()).then(|| commands.join(";"))
+}
+
+fn append_warp_parameter_commands(
+    commands: &mut Vec<String>,
+    filter_id: &str,
+    command: &str,
+    animation: Option<&RenderParameterAnimation>,
+    min: f64,
+    max: f64,
+) {
+    let Some(animation) = animation else {
+        return;
+    };
+    commands.extend(
+        warp_parameter_command_samples(animation)
+            .into_iter()
+            .filter_map(|time_s| {
+                let value = evaluate_keyframes_with_modes(
+                    &animation.keyframes,
+                    time_s,
+                    animation.pre_extrapolation,
+                    animation.post_extrapolation,
+                )?;
+                value.is_finite().then(|| {
+                    format!(
+                        "{} {filter_id} {command} {}",
+                        fmt_filter_num(time_s.max(0.0)),
+                        fmt_filter_num(value.clamp(min, max))
+                    )
+                })
+            }),
+    );
+}
+
+fn warp_parameter_command_samples(animation: &RenderParameterAnimation) -> Vec<f64> {
+    const SAMPLES_PER_SECOND: f64 = 16.0;
+    const MAX_SAMPLES_PER_SEGMENT: usize = 64;
+    let mut samples = Vec::new();
+    for pair in animation.keyframes.windows(2) {
+        let start = pair[0].time_s;
+        let end = pair[1].time_s;
+        if !start.is_finite() || !end.is_finite() {
+            continue;
+        }
+        samples.push(start.max(0.0));
+        if end <= start {
+            continue;
+        }
+        let steps = ((end - start) * SAMPLES_PER_SECOND).ceil() as usize;
+        let steps = steps.clamp(1, MAX_SAMPLES_PER_SEGMENT);
+        for index in 1..steps {
+            let time_s = start + (end - start) * index as f64 / steps as f64;
+            if time_s > start && time_s < end {
+                samples.push(time_s.max(0.0));
+            }
+        }
+    }
+    if let Some(last) = animation
+        .keyframes
+        .last()
+        .filter(|keyframe| keyframe.time_s.is_finite())
+    {
+        samples.push(last.time_s.max(0.0));
+    }
+    samples.sort_by(f64::total_cmp);
+    samples.dedup_by(|a, b| (*a - *b).abs() <= 1e-6);
+    samples
+}
+
+fn initial_animation_value(animation: Option<&RenderParameterAnimation>) -> Option<f64> {
+    animation?
+        .keyframes
+        .iter()
+        .find(|keyframe| keyframe.value.is_finite())
+        .map(|keyframe| keyframe.value)
+}
+
+fn animated_shake_filter_chain(
+    plan: &ShakePlan,
+    intensity_animation: Option<&RenderParameterAnimation>,
+    frequency_animation: Option<&RenderParameterAnimation>,
+) -> Option<String> {
+    if !plan.intensity_px.is_finite()
+        || !plan.frequency_hz.is_finite()
+        || plan.intensity_px <= 0.0
+        || plan.frequency_hz <= 0.0
+    {
+        return None;
+    }
+    let intensity = max_animation_value(intensity_animation).unwrap_or(plan.intensity_px);
+    let intensity = intensity.clamp(0.0, 200.0);
+    let pad = intensity.ceil() as u32;
+    if pad == 0 {
+        return None;
+    }
+    let intensity_expr = intensity_animation
+        .map(|animation| {
+            format!(
+                "min(max(({}),0),200)",
+                keyframes_to_ffmpeg_expr_with_extrapolation(
+                    &animation.keyframes,
+                    "t",
+                    animation.pre_extrapolation,
+                    animation.post_extrapolation,
+                )
+            )
+        })
+        .unwrap_or_else(|| fmt_filter_num(plan.intensity_px.clamp(0.0, 200.0)));
+    let frequency_expr = frequency_animation
+        .map(|animation| {
+            format!(
+                "min(max(({}),0.1),60)",
+                keyframes_to_ffmpeg_expr_with_extrapolation(
+                    &animation.keyframes,
+                    "t",
+                    animation.pre_extrapolation,
+                    animation.post_extrapolation,
+                )
+            )
+        })
+        .unwrap_or_else(|| fmt_filter_num(plan.frequency_hz.clamp(0.1, 60.0)));
+    let y_frequency_expr = if frequency_animation.is_some() {
+        format!("({frequency_expr})*0.73")
+    } else {
+        fmt_filter_num(plan.frequency_hz.clamp(0.1, 60.0) * 0.73)
+    };
+    let x_expr = format!("{intensity_expr}*sin(2*PI*{frequency_expr}*t)");
+    let y_expr = format!("{intensity_expr}*cos(2*PI*{y_frequency_expr}*t)");
+    let crop_margin = pad * 2;
+    Some(format!(
+        "pad=iw+{crop_margin}:ih+{crop_margin}:{pad}:{pad},\
+         crop=w=iw-{crop_margin}:h=ih-{crop_margin}:x={pad}+{x_expr}:y={pad}+{y_expr}",
+    ))
+}
+
+fn max_animation_value(animation: Option<&RenderParameterAnimation>) -> Option<f64> {
+    animation?
+        .keyframes
+        .iter()
+        .filter_map(|keyframe| keyframe.value.is_finite().then_some(keyframe.value))
+        .max_by(f64::total_cmp)
 }
 
 fn filter_escape_single_quoted(s: &str) -> String {
@@ -3199,6 +5857,35 @@ fn color_pipeline_filter_block(
     segments.join(";")
 }
 
+fn masked_color_pipeline_filter_block(
+    in_label: &str,
+    out_label: &str,
+    suffix: &str,
+    plan: &ColorPipelinePlan,
+    mask_input_index: usize,
+) -> Option<String> {
+    let look_lut = plan.look_lut.as_ref()?;
+    if !is_renderable_masked_color_pipeline(plan) {
+        return None;
+    }
+    let orig = format!("[cp_mask_orig_{suffix}]");
+    let to_lut = format!("[cp_mask_lut_in_{suffix}]");
+    let lutted = format!("[cp_mask_lutted_{suffix}]");
+    let mask_loop = format!("[cp_mask_loop_{suffix}]");
+    let mask_scaled = format!("[cp_mask_scaled_{suffix}]");
+    let lut_ref = format!("[cp_mask_lut_ref_{suffix}]");
+    let lut_alpha = format!("[cp_mask_alpha_{suffix}]");
+    Some(format!(
+        "{in_label}split{orig}{to_lut};\
+         {to_lut}{}{lutted};\
+         [{mask_input_index}:v:0]format=gray,loop=-1:1{mask_loop};\
+         {mask_loop}{lutted}scale2ref=w=main_w:h=main_h{mask_scaled}{lut_ref};\
+         {lut_ref}{mask_scaled}alphamerge{lut_alpha};\
+         {orig}{lut_alpha}overlay=format=auto{out_label}",
+        lut3d_filter(look_lut, plan.look_interpolation.as_deref()),
+    ))
+}
+
 /// Build the filter-graph chain segment that applies a LUT to a labeled
 /// video stream, including the multi-filter `split → lut3d → blend`
 /// block when strength is below 1.0. Returns the full string starting
@@ -3271,22 +5958,31 @@ fn format_drawtext_filter(
     t: &TitlePlan,
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
 ) -> String {
-    let escaped_text = drawtext_escape(&t.text);
+    if !t.rich_segments.is_empty() && t.reveal == TextReveal::None {
+        return format_rich_drawtext_filters(t, broadcast_overlay);
+    }
+    if t.reveal != TextReveal::None {
+        return format_revealed_drawtext_filters(t, broadcast_overlay);
+    }
+    format_drawtext_filter_with_text(t, &t.text, t.start_s, t.end_s, broadcast_overlay)
+}
+
+fn format_drawtext_filter_with_text(
+    t: &TitlePlan,
+    text: &str,
+    start_s: f64,
+    end_s: f64,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let wrapped_text = auto_wrap_title_text(text, t.font_size);
+    let escaped_text = drawtext_escape(&wrapped_text);
     let resting_y = match t.position {
         TitlePosition::Top => "h*0.05".to_string(),
         TitlePosition::Center => "(h-text_h)/2".to_string(),
         TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
     };
     let resting_x = "(w-text_w)/2".to_string();
-    let weight_attr = match t.font_weight {
-        TitleWeight::Normal => "",
-        // ffmpeg drawtext doesn't have a `font_weight=` flag — bold
-        // is communicated via the fontfile itself. Without a custom
-        // bold font bundle, we approximate bold by stroking the
-        // text with the same color (`borderw` adds a thicker outline,
-        // which visually thickens the strokes).
-        TitleWeight::Bold => ":borderw=2",
-    };
+    let weight_attr = title_weight_drawtext_attr(t.font_weight);
     let fontfile = pick_fontfile_attr();
     let anim = apply_title_animation(t, &resting_x, &resting_y);
     let alpha = if has_title_animation(t, "title.opacity") {
@@ -3297,7 +5993,13 @@ fn format_drawtext_filter(
     } else {
         anim.alpha
     };
-    let x = if has_title_animation(t, "title.x") {
+    let x = if has_title_animation(t, "title.position") {
+        format!(
+            "({})+w*({})",
+            anim.x,
+            title_motion_path_expr(t, MotionPathCoordinate::X).unwrap_or_else(|| "0".to_string())
+        )
+    } else if has_title_animation(t, "title.x") {
         format!(
             "({})+w*({})",
             anim.x,
@@ -3306,7 +6008,13 @@ fn format_drawtext_filter(
     } else {
         anim.x
     };
-    let y = if has_title_animation(t, "title.y") {
+    let y = if has_title_animation(t, "title.position") {
+        format!(
+            "({})+h*({})",
+            anim.y,
+            title_motion_path_expr(t, MotionPathCoordinate::Y).unwrap_or_else(|| "0".to_string())
+        )
+    } else if has_title_animation(t, "title.y") {
         format!(
             "({})+h*({})",
             anim.y,
@@ -3331,9 +6039,331 @@ fn format_drawtext_filter(
         x = x,
         y = y,
         alpha = alpha,
+        start = start_s,
+        end = end_s,
+    )
+}
+
+fn title_weight_drawtext_attr(font_weight: TitleWeight) -> &'static str {
+    match font_weight {
+        TitleWeight::Normal => "",
+        // ffmpeg drawtext doesn't have a `font_weight=` flag. Without a
+        // custom bold font bundle, approximate bold by stroking the text.
+        TitleWeight::Bold => ":borderw=2",
+    }
+}
+
+fn format_rich_drawtext_filters(
+    title: &TitlePlan,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let full_text = title
+        .rich_segments
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect::<String>();
+    if full_text.is_empty() {
+        return String::new();
+    }
+    let total_width = approximate_text_width_px(&full_text, title.font_size);
+    let mut offset = 0.0_f64;
+    title
+        .rich_segments
+        .iter()
+        .filter(|segment| !segment.text.is_empty())
+        .map(|segment| {
+            let run_width = approximate_text_width_px(&segment.text, title.font_size);
+            let filter =
+                format_rich_drawtext_run(title, segment, total_width, offset, broadcast_overlay);
+            offset += run_width;
+            filter
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn format_rich_drawtext_run(
+    title: &TitlePlan,
+    segment: &RichTextSegment,
+    total_width_px: f64,
+    offset_px: f64,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let mut run = title.clone();
+    run.text = segment.text.clone();
+    run.color = segment.color.clone().unwrap_or_else(|| title.color.clone());
+    run.font_weight = segment.font_weight.unwrap_or(title.font_weight);
+    run.rich_segments.clear();
+    let base_x = format!(
+        "(w-{total})/2+{offset}",
+        total = fmt_px(total_width_px),
+        offset = fmt_px(offset_px)
+    );
+    format_drawtext_filter_with_position(&run, &segment.text, &base_x, broadcast_overlay)
+}
+
+fn format_drawtext_filter_with_position(
+    t: &TitlePlan,
+    text: &str,
+    resting_x: &str,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let wrapped_text = auto_wrap_title_text(text, t.font_size);
+    let escaped_text = drawtext_escape(&wrapped_text);
+    let resting_y = match t.position {
+        TitlePosition::Top => "h*0.05".to_string(),
+        TitlePosition::Center => "(h-text_h)/2".to_string(),
+        TitlePosition::Bottom => title_bottom_y(t, broadcast_overlay),
+    };
+    let weight_attr = title_weight_drawtext_attr(t.font_weight);
+    let fontfile = pick_fontfile_attr();
+    let anim = apply_title_animation(t, resting_x, &resting_y);
+    let alpha = if has_title_animation(t, "title.opacity") {
+        format!(
+            ":alpha='{}'",
+            title_animation_value_expr(t, "title.opacity", "1")
+        )
+    } else {
+        anim.alpha
+    };
+    format!(
+        "drawtext=text='{text}'{font}:fontsize={size}:fontcolor={color}{weight}\
+         :x={x}:y={y}{alpha}:enable='between(t\\,{start}\\,{end})'",
+        text = escaped_text,
+        font = fontfile,
+        size = t.font_size,
+        color = t.color,
+        weight = weight_attr,
+        x = anim.x,
+        y = anim.y,
+        alpha = alpha,
         start = t.start_s,
         end = t.end_s,
     )
+}
+
+fn approximate_text_width_px(text: &str, font_size: u32) -> f64 {
+    text.graphemes(true).map(glyph_width_factor).sum::<f64>() * font_size as f64
+}
+
+fn auto_wrap_title_text(text: &str, font_size: u32) -> String {
+    if text.contains('\n') {
+        return text.to_string();
+    }
+    let max_chars = title_wrap_max_chars(font_size);
+    if grapheme_count(text) <= max_chars {
+        return text.to_string();
+    }
+    wrap_text_by_words(text, max_chars)
+}
+
+fn title_wrap_max_chars(font_size: u32) -> usize {
+    const TITLE_SAFE_WIDTH_PX: f64 = 1500.0;
+    let average_glyph_width = (font_size.max(1) as f64 * 0.55).max(1.0);
+    (TITLE_SAFE_WIDTH_PX / average_glyph_width).floor().max(8.0) as usize
+}
+
+fn wrap_text_by_words(text: &str, max_chars: usize) -> String {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut pending_space = false;
+    for token in text.split_word_bounds() {
+        if token.chars().all(char::is_whitespace) {
+            pending_space |= !current.is_empty();
+            continue;
+        }
+        append_wrapped_token(&mut lines, &mut current, token, pending_space, max_chars);
+        pending_space = false;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        text.to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn append_wrapped_token(
+    lines: &mut Vec<String>,
+    current: &mut String,
+    token: &str,
+    pending_space: bool,
+    max_chars: usize,
+) {
+    let token_len = grapheme_count(token);
+    if token_len > max_chars {
+        if !current.is_empty() {
+            lines.push(std::mem::take(current));
+        }
+        push_grapheme_chunks(lines, current, token, max_chars);
+        return;
+    }
+
+    let space_len = usize::from(pending_space && !current.is_empty());
+    let next_len = grapheme_count(current) + space_len + token_len;
+    if current.is_empty() || next_len <= max_chars {
+        if space_len == 1 {
+            current.push(' ');
+        }
+        current.push_str(token);
+    } else {
+        lines.push(std::mem::take(current));
+        current.push_str(token);
+    }
+}
+
+fn push_grapheme_chunks(
+    lines: &mut Vec<String>,
+    current: &mut String,
+    token: &str,
+    max_chars: usize,
+) {
+    for grapheme in token.graphemes(true) {
+        if grapheme_count(current) >= max_chars {
+            lines.push(std::mem::take(current));
+        }
+        current.push_str(grapheme);
+    }
+}
+
+fn grapheme_count(text: &str) -> usize {
+    text.graphemes(true).count()
+}
+
+fn glyph_width_factor(grapheme: &str) -> f64 {
+    let Some(ch) = grapheme.chars().next() else {
+        return 0.0;
+    };
+    if is_ascii_narrow(ch) {
+        0.28
+    } else if is_ascii_wide(ch) {
+        0.78
+    } else if ch.is_ascii_whitespace() {
+        0.33
+    } else if ch.is_ascii_punctuation() {
+        0.35
+    } else if ch.is_ascii_alphanumeric() {
+        0.55
+    } else if is_cjk(ch) || grapheme.chars().count() > 1 {
+        1.0
+    } else {
+        0.65
+    }
+}
+
+fn is_ascii_narrow(ch: char) -> bool {
+    matches!(ch, 'i' | 'j' | 'l' | 'I' | '!' | '|' | '\'' | '`')
+}
+
+fn is_ascii_wide(ch: char) -> bool {
+    matches!(ch, 'm' | 'w' | 'M' | 'W' | '@' | '#' | '%' | '&')
+}
+
+fn is_cjk(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x3040..=0x30FF
+            | 0xAC00..=0xD7AF
+    )
+}
+
+fn title_motion_path_expr(title: &TitlePlan, coordinate: MotionPathCoordinate) -> Option<String> {
+    title
+        .animations
+        .iter()
+        .find(|animation| animation.parameter == "title.position")
+        .and_then(|animation| {
+            let path = animation.motion_path.as_ref()?;
+            let local_time_var = format!("(t-{})", title.start_s);
+            Some(motion_path_to_ffmpeg_expr_with_keyframes(
+                path,
+                &animation.keyframes,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+                coordinate,
+                &local_time_var,
+            ))
+        })
+}
+
+fn format_revealed_drawtext_filters(
+    t: &TitlePlan,
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+) -> String {
+    let steps = reveal_steps(&t.text, t.reveal);
+    if steps.is_empty() {
+        return String::new();
+    }
+    let duration = (t.end_s - t.start_s).max(0.0);
+    let step_duration = duration / steps.len() as f64;
+    steps
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let start_s = t.start_s + step_duration * index as f64;
+            let end_s = if index + 1 == steps.len() {
+                t.end_s
+            } else {
+                t.start_s + step_duration * (index + 1) as f64
+            };
+            format_drawtext_filter_with_text(t, text, start_s, end_s, broadcast_overlay)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn reveal_steps(text: &str, reveal: TextReveal) -> Vec<String> {
+    match reveal {
+        TextReveal::None => vec![text.to_string()],
+        TextReveal::Typewriter => UnicodeSegmentation::grapheme_indices(text, true)
+            .map(|(index, grapheme)| {
+                let end = index + grapheme.len();
+                text[..end].to_string()
+            })
+            .collect(),
+        TextReveal::Word => {
+            let mut steps = Vec::new();
+            let mut end = 0;
+            let mut saw_word = false;
+            for grapheme in UnicodeSegmentation::graphemes(text, true) {
+                end += grapheme.len();
+                if grapheme.chars().all(char::is_whitespace) {
+                    saw_word = false;
+                    continue;
+                }
+                saw_word = true;
+                let next_is_boundary = text[end..]
+                    .chars()
+                    .next()
+                    .map(char::is_whitespace)
+                    .unwrap_or(true);
+                if next_is_boundary {
+                    steps.push(text[..end].to_string());
+                }
+            }
+            if steps.is_empty() && saw_word {
+                steps.push(text.to_string());
+            }
+            steps
+        }
+        TextReveal::Line => {
+            let mut steps = Vec::new();
+            let mut end = 0;
+            for line in text.split_inclusive('\n') {
+                end += line.len();
+                steps.push(text[..end].to_string());
+            }
+            if steps.is_empty() && !text.is_empty() {
+                steps.push(text.to_string());
+            }
+            steps
+        }
+    }
 }
 
 fn has_title_animation(title: &TitlePlan, parameter: &str) -> bool {
@@ -3350,7 +6380,12 @@ fn title_animation_value_expr(title: &TitlePlan, parameter: &str, fallback: &str
         .find(|animation| animation.parameter == parameter)
         .map(|animation| {
             let local_time_var = format!("(t-{})", title.start_s);
-            keyframes_to_ffmpeg_expr(&animation.keyframes, &local_time_var)
+            keyframes_to_ffmpeg_expr_with_extrapolation(
+                &animation.keyframes,
+                &local_time_var,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+            )
         })
         .unwrap_or_else(|| fallback.to_string())
 }
@@ -4380,6 +7415,7 @@ fn drawtext_escape(s: &str) -> String {
             '\'' => "\\'".to_string(),
             ':' => "\\:".to_string(),
             ',' => "\\,".to_string(),
+            '\n' => "\\n".to_string(),
             other => other.to_string(),
         })
         .collect()
@@ -4452,11 +7488,14 @@ fn pick_sponsor_fontfile_attr() -> String {
 }
 
 /// Effective on-timeline duration of a segment, accounting for any
-/// awidat.speed effect: `duration_s / factor` when factor is set,
-/// raw `duration_s` otherwise. A 4s clip at 2× plays in 2s; at 0.5×
-/// it plays in 8s.
+/// `awidat.time_remap` curve or `awidat.speed` factor. A 4s clip at
+/// 2× plays in 2s; at 0.5× it plays in 8s.
 fn effective_duration(seg: &TimelineSegment) -> f64 {
-    seg.duration_s / segment_speed(seg)
+    if let Some(time_remap) = seg.time_remap.as_ref() {
+        time_remap.timeline_time_at_source(seg.duration_s)
+    } else {
+        seg.duration_s / segment_speed(seg)
+    }
 }
 
 fn visible_effective_duration(seg: &TimelineSegment) -> f64 {
@@ -4464,10 +7503,43 @@ fn visible_effective_duration(seg: &TimelineSegment) -> f64 {
 }
 
 fn segment_speed(seg: &TimelineSegment) -> f64 {
+    if let Some(time_remap) = seg.time_remap.as_ref() {
+        let timeline_duration = time_remap.timeline_time_at_source(seg.duration_s);
+        if timeline_duration > 0.0 {
+            return seg.duration_s / timeline_duration;
+        }
+    }
     match seg.speed {
         Some(f) if f > 0.0 => f,
         _ => 1.0,
     }
+}
+
+fn time_remap_setpts_expr(plan: &TimeRemapPlan) -> String {
+    let time_var = "(PTS-STARTPTS)*TB";
+    let last = plan.points.len() - 1;
+    let mut expr = time_remap_segment_expr(plan.points[last - 1], plan.points[last], time_var);
+    for idx in (0..(last - 1)).rev() {
+        let segment_expr =
+            time_remap_segment_expr(plan.points[idx], plan.points[idx + 1], time_var);
+        expr = format!(
+            "if(lte({time_var}\\,{end})\\,{segment_expr}\\,{expr})",
+            end = fmt_filter_num(plan.points[idx + 1].source_time_s),
+        );
+    }
+    expr
+}
+
+fn time_remap_segment_expr(start: TimeRemapPoint, end: TimeRemapPoint, time_var: &str) -> String {
+    let source_span = end.source_time_s - start.source_time_s;
+    let timeline_span = end.timeline_time_s - start.timeline_time_s;
+    let slope = timeline_span / source_span;
+    format!(
+        "{}+({time_var}-{})*{}",
+        fmt_filter_num(start.timeline_time_s),
+        fmt_filter_num(start.source_time_s),
+        fmt_filter_num(slope)
+    )
 }
 
 /// Decompose a speed factor into a chain of `atempo=` calls, each
@@ -4568,8 +7640,40 @@ pub fn build_timeline_argv_full(
     loudness_target: Option<LoudnessTargetPlan>,
     output_path: &Path,
 ) -> Vec<String> {
+    build_timeline_argv_full_with_annotations(
+        segs,
+        transitions,
+        video_overlays,
+        &[],
+        titles,
+        broadcast_overlay,
+        browser_broadcast_overlay,
+        loudness_target,
+        output_path,
+    )
+}
+
+/// Build FFmpeg arguments with media overlays, annotation overlays, titles,
+/// broadcast overlay, and optional final loudness processing.
+#[allow(clippy::too_many_arguments)]
+pub fn build_timeline_argv_full_with_annotations(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    video_overlays: &[VideoOverlayPlan],
+    annotations: &[AnnotationPlan],
+    titles: &[TitlePlan],
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    browser_broadcast_overlay: Option<&Path>,
+    loudness_target: Option<LoudnessTargetPlan>,
+    output_path: &Path,
+) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
-    for s in segs {
+    let first_matte_input =
+        segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
+    let video_overlays = assign_overlay_matte_input_indices(video_overlays, first_matte_input);
+    let first_mask_input = first_matte_input + renderable_overlay_matte_count(&video_overlays);
+    let segs = assign_mask_input_indices(segs, first_mask_input);
+    for s in &segs {
         argv.extend([
             "-ss".into(),
             format!("{}", s.start_s),
@@ -4579,21 +7683,25 @@ pub fn build_timeline_argv_full(
             s.asset_path.to_string_lossy().into_owned(),
         ]);
     }
-    for overlay in video_overlays {
-        argv.extend([
-            "-ss".into(),
-            format!("{}", overlay.segment.start_s),
-            "-t".into(),
-            format!("{}", overlay.segment.duration_s),
-            "-i".into(),
-            overlay.segment.asset_path.to_string_lossy().into_owned(),
-        ]);
+    for overlay in &video_overlays {
+        append_video_overlay_input_args(&mut argv, &overlay.segment);
     }
     if let Some(path) = browser_broadcast_overlay {
         argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
     }
-    let base = FilterPlanner::new(segs, transitions).plan();
-    let media = append_video_overlays(base, video_overlays, segs.len());
+    for overlay in &video_overlays {
+        if let Some(matte_source) = overlay.matte_source.as_ref() {
+            argv.extend(["-i".into(), matte_source.to_string_lossy().into_owned()]);
+        }
+    }
+    for segment in &segs {
+        if let Some(mask_source) = renderable_mask_source(segment) {
+            argv.extend(["-i".into(), mask_source.to_string_lossy().into_owned()]);
+        }
+    }
+    let base = FilterPlanner::new(&segs, transitions).plan();
+    let media = append_video_overlays(base, &video_overlays, segs.len());
+    let annotated = append_annotations(media, annotations);
     let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
         &[]
     } else {
@@ -4609,7 +7717,7 @@ pub fn build_timeline_argv_full(
         titles,
         ffmpeg_broadcast_overlay,
     )
-    .decorate_video_filter(media.filter_complex, media.video_out_label);
+    .decorate_video_filter(annotated.filter_complex, annotated.video_out_label);
     let mut filter_complex = plan.filter_complex;
     let video_out_label = if browser_broadcast_overlay.is_some() {
         let overlay_input = segs.len() + video_overlays.len();
@@ -4625,7 +7733,7 @@ pub fn build_timeline_argv_full(
     };
     let audio_out_label = append_timeline_loudness_filter(
         &mut filter_complex,
-        media.audio_out_label,
+        annotated.audio_out_label,
         loudness_target,
     );
     argv.extend([
@@ -4644,7 +7752,7 @@ pub fn build_timeline_argv_full(
         "-pix_fmt".into(),
         "yuv420p".into(),
     ]);
-    argv.extend(output_color_tag_argv(segs));
+    argv.extend(output_color_tag_argv(&segs));
     argv.extend([
         "-c:a".into(),
         "aac".into(),
@@ -4653,6 +7761,40 @@ pub fn build_timeline_argv_full(
         output_path.to_string_lossy().into_owned(),
     ]);
     argv
+}
+
+fn append_video_overlay_input_args(argv: &mut Vec<String>, segment: &TimelineSegment) {
+    if still_graphic_asset(&segment.asset_path) {
+        argv.extend([
+            "-loop".into(),
+            "1".into(),
+            "-t".into(),
+            format!("{}", segment.duration_s),
+            "-i".into(),
+            segment.asset_path.to_string_lossy().into_owned(),
+        ]);
+    } else {
+        argv.extend([
+            "-ss".into(),
+            format!("{}", segment.start_s),
+            "-t".into(),
+            format!("{}", segment.duration_s),
+            "-i".into(),
+            segment.asset_path.to_string_lossy().into_owned(),
+        ]);
+    }
+}
+
+fn still_graphic_asset(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "svg" | "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "bmp"
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// Build an ffmpeg argv for explicit audio-track mixing plus video timeline rendering.
@@ -4671,8 +7813,42 @@ pub fn build_timeline_argv_with_audio_tracks(
     audio_tracks: &[AudioTrackPlan],
     output_path: &Path,
 ) -> Vec<String> {
+    build_timeline_argv_with_audio_tracks_and_annotations(
+        segs,
+        transitions,
+        video_overlays,
+        &[],
+        titles,
+        broadcast_overlay,
+        browser_broadcast_overlay,
+        loudness_target,
+        audio_tracks,
+        output_path,
+    )
+}
+
+/// Build FFmpeg arguments for explicit audio-track timelines with media
+/// overlays, annotation overlays, titles, and optional loudness processing.
+#[allow(clippy::too_many_arguments)]
+pub fn build_timeline_argv_with_audio_tracks_and_annotations(
+    segs: &[TimelineSegment],
+    transitions: &[TransitionPlan],
+    video_overlays: &[VideoOverlayPlan],
+    annotations: &[AnnotationPlan],
+    titles: &[TitlePlan],
+    broadcast_overlay: Option<&BroadcastOverlayPlan>,
+    browser_broadcast_overlay: Option<&Path>,
+    loudness_target: Option<LoudnessTargetPlan>,
+    audio_tracks: &[AudioTrackPlan],
+    output_path: &Path,
+) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
-    for s in segs {
+    let first_matte_input =
+        segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
+    let video_overlays = assign_overlay_matte_input_indices(video_overlays, first_matte_input);
+    let first_mask_input = first_matte_input + renderable_overlay_matte_count(&video_overlays);
+    let segs = assign_mask_input_indices(segs, first_mask_input);
+    for s in &segs {
         argv.extend([
             "-ss".into(),
             format!("{}", s.start_s),
@@ -4682,18 +7858,21 @@ pub fn build_timeline_argv_with_audio_tracks(
             s.asset_path.to_string_lossy().into_owned(),
         ]);
     }
-    for overlay in video_overlays {
-        argv.extend([
-            "-ss".into(),
-            format!("{}", overlay.segment.start_s),
-            "-t".into(),
-            format!("{}", overlay.segment.duration_s),
-            "-i".into(),
-            overlay.segment.asset_path.to_string_lossy().into_owned(),
-        ]);
+    for overlay in &video_overlays {
+        append_video_overlay_input_args(&mut argv, &overlay.segment);
     }
     if let Some(path) = browser_broadcast_overlay {
         argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
+    }
+    for overlay in &video_overlays {
+        if let Some(matte_source) = overlay.matte_source.as_ref() {
+            argv.extend(["-i".into(), matte_source.to_string_lossy().into_owned()]);
+        }
+    }
+    for segment in &segs {
+        if let Some(mask_source) = renderable_mask_source(segment) {
+            argv.extend(["-i".into(), mask_source.to_string_lossy().into_owned()]);
+        }
     }
     for track in audio_tracks {
         for item in &track.items {
@@ -4715,7 +7894,7 @@ pub fn build_timeline_argv_with_audio_tracks(
         .iter()
         .map(audio_track_duration)
         .fold(0.1_f64, f64::max);
-    let mut filter = plan_video_only_filter(segs, transitions, fallback_video_duration);
+    let mut filter = plan_video_only_filter(&segs, transitions, fallback_video_duration);
     let base_video_label = "[vonly]";
     let media = append_video_overlays(
         FilterPlan {
@@ -4723,11 +7902,12 @@ pub fn build_timeline_argv_with_audio_tracks(
             video_out_label: base_video_label.to_string(),
             audio_out_label: String::new(),
         },
-        video_overlays,
+        &video_overlays,
         segs.len(),
     );
-    filter = media.filter_complex;
-    let mut video_label = media.video_out_label;
+    let annotated = append_annotations(media, annotations);
+    filter = annotated.filter_complex;
+    let mut video_label = annotated.video_out_label;
     let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
         &[]
     } else {
@@ -4759,8 +7939,11 @@ pub fn build_timeline_argv_with_audio_tracks(
         video_label = out;
     }
 
-    let mut next_input =
-        segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
+    let mut next_input = segs.len()
+        + video_overlays.len()
+        + usize::from(browser_broadcast_overlay.is_some())
+        + renderable_overlay_matte_count(&video_overlays)
+        + renderable_mask_count(&segs);
     let audio_label = plan_audio_mix_filter(&mut filter, audio_tracks, &mut next_input);
     let audio_label = append_timeline_loudness_filter(&mut filter, audio_label, loudness_target);
     argv.extend([
@@ -4779,7 +7962,7 @@ pub fn build_timeline_argv_with_audio_tracks(
         "-pix_fmt".into(),
         "yuv420p".into(),
     ]);
-    argv.extend(output_color_tag_argv(segs));
+    argv.extend(output_color_tag_argv(&segs));
     argv.extend([
         "-c:a".into(),
         "aac".into(),
@@ -4881,15 +8064,34 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push_str(&format!("{video_label}{chain}{cv};"));
         video_label = cv;
     }
+    let blurred_label = append_clip_blur_filter(
+        filter,
+        &video_label,
+        &i.to_string(),
+        seg.blur,
+        seg.blur_radius_animation.as_ref(),
+    );
+    if blurred_label != video_label {
+        video_label = blurred_label;
+    }
     if let Some(plan) = seg.color_pipeline.as_ref() {
         if plan.has_any_lut() {
             let cv = format!("[cpv{i}]");
-            filter.push_str(&color_pipeline_filter_block(
-                &video_label,
-                &cv,
-                &i.to_string(),
-                plan,
-            ));
+            let block = if let Some(mask_input_index) = seg.mask_input_index {
+                masked_color_pipeline_filter_block(
+                    &video_label,
+                    &cv,
+                    &i.to_string(),
+                    plan,
+                    mask_input_index,
+                )
+                .unwrap_or_else(|| {
+                    color_pipeline_filter_block(&video_label, &cv, &i.to_string(), plan)
+                })
+            } else {
+                color_pipeline_filter_block(&video_label, &cv, &i.to_string(), plan)
+            };
+            filter.push_str(&block);
             filter.push(';');
             video_label = cv;
         }
@@ -4906,12 +8108,28 @@ fn stage_segment_video_input(filter: &mut String, i: usize, seg: &TimelineSegmen
         filter.push(';');
         video_label = lv;
     }
-    if let Some(reframe) = seg.reframe.as_ref()
-        && let Some(chain) = reframe_filter_chain(reframe)
-    {
+    if let Some(chain) = segment_reframe_filter_chain(seg) {
         let rv = format!("[rv{i}]");
         filter.push_str(&format!("{video_label}{chain}{rv};"));
         video_label = rv;
+    }
+    if let Some(warp) = seg.warp.as_ref()
+        && let Some(chain) = warp_filter_chain(warp, seg.warp_animation.as_ref(), i)
+    {
+        let wv = format!("[wv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{wv};"));
+        video_label = wv;
+    }
+    if let Some(shake) = seg.shake.as_ref()
+        && let Some(chain) = animated_shake_filter_chain(
+            shake,
+            seg.shake_intensity_animation.as_ref(),
+            seg.shake_frequency_animation.as_ref(),
+        )
+    {
+        let sv = format!("[shv{i}]");
+        filter.push_str(&format!("{video_label}{chain}{sv};"));
+        video_label = sv;
     }
     if let Some(factor) = seg.speed
         && (factor - 1.0).abs() > 1e-9
@@ -5135,6 +8353,7 @@ fn build_timeline_render_spec_inner(
         transitions,
         video_overlays,
         titles,
+        annotations,
         broadcast_overlay,
         audio_tracks,
         loudness_target,
@@ -5191,10 +8410,11 @@ fn build_timeline_render_spec_inner(
         None
     };
     let mut argv = if audio_tracks.is_empty() {
-        build_timeline_argv_full(
+        build_timeline_argv_full_with_annotations(
             &segs,
             &transitions,
             &video_overlays,
+            &annotations,
             &titles,
             broadcast_overlay.as_ref(),
             browser_broadcast_overlay.as_deref(),
@@ -5202,10 +8422,11 @@ fn build_timeline_render_spec_inner(
             &output_path,
         )
     } else {
-        build_timeline_argv_with_audio_tracks(
+        build_timeline_argv_with_audio_tracks_and_annotations(
             &segs,
             &transitions,
             &video_overlays,
+            &annotations,
             &titles,
             broadcast_overlay.as_ref(),
             browser_broadcast_overlay.as_deref(),
@@ -5342,6 +8563,11 @@ fn render_input_paths(
             .iter()
             .map(|overlay| overlay.segment.asset_path.clone()),
     );
+    paths.extend(
+        segs.iter()
+            .filter_map(renderable_mask_source)
+            .map(Path::to_path_buf),
+    );
     for track in audio_tracks {
         paths.extend(track.items.iter().filter_map(|item| match item {
             AudioTrackItemPlan::Clip(clip) => Some(clip.asset_path.clone()),
@@ -5411,11 +8637,15 @@ fn prepare_browser_broadcast_overlay_video(
 mod tests {
     use super::*;
     use awidat_proto::otio::{
-        Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild,
+        Clip, Effect, ExternalReference, MediaReference, RationalTime, Stack, StackChild,
         TimeRange as OtioRange, Timeline, Track, TrackChild, TrackKind,
     };
     use awidat_proto::professional::{
-        BezierHandles, Easing, Keyframe, KeyframeInterpolation, ParameterAnimation,
+        BezierHandles, CompositionGraph, CompositionNode, CompositionNodeType, Easing,
+        ExtrapolationMode, Keyframe, KeyframeInterpolation, MaskKeyframe, MaskOperation,
+        MaskSidecar, MatteSidecar, ParameterAnimation, ReframeKeyframe, ReframePath,
+        ReframeSmoothing, TrackKind as ProfessionalTrackKind, TrackSample, TrackSidecar,
+        TrackingPackage,
     };
     use std::fs;
 
@@ -5440,6 +8670,43 @@ mod tests {
         otio_path
     }
 
+    fn write_fixture_project_with_reframe_path(dir: &Path) -> PathBuf {
+        let otio_path = write_fixture_project(dir);
+        let mut tl = read_otio_timeline(&otio_path, &mut Vec::new()).expect("fixture should parse");
+        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        metadata.tracking_package = Some(TrackingPackage {
+            reframe_paths: vec![ReframePath {
+                id: "reframe-c1-9-16".into(),
+                clip_id: "c1".into(),
+                aspect_ratio: "9:16".into(),
+                source_width: 1920,
+                source_height: 1080,
+                target_width: 1080,
+                target_height: 1920,
+                keyframes: vec![
+                    ReframeKeyframe {
+                        time_s: 0.0,
+                        center: [0.30, 0.35],
+                        scale: 3.1604938271604937,
+                        confidence: Some(0.91),
+                    },
+                    ReframeKeyframe {
+                        time_s: 1.0,
+                        center: [0.60, 0.45],
+                        scale: 3.1604938271604937,
+                        confidence: Some(0.89),
+                    },
+                ],
+                smoothing: ReframeSmoothing::Moderate,
+                evidence_track_id: Some("speaker-face".into()),
+                safe_area: Some("mobile".into()),
+            }],
+            ..TrackingPackage::default()
+        });
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
     fn write_fixture_project_with_guide_section(dir: &Path) -> PathBuf {
         let otio_path = write_fixture_project(dir);
         let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
@@ -5459,6 +8726,29 @@ mod tests {
                 }],
                 ..Default::default()
             });
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_time_remap(dir: &Path) -> PathBuf {
+        let otio_path = write_fixture_project(dir);
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+            panic!("expected video track");
+        };
+        let TrackChild::Clip(clip) = &mut track.children[0] else {
+            panic!("expected fixture clip");
+        };
+        let mut effect = Effect::new("awidat.time_remap");
+        effect.metadata.insert(
+            "curve".into(),
+            serde_json::json!([
+                {"source_time_s": 0.0, "timeline_time_s": 0.0},
+                {"source_time_s": 1.0, "timeline_time_s": 2.5},
+                {"source_time_s": 2.0, "timeline_time_s": 3.5}
+            ]),
+        );
+        clip.effects.push(effect);
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
         otio_path
     }
@@ -5511,6 +8801,380 @@ mod tests {
         otio_path
     }
 
+    fn write_fixture_project_with_oversized_motion_blur_shutter(dir: &Path) -> PathBuf {
+        let animation = ParameterAnimation {
+            id: "move-overlay".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "clip-a".into(),
+                parameter: "overlay.x".into(),
+            },
+            keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 0.2)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        };
+        let otio_path = write_fixture_project_with_overlay_animation(dir, animation);
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let StackChild::Track(track) = &mut tl.tracks.children[1] else {
+            panic!("fixture second child should be overlay track");
+        };
+        let TrackChild::Clip(clip) = &mut track.children[0] else {
+            panic!("fixture overlay child should be clip");
+        };
+        let mut effect = Effect::new("awidat.video_overlay");
+        effect
+            .metadata
+            .insert("motion_blur".into(), serde_json::json!(true));
+        effect
+            .metadata
+            .insert("motion_blur_shutter_s".into(), serde_json::json!(0.5));
+        clip.effects.push(effect);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_tracker_bound_overlay(dir: &Path) -> PathBuf {
+        let base_asset_rel = "raw/base.mp4";
+        let overlay_asset_rel = "raw/overlay.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(base_asset_rel), b"stub").unwrap();
+        fs::write(dir.join(overlay_asset_rel), b"stub").unwrap();
+
+        let mut base_clip = Clip::empty("base".to_string());
+        base_clip.media_reference =
+            MediaReference::External(ExternalReference::new(base_asset_rel));
+        base_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 30.0),
+            RationalTime::new(2.0 * 30.0, 30.0),
+        ));
+
+        let mut overlay_clip = Clip::empty("clip-a".to_string());
+        overlay_clip.media_reference =
+            MediaReference::External(ExternalReference::new(overlay_asset_rel));
+        overlay_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 30.0),
+            RationalTime::new(2.0 * 30.0, 30.0),
+        ));
+
+        let mut v1 = Track::empty("V1", TrackKind::Video);
+        v1.children.push(TrackChild::Clip(base_clip));
+        let mut v2 = Track::empty("V2", TrackKind::Video);
+        v2.children.push(TrackChild::Clip(overlay_clip));
+
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(v1));
+        stack.children.push(StackChild::Track(v2));
+        tl.tracks = stack;
+
+        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        metadata.tracking_package = Some(TrackingPackage {
+            tracks: vec![TrackSidecar {
+                id: "speaker-face".into(),
+                asset_id: "clip-a".into(),
+                kind: ProfessionalTrackKind::Point,
+                samples: vec![
+                    TrackSample {
+                        frame: 0,
+                        points: vec![[0.25, 0.75]],
+                        confidence: Some(0.95),
+                    },
+                    TrackSample {
+                        frame: 60,
+                        points: vec![[0.40, 0.60]],
+                        confidence: Some(0.90),
+                    },
+                ],
+                confidence: Some(0.925),
+                ..TrackSidecar::default()
+            }],
+            ..TrackingPackage::default()
+        });
+        metadata.composition_graphs.push(CompositionGraph {
+            id: "tracked-overlay".into(),
+            nodes: vec![CompositionNode {
+                id: "bind-x".into(),
+                node_type: CompositionNodeType::TrackerBind,
+                params: [
+                    ("track_id".to_string(), serde_json::json!("speaker-face")),
+                    ("target_clip_id".to_string(), serde_json::json!("clip-a")),
+                    (
+                        "target_parameter".to_string(),
+                        serde_json::json!("overlay.x"),
+                    ),
+                    ("channel".to_string(), serde_json::json!("x")),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+            ..CompositionGraph::default()
+        });
+
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_short_tracker_bound_overlay(dir: &Path) -> PathBuf {
+        let otio_path = write_fixture_project_with_tracker_bound_overlay(dir);
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let samples = &mut tl
+            .metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .tracking_package
+            .as_mut()
+            .unwrap()
+            .tracks[0]
+            .samples;
+        samples[1].frame = 30;
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_corner_pin_overlay(dir: &Path) -> PathBuf {
+        let base_asset_rel = "raw/base.mp4";
+        let overlay_asset_rel = "raw/screen-replacement.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(base_asset_rel), b"stub").unwrap();
+        fs::write(dir.join(overlay_asset_rel), b"stub").unwrap();
+
+        let mut base_clip = Clip::empty("base".to_string());
+        base_clip.media_reference =
+            MediaReference::External(ExternalReference::new(base_asset_rel));
+        base_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 30.0),
+            RationalTime::new(2.0 * 30.0, 30.0),
+        ));
+
+        let mut overlay_clip = Clip::empty("replacement-screen".to_string());
+        overlay_clip.media_reference =
+            MediaReference::External(ExternalReference::new(overlay_asset_rel));
+        overlay_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 30.0),
+            RationalTime::new(2.0 * 30.0, 30.0),
+        ));
+
+        let mut v1 = Track::empty("V1", TrackKind::Video);
+        v1.children.push(TrackChild::Clip(base_clip));
+        let mut v2 = Track::empty("V2", TrackKind::Video);
+        v2.children.push(TrackChild::Clip(overlay_clip));
+
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(v1));
+        stack.children.push(StackChild::Track(v2));
+        tl.tracks = stack;
+
+        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        metadata.tracking_package = Some(TrackingPackage {
+            tracks: vec![TrackSidecar {
+                id: "screen-surface".into(),
+                asset_id: "base".into(),
+                kind: ProfessionalTrackKind::Surface,
+                samples: vec![
+                    TrackSample {
+                        frame: 0,
+                        points: vec![[0.10, 0.20], [0.90, 0.18], [0.86, 0.82], [0.14, 0.80]],
+                        confidence: Some(0.91),
+                    },
+                    TrackSample {
+                        frame: 30,
+                        points: vec![[0.12, 0.22], [0.88, 0.20], [0.84, 0.84], [0.16, 0.82]],
+                        confidence: Some(0.88),
+                    },
+                ],
+                confidence: Some(0.895),
+                ..TrackSidecar::default()
+            }],
+            ..TrackingPackage::default()
+        });
+        metadata.composition_graphs.push(CompositionGraph {
+            id: "screen-replace".into(),
+            nodes: vec![CompositionNode {
+                id: "pin-screen".into(),
+                node_type: CompositionNodeType::CornerPin,
+                params: [
+                    ("track_id".to_string(), serde_json::json!("screen-surface")),
+                    (
+                        "target_clip_id".to_string(),
+                        serde_json::json!("replacement-screen"),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+            ..CompositionGraph::default()
+        });
+
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_matte_overlay(dir: &Path) -> PathBuf {
+        let base_asset_rel = "raw/base.mp4";
+        let overlay_asset_rel = "raw/subject.mp4";
+        let matte_asset_rel = "raw/subject-alpha.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(base_asset_rel), b"stub").unwrap();
+        fs::write(dir.join(overlay_asset_rel), b"stub").unwrap();
+        fs::write(dir.join(matte_asset_rel), b"stub").unwrap();
+
+        let mut base_clip = Clip::empty("base".to_string());
+        base_clip.media_reference =
+            MediaReference::External(ExternalReference::new(base_asset_rel));
+        base_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 30.0),
+            RationalTime::new(2.0 * 30.0, 30.0),
+        ));
+
+        let mut overlay_clip = Clip::empty("subject".to_string());
+        overlay_clip.media_reference =
+            MediaReference::External(ExternalReference::new(overlay_asset_rel));
+        overlay_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 30.0),
+            RationalTime::new(2.0 * 30.0, 30.0),
+        ));
+
+        let mut v1 = Track::empty("V1", TrackKind::Video);
+        v1.children.push(TrackChild::Clip(base_clip));
+        let mut v2 = Track::empty("V2", TrackKind::Video);
+        v2.children.push(TrackChild::Clip(overlay_clip));
+
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(v1));
+        stack.children.push(StackChild::Track(v2));
+        tl.tracks = stack;
+
+        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        metadata.tracking_package = Some(TrackingPackage {
+            mattes: vec![MatteSidecar {
+                id: "matte-subject".into(),
+                alpha_source: matte_asset_rel.into(),
+                confidence: Some(0.93),
+                ..MatteSidecar::default()
+            }],
+            ..TrackingPackage::default()
+        });
+        metadata.composition_graphs.push(CompositionGraph {
+            id: "subject-matte".into(),
+            nodes: vec![CompositionNode {
+                id: "apply-matte".into(),
+                node_type: CompositionNodeType::Matte,
+                params: [
+                    ("matte_id".to_string(), serde_json::json!("matte-subject")),
+                    ("target_clip_id".to_string(), serde_json::json!("subject")),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+            ..CompositionGraph::default()
+        });
+
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_mask_overlay(dir: &Path) -> PathBuf {
+        let base_asset_rel = "raw/base.mp4";
+        let overlay_asset_rel = "raw/callout.mp4";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(base_asset_rel), b"stub").unwrap();
+        fs::write(dir.join(overlay_asset_rel), b"stub").unwrap();
+
+        let mut base_clip = Clip::empty("base".to_string());
+        base_clip.media_reference =
+            MediaReference::External(ExternalReference::new(base_asset_rel));
+        base_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 30.0),
+            RationalTime::new(2.0 * 30.0, 30.0),
+        ));
+
+        let mut overlay_clip = Clip::empty("callout".to_string());
+        overlay_clip.media_reference =
+            MediaReference::External(ExternalReference::new(overlay_asset_rel));
+        overlay_clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 30.0),
+            RationalTime::new(2.0 * 30.0, 30.0),
+        ));
+
+        let mut v1 = Track::empty("V1", TrackKind::Video);
+        v1.children.push(TrackChild::Clip(base_clip));
+        let mut v2 = Track::empty("V2", TrackKind::Video);
+        v2.children.push(TrackChild::Clip(overlay_clip));
+
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(v1));
+        stack.children.push(StackChild::Track(v2));
+        tl.tracks = stack;
+
+        let metadata = tl.metadata.awidat.as_mut().unwrap();
+        metadata.tracking_package = Some(TrackingPackage {
+            masks: vec![MaskSidecar {
+                id: "mask-callout".into(),
+                attached_clip_id: Some("callout".into()),
+                operation: MaskOperation::Add,
+                keyframes: vec![MaskKeyframe {
+                    time_s: 0.0,
+                    points: vec![[0.20, 0.25], [0.70, 0.25], [0.70, 0.80], [0.20, 0.80]],
+                    feather: 0.0,
+                    opacity: 0.75,
+                }],
+                ..MaskSidecar::default()
+            }],
+            ..TrackingPackage::default()
+        });
+        metadata.composition_graphs.push(CompositionGraph {
+            id: "callout-mask".into(),
+            nodes: vec![CompositionNode {
+                id: "apply-mask".into(),
+                node_type: CompositionNodeType::Mask,
+                params: [
+                    ("mask_id".to_string(), serde_json::json!("mask-callout")),
+                    ("target_clip_id".to_string(), serde_json::json!("callout")),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+            ..CompositionGraph::default()
+        });
+
+        let otio_path = dir.join(files::OTIO);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_animated_mask_overlay(dir: &Path) -> PathBuf {
+        let otio_path = write_fixture_project_with_mask_overlay(dir);
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let mask = tl
+            .metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .tracking_package
+            .as_mut()
+            .unwrap()
+            .masks
+            .first_mut()
+            .unwrap();
+        mask.keyframes.push(MaskKeyframe {
+            time_s: 1.0,
+            points: vec![[0.30, 0.35], [0.80, 0.35], [0.80, 0.90], [0.30, 0.90]],
+            feather: 0.0,
+            opacity: 0.4,
+        });
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
     fn write_fixture_project_with_base_animation(
         dir: &Path,
         animation: ParameterAnimation,
@@ -5523,6 +9187,40 @@ mod tests {
             .unwrap()
             .parameter_animations
             .push(animation);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
+    fn write_fixture_project_with_audio_track_animation(
+        dir: &Path,
+        animation: ParameterAnimation,
+    ) -> PathBuf {
+        let asset_rel = "raw/music.wav";
+        fs::create_dir_all(dir.join("raw")).unwrap();
+        fs::write(dir.join(asset_rel), b"stub").unwrap();
+
+        let mut clip = Clip::empty("music-clip".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 48_000.0),
+            RationalTime::new(2.0 * 48_000.0, 48_000.0),
+        ));
+
+        let mut track = Track::empty("Music", TrackKind::Audio);
+        track.children.push(TrackChild::Clip(clip));
+
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        tl.metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .parameter_animations
+            .push(animation);
+
+        let otio_path = dir.join(files::OTIO);
         fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
         otio_path
     }
@@ -5562,6 +9260,225 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
                 .starts_with("timeline-")
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_time_remap_curve_to_setpts() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_time_remap(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert_eq!(spec.total_duration_s, Some(3.5));
+        assert!(
+            filter.contains("setpts='if(lte((PTS-STARTPTS)*TB\\,1)"),
+            "time remap should lower to a piecewise setpts expression: {filter}"
+        );
+        assert!(
+            filter.contains("[0:a:0]atempo="),
+            "time remap should keep audio duration aligned with the remapped video: {filter}"
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_applies_tracking_reframe_path_to_matching_clip() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_reframe_path(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(
+            filter.contains("scale=ceil(iw*3.160494/2)*2"),
+            "missing subject reframe scale: {filter}"
+        );
+        assert!(
+            filter.contains("crop=iw/3.160494:ih/3.160494"),
+            "missing subject reframe crop: {filter}"
+        );
+        assert!(
+            filter.contains("x=(in_w-out_w)*(if(lt(t\\,0)"),
+            "missing dynamic x center expression: {filter}"
+        );
+        assert!(
+            filter.contains("0.3+(0.6-0.3)*"),
+            "missing x keyframe interpolation: {filter}"
+        );
+        assert!(
+            filter.contains("0.35+(0.45-0.35)*"),
+            "missing y keyframe interpolation: {filter}"
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_tracker_bind_graph_to_overlay_animation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_tracker_bound_overlay(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(
+            filter.contains("main_w*(if(lt((t-0)\\,0)\\,0.25")
+                && filter.contains("0.25+(0.4-0.25)"),
+            "tracker_bind graph should generate overlay.x animation keyframes from track samples: {filter}"
+        );
+        assert!(
+            spec.limitations.is_empty(),
+            "render should consume graph-derived tracker animations without limitations: {:?}",
+            spec.limitations
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_warns_when_tracker_bind_coverage_is_short() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_short_tracker_bound_overlay(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+        assert!(
+            spec.limitations.iter().any(|limitation| {
+                limitation.kind == "tracker_bind_coverage_shortfall"
+                    && limitation.animation_id.as_deref() == Some("tracker-bind-bind-x")
+                    && limitation.clip_id.as_deref() == Some("clip-a")
+                    && limitation.parameter.as_deref() == Some("overlay.x")
+                    && limitation.message.contains("Hold extrapolation")
+            }),
+            "short tracker coverage should surface a render limitation: {:?}",
+            spec.limitations
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_corner_pin_graph_to_overlay_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_corner_pin_overlay(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(
+            filter.contains("perspective=x0='if(lte(n\\,0)\\,192")
+                && filter.contains(":eval=frame[media_overlay_corner_pin0]"),
+            "corner_pin graph should lower into the target overlay filter branch: {filter}"
+        );
+        assert!(
+            filter.contains("[media_overlay_ref0][media_overlay_corner_pin0]overlay="),
+            "corner-pinned replacement should composite after perspective lowering: {filter}"
+        );
+        assert!(
+            spec.limitations.is_empty(),
+            "render should consume graph-derived corner-pin lowerings without limitations: {:?}",
+            spec.limitations
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_matte_graph_to_overlay_alpha() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_matte_overlay(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(
+            spec.args
+                .windows(2)
+                .any(|w| w[0] == "-i" && w[1].ends_with("raw/subject-alpha.mp4")),
+            "matte alpha source should be added as a render input: {:?}",
+            spec.args
+        );
+        assert!(
+            !filter.contains("loop=-1:1[media_overlay_matte_loop0]")
+                && filter.contains("format=gray[media_overlay_matte_gray0]")
+                && filter.contains("alphamerge=shortest=1[media_overlay_matte0]"),
+            "video matte graph should stream the matte instead of freezing frame 0: {filter}"
+        );
+        assert!(
+            filter.contains("[media_overlay_ref0][media_overlay_matte0]overlay="),
+            "matte-applied overlay should feed the compositing stage: {filter}"
+        );
+        assert!(
+            spec.limitations.is_empty(),
+            "render should consume graph-derived matte lowerings without limitations: {:?}",
+            spec.limitations
+        );
+    }
+
+    #[test]
+    fn oversized_motion_blur_shutter_surfaces_clamp_limitation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_oversized_motion_blur_shutter(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(
+            filter.contains("t-0.1") && filter.contains("t+0.1"),
+            "oversized shutter should be clamped to the renderable max in the filter: {filter}"
+        );
+        assert!(
+            spec.limitations.iter().any(|limitation| {
+                limitation.kind == "motion_blur_shutter_clamped"
+                    && limitation.clip_id.as_deref() == Some("clip-a")
+                    && limitation.parameter.as_deref() == Some("overlay.motion_blur_shutter_s")
+                    && limitation.message.contains("0.5")
+                    && limitation.message.contains("0.2")
+            }),
+            "clamped shutter should surface a limitation: {:?}",
+            spec.limitations
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_mask_graph_to_overlay_alpha_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_mask_overlay(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(
+            filter.contains("[media_overlay_scaled0]format=rgba,geq=")
+                && filter.contains("between(X\\,W*0.2\\,W*0.7)")
+                && filter.contains("between(Y\\,H*0.25\\,H*0.8)")
+                && filter.contains("[media_overlay_mask0]"),
+            "mask graph should lower to an overlay alpha gate from the mask bounds: {filter}"
+        );
+        assert!(
+            filter.contains("[media_overlay_ref0][media_overlay_mask0]overlay="),
+            "masked overlay should feed the compositing stage: {filter}"
+        );
+        assert!(
+            spec.limitations.is_empty(),
+            "render should consume graph-derived mask lowerings without limitations: {:?}",
+            spec.limitations
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_mask_keyframes_to_alpha_gate_animation() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_animated_mask_overlay(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(
+            filter.contains("between(X\\,W*if(lt((T-0)\\,0)")
+                && filter.contains("0.2+(0.3-0.2)")
+                && filter.contains("between(Y\\,H*if(lt((T-0)\\,0)")
+                && filter.contains("0.25+(0.35-0.25)")
+                && filter.contains("0.75+(0.4-0.75)"),
+            "mask keyframes should animate bounds and opacity in the alpha gate: {filter}"
+        );
+        assert!(
+            spec.limitations.is_empty(),
+            "animated mask lowerings should not surface limitations: {:?}",
+            spec.limitations
         );
     }
 
@@ -5642,14 +9559,20 @@ mod tests {
                             in_x: 0.25,
                             in_y: 1.0,
                         }),
+                        tangent_mode: Default::default(),
+                        spring: None,
                     },
                     Keyframe::linear(1.0, 1.0),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
         );
 
-        let (_, _, video_overlays, _, _, _, _, limitations) =
+        let (_, _, video_overlays, _, _, _, _, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert_eq!(video_overlays.len(), 1);
@@ -5680,9 +9603,15 @@ mod tests {
                             in_x: 0.25,
                             in_y: 1.0,
                         }),
+                        tangent_mode: Default::default(),
+                        spring: None,
                     },
                     Keyframe::linear(1.0, 1.0),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
         );
@@ -5704,6 +9633,10 @@ mod tests {
                     parameter: "awidat.color_correction.brightness".to_string(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.2), Keyframe::linear(1.0, 0.4)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: true,
                 rationale: None,
             },
         );
@@ -5716,6 +9649,154 @@ mod tests {
             spec.limitations[0].animation_id.as_deref(),
             Some("anim-base-brightness")
         );
+    }
+
+    #[test]
+    fn base_clip_blur_radius_animation_lowers_to_varblur_filter() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-base-blur".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "awidat.blur.radius_px".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(spec.limitations.is_empty());
+        assert!(
+            filter.contains("varblur=min_r=0:max_r=100:planes=15"),
+            "animated clip blur should lower through a radius-map varblur filter: {filter}"
+        );
+        assert!(
+            filter.contains("geq=lum='min(max(("),
+            "animated clip blur should drive the radius map from keyframes: {filter}"
+        );
+    }
+
+    #[test]
+    fn base_clip_shake_intensity_animation_lowers_to_dynamic_crop_expression() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-base-shake".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "awidat.shake.intensity_px".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 14.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(spec.limitations.is_empty());
+        assert!(
+            filter.contains("pad=iw+28:ih+28:14:14"),
+            "animated shake should allocate padding from peak keyframe intensity: {filter}"
+        );
+        assert!(
+            filter.contains("sin(2*PI*12*t)"),
+            "animated shake should use the default shake frequency without a stamped effect: {filter}"
+        );
+        assert!(
+            filter.contains("if(lt(t\\,0)\\,0"),
+            "animated shake should drive displacement from keyframes: {filter}"
+        );
+    }
+
+    #[test]
+    fn base_clip_warp_k1_animation_lowers_to_sendcmd_lenscorrection() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_base_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "anim-base-warp".to_string(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "c1".to_string(),
+                    parameter: "awidat.warp.k1".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -0.15), Keyframe::linear(1.0, 0.05)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let filter = filter_complex_from_argv(&spec.args);
+
+        assert!(spec.limitations.is_empty());
+        assert!(
+            filter.contains("sendcmd=c='0 warp0 k1 -0.15"),
+            "animated warp should command lenscorrection from first keyframe: {filter}"
+        );
+        assert!(
+            filter.contains("1 warp0 k1 0.05"),
+            "animated warp should command lenscorrection through final keyframe: {filter}"
+        );
+        assert!(
+            filter.contains("0.5 warp0 k1 -0.05"),
+            "animated warp should sample interpolated values between keyframes: {filter}"
+        );
+        assert!(
+            filter.contains("lenscorrection@warp0=cx=0.5:cy=0.5:k1=-0.15:k2=0:i=bilinear"),
+            "animated warp should initialize lenscorrection from first keyframe/defaults: {filter}"
+        );
+    }
+
+    #[test]
+    fn track_volume_db_animation_lowers_to_audio_automation_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_audio_track_animation(
+            dir.path(),
+            ParameterAnimation {
+                id: "music-duck".to_string(),
+                target: awidat_proto::professional::AnimationTarget::TrackParameter {
+                    track: "Music".to_string(),
+                    parameter: "volume_db".to_string(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -18.0), Keyframe::linear(2.0, -6.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+        );
+
+        let (_, _, _, _, _, _, audio_tracks, _, limitations) =
+            collect_timeline_full_plan(dir.path()).unwrap();
+
+        assert!(limitations.is_empty());
+        assert_eq!(audio_tracks.len(), 1);
+        let automation = audio_tracks[0]
+            .volume_automation
+            .as_ref()
+            .expect("track volume animation should lower");
+        assert_eq!(automation.parameter, "volume_db");
+        assert!(automation.expression.contains("pow(10\\,"));
+        assert_eq!(automation.keyframes.len(), 2);
     }
 
     #[test]
@@ -6194,6 +10275,60 @@ mod tests {
             "expected volume automation in filter graph: {filter}"
         );
         assert!(filter.contains(":eval=frame[atrackauto0]"));
+    }
+
+    #[test]
+    fn explicit_audio_track_volume_automation_uses_post_concat_track_time() {
+        let segs = vec![seg("/tmp/a.mp4", 0.0, 6.0)];
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "music".into(),
+            role: "music".into(),
+            volume: 1.0,
+            volume_automation: Some(AudioAutomationPlan {
+                parameter: "volume".into(),
+                expression: "if(lt(t\\,5)\\,0.25\\,1)".into(),
+                keyframes: vec![Keyframe::linear(5.0, 0.25), Keyframe::linear(6.0, 1.0)],
+            }),
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![
+                AudioTrackItemPlan::Gap { duration_s: 5.0 },
+                AudioTrackItemPlan::Clip(AudioClipPlan {
+                    asset_path: PathBuf::from("/tmp/music.wav"),
+                    start_s: 0.0,
+                    duration_s: 1.0,
+                    volume: None,
+                    speed: None,
+                    fade_in_s: None,
+                    fade_out_s: None,
+                    audio_fx: None,
+                }),
+            ],
+        }];
+        let argv = build_timeline_argv_with_audio_tracks(
+            &segs,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv
+            .windows(2)
+            .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
+            .unwrap();
+
+        assert!(filter.contains("anullsrc=r=48000:cl=stereo:d=5[agap0_0]"));
+        assert!(filter.contains("volume='if(lt(t\\,5)\\,0.25\\,1)':eval=frame[atrackauto0]"));
+        assert!(
+            !filter.contains("t+5"),
+            "automation runs after track concat, where t already includes leading gaps: {filter}"
+        );
     }
 
     #[test]
@@ -6922,6 +11057,117 @@ mod tests {
     }
 
     #[test]
+    fn supported_mask_source_adds_mask_input_and_no_limitation() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.clip_name = "clip-with-renderable-mask".into();
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            mask_source: Some(PathBuf::from("/tmp/masks/face.png")),
+            ..Default::default()
+        });
+
+        let argv = build_timeline_argv_full(
+            &[s0.clone()],
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "-i" && w[1] == "/tmp/masks/face.png"),
+            "mask source should be added as a render input: {argv:?}"
+        );
+        assert!(mask_source_limitations(&[s0]).is_empty());
+    }
+
+    #[test]
+    fn masked_lut_emits_alphamerge_and_overlay() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            mask_source: Some(PathBuf::from("/tmp/masks/face.png")),
+            ..Default::default()
+        });
+
+        let argv = build_timeline_argv_full(
+            &[s0],
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("format=gray,loop=-1:1"),
+            "static image mask should be looped as a grayscale stream: {filter}"
+        );
+        assert!(
+            filter.contains("alphamerge") && filter.contains("overlay=format=auto"),
+            "masked LUT should alpha-merge the mask and overlay over the original: {filter}"
+        );
+    }
+
+    #[test]
+    fn audio_track_inputs_shift_after_mask_inputs() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.color_pipeline = Some(ColorPipelinePlan {
+            clip_input_space: "rec709_g24".into(),
+            look_lut: Some(PathBuf::from("/tmp/luts/look.cube")),
+            mask_source: Some(PathBuf::from("/tmp/masks/face.png")),
+            ..Default::default()
+        });
+        let audio_tracks = vec![AudioTrackPlan {
+            name: "A1".into(),
+            role: "dialogue".into(),
+            volume: 1.0,
+            volume_automation: None,
+            muted: false,
+            solo: false,
+            ducking: None,
+            audio_fx: None,
+            items: vec![AudioTrackItemPlan::Clip(AudioClipPlan {
+                asset_path: PathBuf::from("/tmp/dialogue.wav"),
+                start_s: 0.0,
+                duration_s: 4.0,
+                volume: None,
+                speed: None,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_fx: None,
+            })],
+        }];
+
+        let argv = build_timeline_argv_with_audio_tracks(
+            &[s0],
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+            None,
+            &audio_tracks,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("[2:a:0]atrim=0:4"),
+            "audio clip input should shift past segment and mask inputs: {filter}"
+        );
+    }
+
+    #[test]
     fn no_mask_source_means_no_limitation() {
         let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
         s0.color_pipeline = Some(ColorPipelinePlan {
@@ -6988,6 +11234,102 @@ mod tests {
     }
 
     #[test]
+    fn filter_planner_emits_shake_before_speed_and_concat() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.shake = Some(ShakePlan {
+            intensity_px: 6.0,
+            frequency_hz: 10.0,
+        });
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex.contains(
+                "[0:v:0]pad=iw+12:ih+12:6:6,\
+                 crop=w=iw-12:h=ih-12:x=6+6*sin(2*PI*10*t):y=6+6*cos(2*PI*7.3*t)[shv0]"
+            ),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[shv0]setpts=0.5*PTS[sv0]"),
+            "shake should feed speed, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[sv0][sa0]concat"),
+            "post-shake/post-speed labels should feed concat, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_clip_blur_before_reframe_and_speed() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.blur = Some(BlurPlan { radius_px: 4.5 });
+        s0.reframe = Some(ReframePlan {
+            zoom: 1.2,
+            x: 0.0,
+            y: 0.0,
+        });
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[0:v:0]gblur=sigma=4.5[blv0];"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[blv0]scale=ceil(iw*1.2/2)*2"),
+            "blur should feed reframe, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[rv0]setpts=0.5*PTS[sv0]"),
+            "reframe should feed speed, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
+    fn filter_planner_emits_warp_after_reframe_before_shake_and_speed() {
+        let mut s0 = seg("/tmp/a.mp4", 0.0, 4.0);
+        s0.reframe = Some(ReframePlan {
+            zoom: 1.2,
+            x: 0.0,
+            y: 0.0,
+        });
+        s0.warp = Some(WarpPlan {
+            k1: -0.12,
+            k2: 0.03,
+            center_x: 0.45,
+            center_y: 0.55,
+        });
+        s0.shake = Some(ShakePlan {
+            intensity_px: 5.0,
+            frequency_hz: 8.0,
+        });
+        s0.speed = Some(2.0);
+        let plan = FilterPlanner::new(&[s0], &[]).plan();
+        assert!(
+            plan.filter_complex
+                .contains("[rv0]lenscorrection=cx=0.45:cy=0.55:k1=-0.12:k2=0.03:i=bilinear[wv0];"),
+            "filter graph: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[wv0]pad=iw+10:ih+10:5:5"),
+            "warp should feed shake, got: {}",
+            plan.filter_complex,
+        );
+        assert!(
+            plan.filter_complex.contains("[shv0]setpts=0.5*PTS[sv0]"),
+            "shake should feed speed, got: {}",
+            plan.filter_complex,
+        );
+    }
+
+    #[test]
     fn filter_planner_appends_drawtext_for_title_overlay() {
         let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
         let title = TitlePlan {
@@ -6999,8 +11341,10 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation: TitleAnimation::None,
+            reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
+            rich_segments: Vec::new(),
             animations: Vec::new(),
         };
         let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
@@ -7036,6 +11380,51 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_title_keywords_resolve_from_timeline_context() {
+        let mut titles = vec![TitlePlan {
+            text: "#timecode# #frame# #filename# #chapter_title# #speaker#".into(),
+            start_s: 5.0,
+            end_s: 8.0,
+            position: TitlePosition::Top,
+            font_size: 64,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Normal,
+            animation: TitleAnimation::None,
+            reveal: TextReveal::None,
+            role: "title".into(),
+            safe_area: None,
+            rich_segments: Vec::new(),
+            animations: Vec::new(),
+        }];
+        let segs = vec![seg("/tmp/interview.mov", 0.0, 10.0)];
+        let mut overlay = awidat_proto::awidat_meta::BroadcastOverlayConfig::default();
+        overlay.chapters = vec![awidat_proto::awidat_meta::BroadcastTimedEntry {
+            time_seconds: 3.0,
+            text: "Deep Dive".into(),
+        }];
+        let mut metadata = awidat_proto::awidat_meta::AwidatTimelineMetadata {
+            broadcast_overlay: Some(overlay),
+            ..Default::default()
+        };
+        metadata
+            .extra
+            .insert("speaker_label".into(), serde_json::json!("HOST"));
+
+        apply_dynamic_title_keywords(
+            &mut titles,
+            &segs,
+            Some(&metadata),
+            Path::new("/tmp/project"),
+            24.0,
+        );
+
+        assert_eq!(
+            titles[0].text,
+            "00:00:05:00 120 interview.mov Deep Dive HOST"
+        );
+    }
+
+    #[test]
     fn filter_planner_chains_multiple_titles_with_commas() {
         let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
         let titles = vec![
@@ -7048,8 +11437,10 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: TitleWeight::Normal,
                 animation: TitleAnimation::None,
+                reveal: TextReveal::None,
                 role: "title".into(),
                 safe_area: None,
+                rich_segments: Vec::new(),
                 animations: Vec::new(),
             },
             TitlePlan {
@@ -7061,8 +11452,10 @@ mod tests {
                 color: "#FFAA00".into(),
                 font_weight: TitleWeight::Bold,
                 animation: TitleAnimation::None,
+                reveal: TextReveal::None,
                 role: "caption".into(),
                 safe_area: Some("mobile".into()),
+                rich_segments: Vec::new(),
                 animations: Vec::new(),
             },
         ];
@@ -7077,12 +11470,107 @@ mod tests {
     }
 
     #[test]
+    fn long_title_text_auto_wraps_before_drawtext() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let title = TitlePlan {
+            text: "This is a deliberately long title that should wrap before it runs beyond the safe title width".into(),
+            start_s: 0.0,
+            end_s: 3.0,
+            position: TitlePosition::Bottom,
+            font_size: 72,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Bold,
+            animation: TitleAnimation::FadeIn,
+            reveal: TextReveal::None,
+            role: "title".into(),
+            safe_area: None,
+rich_segments: Vec::new(),
+animations: Vec::new(),
+        };
+
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+
+        assert!(
+            plan.filter_complex.contains("\\n"),
+            "long title should be wrapped in the drawtext payload: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn cjk_title_text_wraps_without_spaces() {
+        let text = "天地玄黄宇宙洪荒".repeat(8);
+
+        let wrapped = auto_wrap_title_text(&text, 72);
+
+        assert!(
+            wrapped.contains('\n'),
+            "CJK titles without spaces should still wrap: {wrapped}"
+        );
+    }
+
+    #[test]
+    fn rich_title_width_estimate_accounts_for_proportional_glyphs() {
+        let narrow = approximate_text_width_px("iiiiiiii", 72);
+        let wide = approximate_text_width_px("mmmmmmmm", 72);
+
+        assert!(
+            narrow < wide,
+            "narrow glyph runs should not use the same width as wide glyph runs"
+        );
+    }
+
+    #[test]
+    fn rich_title_segments_render_as_independent_drawtext_runs() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut title = title(TitleAnimation::None, TitlePosition::Bottom);
+        title.text = "Launch now".into();
+        title.rich_segments = vec![
+            RichTextSegment {
+                text: "Launch".into(),
+                color: Some("#FFFFFF".into()),
+                font_weight: Some(TitleWeight::Bold),
+            },
+            RichTextSegment {
+                text: " now".into(),
+                color: Some("#FFCC00".into()),
+                font_weight: Some(TitleWeight::Normal),
+            },
+        ];
+
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+
+        assert!(
+            plan.filter_complex.contains("drawtext=text='Launch'")
+                && plan.filter_complex.contains("drawtext=text=' now'"),
+            "rich title should render each run separately: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains("fontcolor=#FFCC00"),
+            "rich title should preserve per-run color: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains("x=(w-"),
+            "rich title should use centered run offsets: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
     fn media_overlay_is_composited_before_caption_drawtext() {
         let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
         let overlays = vec![VideoOverlayPlan {
             segment: seg("/tmp/overlay.mp4", 0.0, 3.0),
             track_start_s: 1.0,
             mode: VideoOverlayMode::FullFrame,
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
             animations: Vec::new(),
         }];
         let captions = vec![TitlePlan {
@@ -7094,8 +11582,10 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            reveal: TextReveal::None,
             role: "caption".into(),
             safe_area: Some("mobile".into()),
+            rich_segments: Vec::new(),
             animations: Vec::new(),
         }];
 
@@ -7128,6 +11618,296 @@ mod tests {
     }
 
     #[test]
+    fn svg_overlay_inputs_are_looped_like_still_graphics() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/brand/logo.svg", 0.0, 4.0),
+            track_start_s: 1.0,
+            mode: VideoOverlayMode::PiP {
+                corner: "top_right".into(),
+                scale: 0.2,
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: Vec::new(),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &overlays,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let args = argv.join(" ");
+
+        assert!(
+            args.contains("-loop 1 -t 4 -i /tmp/brand/logo.svg"),
+            "SVG overlays should be held for their clip duration instead of decoded as a single frame: {args}"
+        );
+    }
+
+    #[test]
+    fn annotation_primitives_render_after_media_before_titles() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let overlays = vec![VideoOverlayPlan {
+            segment: seg("/tmp/logo.svg", 0.0, 4.0),
+            track_start_s: 1.0,
+            mode: VideoOverlayMode::FullFrame,
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: Vec::new(),
+        }];
+        let annotations = vec![AnnotationPlan {
+            kind: AnnotationKind::Rectangle,
+            start_s: 1.0,
+            end_s: 4.0,
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.25,
+            color: "#FFCC00".into(),
+            stroke_width: 6,
+            label: None,
+        }];
+        let titles = vec![TitlePlan {
+            text: "Caption".into(),
+            start_s: 1.0,
+            end_s: 4.0,
+            position: TitlePosition::Bottom,
+            font_size: 48,
+            color: "#FFFFFF".into(),
+            font_weight: TitleWeight::Bold,
+            animation: TitleAnimation::None,
+            reveal: TextReveal::None,
+            role: "title".into(),
+            safe_area: None,
+            rich_segments: Vec::new(),
+            animations: Vec::new(),
+        }];
+
+        let argv = build_timeline_argv_full_with_annotations(
+            &segs,
+            &[],
+            &overlays,
+            &annotations,
+            &titles,
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+        let Some(media_pos) = filter.find("[media_overlay_v0]") else {
+            panic!("media overlay");
+        };
+        let Some(annotation_pos) = filter.find("drawbox=x=iw*0.1") else {
+            panic!("annotation drawbox");
+        };
+        let Some(title_pos) = filter.find("drawtext=text='Caption'") else {
+            panic!("title drawtext");
+        };
+
+        assert!(media_pos < annotation_pos);
+        assert!(annotation_pos < title_pos);
+        assert!(
+            filter.contains("color=#FFCC00:t=6:enable='between(t\\,1\\,4)'"),
+            "annotation should carry color, stroke, and timing: {filter}"
+        );
+    }
+
+    #[test]
+    fn annotation_color_filter_options_are_not_injected() {
+        let annotations = vec![AnnotationPlan {
+            kind: AnnotationKind::Rectangle,
+            start_s: 1.0,
+            end_s: 4.0,
+            x: 0.1,
+            y: 0.1,
+            width: 0.2,
+            height: 0.2,
+            color: "red:t=fill".into(),
+            stroke_width: 6,
+            label: None,
+        }];
+        let plan = append_annotations(
+            FilterPlan {
+                filter_complex: "[0:v]null[base_v]".into(),
+                video_out_label: "[base_v]".into(),
+                audio_out_label: "[outa]".into(),
+            },
+            &annotations,
+        );
+
+        assert!(
+            !plan.filter_complex.contains("color=red:t=fill"),
+            "annotation color must not be able to inject filter options: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn blur_annotation_lowers_to_boxblur_region_overlay() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let annotations = vec![AnnotationPlan {
+            kind: AnnotationKind::Blur,
+            start_s: 1.0,
+            end_s: 4.0,
+            x: 0.1,
+            y: 0.2,
+            width: 0.3,
+            height: 0.25,
+            color: "#FFCC00".into(),
+            stroke_width: 6,
+            label: None,
+        }];
+
+        let argv = build_timeline_argv_full_with_annotations(
+            &segs,
+            &[],
+            &[],
+            &annotations,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("crop=w=iw*0.3:h=ih*0.25:x=iw*0.1:y=ih*0.2"),
+            "blur annotation should crop the normalized region: {filter}"
+        );
+        assert!(
+            filter.contains("boxblur=12"),
+            "blur annotation should blur the cropped region: {filter}"
+        );
+        assert!(
+            filter.contains("overlay=x=main_w*0.1:y=main_h*0.2:enable='between(t\\,1\\,4)'"),
+            "blur annotation should overlay the blurred region back in time: {filter}"
+        );
+    }
+
+    #[test]
+    fn circle_arrow_and_bracket_annotations_lower_to_draw_filters() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 5.0)];
+        let annotations = vec![
+            AnnotationPlan {
+                kind: AnnotationKind::Circle,
+                start_s: 1.0,
+                end_s: 4.0,
+                x: 0.1,
+                y: 0.2,
+                width: 0.3,
+                height: 0.25,
+                color: "#FFCC00".into(),
+                stroke_width: 6,
+                label: None,
+            },
+            AnnotationPlan {
+                kind: AnnotationKind::Arrow,
+                start_s: 1.0,
+                end_s: 4.0,
+                x: 0.2,
+                y: 0.3,
+                width: 0.3,
+                height: 0.1,
+                color: "#FFCC00".into(),
+                stroke_width: 6,
+                label: None,
+            },
+            AnnotationPlan {
+                kind: AnnotationKind::Bracket,
+                start_s: 1.0,
+                end_s: 4.0,
+                x: 0.3,
+                y: 0.2,
+                width: 0.2,
+                height: 0.25,
+                color: "#FFCC00".into(),
+                stroke_width: 6,
+                label: None,
+            },
+        ];
+
+        let argv = build_timeline_argv_full_with_annotations(
+            &segs,
+            &[],
+            &[],
+            &annotations,
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(filter.contains("drawtext=text='○'"));
+        assert!(filter.contains("drawtext=text='→'"));
+        assert!(
+            filter.contains("annotation_bracket_top")
+                && filter.contains("annotation_bracket_left")
+                && filter.contains("annotation_bracket_right"),
+            "bracket annotation should lower to three drawbox sides: {filter}"
+        );
+    }
+
+    #[test]
+    fn typewriter_title_reveal_emits_prefix_drawtext_windows() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.text = "Hi".into();
+        title.start_s = 1.0;
+        title.end_s = 3.0;
+        title.reveal = TextReveal::Typewriter;
+
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[title]).plan();
+
+        assert!(
+            plan.filter_complex.contains("drawtext=text='H'"),
+            "typewriter reveal should render first prefix: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains("drawtext=text='Hi'"),
+            "typewriter reveal should render final prefix: {}",
+            plan.filter_complex
+        );
+        assert!(
+            plan.filter_complex.contains("enable='between(t\\,1\\,2)'")
+                && plan.filter_complex.contains("enable='between(t\\,2\\,3)'"),
+            "typewriter reveal should split title window across prefixes: {}",
+            plan.filter_complex
+        );
+    }
+
+    #[test]
+    fn reveal_steps_keep_grapheme_clusters_intact() {
+        assert_eq!(
+            reveal_steps("👩\u{200d}💻", TextReveal::Typewriter),
+            vec!["👩\u{200d}💻".to_string()]
+        );
+        assert_eq!(
+            reveal_steps("👩\u{200d}💻 dev", TextReveal::Word),
+            vec!["👩\u{200d}💻".to_string(), "👩\u{200d}💻 dev".to_string()]
+        );
+    }
+
+    #[test]
     fn long_form_broadcast_overlay_suppresses_generic_titles() {
         let s0 = seg("/tmp/a.mp4", 0.0, 10.0);
         let title = TitlePlan {
@@ -7139,8 +11919,10 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
+            rich_segments: Vec::new(),
             animations: Vec::new(),
         };
         let overlay = BroadcastOverlayPlan {
@@ -7262,6 +12044,12 @@ mod tests {
                 scale: 0.28,
                 margin_pct: 0.035,
             },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
             animations: Vec::new(),
         }];
         let argv = build_timeline_argv_full(
@@ -7295,6 +12083,12 @@ mod tests {
                 scale: 0.3,
                 margin_pct: 0.05,
             },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
             animations: vec![
                 RenderParameterAnimation {
                     parameter: "overlay.x".to_string(),
@@ -7302,6 +12096,9 @@ mod tests {
                         awidat_proto::professional::Keyframe::linear(0.0, 0.0),
                         awidat_proto::professional::Keyframe::linear(1.0, -0.1),
                     ],
+                    pre_extrapolation: ExtrapolationMode::Hold,
+                    post_extrapolation: ExtrapolationMode::Hold,
+                    motion_path: None,
                 },
                 RenderParameterAnimation {
                     parameter: "overlay.scale".to_string(),
@@ -7309,6 +12106,9 @@ mod tests {
                         awidat_proto::professional::Keyframe::linear(0.0, 1.0),
                         awidat_proto::professional::Keyframe::linear(1.0, 1.2),
                     ],
+                    pre_extrapolation: ExtrapolationMode::Hold,
+                    post_extrapolation: ExtrapolationMode::Hold,
+                    motion_path: None,
                 },
             ],
         };
@@ -7340,6 +12140,349 @@ mod tests {
     }
 
     #[test]
+    fn overlay_blur_animation_uses_keyframed_radius_map() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.5,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: vec![RenderParameterAnimation {
+                parameter: "overlay.blur".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                    awidat_proto::professional::Keyframe::linear(1.0, 12.0),
+                ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+            }],
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("varblur=min_r=0:max_r=24"),
+            "overlay blur should use a radius-map blur, not blend a fixed blurred stream: {filter}"
+        );
+        assert!(
+            filter.contains("geq=lum='min(max(("),
+            "overlay blur should drive the radius map from keyframes: {filter}"
+        );
+        assert!(
+            !filter.contains("blend=all_expr="),
+            "overlay blur should not approximate radius by blending sharp and fully blurred streams: {filter}"
+        );
+        assert!(
+            filter.contains("(T-0.5)"),
+            "overlay blur should evaluate keyframes in overlay-local time: {filter}"
+        );
+    }
+
+    #[test]
+    fn oversized_overlay_blur_animation_surfaces_clamp_limitation() {
+        let animations = vec![awidat_proto::professional::ParameterAnimation {
+            id: "big-blur".into(),
+            target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                clip_id: "overlay-a".into(),
+                parameter: "overlay.blur".into(),
+            },
+            keyframes: vec![
+                awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                awidat_proto::professional::Keyframe::linear(1.0, 32.0),
+            ],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
+            rationale: None,
+        }];
+
+        let selection =
+            render_animations_for_clip_with_limitations(&animations, "overlay-a", "overlay");
+
+        assert_eq!(selection.animations.len(), 1);
+        assert!(
+            selection.limitations.iter().any(|limitation| {
+                limitation.kind == "overlay_blur_radius_clamped"
+                    && limitation.parameter.as_deref() == Some("overlay.blur")
+                    && limitation.message.contains("32")
+            }),
+            "oversized blur should surface a clamp limitation: {:?}",
+            selection.limitations
+        );
+    }
+
+    #[test]
+    fn overlay_motion_blur_samples_animated_position() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.0,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: Some(OverlayMotionBlurPlan { shutter_s: 0.02 }),
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: vec![RenderParameterAnimation {
+                parameter: "overlay.x".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                    awidat_proto::professional::Keyframe::linear(1.0, -0.2),
+                ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+            }],
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("split=3[media_overlay_blur0_src0][media_overlay_blur0_src1][media_overlay_blur0_src2]"),
+            "motion blur should render temporal transform samples from one overlay source: {filter}"
+        );
+        assert!(
+            filter.contains("t-0.01") && filter.contains("t+0.01"),
+            "motion blur should sample the animated transform around the current frame: {filter}"
+        );
+        assert!(
+            filter.contains("alpha(X,Y)*0.333333"),
+            "motion blur samples should be weighted instead of requiring authored opacity keyframes: {filter}"
+        );
+    }
+
+    #[test]
+    fn overlay_motion_blur_samples_animated_rotation() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.0,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: Some(OverlayMotionBlurPlan { shutter_s: 0.02 }),
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: vec![RenderParameterAnimation {
+                parameter: "overlay.rotation_deg".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                    awidat_proto::professional::Keyframe::linear(1.0, 45.0),
+                ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+            }],
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("split=3[media_overlay_blur0_src0][media_overlay_blur0_src1][media_overlay_blur0_src2]"),
+            "motion blur should render temporal transform samples from one overlay source: {filter}"
+        );
+        assert!(
+            filter.matches("rotate='(PI/180)*(").count() >= 3,
+            "motion blur should rotate each temporal transform sample independently: {filter}"
+        );
+        assert!(
+            filter.contains("t-0.01") && filter.contains("t+0.01"),
+            "motion blur should sample animated rotation around the current frame: {filter}"
+        );
+    }
+
+    #[test]
+    fn overlay_motion_blur_samples_animated_scale() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.0,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: Some(OverlayMotionBlurPlan { shutter_s: 0.02 }),
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: vec![RenderParameterAnimation {
+                parameter: "overlay.scale".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, 1.0),
+                    awidat_proto::professional::Keyframe::linear(1.0, 1.5),
+                ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+            }],
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.matches("scale2ref=w=main_w*0.3*(").count() >= 3,
+            "motion blur should scale each temporal transform sample independently: {filter}"
+        );
+        assert!(
+            filter.contains("t-0.01") && filter.contains("t+0.01"),
+            "motion blur should sample animated scale around the current frame: {filter}"
+        );
+    }
+
+    #[test]
+    fn overlay_rotation_animation_inserts_per_frame_rotate_stage() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.0,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: vec![RenderParameterAnimation {
+                parameter: "overlay.rotation_deg".to_string(),
+                keyframes: vec![
+                    awidat_proto::professional::Keyframe::linear(0.0, 0.0),
+                    awidat_proto::professional::Keyframe::linear(1.0, 15.0),
+                ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+            }],
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("rotate='(PI/180)*(") && filter.contains(":ow='hypot(iw\\,ih)'"),
+            "overlay rotation should use a degree animation expression in a rotate filter: {filter}"
+        );
+        assert!(
+            filter.contains("[media_overlay_rot0]"),
+            "rotated overlay label should feed the overlay stage: {filter}"
+        );
+    }
+
+    #[test]
+    fn overlay_static_rotation_inserts_rotate_stage() {
+        let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
+        let overlay = VideoOverlayPlan {
+            track_start_s: 0.0,
+            segment: seg("/tmp/overlay.mp4", 0.0, 2.0),
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".to_string(),
+                scale: 0.3,
+                margin_pct: 0.05,
+            },
+            rotation_deg: -30.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: Vec::new(),
+        };
+
+        let argv = build_timeline_argv_full(
+            &segs,
+            &[],
+            &[overlay],
+            &[],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = filter_complex_from_argv(&argv);
+
+        assert!(
+            filter.contains("rotate='(PI/180)*(-30)'"),
+            "static overlay rotation should be expressed in degrees: {filter}"
+        );
+    }
+
+    #[test]
     fn overlay_opacity_animation_uses_time_aware_alpha_filter() {
         let segs = vec![seg("/tmp/base.mp4", 0.0, 2.0)];
         let overlay = VideoOverlayPlan {
@@ -7350,12 +12493,21 @@ mod tests {
                 scale: 0.3,
                 margin_pct: 0.05,
             },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
             animations: vec![RenderParameterAnimation {
                 parameter: "overlay.opacity".to_string(),
                 keyframes: vec![
                     awidat_proto::professional::Keyframe::linear(0.0, 0.0),
                     awidat_proto::professional::Keyframe::linear(1.0, 1.0),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
             }],
         };
 
@@ -7406,6 +12558,12 @@ mod tests {
                 scale: 0.35,
                 margin_pct: 0.05,
             },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
             animations: vec![
                 RenderParameterAnimation {
                     parameter: "overlay.opacity".into(),
@@ -7413,6 +12571,9 @@ mod tests {
                         awidat_proto::professional::Keyframe::linear(0.0, 0.2),
                         awidat_proto::professional::Keyframe::linear(1.0, 0.8),
                     ],
+                    pre_extrapolation: ExtrapolationMode::Hold,
+                    post_extrapolation: ExtrapolationMode::Hold,
+                    motion_path: None,
                 },
                 RenderParameterAnimation {
                     parameter: "overlay.scale".into(),
@@ -7420,12 +12581,81 @@ mod tests {
                         awidat_proto::professional::Keyframe::linear(0.0, 0.25),
                         awidat_proto::professional::Keyframe::linear(1.0, 0.45),
                     ],
+                    pre_extrapolation: ExtrapolationMode::Hold,
+                    post_extrapolation: ExtrapolationMode::Hold,
+                    motion_path: None,
                 },
             ],
         };
         let argv =
             build_timeline_argv_full(&segs, &[], &[overlay], &[], None, None, None, &output_path);
 
+        let output = std::process::Command::new(ffmpeg)
+            .args(&argv)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "ffmpeg smoke failed\nargv: {}\nstderr:\n{}",
+            argv.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output_path.exists());
+    }
+
+    #[test]
+    fn ffmpeg_smoke_renders_annotation_and_rich_title() {
+        let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let base_path = dir.path().join("base.mp4");
+        let output_path = dir.path().join("annotation-rich-title.mp4");
+        write_synthetic_video(&ffmpeg, &base_path, "blue");
+
+        let segs = vec![seg(&base_path.to_string_lossy(), 0.0, 1.0)];
+        let annotations = vec![AnnotationPlan {
+            kind: AnnotationKind::Rectangle,
+            start_s: 0.0,
+            end_s: 1.0,
+            x: 0.1,
+            y: 0.1,
+            width: 0.4,
+            height: 0.35,
+            color: "#FFCC00".into(),
+            stroke_width: 4,
+            label: None,
+        }];
+        let mut title = title(TitleAnimation::None, TitlePosition::Bottom);
+        title.start_s = 0.0;
+        title.end_s = 1.0;
+        title.text = "Launch now".into();
+        title.rich_segments = vec![
+            RichTextSegment {
+                text: "Launch".into(),
+                color: Some("#FFFFFF".into()),
+                font_weight: Some(TitleWeight::Bold),
+            },
+            RichTextSegment {
+                text: " now".into(),
+                color: Some("#FFCC00".into()),
+                font_weight: Some(TitleWeight::Normal),
+            },
+        ];
+
+        let argv = build_timeline_argv_full_with_annotations(
+            &segs,
+            &[],
+            &[],
+            &annotations,
+            &[title],
+            None,
+            None,
+            None,
+            &output_path,
+        );
         let output = std::process::Command::new(ffmpeg)
             .args(&argv)
             .current_dir(dir.path())
@@ -7481,6 +12711,10 @@ mod tests {
                 parameter: "title.opacity".to_string(),
             },
             keyframes: vec![awidat_proto::professional::Keyframe::linear(0.0, 0.0)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
             rationale: None,
         }];
 
@@ -7499,6 +12733,10 @@ mod tests {
                 parameter: "overlay.x".to_string(),
             },
             keyframes: vec![awidat_proto::professional::Keyframe::linear(0.0, 0.0)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
             rationale: None,
         }];
 
@@ -7514,6 +12752,12 @@ mod tests {
             segment: seg("/tmp/cover.mp4", 0.0, 2.0),
             track_start_s: 1.0,
             mode: VideoOverlayMode::FullFrame,
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
             animations: Vec::new(),
         }];
         let argv = build_timeline_argv_full(
@@ -7590,6 +12834,9 @@ mod tests {
                 awidat_proto::professional::Keyframe::linear(0.0, 0.0),
                 awidat_proto::professional::Keyframe::linear(1.0, 1.0),
             ],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
         }];
 
         let argv = build_timeline_argv_full(
@@ -7624,6 +12871,9 @@ mod tests {
                     awidat_proto::professional::Keyframe::linear(0.0, -0.1),
                     awidat_proto::professional::Keyframe::linear(1.0, 0.1),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
             },
             RenderParameterAnimation {
                 parameter: "title.y".to_string(),
@@ -7631,6 +12881,9 @@ mod tests {
                     awidat_proto::professional::Keyframe::linear(0.0, 0.0),
                     awidat_proto::professional::Keyframe::linear(1.0, 0.2),
                 ],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
             },
         ];
 
@@ -7665,6 +12918,9 @@ mod tests {
                 awidat_proto::professional::Keyframe::linear(0.0, 48.0),
                 awidat_proto::professional::Keyframe::linear(1.0, 72.0),
             ],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
         }];
 
         let argv = build_timeline_argv_full(
@@ -7689,6 +12945,122 @@ mod tests {
         );
     }
 
+    #[test]
+    fn title_motion_path_offsets_position() {
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.animations = vec![RenderParameterAnimation {
+            parameter: "title.position".to_string(),
+            keyframes: Vec::new(),
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: Some(awidat_proto::professional::MotionPath {
+                points: vec![
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 0.0,
+                        x: -0.2,
+                        y: 0.0,
+                        outgoing_control: None,
+                        incoming_control: None,
+                    },
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 1.0,
+                        x: 0.2,
+                        y: 0.4,
+                        outgoing_control: None,
+                        incoming_control: None,
+                    },
+                ],
+            }),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &[],
+            &[],
+            &[],
+            &[title],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("x=((w-text_w)/2)+w*(if(lt((t-1)"),
+            "title.position path should drive x offset: {filter}"
+        );
+        assert!(
+            filter.contains("y=((h-text_h)/2)+h*(if(lt((t-1)"),
+            "title.position path should drive y offset: {filter}"
+        );
+    }
+
+    #[test]
+    fn title_motion_path_uses_keyframe_progress_curve() {
+        let mut title = title(TitleAnimation::None, TitlePosition::Center);
+        title.animations = vec![RenderParameterAnimation {
+            parameter: "title.position".to_string(),
+            keyframes: vec![
+                Keyframe {
+                    time_s: 0.0,
+                    value: 0.0,
+                    interpolation: KeyframeInterpolation::Bezier,
+                    easing: Easing::Linear,
+                    bezier: Some(BezierHandles {
+                        out_x: 0.25,
+                        out_y: 0.9,
+                        in_x: 0.75,
+                        in_y: 0.1,
+                    }),
+                    tangent_mode: Default::default(),
+                    spring: None,
+                },
+                Keyframe::linear(1.0, 1.0),
+            ],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: Some(awidat_proto::professional::MotionPath {
+                points: vec![
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 0.0,
+                        x: -0.2,
+                        y: 0.0,
+                        outgoing_control: None,
+                        incoming_control: None,
+                    },
+                    awidat_proto::professional::MotionPathPoint {
+                        time_s: 1.0,
+                        x: 0.2,
+                        y: 0.4,
+                        outgoing_control: None,
+                        incoming_control: None,
+                    },
+                ],
+            }),
+        }];
+
+        let argv = build_timeline_argv_full(
+            &[],
+            &[],
+            &[],
+            &[title],
+            None,
+            None,
+            None,
+            Path::new("/tmp/out.mp4"),
+        );
+        let filter = argv.join(" ");
+
+        assert!(
+            filter.contains("min(max("),
+            "motion path should clamp keyframed progress before sampling path: {filter}"
+        );
+        assert!(
+            filter.contains("0.03125") && filter.contains("0.96875"),
+            "bezier progress should be sampled into the motion-path expression: {filter}"
+        );
+    }
+
     fn title(animation: TitleAnimation, position: TitlePosition) -> TitlePlan {
         TitlePlan {
             text: "Hi".into(),
@@ -7699,8 +13071,10 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation,
+            reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
+            rich_segments: Vec::new(),
             animations: Vec::new(),
         }
     }

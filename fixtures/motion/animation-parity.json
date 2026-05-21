@@ -98,6 +98,74 @@
         { "time_s": 0.5, "expected": 0.802403387584857 },
         { "time_s": 0.75, "expected": 0.9604589783489903 }
       ]
+    },
+    {
+      "name": "step interpolation switches at midpoint",
+      "keyframes": [
+        { "time_s": 0.0, "value": 2.0, "interpolation": "step", "easing": "linear" },
+        { "time_s": 1.0, "value": 4.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.49, "expected": 2.0 },
+        { "time_s": 0.5, "expected": 4.0 }
+      ]
+    },
+    {
+      "name": "ease out elastic interpolation",
+      "keyframes": [
+        { "time_s": 0.0, "value": 0.0, "interpolation": "linear", "easing": "ease_out_elastic" },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.25, "expected": 0.9116116523516816 },
+        { "time_s": 0.5, "expected": 1.015625 }
+      ]
+    },
+    {
+      "name": "ease in bounce interpolation",
+      "keyframes": [
+        { "time_s": 0.0, "value": 0.0, "interpolation": "linear", "easing": "ease_in_bounce" },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.25, "expected": 0.02734375 },
+        { "time_s": 0.5, "expected": 0.234375 }
+      ]
+    },
+    {
+      "name": "spring interpolation with default physical parameters",
+      "keyframes": [
+        {
+          "time_s": 0.0,
+          "value": 0.0,
+          "interpolation": "spring",
+          "easing": "linear",
+          "spring": { "mass": 1.0, "stiffness": 100.0, "damping": 12.0 }
+        },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear" }
+      ],
+      "samples": [
+        { "time_s": 0.25, "expected": 0.9406861499313992 },
+        { "time_s": 0.5, "expected": 1.0608022328213043 }
+      ]
+    },
+    {
+      "name": "flat tangent bezier interpolation",
+      "keyframes": [
+        {
+          "time_s": 0.0,
+          "value": 0.0,
+          "interpolation": "bezier",
+          "easing": "linear",
+          "bezier": { "out_x": 0.25, "out_y": 0.9, "in_x": 0.75, "in_y": 0.1 },
+          "tangent_mode": "flat"
+        },
+        { "time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear", "tangent_mode": "flat" }
+      ],
+      "samples": [
+        { "time_s": 0.01, "expected": 0.0005151251794989555 },
+        { "time_s": 0.99, "expected": 0.999484874820501 }
+      ]
     }
   ]
 }

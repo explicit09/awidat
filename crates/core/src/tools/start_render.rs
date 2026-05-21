@@ -235,6 +235,17 @@ impl ToolHandler for StartRenderTool {
                          not put raw FFmpeg, GLSL, shell, or plugin code in transition metadata."
                             )
                         }
+                        RenderTimelineError::InvalidClipEffectMetadata {
+                            clip_name,
+                            effect,
+                            message,
+                        } => {
+                            format!(
+                                "start_render: clip '{clip_name}' has invalid {effect} metadata: \
+                         {message}. Use the registered awidat effect parameter schema and avoid \
+                         raw renderer expressions in clip effect metadata."
+                            )
+                        }
                         RenderTimelineError::BroadcastOverlayRender(message) => {
                             format!("start_render: broadcast overlay render failed: {message}")
                         }

@@ -17,7 +17,7 @@ use awidat_core::tools::{
     analyze_sync::AnalyzeSyncTool, apply_edl::ApplyEdlTool,
     assess_continuity::AssessContinuityTool, assess_edit_quality::AssessEditQualityTool,
     bash::BashTool, broll_candidates::BrollCandidatesTool, clip_search::ClipSearchTool,
-    delegate::DelegateTool, delegate_all::DelegateAllTool,
+    color_scopes::ColorScopesTool, delegate::DelegateTool, delegate_all::DelegateAllTool,
     diagnose_project_media::DiagnoseProjectMediaTool, download_yt_clip::DownloadYtClipTool,
     export_package::ExportPackageTool, find_beat::FindBeatTool,
     find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
@@ -26,16 +26,16 @@ use awidat_core::tools::{
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
     find_speaker_oncam::FindSpeakerOncamTool, inspect_clip::InspectClipTool,
     inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_looks::ListLooksTool,
-    load_skill::LoadSkillTool, plan_look_regions::PlanLookRegionsTool,
-    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
-    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
+    load_skill::LoadSkillTool, plan_emphasis::PlanEmphasisTool,
+    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
+    plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
+    plan_reframe::PlanReframeTool, plan_transition::PlanTransitionTool,
     poll_render::PollRenderTool, read_index::ReadIndexTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transition_context::TransitionContextTool,
-    update_plan::UpdatePlanTool,
-    validate_transition_choice::ValidateTransitionChoiceTool, use_broll::UseBrollTool,
-    vedit_commit::VeditCommitTool,
+    update_plan::UpdatePlanTool, use_broll::UseBrollTool,
+    validate_transition_choice::ValidateTransitionChoiceTool, vedit_commit::VeditCommitTool,
     vedit_diff::VeditDiffTool, vedit_log::VeditLogTool, vedit_revert::VeditRevertTool,
     view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
@@ -70,10 +70,12 @@ holding a phone\", \"dark room\"), shot_summary (visual structure \
 overview), broll_candidates (cutaway/B-roll hunting — wide/no-face \
 + steady + sharp), find_speaker_oncam (when is speaker X's face \
 visible — needs whisper diarization + face), find_eye_contact \
-(direct-address moments).\
+(direct-address moments), plan_reframe (static vertical/social crop \
+fragment from subject-center evidence).\
 \n  - **Raw lookup**: find_moment (transcript substring), read_index \
 (any indexer channel), inspect_clip (one clip's metadata), \
-view_frame (extract a frame at a timestamp).\
+view_frame (extract a frame at a timestamp), color_scopes \
+(histogram/waveform/parade/vectorscope evidence for one frame).\
 \n  - **Edit quality**: assess_edit_quality before risky trims/splits; it recommends hard cut, recut, J/L split edit, b-roll, or motivated transition. transition_context assembles handles, transcript, frames, and continuity context before choosing a visible transition; plan_transition turns that packet into a hard-cut or visible-transition proposal. assess_continuity is the lower-level rule breakdown.\
 \n  - **Editing**: apply_edl (commit edits — Trim, Untrim, Delete, \
 Split, Insert, Insert PiP). For `@@ anchor: clip_uuid=...`, use the clip \
@@ -187,6 +189,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(InspectClipTool));
     registry.register(Arc::new(ListAssetsTool));
     registry.register(Arc::new(ListLooksTool));
+    registry.register(Arc::new(ColorScopesTool));
     registry.register(Arc::new(PollRenderTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RequestUserInputTool));
@@ -195,7 +198,9 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(StartLookRegionPassTool));
     registry.register(Arc::new(PlanLookRegionsTool));
     registry.register(Arc::new(ReviewLookRegionsTool));
+    registry.register(Arc::new(PlanEmphasisTool));
     registry.register(Arc::new(PlanMulticamTool));
+    registry.register(Arc::new(PlanReframeTool));
     registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(TransitionContextTool));

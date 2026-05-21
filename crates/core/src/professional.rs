@@ -2240,6 +2240,20 @@ fn shot_requires_matte(shot: &VfxShot) -> bool {
         .any(|effect| effect_requires_matte(effect))
 }
 
+fn shot_requires_corner_pin(shot: &VfxShot) -> bool {
+    shot.effect_names
+        .iter()
+        .any(|effect| effect_requires_corner_pin(effect))
+}
+
+fn effect_requires_corner_pin(effect_name: &str) -> bool {
+    let normalized = effect_name.to_ascii_lowercase();
+    contains_any(
+        &normalized,
+        &["screen_replace", "corner_pin", "perspective"],
+    )
+}
+
 fn effect_requires_matte(effect_name: &str) -> bool {
     let normalized = effect_name.to_ascii_lowercase();
     contains_any(&normalized, &["key", "matte", "green", "screen"])
@@ -2311,11 +2325,37 @@ fn vfx_composition_graph(shot: &VfxShot) -> CompositionGraph {
         input: None,
     }];
     let mut tail = "tracker".to_string();
+    if shot_requires_corner_pin(shot) {
+        let mut corner_pin_params = HashMap::new();
+        corner_pin_params.insert(
+            "track_id".to_string(),
+            serde_json::Value::String(format!("track-{}", shot.clip_id)),
+        );
+        corner_pin_params.insert(
+            "target_clip_id".to_string(),
+            serde_json::Value::String(shot.clip_id.clone()),
+        );
+        nodes.push(CompositionNode {
+            id: "corner_pin".to_string(),
+            node_type: CompositionNodeType::CornerPin,
+            params: corner_pin_params,
+        });
+        edges.push(CompositionEdge {
+            from: tail,
+            to: "corner_pin".to_string(),
+            input: Some("track".to_string()),
+        });
+        tail = "corner_pin".to_string();
+    }
     if shot_requires_mask(shot) {
         let mut mask_params = HashMap::new();
         mask_params.insert(
             "mask_id".to_string(),
             serde_json::Value::String(format!("mask-{}", shot.clip_id)),
+        );
+        mask_params.insert(
+            "target_clip_id".to_string(),
+            serde_json::Value::String(shot.clip_id.clone()),
         );
         nodes.push(CompositionNode {
             id: "mask".to_string(),
@@ -2334,6 +2374,10 @@ fn vfx_composition_graph(shot: &VfxShot) -> CompositionGraph {
         matte_params.insert(
             "matte_id".to_string(),
             serde_json::Value::String(format!("matte-{}", shot.clip_id)),
+        );
+        matte_params.insert(
+            "target_clip_id".to_string(),
+            serde_json::Value::String(shot.clip_id.clone()),
         );
         nodes.push(CompositionNode {
             id: "matte".to_string(),
@@ -2370,7 +2414,11 @@ fn vfx_track_sidecar(shot: &VfxShot) -> TrackSidecar {
     TrackSidecar {
         id: format!("track-{}", shot.clip_id),
         asset_id: shot.asset_id.clone(),
-        kind: VfxTrackKind::Planar,
+        kind: if shot_requires_corner_pin(shot) {
+            VfxTrackKind::Surface
+        } else {
+            VfxTrackKind::Planar
+        },
         samples: vec![TrackSample {
             frame: 0,
             points: vec![[0.25, 0.25], [0.75, 0.25], [0.75, 0.75], [0.25, 0.75]],
@@ -3636,6 +3684,19 @@ mod tests {
                 .iter()
                 .any(|node| node.node_type == CompositionNodeType::TrackerBind)
         );
+        let corner_pin_node = graph
+            .nodes
+            .iter()
+            .find(|node| node.node_type == CompositionNodeType::CornerPin)
+            .unwrap();
+        assert_eq!(
+            corner_pin_node.params.get("track_id"),
+            Some(&serde_json::json!("track-c-phone"))
+        );
+        assert_eq!(
+            corner_pin_node.params.get("target_clip_id"),
+            Some(&serde_json::json!("c-phone"))
+        );
         let mask_node = graph
             .nodes
             .iter()
@@ -3644,6 +3705,10 @@ mod tests {
         assert_eq!(
             mask_node.params.get("mask_id"),
             Some(&serde_json::json!("mask-c-phone"))
+        );
+        assert_eq!(
+            mask_node.params.get("target_clip_id"),
+            Some(&serde_json::json!("c-phone"))
         );
         let matte_node = graph
             .nodes
@@ -3654,8 +3719,19 @@ mod tests {
             matte_node.params.get("matte_id"),
             Some(&serde_json::json!("matte-c-phone"))
         );
+        assert_eq!(
+            matte_node.params.get("target_clip_id"),
+            Some(&serde_json::json!("c-phone"))
+        );
         assert!(graph.edges.iter().any(|edge| {
-            edge.from == "tracker" && edge.to == "mask" && edge.input.as_deref() == Some("source")
+            edge.from == "tracker"
+                && edge.to == "corner_pin"
+                && edge.input.as_deref() == Some("track")
+        }));
+        assert!(graph.edges.iter().any(|edge| {
+            edge.from == "corner_pin"
+                && edge.to == "mask"
+                && edge.input.as_deref() == Some("source")
         }));
         assert!(graph.edges.iter().any(|edge| {
             edge.from == "mask" && edge.to == "matte" && edge.input.as_deref() == Some("mask")

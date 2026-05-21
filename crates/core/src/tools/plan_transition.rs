@@ -260,9 +260,7 @@ fn incompatibility_reason(
             transition.display_name
         ));
     }
-    if transition.requires_motion_continuity
-        && context.motion_match.as_deref() == Some("opposed")
-    {
+    if transition.requires_motion_continuity && context.motion_match.as_deref() == Some("opposed") {
         return Some(format!(
             "{} requires motion continuity and the boundary shows opposed screen-direction \
              motion; a motion-following transition would cut against the action.",

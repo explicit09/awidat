@@ -12,8 +12,12 @@ use thiserror::Error;
 pub const VOLUME: &str = "awidat.volume";
 /// Per-clip playback speed effect id.
 pub const SPEED: &str = "awidat.speed";
+/// Clip-level curve-based time remap effect id.
+pub const TIME_REMAP: &str = "awidat.time_remap";
 /// Clip-level color correction effect id.
 pub const COLOR_CORRECTION: &str = "awidat.color_correction";
+/// Clip-level blur effect id.
+pub const BLUR: &str = "awidat.blur";
 /// Clip-level 3D LUT effect id.
 pub const LUT: &str = "awidat.lut";
 /// Clip-level atomic color-pipeline effect id. Carries the full
@@ -27,6 +31,10 @@ pub const TITLE: &str = "awidat.title";
 pub const VIDEO_OVERLAY: &str = "awidat.video_overlay";
 /// Clip-level punch-in / reframing effect id.
 pub const REFRAME: &str = "awidat.reframe";
+/// Clip-level lens warp effect id.
+pub const WARP: &str = "awidat.warp";
+/// Clip-level procedural camera shake effect id.
+pub const SHAKE: &str = "awidat.shake";
 /// Per-clip audio fade effect id.
 pub const AUDIO_FADE: &str = "awidat.audio_fade";
 /// FFmpeg-native clip/track audio processing effect id.
@@ -42,6 +50,8 @@ const SPEED_PARAMS: &[ParamDef] = &[ParamDef::number(
     None,
 )];
 
+const TIME_REMAP_PARAMS: &[ParamDef] = &[ParamDef::json("curve", true, None)];
+
 const COLOR_PARAMS: &[ParamDef] = &[
     ParamDef::number("exposure_ev", false, Some(-4.0), Some(4.0), None),
     ParamDef::number("contrast", false, Some(0.0), Some(3.0), None),
@@ -51,6 +61,14 @@ const COLOR_PARAMS: &[ParamDef] = &[
     ParamDef::number("shadows", false, Some(-1.0), Some(1.0), None),
     ParamDef::number("highlights", false, Some(-1.0), Some(1.0), None),
 ];
+
+const BLUR_PARAMS: &[ParamDef] = &[ParamDef::number(
+    "radius_px",
+    false,
+    Some(0.0),
+    Some(100.0),
+    Some(ParamDefault::Number(8.0)),
+)];
 
 const LUT_PARAMS: &[ParamDef] = &[
     ParamDef::string("lut_path", true, None),
@@ -91,12 +109,11 @@ const LUT_PARAMS: &[ParamDef] = &[
 // - `look_strength`: optional 0..=1 blend; defaults to 1.0.
 // - `output_transform_lut`: optional working-to-display ODT.
 //
-// Mask slot (Stage 9, schema-only):
+// Mask slot:
 // - `mask_source`: optional project-relative path to a mask asset
-//   (PNG with alpha, grayscale image, or video). Reserved for
-//   regional grading — apply-time validation accepts it, but render
-//   reports a `mask_not_implemented` limitation until the
-//   split→mask→lut3d→overlay path lands.
+//   (PNG with alpha, grayscale image, or video). Render supports the
+//   v1 masked look-LUT path and reports explicit limitations for mask
+//   combinations outside that scope.
 const COLOR_PIPELINE_PARAMS: &[ParamDef] = &[
     ParamDef::string("clip_input_space", true, None),
     ParamDef::string("working_space", false, None),
@@ -195,6 +212,21 @@ const VIDEO_OVERLAY_PARAMS: &[ParamDef] = &[
     ParamDef::string("corner", false, None),
     ParamDef::number("scale", false, Some(0.01), Some(1.0), None),
     ParamDef::number("margin_pct", false, Some(0.0), Some(0.5), None),
+    ParamDef::number(
+        "rotation_deg",
+        false,
+        Some(-360.0),
+        Some(360.0),
+        Some(ParamDefault::Number(0.0)),
+    ),
+    ParamDef::bool("motion_blur", false, Some(ParamDefault::Bool(false))),
+    ParamDef::number(
+        "motion_blur_shutter_s",
+        false,
+        Some(0.0),
+        Some(0.2),
+        Some(ParamDefault::Number(1.0 / 60.0)),
+    ),
 ];
 
 const REFRAME_PARAMS: &[ParamDef] = &[
@@ -212,6 +244,54 @@ const REFRAME_PARAMS: &[ParamDef] = &[
         Some(-1.0),
         Some(1.0),
         Some(ParamDefault::Number(0.0)),
+    ),
+];
+
+const WARP_PARAMS: &[ParamDef] = &[
+    ParamDef::number(
+        "k1",
+        false,
+        Some(-1.0),
+        Some(1.0),
+        Some(ParamDefault::Number(-0.08)),
+    ),
+    ParamDef::number(
+        "k2",
+        false,
+        Some(-1.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.0)),
+    ),
+    ParamDef::number(
+        "center_x",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.5)),
+    ),
+    ParamDef::number(
+        "center_y",
+        false,
+        Some(0.0),
+        Some(1.0),
+        Some(ParamDefault::Number(0.5)),
+    ),
+];
+
+const SHAKE_PARAMS: &[ParamDef] = &[
+    ParamDef::number(
+        "intensity_px",
+        false,
+        Some(0.0),
+        Some(200.0),
+        Some(ParamDefault::Number(8.0)),
+    ),
+    ParamDef::number(
+        "frequency_hz",
+        false,
+        Some(0.1),
+        Some(60.0),
+        Some(ParamDefault::Number(12.0)),
     ),
 ];
 
@@ -262,6 +342,18 @@ pub const EFFECTS: &[EffectDef] = &[
         params: SPEED_PARAMS,
     },
     EffectDef {
+        id: TIME_REMAP,
+        display_name: "Time Remap",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Both,
+        phase: EffectPhase::Clip,
+        support: SupportStatus::Experimental,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: TIME_REMAP_PARAMS,
+    },
+    EffectDef {
         id: COLOR_CORRECTION,
         display_name: "Color Correction",
         scope: EffectScope::Clip,
@@ -272,6 +364,18 @@ pub const EFFECTS: &[EffectDef] = &[
         backend: BackendKind::FfmpegNative,
         min_present_params: 1,
         params: COLOR_PARAMS,
+    },
+    EffectDef {
+        id: BLUR,
+        display_name: "Blur",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Clip,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: BLUR_PARAMS,
     },
     EffectDef {
         id: LUT,
@@ -291,11 +395,12 @@ pub const EFFECTS: &[EffectDef] = &[
         scope: EffectScope::Clip,
         media_kind: MediaKind::Video,
         phase: EffectPhase::Clip,
-        // Schema is stable but the render lowering arrives in a
-        // follow-up — until then the effect is metadata-only.
+        // Render supports the color-management/LUT chain plus the v1
+        // masked look-LUT subset. Unsupported mask combinations still
+        // surface explicit render limitations.
         support: SupportStatus::Experimental,
         stack_policy: StackPolicy::ReplaceSameId,
-        backend: BackendKind::SemanticOnly,
+        backend: BackendKind::FfmpegNative,
         min_present_params: 0,
         params: COLOR_PIPELINE_PARAMS,
     },
@@ -334,6 +439,30 @@ pub const EFFECTS: &[EffectDef] = &[
         backend: BackendKind::FfmpegNative,
         min_present_params: 0,
         params: REFRAME_PARAMS,
+    },
+    EffectDef {
+        id: WARP,
+        display_name: "Warp",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Transform,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: WARP_PARAMS,
+    },
+    EffectDef {
+        id: SHAKE,
+        display_name: "Shake",
+        scope: EffectScope::Clip,
+        media_kind: MediaKind::Video,
+        phase: EffectPhase::Transform,
+        support: SupportStatus::Stable,
+        stack_policy: StackPolicy::ReplaceSameId,
+        backend: BackendKind::FfmpegNative,
+        min_present_params: 0,
+        params: SHAKE_PARAMS,
     },
     EffectDef {
         id: AUDIO_FADE,
@@ -933,6 +1062,137 @@ mod tests {
     }
 
     #[test]
+    fn video_overlay_accepts_rotation_degrees() {
+        let mut params = Map::new();
+        params.insert("mode".into(), Value::from("pip"));
+        params.insert("rotation_deg".into(), Value::from(12.5));
+        let (_, normalized) = must_normalize(VIDEO_OVERLAY, &params);
+        assert_eq!(
+            normalized.get("rotation_deg").and_then(Value::as_f64),
+            Some(12.5)
+        );
+    }
+
+    #[test]
+    fn video_overlay_accepts_transform_motion_blur() {
+        let mut params = Map::new();
+        params.insert("mode".into(), Value::from("pip"));
+        params.insert("motion_blur".into(), Value::from(true));
+        params.insert("motion_blur_shutter_s".into(), Value::from(0.02));
+        let (_, normalized) = must_normalize(VIDEO_OVERLAY, &params);
+        assert_eq!(
+            normalized.get("motion_blur").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            normalized
+                .get("motion_blur_shutter_s")
+                .and_then(Value::as_f64),
+            Some(0.02)
+        );
+    }
+
+    #[test]
+    fn shake_defaults_and_validates_motion_params() {
+        let effect = must_lookup("awidat.shake");
+        assert_eq!(effect.display_name, "Shake");
+        assert_eq!(effect.phase, EffectPhase::Transform);
+
+        let (_, normalized) = must_normalize("awidat.shake", &Map::new());
+        assert_eq!(
+            normalized.get("intensity_px").and_then(Value::as_f64),
+            Some(8.0)
+        );
+        assert_eq!(
+            normalized.get("frequency_hz").and_then(Value::as_f64),
+            Some(12.0)
+        );
+
+        let mut params = Map::new();
+        params.insert("intensity_px".into(), Value::from(-1.0));
+        let err = must_reject("awidat.shake", &params);
+        assert!(matches!(
+            err,
+            ValidationError::OutOfRange {
+                effect_id: "awidat.shake",
+                param: "intensity_px",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn blur_defaults_and_validates_radius() {
+        let effect = must_lookup("awidat.blur");
+        assert_eq!(effect.display_name, "Blur");
+        assert_eq!(effect.phase, EffectPhase::Clip);
+
+        let (_, normalized) = must_normalize("awidat.blur", &Map::new());
+        assert_eq!(
+            normalized.get("radius_px").and_then(Value::as_f64),
+            Some(8.0)
+        );
+
+        let mut params = Map::new();
+        params.insert("radius_px".into(), Value::from(-1.0));
+        let err = must_reject("awidat.blur", &params);
+        assert!(matches!(
+            err,
+            ValidationError::OutOfRange {
+                effect_id: "awidat.blur",
+                param: "radius_px",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn warp_defaults_and_validates_lens_params() {
+        let effect = must_lookup("awidat.warp");
+        assert_eq!(effect.display_name, "Warp");
+        assert_eq!(effect.phase, EffectPhase::Transform);
+
+        let (_, normalized) = must_normalize("awidat.warp", &Map::new());
+        assert_eq!(normalized.get("k1").and_then(Value::as_f64), Some(-0.08));
+        assert_eq!(normalized.get("k2").and_then(Value::as_f64), Some(0.0));
+        assert_eq!(
+            normalized.get("center_x").and_then(Value::as_f64),
+            Some(0.5)
+        );
+        assert_eq!(
+            normalized.get("center_y").and_then(Value::as_f64),
+            Some(0.5)
+        );
+
+        let mut params = Map::new();
+        params.insert("center_x".into(), Value::from(1.5));
+        let err = must_reject("awidat.warp", &params);
+        assert!(matches!(
+            err,
+            ValidationError::OutOfRange {
+                effect_id: "awidat.warp",
+                param: "center_x",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn time_remap_accepts_curve_points() {
+        let mut params = Map::new();
+        params.insert(
+            "curve".into(),
+            serde_json::json!([
+                {"source_time_s": 0.0, "timeline_time_s": 0.0},
+                {"source_time_s": 1.0, "timeline_time_s": 2.5},
+                {"source_time_s": 2.0, "timeline_time_s": 3.5}
+            ]),
+        );
+        let (_, normalized) = must_normalize(TIME_REMAP, &params);
+        assert!(normalized.get("curve").and_then(Value::as_array).is_some());
+    }
+
+    #[test]
     fn reframe_defaults_position_to_center() {
         let mut params = Map::new();
         params.insert("zoom".into(), Value::from(1.08));
@@ -964,6 +1224,16 @@ mod tests {
             Some(1.0),
             "look_strength should default to 1.0",
         );
+    }
+
+    #[test]
+    fn color_pipeline_registry_advertises_ffmpeg_backend() {
+        let definition = match lookup(COLOR_PIPELINE) {
+            Some(definition) => definition,
+            None => panic!("color pipeline effect is registered"),
+        };
+
+        assert_eq!(definition.backend, BackendKind::FfmpegNative);
     }
 
     #[test]

@@ -586,6 +586,7 @@ fn build_diff_hints(
             | EdlOp::SetMotionTemplate { .. }
             | EdlOp::AttachComposition { .. }
             | EdlOp::SetTrackingPackage { .. }
+            | EdlOp::AuthorSubjectReframeFromTrack { .. }
             | EdlOp::SetColorFinishing { .. }
             | EdlOp::SetAudioFinishing { .. }
             | EdlOp::SelectDeliveryProfile { .. }
@@ -593,8 +594,11 @@ fn build_diff_hints(
             | EdlOp::SetWorkflowLens { .. }
             | EdlOp::SetPipelineReadiness { .. }
             | EdlOp::InsertTitle { .. }
+            | EdlOp::InsertRichTitle { .. }
+            | EdlOp::InstantiateMotionTemplate { .. }
             | EdlOp::SetTitle { .. }
             | EdlOp::InsertCaption { .. }
+            | EdlOp::InsertAnnotation { .. }
             | EdlOp::SetOutputFormat { .. }
             | EdlOp::SetLoudnessTarget { .. }
             | EdlOp::SetPackageMetadata { .. } => {}
@@ -794,6 +798,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetMotionTemplate { .. } => "SetMotionTemplate",
         EdlOp::AttachComposition { .. } => "AttachComposition",
         EdlOp::SetTrackingPackage { .. } => "SetTrackingPackage",
+        EdlOp::AuthorSubjectReframeFromTrack { .. } => "AuthorSubjectReframeFromTrack",
         EdlOp::SetColorFinishing { .. } => "SetColorFinishing",
         EdlOp::SetAudioFinishing { .. } => "SetAudioFinishing",
         EdlOp::SelectDeliveryProfile { .. } => "SelectDeliveryProfile",
@@ -801,8 +806,11 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::SetWorkflowLens { .. } => "SetWorkflowLens",
         EdlOp::SetPipelineReadiness { .. } => "SetPipelineReadiness",
         EdlOp::InsertTitle { .. } => "InsertTitle",
+        EdlOp::InsertRichTitle { .. } => "InsertRichTitle",
+        EdlOp::InstantiateMotionTemplate { .. } => "InstantiateMotionTemplate",
         EdlOp::SetTitle { .. } => "SetTitle",
         EdlOp::InsertCaption { .. } => "InsertCaption",
+        EdlOp::InsertAnnotation { .. } => "InsertAnnotation",
         EdlOp::SetOutputFormat { .. } => "SetOutputFormat",
         EdlOp::SetLoudnessTarget { .. } => "SetLoudnessTarget",
         EdlOp::SetPackageMetadata { .. } => "SetPackageMetadata",

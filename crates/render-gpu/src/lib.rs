@@ -117,7 +117,7 @@ pub enum TransitionShader {
 }
 
 impl TransitionShader {
-    fn fragment_wgsl(&self) -> &'static str {
+    fn fragment_wgsl(self) -> &'static str {
         match self {
             Self::CrossDissolve => CROSS_DISSOLVE_FS_WGSL,
             Self::Shake => SHAKE_FS_WGSL,
@@ -130,7 +130,7 @@ impl TransitionShader {
         }
     }
 
-    fn label(&self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
             Self::CrossDissolve => "cross_dissolve",
             Self::Shake => "shake",
@@ -644,7 +644,7 @@ impl GpuTransitionRenderer {
 fn padded_bytes_per_row(width: u32) -> u32 {
     let row_bytes = width * 4;
     let align = COPY_BYTES_PER_ROW_ALIGNMENT;
-    ((row_bytes + align - 1) / align) * align
+    row_bytes.div_ceil(align) * align
 }
 
 fn expected_bytes(width: u32, height: u32) -> usize {
@@ -670,9 +670,9 @@ pub fn encode_rgba_to_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8
         let mut encoder = png::Encoder::new(&mut buf, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|e| {
-            GpuError::Readback(format!("png header: {e}"))
-        })?;
+        let mut writer = encoder
+            .write_header()
+            .map_err(|e| GpuError::Readback(format!("png header: {e}")))?;
         writer
             .write_image_data(rgba)
             .map_err(|e| GpuError::Readback(format!("png write: {e}")))?;
@@ -707,6 +707,27 @@ mod tests {
         }
     }
 
+    trait GpuTestResultExt<T> {
+        fn assert_ok(self, context: &str) -> T;
+        fn assert_err(self, context: &str) -> GpuError;
+    }
+
+    impl<T> GpuTestResultExt<T> for Result<T, GpuError> {
+        fn assert_ok(self, context: &str) -> T {
+            match self {
+                Ok(value) => value,
+                Err(err) => panic!("{context} failed: {err}"),
+            }
+        }
+
+        fn assert_err(self, context: &str) -> GpuError {
+            match self {
+                Ok(_) => panic!("{context} unexpectedly succeeded"),
+                Err(err) => err,
+            }
+        }
+    }
+
     #[test]
     fn rejects_mismatched_input_size() {
         let Some(renderer) = renderer_or_skip(TransitionShader::CrossDissolve) else {
@@ -724,7 +745,7 @@ mod tests {
                     extra_params: [0.0; 4],
                 },
             )
-            .unwrap_err();
+            .assert_err("GPU render test");
         assert!(matches!(err, GpuError::BadFrameSize { .. }));
     }
 
@@ -746,7 +767,7 @@ mod tests {
                     extra_params: [0.0; 4],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         assert_eq!(out[..4], [255, 0, 0, 255]);
     }
 
@@ -768,7 +789,7 @@ mod tests {
                     extra_params: [0.0; 4],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         assert_eq!(out[..4], [0, 0, 255, 255]);
     }
 
@@ -790,7 +811,7 @@ mod tests {
                     extra_params: [0.0; 4],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         // Linear blend in sRGB-encoded RGBA8 storage. We don't promote to
         // linear before mixing (matches xfade=fade), so 200*0.5 + 0*0.5 = 100.
         let tolerance = 2;
@@ -824,7 +845,7 @@ mod tests {
         }
         let out = renderer
             .render_sequence(&from, &to, width, height, frame_count)
-            .unwrap();
+            .assert_ok("GPU render test");
         assert_eq!(out.len(), frame_bytes * frame_count as usize);
         // Last frame should be the incoming color (progress = 1.0).
         let last = &out[out.len() - frame_bytes..];
@@ -857,7 +878,7 @@ mod tests {
                     extra_params: [0.0; 4],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         // Pure-color inputs render to bell-of-shake mid-blend regardless
         // of the jitter offset — but the output must still be a full
         // 16x16 RGBA frame.
@@ -885,7 +906,7 @@ mod tests {
                     extra_params: [0.0; 4],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         assert_eq!(out.len(), 16 * 16 * 4);
         assert!(out[0] > 60 && out[0] < 140, "R: {}", out[0]);
         assert!(out[2] > 60 && out[2] < 140, "B: {}", out[2]);
@@ -930,7 +951,7 @@ mod tests {
                     extra_params: [0.0; 4],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         let frame_b = renderer
             .render_frame(
                 &from,
@@ -942,7 +963,7 @@ mod tests {
                     extra_params: [0.0; 4],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         let mut differing_pixels = 0;
         for i in (0..frame_a.len()).step_by(4) {
             if frame_a[i] != frame_b[i]
@@ -981,10 +1002,12 @@ mod tests {
             progress: 0.42,
             extra_params: [0.0; 4],
         };
-        let export = renderer.render_frame(&from, &to, params).unwrap();
+        let export = renderer
+            .render_frame(&from, &to, params)
+            .assert_ok("GPU render test");
         let preview = renderer
             .render_preview_frame(&from, &to, params)
-            .unwrap();
+            .assert_ok("GPU render test");
         assert_eq!(
             export, preview,
             "preview and export paths must produce bit-identical RGBA bytes"
@@ -1013,10 +1036,12 @@ mod tests {
                 progress: 0.5,
                 extra_params: [0.0; 4],
             };
-            let export = renderer.render_frame(&from, &to, params).unwrap();
+            let export = renderer
+                .render_frame(&from, &to, params)
+                .assert_ok("GPU render test");
             let preview = renderer
                 .render_preview_frame(&from, &to, params)
-                .unwrap();
+                .assert_ok("GPU render test");
             assert_eq!(
                 export, preview,
                 "shader {shader:?}: preview must match export bit-for-bit"
@@ -1056,9 +1081,15 @@ mod tests {
             progress,
             extra_params: [kind_slot, 0.04, 0.0, 0.0],
         };
-        let clock = renderer.render_frame(&from, &to, make_params(0.0)).unwrap();
-        let blinds = renderer.render_frame(&from, &to, make_params(1.0)).unwrap();
-        let checker = renderer.render_frame(&from, &to, make_params(2.0)).unwrap();
+        let clock = renderer
+            .render_frame(&from, &to, make_params(0.0))
+            .assert_ok("GPU render test");
+        let blinds = renderer
+            .render_frame(&from, &to, make_params(1.0))
+            .assert_ok("GPU render test");
+        let checker = renderer
+            .render_frame(&from, &to, make_params(2.0))
+            .assert_ok("GPU render test");
         // Any two of the three should differ on at least 5% of
         // pixels — same-kind renders would be identical, so this
         // catches a regression where the selector falls through.
@@ -1106,7 +1137,7 @@ mod tests {
                     extra_params: [0.0, 0.0, 0.0, 0.0],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         let leaked = renderer
             .render_frame(
                 &dark,
@@ -1118,7 +1149,7 @@ mod tests {
                     extra_params: [1.0, 0.7, 0.0, 0.0],
                 },
             )
-            .unwrap();
+            .assert_ok("GPU render test");
         // Aggregate luma: leaked frame should be brighter on average.
         let avg = |frame: &[u8]| -> f64 {
             let n = (frame.len() / 4) as f64;
@@ -1172,8 +1203,12 @@ mod tests {
             extra_params: [0.8, 0.0, 0.0, 0.0],
             ..params_d
         };
-        let plain = dissolve.render_frame(&from, &to, params_d).unwrap();
-        let swirled = swirl.render_frame(&from, &to, params_s).unwrap();
+        let plain = dissolve
+            .render_frame(&from, &to, params_d)
+            .assert_ok("GPU render test");
+        let swirled = swirl
+            .render_frame(&from, &to, params_s)
+            .assert_ok("GPU render test");
         let mut diff = 0usize;
         for i in (0..plain.len()).step_by(4) {
             if plain[i] != swirled[i] || plain[i + 1] != swirled[i + 1] {
@@ -1214,8 +1249,12 @@ mod tests {
             progress: 0.5,
             extra_params: [dir, 0.9, 0.0, 0.0],
         };
-        let left = renderer.render_frame(&from, &to, make(-1.0)).unwrap();
-        let right = renderer.render_frame(&from, &to, make(1.0)).unwrap();
+        let left = renderer
+            .render_frame(&from, &to, make(-1.0))
+            .assert_ok("GPU render test");
+        let right = renderer
+            .render_frame(&from, &to, make(1.0))
+            .assert_ok("GPU render test");
         let mut diff = 0usize;
         for i in (0..left.len()).step_by(4) {
             if left[i] != right[i] {

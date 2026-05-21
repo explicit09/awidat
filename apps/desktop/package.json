@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test:animation": "tsc src/timeline/animation.ts --target ES2022 --module ES2022 --moduleResolution bundler --outDir dist-test --skipLibCheck && node tests/animation-evaluator.mjs",
+    "test:animation": "tsc src/timeline/animation.ts src/media/videoOverlayStyle.ts --target ES2022 --module ES2022 --moduleResolution bundler --outDir dist-test --skipLibCheck && node tests/animation-evaluator.mjs",
     "test": "npm run test:animation && node tests/desktop-ui-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

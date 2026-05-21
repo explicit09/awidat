@@ -54,6 +54,7 @@ import {
 } from "../timeline/store";
 import type { TimelineParameterAnimation } from "../protocol";
 import { clampOpacity, evaluateAnimations } from "../timeline/animation";
+import { videoOverlayStyle as buildVideoOverlayStyle } from "./videoOverlayStyle";
 import {
   findActiveSegment,
   type PreviewTransition,
@@ -1012,9 +1013,22 @@ function TimelineVideoOverlay({
   isPlaying: boolean;
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const [previewHeightPx, setPreviewHeightPx] = useState<number | null>(null);
   const [src, setSrc] = useState<string | null>(() =>
     cachedMediaStreamUrl(overlay.proxyPath) ?? null,
   );
+
+  useLayoutEffect(() => {
+    const element = ref.current;
+    const layer = element?.parentElement;
+    if (!layer) return;
+    const update = () => setPreviewHeightPx(layer.getBoundingClientRect().height);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(layer);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const cached = cachedMediaStreamUrl(overlay.proxyPath);
@@ -1063,67 +1077,16 @@ function TimelineVideoOverlay({
       muted
       playsInline
       preload="auto"
-      style={videoOverlayStyle(overlay, timelineTime)}
+      style={videoOverlayStyle({ ...overlay, previewHeightPx }, timelineTime)}
     />
   );
 }
 
 function videoOverlayStyle(
-  overlay: VideoOverlaySegment,
+  overlay: VideoOverlaySegment & { previewHeightPx?: number | null },
   timelineTime: number,
 ): React.CSSProperties {
-  const zIndex = 10 + overlay.zIndex;
-  const animated = evaluateAnimations(
-    overlay.animations,
-    timelineTime - overlay.timelineStart,
-  );
-  const opacity = clampOpacity(animated["overlay.opacity"] ?? 1);
-  const xOffset = animated["overlay.x"] ?? 0;
-  const yOffset = animated["overlay.y"] ?? 0;
-  const scaleMultiplier = animated["overlay.scale"] ?? 1;
-  if (overlay.mode === "full_frame") {
-    return {
-      position: "absolute",
-      inset: 0,
-      width: "100%",
-      height: "100%",
-      objectFit: "contain",
-      opacity,
-      transform: `translate(${xOffset * 100}vw, ${yOffset * 100}vh) scale(${scaleMultiplier})`,
-      zIndex,
-    };
-  }
-  const size = `${overlay.scale * scaleMultiplier * 100}%`;
-  const margin = `${overlay.marginPct * 100}%`;
-  return {
-    position: "absolute",
-    width: size,
-    height: "auto",
-    maxHeight: `calc(100% - (${margin} * 2))`,
-    objectFit: "contain",
-    borderRadius: 6,
-    boxShadow: "0 10px 28px rgba(0, 0, 0, 0.42)",
-    opacity,
-    transform: `translate(${xOffset * 100}vw, ${yOffset * 100}vh)`,
-    zIndex,
-    ...cornerStyle(overlay.corner, margin),
-  };
-}
-
-function cornerStyle(
-  corner: VideoOverlaySegment["corner"],
-  margin: string,
-): React.CSSProperties {
-  switch (corner) {
-    case "top_left":
-      return { top: margin, left: margin };
-    case "top_right":
-      return { top: margin, right: margin };
-    case "bottom_left":
-      return { bottom: margin, left: margin };
-    case "bottom_right":
-      return { bottom: margin, right: margin };
-  }
+  return buildVideoOverlayStyle(overlay, timelineTime);
 }
 
 type BroadcastOverlayConfig = NonNullable<TimelineSnapshot["broadcast_overlay"]>;
@@ -1566,6 +1529,7 @@ type PreviewTitleOverlay = {
   color: string;
   fontWeight: "normal" | "bold";
   animation: "none" | "fade_in" | "fade_out" | "fade_in_out" | "slide_in" | "slide_out";
+  reveal: "none" | "typewriter" | "word" | "line";
   animations: TimelineParameterAnimation[];
 };
 
@@ -1596,6 +1560,7 @@ function activeTitleOverlays(
       color: item.title.color || "#FFFFFF",
       fontWeight: item.title.font_weight === "bold" ? "bold" : "normal",
       animation: titleAnimation(item.title.animation),
+      reveal: titleReveal(item.title.reveal),
       animations: item.animations ?? [],
     });
   }
@@ -1627,7 +1592,7 @@ function TimelineTitleOverlays({
           className={`timeline-title-overlay title-pos-${overlay.position}`}
           style={titleOverlayStyle(overlay, timelineTime)}
         >
-          {overlay.text}
+          {titleRevealText(overlay, timelineTime)}
         </div>
       ))}
     </div>
@@ -1660,12 +1625,13 @@ function titleOverlayStyle(
   if (animated["title.opacity"] !== undefined) {
     opacity = clampOpacity(animated["title.opacity"]);
   }
+  const fontSize = animated["title.font_size"] ?? overlay.fontSize;
   const xOffset = animated["title.x"] ?? 0;
   const yOffset = animated["title.y"] ?? 0;
 
   return {
     color: overlay.color,
-    fontSize: `clamp(15px, ${Math.max(1.2, overlay.fontSize / 22).toFixed(2)}vw, ${overlay.fontSize}px)`,
+    fontSize: `clamp(15px, ${Math.max(1.2, fontSize / 22).toFixed(2)}vw, ${fontSize}px)`,
     fontWeight: overlay.fontWeight === "bold" ? 750 : 500,
     opacity,
     transform: `translate(calc(${translateX} + ${xOffset * 100}vw), calc(${translateY} + ${yOffset * 100}vh))`,
@@ -1687,6 +1653,47 @@ function titleAnimation(value: string): PreviewTitleOverlay["animation"] {
     default:
       return "none";
   }
+}
+
+function titleReveal(value: string): PreviewTitleOverlay["reveal"] {
+  switch (value) {
+    case "typewriter":
+    case "word":
+    case "line":
+      return value;
+    default:
+      return "none";
+  }
+}
+
+function titleRevealText(overlay: PreviewTitleOverlay, timelineTime: number): string {
+  if (overlay.reveal === "none") return overlay.text;
+  const elapsed = Math.max(0, timelineTime - overlay.startS);
+  const duration = Math.max(0.001, overlay.endS - overlay.startS);
+  const progress = Math.min(1, elapsed / duration);
+  const steps = revealSteps(overlay.text, overlay.reveal);
+  if (steps.length === 0) return "";
+  const index = Math.min(steps.length - 1, Math.floor(progress * steps.length));
+  return steps[index];
+}
+
+function revealSteps(text: string, reveal: PreviewTitleOverlay["reveal"]): string[] {
+  if (reveal === "typewriter") {
+    return Array.from(text).map((_, index, chars) => chars.slice(0, index + 1).join(""));
+  }
+  if (reveal === "word") {
+    const matches = [...text.matchAll(/\S+/g)];
+    return matches.map((match) => text.slice(0, (match.index ?? 0) + match[0].length));
+  }
+  if (reveal === "line") {
+    const lines = text.match(/.*(?:\n|$)/g)?.filter((line) => line.length > 0) ?? [];
+    let cursor = 0;
+    return lines.map((line) => {
+      cursor += line.length;
+      return text.slice(0, cursor);
+    });
+  }
+  return [text];
 }
 
 /**

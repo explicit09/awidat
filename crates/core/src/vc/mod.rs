@@ -59,6 +59,9 @@ use vedit_core::diff;
 use vedit_core::otio;
 use vedit_core::repo::Repo as VeditRepo;
 
+mod animation_diff;
+pub use animation_diff::AnimationChange;
+
 /// Branch name vedit uses by default. Mirrors `vedit_core::repo::DEFAULT_BRANCH`.
 /// Re-exported here so callers don't have to reach into vedit-core for it.
 pub const DEFAULT_BRANCH: &str = "main";
@@ -343,14 +346,24 @@ pub fn diff_refs(
     // If the from ref doesn't exist (no session tag yet, fresh repo),
     // diff the "empty timeline" against the to ref so the result is
     // "everything that's there is new."
-    let before_timeline = match from_resolved {
-        Some(hash) => Some(read_timeline_at_commit(repo, &hash)?),
+    let before_value = match from_resolved {
+        Some(hash) => Some(read_timeline_value_at_commit(repo, &hash)?),
         None => None,
     };
-    let after_timeline = match to_resolved {
-        Some(hash) => Some(read_timeline_at_commit(repo, &hash)?),
+    let after_value = match to_resolved {
+        Some(hash) => Some(read_timeline_value_at_commit(repo, &hash)?),
         None => None,
     };
+    let before_timeline = before_value
+        .as_ref()
+        .map(otio::parse_timeline)
+        .transpose()
+        .map_err(vedit_err)?;
+    let after_timeline = after_value
+        .as_ref()
+        .map(otio::parse_timeline)
+        .transpose()
+        .map_err(vedit_err)?;
 
     let changes = match (before_timeline.as_ref(), after_timeline.as_ref()) {
         (Some(b), Some(a)) => diff::diff(b, a),
@@ -364,11 +377,14 @@ pub fn diff_refs(
         // removed. Unlikely in practice but defensive.
         (Some(b), None) => diff::diff(b, &empty_timeline()),
     };
+    let animation_changes =
+        animation_diff::diff_parameter_animations(before_value.as_ref(), after_value.as_ref())?;
 
     Ok(CommittedDiff {
         from_ref: from_ref.unwrap_or(SESSION_START_BRANCH).to_string(),
         to_ref: to_ref.unwrap_or("HEAD").to_string(),
         changes,
+        animation_changes,
     })
 }
 
@@ -395,17 +411,14 @@ fn resolve_default(
     }
 }
 
-fn read_timeline_at_commit(
+fn read_timeline_value_at_commit(
     repo: &Repo,
     commit_hash: &str,
-) -> Result<vedit_core::model::Timeline, VcError> {
+) -> Result<serde_json::Value, VcError> {
     let commit: Commit = repo.inner.read_commit(commit_hash).map_err(vedit_err)?;
-    let timeline_value = repo
-        .inner
+    repo.inner
         .read_timeline(&commit.timeline)
-        .map_err(vedit_err)?;
-    let timeline = otio::parse_timeline(&timeline_value).map_err(vedit_err)?;
-    Ok(timeline)
+        .map_err(vedit_err)
 }
 
 fn empty_timeline() -> vedit_core::model::Timeline {
@@ -424,12 +437,14 @@ pub struct CommittedDiff {
     pub to_ref: String,
     /// Structured changes — see [`vedit_core::diff::Change`].
     pub changes: Vec<diff::Change>,
+    /// Awidat animation metadata changes omitted by vedit-core's structural model.
+    pub animation_changes: Vec<AnimationChange>,
 }
 
 impl CommittedDiff {
     /// Number of structural changes in the diff.
     pub fn len(&self) -> usize {
-        self.changes.len()
+        self.changes.len() + self.animation_changes.len()
     }
 
     /// True iff the structural diff is empty. Note: a metadata-only
@@ -437,7 +452,7 @@ impl CommittedDiff {
     /// empty structural diff but a non-zero hash difference. Phase B
     /// commit messages will surface this as "metadata only."
     pub fn is_empty(&self) -> bool {
-        self.changes.is_empty()
+        self.changes.is_empty() && self.animation_changes.is_empty()
     }
 }
 
@@ -605,6 +620,67 @@ mod tests {
         std::fs::write(path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
     }
 
+    fn write_otio_with_animation_keyframes(
+        path: &Path,
+        animation_id: &str,
+        keyframes: Vec<serde_json::Value>,
+    ) {
+        let v = serde_json::json!({
+            "OTIO_SCHEMA": "Timeline.1",
+            "name": "test",
+            "metadata": {
+                "awidat": {
+                    "version": "0.1",
+                    "parameter_animations": [{
+                        "id": animation_id,
+                        "target": {
+                            "kind": "clip_parameter",
+                            "clip_id": "title-1",
+                            "parameter": "title.opacity"
+                        },
+                        "keyframes": keyframes,
+                        "rationale": "Fade in title."
+                    }]
+                }
+            },
+            "tracks": {
+                "OTIO_SCHEMA": "Stack.1",
+                "name": "tracks",
+                "children": []
+            }
+        });
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+    }
+
+    fn write_otio_with_animation(
+        path: &Path,
+        animation_id: &str,
+        second_keyframe_time_s: f64,
+        easing: &str,
+    ) {
+        write_otio_with_animation_keyframes(
+            path,
+            animation_id,
+            vec![
+                serde_json::json!({
+                    "time_s": 0.0,
+                    "value": 0.0,
+                    "interpolation": "linear",
+                    "easing": easing
+                }),
+                serde_json::json!({
+                    "time_s": second_keyframe_time_s,
+                    "value": 1.0,
+                    "interpolation": "linear",
+                    "easing": "linear"
+                }),
+            ],
+        );
+    }
+
     #[test]
     fn open_or_init_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
@@ -721,6 +797,162 @@ mod tests {
             "expected at least one TrackAdded, got: {:?}",
             diff.changes
         );
+    }
+
+    #[test]
+    fn diff_refs_reports_animation_timing_and_easing_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_animation(&otio, "title-fade", 0.5, "ease_out");
+        let repo = open_or_init(dir.path()).unwrap();
+        commit_current_timeline(&repo, "Initial animation", None).unwrap();
+        ensure_session_tag(&repo).unwrap();
+
+        write_otio_with_animation(&otio, "title-fade", 0.3, "ease_out_expo");
+        commit_current_timeline(
+            &repo,
+            "Tighten title fade",
+            Some("Accepted a snappier title fade."),
+        )
+        .unwrap();
+
+        let diff = diff_refs(&repo, None, None).unwrap();
+        assert_eq!(diff.animation_changes.len(), 1);
+        let serde_json::Value::Object(change) =
+            serde_json::to_value(&diff.animation_changes[0]).unwrap()
+        else {
+            panic!("animation change should serialize to an object");
+        };
+        assert_eq!(
+            change.get("op").and_then(|value| value.as_str()),
+            Some("animation_updated")
+        );
+        let segment_changes = change
+            .get("segment_changes")
+            .and_then(|value| value.as_array())
+            .unwrap();
+        assert!(segment_changes.iter().any(|change| {
+            change["field"] == "easing"
+                && change["before"] == "ease_out"
+                && change["after"] == "ease_out_expo"
+        }));
+        assert!(segment_changes.iter().any(|change| {
+            change["field"] == "duration_s" && change["before"] == 0.5 && change["after"] == 0.3
+        }));
+    }
+
+    #[test]
+    fn diff_refs_reports_inserted_keyframe_by_time_not_index_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_animation_keyframes(
+            &otio,
+            "beat-pulse",
+            vec![
+                serde_json::json!({"time_s": 0.0, "value": 1.0, "interpolation": "linear", "easing": "linear"}),
+                serde_json::json!({"time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear"}),
+            ],
+        );
+        let repo = open_or_init(dir.path()).unwrap();
+        commit_current_timeline(&repo, "Initial animation", None).unwrap();
+        ensure_session_tag(&repo).unwrap();
+
+        write_otio_with_animation_keyframes(
+            &otio,
+            "beat-pulse",
+            vec![
+                serde_json::json!({"time_s": 0.0, "value": 1.0, "interpolation": "linear", "easing": "linear"}),
+                serde_json::json!({"time_s": 0.5, "value": 1.08, "interpolation": "linear", "easing": "linear"}),
+                serde_json::json!({"time_s": 1.0, "value": 1.0, "interpolation": "linear", "easing": "linear"}),
+            ],
+        );
+        commit_current_timeline(&repo, "Insert beat pulse", None).unwrap();
+
+        let diff = diff_refs(&repo, None, None).unwrap();
+        let value = serde_json::to_value(&diff.animation_changes[0]).unwrap();
+        let keyframe_changes = value["keyframe_changes"].as_array().unwrap();
+        assert!(
+            keyframe_changes
+                .iter()
+                .any(|change| { change["op"] == "added" && change["time_s"] == 0.5 })
+        );
+        assert!(
+            !keyframe_changes
+                .iter()
+                .any(|change| { change["op"] == "modified" && change["time_s"] == 1.0 })
+        );
+    }
+
+    #[test]
+    fn diff_refs_reports_spring_params_at_segment_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_animation_keyframes(
+            &otio,
+            "settle",
+            vec![
+                serde_json::json!({"time_s": 0.0, "value": 1.0, "interpolation": "linear", "easing": "linear"}),
+                serde_json::json!({"time_s": 0.4, "value": 1.1, "interpolation": "linear", "easing": "linear"}),
+            ],
+        );
+        let repo = open_or_init(dir.path()).unwrap();
+        commit_current_timeline(&repo, "Initial animation", None).unwrap();
+        ensure_session_tag(&repo).unwrap();
+
+        write_otio_with_animation_keyframes(
+            &otio,
+            "settle",
+            vec![
+                serde_json::json!({"time_s": 0.0, "value": 1.0, "interpolation": "spring", "easing": "linear", "spring": {"mass": 1.0, "stiffness": 180.0, "damping": 18.0}}),
+                serde_json::json!({"time_s": 0.4, "value": 1.1, "interpolation": "linear", "easing": "linear"}),
+            ],
+        );
+        commit_current_timeline(&repo, "Spring settle", None).unwrap();
+
+        let diff = diff_refs(&repo, None, None).unwrap();
+        let value = serde_json::to_value(&diff.animation_changes[0]).unwrap();
+        let segment_changes = value["segment_changes"].as_array().unwrap();
+        assert!(segment_changes.iter().any(|change| {
+            change["field"] == "spring_params"
+                && change["after"]["stiffness"] == 180.0
+                && change["after"]["damping"] == 18.0
+        }));
+    }
+
+    #[test]
+    fn diff_refs_summary_lists_all_changed_easing_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let otio = dir.path().join("project.otio.json");
+        write_otio_with_animation_keyframes(
+            &otio,
+            "beat-pulse",
+            vec![
+                serde_json::json!({"time_s": 0.0, "value": 1.0, "interpolation": "linear", "easing": "ease_out"}),
+                serde_json::json!({"time_s": 0.2, "value": 1.1, "interpolation": "linear", "easing": "ease_out"}),
+                serde_json::json!({"time_s": 0.5, "value": 1.0, "interpolation": "linear", "easing": "ease_out"}),
+                serde_json::json!({"time_s": 0.7, "value": 1.1, "interpolation": "linear", "easing": "linear"}),
+            ],
+        );
+        let repo = open_or_init(dir.path()).unwrap();
+        commit_current_timeline(&repo, "Initial animation", None).unwrap();
+        ensure_session_tag(&repo).unwrap();
+
+        write_otio_with_animation_keyframes(
+            &otio,
+            "beat-pulse",
+            vec![
+                serde_json::json!({"time_s": 0.0, "value": 1.0, "interpolation": "linear", "easing": "ease_out_expo"}),
+                serde_json::json!({"time_s": 0.2, "value": 1.1, "interpolation": "linear", "easing": "ease_out_expo"}),
+                serde_json::json!({"time_s": 0.5, "value": 1.0, "interpolation": "linear", "easing": "ease_out_expo"}),
+                serde_json::json!({"time_s": 0.7, "value": 1.1, "interpolation": "linear", "easing": "linear"}),
+            ],
+        );
+        commit_current_timeline(&repo, "Sharpen pulse easing", None).unwrap();
+
+        let diff = diff_refs(&repo, None, None).unwrap();
+        let value = serde_json::to_value(&diff.animation_changes[0]).unwrap();
+        let summary = value["summary"].as_str().unwrap();
+        assert!(summary.contains("changed easing on segments 0, 1, 2"));
     }
 
     #[test]

@@ -391,7 +391,9 @@ mod tests {
         let red = dir.path().join("red.mp4");
         synth_color_mp4(&red, "red", 32, 32, 0.5, 30).await;
 
-        let mut provider = FrameProvider::open(&red, 0.0, 0.5, 32, 32, 30).await.unwrap();
+        let mut provider = FrameProvider::open(&red, 0.0, 0.5, 32, 32, 30)
+            .await
+            .unwrap();
         let mut count = 0;
         while provider.next_frame().await.unwrap().is_some() {
             count += 1;
@@ -414,7 +416,9 @@ mod tests {
         let red = dir.path().join("red.mp4");
         synth_color_mp4(&red, "red", 16, 16, 0.3, 30).await;
 
-        let mut provider = FrameProvider::open(&red, 0.0, 0.3, 16, 16, 30).await.unwrap();
+        let mut provider = FrameProvider::open(&red, 0.0, 0.3, 16, 16, 30)
+            .await
+            .unwrap();
         let frame = provider
             .next_frame()
             .await
@@ -441,17 +445,16 @@ mod tests {
         let out = dir.path().join("roundtrip.mp4");
         synth_color_mp4(&red, "red", 32, 32, 0.5, 30).await;
 
-        let mut provider = FrameProvider::open(&red, 0.0, 0.5, 32, 32, 30).await.unwrap();
+        let mut provider = FrameProvider::open(&red, 0.0, 0.5, 32, 32, 30)
+            .await
+            .unwrap();
         let mut encoder = FrameEncoder::open(&out, 32, 32, 30).await.unwrap();
 
         let mut frames_written = 0usize;
         loop {
             // Borrow the frame, copy into a small buffer so we can drop
             // the provider borrow before awaiting the encoder push.
-            let owned: Option<Vec<u8>> = match provider.next_frame().await.unwrap() {
-                Some(frame) => Some(frame.to_vec()),
-                None => None,
-            };
+            let owned: Option<Vec<u8>> = provider.next_frame().await.unwrap().map(<[u8]>::to_vec);
             let Some(frame) = owned else {
                 break;
             };

@@ -24,9 +24,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::raw_stream::{
-    ComposeError, RawStreamComposer, RawStreamSegment, RawStreamTransition,
-};
+use crate::raw_stream::{ComposeError, RawStreamComposer, RawStreamSegment, RawStreamTransition};
 use crate::raw_stream_audio::{AudioError, compose_audio, mux_video_and_audio};
 use crate::timeline::{TimelineSegment, TransitionPlan};
 
@@ -111,8 +109,15 @@ pub async fn build_timeline_raw_stream_render(
 
     let composer = RawStreamComposer::new(width, height, fps)?;
 
-    let render_result =
-        run_render(&composer, &raw_segments, &raw_transitions, &video_temp, &audio_temp, output_path).await;
+    let render_result = run_render(
+        &composer,
+        &raw_segments,
+        &raw_transitions,
+        &video_temp,
+        &audio_temp,
+        output_path,
+    )
+    .await;
 
     // Best-effort cleanup of intermediates regardless of outcome.
     let _ = tokio::fs::remove_file(&video_temp).await;
@@ -388,10 +393,7 @@ mod tests {
         synth_av_mp4(&a, 440, "red", 32, 32, 1.0, 30).await;
         synth_av_mp4(&b, 880, "blue", 32, 32, 1.0, 30).await;
 
-        let segments = vec![
-            ts(a, 0.0, 1.0),
-            ts(b, 0.0, 1.0),
-        ];
+        let segments = vec![ts(a, 0.0, 1.0), ts(b, 0.0, 1.0)];
         let transitions = vec![tp_gpu(
             0,
             "awidat.cross_dissolve",
@@ -399,7 +401,8 @@ mod tests {
             awidat_render_gpu::TransitionShader::CrossDissolve,
         )];
 
-        let result = build_timeline_raw_stream_render(&segments, &transitions, 32, 32, 30, &out).await;
+        let result =
+            build_timeline_raw_stream_render(&segments, &transitions, 32, 32, 30, &out).await;
         match result {
             Ok(()) => {
                 let probe = crate::ffmpeg::ffprobe_path().expect("ffprobe");
@@ -417,8 +420,7 @@ mod tests {
                     .await
                     .unwrap();
                 assert!(
-                    String::from_utf8_lossy(&video_streams.stdout)
-                        .contains("video"),
+                    String::from_utf8_lossy(&video_streams.stdout).contains("video"),
                     "muxed output must have a video stream"
                 );
                 let audio_streams = Command::new(&probe)
@@ -435,8 +437,7 @@ mod tests {
                     .await
                     .unwrap();
                 assert!(
-                    String::from_utf8_lossy(&audio_streams.stdout)
-                        .contains("audio"),
+                    String::from_utf8_lossy(&audio_streams.stdout).contains("audio"),
                     "muxed output must have an audio stream"
                 );
 

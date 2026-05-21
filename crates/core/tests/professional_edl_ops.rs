@@ -2,7 +2,9 @@
 
 use awidat_core::edl::anchor::AnchorContext;
 use awidat_core::edl::apply::apply;
-use awidat_core::edl::op::{Anchor, EdlOp, ProfessionalTimelineEdit};
+use awidat_core::edl::op::{
+    Anchor, AnnotationKind, EdlOp, MotionTemplateAnimation, ProfessionalTimelineEdit, TitleWeight,
+};
 use awidat_core::edl::parser::parse;
 use awidat_proto::awidat_meta::{Anchor as AwAnchor, AwidatClipMetadata};
 use awidat_proto::otio::{
@@ -106,6 +108,373 @@ fn parser_accepts_professional_substrate_json_ops() {
 }
 
 #[test]
+fn parser_accepts_motion_template_instantiation() {
+    let edl = r#"
+*** Begin EDL
+*** Instantiate Motion Template
++ template_id: lower-third
++ start_s: 1.0
++ end_s: 4.0
++ animation: transform
++ slot_values_json: {"text":"Ada Lovelace","subtitle":"Host","safe_area":"16:9"}
+*** End EDL
+"#;
+
+    let envelope = match parse(edl) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("parse motion template instantiation: {error}"),
+    };
+
+    assert_eq!(envelope.ops.len(), 1);
+    let EdlOp::InstantiateMotionTemplate {
+        template_id,
+        start_s,
+        end_s,
+        animation,
+        slot_values,
+    } = &envelope.ops[0]
+    else {
+        panic!(
+            "expected InstantiateMotionTemplate, got {:?}",
+            envelope.ops[0]
+        );
+    };
+
+    assert_eq!(template_id, "lower-third");
+    assert_eq!(*start_s, 1.0);
+    assert_eq!(*end_s, 4.0);
+    assert_eq!(*animation, MotionTemplateAnimation::Transform);
+    assert_eq!(
+        slot_values.get("text").and_then(serde_json::Value::as_str),
+        Some("Ada Lovelace")
+    );
+}
+
+#[test]
+fn motion_template_instantiation_lowers_to_titles_and_runtime_animations() {
+    let edl = r#"
+*** Begin EDL
+*** Instantiate Motion Template
++ template_id: lower-third
++ start_s: 1.0
++ end_s: 4.0
++ animation: transform
++ slot_values_json: {"text":"Ada Lovelace","subtitle":"Host","safe_area":"16:9"}
+*** End EDL
+"#;
+    let envelope = match parse(edl) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("parse motion template instantiation: {error}"),
+    };
+    let timeline = Timeline::empty("motion-template-instantiation");
+
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(error) => panic!("apply motion template instantiation: {error}"),
+    };
+
+    assert_eq!(outcome.applied.len(), 1);
+    let Some(titles) = timeline
+        .tracks
+        .children
+        .iter()
+        .find_map(|child| match child {
+            StackChild::Track(track) if track.name == "Titles" => Some(track),
+            _ => None,
+        })
+    else {
+        panic!("titles track should be created");
+    };
+    assert_eq!(titles.children.len(), 2);
+
+    let TrackChild::Clip(first_title) = &titles.children[0] else {
+        panic!("first titles child should be a clip");
+    };
+    let Some(effect) = first_title
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.title")
+    else {
+        panic!("motion template title should carry awidat.title effect");
+    };
+    assert_eq!(
+        effect
+            .metadata
+            .get("text")
+            .and_then(serde_json::Value::as_str),
+        Some("Ada Lovelace")
+    );
+    assert_eq!(
+        effect
+            .metadata
+            .get("role")
+            .and_then(serde_json::Value::as_str),
+        Some("motion_template")
+    );
+    let Some(clip_uuid) = first_title
+        .metadata
+        .awidat
+        .as_ref()
+        .and_then(|metadata| metadata.extra.get("clip_uuid"))
+        .and_then(serde_json::Value::as_str)
+    else {
+        panic!("motion template title should have a targetable clip uuid");
+    };
+
+    let Some(metadata) = timeline.metadata.awidat else {
+        panic!("timeline metadata should include template animations");
+    };
+    assert_eq!(metadata.parameter_animations.len(), 2);
+    let animated_parameters = metadata
+        .parameter_animations
+        .iter()
+        .map(|animation| match &animation.target {
+            AnimationTarget::ClipParameter { clip_id, parameter } => {
+                assert_eq!(clip_id, clip_uuid);
+                parameter.as_str()
+            }
+            other => panic!("expected clip animation target, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(animated_parameters, vec!["title.opacity", "title.y"]);
+}
+
+#[test]
+fn parser_accepts_annotation_primitives() {
+    let edl = r#"
+*** Begin EDL
+*** Insert Annotation
++ start_s: 2.0
++ end_s: 5.0
++ kind: rectangle
++ x: 0.10
++ y: 0.20
++ width: 0.30
++ height: 0.25
++ color: #FFCC00
++ stroke_width: 6
++ label: Circle this
+*** End EDL
+"#;
+
+    let envelope = match parse(edl) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("parse annotation primitive: {error}"),
+    };
+
+    let EdlOp::InsertAnnotation {
+        kind,
+        start_s,
+        end_s,
+        x,
+        y,
+        width,
+        height,
+        color,
+        stroke_width,
+        label,
+    } = &envelope.ops[0]
+    else {
+        panic!("expected InsertAnnotation, got {:?}", envelope.ops[0]);
+    };
+
+    assert_eq!(*kind, AnnotationKind::Rectangle);
+    assert_eq!(*start_s, 2.0);
+    assert_eq!(*end_s, 5.0);
+    assert_eq!((*x, *y, *width, *height), (0.10, 0.20, 0.30, 0.25));
+    assert_eq!(color, "#FFCC00");
+    assert_eq!(*stroke_width, 6);
+    assert_eq!(label.as_deref(), Some("Circle this"));
+}
+
+#[test]
+fn parser_rejects_annotation_color_filter_options() {
+    let edl = r#"
+*** Begin EDL
+*** Insert Annotation
++ start_s: 2.0
++ end_s: 5.0
++ kind: rectangle
++ x: 0.10
++ y: 0.20
++ width: 0.30
++ height: 0.25
++ color: red:t=fill
+*** End EDL
+"#;
+
+    let err = match parse(edl) {
+        Ok(envelope) => panic!("expected annotation color rejection, got {envelope:?}"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string().contains("annotation color"),
+        "unexpected parse error: {err}"
+    );
+}
+
+#[test]
+fn annotation_primitive_applies_as_virtual_overlay_clip() {
+    let edl = r#"
+*** Begin EDL
+*** Insert Annotation
++ start_s: 2.0
++ end_s: 5.0
++ kind: blur
++ x: 0.10
++ y: 0.20
++ width: 0.30
++ height: 0.25
+*** End EDL
+"#;
+    let envelope = match parse(edl) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("parse annotation primitive: {error}"),
+    };
+    let timeline = Timeline::empty("annotation-primitive");
+
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(error) => panic!("apply annotation primitive: {error}"),
+    };
+
+    assert_eq!(outcome.applied.len(), 1);
+    let Some(annotations) = timeline
+        .tracks
+        .children
+        .iter()
+        .find_map(|child| match child {
+            StackChild::Track(track) if track.name == "Annotations" => Some(track),
+            _ => None,
+        })
+    else {
+        panic!("annotations track should be created");
+    };
+    assert_eq!(
+        annotations
+            .metadata
+            .get("awidat_track_role")
+            .and_then(serde_json::Value::as_str),
+        Some("annotations")
+    );
+    let TrackChild::Clip(annotation_clip) = &annotations.children[0] else {
+        panic!("expected annotation clip");
+    };
+    let Some(effect) = annotation_clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.annotation")
+    else {
+        panic!("annotation clip should carry awidat.annotation effect");
+    };
+    assert_eq!(
+        effect
+            .metadata
+            .get("kind")
+            .and_then(serde_json::Value::as_str),
+        Some("blur")
+    );
+    assert_eq!(
+        effect.metadata.get("x").and_then(serde_json::Value::as_f64),
+        Some(0.10)
+    );
+}
+
+#[test]
+fn parser_accepts_rich_title_segments() {
+    let edl = r##"
+*** Begin EDL
+*** Insert Rich Title
++ start_s: 1.0
++ end_s: 3.0
++ position: bottom
++ font_size: 64
++ animation: fade_in
++ segments_json: [{"text":"Launch","color":"#FFFFFF","font_weight":"bold"},{"text":" now","color":"#FFCC00","font_weight":"normal"}]
+*** End EDL
+"##;
+
+    let envelope = match parse(edl) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("parse rich title: {error}"),
+    };
+
+    let EdlOp::InsertRichTitle {
+        segments,
+        font_size,
+        ..
+    } = &envelope.ops[0]
+    else {
+        panic!("expected InsertRichTitle, got {:?}", envelope.ops[0]);
+    };
+
+    assert_eq!(*font_size, 64);
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].text, "Launch");
+    assert_eq!(segments[0].font_weight, Some(TitleWeight::Bold));
+    assert_eq!(segments[1].color.as_deref(), Some("#FFCC00"));
+}
+
+#[test]
+fn rich_title_applies_as_title_with_run_metadata() {
+    let edl = r##"
+*** Begin EDL
+*** Insert Rich Title
++ start_s: 1.0
++ end_s: 3.0
++ position: bottom
++ font_size: 64
++ segments_json: [{"text":"Launch","color":"#FFFFFF","font_weight":"bold"},{"text":" now","color":"#FFCC00","font_weight":"normal"}]
+*** End EDL
+"##;
+    let envelope = match parse(edl) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("parse rich title: {error}"),
+    };
+    let timeline = Timeline::empty("rich-title");
+
+    let (timeline, _) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(error) => panic!("apply rich title: {error}"),
+    };
+
+    let Some(titles) = timeline
+        .tracks
+        .children
+        .iter()
+        .find_map(|child| match child {
+            StackChild::Track(track) if track.name == "Titles" => Some(track),
+            _ => None,
+        })
+    else {
+        panic!("titles track should be created");
+    };
+    let TrackChild::Clip(title_clip) = &titles.children[0] else {
+        panic!("expected title clip");
+    };
+    let Some(effect) = title_clip
+        .effects
+        .iter()
+        .find(|effect| effect.effect_name == "awidat.title")
+    else {
+        panic!("rich title should carry awidat.title");
+    };
+
+    assert_eq!(
+        effect
+            .metadata
+            .get("text")
+            .and_then(serde_json::Value::as_str),
+        Some("Launch now")
+    );
+    assert!(
+        effect.metadata.get("rich_segments").is_some(),
+        "rich title should preserve segment styling metadata"
+    );
+}
+
+#[test]
 fn parsed_professional_substrate_ops_apply_to_timeline_metadata() {
     let edl = r#"
 *** Begin EDL
@@ -143,6 +512,105 @@ fn parsed_professional_substrate_ops_apply_to_timeline_metadata() {
         metadata.build_professional_readiness_report().stages.len(),
         13
     );
+}
+
+#[test]
+fn set_parameter_animation_rejects_runtime_unsupported_target_by_default() {
+    let timeline = Timeline::empty("animation-contract");
+    let envelope = awidat_core::edl::op::EdlEnvelope {
+        ops: vec![EdlOp::SetParameterAnimation {
+            animation: ParameterAnimation {
+                id: "anim-blur".into(),
+                target: AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "effect.blur.radius".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
+                ..ParameterAnimation::default()
+            },
+        }],
+    };
+
+    let err = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(_) => panic!("unsupported target should be rejected"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string()
+            .contains("unsupported parameter animation target"),
+        "expected unsupported target rejection, got: {err}"
+    );
+    assert!(
+        err.to_string().contains("metadata_only"),
+        "error should name the explicit metadata-only escape hatch, got: {err}"
+    );
+    assert!(
+        err.to_string().contains("title.opacity") && err.to_string().contains("volume_db"),
+        "error should list runtime-supported parameters for agent correction, got: {err}"
+    );
+}
+
+#[test]
+fn set_parameter_animation_preserves_unsupported_target_when_metadata_only() {
+    let timeline = Timeline::empty("animation-contract");
+    let envelope = awidat_core::edl::op::EdlEnvelope {
+        ops: vec![EdlOp::SetParameterAnimation {
+            animation: ParameterAnimation {
+                id: "anim-blur".into(),
+                target: AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "effect.blur.radius".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 12.0)],
+                metadata_only: true,
+                ..ParameterAnimation::default()
+            },
+        }],
+    };
+
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(err) => panic!("metadata-only animation should apply: {err}"),
+    };
+    let Some(metadata) = timeline.metadata.awidat else {
+        panic!("timeline metadata missing");
+    };
+
+    assert_eq!(outcome.applied.len(), 1);
+    assert_eq!(metadata.parameter_animations.len(), 1);
+    assert!(metadata.parameter_animations[0].metadata_only);
+    assert_eq!(metadata.parameter_animations[0].id, "anim-blur");
+}
+
+#[test]
+fn set_parameter_animation_accepts_track_volume_db_automation() {
+    let timeline = Timeline::empty("animation-contract");
+    let envelope = awidat_core::edl::op::EdlEnvelope {
+        ops: vec![EdlOp::SetParameterAnimation {
+            animation: ParameterAnimation {
+                id: "music-duck".into(),
+                target: AnimationTarget::TrackParameter {
+                    track: "Music".into(),
+                    parameter: "volume_db".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -18.0), Keyframe::linear(1.0, -6.0)],
+                ..ParameterAnimation::default()
+            },
+        }],
+    };
+
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(err) => panic!("track volume automation should apply: {err}"),
+    };
+    let Some(metadata) = timeline.metadata.awidat else {
+        panic!("timeline metadata missing");
+    };
+
+    assert_eq!(outcome.applied.len(), 1);
+    assert_eq!(metadata.parameter_animations.len(), 1);
+    assert_eq!(metadata.parameter_animations[0].id, "music-duck");
 }
 
 #[test]

@@ -1,25 +1,46 @@
 //! Professional substrate schema acceptance tests.
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 
 use awidat_proto::awidat_meta::{AwidatTimelineMetadata, BeatMarker, BeatMarkerRole};
 use awidat_proto::professional::{
-    AssetCatalog, AssetQuery, AssetReadiness, AssetRecord, AssetRole, AudioBus,
-    AudioFinishingState, CapabilityArea, CapabilityRegistry, CapabilityStatus, ColorFinishingState,
-    CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
-    DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
-    ExpressionSource, FindingSeverity, GradeStack, GroundingBoxFormat, GroundingDetection,
-    GroundingEvidence, GroundingEvidenceStatus, HardwareAccelerationPolicy, Keyframe,
-    MaskArtifactKind, MaskArtifactProfile, MaskQualityScorecard, MaskReviewDecision, MaskSidecar,
-    MatteGenerationFallback, MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings,
-    MotionGraphicsTemplate, MotionPackage, ParameterAnimation, PipelineReadinessReport,
-    PreflightCheckKind, ReadinessState, ReframeKeyframe, ReframePath, ReframeSmoothing,
+    AnimationTarget, AssetCatalog, AssetQuery, AssetReadiness, AssetRecord, AssetRole, AudioBus,
+    AudioFinishingState, BezierHandles, CapabilityArea, CapabilityRegistry, CapabilityStatus,
+    ColorFinishingState, CompositionGraph, CompositionNode, CompositionNodeType,
+    DeliveryPreflightInput, DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset,
+    ExportRange, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity, GradeStack,
+    GroundingBoxFormat, GroundingDetection, GroundingEvidence, GroundingEvidenceStatus,
+    HardwareAccelerationPolicy, Keyframe, MaskArtifactKind, MaskArtifactProfile,
+    MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MatteGenerationFallback,
+    MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings, MotionGraphicsTemplate,
+    MotionPackage, ParameterAnimation, PipelineReadinessReport, PreflightCheckKind,
+    RUNTIME_CLIP_PARAMETERS, ReadinessState, ReframeKeyframe, ReframePath, ReframeSmoothing,
     SegmentationIntent, SegmentationPrompt, SegmentationPromptKind, SegmentationPromptLabel,
     SegmentationPromptPackage, SegmentationRuntimeStatus, SegmentationSessionOperation,
     SegmentationSessionOperationKind, SelectDecision, SourceRange, SourceSelect,
-    StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, Stringout, TemplateSlot,
-    TrackingPackage, WorkflowLens,
+    StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, Stringout, TangentMode,
+    TemplateSlot, TrackingPackage, WorkflowLens,
 };
+
+#[test]
+fn runtime_clip_parameter_allowlist_matches_desktop_preview() {
+    let desktop_parameters = desktop_runtime_clip_parameters();
+    assert!(
+        !desktop_parameters.is_empty(),
+        "failed to parse non-empty desktop RUNTIME_CLIP_PARAMETERS export; keep marker `export const RUNTIME_CLIP_PARAMETERS = [` and `] as const` visible in apps/desktop/src/timeline/animation.ts"
+    );
+    let rust_parameters = RUNTIME_CLIP_PARAMETERS
+        .iter()
+        .map(|parameter| (*parameter).to_string())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        desktop_parameters, rust_parameters,
+        "desktop preview runtime parameter support must match the Rust render/protocol allowlist"
+    );
+}
 
 #[test]
 fn timeline_metadata_carries_all_professional_substrate_documents() {
@@ -67,6 +88,10 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
                     parameter: "title.opacity".into(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             }],
             ..MotionPackage::default()
@@ -322,6 +347,88 @@ fn expression_link_dependency_cycle_is_reported_once() {
     assert_eq!(
         cycle_diagnostics[0].area,
         CapabilityArea::ParameterAnimation
+    );
+}
+
+#[test]
+fn aligned_tangent_mode_rejects_non_collinear_bezier_handles() {
+    let mut middle = Keyframe::linear(1.0, 1.0);
+    middle.tangent_mode = TangentMode::Aligned;
+    middle.bezier = Some(BezierHandles {
+        out_x: 0.25,
+        out_y: 0.2,
+        in_x: 0.75,
+        in_y: 0.1,
+    });
+    let animation = ParameterAnimation {
+        id: "aligned-bad".into(),
+        target: AnimationTarget::ClipParameter {
+            clip_id: "clip-a".into(),
+            parameter: "overlay.x".into(),
+        },
+        keyframes: vec![
+            Keyframe {
+                bezier: Some(BezierHandles {
+                    out_x: 0.25,
+                    out_y: 0.0,
+                    in_x: 0.75,
+                    in_y: 0.1,
+                }),
+                ..Keyframe::linear(0.0, 0.0)
+            },
+            middle,
+            Keyframe::linear(2.0, 2.0),
+        ],
+        ..ParameterAnimation::default()
+    };
+
+    let diagnostics = animation.validate();
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("not collinear")),
+        "expected aligned tangent validation error, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn aligned_tangent_mode_accepts_collinear_bezier_handles() {
+    let mut middle = Keyframe::linear(1.0, 1.0);
+    middle.tangent_mode = TangentMode::Aligned;
+    middle.bezier = Some(BezierHandles {
+        out_x: 0.25,
+        out_y: 0.25,
+        in_x: 0.75,
+        in_y: 0.75,
+    });
+    let animation = ParameterAnimation {
+        id: "aligned-good".into(),
+        target: AnimationTarget::ClipParameter {
+            clip_id: "clip-a".into(),
+            parameter: "overlay.x".into(),
+        },
+        keyframes: vec![
+            Keyframe {
+                bezier: Some(BezierHandles {
+                    out_x: 0.25,
+                    out_y: 0.25,
+                    in_x: 0.75,
+                    in_y: 0.75,
+                }),
+                ..Keyframe::linear(0.0, 0.0)
+            },
+            middle,
+            Keyframe::linear(2.0, 2.0),
+        ],
+        ..ParameterAnimation::default()
+    };
+
+    let diagnostics = animation.validate();
+
+    assert!(
+        diagnostics.is_empty(),
+        "expected aligned tangent handles to validate, got: {diagnostics:?}"
     );
 }
 
@@ -1776,6 +1883,10 @@ fn duplicate_parameter_animations_report_one_deterministic_conflict() {
                     parameter: "title.opacity".into(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
             ParameterAnimation {
@@ -1785,6 +1896,10 @@ fn duplicate_parameter_animations_report_one_deterministic_conflict() {
                     parameter: "title.opacity".into(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 1.0), Keyframe::linear(1.0, 0.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
         ],
@@ -1816,6 +1931,10 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                     parameter: "overlay.opacity".into(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 2.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
             ParameterAnimation {
@@ -1825,6 +1944,23 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                     parameter: "overlay.scale".into(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
+                rationale: None,
+            },
+            ParameterAnimation {
+                id: "anim-blur".into(),
+                target: awidat_proto::professional::AnimationTarget::ClipParameter {
+                    clip_id: "clip-a".into(),
+                    parameter: "overlay.blur".into(),
+                },
+                keyframes: vec![Keyframe::linear(0.0, -1.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
             ParameterAnimation {
@@ -1834,6 +1970,10 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                     parameter: "title.font_size".into(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
             ParameterAnimation {
@@ -1843,6 +1983,10 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                     parameter: "overlay.x".into(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, f64::NAN)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: None,
             },
         ],
@@ -1867,6 +2011,13 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
     assert!(
         diagnostics
             .iter()
+            .any(|diagnostic| diagnostic.message.contains("overlay.blur")
+                && diagnostic.message.contains("non-negative")),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics
+            .iter()
             .any(|diagnostic| diagnostic.message.contains("title.font_size")
                 && diagnostic.message.contains("positive")),
         "{diagnostics:?}"
@@ -1878,4 +2029,37 @@ fn parameter_animation_value_validation_rejects_invalid_phase_3a_values() {
                 && diagnostic.message.contains("non-finite keyframe")),
         "{diagnostics:?}"
     );
+}
+
+fn desktop_runtime_clip_parameters() -> Vec<String> {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source_path = repo_root.join("apps/desktop/src/timeline/animation.ts");
+    let source = fs::read_to_string(&source_path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", source_path.display()));
+    let marker = "export const RUNTIME_CLIP_PARAMETERS = [";
+    let Some(start) = source.find(marker) else {
+        panic!(
+            "desktop runtime parameter export missing in {}",
+            source_path.display()
+        );
+    };
+    let rest = &source[start + marker.len()..];
+    let Some(end) = rest.find("] as const") else {
+        panic!(
+            "desktop runtime parameter export terminator missing in {}",
+            source_path.display()
+        );
+    };
+
+    rest[..end]
+        .lines()
+        .filter_map(|line| {
+            let parameter = line.trim().trim_end_matches(',');
+            if parameter.starts_with('"') && parameter.ends_with('"') {
+                Some(parameter.trim_matches('"').to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
 }

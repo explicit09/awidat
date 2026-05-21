@@ -12,24 +12,30 @@ use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, CapabilityArea, ColorFinishingState, CompositionGraph,
-    CompositionNode, CompositionNodeType, DeliveryPreflightInput, DeliveryProfile, Easing,
-    ExportPreset, ExpressionLink, ExpressionSource, FindingSeverity, GradeStack, GradeStage,
-    Keyframe, KeyframeInterpolation, MaskSidecar, MatteSidecar, MotionGraphicsTemplate,
-    MotionPackage, PackageManifest, ParameterAnimation, PreflightReport, ProfessionalDiagnostic,
-    ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract,
-    StreamExportMode, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample, TrackSidecar,
-    TrackingPackage,
+    CompositionNode, CompositionNodeType, CoordinateSpace, DeliveryPreflightInput, DeliveryProfile,
+    Easing, ExportPreset, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity,
+    GradeStack, GradeStage, HardwareAccelerationPolicy, Keyframe, KeyframeInterpolation,
+    MaskSidecar, MatteSidecar, MotionGraphicsTemplate, MotionPackage, PackageManifest,
+    ParameterAnimation, PreflightReport, ProfessionalDiagnostic, RUNTIME_CLIP_PARAMETERS,
+    ReframeKeyframe, ReframePath, ReframeSmoothing, ReviewStatus, SafeAreaRule,
+    StreamExportContract, StreamExportMode, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample,
+    TrackSidecar, TrackingPackage, is_runtime_clip_parameter,
 };
 use serde_json::Value;
 use thiserror::Error;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::animation::keyframes_to_ffmpeg_expr;
-use crate::timeline::ColorCorrectionPlan;
+use crate::timeline::{
+    ColorCorrectionPlan, RenderParameterAnimation, TextReveal, TimelineSegment, VideoOverlayMode,
+    VideoOverlayPlan,
+};
 use crate::{
     AudioAutomationPlan, AudioFxPlan, AudioTrackPlan, DuckingPlan, EqBandPlan, LoudnessTargetPlan,
     RenderJobSpec, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
 };
+
+const TRACKING_REVIEW_CONFIDENCE_THRESHOLD: f64 = 0.75;
 
 /// Errors returned by professional pipeline engines.
 #[derive(Debug, Error)]
@@ -85,6 +91,14 @@ pub enum ProfessionalEngineError {
         /// Existing animation id.
         animation_id: String,
     },
+    /// A tracker binding node is malformed or not supported by the evaluator.
+    #[error("tracker binding {binding_id} is invalid: {message}")]
+    InvalidTrackerBinding {
+        /// Composition node / binding id.
+        binding_id: String,
+        /// Detailed validation message.
+        message: String,
+    },
 }
 
 /// Lightweight tracking evidence available from existing index sidecars.
@@ -102,6 +116,163 @@ pub struct TrackingEvidence {
     pub height: u32,
     /// Per-sample motion magnitude, usually from the motion sidecar.
     pub motion_signal: Vec<f32>,
+}
+
+/// Normalized rectangle used to initialize a tracker.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackerRegion {
+    /// Left coordinate in normalized frame space.
+    pub x: f64,
+    /// Top coordinate in normalized frame space.
+    pub y: f64,
+    /// Width in normalized frame space.
+    pub width: f64,
+    /// Height in normalized frame space.
+    pub height: f64,
+}
+
+impl TrackerRegion {
+    /// Build a normalized `x/y/width/height` region.
+    pub fn from_xywh(x: f64, y: f64, width: f64, height: f64) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+}
+
+/// Request to create or reuse a tracker for a clip region.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackingRequest {
+    /// Clip or asset id to track.
+    pub clip_id: String,
+    /// Requested track primitive.
+    pub kind: TrackKind,
+    /// Initial normalized tracking rectangle.
+    pub region: TrackerRegion,
+    /// First sampled frame.
+    pub start_frame: u64,
+    /// Last sampled frame, inclusive.
+    pub end_frame: u64,
+}
+
+/// One observed tracker rectangle from a detection/tracking pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackerObservation {
+    /// Frame number for this observation.
+    pub frame: u64,
+    /// Observed normalized tracking rectangle.
+    pub region: TrackerRegion,
+    /// Observation confidence in `0.0..=1.0`.
+    pub confidence: f64,
+}
+
+/// Opaque handle returned to callers after tracker creation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackerHandle {
+    /// Stable sidecar track id.
+    pub track_id: String,
+}
+
+/// Agent/UI request to author an overlay insert bound to a tracker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackedInsertRequest {
+    /// Overlay clip id that should follow the tracked subject.
+    pub overlay_clip_id: String,
+    /// Tracker region request for the source clip.
+    pub tracker: TrackingRequest,
+    /// Optional observed tracker rows from a detector/tracker pass.
+    pub observations: Vec<TrackerObservation>,
+}
+
+/// Authored tracker insert with concrete runtime animations and review summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackedInsertPlan {
+    /// Stable track id used by the authored insert.
+    pub track_id: String,
+    /// Generated `overlay.x` and `overlay.y` animations for the insert clip.
+    pub generated_animations: Vec<ParameterAnimation>,
+    /// Review summary callers can surface before accepting the insert.
+    pub review: TrackingReviewPackage,
+}
+
+/// Agent/UI request to author a subject-aware reframe path from observed boxes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubjectReframeRequest {
+    /// Timeline clip id receiving the reframe path.
+    pub clip_id: String,
+    /// Delivery aspect ratio label, e.g. `9:16`.
+    pub aspect_ratio: String,
+    /// Source media width in pixels.
+    pub source_width: u32,
+    /// Source media height in pixels.
+    pub source_height: u32,
+    /// Target canvas width in pixels.
+    pub target_width: u32,
+    /// Target canvas height in pixels.
+    pub target_height: u32,
+    /// Observation frame rate.
+    pub frame_rate: f64,
+    /// Smoothing policy for generated crop centers.
+    pub smoothing: ReframeSmoothing,
+    /// Optional safe-area policy label.
+    pub safe_area: Option<String>,
+}
+
+/// Authored subject reframe path and review summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubjectReframePlan {
+    /// Stable reframe path id.
+    pub reframe_id: String,
+    /// Review summary callers can surface before accepting the path.
+    pub review: TrackingReviewPackage,
+}
+
+/// Compact review surface for tracker packages.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackingReviewPackage {
+    /// Track rows with confidence and correction cues.
+    pub tracks: Vec<TrackingReviewTrack>,
+    /// Reframe rows with confidence and correction cues.
+    pub reframe_paths: Vec<TrackingReviewReframe>,
+}
+
+/// Review row for a tracker sidecar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackingReviewTrack {
+    /// Track id.
+    pub track_id: String,
+    /// Asset or clip id being tracked.
+    pub asset_id: String,
+    /// Track primitive kind.
+    pub kind: TrackKind,
+    /// Number of sampled frames.
+    pub sample_count: usize,
+    /// Average confidence if available.
+    pub confidence: Option<f64>,
+    /// Frames that need user/agent correction.
+    pub correction_frames: Vec<u64>,
+    /// True when correction frames or low aggregate confidence remain.
+    pub requires_correction: bool,
+}
+
+/// Review row for a subject-aware reframe path.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackingReviewReframe {
+    /// Reframe path id.
+    pub reframe_id: String,
+    /// Clip being reframed.
+    pub clip_id: String,
+    /// Number of authored crop keyframes.
+    pub keyframe_count: usize,
+    /// Average keyframe confidence if available.
+    pub confidence: Option<f64>,
+    /// Times that need user/agent correction.
+    pub correction_times_s: Vec<f64>,
+    /// True when correction times or low aggregate confidence remain.
+    pub requires_correction: bool,
 }
 
 /// Deterministic lowering for an overlay bound to a tracker.
@@ -128,6 +299,17 @@ pub struct ReframePathLowering {
     pub smoothing: ReframeSmoothing,
     /// Render expression/summary for deterministic review.
     pub expression: String,
+}
+
+/// Deterministic lowering for a surface track driving a corner-pin distortion.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CornerPinLowering {
+    /// Track id used for the surface binding.
+    pub track_id: String,
+    /// Clip id receiving the corner-pin distortion.
+    pub target_clip_id: String,
+    /// FFmpeg perspective filter expression.
+    pub filter: String,
 }
 
 /// Result of evaluating expression links at one sample time.
@@ -213,6 +395,578 @@ pub fn generate_tracking_package(evidence: TrackingEvidence) -> TrackingPackage 
     }
 }
 
+/// Ensure a stable tracker exists for a clip region and return its handle.
+pub fn ensure_tracker(
+    package: &mut TrackingPackage,
+    request: TrackingRequest,
+) -> Result<TrackerHandle, ProfessionalEngineError> {
+    validate_tracking_request(&request)?;
+    let track_id = tracker_request_id(&request);
+    if package.tracks.iter().any(|track| track.id == track_id) {
+        return Ok(TrackerHandle { track_id });
+    }
+    let samples = (request.start_frame..=request.end_frame)
+        .map(|frame| TrackSample {
+            frame,
+            points: tracker_region_points(request.kind, request.region),
+            confidence: Some(1.0),
+        })
+        .collect::<Vec<_>>();
+    package.tracks.push(TrackSidecar {
+        id: track_id.clone(),
+        asset_id: request.clip_id,
+        kind: request.kind,
+        coordinate_space: CoordinateSpace::Normalized,
+        samples,
+        confidence: Some(1.0),
+    });
+    Ok(TrackerHandle { track_id })
+}
+
+/// Ensure a stable tracker exists from observed per-frame rectangles.
+pub fn ensure_tracker_from_observations(
+    package: &mut TrackingPackage,
+    request: TrackingRequest,
+    observations: Vec<TrackerObservation>,
+) -> Result<TrackerHandle, ProfessionalEngineError> {
+    validate_tracking_request(&request)?;
+    if observations.is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "ensure_tracker_from_observations".into(),
+            message: "at least one tracker observation is required".into(),
+        });
+    }
+    let track_id = tracker_request_id(&request);
+    let samples = tracker_samples_from_observations(&request, observations)?;
+    let confidence = average_sample_confidence(&samples);
+    let sidecar = TrackSidecar {
+        id: track_id.clone(),
+        asset_id: request.clip_id,
+        kind: request.kind,
+        coordinate_space: CoordinateSpace::Normalized,
+        samples,
+        confidence,
+    };
+    if let Some(existing) = package.tracks.iter_mut().find(|track| track.id == track_id) {
+        *existing = sidecar;
+    } else {
+        package.tracks.push(sidecar);
+    }
+    Ok(TrackerHandle { track_id })
+}
+
+/// Author a tracked overlay insert from a tracker request and optional observations.
+pub fn author_tracked_insert(
+    package: &mut TrackingPackage,
+    request: TrackedInsertRequest,
+    frame_rate: f64,
+) -> Result<TrackedInsertPlan, ProfessionalEngineError> {
+    if request.overlay_clip_id.trim().is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "author_tracked_insert".into(),
+            message: "overlay_clip_id is required".into(),
+        });
+    }
+    let overlay_clip_id = request.overlay_clip_id;
+    let handle = if request.observations.is_empty() {
+        ensure_tracker(package, request.tracker)?
+    } else {
+        ensure_tracker_from_observations(package, request.tracker, request.observations)?
+    };
+    let graph = tracked_insert_binding_graph(&handle.track_id, &overlay_clip_id);
+    let generated_animations = lower_tracker_parameter_bindings(package, &graph, frame_rate)?;
+    Ok(TrackedInsertPlan {
+        track_id: handle.track_id,
+        generated_animations,
+        review: summarize_tracking_package(package),
+    })
+}
+
+/// Author a subject-aware crop/reframe path from observed tracker boxes.
+pub fn author_subject_reframe_path(
+    package: &mut TrackingPackage,
+    request: SubjectReframeRequest,
+    observations: Vec<TrackerObservation>,
+) -> Result<SubjectReframePlan, ProfessionalEngineError> {
+    validate_subject_reframe_request(&request)?;
+    if observations.is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "author_subject_reframe_path".into(),
+            message: "at least one subject observation is required".into(),
+        });
+    }
+    let mut keyframes = Vec::with_capacity(observations.len());
+    let scale = reframe_scale_for_aspect(&request);
+    for observation in observations {
+        validate_tracker_region(observation.region, &request.clip_id)?;
+        if !observation.confidence.is_finite() {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: "author_subject_reframe_path".into(),
+                message: "subject observation confidence must be finite".into(),
+            });
+        }
+        keyframes.push(ReframeKeyframe {
+            time_s: observation.frame as f64 / request.frame_rate,
+            center: [
+                stable_tracker_coordinate(observation.region.x + observation.region.width / 2.0),
+                stable_tracker_coordinate(observation.region.y + observation.region.height / 2.0),
+            ],
+            scale,
+            confidence: Some(observation.confidence.clamp(0.0, 1.0)),
+        });
+    }
+    keyframes.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+    store_subject_reframe_path(package, request, keyframes, "subject-observations".into())
+}
+
+/// Author a subject-aware crop/reframe path from an existing normalized tracker.
+pub fn author_subject_reframe_path_from_track(
+    package: &mut TrackingPackage,
+    track_id: &str,
+    request: SubjectReframeRequest,
+) -> Result<SubjectReframePlan, ProfessionalEngineError> {
+    validate_subject_reframe_request(&request)?;
+    let track = package
+        .tracks
+        .iter()
+        .find(|track| track.id == track_id)
+        .ok_or_else(|| ProfessionalEngineError::MissingTrack(track_id.to_string()))?;
+    if track.coordinate_space != CoordinateSpace::Normalized {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: track_id.to_string(),
+            message: "subject reframe requires normalized tracker coordinate space".into(),
+        });
+    }
+    let scale = reframe_scale_for_aspect(&request);
+    let mut keyframes = Vec::new();
+    for sample in track
+        .samples
+        .iter()
+        .filter(|sample| !sample.points.is_empty())
+    {
+        let center = tracker_sample_center(sample, track_id)?;
+        let confidence = sample
+            .confidence
+            .or(track.confidence)
+            .filter(|confidence| confidence.is_finite())
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        keyframes.push(ReframeKeyframe {
+            time_s: sample.frame as f64 / request.frame_rate,
+            center,
+            scale,
+            confidence: Some(confidence),
+        });
+    }
+    if keyframes.is_empty() {
+        return Err(ProfessionalEngineError::MissingTrack(track_id.to_string()));
+    }
+    keyframes.sort_by(|a, b| a.time_s.total_cmp(&b.time_s));
+    store_subject_reframe_path(package, request, keyframes, track_id.to_string())
+}
+
+fn store_subject_reframe_path(
+    package: &mut TrackingPackage,
+    request: SubjectReframeRequest,
+    keyframes: Vec<ReframeKeyframe>,
+    evidence_track_id: String,
+) -> Result<SubjectReframePlan, ProfessionalEngineError> {
+    let reframe_id = subject_reframe_id(&request);
+    let path = ReframePath {
+        id: reframe_id.clone(),
+        clip_id: request.clip_id,
+        aspect_ratio: request.aspect_ratio,
+        source_width: request.source_width,
+        source_height: request.source_height,
+        target_width: request.target_width,
+        target_height: request.target_height,
+        keyframes,
+        smoothing: request.smoothing,
+        evidence_track_id: Some(evidence_track_id),
+        safe_area: request.safe_area,
+    };
+    if let Some(existing) = package
+        .reframe_paths
+        .iter_mut()
+        .find(|candidate| candidate.id == reframe_id)
+    {
+        *existing = path;
+    } else {
+        package.reframe_paths.push(path);
+    }
+    Ok(SubjectReframePlan {
+        reframe_id,
+        review: summarize_tracking_package(package),
+    })
+}
+
+fn tracker_sample_center(
+    sample: &TrackSample,
+    binding_id: &str,
+) -> Result<[f64; 2], ProfessionalEngineError> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for point in &sample.points {
+        if !point[0].is_finite()
+            || !point[1].is_finite()
+            || !(0.0..=1.0).contains(&point[0])
+            || !(0.0..=1.0).contains(&point[1])
+        {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: binding_id.to_string(),
+                message: "tracker samples for subject reframe must be finite normalized points"
+                    .into(),
+            });
+        }
+        min_x = min_x.min(point[0]);
+        min_y = min_y.min(point[1]);
+        max_x = max_x.max(point[0]);
+        max_y = max_y.max(point[1]);
+    }
+    Ok([
+        stable_tracker_coordinate((min_x + max_x) / 2.0),
+        stable_tracker_coordinate((min_y + max_y) / 2.0),
+    ])
+}
+
+/// Summarize a tracking package into rows suitable for UI or agent review.
+pub fn summarize_tracking_package(package: &TrackingPackage) -> TrackingReviewPackage {
+    TrackingReviewPackage {
+        tracks: package.tracks.iter().map(tracking_review_track).collect(),
+        reframe_paths: package
+            .reframe_paths
+            .iter()
+            .map(tracking_review_reframe)
+            .collect(),
+    }
+}
+
+fn validate_subject_reframe_request(
+    request: &SubjectReframeRequest,
+) -> Result<(), ProfessionalEngineError> {
+    if request.clip_id.trim().is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "author_subject_reframe_path".into(),
+            message: "clip_id is required".into(),
+        });
+    }
+    if request.aspect_ratio.trim().is_empty()
+        || request.source_width == 0
+        || request.source_height == 0
+        || request.target_width == 0
+        || request.target_height == 0
+        || !request.frame_rate.is_finite()
+        || request.frame_rate <= 0.0
+    {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "author_subject_reframe_path".into(),
+            message: "aspect ratio, source/target dimensions, and positive frame_rate are required"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
+fn reframe_scale_for_aspect(request: &SubjectReframeRequest) -> f64 {
+    let source_aspect = f64::from(request.source_width) / f64::from(request.source_height);
+    let target_aspect = f64::from(request.target_width) / f64::from(request.target_height);
+    if target_aspect <= source_aspect {
+        source_aspect / target_aspect
+    } else {
+        target_aspect / source_aspect
+    }
+    .max(1.0)
+}
+
+fn subject_reframe_id(request: &SubjectReframeRequest) -> String {
+    let aspect = request
+        .aspect_ratio
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    format!("reframe-{}-{aspect}", request.clip_id)
+}
+
+fn tracked_insert_binding_graph(track_id: &str, overlay_clip_id: &str) -> CompositionGraph {
+    CompositionGraph {
+        id: format!("tracked-insert-{overlay_clip_id}"),
+        nodes: vec![
+            tracker_bind_node_for_authoring(
+                "tracked-insert-x",
+                track_id,
+                overlay_clip_id,
+                "overlay.x",
+                "x",
+            ),
+            tracker_bind_node_for_authoring(
+                "tracked-insert-y",
+                track_id,
+                overlay_clip_id,
+                "overlay.y",
+                "y",
+            ),
+        ],
+        ..CompositionGraph::default()
+    }
+}
+
+fn tracker_bind_node_for_authoring(
+    id: &str,
+    track_id: &str,
+    target_clip_id: &str,
+    target_parameter: &str,
+    channel: &str,
+) -> CompositionNode {
+    CompositionNode {
+        id: id.into(),
+        node_type: CompositionNodeType::TrackerBind,
+        params: HashMap::from([
+            ("track_id".into(), Value::String(track_id.into())),
+            (
+                "target_clip_id".into(),
+                Value::String(target_clip_id.into()),
+            ),
+            (
+                "target_parameter".into(),
+                Value::String(target_parameter.into()),
+            ),
+            ("channel".into(), Value::String(channel.into())),
+        ]),
+    }
+}
+
+fn tracker_samples_from_observations(
+    request: &TrackingRequest,
+    observations: Vec<TrackerObservation>,
+) -> Result<Vec<TrackSample>, ProfessionalEngineError> {
+    let mut observations = observations;
+    observations.sort_by_key(|observation| observation.frame);
+    let mut previous_frame = None;
+    let mut samples = Vec::with_capacity(observations.len());
+    for observation in observations {
+        if observation.frame < request.start_frame || observation.frame > request.end_frame {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: request.clip_id.clone(),
+                message: format!(
+                    "tracker observation frame {} is outside requested frame range {}..={}",
+                    observation.frame, request.start_frame, request.end_frame
+                ),
+            });
+        }
+        if previous_frame == Some(observation.frame) {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: request.clip_id.clone(),
+                message: format!(
+                    "duplicate tracker observation for frame {}",
+                    observation.frame
+                ),
+            });
+        }
+        validate_tracker_region(observation.region, &request.clip_id)?;
+        if !observation.confidence.is_finite() {
+            return Err(ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: request.clip_id.clone(),
+                message: "tracker observation confidence must be finite".into(),
+            });
+        }
+        samples.push(TrackSample {
+            frame: observation.frame,
+            points: tracker_region_points(request.kind, observation.region),
+            confidence: Some(observation.confidence.clamp(0.0, 1.0)),
+        });
+        previous_frame = Some(observation.frame);
+    }
+    Ok(samples)
+}
+
+fn validate_tracking_request(request: &TrackingRequest) -> Result<(), ProfessionalEngineError> {
+    if request.clip_id.trim().is_empty() {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: "ensure_tracker".into(),
+            message: "clip_id is required".into(),
+        });
+    }
+    if request.end_frame < request.start_frame {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: request.clip_id.clone(),
+            message: "end_frame must be greater than or equal to start_frame".into(),
+        });
+    }
+    validate_tracker_region(request.region, &request.clip_id)
+}
+
+fn validate_tracker_region(
+    region: TrackerRegion,
+    binding_id: &str,
+) -> Result<(), ProfessionalEngineError> {
+    let valid_region = [region.x, region.y, region.width, region.height]
+        .into_iter()
+        .all(f64::is_finite)
+        && region.width > 0.0
+        && region.height > 0.0
+        && region.x >= 0.0
+        && region.y >= 0.0
+        && region.x + region.width <= 1.0
+        && region.y + region.height <= 1.0;
+    if !valid_region {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: binding_id.to_string(),
+            message: "tracker region must be finite normalized xywh within 0..1".into(),
+        });
+    }
+    Ok(())
+}
+
+fn tracker_request_id(request: &TrackingRequest) -> String {
+    format!(
+        "tracker-{}-{}-{}-{}-{}-{}-{}-{}",
+        sanitize_track_id_component(&request.clip_id),
+        track_kind_id(request.kind),
+        request.start_frame,
+        request.end_frame,
+        tracker_coord_id(request.region.x),
+        tracker_coord_id(request.region.y),
+        tracker_coord_id(request.region.width),
+        tracker_coord_id(request.region.height)
+    )
+}
+
+fn sanitize_track_id_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    sanitized.trim_matches('-').to_string()
+}
+
+fn track_kind_id(kind: TrackKind) -> &'static str {
+    match kind {
+        TrackKind::Point => "point",
+        TrackKind::Planar => "planar",
+        TrackKind::Surface => "surface",
+    }
+}
+
+fn tracker_coord_id(value: f64) -> i64 {
+    (value * 10_000.0).round() as i64
+}
+
+fn tracker_region_points(kind: TrackKind, region: TrackerRegion) -> Vec<[f64; 2]> {
+    let left = stable_tracker_coordinate(region.x);
+    let top = stable_tracker_coordinate(region.y);
+    let right = stable_tracker_coordinate(region.x + region.width);
+    let bottom = stable_tracker_coordinate(region.y + region.height);
+    match kind {
+        TrackKind::Point => vec![[
+            stable_tracker_coordinate((left + right) / 2.0),
+            stable_tracker_coordinate((top + bottom) / 2.0),
+        ]],
+        TrackKind::Planar | TrackKind::Surface => {
+            vec![[left, top], [right, top], [right, bottom], [left, bottom]]
+        }
+    }
+}
+
+fn stable_tracker_coordinate(value: f64) -> f64 {
+    (value * 1_000_000.0).round() / 1_000_000.0
+}
+
+fn tracking_review_track(track: &TrackSidecar) -> TrackingReviewTrack {
+    let confidence = track
+        .confidence
+        .filter(|confidence| confidence.is_finite())
+        .or_else(|| average_sample_confidence(&track.samples));
+    let correction_frames = track
+        .samples
+        .iter()
+        .filter(|sample| track_sample_requires_correction(sample))
+        .map(|sample| sample.frame)
+        .collect::<Vec<_>>();
+    TrackingReviewTrack {
+        track_id: track.id.clone(),
+        asset_id: track.asset_id.clone(),
+        kind: track.kind,
+        sample_count: track.samples.len(),
+        confidence,
+        requires_correction: !correction_frames.is_empty()
+            || confidence
+                .map(|value| value < TRACKING_REVIEW_CONFIDENCE_THRESHOLD)
+                .unwrap_or(true),
+        correction_frames,
+    }
+}
+
+fn track_sample_requires_correction(sample: &TrackSample) -> bool {
+    sample.points.is_empty()
+        || sample
+            .points
+            .iter()
+            .flatten()
+            .any(|coordinate| !coordinate.is_finite())
+        || sample
+            .confidence
+            .filter(|confidence| confidence.is_finite())
+            .map(|confidence| confidence < TRACKING_REVIEW_CONFIDENCE_THRESHOLD)
+            .unwrap_or(true)
+}
+
+fn tracking_review_reframe(path: &ReframePath) -> TrackingReviewReframe {
+    let confidence = average_reframe_confidence(path);
+    let correction_times_s = path
+        .keyframes
+        .iter()
+        .filter(|keyframe| {
+            keyframe
+                .confidence
+                .filter(|confidence| confidence.is_finite())
+                .map(|confidence| confidence < TRACKING_REVIEW_CONFIDENCE_THRESHOLD)
+                .unwrap_or(true)
+        })
+        .map(|keyframe| keyframe.time_s)
+        .collect::<Vec<_>>();
+    TrackingReviewReframe {
+        reframe_id: path.id.clone(),
+        clip_id: path.clip_id.clone(),
+        keyframe_count: path.keyframes.len(),
+        confidence,
+        requires_correction: !correction_times_s.is_empty()
+            || confidence
+                .map(|value| value < TRACKING_REVIEW_CONFIDENCE_THRESHOLD)
+                .unwrap_or(true),
+        correction_times_s,
+    }
+}
+
+fn average_reframe_confidence(path: &ReframePath) -> Option<f64> {
+    let mut total = 0.0;
+    let mut count = 0usize;
+    for confidence in path
+        .keyframes
+        .iter()
+        .filter_map(|keyframe| keyframe.confidence)
+    {
+        if confidence.is_finite() {
+            total += confidence.clamp(0.0, 1.0);
+            count += 1;
+        }
+    }
+    if count == 0 {
+        None
+    } else {
+        Some(total / count as f64)
+    }
+}
+
 /// Lower an overlay transform from a reviewed tracking package.
 pub fn lower_track_bound_overlay(
     package: &TrackingPackage,
@@ -248,6 +1002,239 @@ pub fn lower_track_bound_overlay(
             point[0], point[1]
         ),
     })
+}
+
+/// Lower tracker-bind composition nodes into executable clip parameter animations.
+pub fn lower_tracker_parameter_bindings(
+    package: &TrackingPackage,
+    graph: &CompositionGraph,
+    frame_rate: f64,
+) -> Result<Vec<ParameterAnimation>, ProfessionalEngineError> {
+    if !frame_rate.is_finite() || frame_rate <= 0.0 {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: graph.id.clone(),
+            message: "frame_rate must be finite and positive".into(),
+        });
+    }
+    graph
+        .nodes
+        .iter()
+        .filter(|node| node.node_type == CompositionNodeType::TrackerBind)
+        .map(|node| lower_tracker_binding_node(package, node, frame_rate))
+        .collect()
+}
+
+fn lower_tracker_binding_node(
+    package: &TrackingPackage,
+    node: &CompositionNode,
+    frame_rate: f64,
+) -> Result<ParameterAnimation, ProfessionalEngineError> {
+    let track_id = required_string_param(node, "track_id")?;
+    let target_clip_id = required_string_param(node, "target_clip_id")?;
+    let target_parameter = required_string_param(node, "target_parameter")?;
+    if !is_runtime_clip_parameter(&target_parameter) {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: node.id.clone(),
+            message: format!(
+                "unsupported target_parameter {target_parameter:?}; supported clip parameters: {}",
+                RUNTIME_CLIP_PARAMETERS.join(", ")
+            ),
+        });
+    }
+    let channel = string_param(node, "channel")
+        .map(str::to_string)
+        .unwrap_or_else(|| inferred_tracker_channel(&target_parameter).to_string());
+    let track = package
+        .tracks
+        .iter()
+        .find(|track| track.id == track_id)
+        .ok_or_else(|| ProfessionalEngineError::MissingTrack(track_id.clone()))?;
+    if track.coordinate_space != CoordinateSpace::Normalized {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: node.id.clone(),
+            message:
+                "only normalized tracker coordinate space can bind directly to overlay parameters"
+                    .into(),
+        });
+    }
+    let mut keyframes = Vec::new();
+    for sample in track
+        .samples
+        .iter()
+        .filter(|sample| !sample.points.is_empty())
+    {
+        let value = tracker_channel_value(sample, &channel).ok_or_else(|| {
+            ProfessionalEngineError::InvalidTrackerBinding {
+                binding_id: node.id.clone(),
+                message: format!("unsupported tracker channel {channel:?}"),
+            }
+        })?;
+        keyframes.push(Keyframe::linear(sample.frame as f64 / frame_rate, value));
+    }
+    if keyframes.is_empty() {
+        return Err(ProfessionalEngineError::MissingTrack(track_id));
+    }
+    Ok(ParameterAnimation {
+        id: format!("tracker-bind-{}", node.id),
+        target: AnimationTarget::ClipParameter {
+            clip_id: target_clip_id,
+            parameter: target_parameter,
+        },
+        keyframes,
+        pre_extrapolation: ExtrapolationMode::Hold,
+        post_extrapolation: ExtrapolationMode::Hold,
+        motion_path: None,
+        metadata_only: false,
+        rationale: Some(format!("bound to tracker {}", track.id)),
+    })
+}
+
+fn required_string_param(
+    node: &CompositionNode,
+    key: &'static str,
+) -> Result<String, ProfessionalEngineError> {
+    let Some(value) = string_param(node, key).filter(|value| !value.trim().is_empty()) else {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: node.id.clone(),
+            message: format!("missing required string parameter {key}"),
+        });
+    };
+    Ok(value.to_string())
+}
+
+fn inferred_tracker_channel(target_parameter: &str) -> &'static str {
+    if target_parameter.ends_with(".y") {
+        "y"
+    } else {
+        "x"
+    }
+}
+
+fn tracker_channel_value(sample: &TrackSample, channel: &str) -> Option<f64> {
+    let points = sample.points.as_slice();
+    match channel {
+        "x" | "center_x" => {
+            Some(points.iter().map(|point| point[0]).sum::<f64>() / points.len() as f64)
+        }
+        "y" | "center_y" => {
+            Some(points.iter().map(|point| point[1]).sum::<f64>() / points.len() as f64)
+        }
+        "width" => {
+            let (min_x, max_x) = min_max_coordinate(points, 0)?;
+            Some(max_x - min_x)
+        }
+        "height" => {
+            let (min_y, max_y) = min_max_coordinate(points, 1)?;
+            Some(max_y - min_y)
+        }
+        _ => None,
+    }
+}
+
+/// Lower a reviewed four-point surface track into an FFmpeg perspective filter.
+pub fn lower_surface_track_corner_pin(
+    package: &TrackingPackage,
+    track_id: &str,
+    target_clip_id: &str,
+    width: u32,
+    height: u32,
+) -> Result<CornerPinLowering, ProfessionalEngineError> {
+    let track = package
+        .tracks
+        .iter()
+        .find(|track| track.id == track_id)
+        .ok_or_else(|| ProfessionalEngineError::MissingTrack(track_id.to_string()))?;
+    if track.kind != TrackKind::Surface {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: track_id.to_string(),
+            message: "corner-pin lowering requires a surface track".into(),
+        });
+    }
+    if track.coordinate_space != CoordinateSpace::Normalized {
+        return Err(ProfessionalEngineError::InvalidTrackerBinding {
+            binding_id: track_id.to_string(),
+            message: "corner-pin lowering currently requires normalized surface points".into(),
+        });
+    }
+    let samples = track
+        .samples
+        .iter()
+        .filter(|sample| sample.points.len() >= 4)
+        .collect::<Vec<_>>();
+    if samples.is_empty() {
+        return Err(ProfessionalEngineError::MissingTrack(track_id.to_string()));
+    }
+    let x0 = surface_corner_expr(&samples, 0, 0, f64::from(width));
+    let y0 = surface_corner_expr(&samples, 0, 1, f64::from(height));
+    let x1 = surface_corner_expr(&samples, 1, 0, f64::from(width));
+    let y1 = surface_corner_expr(&samples, 1, 1, f64::from(height));
+    let x2 = surface_corner_expr(&samples, 3, 0, f64::from(width));
+    let y2 = surface_corner_expr(&samples, 3, 1, f64::from(height));
+    let x3 = surface_corner_expr(&samples, 2, 0, f64::from(width));
+    let y3 = surface_corner_expr(&samples, 2, 1, f64::from(height));
+    Ok(CornerPinLowering {
+        track_id: track_id.into(),
+        target_clip_id: target_clip_id.into(),
+        filter: format!(
+            "perspective=x0='{x0}':y0='{y0}':x1='{x1}':y1='{y1}':x2='{x2}':y2='{y2}':x3='{x3}':y3='{y3}':interpolation=linear:eval=frame"
+        ),
+    })
+}
+
+/// Lower graph-native corner-pin nodes through reviewed surface tracks.
+pub fn lower_surface_track_corner_pin_bindings(
+    package: &TrackingPackage,
+    graph: &CompositionGraph,
+    width: u32,
+    height: u32,
+) -> Result<Vec<CornerPinLowering>, ProfessionalEngineError> {
+    graph
+        .nodes
+        .iter()
+        .filter(|node| node.node_type == CompositionNodeType::CornerPin)
+        .map(|node| {
+            let track_id = required_string_param(node, "track_id")?;
+            let target_clip_id = required_string_param(node, "target_clip_id")?;
+            lower_surface_track_corner_pin(package, &track_id, &target_clip_id, width, height)
+        })
+        .collect()
+}
+
+fn surface_corner_expr(
+    samples: &[&TrackSample],
+    point_index: usize,
+    coordinate_index: usize,
+    scale: f64,
+) -> String {
+    let mut expr =
+        fmt_filter_num(samples[samples.len() - 1].points[point_index][coordinate_index] * scale);
+    for sample in samples.iter().rev().skip(1) {
+        let value = fmt_filter_num(sample.points[point_index][coordinate_index] * scale);
+        expr = format!("if(lte(n\\,{})\\,{value}\\,{expr})", sample.frame);
+    }
+    expr
+}
+
+fn fmt_filter_num(value: f64) -> String {
+    let mut s = format!("{value:.6}");
+    while s.contains('.') && s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    if s == "-0" { "0".into() } else { s }
+}
+
+fn min_max_coordinate(points: &[[f64; 2]], coordinate: usize) -> Option<(f64, f64)> {
+    let first = points.first()?;
+    let mut min = first[coordinate];
+    let mut max = first[coordinate];
+    for point in points.iter().skip(1) {
+        min = min.min(point[coordinate]);
+        max = max.max(point[coordinate]);
+    }
+    Some((min, max))
 }
 
 /// Lower a reviewed subject-aware reframe path into a deterministic crop expression.
@@ -523,6 +1510,7 @@ pub struct EffectParameterCapability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EffectParameterValidation {
     AnyFinite,
+    NonNegative,
     Normalized,
     Positive,
 }
@@ -569,6 +1557,70 @@ pub fn effect_parameter_capability_matrix() -> Vec<EffectParameterCapability> {
             previewable: true,
             renderable: true,
             validation: EffectParameterValidation::Positive,
+        },
+        EffectParameterCapability {
+            effect: "awidat.video_overlay",
+            parameter: "blur",
+            unit: "px",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::NonNegative,
+        },
+        EffectParameterCapability {
+            effect: "awidat.blur",
+            parameter: "radius_px",
+            unit: "px",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::NonNegative,
+        },
+        EffectParameterCapability {
+            effect: "awidat.shake",
+            parameter: "intensity_px",
+            unit: "px",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::NonNegative,
+        },
+        EffectParameterCapability {
+            effect: "awidat.shake",
+            parameter: "frequency_hz",
+            unit: "hz",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::Positive,
+        },
+        EffectParameterCapability {
+            effect: "awidat.warp",
+            parameter: "k1",
+            unit: "coefficient",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::AnyFinite,
+        },
+        EffectParameterCapability {
+            effect: "awidat.warp",
+            parameter: "k2",
+            unit: "coefficient",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::AnyFinite,
+        },
+        EffectParameterCapability {
+            effect: "awidat.warp",
+            parameter: "center_x",
+            unit: "normalized",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::Normalized,
+        },
+        EffectParameterCapability {
+            effect: "awidat.warp",
+            parameter: "center_y",
+            unit: "normalized",
+            previewable: true,
+            renderable: true,
+            validation: EffectParameterValidation::Normalized,
         },
         EffectParameterCapability {
             effect: "awidat.volume",
@@ -619,6 +1671,7 @@ fn effect_parameter_value_is_valid(value: f64, validation: EffectParameterValida
     }
     match validation {
         EffectParameterValidation::AnyFinite => true,
+        EffectParameterValidation::NonNegative => value >= 0.0,
         EffectParameterValidation::Normalized => (0.0..=1.0).contains(&value),
         EffectParameterValidation::Positive => value > 0.0,
     }
@@ -703,6 +1756,11 @@ fn lower_composition_node(node: &CompositionNode) -> Option<RenderLoweringStep> 
             let track_id = string_param(node, "track_id").unwrap_or("unbound");
             format!("metadata={track_id}")
         }
+        CompositionNodeType::CornerPin => {
+            let track_id = string_param(node, "track_id").unwrap_or("unbound");
+            let target_clip_id = string_param(node, "target_clip_id").unwrap_or("unbound");
+            format!("corner_pin=track:{track_id}:target:{target_clip_id}")
+        }
         CompositionNodeType::Output => "map=output".to_string(),
     };
     Some(RenderLoweringStep {
@@ -738,6 +1796,8 @@ pub struct FilledMotionTemplate {
     pub name: String,
     /// Slot values keyed by slot id.
     pub slots: BTreeMap<String, Value>,
+    /// Slot definitions copied from the source template.
+    pub slot_defs: Vec<TemplateSlot>,
     /// Safe-area rules copied from the template.
     pub safe_areas: Vec<awidat_proto::professional::SafeAreaRule>,
 }
@@ -773,6 +1833,8 @@ pub enum TemplateAnimation {
 pub struct MotionTemplateRender {
     /// Title plans the current renderer can draw.
     pub titles: Vec<TitlePlan>,
+    /// Media overlay plans lowered from image, logo, or video template slots.
+    pub media_overlays: Vec<VideoOverlayPlan>,
     /// Explicit parameter animations generated by the template.
     pub parameter_animations: Vec<ParameterAnimation>,
     /// Safe-area violations found before render.
@@ -862,6 +1924,29 @@ pub fn built_in_motion_templates() -> Vec<MotionGraphicsTemplate> {
                 slot("target_clip", TemplateSlotKind::TargetClip, true),
                 slot("image_asset", TemplateSlotKind::Image, false),
                 slot("video_asset", TemplateSlotKind::Video, false),
+                slot("scale", TemplateSlotKind::Number, false),
+                slot("safe_area", TemplateSlotKind::SafeAreaProfile, false),
+            ],
+            safe_areas: platform_safe_areas(),
+            platform_variants: platform_variants(),
+        },
+        MotionGraphicsTemplate {
+            id: "shake-emphasis".into(),
+            name: "Shake Emphasis".into(),
+            slots: vec![
+                slot("target_clip", TemplateSlotKind::TargetClip, true),
+                slot("intensity", TemplateSlotKind::Number, false),
+                slot("safe_area", TemplateSlotKind::SafeAreaProfile, false),
+            ],
+            safe_areas: platform_safe_areas(),
+            platform_variants: platform_variants(),
+        },
+        MotionGraphicsTemplate {
+            id: "logo-reveal".into(),
+            name: "Logo Reveal".into(),
+            slots: vec![
+                slot("target_clip", TemplateSlotKind::TargetClip, true),
+                slot("logo_asset", TemplateSlotKind::Image, true),
                 slot("scale", TemplateSlotKind::Number, false),
                 slot("safe_area", TemplateSlotKind::SafeAreaProfile, false),
             ],
@@ -1055,6 +2140,7 @@ pub fn fill_motion_template(
         template_id: template.id.clone(),
         name: template.name.clone(),
         slots: values,
+        slot_defs: template.slots.clone(),
         safe_areas: template.safe_areas.clone(),
     })
 }
@@ -1100,13 +2186,14 @@ pub fn lower_motion_template(
 ) -> MotionTemplateRender {
     let mut render = MotionTemplateRender {
         safe_area_violations: validate_motion_safe_areas(filled),
+        limitations: unsupported_motion_template_slot_limitations(filled),
         ..MotionTemplateRender::default()
     };
     let name = text_slot(filled, "name")
         .or_else(|| text_slot(filled, "text"))
         .or_else(|| text_slot(filled, "title"))
         .unwrap_or_else(|| filled.name.clone());
-    let subtitle = text_slot(filled, "title").filter(|text| text != &name);
+    let subtitle = text_slot(filled, "subtitle");
     match timing.animation {
         TemplateAnimation::TextReveal | TemplateAnimation::WriteOn => {
             render.titles.extend(progressive_titles(&name, timing));
@@ -1142,10 +2229,57 @@ pub fn lower_motion_template(
             32,
         ));
     }
+    if let Some(color) = color_slot(filled) {
+        apply_title_color(&mut render.titles, color);
+    }
+    let parameter_animations = template_parameter_animations(filled, timing);
+    render.media_overlays.extend(template_media_overlays(
+        filled,
+        timing,
+        &parameter_animations,
+    ));
+    render.parameter_animations.extend(parameter_animations);
     render
-        .parameter_animations
-        .extend(template_parameter_animations(filled, timing));
-    render
+}
+
+fn unsupported_motion_template_slot_limitations(
+    filled: &FilledMotionTemplate,
+) -> Vec<RenderLimitation> {
+    filled
+        .slot_defs
+        .iter()
+        .filter(|slot| {
+            filled.slots.contains_key(&slot.id) && !motion_template_slot_is_lowered(slot)
+        })
+        .map(|slot| RenderLimitation {
+            node_id: format!("{}:{}", filled.template_id, slot.id),
+            severity: FindingSeverity::Warning,
+            message: format!(
+                "motion template {} slot {} ({:?}) is filled but has no current render lowering",
+                filled.template_id, slot.id, slot.kind
+            ),
+        })
+        .collect()
+}
+
+fn motion_template_slot_is_lowered(slot: &TemplateSlot) -> bool {
+    match slot.kind {
+        TemplateSlotKind::Text => {
+            matches!(slot.id.as_str(), "name" | "text" | "title" | "subtitle")
+        }
+        TemplateSlotKind::Number => matches!(slot.id.as_str(), "scale" | "intensity"),
+        TemplateSlotKind::Color => matches!(slot.id.as_str(), "color" | "accent_color"),
+        TemplateSlotKind::Image => image_template_slot_is_lowered(&slot.id),
+        TemplateSlotKind::Video => matches!(slot.id.as_str(), "video_asset"),
+        TemplateSlotKind::TargetClip | TemplateSlotKind::SafeAreaProfile => true,
+    }
+}
+
+fn image_template_slot_is_lowered(slot_id: &str) -> bool {
+    matches!(
+        slot_id,
+        "image_asset" | "logo" | "logo_asset" | "brand_logo" | "brand_logo_path"
+    )
 }
 
 fn template_parameter_animations(
@@ -1199,7 +2333,146 @@ fn template_parameter_animations(
                 ),
             ]
         }
+        "shake-emphasis" => {
+            let intensity = number_slot(filled, "intensity")
+                .unwrap_or(0.035)
+                .abs()
+                .clamp(0.005, 0.20);
+            let rotation_deg = (intensity * 60.0).clamp(1.0, 8.0);
+            vec![
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.x",
+                    shake_keyframes(duration_s, intensity),
+                ),
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.y",
+                    shake_y_keyframes(duration_s, intensity * 0.65),
+                ),
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.rotation_deg",
+                    vec![
+                        keyframe(0.0, 0.0),
+                        keyframe(duration_s * 0.20, -rotation_deg),
+                        keyframe(duration_s * 0.40, rotation_deg),
+                        keyframe(duration_s * 0.65, -rotation_deg * 0.5),
+                        keyframe(duration_s, 0.0),
+                    ],
+                ),
+            ]
+        }
+        "logo-reveal" => {
+            let scale = number_slot(filled, "scale").unwrap_or(1.0).max(0.05);
+            vec![
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.opacity",
+                    fade_keyframes(duration_s),
+                ),
+                clip_animation(
+                    &filled.template_id,
+                    &target_clip,
+                    "overlay.scale",
+                    vec![
+                        keyframe(0.0, 0.85 * scale),
+                        keyframe((duration_s * 0.25).min(0.45), scale),
+                        keyframe(duration_s, scale),
+                    ],
+                ),
+            ]
+        }
         _ => Vec::new(),
+    }
+}
+
+fn template_media_overlays(
+    filled: &FilledMotionTemplate,
+    timing: MotionTemplateTiming,
+    parameter_animations: &[ParameterAnimation],
+) -> Vec<VideoOverlayPlan> {
+    let target_clip = text_slot(filled, "target_clip");
+    let duration_s = (timing.end_s - timing.start_s).max(0.1);
+    let animations = target_clip
+        .as_deref()
+        .map(|target_clip| {
+            parameter_animations
+                .iter()
+                .filter_map(|animation| {
+                    render_animation_for_template_overlay(animation, target_clip)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    media_asset_slots(filled)
+        .into_iter()
+        .map(|(slot_id, asset_path)| VideoOverlayPlan {
+            segment: TimelineSegment {
+                clip_name: format!("{}:{slot_id}", filled.template_id),
+                asset_path: PathBuf::from(asset_path),
+                start_s: 0.0,
+                duration_s,
+                ..TimelineSegment::default()
+            },
+            track_start_s: timing.start_s,
+            mode: VideoOverlayMode::PiP {
+                corner: "bottom_right".into(),
+                scale: template_media_overlay_scale(filled),
+                margin_pct: 0.05,
+            },
+            rotation_deg: 0.0,
+            motion_blur: None,
+            corner_pin_filter: None,
+            matte_source: None,
+            matte_input_index: None,
+            mask: None,
+            animations: animations.clone(),
+        })
+        .collect()
+}
+
+fn media_asset_slots(filled: &FilledMotionTemplate) -> Vec<(String, String)> {
+    filled
+        .slot_defs
+        .iter()
+        .filter(|slot| match slot.kind {
+            TemplateSlotKind::Image => image_template_slot_is_lowered(&slot.id),
+            TemplateSlotKind::Video => slot.id == "video_asset",
+            _ => false,
+        })
+        .filter_map(|slot| text_slot(filled, &slot.id).map(|value| (slot.id.clone(), value)))
+        .collect()
+}
+
+fn render_animation_for_template_overlay(
+    animation: &ParameterAnimation,
+    target_clip: &str,
+) -> Option<RenderParameterAnimation> {
+    let AnimationTarget::ClipParameter { clip_id, parameter } = &animation.target else {
+        return None;
+    };
+    if clip_id != target_clip || !parameter.starts_with("overlay.") {
+        return None;
+    }
+    Some(RenderParameterAnimation {
+        parameter: parameter.clone(),
+        keyframes: animation.keyframes.clone(),
+        pre_extrapolation: animation.pre_extrapolation,
+        post_extrapolation: animation.post_extrapolation,
+        motion_path: animation.motion_path.clone(),
+    })
+}
+
+fn template_media_overlay_scale(filled: &FilledMotionTemplate) -> f64 {
+    match filled.template_id.as_str() {
+        "product-insert-emphasis" => 0.30,
+        "pip-emphasis" => 0.28,
+        _ => 0.25,
     }
 }
 
@@ -1216,6 +2489,10 @@ fn clip_animation(
             parameter: parameter.into(),
         },
         keyframes,
+        pre_extrapolation: ExtrapolationMode::Hold,
+        post_extrapolation: ExtrapolationMode::Hold,
+        motion_path: None,
+        metadata_only: false,
         rationale: Some(format!("lowered from motion template {template_id}")),
     }
 }
@@ -1230,6 +2507,28 @@ fn fade_keyframes(duration_s: f64) -> Vec<Keyframe> {
     ]
 }
 
+fn shake_keyframes(duration_s: f64, intensity: f64) -> Vec<Keyframe> {
+    vec![
+        keyframe(0.0, 0.0),
+        keyframe(duration_s * 0.16, -intensity),
+        keyframe(duration_s * 0.32, intensity),
+        keyframe(duration_s * 0.52, -intensity * 0.5),
+        keyframe(duration_s * 0.72, intensity * 0.5),
+        keyframe(duration_s, 0.0),
+    ]
+}
+
+fn shake_y_keyframes(duration_s: f64, intensity: f64) -> Vec<Keyframe> {
+    vec![
+        keyframe(0.0, 0.0),
+        keyframe(duration_s * 0.16, intensity),
+        keyframe(duration_s * 0.32, -intensity),
+        keyframe(duration_s * 0.52, intensity * 0.5),
+        keyframe(duration_s * 0.72, -intensity * 0.5),
+        keyframe(duration_s, 0.0),
+    ]
+}
+
 fn keyframe(time_s: f64, value: f64) -> Keyframe {
     Keyframe {
         time_s,
@@ -1237,6 +2536,8 @@ fn keyframe(time_s: f64, value: f64) -> Keyframe {
         interpolation: KeyframeInterpolation::Linear,
         easing: Easing::EaseInOut,
         bezier: None,
+        tangent_mode: Default::default(),
+        spring: None,
     }
 }
 
@@ -1302,8 +2603,10 @@ fn title_plan(
         color: "#FFFFFF".into(),
         font_weight: TitleWeight::Bold,
         animation,
+        reveal: TextReveal::None,
         role: "motion_template".into(),
         safe_area: Some("title_safe".into()),
+        rich_segments: Vec::new(),
         animations: Vec::new(),
     }
 }
@@ -1315,6 +2618,28 @@ fn text_slot(filled: &FilledMotionTemplate, key: &str) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_string)
         .filter(|value| !value.trim().is_empty())
+}
+
+fn color_slot(filled: &FilledMotionTemplate) -> Option<String> {
+    text_slot(filled, "color")
+        .or_else(|| text_slot(filled, "accent_color"))
+        .filter(|value| color_value_is_safe(value))
+}
+
+fn color_value_is_safe(value: &str) -> bool {
+    let value = value.trim();
+    if value.len() > 32 {
+        return false;
+    }
+    value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '#')
+}
+
+fn apply_title_color(titles: &mut [TitlePlan], color: String) {
+    for title in titles {
+        title.color.clone_from(&color);
+    }
 }
 
 fn number_slot(filled: &FilledMotionTemplate, key: &str) -> Option<f64> {
@@ -1674,7 +2999,12 @@ pub fn apply_export_preset_to_spec(
         ]);
     }
     if let Some(video) = &preset.video {
-        args.extend(["-c:v".into(), video.codec.clone()]);
+        let codec = export_video_codec_for_policy(
+            &video.codec,
+            preset.output.hardware_acceleration,
+            &preset.id,
+        )?;
+        args.extend(["-c:v".into(), codec]);
         if let Some(bitrate) = video.bitrate_kbps.or(preset.profile.video_bitrate_kbps) {
             args.extend(["-b:v".into(), format!("{bitrate}k")]);
         }
@@ -1690,9 +3020,63 @@ pub fn apply_export_preset_to_spec(
         args.extend(["-ar".into(), audio.sample_rate_hz.to_string()]);
         args.extend(["-ac".into(), audio.channels.to_string()]);
     }
+    if preset.output.container == "mp4" || preset.output.extension == "mp4" {
+        args.extend(["-movflags".into(), "+faststart".into()]);
+    }
     args.extend(["-f".into(), preset.output.container.clone()]);
     spec.args.splice(insertion..insertion, args);
     Ok(spec)
+}
+
+fn export_video_codec_for_policy(
+    codec: &str,
+    policy: HardwareAccelerationPolicy,
+    preset_id: &str,
+) -> Result<String, ProfessionalEngineError> {
+    match policy {
+        HardwareAccelerationPolicy::Off => Ok(codec.to_string()),
+        HardwareAccelerationPolicy::Auto => Ok(native_hardware_codec(codec)
+            .map(str::to_string)
+            .unwrap_or_else(|| codec.to_string())),
+        HardwareAccelerationPolicy::Require => native_hardware_codec(codec)
+            .map(str::to_string)
+            .ok_or_else(|| ProfessionalEngineError::InvalidExportPreset {
+                preset_id: preset_id.to_string(),
+                message: format!(
+                    "hardware acceleration was required but no native hardware codec mapping exists for {codec}"
+                ),
+            }),
+    }
+}
+
+fn native_hardware_codec(codec: &str) -> Option<&'static str> {
+    match codec {
+        "h264_videotoolbox" => Some("h264_videotoolbox"),
+        "hevc_videotoolbox" => Some("hevc_videotoolbox"),
+        "h264_nvenc" => Some("h264_nvenc"),
+        "hevc_nvenc" => Some("hevc_nvenc"),
+        "h264_qsv" => Some("h264_qsv"),
+        "hevc_qsv" => Some("hevc_qsv"),
+        "h264_amf" => Some("h264_amf"),
+        "hevc_amf" => Some("hevc_amf"),
+        "h264_vaapi" => Some("h264_vaapi"),
+        "hevc_vaapi" => Some("hevc_vaapi"),
+        _ => native_software_codec_mapping(codec),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn native_software_codec_mapping(codec: &str) -> Option<&'static str> {
+    match codec {
+        "libx264" => Some("h264_videotoolbox"),
+        "libx265" | "libx265_hevc" => Some("hevc_videotoolbox"),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn native_software_codec_mapping(_codec: &str) -> Option<&'static str> {
+    None
 }
 
 /// Lower a stream-level export contract into deterministic FFmpeg arguments.

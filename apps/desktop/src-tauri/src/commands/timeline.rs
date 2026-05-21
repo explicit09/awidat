@@ -15,7 +15,8 @@ use awidat_desktop_protocol::{
 use awidat_proto::awidat_meta;
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::professional::{
-    AnimationTarget, Easing, KeyframeInterpolation, ParameterAnimation,
+    AnimationTarget, Easing, ExtrapolationMode, KeyframeInterpolation, ParameterAnimation,
+    is_runtime_clip_parameter,
 };
 use awidat_proto::project::Project;
 use awidat_proto::transitions::{
@@ -248,6 +249,12 @@ pub fn flatten_timeline_public(
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("none")
                                 .to_string(),
+                            reveal: e
+                                .metadata
+                                .get("reveal")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("none")
+                                .to_string(),
                         });
                     let video_overlay = clip
                         .effects
@@ -386,32 +393,68 @@ pub fn flatten_timeline_public(
 }
 
 fn is_phase_3a_parameter(parameter: &str) -> bool {
-    matches!(
-        parameter,
-        "title.opacity"
-            | "title.x"
-            | "title.y"
-            | "overlay.opacity"
-            | "overlay.x"
-            | "overlay.y"
-            | "overlay.scale"
-    )
+    is_runtime_clip_parameter(parameter)
 }
 
 fn interpolation_name(value: KeyframeInterpolation) -> &'static str {
     match value {
         KeyframeInterpolation::Hold => "hold",
+        KeyframeInterpolation::Step => "step",
         KeyframeInterpolation::Linear => "linear",
         KeyframeInterpolation::Bezier => "bezier",
+        KeyframeInterpolation::Spring => "spring",
+    }
+}
+
+fn tangent_mode_name(value: awidat_proto::professional::TangentMode) -> &'static str {
+    match value {
+        awidat_proto::professional::TangentMode::Auto => "auto",
+        awidat_proto::professional::TangentMode::Aligned => "aligned",
+        awidat_proto::professional::TangentMode::Broken => "broken",
+        awidat_proto::professional::TangentMode::Flat => "flat",
+    }
+}
+
+fn extrapolation_name(value: ExtrapolationMode) -> &'static str {
+    match value {
+        ExtrapolationMode::Hold => "hold",
+        ExtrapolationMode::Linear => "linear",
     }
 }
 
 fn easing_name(value: Easing) -> &'static str {
     match value {
         Easing::Linear => "linear",
+        Easing::EaseInSine => "ease_in_sine",
+        Easing::EaseOutSine => "ease_out_sine",
+        Easing::EaseInOutSine => "ease_in_out_sine",
         Easing::EaseIn => "ease_in",
         Easing::EaseOut => "ease_out",
         Easing::EaseInOut => "ease_in_out",
+        Easing::EaseInCubic => "ease_in_cubic",
+        Easing::EaseOutCubic => "ease_out_cubic",
+        Easing::EaseInOutCubic => "ease_in_out_cubic",
+        Easing::EaseInQuart => "ease_in_quart",
+        Easing::EaseOutQuart => "ease_out_quart",
+        Easing::EaseInOutQuart => "ease_in_out_quart",
+        Easing::EaseInQuint => "ease_in_quint",
+        Easing::EaseOutQuint => "ease_out_quint",
+        Easing::EaseInOutQuint => "ease_in_out_quint",
+        Easing::EaseInExpo => "ease_in_expo",
+        Easing::EaseOutExpo => "ease_out_expo",
+        Easing::EaseInOutExpo => "ease_in_out_expo",
+        Easing::EaseInCirc => "ease_in_circ",
+        Easing::EaseOutCirc => "ease_out_circ",
+        Easing::EaseInOutCirc => "ease_in_out_circ",
+        Easing::EaseInBack => "ease_in_back",
+        Easing::EaseOutBack => "ease_out_back",
+        Easing::EaseInOutBack => "ease_in_out_back",
+        Easing::EaseInElastic => "ease_in_elastic",
+        Easing::EaseOutElastic => "ease_out_elastic",
+        Easing::EaseInOutElastic => "ease_in_out_elastic",
+        Easing::EaseInBounce => "ease_in_bounce",
+        Easing::EaseOutBounce => "ease_out_bounce",
+        Easing::EaseInOutBounce => "ease_in_out_bounce",
     }
 }
 
@@ -451,8 +494,43 @@ fn timeline_animation_for_clip(
                         in_y: handles.in_y,
                     }
                 }),
+                tangent_mode: tangent_mode_name(keyframe.tangent_mode).to_string(),
+                spring: keyframe.spring.map(|spring| {
+                    awidat_desktop_protocol::TimelineSpringParameters {
+                        mass: spring.mass,
+                        stiffness: spring.stiffness,
+                        damping: spring.damping,
+                    }
+                }),
             })
             .collect(),
+        pre_extrapolation: extrapolation_name(animation.pre_extrapolation).to_string(),
+        post_extrapolation: extrapolation_name(animation.post_extrapolation).to_string(),
+        motion_path: animation.motion_path.as_ref().map(|path| {
+            awidat_desktop_protocol::TimelineMotionPath {
+                points: path
+                    .points
+                    .iter()
+                    .map(|point| awidat_desktop_protocol::TimelineMotionPathPoint {
+                        time_s: point.time_s,
+                        x: point.x,
+                        y: point.y,
+                        outgoing_control: point.outgoing_control.map(|control| {
+                            awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                                x: control.x,
+                                y: control.y,
+                            }
+                        }),
+                        incoming_control: point.incoming_control.map(|control| {
+                            awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                                x: control.x,
+                                y: control.y,
+                            }
+                        }),
+                    })
+                    .collect(),
+            }
+        }),
         rationale: animation.rationale.clone(),
     })
 }
@@ -783,7 +861,13 @@ mod tests {
                 interpolation: KeyframeInterpolation::Linear,
                 easing: Easing::EaseOut,
                 bezier: None,
+                tangent_mode: Default::default(),
+                spring: None,
             }],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
             rationale: Some("Fade in".to_string()),
         };
 
@@ -813,7 +897,13 @@ mod tests {
                     in_x: 0.25,
                     in_y: 1.0,
                 }),
+                tangent_mode: Default::default(),
+                spring: None,
             }],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
             rationale: None,
         };
 
@@ -836,6 +926,10 @@ mod tests {
                 parameter: "volume".to_string(),
             },
             keyframes: vec![Keyframe::linear(0.0, 1.0)],
+            pre_extrapolation: ExtrapolationMode::Hold,
+            post_extrapolation: ExtrapolationMode::Hold,
+            motion_path: None,
+            metadata_only: false,
             rationale: None,
         };
 
@@ -853,6 +947,10 @@ mod tests {
                     parameter: "title.opacity".to_string(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: false,
                 rationale: Some("Fade title in".to_string()),
             }],
             ..awidat_meta::AwidatTimelineMetadata::default()
@@ -893,6 +991,10 @@ mod tests {
                     parameter: "volume".to_string(),
                 },
                 keyframes: vec![Keyframe::linear(0.0, 1.0)],
+                pre_extrapolation: ExtrapolationMode::Hold,
+                post_extrapolation: ExtrapolationMode::Hold,
+                motion_path: None,
+                metadata_only: true,
                 rationale: None,
             }],
             ..awidat_meta::AwidatTimelineMetadata::default()

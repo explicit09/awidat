@@ -715,6 +715,12 @@ pub struct TimelineParameterAnimation {
     pub target: TimelineAnimationTarget,
     /// Ordered keyframes in seconds relative to the clip start.
     pub keyframes: Vec<TimelineKeyframe>,
+    /// Behavior before the first keyframe.
+    pub pre_extrapolation: String,
+    /// Behavior after the last keyframe.
+    pub post_extrapolation: String,
+    /// Optional 2D motion path for position parameters.
+    pub motion_path: Option<TimelineMotionPath>,
     /// Optional agent/user rationale for review.
     pub rationale: Option<String>,
 }
@@ -743,6 +749,10 @@ pub struct TimelineKeyframe {
     pub easing: String,
     /// Optional normalized cubic Bezier handles.
     pub bezier: Option<TimelineBezierHandles>,
+    /// Tangent constraint mode from proto.
+    pub tangent_mode: String,
+    /// Optional spring parameters.
+    pub spring: Option<TimelineSpringParameters>,
 }
 
 /// Normalized cubic Bezier handles exposed to desktop preview.
@@ -757,6 +767,56 @@ pub struct TimelineBezierHandles {
     pub in_x: f64,
     /// Incoming control point y, normalized to the value delta.
     pub in_y: f64,
+}
+
+/// Physical spring parameters exposed to desktop preview.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineSpringParameters {
+    /// Moving mass.
+    pub mass: f64,
+    /// Spring stiffness.
+    pub stiffness: f64,
+    /// Damping coefficient.
+    pub damping: f64,
+}
+
+/// 2D motion path exposed to desktop preview.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineMotionPath {
+    /// Ordered path points.
+    pub points: Vec<TimelineMotionPathPoint>,
+}
+
+/// One point on a 2D motion path.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineMotionPathPoint {
+    /// Time in seconds relative to the clip start.
+    pub time_s: f64,
+    /// Horizontal viewport-width offset.
+    pub x: f64,
+    /// Vertical viewport-height offset.
+    pub y: f64,
+    /// Optional outgoing spatial control point for the segment after this point.
+    #[serde(default)]
+    #[ts(optional)]
+    pub outgoing_control: Option<TimelineMotionPathControlPoint>,
+    /// Optional incoming spatial control point for the segment before this point.
+    #[serde(default)]
+    #[ts(optional)]
+    pub incoming_control: Option<TimelineMotionPathControlPoint>,
+}
+
+/// Absolute 2D control point for a cubic spatial motion-path segment.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct TimelineMotionPathControlPoint {
+    /// Horizontal viewport-width offset.
+    pub x: f64,
+    /// Vertical viewport-height offset.
+    pub y: f64,
 }
 
 /// Timeline-level semantic metadata for one adjacent clip boundary.
@@ -1117,6 +1177,8 @@ pub struct TitleStyling {
     /// Animation: `"none"`, `"fade_in"`, `"fade_out"`, `"fade_in_out"`,
     /// `"slide_in"`, or `"slide_out"`.
     pub animation: String,
+    /// Text reveal: `"none"`, `"typewriter"`, `"word"`, or `"line"`.
+    pub reveal: String,
 }
 
 /// Clip-level media overlay styling, lifted off
@@ -1576,6 +1638,8 @@ mod tests {
                         interpolation: "linear".to_string(),
                         easing: "linear".to_string(),
                         bezier: None,
+                        tangent_mode: "auto".to_string(),
+                        spring: None,
                     },
                     TimelineKeyframe {
                         time_s: 0.5,
@@ -1583,8 +1647,13 @@ mod tests {
                         interpolation: "linear".to_string(),
                         easing: "ease_out".to_string(),
                         bezier: None,
+                        tangent_mode: "auto".to_string(),
+                        spring: None,
                     },
                 ],
+                pre_extrapolation: "hold".to_string(),
+                post_extrapolation: "hold".to_string(),
+                motion_path: None,
                 rationale: Some("Fade title in".to_string()),
             }],
         };

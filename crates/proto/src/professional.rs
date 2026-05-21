@@ -455,6 +455,19 @@ pub struct ParameterAnimation {
     /// Ordered keyframes.
     #[serde(default)]
     pub keyframes: Vec<Keyframe>,
+    /// Behavior before the first keyframe.
+    #[serde(default, skip_serializing_if = "ExtrapolationMode::is_hold")]
+    pub pre_extrapolation: ExtrapolationMode,
+    /// Behavior after the last keyframe.
+    #[serde(default, skip_serializing_if = "ExtrapolationMode::is_hold")]
+    pub post_extrapolation: ExtrapolationMode,
+    /// Optional 2D motion path for position parameters.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub motion_path: Option<MotionPath>,
+    /// Store the animation as reviewable metadata without claiming
+    /// preview/render support.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub metadata_only: bool,
     /// Optional summary for review.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub rationale: Option<String>,
@@ -494,6 +507,9 @@ impl ParameterAnimation {
             if let Some(handles) = keyframe.bezier {
                 validate_bezier_handles(&mut diagnostics, &self.id, handles);
             }
+            if let Some(spring) = keyframe.spring {
+                validate_spring_parameters(&mut diagnostics, &self.id, spring);
+            }
             if let Some(previous) = previous_time
                 && keyframe.time_s < previous
             {
@@ -507,9 +523,66 @@ impl ParameterAnimation {
             }
             previous_time = Some(keyframe.time_s);
         }
+        validate_tangent_modes(&mut diagnostics, &self.id, &self.keyframes);
+        if let Some(path) = &self.motion_path {
+            validate_motion_path(&mut diagnostics, &self.id, path);
+        }
         diagnostics
     }
 }
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Returns true when Awidat currently previews and renders this
+/// animation target as an executable runtime animation.
+pub fn is_runtime_parameter_animation_target(target: &AnimationTarget) -> bool {
+    match target {
+        AnimationTarget::ClipParameter { parameter, .. } => is_runtime_clip_parameter(parameter),
+        AnimationTarget::TrackParameter { parameter, .. } => is_runtime_track_parameter(parameter),
+        AnimationTarget::CompositionNodeParameter { .. } | AnimationTarget::Unset => false,
+    }
+}
+
+/// Returns true when the named clip parameter is executable by the
+/// current preview/render runtime.
+pub fn is_runtime_clip_parameter(parameter: &str) -> bool {
+    RUNTIME_CLIP_PARAMETERS.contains(&parameter)
+}
+
+/// Returns true when the named track parameter is executable by the
+/// current preview/render runtime.
+pub fn is_runtime_track_parameter(parameter: &str) -> bool {
+    RUNTIME_TRACK_PARAMETERS.contains(&parameter)
+}
+
+/// Clip parameter paths executable by the current preview/render runtime.
+pub const RUNTIME_CLIP_PARAMETERS: &[&str] = &[
+    "title.opacity",
+    "title.x",
+    "title.y",
+    "title.position",
+    "title.font_size",
+    "overlay.opacity",
+    "overlay.x",
+    "overlay.y",
+    "overlay.position",
+    "overlay.scale",
+    "overlay.rotation_deg",
+    "overlay.blur",
+    "awidat.blur.radius_px",
+    "awidat.shake.intensity_px",
+    "awidat.shake.frequency_hz",
+    "awidat.warp.k1",
+    "awidat.warp.k2",
+    "awidat.warp.center_x",
+    "awidat.warp.center_y",
+];
+
+/// Track parameter paths executable by the current preview/render runtime.
+pub const RUNTIME_TRACK_PARAMETERS: &[&str] = &["volume", "volume_db"];
 
 fn validate_bezier_handles(
     diagnostics: &mut Vec<ProfessionalDiagnostic>,
@@ -531,6 +604,129 @@ fn validate_bezier_handles(
             CapabilityArea::ParameterAnimation,
             format!("parameter animation {animation_id} Bezier handle x values must be in [0, 1]"),
         ));
+    }
+}
+
+fn validate_spring_parameters(
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+    animation_id: &str,
+    spring: SpringParameters,
+) {
+    if !spring.mass.is_finite()
+        || !spring.stiffness.is_finite()
+        || !spring.damping.is_finite()
+        || spring.mass <= 0.0
+        || spring.stiffness <= 0.0
+        || spring.damping < 0.0
+    {
+        diagnostics.push(ProfessionalDiagnostic::error(
+            CapabilityArea::ParameterAnimation,
+            format!(
+                "parameter animation {animation_id} spring requires positive finite mass/stiffness and non-negative finite damping"
+            ),
+        ));
+    }
+}
+
+fn validate_tangent_modes(
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+    animation_id: &str,
+    keyframes: &[Keyframe],
+) {
+    for index in 1..keyframes.len().saturating_sub(1) {
+        let keyframe = &keyframes[index];
+        if keyframe.tangent_mode != TangentMode::Aligned {
+            continue;
+        }
+        let Some(previous_handles) = keyframes[index - 1].bezier else {
+            continue;
+        };
+        let Some(next_handles) = keyframe.bezier else {
+            continue;
+        };
+        if !aligned_tangents(
+            keyframes[index - 1].time_s,
+            keyframes[index - 1].value,
+            previous_handles,
+            keyframe.time_s,
+            keyframe.value,
+            keyframes[index + 1].time_s,
+            keyframes[index + 1].value,
+            next_handles,
+        ) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} keyframe at {}s has tangent_mode=aligned but adjacent Bezier handles are not collinear",
+                    keyframe.time_s
+                ),
+            ));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aligned_tangents(
+    previous_time: f64,
+    previous_value: f64,
+    previous_handles: BezierHandles,
+    keyframe_time: f64,
+    keyframe_value: f64,
+    next_time: f64,
+    next_value: f64,
+    next_handles: BezierHandles,
+) -> bool {
+    let incoming_dt = keyframe_time - previous_time;
+    let outgoing_dt = next_time - keyframe_time;
+    if incoming_dt <= 0.0 || outgoing_dt <= 0.0 {
+        return true;
+    }
+    let incoming_value_delta = keyframe_value - previous_value;
+    let outgoing_value_delta = next_value - keyframe_value;
+    let incoming_x = previous_time + previous_handles.in_x * incoming_dt - keyframe_time;
+    let incoming_y = previous_value + previous_handles.in_y * incoming_value_delta - keyframe_value;
+    let outgoing_x = keyframe_time + next_handles.out_x * outgoing_dt - keyframe_time;
+    let outgoing_y = keyframe_value + next_handles.out_y * outgoing_value_delta - keyframe_value;
+    let incoming_len = incoming_x.hypot(incoming_y);
+    let outgoing_len = outgoing_x.hypot(outgoing_y);
+    if incoming_len <= f64::EPSILON || outgoing_len <= f64::EPSILON {
+        return true;
+    }
+    let cross = incoming_x * outgoing_y - incoming_y * outgoing_x;
+    cross.abs() <= 1e-6 * incoming_len * outgoing_len
+}
+
+fn validate_motion_path(
+    diagnostics: &mut Vec<ProfessionalDiagnostic>,
+    animation_id: &str,
+    path: &MotionPath,
+) {
+    if path.points.len() < 2 {
+        diagnostics.push(ProfessionalDiagnostic::error(
+            CapabilityArea::ParameterAnimation,
+            format!("parameter animation {animation_id} motion path requires at least two points"),
+        ));
+    }
+    for point in &path.points {
+        if !point.time_s.is_finite() || !point.x.is_finite() || !point.y.is_finite() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!("parameter animation {animation_id} has a non-finite motion path point"),
+            ));
+        }
+        for control in [point.outgoing_control, point.incoming_control]
+            .into_iter()
+            .flatten()
+        {
+            if !control.x.is_finite() || !control.y.is_finite() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::ParameterAnimation,
+                    format!(
+                        "parameter animation {animation_id} has a non-finite motion path control point"
+                    ),
+                ));
+            }
+        }
     }
 }
 
@@ -558,6 +754,37 @@ fn validate_parameter_animation_value(
                 CapabilityArea::ParameterAnimation,
                 format!(
                     "parameter animation {animation_id} target {parameter} value {} must be positive",
+                    keyframe.value
+                ),
+            ));
+        }
+        "overlay.blur" | "awidat.blur.radius_px" | "awidat.shake.intensity_px"
+            if keyframe.value < 0.0 =>
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} target {parameter} value {} must be non-negative",
+                    keyframe.value
+                ),
+            ));
+        }
+        "awidat.shake.frequency_hz" if keyframe.value <= 0.0 => {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} target {parameter} value {} must be positive",
+                    keyframe.value
+                ),
+            ));
+        }
+        "awidat.warp.center_x" | "awidat.warp.center_y"
+            if !(0.0..=1.0).contains(&keyframe.value) =>
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::ParameterAnimation,
+                format!(
+                    "parameter animation {animation_id} target {parameter} value {} must be in [0, 1]",
                     keyframe.value
                 ),
             ));
@@ -593,7 +820,9 @@ pub enum AnimationTarget {
     TrackParameter {
         /// Track id/name.
         track: String,
-        /// Parameter path.
+        /// Parameter path. Keyframe times are track-local seconds in the rendered track stream:
+        /// `t=0` is the beginning of the track after clips/gaps are concatenated, not the absolute
+        /// timeline time of an individual source clip.
         parameter: String,
     },
 }
@@ -614,6 +843,12 @@ pub struct Keyframe {
     /// Optional normalized cubic Bezier handles for interpolation into the next keyframe.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub bezier: Option<BezierHandles>,
+    /// Constraint mode for Bezier handles at this keyframe.
+    #[serde(default, skip_serializing_if = "TangentMode::is_auto")]
+    pub tangent_mode: TangentMode,
+    /// Optional spring parameters for spring interpolation into the next keyframe.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub spring: Option<SpringParameters>,
 }
 
 impl Keyframe {
@@ -625,6 +860,8 @@ impl Keyframe {
             interpolation: KeyframeInterpolation::Linear,
             easing: Easing::Linear,
             bezier: None,
+            tangent_mode: TangentMode::Auto,
+            spring: None,
         }
     }
 }
@@ -642,17 +879,116 @@ pub struct BezierHandles {
     pub in_y: f64,
 }
 
+/// Constraint mode for Bezier keyframe tangent handles.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TangentMode {
+    /// Editor/runtime may keep tangents smooth automatically.
+    #[default]
+    Auto,
+    /// Incoming and outgoing handles remain collinear and proportional.
+    Aligned,
+    /// Handles are independent.
+    Broken,
+    /// Tangents flatten at the keyframe.
+    Flat,
+}
+
+impl TangentMode {
+    /// True when this mode is the default auto behavior.
+    pub fn is_auto(value: &Self) -> bool {
+        matches!(value, Self::Auto)
+    }
+}
+
+/// Physical spring parameters for duration-light motion.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SpringParameters {
+    /// Moving mass. Must be positive.
+    pub mass: f64,
+    /// Spring stiffness. Must be positive.
+    pub stiffness: f64,
+    /// Damping coefficient. Must be non-negative.
+    pub damping: f64,
+}
+
+impl Default for SpringParameters {
+    fn default() -> Self {
+        Self {
+            mass: 1.0,
+            stiffness: 100.0,
+            damping: 12.0,
+        }
+    }
+}
+
+/// A 2D motion path attached to a position parameter.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MotionPath {
+    /// Ordered path samples in clip-local seconds.
+    #[serde(default)]
+    pub points: Vec<MotionPathPoint>,
+}
+
+/// One point on a 2D motion path.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MotionPathPoint {
+    /// Time in seconds.
+    pub time_s: f64,
+    /// Horizontal offset in viewport-width units.
+    pub x: f64,
+    /// Vertical offset in viewport-height units.
+    pub y: f64,
+    /// Optional outgoing spatial control point for the segment after this point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outgoing_control: Option<MotionPathControlPoint>,
+    /// Optional incoming spatial control point for the segment before this point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incoming_control: Option<MotionPathControlPoint>,
+}
+
+/// Absolute 2D control point for a cubic spatial motion-path segment.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MotionPathControlPoint {
+    /// Horizontal offset in viewport-width units.
+    pub x: f64,
+    /// Vertical offset in viewport-height units.
+    pub y: f64,
+}
+
 /// Keyframe interpolation mode.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyframeInterpolation {
     /// Hold previous value.
     Hold,
+    /// Discrete step to the next value at the segment midpoint.
+    Step,
     /// Linear interpolation.
     #[default]
     Linear,
     /// Bezier curve handles.
     Bezier,
+    /// Physically-inspired spring interpolation.
+    Spring,
+}
+
+/// Behavior outside an animation's explicit keyframe range.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtrapolationMode {
+    /// Hold the nearest endpoint value.
+    #[default]
+    Hold,
+    /// Continue the velocity of the first or last keyframe segment.
+    Linear,
+}
+
+impl ExtrapolationMode {
+    /// True when this mode is the default hold behavior.
+    pub fn is_hold(value: &Self) -> bool {
+        matches!(value, Self::Hold)
+    }
 }
 
 /// Easing mode.
@@ -662,12 +998,66 @@ pub enum Easing {
     /// No easing.
     #[default]
     Linear,
+    /// Sine ease in.
+    EaseInSine,
+    /// Sine ease out.
+    EaseOutSine,
+    /// Sine ease in and out.
+    EaseInOutSine,
     /// Ease in.
     EaseIn,
     /// Ease out.
     EaseOut,
     /// Ease in and out.
     EaseInOut,
+    /// Cubic ease in.
+    EaseInCubic,
+    /// Cubic ease out.
+    EaseOutCubic,
+    /// Cubic ease in and out.
+    EaseInOutCubic,
+    /// Quartic ease in.
+    EaseInQuart,
+    /// Quartic ease out.
+    EaseOutQuart,
+    /// Quartic ease in and out.
+    EaseInOutQuart,
+    /// Quintic ease in.
+    EaseInQuint,
+    /// Quintic ease out.
+    EaseOutQuint,
+    /// Quintic ease in and out.
+    EaseInOutQuint,
+    /// Exponential ease in.
+    EaseInExpo,
+    /// Exponential ease out.
+    EaseOutExpo,
+    /// Exponential ease in and out.
+    EaseInOutExpo,
+    /// Circular ease in.
+    EaseInCirc,
+    /// Circular ease out.
+    EaseOutCirc,
+    /// Circular ease in and out.
+    EaseInOutCirc,
+    /// Back ease in.
+    EaseInBack,
+    /// Back ease out.
+    EaseOutBack,
+    /// Back ease in and out.
+    EaseInOutBack,
+    /// Elastic ease in.
+    EaseInElastic,
+    /// Elastic ease out.
+    EaseOutElastic,
+    /// Elastic ease in and out.
+    EaseInOutElastic,
+    /// Bounce ease in.
+    EaseInBounce,
+    /// Bounce ease out.
+    EaseOutBounce,
+    /// Bounce ease in and out.
+    EaseInOutBounce,
 }
 
 /// Reusable motion graphics template.
@@ -937,6 +1327,8 @@ pub enum CompositionNodeType {
     Color,
     /// Tracker binding.
     TrackerBind,
+    /// Four-corner perspective/corner-pin distortion driven by a surface track.
+    CornerPin,
     /// 3D scene container.
     Scene3d,
     /// Particle emitter.

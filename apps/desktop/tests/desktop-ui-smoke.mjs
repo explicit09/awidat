@@ -56,6 +56,33 @@ function assertDesktopTransitionCoverage() {
   }
 }
 
+function assertDesktopMotionAuthoringCoverage() {
+  const propertiesSource = readFileSync(
+    `${desktopRoot}/src/properties/PropertiesPane.tsx`,
+    "utf8",
+  );
+  const motionControlSource = readFileSync(
+    `${desktopRoot}/src/properties/MotionAnimationControl.tsx`,
+    "utf8",
+  );
+  const edlBuilderSource = readFileSync(
+    `${desktopRoot}/src/timeline/edlBuilder.ts`,
+    "utf8",
+  );
+  for (const expected of [
+    "properties-motion-path-summary",
+    "Add drift path",
+    "title.position",
+  ]) {
+    if (!propertiesSource.includes(expected) && !motionControlSource.includes(expected)) {
+      throw new Error(`motion authoring inspector coverage missing: ${expected}`);
+    }
+  }
+  if (!edlBuilderSource.includes("*** Set Parameter Animation")) {
+    throw new Error("EDL builder cannot serialize Set Parameter Animation");
+  }
+}
+
 function startVite() {
   const child = spawn(
     "pnpm",
@@ -97,6 +124,7 @@ async function expectVisible(page, selector, label) {
 
 async function run() {
   assertDesktopTransitionCoverage();
+  assertDesktopMotionAuthoringCoverage();
   const server = startVite();
   let browser;
   try {
@@ -230,6 +258,35 @@ async function run() {
     await page
       .getByText("3 visible transitions land within this 30s window.")
       .waitFor({ state: "visible", timeout: 5_000 });
+
+    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=title-motion`);
+    await page.getByText("Selected clip").waitFor({ state: "visible", timeout: 5_000 });
+    await page
+      .locator(".properties-motion-path-summary")
+      .filter({ hasText: "title.position" })
+      .waitFor({ state: "visible", timeout: 5_000 });
+    await expectVisible(page, ".properties-motion-curve-preview", "motion curve preview");
+    await page.getByText("Velocity").waitFor({ state: "visible", timeout: 5_000 });
+    await page.getByRole("button", { name: "Ease In/Out" }).click();
+    const easeEdl = await page.evaluate(() => window.__lastEdlText);
+    if (
+      !easeEdl.includes("*** Set Parameter Animation") ||
+      !easeEdl.includes('"parameter":"title.position"') ||
+      !easeEdl.includes('"interpolation":"bezier"') ||
+      !easeEdl.includes('"easing":"ease_in_out"')
+    ) {
+      throw new Error(`Ease In/Out preset did not emit expected EDL: ${easeEdl}`);
+    }
+    await page.getByRole("button", { name: "Add drift path" }).click();
+    const driftEdl = await page.evaluate(() => window.__lastEdlText);
+    if (
+      !driftEdl.includes("*** Set Parameter Animation") ||
+      !driftEdl.includes('"parameter":"title.position"') ||
+      !driftEdl.includes('"motion_path"') ||
+      !driftEdl.includes('"interpolation":"bezier"')
+    ) {
+      throw new Error(`title drift path action did not emit expected EDL: ${driftEdl}`);
+    }
 
     await page.getByRole("tab", { name: "Vedit" }).click();
     await expectVisible(page, ".vedit-panel", "vedit panel");

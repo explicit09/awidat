@@ -5,14 +5,15 @@
 //! snippet, clip uuid, or scene-change index — content, not absolute
 //! timestamps; per `PLAN.md` §6.2 property 1).
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use awidat_proto::awidat_meta::{BroadcastOverlayConfig, SemanticCutSpec, SplitEditSpec};
 use awidat_proto::professional::{
     AssetCatalog, AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
     MotionGraphicsTemplate, ParameterAnimation, PipelineReadinessReport, PlannerPassContract,
-    PreflightReport, ProposalPackage, SourceRange, SourceSelect, Stringout, TrackingPackage,
-    WorkflowLens,
+    PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange, SourceSelect, Stringout,
+    TrackingPackage, WorkflowLens,
 };
 use awidat_proto::transitions::SemanticTransitionSpec;
 use serde::{Deserialize, Serialize};
@@ -412,6 +413,41 @@ pub enum EdlOp {
         /// Entry / exit animation.
         animation: TitleAnimation,
     },
+    /// Insert a title with multiple inline style runs. This keeps the
+    /// common single-string title path simple while giving agents a
+    /// compact operation for emphasis words and phrase color changes.
+    InsertRichTitle {
+        /// Title appears at this timeline-time, in seconds.
+        start_s: f64,
+        /// Title disappears at this timeline-time, in seconds.
+        end_s: f64,
+        /// Inline styled text runs.
+        segments: Vec<RichTextSegment>,
+        /// Vertical band on the frame.
+        position: TitlePosition,
+        /// Font size in pixels.
+        font_size: u32,
+        /// Entry / exit animation.
+        animation: TitleAnimation,
+    },
+    /// Instantiate a reusable motion graphics template into concrete title
+    /// clips and runtime parameter animations. This is the agent-facing
+    /// lowering path for first-class graphics templates such as lower thirds:
+    /// the agent fills named slots instead of hand-authoring text boxes,
+    /// rectangles, keyframes, and timing.
+    InstantiateMotionTemplate {
+        /// Template id. Resolved against stored timeline templates first,
+        /// then the built-in render template catalog.
+        template_id: String,
+        /// Template starts at this timeline-time, in seconds.
+        start_s: f64,
+        /// Template ends at this timeline-time, in seconds. Must be `> start_s`.
+        end_s: f64,
+        /// Runtime animation style used when lowering the template.
+        animation: MotionTemplateAnimation,
+        /// Slot values keyed by the template's slot ids.
+        slot_values: BTreeMap<String, serde_json::Value>,
+    },
     /// Update an existing title overlay's styling. Anchored by the
     /// title clip's uuid (every InsertTitle stamps one). All fields
     /// are optional — only non-None fields update.
@@ -457,6 +493,33 @@ pub enum EdlOp {
         color: String,
         /// Safe-area profile such as `"mobile"` or `"standard"`.
         safe_area: String,
+    },
+    /// Insert a first-class annotation overlay such as a rectangle,
+    /// circle, arrow, bracket, or blur region. Coordinates are
+    /// normalized frame fractions in `[0.0, 1.0]` so annotations survive
+    /// output resolution changes.
+    InsertAnnotation {
+        /// Annotation appears at this timeline-time, in seconds.
+        start_s: f64,
+        /// Annotation disappears at this timeline-time, in seconds.
+        end_s: f64,
+        /// Primitive to draw or apply.
+        kind: AnnotationKind,
+        /// Normalized left/start x coordinate.
+        x: f64,
+        /// Normalized top/start y coordinate.
+        y: f64,
+        /// Normalized width or arrow delta x.
+        width: f64,
+        /// Normalized height or arrow delta y.
+        height: f64,
+        /// Stroke/accent color, e.g. `"#FFCC00"`.
+        color: String,
+        /// Stroke width in pixels for shape primitives.
+        stroke_width: u32,
+        /// Optional human label retained in metadata for review surfaces.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        label: Option<String>,
     },
     /// Store the intended output format on the timeline graph. This is
     /// where vertical/short-form intent lives before rendering.
@@ -541,6 +604,29 @@ pub enum EdlOp {
         /// Tracking package.
         package: TrackingPackage,
     },
+    /// Author a subject-aware reframe path from an existing tracker.
+    AuthorSubjectReframeFromTrack {
+        /// Existing tracker id in the stored tracking package.
+        track_id: String,
+        /// Timeline clip id receiving the reframe path.
+        clip_id: String,
+        /// Delivery aspect ratio label, e.g. `9:16`.
+        aspect_ratio: String,
+        /// Source media width in pixels.
+        source_width: u32,
+        /// Source media height in pixels.
+        source_height: u32,
+        /// Target canvas width in pixels.
+        target_width: u32,
+        /// Target canvas height in pixels.
+        target_height: u32,
+        /// Tracker sample frame rate.
+        frame_rate: f64,
+        /// Smoothing policy for generated crop centers.
+        smoothing: ReframeSmoothing,
+        /// Optional safe-area policy label.
+        safe_area: Option<String>,
+    },
     /// Store color finishing workflow state.
     SetColorFinishing {
         /// Color finishing state.
@@ -574,6 +660,19 @@ pub enum EdlOp {
         #[serde(default)]
         planner_passes: Vec<PlannerPassContract>,
     },
+}
+
+/// Return true when a graphic color can be passed to FFmpeg filters without
+/// escaping or option injection risk.
+pub fn valid_graphic_color(raw: &str) -> bool {
+    let color = raw.trim();
+    if color.is_empty() || color != raw {
+        return false;
+    }
+    if let Some(hex) = color.strip_prefix('#') {
+        return matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit());
+    }
+    color.chars().all(|ch| ch.is_ascii_alphanumeric())
 }
 
 /// Professional timeline operation contracts recorded for review/planning.
@@ -793,6 +892,51 @@ pub enum TitleAnimation {
     SlideIn,
     /// Slide out off-screen on the side matching the position.
     SlideOut,
+}
+
+/// One styled run inside a rich title.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RichTextSegment {
+    /// Text for this run.
+    pub text: String,
+    /// Optional run color. Falls back to the title color.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub color: Option<String>,
+    /// Optional run weight. Falls back to the title weight.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub font_weight: Option<TitleWeight>,
+}
+
+/// Runtime animation style for motion template instantiation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionTemplateAnimation {
+    /// No generated animation.
+    None,
+    /// Fade generated template title opacity.
+    Opacity,
+    /// Slide/transform generated template title elements.
+    Transform,
+    /// Reveal text progressively.
+    TextReveal,
+    /// Write-on approximation using progressive text.
+    WriteOn,
+}
+
+/// First-class visual annotation primitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnotationKind {
+    /// Rectangle outline around a region.
+    Rectangle,
+    /// Circle/ellipse approximation around a region.
+    Circle,
+    /// Arrow pointing across a region.
+    Arrow,
+    /// Bracket/corner callout around a region.
+    Bracket,
+    /// Blur a rectangular region, typically a face or private detail.
+    Blur,
 }
 
 /// Where to anchor a `Trim`/`Delete`/`Move`/etc.

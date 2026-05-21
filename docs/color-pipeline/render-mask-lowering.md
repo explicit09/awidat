@@ -1,28 +1,33 @@
-# Render mask lowering — design
+# Render mask lowering
 
-`awidat.color_pipeline.mask_source` is reserved schema (Stage 9). Apply-time
-validation accepts the slot and stamps the path on the OTIO; `read_color_pipeline`
-populates `ColorPipelinePlan.mask_source: Option<PathBuf>`; render surfaces a
-`mask_not_implemented` `RenderPlanLimitation` per masked clip so the agent
-sees its regional-grading request was a no-op. This memo captures the design
-for closing the loop.
+`awidat.color_pipeline.mask_source` is no longer only reserved schema.
+The timeline render path lowers the v1 masked look-LUT case into FFmpeg by
+adding the mask as an extra input and compositing the masked grade over the
+original clip.
 
-## Why deferred
+## Implemented scope
 
-Unlike auto-zscale or the catalog work, regional grading touches:
+- Single `look_lut` plus `mask_source` on `awidat.color_pipeline`.
+- Static-image masks, including grayscale or alpha-bearing images.
+- Mask input is inserted after video/overlay inputs and before explicit
+  audio-track inputs.
+- Audio input labels are shifted past mask inputs, so masked video clips do
+  not break explicit audio-track rendering.
+- The effect registry advertises `awidat.color_pipeline` as an FFmpeg-native
+  backend because the render path now supports the color-management/LUT chain
+  and this masked look-LUT subset.
 
-1. The FFmpeg argv input list — the mask becomes a separate `-i`.
-2. `FilterPlanner`'s segment→input-index assignment.
-3. A multi-input filter pattern (`alphamerge` + `scale2ref` + `overlay`).
-4. Audio-input index reshuffling in `build_timeline_argv_with_audio_tracks`.
+Unsupported mask combinations remain explicit render limitations instead of
+silent no-ops. Multi-stage color pipelines with masked IDT/shaper/ODT
+combinations and complex transition/overlay interactions should continue to
+surface `mask_in_complex_chain` or equivalent limitation records until they
+have parity tests.
 
-None of the in-tree integration tests run ffmpeg on a graded frame, so a
-half-shipped chain wouldn't have a regression net. Better to land this with
-a real masked-render fixture than to guess.
+## Filter graph
 
-## Filter graph (single clip, image mask, full-strength look LUT)
+Single clip, image mask, full-strength look LUT:
 
-```
+```text
 [<seg_idx>:v:0]split[clip_orig][clip_to_lut];
 [clip_to_lut]lut3d=file='<look>':interp=<interp>[clip_lutted];
 [<mask_idx>:v:0]format=gray,loop=-1:1[mask_loop];
@@ -31,92 +36,51 @@ a real masked-render fixture than to guess.
 [clip_orig][lut_alpha]overlay=format=auto[<out>]
 ```
 
-- `loop=-1:1` keeps the mask alive for the segment's duration when the
-  source is a static image.
-- `scale2ref` matches the mask to the clip's dimensions on the fly so the
-  mask author doesn't need to pre-resize.
+- `loop=-1:1` keeps a static mask alive for the segment duration.
+- `scale2ref` matches the mask to the clip dimensions at render time.
 - `alphamerge` puts the mask into the LUT-graded stream's alpha channel.
 - `overlay=format=auto` composites the alpha-masked LUT result over the
-  un-graded original.
+  ungraded original.
 
-## FFmpeg input list plumbing
+## FFmpeg input list
 
-Today `build_timeline_argv_full` and `build_timeline_argv_with_audio_tracks`
-build the `-i` list in this order:
+`build_timeline_argv_full` and
+`build_timeline_argv_with_audio_tracks_and_annotations` build inputs in this
+order:
 
-1. `segs` — one `-i` per segment.
-2. `video_overlays` — one `-i` per overlay.
-3. `browser_broadcast_overlay` — optional, single `-i`.
-4. `audio_tracks` — one `-i` per audio clip (only in `_with_audio_tracks`).
+1. Timeline segments.
+2. Video overlays.
+3. Optional browser broadcast overlay.
+4. Mask sources for segments with renderable masked look LUTs.
+5. Explicit audio-track clips.
 
-Masks fit between (3) and (4):
+The mask index is derived from the count of segment, overlay, and broadcast
+inputs plus the number of earlier masked segments:
 
-```
+```text
 base_mask_index = segs.len()
                + video_overlays.len()
                + (browser_broadcast_overlay.is_some() as usize)
 mask_idx(i) = base_mask_index + segments_with_mask_before(i)
 ```
 
-Audio-track input indices must shift past `mask_count` whenever masks are
-present. The existing audio-input loop assumes audio starts right after the
-broadcast overlay, so this is the one cross-cutting edit.
+Explicit audio-track inputs start after `mask_count`, which keeps audio labels
+stable when masks are present.
 
-## `FilterPlanner` integration
+## Tests
 
-`stage_segment_inputs` and `stage_segment_video_input` need the mask input
-label for each segment. Simplest: add `mask_input_index: Option<usize>` to
-`TimelineSegment`, populated when masks are added to the input list. Staging
-functions check `seg.mask_input_index` and route through the masked block
-instead of the unmasked `color_pipeline_filter_block`.
+The render tests cover the current v1 behavior at argv/filtergraph level:
 
-## Refactor of `color_pipeline_filter_block`
-
-The block currently emits the LUT chain as one labeled fragment. To support
-masking we either:
-
-- **(a)** add a `mask_input_label: Option<&str>` parameter and weave the
-  alphamerge/overlay subchain in when set, OR
-- **(b)** add a sibling `masked_color_pipeline_filter_block` that takes the
-  mask label.
-
-Option (a) keeps one source of truth but the function gets messy when
-`look_strength<1` (split/blend already forks the stream). Option (b) keeps
-the un-masked case clean — and masked cases probably want to ignore
-`look_strength<1` for v1, since the mask is its own opacity-like control.
-Recommend **(b)** initially.
-
-## Supported scope for v1
-
-- Single `look_lut` + `mask_source`. No `input_transform_lut` / `shaper_lut`
-  / `output_transform_lut` combined with masking yet.
-- Static-image masks (PNG with alpha, or grayscale image). `loop=-1:1`
-  keeps the frame live for the segment's duration.
-- `look_strength` is ignored when `mask_source` is set — the mask carries
-  the regional opacity.
-- No transitions / video overlays interacting with the masked stream
-  (FilterPlanner v2 work).
-
-Cases outside this scope keep the existing `mask_not_implemented`
-limitation. Surface a tighter `mask_in_complex_chain` kind for the
-unsupported-combination case so the agent knows the gap is "this combo,"
-not "masks at all."
-
-## Tests to add (argv-level, no ffmpeg)
-
-- `mask_source_inserted_as_additional_input` — argv contains `-i <mask_path>`
-  after video overlays.
-- `masked_lut_emits_alphamerge_and_overlay` — filter_complex string contains
-  the `alphamerge` and `overlay=format=auto` clauses.
-- `audio_input_indices_shift_past_masks` — audio-track filter labels stay
-  consistent when masks are present.
+- Mask source is inserted as an additional FFmpeg input.
+- Masked LUT emits `alphamerge` and `overlay=format=auto`.
+- Audio input indices shift past mask inputs.
+- Unsupported masked color-pipeline combinations produce limitations.
 
 ## Future
 
-- Animated masks (video files instead of static images).
-- Per-frame mask alpha modulation (envelope animations on the mask track).
-- Multiple masks per clip stacking (face + sky, for example).
-- Masked output LUTs — currently the design only masks the look LUT; the
-  `output_transform_lut` stays outside the masked branch.
-- Real masked-render fixture under `crates/render/tests/` driving ffmpeg
-  end-to-end so the chain can be regression-tested.
+- Animated masks from video assets.
+- Per-frame mask alpha modulation.
+- Multiple masks per clip.
+- Masked input/output transform LUT combinations.
+- End-to-end masked-render fixture that runs FFmpeg on test media, not only
+  argv/filtergraph assertions.

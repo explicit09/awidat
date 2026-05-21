@@ -7,22 +7,27 @@ use awidat_proto::awidat_meta::AwidatTimelineMetadata;
 use awidat_proto::professional::{
     AnimationTarget, AudioAutomationLane, AudioBus, AudioChainPreset, AudioFinishingState,
     AudioMeterReading, AudioRole, ColorFinishingState, CompositionGraph, CompositionNode,
-    DeliveryPreflightInput, DeliveryProfile, ExportPreset, ExpressionLink, ExpressionSource,
-    FindingSeverity, GradeStack, GradeStage, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
+    DeliveryPreflightInput, DeliveryProfile, ExportOutputSettings, ExportPreset, ExpressionLink,
+    ExpressionSource, ExtrapolationMode, FindingSeverity, GradeStack, GradeStage,
+    HardwareAccelerationPolicy, Keyframe, MaskKeyframe, MaskOperation, MaskSidecar,
     MotionGraphicsTemplate, MotionPackage, ParameterAnimation, ReframeKeyframe, ReframePath,
     ReframeSmoothing, ReviewStatus, SafeAreaRule, StreamExportContract, StreamExportMode,
     StreamExportSpec, StreamKind, TemplateSlot, TemplateSlotKind, TrackKind, TrackSample,
     TrackSidecar, TrackingPackage,
 };
 use awidat_render::professional::{
-    DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, TemplateAnimation,
-    TrackCorrection, TrackingEvidence, apply_delivery_profile_to_spec, apply_export_preset_to_spec,
-    apply_motion_package, built_in_motion_templates, diagnose_effect_parameter_animation,
-    effect_parameter_capability_matrix, evaluate_expression_links, fill_motion_template,
-    generate_tracking_package, inspect_composition_graph, lower_audio_finishing,
-    lower_composition_graph, lower_grade_stack, lower_motion_template, lower_reframe_path,
-    lower_track_bound_overlay, motion_package_summary, plan_delivery_queue_item,
-    plan_stream_export_args, summarize_color_finishing,
+    DeliveryQueueRequest, MotionPackageDecision, MotionTemplateTiming, SubjectReframeRequest,
+    TemplateAnimation, TrackCorrection, TrackedInsertRequest, TrackerObservation, TrackerRegion,
+    TrackingEvidence, TrackingRequest, apply_delivery_profile_to_spec, apply_export_preset_to_spec,
+    apply_motion_package, author_subject_reframe_path, author_subject_reframe_path_from_track,
+    author_tracked_insert, built_in_motion_templates, diagnose_effect_parameter_animation,
+    effect_parameter_capability_matrix, ensure_tracker, ensure_tracker_from_observations,
+    evaluate_expression_links, fill_motion_template, generate_tracking_package,
+    inspect_composition_graph, lower_audio_finishing, lower_composition_graph, lower_grade_stack,
+    lower_motion_template, lower_reframe_path, lower_surface_track_corner_pin,
+    lower_surface_track_corner_pin_bindings, lower_track_bound_overlay,
+    lower_tracker_parameter_bindings, motion_package_summary, plan_delivery_queue_item,
+    plan_stream_export_args, summarize_color_finishing, summarize_tracking_package,
 };
 use awidat_render::{RenderJobSpec, TitleAnimation, TitlePosition};
 use serde_json::json;
@@ -90,6 +95,162 @@ fn tracking_corrections_replace_samples_and_rescore_quality() {
     };
     assert!(corrected > initial);
     assert_eq!(package.tracks[0].samples[0].points.len(), 4);
+}
+
+#[test]
+fn ensure_tracker_creates_stable_region_handle_and_track_samples() {
+    let mut package = TrackingPackage::default();
+    let request = TrackingRequest {
+        clip_id: "clip-a".into(),
+        kind: TrackKind::Surface,
+        region: TrackerRegion::from_xywh(0.20, 0.30, 0.40, 0.20),
+        start_frame: 10,
+        end_frame: 12,
+    };
+
+    let handle = match ensure_tracker(&mut package, request.clone()) {
+        Ok(handle) => handle,
+        Err(err) => panic!("tracker creation should succeed: {err}"),
+    };
+    let duplicate = match ensure_tracker(&mut package, request) {
+        Ok(handle) => handle,
+        Err(err) => panic!("tracker creation should be idempotent: {err}"),
+    };
+
+    assert_eq!(handle.track_id, duplicate.track_id);
+    assert_eq!(package.tracks.len(), 1);
+    let track = &package.tracks[0];
+    assert_eq!(track.id, handle.track_id);
+    assert_eq!(track.asset_id, "clip-a");
+    assert_eq!(track.kind, TrackKind::Surface);
+    assert_eq!(track.samples.len(), 3);
+    assert_eq!(track.samples[0].frame, 10);
+    assert_eq!(
+        track.samples[0].points,
+        vec![[0.20, 0.30], [0.60, 0.30], [0.60, 0.50], [0.20, 0.50]]
+    );
+    assert!(package.validate().is_empty());
+}
+
+#[test]
+fn ensure_tracker_from_observations_creates_moving_track_rows() {
+    let mut package = TrackingPackage::default();
+    let request = TrackingRequest {
+        clip_id: "clip-a".into(),
+        kind: TrackKind::Surface,
+        region: TrackerRegion::from_xywh(0.20, 0.30, 0.40, 0.20),
+        start_frame: 10,
+        end_frame: 12,
+    };
+    let observations = vec![
+        TrackerObservation {
+            frame: 10,
+            region: TrackerRegion::from_xywh(0.20, 0.30, 0.40, 0.20),
+            confidence: 0.98,
+        },
+        TrackerObservation {
+            frame: 11,
+            region: TrackerRegion::from_xywh(0.23, 0.31, 0.40, 0.20),
+            confidence: 0.90,
+        },
+        TrackerObservation {
+            frame: 12,
+            region: TrackerRegion::from_xywh(0.27, 0.33, 0.41, 0.22),
+            confidence: 0.82,
+        },
+    ];
+
+    let handle = match ensure_tracker_from_observations(&mut package, request, observations) {
+        Ok(handle) => handle,
+        Err(err) => panic!("observed tracker creation should succeed: {err}"),
+    };
+
+    assert_eq!(package.tracks.len(), 1);
+    let track = &package.tracks[0];
+    assert_eq!(track.id, handle.track_id);
+    assert_eq!(track.samples.len(), 3);
+    assert_eq!(track.samples[0].points[0], [0.20, 0.30]);
+    assert_eq!(track.samples[1].points[0], [0.23, 0.31]);
+    assert_eq!(track.samples[2].points[2], [0.68, 0.55]);
+    let Some(confidence) = track.confidence else {
+        panic!("observed tracker confidence");
+    };
+    assert!((confidence - 0.9).abs() < 1e-9);
+    assert!(package.validate().is_empty());
+}
+
+#[test]
+fn author_tracked_insert_creates_bindings_and_review_surface() {
+    let mut package = TrackingPackage::default();
+    let plan = match author_tracked_insert(
+        &mut package,
+        TrackedInsertRequest {
+            overlay_clip_id: "logo-overlay".into(),
+            tracker: TrackingRequest {
+                clip_id: "speaker-clip".into(),
+                kind: TrackKind::Point,
+                region: TrackerRegion::from_xywh(0.20, 0.30, 0.20, 0.20),
+                start_frame: 0,
+                end_frame: 30,
+            },
+            observations: vec![
+                TrackerObservation {
+                    frame: 0,
+                    region: TrackerRegion::from_xywh(0.20, 0.30, 0.20, 0.20),
+                    confidence: 0.94,
+                },
+                TrackerObservation {
+                    frame: 30,
+                    region: TrackerRegion::from_xywh(0.40, 0.50, 0.20, 0.20),
+                    confidence: 0.52,
+                },
+            ],
+        },
+        30.0,
+    ) {
+        Ok(plan) => plan,
+        Err(err) => panic!("tracked insert should author: {err}"),
+    };
+
+    assert_eq!(plan.generated_animations.len(), 2);
+    assert!(
+        plan.generated_animations
+            .iter()
+            .any(|animation| animation.target
+                == AnimationTarget::ClipParameter {
+                    clip_id: "logo-overlay".into(),
+                    parameter: "overlay.x".into()
+                })
+    );
+    assert!(
+        plan.generated_animations
+            .iter()
+            .any(|animation| animation.target
+                == AnimationTarget::ClipParameter {
+                    clip_id: "logo-overlay".into(),
+                    parameter: "overlay.y".into()
+                })
+    );
+    assert_eq!(plan.review.tracks.len(), 1);
+    assert_eq!(plan.review.tracks[0].track_id, plan.track_id);
+    assert_eq!(plan.review.tracks[0].correction_frames, vec![30]);
+    assert!(plan.review.tracks[0].requires_correction);
+
+    if let Err(err) = (TrackCorrection {
+        track_id: plan.track_id,
+        samples: vec![
+            (0, vec![[0.30, 0.40]], 0.96),
+            (30, vec![[0.50, 0.60]], 0.95),
+        ],
+    })
+    .apply(&mut package)
+    {
+        panic!("correction applies: {err}");
+    }
+    let review = summarize_tracking_package(&package);
+
+    assert!(review.tracks[0].correction_frames.is_empty());
+    assert!(!review.tracks[0].requires_correction);
 }
 
 #[test]
@@ -185,6 +346,216 @@ fn track_bound_overlay_fails_loudly_when_track_is_missing() {
 }
 
 #[test]
+fn tracker_bind_node_lowers_to_clip_parameter_animation() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "speaker-face".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Point,
+            samples: vec![
+                TrackSample {
+                    frame: 0,
+                    points: vec![[0.25, 0.75]],
+                    confidence: Some(0.95),
+                },
+                TrackSample {
+                    frame: 30,
+                    points: vec![[0.40, 0.60]],
+                    confidence: Some(0.90),
+                },
+            ],
+            confidence: Some(0.925),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+    let graph = CompositionGraph {
+        id: "tracked-lower-third".into(),
+        nodes: vec![node(
+            "bind-x",
+            "tracker_bind",
+            json!({
+                "track_id": "speaker-face",
+                "target_clip_id": "lower-third",
+                "target_parameter": "overlay.x",
+                "channel": "x"
+            }),
+        )],
+        ..CompositionGraph::default()
+    };
+
+    let animations = match lower_tracker_parameter_bindings(&package, &graph, 30.0) {
+        Ok(animations) => animations,
+        Err(err) => panic!("tracker bind should lower: {err}"),
+    };
+
+    assert_eq!(animations.len(), 1);
+    assert_eq!(
+        animations[0].target,
+        AnimationTarget::ClipParameter {
+            clip_id: "lower-third".into(),
+            parameter: "overlay.x".into()
+        }
+    );
+    assert_eq!(animations[0].keyframes[0], Keyframe::linear(0.0, 0.25));
+    assert_eq!(animations[0].keyframes[1], Keyframe::linear(1.0, 0.40));
+    assert!(!animations[0].metadata_only);
+}
+
+#[test]
+fn tracker_bind_node_rejects_unsupported_target_parameter() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "speaker-face".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Point,
+            samples: vec![TrackSample {
+                frame: 0,
+                points: vec![[0.25, 0.75]],
+                confidence: Some(0.95),
+            }],
+            confidence: Some(0.95),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+    let graph = CompositionGraph {
+        id: "bad-bind".into(),
+        nodes: vec![node(
+            "bind-bad",
+            "tracker_bind",
+            json!({
+                "track_id": "speaker-face",
+                "target_clip_id": "lower-third",
+                "target_parameter": "overlay.lut_path",
+                "channel": "x"
+            }),
+        )],
+        ..CompositionGraph::default()
+    };
+
+    let err = match lower_tracker_parameter_bindings(&package, &graph, 30.0) {
+        Ok(_) => panic!("unsupported tracker_bind target should fail"),
+        Err(err) => err,
+    };
+
+    assert!(
+        err.to_string().contains("unsupported target_parameter")
+            && err.to_string().contains("overlay.rotation_deg"),
+        "error should enumerate supported runtime clip parameters: {err}"
+    );
+}
+
+#[test]
+fn surface_track_lowers_to_perspective_filter() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "screen-surface".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Surface,
+            samples: vec![
+                TrackSample {
+                    frame: 0,
+                    points: vec![[0.10, 0.20], [0.90, 0.18], [0.86, 0.82], [0.14, 0.80]],
+                    confidence: Some(0.91),
+                },
+                TrackSample {
+                    frame: 30,
+                    points: vec![[0.12, 0.22], [0.88, 0.20], [0.84, 0.84], [0.16, 0.82]],
+                    confidence: Some(0.88),
+                },
+            ],
+            confidence: Some(0.895),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+
+    let lowering = match lower_surface_track_corner_pin(
+        &package,
+        "screen-surface",
+        "replacement-screen",
+        1920,
+        1080,
+    ) {
+        Ok(lowering) => lowering,
+        Err(err) => panic!("surface track should lower: {err}"),
+    };
+
+    assert_eq!(lowering.track_id, "screen-surface");
+    assert_eq!(lowering.target_clip_id, "replacement-screen");
+    assert!(
+        lowering.filter.contains("perspective=") && lowering.filter.contains(":eval=frame"),
+        "corner pin should lower to a per-frame perspective filter: {}",
+        lowering.filter
+    );
+    assert!(
+        lowering.filter.contains("x0='if(lte(n\\,0)\\,192")
+            && lowering.filter.contains("y0='if(lte(n\\,0)\\,216"),
+        "top-left normalized surface point should become pixel expressions: {}",
+        lowering.filter
+    );
+    assert!(
+        lowering.filter.contains("x2='if(lte(n\\,0)\\,268.8")
+            && lowering.filter.contains("x3='if(lte(n\\,0)\\,1651.2"),
+        "surface point order should map bottom-left to x2 and bottom-right to x3: {}",
+        lowering.filter
+    );
+}
+
+#[test]
+fn corner_pin_graph_node_lowers_from_surface_track() {
+    let package = TrackingPackage {
+        tracks: vec![TrackSidecar {
+            id: "screen-surface".into(),
+            asset_id: "clip-a".into(),
+            kind: TrackKind::Surface,
+            samples: vec![
+                TrackSample {
+                    frame: 0,
+                    points: vec![[0.10, 0.20], [0.90, 0.18], [0.86, 0.82], [0.14, 0.80]],
+                    confidence: Some(0.91),
+                },
+                TrackSample {
+                    frame: 30,
+                    points: vec![[0.12, 0.22], [0.88, 0.20], [0.84, 0.84], [0.16, 0.82]],
+                    confidence: Some(0.88),
+                },
+            ],
+            confidence: Some(0.895),
+            ..TrackSidecar::default()
+        }],
+        ..TrackingPackage::default()
+    };
+    let graph = CompositionGraph {
+        id: "screen-replace".into(),
+        nodes: vec![node(
+            "pin-screen",
+            "corner_pin",
+            json!({
+                "track_id": "screen-surface",
+                "target_clip_id": "replacement-screen"
+            }),
+        )],
+        ..CompositionGraph::default()
+    };
+
+    let lowerings = match lower_surface_track_corner_pin_bindings(&package, &graph, 1920, 1080) {
+        Ok(lowerings) => lowerings,
+        Err(err) => panic!("corner-pin graph node should lower: {err}"),
+    };
+
+    assert_eq!(lowerings.len(), 1);
+    assert_eq!(lowerings[0].track_id, "screen-surface");
+    assert_eq!(lowerings[0].target_clip_id, "replacement-screen");
+    assert!(
+        lowerings[0].filter.contains("perspective=") && lowerings[0].filter.contains(":eval=frame"),
+        "corner-pin graph node should lower through the surface track perspective path: {}",
+        lowerings[0].filter
+    );
+}
+
+#[test]
 fn reframe_path_lowers_to_deterministic_crop_expression() {
     let package = TrackingPackage {
         reframe_paths: vec![ReframePath {
@@ -229,6 +600,138 @@ fn reframe_path_lowers_to_deterministic_crop_expression() {
     assert!(lowering.expression.contains("center=0.45,0.5"));
     assert!(lowering.expression.contains("scale=1.15"));
     assert!(lowering.expression.contains("safe_area=mobile"));
+
+    let review = summarize_tracking_package(&package);
+    assert_eq!(review.reframe_paths.len(), 1);
+    assert_eq!(review.reframe_paths[0].reframe_id, "vertical-speaker");
+    assert_eq!(review.reframe_paths[0].keyframe_count, 2);
+    assert!(!review.reframe_paths[0].requires_correction);
+}
+
+#[test]
+fn author_subject_reframe_path_creates_reviewable_path_from_observations() {
+    let mut package = TrackingPackage::default();
+    let plan = match author_subject_reframe_path(
+        &mut package,
+        SubjectReframeRequest {
+            clip_id: "clip-speaker".into(),
+            aspect_ratio: "9:16".into(),
+            source_width: 1920,
+            source_height: 1080,
+            target_width: 1080,
+            target_height: 1920,
+            frame_rate: 30.0,
+            smoothing: ReframeSmoothing::Gentle,
+            safe_area: Some("mobile".into()),
+        },
+        vec![
+            TrackerObservation {
+                frame: 0,
+                region: TrackerRegion::from_xywh(0.25, 0.2, 0.2, 0.3),
+                confidence: 0.92,
+            },
+            TrackerObservation {
+                frame: 30,
+                region: TrackerRegion::from_xywh(0.45, 0.25, 0.2, 0.3),
+                confidence: 0.88,
+            },
+        ],
+    ) {
+        Ok(plan) => plan,
+        Err(err) => panic!("subject reframe path should author: {err}"),
+    };
+
+    assert_eq!(plan.reframe_id, "reframe-clip-speaker-9-16");
+    assert_eq!(package.reframe_paths.len(), 1);
+    let path = &package.reframe_paths[0];
+    assert_eq!(path.clip_id, "clip-speaker");
+    assert_eq!(path.aspect_ratio, "9:16");
+    assert_eq!(
+        path.evidence_track_id.as_deref(),
+        Some("subject-observations")
+    );
+    assert_eq!(path.keyframes.len(), 2);
+    assert_eq!(path.keyframes[0].time_s, 0.0);
+    assert_eq!(path.keyframes[1].time_s, 1.0);
+    assert_eq!(path.keyframes[0].center, [0.35, 0.35]);
+    assert_eq!(path.keyframes[1].center, [0.55, 0.4]);
+    assert!((path.keyframes[0].scale - 3.1604938271604937).abs() < 1e-9);
+
+    assert_eq!(plan.review.reframe_paths.len(), 1);
+    assert_eq!(
+        plan.review.reframe_paths[0].reframe_id,
+        "reframe-clip-speaker-9-16"
+    );
+    assert!(!plan.review.reframe_paths[0].requires_correction);
+
+    let lowering = match lower_reframe_path(&package, &plan.reframe_id) {
+        Ok(lowering) => lowering,
+        Err(err) => panic!("authored reframe should lower: {err}"),
+    };
+    assert!(lowering.expression.contains("clip=clip-speaker"));
+    assert!(lowering.expression.contains("safe_area=mobile"));
+}
+
+#[test]
+fn author_subject_reframe_path_from_track_uses_existing_tracker_samples() {
+    let mut package = TrackingPackage::default();
+    let handle = match ensure_tracker_from_observations(
+        &mut package,
+        TrackingRequest {
+            clip_id: "clip-speaker".into(),
+            kind: TrackKind::Surface,
+            region: TrackerRegion::from_xywh(0.20, 0.20, 0.20, 0.30),
+            start_frame: 0,
+            end_frame: 30,
+        },
+        vec![
+            TrackerObservation {
+                frame: 0,
+                region: TrackerRegion::from_xywh(0.20, 0.20, 0.20, 0.30),
+                confidence: 0.91,
+            },
+            TrackerObservation {
+                frame: 30,
+                region: TrackerRegion::from_xywh(0.50, 0.30, 0.20, 0.30),
+                confidence: 0.89,
+            },
+        ],
+    ) {
+        Ok(handle) => handle,
+        Err(err) => panic!("tracker should author: {err}"),
+    };
+
+    let plan = match author_subject_reframe_path_from_track(
+        &mut package,
+        &handle.track_id,
+        SubjectReframeRequest {
+            clip_id: "clip-speaker".into(),
+            aspect_ratio: "9:16".into(),
+            source_width: 1920,
+            source_height: 1080,
+            target_width: 1080,
+            target_height: 1920,
+            frame_rate: 30.0,
+            smoothing: ReframeSmoothing::Moderate,
+            safe_area: Some("mobile".into()),
+        },
+    ) {
+        Ok(plan) => plan,
+        Err(err) => panic!("tracked subject reframe should author: {err}"),
+    };
+
+    assert_eq!(plan.reframe_id, "reframe-clip-speaker-9-16");
+    assert_eq!(package.reframe_paths.len(), 1);
+    let path = &package.reframe_paths[0];
+    assert_eq!(
+        path.evidence_track_id.as_deref(),
+        Some(handle.track_id.as_str())
+    );
+    assert_eq!(path.keyframes.len(), 2);
+    assert_eq!(path.keyframes[0].center, [0.3, 0.35]);
+    assert_eq!(path.keyframes[1].center, [0.6, 0.45]);
+    assert_eq!(path.keyframes[1].time_s, 1.0);
+    assert!(!plan.review.reframe_paths[0].requires_correction);
 }
 
 #[test]
@@ -518,6 +1021,187 @@ fn motion_template_fill_validates_slots_and_lowers_text_reveal_titles() {
 }
 
 #[test]
+fn motion_template_preserves_explicit_duplicate_subtitle() {
+    let template = match built_in_motion_templates()
+        .into_iter()
+        .find(|template| template.id == "lower-third")
+    {
+        Some(template) => template,
+        None => panic!("lower-third template"),
+    };
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("clip-a")),
+            ("text", json!("Ada")),
+            ("subtitle", json!("Ada")),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("filled template: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 1.0,
+            end_s: 4.0,
+            animation: TemplateAnimation::Opacity,
+        },
+    );
+
+    assert_eq!(render.titles.len(), 2);
+    assert_eq!(render.titles[0].text, "Ada");
+    assert_eq!(render.titles[1].text, "Ada");
+}
+
+#[test]
+fn motion_template_lowers_filled_image_slots_to_media_overlays() {
+    let template = match built_in_motion_templates()
+        .into_iter()
+        .find(|template| template.id == "product-insert-emphasis")
+    {
+        Some(template) => template,
+        None => panic!("product-insert-emphasis template"),
+    };
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("clip-a")),
+            ("image_asset", json!("logo.svg")),
+            ("scale", json!(1.15)),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("filled template: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 1.0,
+            end_s: 4.0,
+            animation: TemplateAnimation::Transform,
+        },
+    );
+
+    assert_eq!(render.media_overlays.len(), 1);
+    assert_eq!(
+        render.media_overlays[0].segment.asset_path,
+        PathBuf::from("logo.svg")
+    );
+    assert_eq!(render.media_overlays[0].track_start_s, 1.0);
+    assert_eq!(render.media_overlays[0].segment.duration_s, 3.0);
+    assert!(
+        render
+            .media_overlays
+            .iter()
+            .flat_map(|overlay| overlay.animations.iter())
+            .any(|animation| animation.parameter == "overlay.scale")
+    );
+    assert!(
+        render
+            .limitations
+            .iter()
+            .all(|limitation| !limitation.node_id.ends_with(":image_asset")),
+        "image slot should lower into a media overlay rather than report unsupported: {:?}",
+        render.limitations
+    );
+}
+
+#[test]
+fn logo_reveal_template_lowers_logo_asset_to_fade_and_scale_overlay() {
+    let template = built_in_template("logo-reveal");
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("logo-clip")),
+            ("logo_asset", json!("brand/logo.png")),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("logo reveal fill: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 2.0,
+            end_s: 5.0,
+            animation: TemplateAnimation::Transform,
+        },
+    );
+
+    assert_eq!(render.media_overlays.len(), 1);
+    assert_eq!(
+        render.media_overlays[0].segment.asset_path,
+        PathBuf::from("brand/logo.png")
+    );
+    assert!(
+        render
+            .media_overlays
+            .iter()
+            .flat_map(|overlay| overlay.animations.iter())
+            .any(|animation| animation.parameter == "overlay.opacity")
+    );
+    assert!(
+        render
+            .media_overlays
+            .iter()
+            .flat_map(|overlay| overlay.animations.iter())
+            .any(|animation| animation.parameter == "overlay.scale")
+    );
+}
+
+#[test]
+fn image_only_template_lowers_without_target_clip() {
+    let template = MotionGraphicsTemplate {
+        id: "brand-bug".into(),
+        name: "Brand Bug".into(),
+        slots: vec![TemplateSlot {
+            id: "logo_asset".into(),
+            kind: TemplateSlotKind::Image,
+            required: true,
+            ..TemplateSlot::default()
+        }],
+        safe_areas: Vec::new(),
+        platform_variants: Vec::new(),
+    };
+    let filled =
+        match fill_motion_template(&template, btree_map([("logo_asset", json!("bug.png"))])) {
+            Ok(filled) => filled,
+            Err(err) => panic!("image-only fill: {err}"),
+        };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 6.0,
+            end_s: 9.0,
+            animation: TemplateAnimation::None,
+        },
+    );
+
+    assert_eq!(render.media_overlays.len(), 1);
+    assert_eq!(
+        render.media_overlays[0].segment.asset_path,
+        PathBuf::from("bug.png")
+    );
+    assert!(render.media_overlays[0].animations.is_empty());
+    assert!(
+        render
+            .limitations
+            .iter()
+            .all(|limitation| !limitation.node_id.ends_with(":logo_asset")),
+        "image-only template should not silently drop or warn for a renderable logo slot: {:?}",
+        render.limitations
+    );
+}
+
+#[test]
 fn text_reveal_keeps_combining_mark_graphemes_together() {
     let template = match built_in_motion_templates()
         .into_iter()
@@ -601,6 +1285,53 @@ fn effect_parameter_registry_reports_units_and_validation() {
     assert_eq!(saturation.unit, "multiplier");
     assert!(saturation.previewable);
     assert!(saturation.renderable);
+    let blur = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.video_overlay" && entry.parameter == "blur")
+    {
+        Some(entry) => entry,
+        None => panic!("overlay blur capability"),
+    };
+
+    assert_eq!(blur.unit, "px");
+    assert!(blur.previewable);
+    assert!(blur.renderable);
+
+    let shake = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.shake" && entry.parameter == "intensity_px")
+    {
+        Some(entry) => entry,
+        None => panic!("shake intensity capability"),
+    };
+
+    assert_eq!(shake.unit, "px");
+    assert!(shake.previewable);
+    assert!(shake.renderable);
+
+    let clip_blur = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.blur" && entry.parameter == "radius_px")
+    {
+        Some(entry) => entry,
+        None => panic!("clip blur capability"),
+    };
+
+    assert_eq!(clip_blur.unit, "px");
+    assert!(clip_blur.previewable);
+    assert!(clip_blur.renderable);
+
+    let warp = match matrix
+        .iter()
+        .find(|entry| entry.effect == "awidat.warp" && entry.parameter == "k1")
+    {
+        Some(entry) => entry,
+        None => panic!("warp k1 capability"),
+    };
+
+    assert_eq!(warp.unit, "coefficient");
+    assert!(warp.previewable);
+    assert!(warp.renderable);
 
     let invalid = ParameterAnimation {
         id: "anim-bad-scale".into(),
@@ -609,6 +1340,10 @@ fn effect_parameter_registry_reports_units_and_validation() {
             parameter: "awidat.video_overlay.scale".into(),
         },
         keyframes: vec![Keyframe::linear(0.0, 0.0)],
+        pre_extrapolation: ExtrapolationMode::Hold,
+        post_extrapolation: ExtrapolationMode::Hold,
+        motion_path: None,
+        metadata_only: false,
         rationale: None,
     };
     let diagnostic = match diagnose_effect_parameter_animation(&invalid) {
@@ -636,6 +1371,8 @@ fn built_in_motion_template_catalog_covers_phase_3b_templates() {
         "title-reveal",
         "pip-emphasis",
         "product-insert-emphasis",
+        "shake-emphasis",
+        "logo-reveal",
     ] {
         assert!(ids.contains(&expected), "missing template {expected}");
     }
@@ -665,7 +1402,7 @@ fn lower_third_template_lowers_to_title_opacity_and_y_animations() {
             ("target_clip", json!("title-clip")),
             ("text", json!("Ada Lovelace")),
             ("subtitle", json!("Host")),
-            ("color", json!("#FFFFFF")),
+            ("color", json!("#FFCC00")),
             ("safe_area", json!("16:9")),
         ]),
     ) {
@@ -694,6 +1431,16 @@ fn lower_third_template_lowers_to_title_opacity_and_y_animations() {
         .collect::<Vec<_>>();
     assert!(parameters.contains(&"title-clip/title.opacity".to_string()));
     assert!(parameters.contains(&"title-clip/title.y".to_string()));
+    assert_eq!(render.titles[0].color, "#FFCC00");
+    assert_eq!(render.titles[1].color, "#FFCC00");
+    assert!(
+        render
+            .limitations
+            .iter()
+            .all(|limitation| !limitation.node_id.ends_with(":color")),
+        "color slot should lower into title color rather than report unsupported: {:?}",
+        render.limitations
+    );
 }
 
 #[test]
@@ -732,6 +1479,51 @@ fn focus_highlight_template_lowers_to_overlay_scale_and_opacity() {
         .collect::<Vec<_>>();
     assert!(parameters.contains(&"overlay.scale"));
     assert!(parameters.contains(&"overlay.opacity"));
+}
+
+#[test]
+fn shake_emphasis_template_lowers_to_overlay_x_and_rotation_keyframes() {
+    let template = built_in_template("shake-emphasis");
+    let filled = match fill_motion_template(
+        &template,
+        btree_map([
+            ("target_clip", json!("overlay-clip")),
+            ("intensity", json!(0.04)),
+            ("safe_area", json!("16:9")),
+        ]),
+    ) {
+        Ok(filled) => filled,
+        Err(err) => panic!("shake emphasis fill: {err}"),
+    };
+
+    let render = lower_motion_template(
+        &filled,
+        MotionTemplateTiming {
+            start_s: 4.0,
+            end_s: 5.0,
+            animation: TemplateAnimation::Transform,
+        },
+    );
+
+    let x_animation = clip_parameter_animation(&render.parameter_animations, "overlay.x");
+    let y_animation = clip_parameter_animation(&render.parameter_animations, "overlay.y");
+    let rotation_animation =
+        clip_parameter_animation(&render.parameter_animations, "overlay.rotation_deg");
+
+    assert_eq!(x_animation.keyframes.len(), 6);
+    assert_eq!(x_animation.keyframes[0].value, 0.0);
+    assert_eq!(x_animation.keyframes[1].value, -0.04);
+    assert_eq!(x_animation.keyframes[2].value, 0.04);
+    assert_eq!(x_animation.keyframes[5].value, 0.0);
+    assert_eq!(y_animation.keyframes.len(), 6);
+    assert_eq!(y_animation.keyframes[0].value, 0.0);
+    assert!(y_animation.keyframes[1].value > 0.0);
+    assert!(y_animation.keyframes[2].value < 0.0);
+    assert_eq!(y_animation.keyframes[5].value, 0.0);
+    assert_eq!(rotation_animation.keyframes.len(), 5);
+    assert_eq!(rotation_animation.keyframes[0].value, 0.0);
+    assert!(rotation_animation.keyframes[1].value < 0.0);
+    assert!(rotation_animation.keyframes[2].value > 0.0);
 }
 
 #[test]
@@ -1089,6 +1881,104 @@ fn export_preset_lowers_codecs_container_and_audio_settings() {
 }
 
 #[test]
+fn export_preset_sets_faststart_for_mp4_delivery() {
+    let preset = ExportPreset::vertical_short_form();
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let profiled = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(spec) => spec,
+        Err(err) => panic!("preset lowers: {err}"),
+    };
+
+    assert!(
+        profiled
+            .args
+            .windows(2)
+            .any(|w| w == ["-movflags", "+faststart"])
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn export_preset_auto_hardware_uses_videotoolbox_for_h264_on_macos() {
+    let mut preset = ExportPreset::vertical_short_form();
+    preset.output.hardware_acceleration = HardwareAccelerationPolicy::Auto;
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let profiled = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(spec) => spec,
+        Err(err) => panic!("preset lowers: {err}"),
+    };
+
+    assert!(
+        profiled
+            .args
+            .windows(2)
+            .any(|w| w == ["-c:v", "h264_videotoolbox"])
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn export_preset_auto_hardware_keeps_software_codec_when_no_native_mapping_exists() {
+    let mut preset = ExportPreset::vertical_short_form();
+    preset.output.hardware_acceleration = HardwareAccelerationPolicy::Auto;
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let profiled = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(spec) => spec,
+        Err(err) => panic!("preset lowers: {err}"),
+    };
+
+    assert!(profiled.args.windows(2).any(|w| w == ["-c:v", "libx264"]));
+}
+
+#[test]
+fn export_preset_require_hardware_errors_when_codec_has_no_mapping() {
+    let mut preset = ExportPreset::vertical_short_form();
+    match preset.video.as_mut() {
+        Some(video) => video.codec = "prores_ks".into(),
+        None => panic!("video settings"),
+    }
+    preset.output = ExportOutputSettings {
+        hardware_acceleration: HardwareAccelerationPolicy::Require,
+        ..ExportOutputSettings::mp4()
+    };
+    let spec = RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        limitations: Vec::new(),
+    };
+
+    let err = match apply_export_preset_to_spec(spec, &preset) {
+        Ok(_) => panic!("unsupported required hardware should fail"),
+        Err(err) => err,
+    };
+
+    assert!(err.to_string().contains("hardware"));
+}
+
+#[test]
 fn stream_export_contract_lowers_to_ffmpeg_stream_args() {
     let contract = StreamExportContract {
         id: "stream-master".into(),
@@ -1159,6 +2049,7 @@ fn node(
             "blur" => awidat_proto::professional::CompositionNodeType::Blur,
             "color" => awidat_proto::professional::CompositionNodeType::Color,
             "tracker_bind" => awidat_proto::professional::CompositionNodeType::TrackerBind,
+            "corner_pin" => awidat_proto::professional::CompositionNodeType::CornerPin,
             "output" => awidat_proto::professional::CompositionNodeType::Output,
             other => panic!("node kind {other}"),
         },
@@ -1220,8 +2111,31 @@ fn package_animation(
             parameter: parameter.into(),
         },
         keyframes: vec![Keyframe::linear(0.0, 0.0), Keyframe::linear(1.0, 1.0)],
+        pre_extrapolation: ExtrapolationMode::Hold,
+        post_extrapolation: ExtrapolationMode::Hold,
+        motion_path: None,
+        metadata_only: false,
         rationale: None,
     }
+}
+
+fn clip_parameter_animation<'a>(
+    animations: &'a [ParameterAnimation],
+    parameter: &str,
+) -> &'a ParameterAnimation {
+    for animation in animations {
+        let AnimationTarget::ClipParameter {
+            parameter: candidate,
+            ..
+        } = &animation.target
+        else {
+            continue;
+        };
+        if candidate == parameter {
+            return animation;
+        }
+    }
+    panic!("parameter animation {parameter}");
 }
 
 fn expression_link(
