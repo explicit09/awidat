@@ -75,7 +75,9 @@ fn transform_compositor_renders_non_empty_frame_with_translate_scale_rotate() {
 
     let frame = match compositor.compose(&spec) {
         Ok(frame) => frame,
-        Err(err) => panic!("TransformCompositor::compose should succeed on synthetic input: {err:?}"),
+        Err(err) => {
+            panic!("TransformCompositor::compose should succeed on synthetic input: {err:?}")
+        }
     };
 
     assert_eq!(frame.width, width, "frame.width must match spec");
