@@ -81,8 +81,11 @@ impl ToolHandler for VeditDiffTool {
             "from": diff.from_ref,
             "to": diff.to_ref,
             "change_count": diff.len(),
-            "structural_changes_empty": diff.is_empty(),
+            "structural_change_count": diff.changes.len(),
+            "structural_changes_empty": diff.changes.is_empty(),
             "changes": diff.changes,
+            "animation_change_count": diff.animation_changes.len(),
+            "animation_changes": diff.animation_changes,
             "note": if diff.is_empty() {
                 "Empty structural diff. If you committed metadata-only changes (e.g. agent reasoning updates), they show up in vedit_log but not here."
             } else {
