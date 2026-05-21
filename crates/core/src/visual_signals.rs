@@ -3,9 +3,10 @@
 //! The shot indexer writes one record per shot under
 //! `index/shot/<asset>.json` with fields like `motion_magnitude`,
 //! `dominant_direction`, `whip_pan_score`, `occlusion_score`, and
-//! `action_score`. `assess_edit_quality` already reads these for one
-//! side of a candidate cut; the transition planner needs both sides
-//! and the relationship between them.
+//! `action_score`, `subject_center`, and `face_center`.
+//! `assess_edit_quality` already reads these for one side of a
+//! candidate cut; planner tools need both sides and the relationship
+//! between them.
 //!
 //! This module exposes a focused `BoundaryVisualSignals` builder that
 //! returns motion- and motion-direction-aware signals at the cut
@@ -14,8 +15,7 @@
 //! produces them.
 //!
 //! The data shape is deliberately minimal — only what the agent
-//! consumes when picking a transition. The richer per-shot composition
-//! data stays inside `assess_edit_quality.rs`.
+//! consumes when picking transitions or clip-level emphasis motion.
 
 use std::path::Path;
 
@@ -26,6 +26,10 @@ use awidat_proto::transitions::MotionAlignment;
 /// Visual signals at one side of a cut.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SideSignals {
+    /// Normalized subject center `[x, y]` in frame coordinates.
+    pub subject_center: Option<[f64; 2]>,
+    /// Normalized face center `[x, y]` in frame coordinates.
+    pub face_center: Option<[f64; 2]>,
     /// Average motion magnitude for the shot covering this side.
     pub motion_magnitude: Option<f64>,
     /// Inferred screen direction for the shot when the indexer can label one.
@@ -159,6 +163,8 @@ fn load_side_signals(project_root: &Path, asset_id: &str, source_at_s: f64) -> S
     };
 
     SideSignals {
+        subject_center: shot.get("subject_center").and_then(point2),
+        face_center: shot.get("face_center").and_then(point2),
         motion_magnitude: shot
             .get("motion_magnitude")
             .and_then(|value| value.as_f64()),
@@ -170,6 +176,14 @@ fn load_side_signals(project_root: &Path, asset_id: &str, source_at_s: f64) -> S
         occlusion_score: shot.get("occlusion_score").and_then(|value| value.as_f64()),
         action_score: shot.get("action_score").and_then(|value| value.as_f64()),
     }
+}
+
+fn point2(value: &serde_json::Value) -> Option<[f64; 2]> {
+    let arr = value.as_array()?;
+    if arr.len() != 2 {
+        return None;
+    }
+    Some([arr[0].as_f64()?, arr[1].as_f64()?])
 }
 
 #[cfg(test)]
@@ -193,7 +207,7 @@ mod tests {
             dir.path(),
             "raw_a",
             serde_json::json!([
-                {"start_s": 0.0, "end_s": 5.0, "motion_magnitude": 0.6, "dominant_direction": "left"}
+                {"start_s": 0.0, "end_s": 5.0, "motion_magnitude": 0.6, "dominant_direction": "left", "subject_center": [0.4, 0.35], "face_center": [0.42, 0.22]}
             ]),
         );
         write_shot_sidecar(
@@ -205,6 +219,8 @@ mod tests {
         );
         let signals = load_boundary_signals(dir.path(), "raw_a", 2.0, "raw_b", 1.0);
         assert_eq!(signals.outgoing.motion_magnitude, Some(0.6));
+        assert_eq!(signals.outgoing.subject_center, Some([0.4, 0.35]));
+        assert_eq!(signals.outgoing.face_center, Some([0.42, 0.22]));
         assert_eq!(
             signals.outgoing.motion_direction,
             Some(MotionAlignment::Left)
