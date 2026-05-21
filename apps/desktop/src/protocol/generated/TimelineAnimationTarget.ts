@@ -3,11 +3,11 @@
 /**
  * Clip-local animation target exposed to desktop preview.
  */
-export type TimelineAnimationTarget = {
+export type TimelineAnimationTarget = { 
 /**
  * Target clip id.
  */
-clip_id: string,
+clip_id: string, 
 /**
  * Phase 3A parameter path such as `title.opacity`.
  */

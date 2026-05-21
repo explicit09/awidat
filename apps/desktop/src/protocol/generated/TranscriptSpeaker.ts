@@ -4,11 +4,11 @@
  * Speaker summary from a diarized whisper sidecar. Empty when
  * diarization wasn't run.
  */
-export type TranscriptSpeaker = {
+export type TranscriptSpeaker = { 
 /**
  * Diarized id (e.g. `"SPEAKER_00"`).
  */
-id: string,
+id: string, 
 /**
  * Total seconds of speech attributed to this speaker.
  */

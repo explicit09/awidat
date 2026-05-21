@@ -43,6 +43,13 @@ export type { AppliedDiff } from "./generated/AppliedDiff";
 export type { Side } from "./generated/Side";
 export type { EditAdjustment } from "./generated/EditAdjustment";
 export type { AdjustField } from "./generated/AdjustField";
+// Proposal Inspector additions (Phase 2.8). All optional on the wire —
+// the UI degrades when fields are absent.
+export type { RiskLevel } from "./generated/RiskLevel";
+export type { ConfidenceTier } from "./generated/ConfidenceTier";
+export type { ProposalEvidence } from "./generated/ProposalEvidence";
+export type { ProposalEvidenceKind } from "./generated/ProposalEvidenceKind";
+export type { ProposalAlternative } from "./generated/ProposalAlternative";
 // Transcript pane (Step 6).
 export type { Transcript } from "./generated/Transcript";
 export type { TranscriptSegment } from "./generated/TranscriptSegment";

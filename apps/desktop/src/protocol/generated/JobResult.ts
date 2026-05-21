@@ -3,11 +3,11 @@
 /**
  * Terminal state of an [`Item::Job`].
  */
-export type JobResult = { "ok": {
+export type JobResult = { "ok": { 
 /**
  * Optional success summary.
  */
-summary: string | null, } } | { "err": {
+summary: string | null, } } | { "err": { 
 /**
  * Error message.
  */

@@ -3,11 +3,11 @@
 /**
  * Absolute 2D control point for a cubic spatial motion-path segment.
  */
-export type TimelineMotionPathControlPoint = {
+export type TimelineMotionPathControlPoint = { 
 /**
  * Horizontal viewport-width offset.
  */
-x: number,
+x: number, 
 /**
  * Vertical viewport-height offset.
  */

@@ -15,6 +15,7 @@ dist-ssr
 
 # Gallery / smoke screenshots — generated artifacts
 tests/*.png
+tests/smoke/
 
 # Editor directories and files
 .vscode/*

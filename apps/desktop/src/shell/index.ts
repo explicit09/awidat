@@ -34,3 +34,4 @@ export {
   type EvidenceKind,
   type Alternative,
 } from "./ProposalInspector";
+export { StageStub, type StageStubProps } from "./StageStub";

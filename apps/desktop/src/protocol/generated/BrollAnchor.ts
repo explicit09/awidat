@@ -3,11 +3,11 @@
 /**
  * Exact anchor carried by a b-roll note for `use_broll`.
  */
-export type BrollAnchor = { "kind": "transcript_snippet",
+export type BrollAnchor = { "kind": "transcript_snippet", 
 /**
  * Snippet text.
  */
-text: string, } | { "kind": "clip_uuid",
+text: string, } | { "kind": "clip_uuid", 
 /**
  * Clip UUID.
  */
