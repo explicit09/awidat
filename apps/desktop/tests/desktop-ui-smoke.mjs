@@ -97,7 +97,7 @@ const SPEC_SCREENS = [
   },
   {
     id: "screen6",
-    text: ["Import / Indexing State", "Import files", "Indexing pipeline", "Speaker diarization", "Ask agent for first cut"],
+    text: ["Import / Indexing State", "Add media", "Add files", "Indexing pipeline", "Speaker diarization", "Ask agent for first cut"],
   },
   {
     id: "screen7",
@@ -185,27 +185,26 @@ await check("top chrome matches Screen 2 app model", async () => {
   const body = await page.textContent("body");
   for (const expected of [
     "Awidat",
-    "Project",
-    "Workspace",
-    "Agent",
-    "Media",
+    "Main Desktop Workspace",
+    "Intent",
+    "Indexing",
+    "Proposal",
     "Review",
+    "Revise",
     "Deliver",
-    "Settings",
-    "Interview_A",
-    "Podcast Episode",
+    "Awaiting review",
   ]) {
     assert.ok(body.includes(expected), `missing top chrome text: ${expected}`);
   }
+  await page.getByTitle("Settings").waitFor({ state: "visible" });
   const clippedTopNav = await page.evaluate(() => {
     const header = document.querySelector("header");
     if (!header) return ["missing header"];
-    const labels = ["Project", "Workspace", "Agent", "Media", "Review", "Deliver", "Settings"];
+    const labels = ["Intent", "Indexing", "Proposal", "Review", "Revise", "Deliver"];
     const clipped = [];
+    const buttons = Array.from(header.querySelectorAll('button[role="tab"]'));
     for (const label of labels) {
-      const button = Array.from(header.querySelectorAll("button")).find(
-        (el) => el.textContent?.trim() === label,
-      );
+      const button = buttons.find((el) => el.textContent?.trim() === label);
       if (!button) {
         clipped.push(`${label}: missing`);
         continue;
@@ -247,6 +246,47 @@ await check("workflow lens row exposes all 9 lenses", async () => {
   ]) {
     assert.ok(lensNames.some((s) => s.includes(expected)), `lens "${expected}" missing`);
   }
+  await page.close();
+});
+
+await check("indexing dashboard treats import as a secondary add-media action", async () => {
+  const { page } = await makePage();
+  await page.goto(demoUrl("screen6"), { waitUntil: "networkidle" });
+  const body = await page.textContent("body");
+  for (const expected of [
+    "Project media",
+    "Add media",
+    "Add files",
+    "Add URL",
+    "9 items",
+  ]) {
+    assert.ok(body.includes(expected), `missing indexing dashboard text: ${expected}`);
+  }
+  for (const stale of [
+    "Project & import",
+    "Importing 9 of 9 files",
+    "12.4 GB / 12.4 GB",
+  ]) {
+    assert.ok(!body.includes(stale), `stale import dashboard text should be gone: ${stale}`);
+  }
+  await page.close();
+});
+
+await check("indexing dashboard keeps secondary insights compact and data-backed", async () => {
+  const { page } = await makePage();
+  await page.goto(demoUrl("screen6"), { waitUntil: "networkidle" });
+  const body = await page.textContent("body");
+  for (const expected of [
+    "Index insights",
+    "Structure preview",
+    "00:42:11",
+    "31",
+    "126",
+    "2",
+  ]) {
+    assert.ok(body.includes(expected), `missing indexing insight text: ${expected}`);
+  }
+  assert.ok(!body.includes("Smart hints"), "old smart hints heading should not be visible");
   await page.close();
 });
 
