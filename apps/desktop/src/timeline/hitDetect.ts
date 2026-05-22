@@ -6,14 +6,10 @@
 // pointer-down branch.
 
 import type { TimelineSnapshot, TimelineItem } from "./store";
+import { LANE_HEIGHT, RULER_HEIGHT } from "./layout.ts";
 
 /** Pointer-pixel tolerance for "near a clip edge". */
 export const EDGE_HIT_PX = 6;
-
-/** Lane height — must stay in sync with TimelinePane's LANE_HEIGHT. */
-const LANE_HEIGHT = 38;
-/** Ruler height — must stay in sync with TimelinePane's RULER_HEIGHT. */
-const RULER_HEIGHT = 22;
 
 export type EdgeHit = {
   /** Index of the track in `snapshot.tracks`. */

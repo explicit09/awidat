@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:animation": "tsc src/timeline/animation.ts src/media/videoOverlayStyle.ts --target ES2022 --module ES2022 --moduleResolution bundler --outDir dist-test --skipLibCheck && node tests/animation-evaluator.mjs",
-    "test": "npm run test:animation && node tests/desktop-ui-smoke.mjs",
+    "test:editor": "node --experimental-strip-types src/editor/dispatch.test.ts",
+    "test:timeline": "node --experimental-strip-types src/timeline/editMath.test.ts && node --experimental-strip-types src/timeline/editOps.test.ts && node --experimental-strip-types src/timeline/editorialMarkers.test.ts && node --experimental-strip-types src/timeline/formatting.test.ts && node --experimental-strip-types src/timeline/proposalDiffKeys.test.ts && node --experimental-strip-types src/timeline/renderer.test.ts && node --experimental-strip-types src/timeline/canvasLayout.test.ts && node --experimental-strip-types src/timeline/refreshActivity.test.ts",
+    "test": "npm run test:animation && npm run test:editor && npm run test:timeline && node tests/desktop-ui-smoke.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },

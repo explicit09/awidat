@@ -14,14 +14,9 @@ import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useProposalStore } from "./proposal";
 import type { AppliedDiff, AdjustField, TimelineSnapshot } from "../protocol";
+import { LANE_HEIGHT, PX_PER_SECOND_BASE, RULER_HEIGHT } from "./layout.ts";
 
-/** Layout constants — must match TimelinePane.tsx exactly. The
- *  handles overlay the canvas; same lane heights and ruler offset
- *  are baked into both. */
-const LANE_HEIGHT = 38;
-const RULER_HEIGHT = 22;
 const HANDLE_WIDTH = 8;
-const PX_PER_SECOND_BASE = 12;
 
 type HandleSpec = {
   key: string;
