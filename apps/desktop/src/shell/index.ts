@@ -57,6 +57,8 @@ export {
   type IndexingMediaItem,
   type IndexingTask,
   type IndexingSystemStatus,
+  type IndexerConfigSnapshot,
+  type IndexerConfigEntry,
 } from "./IndexingDashboard";
 export {
   DeliverySurface,

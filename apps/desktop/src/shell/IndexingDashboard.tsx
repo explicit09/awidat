@@ -3,10 +3,12 @@ import {
   Captions,
   Clapperboard,
   Database,
+  ExternalLink,
   FileText,
   Gauge,
   HardDrive,
   Import,
+  LocateFixed,
   Palette,
   Scan,
   Sparkles,
@@ -69,6 +71,24 @@ export type IndexingSystemStatus = {
   tempC?: number;
 };
 
+export type IndexerConfigEntry = {
+  name: string;
+  enabled: boolean;
+  command: string;
+  args: string[];
+  cwd?: string | null;
+  dependsOn: string[];
+  resourceClass: string;
+  group?: string | null;
+  userConfigured: boolean;
+};
+
+export type IndexerConfigSnapshot = {
+  globalPath?: string | null;
+  projectPath?: string | null;
+  indexers: IndexerConfigEntry[];
+};
+
 export type IndexingDashboardProps = {
   projectName?: string;
   sourceCount?: number;
@@ -76,11 +96,17 @@ export type IndexingDashboardProps = {
   media?: IndexingMediaItem[];
   tasks?: IndexingTask[];
   system?: IndexingSystemStatus;
+  indexerConfig?: IndexerConfigSnapshot;
   /** True when all 9 tasks are at least partially indexed. */
   ready?: boolean;
   onImport?: () => void;
   onImportUrl?: () => void;
   onAskAgent?: () => void;
+  onReviewIndexResults?: () => void;
+  onToggleIndexer?: (indexer: IndexerConfigEntry) => void;
+  onOpenConfigPath?: (path: string) => void;
+  onRevealConfigPath?: (path: string) => void;
+  showImportActions?: boolean;
 };
 
 const TASK_META: Record<
@@ -117,10 +143,16 @@ export function IndexingDashboard({
   media = [],
   tasks = [],
   system,
+  indexerConfig,
   ready = false,
   onImport,
   onImportUrl,
   onAskAgent,
+  onReviewIndexResults,
+  onToggleIndexer,
+  onOpenConfigPath,
+  onRevealConfigPath,
+  showImportActions = true,
 }: IndexingDashboardProps) {
   // Resolve each of the 9 named tasks — fill missing ones with status="missing"
   // so the UI always shows all 9 rows.
@@ -134,52 +166,85 @@ export function IndexingDashboard({
       }
     );
   });
+  const indexedTaskCount = resolved.filter((task) => task.status !== "missing").length;
+  const overallProgress = Math.round(
+    resolved.reduce((sum, task) => {
+      if (typeof task.progress === "number") return sum + task.progress;
+      if (task.status === "indexed" || task.status === "imported") return sum + 100;
+      if (task.status === "processing") return sum + 45;
+      if (task.status === "partial") return sum + 50;
+      return sum;
+    }, 0) / resolved.length,
+  );
 
   return (
-    <div className="grid h-full grid-cols-[1fr_360px] bg-[var(--color-surface-app)] min-h-0">
-      {/* Left: media + pipeline */}
-      <div className="flex flex-col min-h-0 overflow-y-auto">
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-[var(--color-border-subtle)]">
-          <Inline justify="between" align="end">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(250px,0.82fr)_minmax(300px,1fr)_minmax(390px,1.68fr)_minmax(220px,0.78fr)] bg-[var(--color-surface-app)]">
+      <aside className="border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
+        <div className="px-4 py-4 border-b border-[var(--color-border-subtle)]">
+          <Stack gap="3">
             <Stack gap="1">
               <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-                Project
+                Project & import
               </span>
-              <span className="text-[var(--text-h2)] font-semibold text-[var(--color-text-primary)]">
+              <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
                 {projectName ?? "Untitled"}
               </span>
-              <Inline gap="3" align="center">
-                <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-                  {sourceCount} {sourceCount === 1 ? "source" : "sources"}
-                </span>
-                {deliveryTarget ? (
-                  <Pill status="proposed" dot={false}>
-                    {deliveryTarget}
-                  </Pill>
-                ) : null}
-              </Inline>
+              <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
+                {sourceCount} {sourceCount === 1 ? "file" : "files"} · {media.length > 0 ? "12.4 GB" : "No media imported"}
+              </span>
             </Stack>
-            <Inline gap="2">
-              <Button variant="secondary" size="sm" onClick={onImportUrl}>
-                Import from URL
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                onClick={onImport}
-                leadingIcon={<Import className="h-3.5 w-3.5 stroke-[1.75]" />}
-              >
-                Import files
-              </Button>
-            </Inline>
-          </Inline>
+            {deliveryTarget ? (
+              <Pill status="proposed" dot={false}>
+                {deliveryTarget}
+              </Pill>
+            ) : null}
+            {showImportActions ? (
+              <Inline gap="2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={onImport}
+                  leadingIcon={<Import className="h-3.5 w-3.5 stroke-[1.75]" />}
+                  className="flex-1"
+                >
+                  Import files
+                </Button>
+                <Button variant="secondary" size="sm" onClick={onImportUrl} className="flex-1">
+                  Import URL
+                </Button>
+              </Inline>
+            ) : null}
+          </Stack>
         </div>
-
-        {/* Media list */}
-        <Section title="Media" subtitle={`${media.length} items`}>
-          {media.length === 0 ? (
+        {showImportActions ? (
+          <div className="p-4 border-b border-[var(--color-border-subtle)]">
             <DropZone onImport={onImport} />
+          </div>
+        ) : null}
+        <div className="flex-1 overflow-y-auto p-4">
+          <Stack gap="3">
+            <SectionHeader title="Import status" subtitle="Complete" />
+            <ProgressStat label="Importing 9 of 9 files" value="12.4 GB / 12.4 GB" progress={100} />
+            <SectionHeader title="Activity log" />
+            {[
+              "Scanned folder and matched 9 supported files",
+              "Generated proxies for A and B camera",
+              "Queued transcript, scene, and speaker analysis",
+              "Audio waveform cache is ready",
+            ].map((item, index) => (
+              <div key={item} className="grid grid-cols-[24px_1fr] gap-2 text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+                <span className="font-mono text-[var(--color-text-muted)]">{String(index + 1).padStart(2, "0")}</span>
+                <span className="leading-snug">{item}</span>
+              </div>
+            ))}
+          </Stack>
+        </div>
+      </aside>
+
+      <section className="grid min-h-0 grid-rows-[1fr_auto] border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)]">
+        <Section title={`Imported media (${media.length})`} subtitle="Local sources" fill>
+          {media.length === 0 ? (
+            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">No media yet.</span>
           ) : (
             <Stack gap="2">
               {media.map((m) => (
@@ -195,17 +260,44 @@ export function IndexingDashboard({
             </Stack>
           )}
         </Section>
+        <div className="border-t border-[var(--color-border-subtle)] px-4 py-2">
+          <Inline justify="between" align="center">
+            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+              {media.length} items · 12.4 GB
+            </span>
+            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+              Indexed locally
+            </span>
+          </Inline>
+        </div>
+      </section>
 
-        {/* Indexing pipeline */}
+      <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_218px] overflow-hidden">
         <Section
           title="Indexing pipeline"
           subtitle={
             ready
               ? "All signals ready"
-              : `${resolved.filter((t) => t.status !== "missing").length} of 9`
+              : `${indexedTaskCount} of 9`
           }
         >
           <Stack gap="2">
+            <Inline justify="between" align="baseline">
+              <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                Overall progress
+              </span>
+              <span className="font-mono text-[var(--text-caption)] text-[var(--color-brand-secondary-hover)]">
+                {overallProgress}%
+              </span>
+            </Inline>
+            <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+              <div
+                className="h-full rounded-full bg-[var(--color-brand-secondary)]"
+                style={{ width: `${overallProgress}%` }}
+              />
+            </div>
+          </Stack>
+          <div className="grid grid-cols-1 gap-2">
             {resolved.map((task) => {
               const meta = TASK_META[task.kind];
               const Icon = meta.icon;
@@ -217,14 +309,42 @@ export function IndexingDashboard({
                   status={task.status}
                   progress={task.progress}
                   icon={<Icon className="h-4 w-4 stroke-[1.75]" />}
+                  className="min-h-[58px]"
                 />
               );
             })}
-          </Stack>
+          </div>
         </Section>
-      </div>
 
-      {/* Right: ready CTA + system status */}
+        <section className="border-t border-[var(--color-border-subtle)] px-5 py-4 bg-[var(--color-surface-panel)]">
+          <Stack gap="3">
+            <SectionHeader title="Extracted structure preview" subtitle="Updating live" />
+            <div className="grid grid-cols-3 gap-2 xl:grid-cols-5">
+              <MetricTile label="Duration" value="00:42:11" />
+              <MetricTile label="Scenes" value="368" />
+              <MetricTile label="Segments" value="126" />
+              <MetricTile label="Speakers" value="2" />
+              <MetricTile label="Transcript" value="78%" />
+            </div>
+            <div className="grid grid-cols-[1fr_140px] gap-3">
+              <div className="flex h-10 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)]">
+                {Array.from({ length: 14 }).map((_, index) => (
+                  <div
+                    key={index}
+                    className="border-r border-black/40"
+                    style={{
+                      width: `${index % 3 === 0 ? 9 : index % 2 === 0 ? 6 : 8}%`,
+                      background: index % 4 === 0 ? "rgba(56,189,248,0.38)" : index % 3 === 0 ? "rgba(168,85,247,0.34)" : "rgba(100,116,139,0.28)",
+                    }}
+                  />
+                ))}
+              </div>
+              <span className="self-center text-[var(--text-caption)] text-[var(--color-text-muted)]">+363 scene markers</span>
+            </div>
+          </Stack>
+        </section>
+      </main>
+
       <aside className="border-l border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto p-4">
           <Stack gap="4">
@@ -256,8 +376,61 @@ export function IndexingDashboard({
                 >
                   Ask agent for first cut
                 </Button>
+                <Button variant="ghost" size="sm" onClick={onReviewIndexResults}>
+                  Review index results
+                </Button>
               </Stack>
             </Card>
+
+            <Card padding="md">
+              <Stack gap="3">
+                <SectionHeader title="Smart hints" />
+                {[
+                  ["2 segments may benefit from tighter cuts", "Review now"],
+                  ["Audio levels vary across 3% of the timeline", "View in Audio"],
+                  ["Faces detected in 95% of the timeline", "Good coverage"],
+                ].map(([label, value]) => (
+                  <Inline key={label} justify="between" gap="3" align="baseline">
+                    <span className="text-[var(--text-caption)] leading-snug text-[var(--color-text-secondary)]">{label}</span>
+                    <span className="shrink-0 text-[var(--text-caption)] font-semibold text-[var(--color-brand-secondary-hover)]">{value}</span>
+                  </Inline>
+                ))}
+              </Stack>
+            </Card>
+
+            {indexerConfig ? (
+              <Card padding="md">
+                <Stack gap="3">
+                  <SectionHeader
+                    title="Indexer config"
+                    subtitle={`${indexerConfig.indexers.filter((indexer) => indexer.enabled).length} active`}
+                  />
+                  <Stack gap="1" className="max-h-[236px] overflow-y-auto pr-1">
+                    {indexerConfig.indexers.map((indexer) => (
+                      <IndexerConfigRow
+                        key={indexer.name}
+                        indexer={indexer}
+                        onToggle={onToggleIndexer}
+                      />
+                    ))}
+                  </Stack>
+                  <Stack gap="1">
+                    <ConfigPath
+                      label="Project"
+                      value={indexerConfig.projectPath}
+                      onOpen={onOpenConfigPath}
+                      onReveal={onRevealConfigPath}
+                    />
+                    <ConfigPath
+                      label="Global"
+                      value={indexerConfig.globalPath}
+                      onOpen={onOpenConfigPath}
+                      onReveal={onRevealConfigPath}
+                    />
+                  </Stack>
+                </Stack>
+              </Card>
+            ) : null}
 
             {system ? (
               <Card padding="md">
@@ -299,6 +472,138 @@ export function IndexingDashboard({
   );
 }
 
+function IndexerConfigRow({
+  indexer,
+  onToggle,
+}: {
+  indexer: IndexerConfigEntry;
+  onToggle?: (indexer: IndexerConfigEntry) => void;
+}) {
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2.5 py-2">
+      <Stack gap="1">
+        <Inline justify="between" gap="2" align="center">
+          <span className="min-w-0 truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+            {indexer.name}
+          </span>
+          <Inline gap="1" align="center" className="shrink-0">
+            {indexer.userConfigured ? (
+              <Pill status="proposed" dot={false}>override</Pill>
+            ) : null}
+            <Pill status={indexer.enabled ? "ready" : "missing"} dot={false}>
+              {indexer.enabled ? "on" : "off"}
+            </Pill>
+            {onToggle ? (
+              <button
+                type="button"
+                onClick={() => onToggle(indexer)}
+                className="h-5 rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-1.5 text-[var(--text-caption)] font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-border)] hover:text-[var(--color-text-primary)]"
+              >
+                {indexer.enabled ? "Disable" : "Enable"}
+              </button>
+            ) : null}
+          </Inline>
+        </Inline>
+        <Inline justify="between" gap="2" align="baseline">
+          <span className="min-w-0 truncate font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            {indexer.command} {indexer.args.join(" ")}
+          </span>
+          <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            {indexer.group ?? indexer.resourceClass}
+          </span>
+        </Inline>
+        {indexer.dependsOn.length > 0 ? (
+          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            Depends on {indexer.dependsOn.join(", ")}
+          </span>
+        ) : null}
+      </Stack>
+    </div>
+  );
+}
+
+function ConfigPath({
+  label,
+  value,
+  onOpen,
+  onReveal,
+}: {
+  label: string;
+  value?: string | null;
+  onOpen?: (path: string) => void;
+  onReveal?: (path: string) => void;
+}) {
+  const canAct = Boolean(value);
+  return (
+    <Inline justify="between" gap="2" align="center">
+      <span className="shrink-0 text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+        {label}
+      </span>
+      <span className="min-w-0 truncate font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+        {value ?? "not available"}
+      </span>
+      <Inline gap="1" align="center" className="shrink-0">
+        <button
+          type="button"
+          disabled={!canAct || !onOpen}
+          onClick={() => value && onOpen?.(value)}
+          className="grid h-5 w-5 place-items-center rounded-[var(--radius-xs)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--color-text-muted)]"
+          aria-label={`Open ${label.toLowerCase()} config`}
+          title={`Open ${label.toLowerCase()} config`}
+        >
+          <ExternalLink className="h-3 w-3 stroke-[1.75]" />
+        </button>
+        <button
+          type="button"
+          disabled={!canAct || !onReveal}
+          onClick={() => value && onReveal?.(value)}
+          className="grid h-5 w-5 place-items-center rounded-[var(--radius-xs)] text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--color-text-muted)]"
+          aria-label={`Reveal ${label.toLowerCase()} config`}
+          title={`Reveal ${label.toLowerCase()} config`}
+        >
+          <LocateFixed className="h-3 w-3 stroke-[1.75]" />
+        </button>
+      </Inline>
+    </Inline>
+  );
+}
+
+function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+  return (
+    <Inline justify="between" align="baseline">
+      <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+        {title}
+      </span>
+      {subtitle ? (
+        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">{subtitle}</span>
+      ) : null}
+    </Inline>
+  );
+}
+
+function ProgressStat({ label, value, progress }: { label: string; value: string; progress: number }) {
+  return (
+    <Stack gap="2">
+      <Inline justify="between" align="baseline">
+        <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">{label}</span>
+        <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">{value}</span>
+      </Inline>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+        <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+      </div>
+    </Stack>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2.5 py-2">
+      <div className="font-mono text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">{value}</div>
+      <div className="text-[var(--text-caption)] text-[var(--color-text-muted)]">{label}</div>
+    </div>
+  );
+}
+
 function statusDetail(status: MediaIndexingStatus): string {
   switch (status) {
     case "missing":
@@ -322,24 +627,24 @@ function Section({
   title,
   subtitle,
   children,
+  fill = false,
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
+  fill?: boolean;
 }) {
   return (
-    <div className="px-6 py-4 border-b border-[var(--color-border-subtle)]">
-      <Inline justify="between" align="baseline" className="mb-3">
-        <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-          {title}
-        </span>
-        {subtitle ? (
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-            {subtitle}
-          </span>
-        ) : null}
-      </Inline>
-      {children}
+    <div
+      className={cn(
+        "min-h-0 overflow-y-auto px-5 py-4 border-b border-[var(--color-border-subtle)]",
+        fill ? "h-full" : "h-full",
+      )}
+    >
+      <Stack gap="3">
+        <SectionHeader title={title} subtitle={subtitle} />
+        {children}
+      </Stack>
     </div>
   );
 }
@@ -356,7 +661,7 @@ function DropZone({ onImport }: { onImport?: () => void }) {
         Drop media here or click to import
       </span>
       <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-        mp4 / mov / mkv · audio / video
+        MP4, MOV, MXF, WAV, MP3, SRT, VTT
       </span>
     </button>
   );
