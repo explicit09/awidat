@@ -233,6 +233,14 @@ present but invalid, the failure summarizes valid and invalid region
 counts and includes sample path/reason diagnostics so model rollouts can
 distinguish missing output from contract-breaking output.
 
+`composition-mcp` sidecars include a `verification` object with
+`passed`, `checked_regions`, and `issues`. This is a lightweight sanity
+report for generated regions and does not render media. `frame-quality-mcp`
+sidecars include `thumbnail_score` per sampled frame and ranked
+`thumbnail_candidates` derived from sharpness, exposure, and contrast.
+`audio-energy-mcp` sidecars include `true_peak_dbfs` next to integrated
+LUFS for delivery loudness review.
+
 Safe smoke also preflights mounted real-corpus fixture coverage when
 `AWIDAT_REAL_MIN_ASSESSOR_PROPOSAL_FIXTURES`,
 `AWIDAT_REAL_MIN_TRANSITION_PLANNER_FIXTURES`, or

@@ -1,6 +1,6 @@
 import unittest
 
-from composition_mcp import _region_for_shot, _regions_from_sidecars
+from composition_mcp import _region_for_shot, _regions_from_sidecars, _verify_regions
 
 
 class CompositionMcpTests(unittest.TestCase):
@@ -75,6 +75,30 @@ class CompositionMcpTests(unittest.TestCase):
         self.assertEqual(regions[0]["depth_layer"], "foreground")
         self.assertEqual(regions[0]["framing"], "single_close")
         self.assertIn("heuristic_composition_source", regions[0])
+
+    def test_verify_regions_reports_invalid_ranges_and_confidence(self) -> None:
+        report = _verify_regions(
+            [
+                {
+                    "start_s": 0.0,
+                    "end_s": 2.0,
+                    "composition_confidence": 0.7,
+                    "composition_source": "heuristic:composition-v1",
+                },
+                {
+                    "start_s": 2.0,
+                    "end_s": 1.5,
+                    "composition_confidence": 1.4,
+                    "composition_source": "",
+                },
+            ]
+        )
+
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["checked_regions"], 2)
+        self.assertIn("region 1 has non-positive or non-finite range", report["issues"])
+        self.assertIn("region 1 composition_confidence is outside 0..=1", report["issues"])
+        self.assertIn("region 1 missing composition_source", report["issues"])
 
 
 if __name__ == "__main__":

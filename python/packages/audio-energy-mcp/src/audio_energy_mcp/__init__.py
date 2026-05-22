@@ -196,6 +196,15 @@ def _loudness(audio: _LoadedAudio) -> dict[str, Any]:
     return {"integrated_lufs": integrated, "short_term": short_term}
 
 
+def _true_peak_dbfs(audio: _LoadedAudio) -> float | None:
+    if len(audio.samples) == 0:
+        return None
+    peak = float(np.max(np.abs(audio.samples)))
+    if peak <= 0.0 or not math.isfinite(peak):
+        return None
+    return float(20.0 * math.log10(peak))
+
+
 def _silences(loudness: dict[str, Any]) -> list[dict[str, float]]:
     integrated = loudness.get("integrated_lufs")
     short_term = loudness.get("short_term", [])
@@ -237,6 +246,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
             "window_ms": WINDOW_MS,
             "windows": windows,
             "loudness_integrated_lufs": loudness.get("integrated_lufs"),
+            "true_peak_dbfs": _true_peak_dbfs(audio),
             "loudness_short_term": loudness.get("short_term", []),
             "silences": silences,
             "silence_relative_lu": SILENCE_RELATIVE_LU,

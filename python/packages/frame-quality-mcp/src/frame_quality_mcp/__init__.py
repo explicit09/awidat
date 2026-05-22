@@ -36,6 +36,7 @@ PROBE_W = 640
 
 # Conventional Laplacian-variance threshold for "sharp" frames.
 BLUR_SHARP_THRESHOLD = 100.0
+THUMBNAIL_CANDIDATE_LIMIT = 5
 
 _log = logging.getLogger(INDEXER_NAME)
 
@@ -133,6 +134,46 @@ def _score_frame(frame_bgr: np.ndarray) -> dict[str, float]:
     }
 
 
+def _thumbnail_score(frame: dict[str, Any]) -> float:
+    """Rank a frame for thumbnail use from existing quality metrics."""
+    blur = max(0.0, float(frame.get("blur", 0.0)))
+    brightness = max(0.0, min(255.0, float(frame.get("brightness", 0.0))))
+    contrast = max(0.0, float(frame.get("contrast", 0.0)))
+    sharpness = min(1.0, blur / (BLUR_SHARP_THRESHOLD * 2.0))
+    exposure = max(0.0, 1.0 - abs(brightness - 128.0) / 128.0)
+    contrast_score = min(1.0, contrast / 64.0)
+    return float(round(sharpness * 0.50 + exposure * 0.30 + contrast_score * 0.20, 4))
+
+
+def _thumbnail_reasons(frame: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if bool(frame.get("is_sharp")):
+        reasons.append("sharp")
+    brightness = float(frame.get("brightness", 0.0))
+    if 72.0 <= brightness <= 184.0:
+        reasons.append("balanced_exposure")
+    if float(frame.get("contrast", 0.0)) >= 40.0:
+        reasons.append("good_contrast")
+    if not reasons:
+        reasons.append("fallback_candidate")
+    return reasons
+
+
+def _thumbnail_candidates(
+    per_frame: list[dict[str, Any]], limit: int = THUMBNAIL_CANDIDATE_LIMIT
+) -> list[dict[str, Any]]:
+    candidates = [
+        {
+            "t_s": float(frame.get("t_s", 0.0)),
+            "thumbnail_score": _thumbnail_score(frame),
+            "reasons": _thumbnail_reasons(frame),
+        }
+        for frame in per_frame
+    ]
+    candidates.sort(key=lambda item: (-item["thumbnail_score"], item["t_s"]))
+    return candidates[: max(0, limit)]
+
+
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     frames, w, h = _extract_frames_bgr(req.asset_path, SAMPLE_FPS)
@@ -142,9 +183,11 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         w,
         h,
     )
-    per_frame = [
-        {"t_s": i / SAMPLE_FPS, **_score_frame(f)} for i, f in enumerate(frames)
-    ]
+    per_frame = []
+    for i, frame in enumerate(frames):
+        scored = {"t_s": i / SAMPLE_FPS, **_score_frame(frame)}
+        scored["thumbnail_score"] = _thumbnail_score(scored)
+        per_frame.append(scored)
     # Aggregate stats so the agent can read a one-line summary without
     # iterating per_frame.
     if per_frame:
@@ -168,6 +211,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         "frame_count": len(per_frame),
         "blur_sharp_threshold": BLUR_SHARP_THRESHOLD,
         "summary": summary,
+        "thumbnail_candidates": _thumbnail_candidates(per_frame),
         "per_frame": per_frame,
     }
 
