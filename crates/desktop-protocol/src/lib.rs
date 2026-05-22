@@ -1091,6 +1091,19 @@ pub enum TimelineItem {
         /// when the asset is missing, the proxy hasn't finished
         /// transcoding, or the proxies dir doesn't exist yet.
         proxy_path: Option<String>,
+        /// Absolute path the frontend should feed to `<video src>` to
+        /// play this clip *right now*, regardless of whether a proxy
+        /// exists. Falls back to the source asset when no proxy is
+        /// ready. `None` only when the asset is genuinely missing on
+        /// disk — in that case `playable_kind` is `Missing` and the
+        /// player draws an offline overlay.
+        #[ts(optional)]
+        playable_path: Option<String>,
+        /// Discriminator for what `playable_path` points at. Lets the
+        /// frontend tint the timeline ruler (proxy = green, source =
+        /// amber, missing = red) without re-deriving the kind from
+        /// the path string.
+        playable_kind: PlayableKind,
         /// Absolute path to the directory holding this asset's
         /// extracted filmstrip JPEGs (e.g.
         /// `<project>/.awidat/thumbnails/<stem>-<hash>/`). The
@@ -1816,6 +1829,8 @@ mod tests {
             asset_id: None,
             source_start_s: Some(0.0),
             proxy_path: None,
+            playable_path: None,
+            playable_kind: PlayableKind::Missing,
             thumbnail_dir: None,
             waveform_path: None,
             volume: None,
@@ -1903,5 +1918,42 @@ mod tests {
         assert_eq!(proxy, "\"proxy\"");
         assert_eq!(source, "\"source\"");
         assert_eq!(missing, "\"missing\"");
+    }
+
+    #[test]
+    fn timeline_item_clip_carries_playable_fields() {
+        let item = TimelineItem::Clip {
+            index: 0,
+            name: "x".into(),
+            clip_uuid: "u".into(),
+            track_start_s: 0.0,
+            duration_s: 1.0,
+            asset_id: Some("raw/x.mov".into()),
+            source_start_s: Some(0.0),
+            proxy_path: None,
+            playable_path: Some("/abs/raw/x.mov".into()),
+            playable_kind: PlayableKind::Source,
+            thumbnail_dir: None,
+            waveform_path: None,
+            volume: None,
+            speed: None,
+            fade_in_s: None,
+            fade_out_s: None,
+            audio_lead_s: None,
+            audio_trail_s: None,
+            split_edit_reason: None,
+            split_edit_confidence: None,
+            link_group_id: None,
+            has_video: Some(true),
+            has_audio: Some(true),
+            color_correction: None,
+            lut_path: None,
+            title: None,
+            video_overlay: None,
+            animations: vec![],
+        };
+        let json = serde_json::to_value(&item).unwrap();
+        assert_eq!(json["playable_path"], "/abs/raw/x.mov");
+        assert_eq!(json["playable_kind"], "source");
     }
 }
