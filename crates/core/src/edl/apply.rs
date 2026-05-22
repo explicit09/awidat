@@ -46,6 +46,27 @@ pub struct AppliedOp {
     pub description: String,
     /// The clip locator that resolved (when applicable).
     pub locator: Option<ClipLocator>,
+    /// Command-history-style structured metadata for audit/history surfaces.
+    pub metadata: AppliedOpMetadata,
+}
+
+/// Compact command-history metadata for one applied operation.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AppliedOpMetadata {
+    /// Stable EDL operation kind, e.g. `trim_clip`.
+    pub kind: String,
+    /// Stable clip IDs/names touched by this operation.
+    #[serde(default)]
+    pub affected_clip_ids: Vec<String>,
+    /// Stable track IDs/names touched by this operation.
+    #[serde(default)]
+    pub affected_track_ids: Vec<String>,
+    /// Source actor when known (`agent`, `user`, etc.).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
+    /// Compact structured operation parameters.
+    #[serde(default)]
+    pub parameters: BTreeMap<String, serde_json::Value>,
 }
 
 /// Outcome of applying one envelope.
@@ -113,13 +134,16 @@ pub fn apply(
 
     for (index, op) in envelope.ops.iter().enumerate() {
         let locator = resolve_locator_for_op(&working, index, op, ctx)?;
+        let mut metadata = metadata_before_apply(&working, op, locator.as_ref());
         let description = apply_one(&mut working, index, op, ctx, locator)?;
+        metadata_after_apply(&working, op, &mut metadata);
         prune_stale_cut_boundaries(&mut working);
         prune_stale_split_edits(&mut working);
         applied.push(AppliedOp {
             index,
             description,
             locator,
+            metadata,
         });
     }
 
@@ -134,6 +158,194 @@ pub fn apply(
     }
 
     Ok((working, ApplyOutcome { applied }))
+}
+
+fn metadata_before_apply(
+    timeline: &Timeline,
+    op: &EdlOp,
+    locator: Option<&ClipLocator>,
+) -> AppliedOpMetadata {
+    let mut metadata = AppliedOpMetadata {
+        kind: op_kind(op),
+        affected_clip_ids: Vec::new(),
+        affected_track_ids: Vec::new(),
+        source: Some("agent".to_string()),
+        parameters: op_parameters(op),
+    };
+
+    if let Some(locator) = locator
+        && let Some((track_name, clip_id)) = ids_at_locator(timeline, locator)
+    {
+        push_unique(&mut metadata.affected_track_ids, track_name);
+        push_unique(&mut metadata.affected_clip_ids, clip_id);
+    }
+
+    match op {
+        EdlOp::InsertClip { track, asset, .. } => {
+            push_unique(&mut metadata.affected_track_ids, track.clone());
+            metadata
+                .parameters
+                .entry("asset".to_string())
+                .or_insert_with(|| serde_json::Value::String(asset.clone()));
+        }
+        EdlOp::SetTrackAudio { track, .. } | EdlOp::SetTrackAudioFx { track, .. } => {
+            push_unique(&mut metadata.affected_track_ids, track.clone());
+        }
+        _ => {}
+    }
+
+    metadata
+}
+
+fn metadata_after_apply(timeline: &Timeline, op: &EdlOp, metadata: &mut AppliedOpMetadata) {
+    match op {
+        EdlOp::InsertClip {
+            asset, track, name, ..
+        } => {
+            if let Some(clip_id) = find_inserted_clip_id(timeline, track, asset, name.as_deref()) {
+                push_unique(&mut metadata.affected_clip_ids, clip_id);
+            }
+        }
+        EdlOp::SplitClip { .. } => {
+            if let Some(left_id) = metadata.affected_clip_ids.first().cloned()
+                && let Some(right_id) = find_split_right_clip_id(timeline, &left_id)
+            {
+                push_unique(&mut metadata.affected_clip_ids, right_id);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn op_kind(op: &EdlOp) -> String {
+    serde_json::to_value(op)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("op")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn op_parameters(op: &EdlOp) -> BTreeMap<String, serde_json::Value> {
+    let mut out = BTreeMap::new();
+    let Ok(serde_json::Value::Object(mut object)) = serde_json::to_value(op) else {
+        return out;
+    };
+    for skipped in [
+        "op",
+        "anchor",
+        "between",
+        "plan",
+        "edit",
+        "spec",
+        "split_edit",
+    ] {
+        object.remove(skipped);
+    }
+    for (key, value) in object {
+        if is_compact_parameter_value(&value) {
+            out.insert(key, value);
+        }
+    }
+    out
+}
+
+fn is_compact_parameter_value(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => true,
+        serde_json::Value::Array(values) => values.len() <= 8 && values.iter().all(is_scalar_json),
+        serde_json::Value::Object(values) => {
+            values.len() <= 8 && values.values().all(is_scalar_json)
+        }
+    }
+}
+
+fn is_scalar_json(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) | serde_json::Value::String(_)
+    )
+}
+
+fn ids_at_locator(timeline: &Timeline, locator: &ClipLocator) -> Option<(String, String)> {
+    let StackChild::Track(track) = timeline.tracks.children.get(locator.track_index)? else {
+        return None;
+    };
+    let track_id = track.name.clone();
+    let TrackChild::Clip(clip) = track.children.get(locator.child_index)? else {
+        return None;
+    };
+    Some((track_id, clip_id(clip)))
+}
+
+fn find_inserted_clip_id(
+    timeline: &Timeline,
+    track_name: &str,
+    asset: &str,
+    name: Option<&str>,
+) -> Option<String> {
+    let track = timeline
+        .tracks
+        .children
+        .iter()
+        .find_map(|child| match child {
+            StackChild::Track(track) if track.name == track_name => Some(track),
+            _ => None,
+        })?;
+    track.children.iter().rev().find_map(|child| match child {
+        TrackChild::Clip(clip)
+            if name.is_none_or(|name| clip.name == name)
+                && clip_media_target(clip).as_deref() == Some(asset) =>
+        {
+            Some(clip_id(clip))
+        }
+        _ => None,
+    })
+}
+
+fn find_split_right_clip_id(timeline: &Timeline, left_id: &str) -> Option<String> {
+    for child in &timeline.tracks.children {
+        let StackChild::Track(track) = child else {
+            continue;
+        };
+        for pair in track.children.windows(2) {
+            let TrackChild::Clip(left) = &pair[0] else {
+                continue;
+            };
+            let TrackChild::Clip(right) = &pair[1] else {
+                continue;
+            };
+            if clip_id(left) == left_id {
+                return Some(clip_id(right));
+            }
+        }
+    }
+    None
+}
+
+fn clip_id(clip: &Clip) -> String {
+    clip_uuid(clip).unwrap_or(clip.name.as_str()).to_string()
+}
+
+fn clip_media_target(clip: &Clip) -> Option<String> {
+    match &clip.media_reference {
+        awidat_proto::otio::MediaReference::External(reference) => {
+            Some(reference.target_url.clone())
+        }
+        awidat_proto::otio::MediaReference::Missing(_) => None,
+    }
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !value.is_empty() && !values.contains(&value) {
+        values.push(value);
+    }
 }
 
 /// Apply one op in place. Returns a one-line description of what landed.

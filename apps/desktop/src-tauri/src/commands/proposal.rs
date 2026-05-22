@@ -196,6 +196,14 @@ pub async fn accept_proposal(
             .iter()
             .map(|a| a.description.clone())
             .collect();
+        let action_metadata = awidat_core::vc::ActionMetadata {
+            source: Some("agent".into()),
+            operations: proposal
+                .applied
+                .iter()
+                .map(|a| a.metadata.clone())
+                .collect(),
+        };
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let mut project =
                 Project::read(&project_root).map_err(|e| format!("project read: {e}"))?;
@@ -209,9 +217,12 @@ pub async fn accept_proposal(
             // are logged but never unwind the disk write.
             match awidat_core::vc::open_or_init(&project_root) {
                 Ok(repo) => {
-                    if let Err(e) =
-                        awidat_core::vc::auto_commit_apply(&repo, &applied_descriptions, None)
-                    {
+                    if let Err(e) = awidat_core::vc::auto_commit_apply_with_metadata(
+                        &repo,
+                        &applied_descriptions,
+                        None,
+                        Some(&action_metadata),
+                    ) {
                         tracing::warn!(
                             error = %e,
                             "vedit auto-commit failed (desktop-writes path)"

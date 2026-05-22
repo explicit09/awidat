@@ -230,6 +230,17 @@ pub struct CommitOutcome {
     pub message: String,
 }
 
+/// Command-history-style metadata embedded in Awidat-authored vedit commit messages.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ActionMetadata {
+    /// Source actor for the envelope when known.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source: Option<String>,
+    /// Operations landed by the envelope, in source order.
+    #[serde(default)]
+    pub operations: Vec<crate::edl::AppliedOpMetadata>,
+}
+
 /// Compose a commit message in the format the apply pipeline will
 /// auto-generate in Phase B. Header line first, blank line, then
 /// agent reasoning (if provided) prefixed by `Agent reasoning:`.
@@ -258,6 +269,29 @@ pub fn format_commit_message(header: &str, agent_reasoning: Option<&str>) -> Str
     }
 }
 
+fn format_commit_message_with_action_metadata(
+    header: &str,
+    agent_reasoning: Option<&str>,
+    action_metadata: Option<&ActionMetadata>,
+) -> String {
+    let mut message = format_commit_message(header, agent_reasoning);
+    let Some(action_metadata) = action_metadata else {
+        return message;
+    };
+    if action_metadata.operations.is_empty() {
+        return message;
+    }
+    if !message.contains("\n\n") {
+        message.push_str("\n\n");
+    } else {
+        message.push('\n');
+    }
+    let metadata_json = serde_json::to_string(action_metadata).unwrap_or_else(|_| "{}".to_string());
+    message.push_str("Action metadata: ");
+    message.push_str(&metadata_json);
+    message
+}
+
 /// Phase B auto-commit: snapshot the project after a successful
 /// apply_edl envelope, generating an awidat-shaped commit message
 /// from the structured op descriptions + the agent's reasoning text.
@@ -277,8 +311,35 @@ pub fn auto_commit_apply(
     op_descriptions: &[String],
     agent_reasoning: Option<&str>,
 ) -> Result<CommitOutcome, VcError> {
+    auto_commit_apply_with_metadata(repo, op_descriptions, agent_reasoning, None)
+}
+
+/// Auto-commit an apply_edl envelope with optional structured action metadata.
+pub fn auto_commit_apply_with_metadata(
+    repo: &Repo,
+    op_descriptions: &[String],
+    agent_reasoning: Option<&str>,
+    action_metadata: Option<&ActionMetadata>,
+) -> Result<CommitOutcome, VcError> {
     let header = compose_auto_header(op_descriptions);
-    commit_current_timeline(repo, &header, agent_reasoning)
+    let bytes = std::fs::read(&repo.project_otio)
+        .map_err(|e| VcError::Project(format!("reading {}: {e}", repo.project_otio.display())))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| VcError::Project(format!("parsing {}: {e}", repo.project_otio.display())))?;
+
+    let timeline_hash = repo.inner.write_timeline(&value).map_err(vedit_err)?;
+    let message =
+        format_commit_message_with_action_metadata(&header, agent_reasoning, action_metadata);
+    let author = awidat_author();
+    let commit_hash = repo
+        .inner
+        .commit(&timeline_hash, author, &message)
+        .map_err(vedit_err)?;
+    Ok(CommitOutcome {
+        commit_hash,
+        timeline_hash,
+        message,
+    })
 }
 
 /// Build a one-line header from a list of op descriptions.
@@ -652,6 +713,7 @@ pub fn show_commit(repo: &Repo, refstr: &str) -> Result<CommitDetails, VcError> 
         commit_hash,
         timestamp: commit.timestamp,
         header: header_line(&commit.message),
+        action_metadata: parse_action_metadata(&commit.message),
         full_message: commit.message,
         timeline_hash: commit.timeline,
         parents: commit.parents,
@@ -697,6 +759,8 @@ pub struct CommitDetails {
     pub timestamp: String,
     /// First line of the message.
     pub header: String,
+    /// Optional structured action metadata embedded by Awidat auto-commit.
+    pub action_metadata: Option<ActionMetadata>,
     /// Complete commit message.
     pub full_message: String,
     /// Timeline object hash.
@@ -743,6 +807,7 @@ pub fn blame_clip(
             commit_hash,
             timestamp: commit.timestamp,
             header: header_line(&commit.message),
+            action_metadata: parse_action_metadata(&commit.message),
             full_message: commit.message,
             timeline_hash: commit.timeline,
             parents: commit.parents,
@@ -1260,6 +1325,8 @@ pub struct BlameEntry {
     pub timestamp: String,
     /// First line of the commit message.
     pub header: String,
+    /// Optional structured action metadata embedded by Awidat auto-commit.
+    pub action_metadata: Option<ActionMetadata>,
     /// Complete commit message.
     pub full_message: String,
     /// Timeline hash for this commit.
@@ -1318,6 +1385,7 @@ pub fn log(repo: &Repo, limit: usize) -> Result<Vec<LogEntry>, VcError> {
             commit_hash: hash,
             timestamp: commit.timestamp,
             header: header_line(&commit.message),
+            action_metadata: parse_action_metadata(&commit.message),
             full_message: commit.message,
             timeline_hash: commit.timeline,
             parents: commit.parents,
@@ -1335,6 +1403,8 @@ pub struct LogEntry {
     pub timestamp: String,
     /// First line of the message — what the UI renders by default.
     pub header: String,
+    /// Optional structured action metadata embedded by Awidat auto-commit.
+    pub action_metadata: Option<ActionMetadata>,
     /// Full message body for "show this commit" deep dives.
     pub full_message: String,
     /// `sha256:...` of the timeline this commit points at.
@@ -1345,6 +1415,13 @@ pub struct LogEntry {
 
 fn header_line(message: &str) -> String {
     message.lines().next().unwrap_or("").trim().to_string()
+}
+
+fn parse_action_metadata(message: &str) -> Option<ActionMetadata> {
+    message.lines().find_map(|line| {
+        let json = line.trim().strip_prefix("Action metadata: ")?;
+        serde_json::from_str(json).ok()
+    })
 }
 
 /// Pending diff — what's NOT yet committed. Distinct concept from
@@ -2108,6 +2185,10 @@ mod tests {
         assert_eq!(entries[0].header, "Third");
         assert_eq!(entries[1].header, "Second");
         assert!(entries[1].full_message.contains("body 2"));
+        assert!(
+            entries[1].action_metadata.is_none(),
+            "legacy vedit messages should remain readable without action metadata"
+        );
         assert_eq!(entries[2].header, "First");
         assert!(entries[2].parents.is_empty(), "first commit has no parent");
         assert_eq!(entries[1].parents.len(), 1);

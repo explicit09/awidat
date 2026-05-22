@@ -168,6 +168,10 @@ async fn insert_asset(
             .iter()
             .map(|a| a.description.clone())
             .collect();
+        let action_metadata = awidat_core::vc::ActionMetadata {
+            source: Some("agent".into()),
+            operations: outcome.applied.iter().map(|a| a.metadata.clone()).collect(),
+        };
 
         // Persist. Project::write writes the OTIO + edit-plan +
         // manifest atomically; we only mutated the timeline.
@@ -181,10 +185,11 @@ async fn insert_asset(
         // same audit trail as explicit apply_edl/proposal writes.
         match awidat_core::vc::open_or_init(&project_root) {
             Ok(repo) => {
-                if let Err(e) = awidat_core::vc::auto_commit_apply(
+                if let Err(e) = awidat_core::vc::auto_commit_apply_with_metadata(
                     &repo,
                     &applied_descriptions,
                     Some("Auto-inserted the first imported asset onto the empty timeline."),
+                    Some(&action_metadata),
                 ) {
                     tracing::warn!(
                         error = %e,
@@ -294,6 +299,10 @@ async fn insert_media(
             .iter()
             .map(|a| a.description.clone())
             .collect();
+        let action_metadata = awidat_core::vc::ActionMetadata {
+            source: Some("agent".into()),
+            operations: outcome.applied.iter().map(|a| a.metadata.clone()).collect(),
+        };
 
         let mut updated = project;
         updated.timeline = new_timeline;
@@ -302,10 +311,11 @@ async fn insert_media(
             .map_err(|e| format!("auto-insert: write project: {e}"))?;
 
         if let Ok(repo) = awidat_core::vc::open_or_init(&project_root)
-            && let Err(e) = awidat_core::vc::auto_commit_apply(
+            && let Err(e) = awidat_core::vc::auto_commit_apply_with_metadata(
                 &repo,
                 &applied_descriptions,
                 Some("Auto-inserted imported media onto the timeline."),
+                Some(&action_metadata),
             )
         {
             tracing::warn!(error = %e, "vedit auto-commit failed (auto-insert media path)");

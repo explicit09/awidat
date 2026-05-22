@@ -90,6 +90,7 @@ impl ToolHandler for VeditLogTool {
                     "timeline_hash": e.timeline_hash,
                     "timestamp": e.timestamp,
                     "header": e.header,
+                    "action_metadata": e.action_metadata,
                     "full_message": e.full_message,
                     "parents": e.parents,
                 })
@@ -126,6 +127,7 @@ limits keep context focused.\
 mod tests {
     use super::*;
     use crate::tool::ToolContext;
+    use std::collections::BTreeMap;
 
     fn ctx_for(project_root: std::path::PathBuf) -> ToolContext {
         use std::sync::Arc;
@@ -217,6 +219,55 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("body 1")
+        );
+    }
+
+    #[tokio::test]
+    async fn returns_action_metadata_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        write_minimal_otio(dir.path());
+        let repo = vc::open_or_init(dir.path()).unwrap();
+        let metadata = vc::ActionMetadata {
+            source: Some("agent".into()),
+            operations: vec![crate::edl::AppliedOpMetadata {
+                kind: "trim_clip".into(),
+                affected_clip_ids: vec!["clip-1".into()],
+                affected_track_ids: vec!["V1".into()],
+                source: Some("agent".into()),
+                parameters: BTreeMap::from([("end".into(), serde_json::json!(3.0))]),
+            }],
+        };
+        vc::auto_commit_apply_with_metadata(
+            &repo,
+            &["trimmed clip \"clip-1\"".to_string()],
+            Some("User asked for a shorter beat."),
+            Some(&metadata),
+        )
+        .unwrap();
+
+        let ctx = ctx_for(dir.path().to_path_buf());
+        let out = VeditLogTool
+            .handle(
+                ToolInvocation {
+                    call_id: "c1".into(),
+                    name: "vedit_log".into(),
+                    args: serde_json::json!({}),
+                },
+                ctx,
+            )
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        let entry = &parsed["entries"][0];
+        assert_eq!(entry["header"].as_str(), Some("trimmed clip \"clip-1\""));
+        assert_eq!(entry["action_metadata"]["source"].as_str(), Some("agent"));
+        assert_eq!(
+            entry["action_metadata"]["operations"][0]["kind"].as_str(),
+            Some("trim_clip")
+        );
+        assert_eq!(
+            entry["action_metadata"]["operations"][0]["affected_clip_ids"][0].as_str(),
+            Some("clip-1")
         );
     }
 
