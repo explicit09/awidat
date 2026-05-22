@@ -2,8 +2,12 @@ import {
   ChevronDown,
   ChevronRight,
   CircleStop,
+  History,
   ListChecks,
+  Maximize2,
+  Minimize2,
   Paperclip,
+  Plus,
   SendHorizontal,
   Sparkles,
   Terminal,
@@ -51,6 +55,15 @@ export type SuggestedAction = {
   prompt: string;
 };
 
+export type ChatSessionSummary = {
+  id: string;
+  title: string;
+  projectRoot: string;
+  logPath: string;
+  startedAt: string;
+  messageCount: number;
+};
+
 export type CommandRailProps = {
   /** Used to disable Send when no project is open. */
   hasProject?: boolean;
@@ -68,6 +81,14 @@ export type CommandRailProps = {
   suggestions?: SuggestedAction[];
   /** Optional prefilled command for static/demo review surfaces. */
   initialDraft?: string;
+  /** Saved chats for the active project. */
+  chatSessions?: ChatSessionSummary[];
+  /** Currently loaded chat, or null for a fresh chat. */
+  activeChatSession?: ChatSessionSummary | null;
+  /** True while chat history is loading. */
+  chatLoading?: boolean;
+  /** True when the command rail is promoted to the main workspace. */
+  focused?: boolean;
   /** True while a turn is running — toggles Send → Stop. */
   running?: boolean;
   /** Called when the user submits the command field. */
@@ -78,6 +99,12 @@ export type CommandRailProps = {
   onSuggestion?: (action: SuggestedAction) => void;
   /** Called when a context chip is removed. */
   onRemoveChip?: (chip: ContextChip, index: number) => void;
+  /** Called when the user loads a saved chat. */
+  onSelectChatSession?: (session: ChatSessionSummary) => void;
+  /** Called when the user starts a fresh chat. */
+  onNewChat?: () => void;
+  /** Called when the user enters/leaves focus mode. */
+  onToggleFocus?: () => void;
 };
 
 export function CommandRail({
@@ -89,14 +116,22 @@ export function CommandRail({
   conversation = [],
   suggestions = [],
   initialDraft = "",
+  chatSessions = [],
+  activeChatSession = null,
+  chatLoading = false,
+  focused = false,
   running = false,
   onSubmit,
   onCancel,
   onSuggestion,
   onRemoveChip,
+  onSelectChatSession,
+  onNewChat,
+  onToggleFocus,
 }: CommandRailProps) {
   const [draft, setDraft] = useState(initialDraft);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const trimmedDraft = draft.trim();
   const sendDisabledReason = !hasProject
     ? "Open a project before sending commands."
@@ -112,6 +147,119 @@ export function CommandRail({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b border-[var(--color-border-subtle)] p-2">
+        <Inline justify="between" align="center" gap="2">
+          <button
+            type="button"
+            className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+            onClick={() => setHistoryOpen((open) => !open)}
+            disabled={chatLoading}
+            aria-expanded={historyOpen}
+            title="Chat history"
+          >
+            <span className="block truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
+              {chatLoading ? "Loading chats..." : activeChatSession?.title ?? "New chat"}
+            </span>
+            <span className="block truncate font-mono text-[10px] text-[var(--color-text-muted)]">
+              {activeChatSession
+                ? `${activeChatSession.messageCount} messages`
+                : "Fresh context"}
+            </span>
+          </button>
+          <Inline gap="1" align="center" className="shrink-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={chatLoading}
+              onClick={() => setHistoryOpen((open) => !open)}
+              leadingIcon={<History className="h-3.5 w-3.5 stroke-[1.75]" />}
+              title="Past chats"
+            >
+              History
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={running || chatLoading}
+              onClick={onNewChat}
+              leadingIcon={<Plus className="h-3.5 w-3.5 stroke-[1.75]" />}
+              title="New chat"
+            >
+              New
+            </Button>
+            {onToggleFocus ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onToggleFocus}
+                leadingIcon={
+                  focused ? (
+                    <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+                  ) : (
+                    <Maximize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+                  )
+                }
+                title={focused ? "Restore workspace" : "Focus mode"}
+              >
+                {focused ? "Restore" : "Focus"}
+              </Button>
+            ) : null}
+          </Inline>
+        </Inline>
+        {historyOpen ? (
+          <div className="mt-2 max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-md)]">
+            <button
+              type="button"
+              className={cn(
+                "flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
+                activeChatSession === null ? "bg-[var(--color-surface-selected)]" : "",
+              )}
+              disabled={running || chatLoading}
+              onClick={() => {
+                onNewChat?.();
+                setHistoryOpen(false);
+              }}
+            >
+              <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
+                New chat
+              </span>
+              <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
+                ready
+              </span>
+            </button>
+            {chatSessions.map((session) => (
+              <button
+                key={session.logPath}
+                type="button"
+                className={cn(
+                  "mt-1 flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
+                  activeChatSession?.logPath === session.logPath
+                    ? "bg-[var(--color-surface-selected)]"
+                    : "",
+                )}
+                disabled={running || chatLoading}
+                onClick={() => {
+                  onSelectChatSession?.(session);
+                  setHistoryOpen(false);
+                }}
+              >
+                <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
+                  {session.title}
+                </span>
+                <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
+                  {formatChatDate(session.startedAt)}
+                </span>
+              </button>
+            ))}
+            {!chatLoading && chatSessions.length === 0 ? (
+              <p className="px-2 py-2 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                No saved chats for this project yet.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
       {/* Composer */}
       <div className="shrink-0 p-3 border-b border-[var(--color-border-subtle)]">
         <Stack gap="3">
@@ -453,6 +601,12 @@ function contextChipClass(kind: ContextChip["kind"]) {
     default:
       return "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-secondary)]";
   }
+}
+
+function formatChatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 // Re-export for any consumers that want to assemble a row manually.

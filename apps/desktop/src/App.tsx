@@ -35,6 +35,7 @@ import {
   type ActivityEntry,
   type AgentCommand,
   type BatchProposal,
+  type ChatSessionSummary,
   type ContextChip,
   type DeliveryRenderSummary,
   type DeliveryTarget,
@@ -58,7 +59,7 @@ import { useTimelineStore } from "./timeline/store";
 import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
-import type { JobKind, TimelineSnapshot } from "./protocol";
+import type { Item, JobKind, TimelineSnapshot } from "./protocol";
 import {
   screen2Activity,
   SCREEN2_CURRENT_TIME_S,
@@ -82,6 +83,7 @@ function App() {
   const refreshProject = useProjectStore((s) => s.refresh);
   const items = useAgentStore((s) => s.items);
   const running = useAgentStore((s) => s.running);
+  const replaceAgentItems = useAgentStore((s) => s.replace);
   const setRunning = useAgentStore((s) => s.setRunning);
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
@@ -133,6 +135,10 @@ function App() {
   const [deliveryTargetOverrides, setDeliveryTargetOverrides] = useState<Record<string, boolean>>({});
   const [indexerConfig, setIndexerConfig] = useState<IndexerConfigSnapshot | undefined>(undefined);
   const [indexReadiness, setIndexReadiness] = useState<IndexReadinessSnapshot | undefined>(undefined);
+  const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
+  const [activeChatSession, setActiveChatSession] = useState<ChatSessionSummary | null>(null);
+  const [chatLoading, setChatLoading] = useState(false);
+  const [agentFocusMode, setAgentFocusMode] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [leftPanel, setLeftPanel] = useState<"agent" | "media">("agent");
   const [rightPanel, setRightPanel] = useState<"inspector" | "index">("inspector");
@@ -449,6 +455,74 @@ function App() {
     }
   }
 
+  async function loadInitialChatHistory() {
+    if (demoMode || !isTauri() || !current) {
+      setChatSessions([]);
+      setActiveChatSession(null);
+      return;
+    }
+    setChatLoading(true);
+    try {
+      const [sessions, history] = await Promise.all([
+        invoke<ChatSessionSummary[]>("list_chat_sessions"),
+        invoke<ChatHistory>("load_chat_history"),
+      ]);
+      setChatSessions(sessions);
+      setActiveChatSession(history.session);
+      replaceAgentItems(history.items);
+    } catch (e) {
+      console.warn("chat history load failed", e);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function refreshChatSessions() {
+    if (demoMode || !isTauri() || !current) return;
+    try {
+      const sessions = await invoke<ChatSessionSummary[]>("list_chat_sessions");
+      setChatSessions(sessions);
+      setActiveChatSession((active) => {
+        if (active) {
+          return sessions.find((session) => session.logPath === active.logPath) ?? active;
+        }
+        return sessions[0] ?? null;
+      });
+    } catch (e) {
+      console.warn("list_chat_sessions failed", e);
+    }
+  }
+
+  async function selectChatSession(session: ChatSessionSummary) {
+    if (!isTauri()) return;
+    setChatLoading(true);
+    try {
+      const history = await invoke<ChatHistory>("load_chat_session", {
+        logPath: session.logPath,
+      });
+      setActiveChatSession(history.session);
+      replaceAgentItems(history.items);
+    } catch (e) {
+      setCommandError(String(e));
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function startNewChat() {
+    if (!isTauri()) return;
+    setChatLoading(true);
+    try {
+      const history = await invoke<ChatHistory>("start_new_chat_session");
+      setActiveChatSession(history.session);
+      replaceAgentItems(history.items);
+    } catch (e) {
+      setCommandError(String(e));
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
   async function toggleProjectIndexer(indexer: IndexerConfigEntry) {
     if (!isTauri()) return;
     setCommandError(null);
@@ -593,6 +667,18 @@ function App() {
       void refreshMedia();
     }
   }, [current, demoMode, refreshMedia]);
+
+  useEffect(() => {
+    void loadInitialChatHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, demoMode]);
+
+  useEffect(() => {
+    if (!running) {
+      void refreshChatSessions();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
 
   useEffect(() => {
     resetSurfaceControls();
@@ -1157,6 +1243,38 @@ function App() {
           ? "Cut this into a tight 8-minute podcast episode.\nRemove dead air but preserve natural pacing."
           : undefined,
       };
+  const agentRail = (
+    <CommandRail
+      hasProject={hasProject || demoMode}
+      running={demoMode ? true : running}
+      {...railProps}
+      chatSessions={demoMode ? [] : chatSessions}
+      activeChatSession={demoMode ? null : activeChatSession}
+      chatLoading={chatLoading}
+      focused={agentFocusMode}
+      onToggleFocus={() => setAgentFocusMode((focused) => !focused)}
+      onSelectChatSession={(session) => void selectChatSession(session)}
+      onNewChat={() => void startNewChat()}
+      onSubmit={(command) => void runEngineCommand(command)}
+      onCancel={() => {
+        if (!isTauri()) return;
+        invoke("cancel_turn").catch((e) =>
+          console.warn("cancel_turn failed", e),
+        );
+      }}
+      onSuggestion={(action) => void runEngineCommand(action.prompt)}
+      onRemoveChip={(chip) => dismissContextChip(chip)}
+    />
+  );
+  const workspaceOverride = agentFocusMode ? (
+    <div className="mx-auto h-full min-h-0 w-full max-w-[780px] overflow-hidden">
+      {agentRail}
+    </div>
+  ) : demoMode && demoScreen.workspace ? (
+    demoScreen.workspace
+  ) : (
+    realWorkspace
+  );
 
   return (
     <>
@@ -1221,27 +1339,12 @@ function App() {
           <IconButton icon={<SettingsIcon />} label="Settings" size="md" onClick={openSettingsFromChrome} />
         </Inline>
       }
-      workspace={demoMode && demoScreen.workspace ? demoScreen.workspace : realWorkspace}
+      workspace={workspaceOverride}
       commandRail={
         <LeftWorkspaceRail
           active={leftPanel}
           onChange={setLeftPanel}
-          agent={
-            <CommandRail
-              hasProject={hasProject || demoMode}
-              running={demoMode ? true : running}
-              {...railProps}
-              onSubmit={(command) => void runEngineCommand(command)}
-              onCancel={() => {
-                if (!isTauri()) return;
-                invoke("cancel_turn").catch((e) =>
-                  console.warn("cancel_turn failed", e),
-                );
-              }}
-              onSuggestion={(action) => void runEngineCommand(action.prompt)}
-              onRemoveChip={(chip) => dismissContextChip(chip)}
-            />
-          }
+          agent={agentRail}
           media={
             <ProjectMediaPanel
               projectName={current ? projectName(current) : undefined}
@@ -2517,6 +2620,11 @@ type UserInputItem = Extract<AnyAgentItem, { kind: "user_input" }>;
 type JobItem = Extract<AnyAgentItem, { kind: "job" }>;
 type ActivitySourceItem = ToolCallItem | JobItem;
 type ConversationSourceItem = UserInputItem | TextItem;
+
+type ChatHistory = {
+  session: ChatSessionSummary | null;
+  items: Item[];
+};
 
 function activityFor(item: ActivitySourceItem): ActivityEntry {
   const id = item.id.toString();

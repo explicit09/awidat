@@ -6,6 +6,7 @@ export {
   type ContextChip,
   type PlanItem,
   type ActivityEntry,
+  type ChatSessionSummary,
   type SuggestedAction,
 } from "./CommandRail";
 export {
