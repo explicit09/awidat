@@ -61,6 +61,7 @@ pub mod review;
 pub mod rollout;
 pub mod session;
 pub mod skills;
+pub mod structured_plan;
 pub mod subagent;
 pub mod system_prompt;
 pub mod tool;
