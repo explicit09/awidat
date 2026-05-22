@@ -152,6 +152,12 @@ export function CommandRail({
     suggestions.length > 0 ||
     taskProgress !== undefined;
 
+  // True when the rail has literally nothing to show beyond the hint
+  // card. We center the hint vertically in that case instead of
+  // pinning it to the top — an empty rail with a top-aligned card
+  // reads as "half-loaded UI" instead of "ready, waiting for input."
+  const isOnlyEmptyState = !hasWork && !focused;
+
   const sessionChrome = (
     <div className={cn("shrink-0 p-2", focused ? "" : "border-b border-[var(--color-border-subtle)]")}>
       <Inline justify="between" align="center" gap="2">
@@ -390,11 +396,20 @@ export function CommandRail({
       <div
         className={cn(
           "min-h-0 flex-1 overflow-y-auto p-3",
-          focused && !hasWork ? "flex items-center justify-center" : "",
+          (focused && !hasWork) || isOnlyEmptyState
+            ? "flex items-center justify-center"
+            : "",
         )}
       >
         {focused && !hasWork ? (
           <div className="w-full max-w-[720px]">{composer}</div>
+        ) : isOnlyEmptyState ? (
+          // Nothing to do yet — vertically + horizontally centered hint
+          // card so the empty rail doesn't read as a pinned-to-top
+          // half-rendered panel.
+          <div className="w-full max-w-[320px]">
+            <EmptyState />
+          </div>
         ) : (
         <Stack gap="3">
           {/* Task progress */}
@@ -554,9 +569,9 @@ export function CommandRail({
             </Section>
           ) : null}
 
-          {plan.length === 0 && !taskProgress && suggestions.length === 0 && conversation.length === 0 && activity.length === 0 ? (
-            <EmptyState />
-          ) : null}
+          {/* The empty-state hint is rendered above the Stack (centered)
+              when nothing else is present — no fallback render needed
+              inside the Stack itself. */}
         </Stack>
         )}
       </div>
@@ -616,7 +631,7 @@ function PlanRow({ step }: { step: PlanItem }) {
 
 function EmptyState() {
   return (
-    <Stack gap="2" className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2.5 text-[var(--color-text-muted)]">
+    <Stack gap="2" className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-3 text-[var(--color-text-muted)]">
       <span className="text-[var(--text-caption)] leading-relaxed">
         Type an editing goal and Awidat will use the attached project, clip, and timeline context.
       </span>
