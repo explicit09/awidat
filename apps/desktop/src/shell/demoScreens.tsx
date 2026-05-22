@@ -520,7 +520,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen1",
     specLabel: "Screen 1",
     title: "Product Concept & Information Architecture",
-    stage: "indexing",
+    stage: "edit",
     statusLabel: "Concept board",
     pendingLabel: "Concept",
     workspace: <ProductConceptBoard />,
@@ -528,7 +528,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     smokeText: [
       "Product Concept & Information Architecture",
       "AI-assisted podcast editing",
-      "Indexing",
       "Edit",
       "Evidence & Feedback Loop",
       "Information architecture",
@@ -620,7 +619,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen6",
     specLabel: "Screen 6",
     title: "Import / Indexing State",
-    stage: "indexing",
+    stage: "edit",
     statusLabel: "Indexing locally",
     pendingLabel: "9 signals",
     workspace: (
@@ -681,7 +680,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen8",
     specLabel: "Screen 8",
     title: "Empty / Loading / Error States",
-    stage: "indexing",
+    stage: "edit",
     statusLabel: "System states",
     workspace: <SystemStateBoard />,
     smokeText: [
@@ -721,8 +720,7 @@ const conceptStages: Array<{
   color: string;
   icon: LucideIcon;
 }> = [
-  { label: "Indexing", description: "Import media and generate transcript, scene, audio, and visual signals.", color: "var(--color-info)", icon: Database },
-  { label: "Edit", description: "One review loop for proposals, transcript, evidence, notes, and revisions.", color: "var(--color-brand-secondary)", icon: SlidersHorizontal },
+  { label: "Edit", description: "One workspace for media, index readiness, proposals, transcript, evidence, notes, and revisions.", color: "var(--color-brand-secondary)", icon: SlidersHorizontal },
   { label: "Deliver", description: "Export with confidence, captions, and assets.", color: "var(--color-success)", icon: PackageCheck },
 ];
 
@@ -776,7 +774,7 @@ function ProductConceptBoard() {
               <span className="text-[var(--text-label)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-secondary)]">
                 Human-in-the-loop editing
               </span>
-              <span className="font-mono text-[9px] text-[var(--color-text-muted)]">Intent → Indexing → Proposal → Review → Revise → Deliver</span>
+              <span className="font-mono text-[9px] text-[var(--color-text-muted)]">Edit → Deliver</span>
             </div>
             <div className="grid grid-cols-6 gap-1.5 pb-5">
               {conceptStages.map((stage) => {
@@ -976,8 +974,8 @@ function ProductConceptBoard() {
             <span className="text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">Stage-driven workflow</span>
             <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">Edit active</span>
           </Inline>
-          <div className="grid grid-cols-3 gap-1.5">
-            {["Index", "Edit", "Deliver"].map((lens) => (
+          <div className="grid grid-cols-2 gap-1.5">
+            {["Edit", "Deliver"].map((lens) => (
               <div
                 key={lens}
                 className="rounded-[var(--radius-sm)] border px-2 py-1 text-center text-[10px] font-semibold"

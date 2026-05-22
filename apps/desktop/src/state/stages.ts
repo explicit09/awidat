@@ -1,17 +1,17 @@
 /**
- * Stages — the three human-facing workflow destinations:
- *   Indexing → Edit → Deliver.
+ * Stages — the two human-facing workflow destinations:
+ *   Edit → Deliver.
  *
- * Intent is handled by the command rail, and proposal/review/revise are one edit loop.
+ * Intent is handled by the command rail. Indexing, proposal, review, and revise
+ * are panels inside the Edit workspace instead of standalone destinations.
  */
 
 import { create } from "zustand";
 
-export const STAGES = ["indexing", "edit", "deliver"] as const;
+export const STAGES = ["edit", "deliver"] as const;
 export type Stage = (typeof STAGES)[number];
 
 export const STAGE_LABEL: Record<Stage, string> = {
-  indexing: "Index",
   edit: "Edit",
   deliver: "Deliver",
 };
@@ -30,14 +30,14 @@ export type StageStore = {
 };
 
 export const useStageStore = create<StageStore>((set) => ({
-  current: "indexing",
-  visited: new Set<Stage>(["indexing"]),
+  current: "edit",
+  visited: new Set<Stage>(["edit"]),
   set: (stage) =>
     set((s) => ({
       current: stage,
       visited: new Set([...s.visited, stage]),
     })),
-  reset: () => set({ current: "indexing", visited: new Set<Stage>(["indexing"]) }),
+  reset: () => set({ current: "edit", visited: new Set<Stage>(["edit"]) }),
 }));
 
 /**

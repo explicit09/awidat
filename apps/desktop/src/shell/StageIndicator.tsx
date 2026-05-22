@@ -1,5 +1,4 @@
 import {
-  Database,
   SlidersHorizontal,
   Upload,
   type LucideIcon,
@@ -19,7 +18,6 @@ import { cn } from "../ui";
  * stage in tiny chrome. Color comes from the active/complete state, not the icon.
  */
 const STAGE_ICON: Record<Stage, LucideIcon> = {
-  indexing: Database,
   edit: SlidersHorizontal,
   deliver: Upload,
 };

@@ -12,7 +12,7 @@ import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, Redo2, Settings as SettingsIcon, Share2, Undo2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import wordmark from "./brand/awidat-wordmark.svg";
 import { useAgentStore } from "./agent/store";
 import { useProjectStore } from "./app/state";
@@ -25,7 +25,6 @@ import {
   BatchReviewSurface,
   CommandRail,
   DeliverySurface,
-  IndexingDashboard,
   PreviewSurface,
   ProposalInspector,
   StageIndicator,
@@ -128,6 +127,8 @@ function App() {
   const [deliveryTargetOverrides, setDeliveryTargetOverrides] = useState<Record<string, boolean>>({});
   const [indexerConfig, setIndexerConfig] = useState<IndexerConfigSnapshot | undefined>(undefined);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [leftPanel, setLeftPanel] = useState<"agent" | "media">("agent");
+  const [rightPanel, setRightPanel] = useState<"inspector" | "index">("inspector");
 
   const hasProject = current !== null;
   const demoMode = !hasProject && !isTauri();
@@ -154,7 +155,9 @@ function App() {
     try {
       await invoke("import_locals", { srcPaths: paths, link: false });
       await refreshMedia();
-      setStage("indexing");
+      setStage("edit");
+      setLeftPanel("media");
+      setRightPanel("index");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -167,7 +170,9 @@ function App() {
     try {
       await invoke("import_url", { url: trimmed });
       await refreshMedia();
-      setStage("indexing");
+      setStage("edit");
+      setLeftPanel("media");
+      setRightPanel("index");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -212,7 +217,8 @@ function App() {
       if (typeof picked !== "string") return;
       await invoke("set_project_root", { path: picked });
       await refreshProject();
-      setStage("indexing");
+      setStage("edit");
+      setLeftPanel("media");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -221,7 +227,7 @@ function App() {
   async function completeNewProject(path: string) {
     await refreshProject().catch(() => {});
     setShowNewProject(false);
-    setStage("indexing");
+    setStage("edit");
     const importPaths = pendingImportPaths;
     const importUrlValue = pendingImportUrl;
     setPendingImportPaths(null);
@@ -425,11 +431,12 @@ function App() {
   }
 
   function openDeliveryFromChrome() {
-    setStage(current ? "deliver" : "indexing");
+    setStage(current ? "deliver" : "edit");
   }
 
   function openSettingsFromChrome() {
-    setStage("indexing");
+    setStage("edit");
+    setRightPanel("index");
     if (current) {
       void loadIndexerConfig();
     }
@@ -466,7 +473,7 @@ function App() {
     }
     if (current === null) {
       routedProjectRef.current = { project: null, mode: null };
-      setStage("indexing");
+      setStage("edit");
       return;
     }
 
@@ -493,7 +500,8 @@ function App() {
       return;
     }
 
-    setStage("indexing");
+    setStage("edit");
+    setRightPanel("index");
   }, [activeProposal, current, demoMode, hasImportedMedia, setStage, timelineDuration]);
 
   useEffect(() => {
@@ -917,6 +925,9 @@ function App() {
 
   useEffect(() => {
     setInspectorCollapsed(false);
+    if (activeProposal) {
+      setRightPanel("inspector");
+    }
   }, [activeProposal?.callId]);
 
   const effectiveDuration = demoMode ? SCREEN2_DURATION_S : timelineDuration > 0 ? timelineDuration : sourceDurationS;
@@ -924,32 +935,6 @@ function App() {
   const effectiveChanges = demoMode ? screen2Changes : previewChanges;
   const effectivePlan = demoMode ? screen2Plan : plan;
   const effectiveInspector = demoMode ? screen2Inspector : inspectorData;
-  const realIndexingWorkspace = (
-    <IndexingDashboard
-      projectName={current ? projectName(current) : undefined}
-      sourceCount={sourceMediaCount}
-      showImportActions={!hasImportedMedia}
-      deliveryTarget={timelineDuration > 0 ? `Timeline ${formatDuration(timelineDuration)}` : undefined}
-      media={realIndexingMedia}
-      tasks={realIndexingTasks}
-      structurePreview={realIndexingStructure}
-      indexerConfig={indexerConfig}
-      ready={realIndexingReady}
-      onImport={() => void chooseAndImportFiles()}
-      onImportUrl={() => setShowUrlImport(true)}
-      onAskAgent={() => {
-        setStage("edit");
-        void runEngineCommand("Create a first cut from the indexed media and explain the edit decisions.");
-      }}
-      onReviewIndexResults={() => {
-        void loadIndexerConfig();
-        void runIndexers();
-      }}
-      onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
-      onOpenConfigPath={openConfigPath}
-      onRevealConfigPath={revealConfigPath}
-    />
-  );
   const realDeliveryWorkspace = (
     <DeliverySurface
       targets={effectiveDeliveryTargets}
@@ -1009,8 +994,6 @@ function App() {
           void runEngineCommand(`Revise this proposal using stricter pacing and delivery criteria: ${proposal.title}`);
         }}
       />
-    ) : !demoMode && stage === "indexing" ? (
-      realIndexingWorkspace
     ) : !demoMode && stage === "deliver" ? (
       realDeliveryWorkspace
     ) : undefined;
@@ -1101,19 +1084,35 @@ function App() {
       }
       workspace={demoMode && demoScreen.workspace ? demoScreen.workspace : realWorkspace}
       commandRail={
-        <CommandRail
-          hasProject={hasProject || demoMode}
-          running={demoMode ? true : running}
-          {...railProps}
-          onSubmit={(command) => void runEngineCommand(command)}
-          onCancel={() => {
-            if (!isTauri()) return;
-            invoke("cancel_turn").catch((e) =>
-              console.warn("cancel_turn failed", e),
-            );
-          }}
-          onSuggestion={(action) => void runEngineCommand(action.prompt)}
-          onRemoveChip={(chip) => dismissContextChip(chip)}
+        <LeftWorkspaceRail
+          active={leftPanel}
+          onChange={setLeftPanel}
+          agent={
+            <CommandRail
+              hasProject={hasProject || demoMode}
+              running={demoMode ? true : running}
+              {...railProps}
+              onSubmit={(command) => void runEngineCommand(command)}
+              onCancel={() => {
+                if (!isTauri()) return;
+                invoke("cancel_turn").catch((e) =>
+                  console.warn("cancel_turn failed", e),
+                );
+              }}
+              onSuggestion={(action) => void runEngineCommand(action.prompt)}
+              onRemoveChip={(chip) => dismissContextChip(chip)}
+            />
+          }
+          media={
+            <ProjectMediaPanel
+              projectName={current ? projectName(current) : undefined}
+              sourceCount={sourceMediaCount}
+              media={realIndexingMedia}
+              ready={realIndexingReady}
+              onImport={() => void chooseAndImportFiles()}
+              onImportUrl={() => setShowUrlImport(true)}
+            />
+          }
         />
       }
       preview={
@@ -1152,8 +1151,6 @@ function App() {
             onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
             onFullscreen={() => setInspectorCollapsed(false)}
           />
-        ) : stage === "indexing" ? (
-          realIndexingWorkspace
         ) : stage === "deliver" ? (
           realDeliveryWorkspace
         ) : (
@@ -1184,17 +1181,44 @@ function App() {
         isEditStage && inspectorCollapsed ? (
           <CollapsedInspectorButton onOpen={() => setInspectorCollapsed(false)} />
         ) : isEditStage ? (
-          <ProposalInspector
-            data={effectiveInspector}
-            onAccept={acceptActiveProposal}
-            onReject={rejectActiveProposal}
-            onInspectDeeper={inspectActiveProposal}
-            onRevise={reviseActiveProposal}
-            onAgentRepair={() => {
-              void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
-            }}
-            onMaximize={() => setInspectorCollapsed(false)}
-            onCollapse={() => setInspectorCollapsed(true)}
+          <RightEditPanel
+            active={rightPanel}
+            onChange={setRightPanel}
+            inspector={
+              <ProposalInspector
+                data={effectiveInspector}
+                onAccept={acceptActiveProposal}
+                onReject={rejectActiveProposal}
+                onInspectDeeper={inspectActiveProposal}
+                onRevise={reviseActiveProposal}
+                onAgentRepair={() => {
+                  void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
+                }}
+                onMaximize={() => setInspectorCollapsed(false)}
+                onCollapse={() => setInspectorCollapsed(true)}
+              />
+            }
+            index={
+              <IndexReadinessPanel
+                sourceCount={sourceMediaCount}
+                tasks={realIndexingTasks}
+                structurePreview={realIndexingStructure}
+                indexerConfig={indexerConfig}
+                ready={realIndexingReady}
+                onRunIndex={() => {
+                  void loadIndexerConfig();
+                  void runIndexers();
+                }}
+                onAskAgent={() => {
+                  setStage("edit");
+                  setRightPanel("inspector");
+                  void runEngineCommand("Create a first cut from the indexed media and explain the edit decisions.");
+                }}
+                onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
+                onOpenConfigPath={openConfigPath}
+                onRevealConfigPath={revealConfigPath}
+              />
+            }
           />
         ) : (
           <span />
@@ -1351,6 +1375,335 @@ function RealProxyPreviewSlot({
       </div>
     </div>
   );
+}
+
+function LeftWorkspaceRail({
+  active,
+  onChange,
+  agent,
+  media,
+}: {
+  active: "agent" | "media";
+  onChange: (panel: "agent" | "media") => void;
+  agent: ReactNode;
+  media: ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <PanelSwitch
+        value={active}
+        options={[
+          { value: "agent", label: "Agent" },
+          { value: "media", label: "Media" },
+        ]}
+        onChange={onChange}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {active === "agent" ? agent : media}
+      </div>
+    </div>
+  );
+}
+
+function RightEditPanel({
+  active,
+  onChange,
+  inspector,
+  index,
+}: {
+  active: "inspector" | "index";
+  onChange: (panel: "inspector" | "index") => void;
+  inspector: ReactNode;
+  index: ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <PanelSwitch
+        value={active}
+        options={[
+          { value: "inspector", label: "Inspector" },
+          { value: "index", label: "Index" },
+        ]}
+        onChange={onChange}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {active === "inspector" ? inspector : index}
+      </div>
+    </div>
+  );
+}
+
+function PanelSwitch<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<{ value: T; label: string }>;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-1 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] p-2">
+      {options.map((option) => {
+        const selected = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            className={[
+              "h-7 flex-1 rounded-[var(--radius-sm)] border px-2 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] transition-colors",
+              selected
+                ? "border-[var(--color-border-active)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
+                : "border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-secondary)]",
+            ].join(" ")}
+            aria-pressed={selected}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProjectMediaPanel({
+  projectName,
+  sourceCount,
+  media,
+  ready,
+  onImport,
+  onImportUrl,
+}: {
+  projectName?: string;
+  sourceCount: number;
+  media: IndexingMediaItem[];
+  ready: boolean;
+  onImport: () => void;
+  onImportUrl: () => void;
+}) {
+  return (
+    <Stack gap="4" className="p-3">
+      <Stack gap="1">
+        <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+          Project media
+        </span>
+        <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+          {projectName ?? "No project"}
+        </span>
+        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+          {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {ready ? "index ready" : "index pending"}
+        </span>
+      </Stack>
+      <Inline gap="1" wrap="wrap">
+        <Button variant="secondary" size="sm" onClick={onImport}>
+          Add files
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onImportUrl}>
+          Add URL
+        </Button>
+      </Inline>
+      <Stack gap="2">
+        {media.length > 0 ? media.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
+          >
+            <Inline justify="between" align="start" gap="2">
+              <Stack gap="1" className="min-w-0">
+                <span className="truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+                  {item.title}
+                </span>
+                {item.detail ? (
+                  <span className="line-clamp-2 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                    {item.detail}
+                  </span>
+                ) : null}
+              </Stack>
+              <span className="shrink-0 rounded-full border border-[var(--color-border-subtle)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-[var(--color-text-secondary)]">
+                {item.status}
+              </span>
+            </Inline>
+          </button>
+        )) : (
+          <Card padding="sm" tone="flat">
+            <Stack gap="2">
+              <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+                No media yet
+              </span>
+              <span className="text-[var(--text-caption)] leading-relaxed text-[var(--color-text-muted)]">
+                Add source files here. The edit surface can stay open while indexing catches up.
+              </span>
+            </Stack>
+          </Card>
+        )}
+      </Stack>
+    </Stack>
+  );
+}
+
+function IndexReadinessPanel({
+  sourceCount,
+  tasks,
+  structurePreview,
+  indexerConfig,
+  ready,
+  onRunIndex,
+  onAskAgent,
+  onToggleIndexer,
+  onOpenConfigPath,
+  onRevealConfigPath,
+}: {
+  sourceCount: number;
+  tasks: IndexingTask[];
+  structurePreview?: IndexingStructurePreview;
+  indexerConfig?: IndexerConfigSnapshot;
+  ready: boolean;
+  onRunIndex: () => void;
+  onAskAgent: () => void;
+  onToggleIndexer: (indexer: IndexerConfigEntry) => void;
+  onOpenConfigPath: (path: string) => void;
+  onRevealConfigPath: (path: string) => void;
+}) {
+  const readyCount = tasks.filter((task) => task.status === "indexed" || task.status === "imported").length;
+  const runningCount = tasks.filter((task) => task.status === "indexing" || task.status === "processing" || task.status === "partial").length;
+  const activeIndexers = indexerConfig?.indexers.filter((indexer) => indexer.enabled) ?? [];
+  return (
+    <Stack gap="4" className="p-3">
+      <Inline justify="between" align="start" gap="2">
+        <Stack gap="1">
+          <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+            Index readiness
+          </span>
+          <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+            {readyCount} of {tasks.length} signals ready
+          </span>
+          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {runningCount > 0 ? `${runningCount} running` : "idle"}
+          </span>
+        </Stack>
+        <Pill status={ready ? "ready" : runningCount > 0 ? "processing" : "missing"} dot>
+          {ready ? "Ready" : runningCount > 0 ? "Indexing" : "Missing"}
+        </Pill>
+      </Inline>
+      {structurePreview ? (
+        <div className="grid grid-cols-2 gap-2">
+          <Metric label="Duration" value={structurePreview.duration ?? "—"} />
+          <Metric label="Scenes" value={structurePreview.scenes ?? "—"} />
+          <Metric label="Segments" value={structurePreview.segments ?? "—"} />
+          <Metric label="Transcript" value={typeof structurePreview.transcriptPercent === "number" ? `${structurePreview.transcriptPercent}%` : "—"} />
+        </div>
+      ) : null}
+      <Stack gap="2">
+        {tasks.map((task) => (
+          <Inline
+            key={task.id}
+            justify="between"
+            align="center"
+            gap="2"
+            className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2"
+          >
+            <Stack gap="0" className="min-w-0">
+              <span className="truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+                {indexTaskLabel(task.kind)}
+              </span>
+              <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                {task.detail ?? indexTaskDetail(task.status)}
+              </span>
+            </Stack>
+            <span className="shrink-0 rounded-full border border-[var(--color-border-subtle)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-[var(--color-text-secondary)]">
+              {task.status}
+            </span>
+          </Inline>
+        ))}
+      </Stack>
+      <Stack gap="2">
+        <Button variant="secondary" onClick={onRunIndex}>
+          Run indexers
+        </Button>
+        <Button variant="primary" onClick={onAskAgent} disabled={sourceCount === 0}>
+          Ask agent for first cut
+        </Button>
+      </Stack>
+      {indexerConfig ? (
+        <Stack gap="2">
+          <Inline justify="between" align="center">
+            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+              Indexers
+            </span>
+            <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+              {activeIndexers.length} active
+            </span>
+          </Inline>
+          {indexerConfig.indexers.slice(0, 4).map((indexer) => (
+            <Inline
+              key={indexer.name}
+              justify="between"
+              align="center"
+              gap="2"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2"
+            >
+              <Stack gap="0" className="min-w-0">
+                <span className="truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
+                  {indexer.name}
+                </span>
+                <span className="truncate text-[10px] text-[var(--color-text-muted)]">
+                  {indexer.cwd ?? "global"} · {indexer.resourceClass}
+                </span>
+              </Stack>
+              <Button variant="ghost" size="sm" onClick={() => onToggleIndexer(indexer)}>
+                {indexer.enabled ? "Disable" : "Enable"}
+              </Button>
+            </Inline>
+          ))}
+          <Inline gap="1" wrap="wrap">
+            {indexerConfig.projectPath ? (
+              <Button variant="ghost" size="sm" onClick={() => onRevealConfigPath(indexerConfig.projectPath!)}>
+                Project config
+              </Button>
+            ) : null}
+            {indexerConfig.globalPath ? (
+              <Button variant="ghost" size="sm" onClick={() => onOpenConfigPath(indexerConfig.globalPath!)}>
+                Global config
+              </Button>
+            ) : null}
+          </Inline>
+        </Stack>
+      ) : null}
+    </Stack>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2">
+      <span className="block text-[var(--text-caption)] font-mono text-[var(--color-text-primary)]">{value}</span>
+      <span className="block text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-muted)]">{label}</span>
+    </div>
+  );
+}
+
+function indexTaskLabel(kind: IndexingTask["kind"]): string {
+  const labels: Record<IndexingTask["kind"], string> = {
+    transcripts: "Transcripts",
+    scenes: "Scenes",
+    audio: "Audio analysis",
+    face: "Face detection",
+    motion: "Motion analysis",
+    color: "Color analysis",
+    silence: "Silence detection",
+    speaker: "Speaker diarization",
+    captions: "Caption readiness",
+  };
+  return labels[kind];
+}
+
+function indexTaskDetail(status: IndexingTask["status"]): string {
+  if (status === "indexed" || status === "imported") return "Ready for edit evidence";
+  if (status === "indexing" || status === "processing" || status === "partial") return "Indexing locally";
+  if (status === "failed") return "Needs attention";
+  return "Missing";
 }
 
 function CollapsedInspectorButton({ onOpen }: { onOpen: () => void }) {

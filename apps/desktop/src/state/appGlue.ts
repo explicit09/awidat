@@ -135,7 +135,7 @@ export function useAppGlue() {
           console.warn("reveal project failed", e),
         );
       } else if (id === MENU_COMMANDS.RUN_INDEXERS && current) {
-        setStage("indexing");
+        setStage("edit");
         invoke("index_project").catch((e) =>
           console.warn("index_project failed", e),
         );
@@ -172,24 +172,24 @@ export function useAppGlue() {
           .then((fullscreen) => win.setFullscreen(!fullscreen))
           .catch((e) => console.warn("toggle fullscreen failed", e));
       } else if (id === MENU_COMMANDS.NAV_PROJECT) {
-        setStage("indexing");
+        setStage("edit");
       } else if (id === MENU_COMMANDS.NAV_WORKSPACE) {
-        setStage(current ? "edit" : "indexing");
+        setStage("edit");
       } else if (id === MENU_COMMANDS.NAV_AGENT) {
-        setStage(current ? "edit" : "indexing");
+        setStage("edit");
       } else if (id === MENU_COMMANDS.NAV_MEDIA || id === MENU_COMMANDS.VIEW_MEDIA) {
-        setStage("indexing");
+        setStage("edit");
       } else if (
         id === MENU_COMMANDS.NAV_REVIEW ||
         id === MENU_COMMANDS.VIEW_TIMELINE ||
         id === MENU_COMMANDS.VIEW_TRANSCRIPT ||
         id === MENU_COMMANDS.VIEW_EDITS
       ) {
-        setStage(current ? "edit" : "indexing");
+        setStage("edit");
       } else if (id === MENU_COMMANDS.NAV_DELIVER) {
-        setStage(current ? "deliver" : "indexing");
+        setStage(current ? "deliver" : "edit");
       } else if (id === MENU_COMMANDS.NAV_SETTINGS) {
-        setStage("indexing");
+        setStage("edit");
       }
       // The legacy pane toggles that do not map to v2 lenses are kept
       // enabled for menu completeness but intentionally do not resize panes.

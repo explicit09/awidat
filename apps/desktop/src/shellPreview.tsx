@@ -108,7 +108,6 @@ function Root() {
   // Pre-warm two stages so the StageIndicator shows the "complete" treatment
   // for prior stages — purely a preview convenience.
   if (useStageStore.getState().visited.size === 1) {
-    useStageStore.getState().set("indexing");
     useStageStore.getState().set("edit");
   }
   const [activeChangeId, setActiveChangeId] = useState<string | undefined>("c7");

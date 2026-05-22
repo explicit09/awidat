@@ -186,7 +186,6 @@ await check("top chrome matches Screen 2 app model", async () => {
   for (const expected of [
     "Awidat",
     "Main Desktop Workspace",
-    "Index",
     "Edit",
     "Deliver",
     "Awaiting review",
@@ -197,7 +196,7 @@ await check("top chrome matches Screen 2 app model", async () => {
   const clippedTopNav = await page.evaluate(() => {
     const header = document.querySelector("header");
     if (!header) return ["missing header"];
-    const labels = ["Index", "Edit", "Deliver"];
+    const labels = ["Edit", "Deliver"];
     const clipped = [];
     const buttons = Array.from(header.querySelectorAll('button[role="tab"]'));
     for (const label of labels) {
@@ -233,13 +232,12 @@ await check("top stage row is the only global workflow navigation", async () => 
   assert.equal(lensRows, 0, "secondary workflow lens row should not render");
   const stageNames = await page.locator('[role="tablist"][aria-label="Stage"] button[role="tab"]').allTextContents();
   for (const expected of [
-    "Index",
     "Edit",
     "Deliver",
   ]) {
     assert.ok(stageNames.some((s) => s.includes(expected)), `stage "${expected}" missing`);
   }
-  for (const folded of ["Intent", "Proposal", "Review", "Revise", "Import", "Selects", "Assembly", "Captions", "Audio", "Color"]) {
+  for (const folded of ["Intent", "Index", "Proposal", "Review", "Revise", "Import", "Selects", "Assembly", "Captions", "Audio", "Color"]) {
     assert.ok(!stageNames.some((s) => s.includes(folded)), `${folded} should not be a second-level global tab`);
   }
   await page.close();

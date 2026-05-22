@@ -26,21 +26,20 @@ function it(name: string, fn: () => void) {
 
 describe("stageProgress", () => {
   it("marks the current stage as 'current'", () => {
-    assert.equal(stageProgress("edit", "edit", new Set<Stage>(["indexing", "edit"])), "current");
+    assert.equal(stageProgress("edit", "edit", new Set<Stage>(["edit"])), "current");
   });
 
   it("marks visited non-current stages as 'complete'", () => {
-    const visited = new Set<Stage>(["indexing", "edit"]);
-    assert.equal(stageProgress("indexing", "edit", visited), "complete");
+    const visited = new Set<Stage>(["edit", "deliver"]);
+    assert.equal(stageProgress("edit", "deliver", visited), "complete");
   });
 
   it("marks unvisited stages as 'upcoming'", () => {
-    const visited = new Set<Stage>(["indexing"]);
-    assert.equal(stageProgress("edit", "indexing", visited), "upcoming");
-    assert.equal(stageProgress("deliver", "indexing", visited), "upcoming");
+    const visited = new Set<Stage>(["edit"]);
+    assert.equal(stageProgress("deliver", "edit", visited), "upcoming");
   });
 
   it("STAGES order matches the simplified editor workflow", () => {
-    assert.deepEqual([...STAGES], ["indexing", "edit", "deliver"]);
+    assert.deepEqual([...STAGES], ["edit", "deliver"]);
   });
 });
