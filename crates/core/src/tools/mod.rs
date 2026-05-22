@@ -72,6 +72,7 @@ pub mod vedit_merge_preflight;
 pub mod vedit_revert;
 pub mod vedit_show;
 pub mod vedit_tag;
+pub mod verify_render;
 pub mod view_episode;
 pub mod view_frame;
 pub mod view_timeline;

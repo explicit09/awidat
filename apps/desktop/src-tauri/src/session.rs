@@ -38,8 +38,8 @@ use awidat_core::tools::{
     vedit_changed_clip_ids::VeditChangedClipIdsTool, vedit_checkout::VeditCheckoutTool,
     vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
     vedit_merge_preflight::VeditMergePreflightTool, vedit_revert::VeditRevertTool,
-    vedit_show::VeditShowTool, vedit_tag::VeditTagTool, view_episode::ViewEpisodeTool,
-    view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    vedit_show::VeditShowTool, vedit_tag::VeditTagTool, verify_render::VerifyRenderTool,
+    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use tokio::sync::mpsc;
@@ -83,6 +83,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(TranscriptSearchTool));
     registry.register(Arc::new(StartRenderTool));
+    registry.register(Arc::new(VerifyRenderTool));
     registry.register(Arc::new(ExportPackageTool));
     registry.register(Arc::new(StartLookRegionPassTool));
     registry.register(Arc::new(PlanLookRegionsTool));
