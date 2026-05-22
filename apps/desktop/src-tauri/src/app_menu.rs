@@ -168,13 +168,6 @@ fn build_macos(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
 
     MenuBuilder::new(app)
         .item(&app_menu)
-        .item(&project_menu(app)?)
-        .item(&workspace_menu(app)?)
-        .item(&agent_menu(app)?)
-        .item(&media_menu(app)?)
-        .item(&review_menu(app)?)
-        .item(&deliver_menu(app)?)
-        .item(&settings_menu(app)?)
         .item(&file_menu(app, "Reveal Project in Finder", false, true)?)
         .item(&edit_menu(app)?)
         .item(&view_menu(app)?)
@@ -185,13 +178,6 @@ fn build_macos(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
 
 fn build_windows(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     MenuBuilder::new(app)
-        .item(&project_menu(app)?)
-        .item(&workspace_menu(app)?)
-        .item(&agent_menu(app)?)
-        .item(&media_menu(app)?)
-        .item(&review_menu(app)?)
-        .item(&deliver_menu(app)?)
-        .item(&settings_menu(app)?)
         .item(&file_menu(
             app,
             "Reveal Project in File Explorer",
@@ -200,178 +186,7 @@ fn build_windows(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
         )?)
         .item(&edit_menu(app)?)
         .item(&view_menu(app)?)
-        .item(&tools_menu(app)?)
         .item(&help_menu(app, true)?)
-        .build()
-}
-
-fn project_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
-    SubmenuBuilder::new(app, "Project")
-        .item(&item(app, id::NAV_PROJECT, "Project Overview", true, None)?)
-        .separator()
-        .item(&item(
-            app,
-            id::NEW_PROJECT,
-            "New Project…",
-            true,
-            Some("CmdOrCtrl+N"),
-        )?)
-        .item(&item(
-            app,
-            id::OPEN_PROJECT,
-            "Open Project…",
-            true,
-            Some("CmdOrCtrl+O"),
-        )?)
-        .item(&item(app, id::OPEN_RECENT, "Open Recent", true, None)?)
-        .separator()
-        .item(&item(
-            app,
-            id::CLOSE_PROJECT,
-            "Close Project",
-            false,
-            Some("CmdOrCtrl+W"),
-        )?)
-        .item(&item(
-            app,
-            id::REVEAL_PROJECT,
-            "Reveal Project",
-            false,
-            None,
-        )?)
-        .build()
-}
-
-fn workspace_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
-    SubmenuBuilder::new(app, "Workspace")
-        .item(&item(
-            app,
-            id::NAV_WORKSPACE,
-            "Review Workspace",
-            true,
-            None,
-        )?)
-        .separator()
-        .item(&item(app, id::VIEW_TIMELINE, "Timeline", false, None)?)
-        .item(&item(app, id::VIEW_TRANSCRIPT, "Transcript", false, None)?)
-        .item(&item(app, id::VIEW_NOTES, "Notes", false, None)?)
-        .item(&item(app, id::VIEW_PROPERTIES, "Inspector", false, None)?)
-        .separator()
-        .item(&item(
-            app,
-            id::TIMELINE_ZOOM_IN,
-            "Zoom Timeline In",
-            false,
-            Some("CmdOrCtrl+="),
-        )?)
-        .item(&item(
-            app,
-            id::TIMELINE_ZOOM_OUT,
-            "Zoom Timeline Out",
-            false,
-            Some("CmdOrCtrl+-"),
-        )?)
-        .item(&item(
-            app,
-            id::TIMELINE_ZOOM_FIT,
-            "Fit Timeline",
-            false,
-            Some("CmdOrCtrl+0"),
-        )?)
-        .build()
-}
-
-fn agent_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
-    SubmenuBuilder::new(app, "Agent")
-        .item(&item(app, id::NAV_AGENT, "Agent Command Rail", true, None)?)
-        .separator()
-        .item(&item(app, id::RUN_INDEXERS, "Run Indexers", false, None)?)
-        .item(&item(app, id::VIEW_CHAT, "Activity / Chat", false, None)?)
-        .build()
-}
-
-fn media_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
-    SubmenuBuilder::new(app, "Media")
-        .item(&item(
-            app,
-            id::NAV_MEDIA,
-            "Media / Import Workspace",
-            true,
-            None,
-        )?)
-        .separator()
-        .item(&item(
-            app,
-            id::IMPORT_FILES,
-            "Import Files…",
-            false,
-            Some("CmdOrCtrl+I"),
-        )?)
-        .item(&item(
-            app,
-            id::IMPORT_URL,
-            "Import URL…",
-            false,
-            Some("CmdOrCtrl+Shift+I"),
-        )?)
-        .item(&item(app, id::VIEW_MEDIA, "Media Viewer", false, None)?)
-        .build()
-}
-
-fn review_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
-    SubmenuBuilder::new(app, "Review")
-        .item(&item(app, id::NAV_REVIEW, "Review Workspace", true, None)?)
-        .separator()
-        .item(&item(
-            app,
-            id::ACCEPT_PROPOSAL,
-            "Accept Proposal",
-            false,
-            Some("Enter"),
-        )?)
-        .item(&item(
-            app,
-            id::REJECT_PROPOSAL,
-            "Reject Proposal",
-            false,
-            Some("Esc"),
-        )?)
-        .item(&item(app, id::VIEW_EDITS, "Edit History", false, None)?)
-        .build()
-}
-
-fn deliver_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
-    SubmenuBuilder::new(app, "Deliver")
-        .item(&item(
-            app,
-            id::NAV_DELIVER,
-            "Delivery / Preflight Workspace",
-            true,
-            None,
-        )?)
-        .separator()
-        .item(&item(
-            app,
-            id::EXPORT_TIMELINE,
-            "Export Timeline…",
-            false,
-            Some("CmdOrCtrl+E"),
-        )?)
-        .build()
-}
-
-fn settings_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
-    SubmenuBuilder::new(app, "Settings")
-        .item(&item(
-            app,
-            id::NAV_SETTINGS,
-            "Settings Overview",
-            true,
-            None,
-        )?)
-        .separator()
-        .item(&disabled(app, DISABLED_SETTINGS, "Preferences…")?)
-        .item(&disabled(app, DISABLED_LOGS, "Open Logs")?)
         .build()
 }
 
@@ -404,6 +219,7 @@ fn file_menu(
         false,
         Some("CmdOrCtrl+W"),
     )?;
+    let reveal_project = item(app, id::REVEAL_PROJECT, reveal_label, false, None)?;
     let import_files = item(
         app,
         id::IMPORT_FILES,
@@ -418,7 +234,6 @@ fn file_menu(
         false,
         Some("CmdOrCtrl+Shift+I"),
     )?;
-    let run_indexers = item(app, id::RUN_INDEXERS, "Run Indexers", false, None)?;
     let export_timeline = item(
         app,
         id::EXPORT_TIMELINE,
@@ -426,7 +241,6 @@ fn file_menu(
         false,
         Some("CmdOrCtrl+E"),
     )?;
-    let reveal_project = item(app, id::REVEAL_PROJECT, reveal_label, false, None)?;
 
     let mut builder = SubmenuBuilder::new(app, "File")
         .item(&new_project)
@@ -434,13 +248,12 @@ fn file_menu(
         .item(&open_recent)
         .separator()
         .item(&close_project)
+        .item(&reveal_project)
         .separator()
         .item(&import_files)
         .item(&import_url)
-        .item(&run_indexers)
         .separator()
-        .item(&export_timeline)
-        .item(&reveal_project);
+        .item(&export_timeline);
 
     if include_exit {
         builder = builder.separator().quit_with_text("Exit");
@@ -495,6 +308,14 @@ fn edit_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
 }
 
 fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    let nav_project = item(app, id::NAV_PROJECT, "Project Overview", true, None)?;
+    let nav_workspace = item(app, id::NAV_WORKSPACE, "Workspace", true, None)?;
+    let nav_agent = item(app, id::NAV_AGENT, "Agent Rail", true, None)?;
+    let nav_media = item(app, id::NAV_MEDIA, "Media / Import", true, None)?;
+    let nav_review = item(app, id::NAV_REVIEW, "Review", true, None)?;
+    let nav_deliver = item(app, id::NAV_DELIVER, "Delivery", true, None)?;
+    let nav_settings = item(app, id::NAV_SETTINGS, "Settings", true, None)?;
+
     let media = item(app, id::VIEW_MEDIA, "Media Viewer", false, None)?;
     let timeline = item(app, id::VIEW_TIMELINE, "Timeline", false, None)?;
     let properties = item(app, id::VIEW_PROPERTIES, "Properties", false, None)?;
@@ -504,6 +325,7 @@ fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
     let chat = item(app, id::VIEW_CHAT, "Chat", false, None)?;
     let transcript = item(app, id::VIEW_TRANSCRIPT, "Transcript", false, None)?;
     let edits = item(app, id::VIEW_EDITS, "Edit History", false, None)?;
+    let run_indexers = item(app, id::RUN_INDEXERS, "Run Indexers", false, None)?;
     let zoom_in = item(
         app,
         id::TIMELINE_ZOOM_IN,
@@ -534,6 +356,14 @@ fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
     )?;
 
     SubmenuBuilder::new(app, "View")
+        .item(&nav_project)
+        .item(&nav_workspace)
+        .item(&nav_agent)
+        .item(&nav_media)
+        .item(&nav_review)
+        .item(&nav_deliver)
+        .item(&nav_settings)
+        .separator()
         .item(&media)
         .item(&timeline)
         .item(&properties)
@@ -544,6 +374,8 @@ fn view_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
         .item(&chat)
         .item(&transcript)
         .item(&edits)
+        .separator()
+        .item(&run_indexers)
         .separator()
         .item(&zoom_in)
         .item(&zoom_out)
@@ -559,15 +391,6 @@ fn window_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>>
         .maximize_with_text("Zoom")
         .separator()
         .bring_all_to_front()
-        .build()
-}
-
-fn tools_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
-    let indexers = item(app, id::RUN_INDEXERS, "Indexers", false, None)?;
-    SubmenuBuilder::new(app, "Tools")
-        .item(&disabled(app, DISABLED_SETTINGS, "Settings")?)
-        .item(&indexers)
-        .item(&disabled(app, DISABLED_LOGS, "Open Logs")?)
         .build()
 }
 
@@ -666,35 +489,8 @@ fn frontend_command_ids() -> &'static [&'static str] {
 #[cfg(test)]
 fn top_level_menu_labels(platform: MenuPlatform) -> Vec<&'static str> {
     match platform {
-        MenuPlatform::Macos => vec![
-            "Awidat",
-            "Project",
-            "Workspace",
-            "Agent",
-            "Media",
-            "Review",
-            "Deliver",
-            "Settings",
-            "File",
-            "Edit",
-            "View",
-            "Window",
-            "Help",
-        ],
-        MenuPlatform::Windows => vec![
-            "Project",
-            "Workspace",
-            "Agent",
-            "Media",
-            "Review",
-            "Deliver",
-            "Settings",
-            "File",
-            "Edit",
-            "View",
-            "Tools",
-            "Help",
-        ],
+        MenuPlatform::Macos => vec!["Awidat", "File", "Edit", "View", "Window", "Help"],
+        MenuPlatform::Windows => vec!["File", "Edit", "View", "Help"],
     }
 }
 
@@ -704,40 +500,20 @@ mod tests {
 
     #[test]
     fn top_level_labels_follow_platform_conventions() {
+        // The bar used to carry seven workspace-style menus (Project /
+        // Workspace / Agent / Media / Review / Deliver / Settings) on
+        // top of File/Edit/View/Window/Help. They duplicated File and
+        // View items and made the bar feel cluttered. Consolidated
+        // into the platform-standard set; nav items now live under
+        // View, import/export/reveal under File, accept/reject under
+        // Edit.
         assert_eq!(
             top_level_menu_labels(MenuPlatform::Macos),
-            vec![
-                "Awidat",
-                "Project",
-                "Workspace",
-                "Agent",
-                "Media",
-                "Review",
-                "Deliver",
-                "Settings",
-                "File",
-                "Edit",
-                "View",
-                "Window",
-                "Help"
-            ]
+            vec!["Awidat", "File", "Edit", "View", "Window", "Help"]
         );
         assert_eq!(
             top_level_menu_labels(MenuPlatform::Windows),
-            vec![
-                "Project",
-                "Workspace",
-                "Agent",
-                "Media",
-                "Review",
-                "Deliver",
-                "Settings",
-                "File",
-                "Edit",
-                "View",
-                "Tools",
-                "Help"
-            ]
+            vec!["File", "Edit", "View", "Help"]
         );
     }
 
