@@ -877,4 +877,15 @@ mod tests {
             Some(sidecar.to_string_lossy().as_ref()),
         );
     }
+
+    #[test]
+    fn is_project_media_path_accepts_raw_video_under_raw_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let raw_dir = tmp.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("clip.mov");
+        std::fs::write(&asset, b"src").unwrap();
+        let canonical = std::fs::canonicalize(&asset).unwrap();
+        assert!(is_project_media_path(tmp.path(), &canonical));
+    }
 }
