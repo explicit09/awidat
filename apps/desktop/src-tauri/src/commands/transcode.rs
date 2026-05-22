@@ -249,6 +249,17 @@ pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
         if assets.is_empty() {
             return;
         }
+
+        // Smart prioritization: transcode clips already on the
+        // timeline first (and within those, the ones nearest the
+        // playhead). Falls back to scan order for assets that aren't
+        // on the timeline at all — those still get transcoded, just
+        // last. The cursor is not currently persisted across project
+        // loads, so we default to 0.0 (project start).
+        let ranges = collect_timeline_asset_ranges(&project_root);
+        let priority = crate::commands::playable::prioritize_for_cursor(&ranges, 0.0);
+        let assets = reorder_by_priority(assets, &priority, &project_root);
+
         let state = app.state::<AwidatState>();
         let mut touched = false;
         for asset in assets {
@@ -268,6 +279,82 @@ pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
             crate::events::emit_timeline_changed(&app, &project_root);
         }
     });
+}
+
+/// Walk the project's OTIO and return one entry per video clip:
+/// `(asset_id, track_start_s, track_end_s)`. Audio-only clips are
+/// excluded — they're not what blocks the timeline preview. Returns
+/// an empty vec on any read error (the caller falls back to scan
+/// order, which is still correct, just not optimal).
+fn collect_timeline_asset_ranges(project_root: &Path) -> Vec<(String, f64, f64)> {
+    use awidat_proto::project::Project;
+    let project = match Project::read(project_root) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+    let snapshot = crate::commands::timeline::flatten_timeline_public(
+        &project.timeline,
+        project_root,
+    );
+    let mut out: Vec<(String, f64, f64)> = Vec::new();
+    for track in &snapshot.tracks {
+        // Skip pure-audio tracks — proxy generation is for video
+        // playback. Tracks with both kinds, or kind "video", count.
+        if track.kind == "audio" {
+            continue;
+        }
+        for item in &track.items {
+            if let awidat_desktop_protocol::TimelineItem::Clip {
+                asset_id: Some(aid),
+                track_start_s,
+                duration_s,
+                ..
+            } = item
+            {
+                if *duration_s > 0.0 {
+                    out.push((aid.clone(), *track_start_s, *track_start_s + *duration_s));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Reorder absolute asset paths so the ones whose project-relative
+/// id appears in `priority` (timeline-resident, ordered by playhead
+/// distance) come first. Off-timeline assets keep their original
+/// scan order and run after, so nothing gets skipped — just deferred.
+fn reorder_by_priority(
+    assets: Vec<PathBuf>,
+    priority: &[String],
+    project_root: &Path,
+) -> Vec<PathBuf> {
+    let rank: std::collections::HashMap<&str, usize> = priority
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.as_str(), i))
+        .collect();
+    let mut with_rank: Vec<(usize, PathBuf)> = assets
+        .into_iter()
+        .map(|path| {
+            // Compute project-relative id by stripping project_root.
+            // If strip fails (asset outside project), give it the
+            // unranked fallback so it sorts after all ranked assets.
+            let id = path
+                .strip_prefix(project_root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let r = rank.get(id.as_str()).copied().unwrap_or(usize::MAX);
+            (r, path)
+        })
+        .collect();
+    // Stable sort: with_rank is iterated in original order, so equal
+    // ranks (e.g. all the off-timeline assets at MAX) preserve scan
+    // order. `sort_by_key` is stable in Rust.
+    with_rank.sort_by_key(|(r, _)| *r);
+    with_rank.into_iter().map(|(_, p)| p).collect()
 }
 
 /// Transcode one asset into the proxy directory for a specific project.
@@ -786,5 +873,29 @@ mod tests {
         let (deleted, bytes_freed) = cleanup_orphaned_proxies_in(dir.path()).unwrap();
         assert_eq!(deleted, 0);
         assert_eq!(bytes_freed, 0);
+    }
+
+    #[test]
+    fn reorder_by_priority_places_ranked_assets_first_and_preserves_scan_order_for_unranked() {
+        let project_root = std::path::PathBuf::from("/proj");
+        let assets = vec![
+            project_root.join("raw/a.mov"),
+            project_root.join("raw/b.mov"),
+            project_root.join("raw/c.mov"),
+            project_root.join("raw/d.mov"),
+        ];
+        // Timeline says c, then a are nearest the cursor; b and d
+        // aren't on the timeline at all.
+        let priority = vec!["raw/c.mov".to_string(), "raw/a.mov".to_string()];
+        let got = reorder_by_priority(assets, &priority, &project_root);
+        assert_eq!(
+            got,
+            vec![
+                project_root.join("raw/c.mov"),
+                project_root.join("raw/a.mov"),
+                project_root.join("raw/b.mov"),
+                project_root.join("raw/d.mov"),
+            ],
+        );
     }
 }
