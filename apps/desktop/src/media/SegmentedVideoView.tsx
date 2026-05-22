@@ -103,19 +103,17 @@ export function SegmentedVideoView({
   }, [timelineDurationS]);
 
   if (segments.length === 0) {
-    // Timeline has clips (the MediaPane gates on duration_s > 0)
-    // but none are playable yet — every clip's proxy is still
-    // transcoding. Show a placeholder so the user understands the
-    // delay; once the first proxy lands the SegmentedPlayer takes
-    // over without flicker.
+    // Timeline genuinely has nothing playable: either no clips at all,
+    // or every clip's source is missing on disk. The Tier 5 offline
+    // overlay handles per-clip "missing" state once it lands; until
+    // then we keep this minimal placeholder for the no-clips case.
     return (
       <div className="video-wrap">
         <div className="video-stack">
           <div className="media-empty media-empty-stacked">
-            <p className="media-empty-title">Generating preview…</p>
+            <p className="media-empty-title">No playable clips yet</p>
             <p className="media-empty-hint">
-              The 1080p proxy for this timeline is being transcoded.
-              Playback will start as soon as the first clip is ready.
+              Add a clip from the Media bin to start your timeline preview.
             </p>
           </div>
         </div>
