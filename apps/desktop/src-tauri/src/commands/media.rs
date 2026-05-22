@@ -721,6 +721,82 @@ pub fn thumbnails_dir_for_asset_id(project_root: &Path, asset_id: &str) -> Optio
     has_frame.then(|| dir.to_string_lossy().into_owned())
 }
 
+/// Recursively walk a JSON value and rewrite every `ExternalReference`
+/// node whose `target_url` matches `old` to use `new`. `changed` is
+/// incremented for each rewrite so callers can refuse no-op writes.
+fn walk_external_refs(
+    value: &mut serde_json::Value,
+    old: &str,
+    new: &str,
+    changed: &mut usize,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let is_external = map
+                .get("OTIO_SCHEMA")
+                .and_then(|s| s.as_str())
+                .is_some_and(|s| s.starts_with("ExternalReference"));
+            if is_external
+                && map.get("target_url").and_then(|t| t.as_str()) == Some(old)
+            {
+                map.insert(
+                    "target_url".into(),
+                    serde_json::Value::String(new.into()),
+                );
+                *changed += 1;
+            }
+            for child in map.values_mut() {
+                walk_external_refs(child, old, new, changed);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for child in arr.iter_mut() {
+                walk_external_refs(child, old, new, changed);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Re-point every clip referencing `old_asset_id` at `new_asset_id`
+/// in the project's OTIO. Used by the Media-Offline overlay so the
+/// user can recover from a moved/renamed raw file without losing
+/// their cut. Errors when nothing matches so the UI can surface
+/// "no clips needed relinking" instead of silently writing the OTIO
+/// back unchanged.
+#[tauri::command]
+pub async fn relink_missing_asset(
+    app: AppHandle,
+    state: State<'_, AwidatState>,
+    old_asset_id: String,
+    new_asset_id: String,
+) -> Result<usize, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    let otio_path = project_root.join("project.otio.json");
+    let bytes = tokio::fs::read(&otio_path)
+        .await
+        .map_err(|e| format!("read otio: {e}"))?;
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse otio: {e}"))?;
+    let mut changed = 0_usize;
+    walk_external_refs(&mut json, &old_asset_id, &new_asset_id, &mut changed);
+    if changed == 0 {
+        return Err(format!("no ExternalReference matched {old_asset_id}"));
+    }
+    let serialized = serde_json::to_vec_pretty(&json)
+        .map_err(|e| format!("serialize otio: {e}"))?;
+    tokio::fs::write(&otio_path, serialized)
+        .await
+        .map_err(|e| format!("write otio: {e}"))?;
+    crate::events::emit_timeline_changed(&app, &project_root);
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -887,5 +963,58 @@ mod tests {
         std::fs::write(&asset, b"src").unwrap();
         let canonical = std::fs::canonicalize(&asset).unwrap();
         assert!(is_project_media_path(tmp.path(), &canonical));
+    }
+
+    #[test]
+    fn rewrite_target_url_swaps_external_reference_path() {
+        let mut json = serde_json::json!({
+            "OTIO_SCHEMA": "ExternalReference.1",
+            "target_url": "raw/old.MOV"
+        });
+        let mut changed = 0_usize;
+        walk_external_refs(&mut json, "raw/old.MOV", "raw/new.MOV", &mut changed);
+        assert_eq!(changed, 1);
+        assert_eq!(json["target_url"], "raw/new.MOV");
+    }
+
+    #[test]
+    fn walk_external_refs_skips_non_matching_target_url() {
+        let mut json = serde_json::json!({
+            "OTIO_SCHEMA": "ExternalReference.1",
+            "target_url": "raw/other.MOV"
+        });
+        let mut changed = 0_usize;
+        walk_external_refs(&mut json, "raw/old.MOV", "raw/new.MOV", &mut changed);
+        assert_eq!(changed, 0);
+        assert_eq!(json["target_url"], "raw/other.MOV");
+    }
+
+    #[test]
+    fn walk_external_refs_recurses_into_nested_arrays_and_objects() {
+        let mut json = serde_json::json!({
+            "tracks": {
+                "children": [
+                    {
+                        "OTIO_SCHEMA": "Track.1",
+                        "children": [
+                            {
+                                "OTIO_SCHEMA": "Clip.1",
+                                "media_reference": {
+                                    "OTIO_SCHEMA": "ExternalReference.1",
+                                    "target_url": "raw/old.MOV"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        let mut changed = 0_usize;
+        walk_external_refs(&mut json, "raw/old.MOV", "raw/new.MOV", &mut changed);
+        assert_eq!(changed, 1);
+        assert_eq!(
+            json["tracks"]["children"][0]["children"][0]["media_reference"]["target_url"],
+            "raw/new.MOV"
+        );
     }
 }

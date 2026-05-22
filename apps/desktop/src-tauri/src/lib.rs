@@ -127,6 +127,7 @@ pub fn run() {
             commands::media::list_proxies,
             commands::media::media_url_for_path,
             commands::media::proxy_path_for_stem,
+            commands::media::relink_missing_asset,
             commands::preview::render_transition_preview_frame,
             commands::thumbnail::generate_thumbnails_for_asset,
             commands::thumbnail::list_thumbnail_frames,
