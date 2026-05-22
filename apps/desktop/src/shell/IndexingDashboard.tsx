@@ -176,7 +176,9 @@ export function IndexingDashboard({
       }
     );
   });
-  const indexedTaskCount = resolved.filter((task) => task.status !== "missing").length;
+  const availableTaskCount = resolved.filter((task) =>
+    task.status === "indexed" || task.status === "imported",
+  ).length;
   const overallProgress = Math.round(
     resolved.reduce((sum, task) => {
       if (typeof task.progress === "number") return sum + task.progress;
@@ -202,7 +204,7 @@ export function IndexingDashboard({
       ? "Indexed"
       : activeTaskCount > 0
         ? "Indexing"
-        : indexedTaskCount > 0
+        : availableTaskCount > 0
           ? "Partially indexed"
           : "Ready to index";
   const hasStructureMetrics =
@@ -214,7 +216,7 @@ export function IndexingDashboard({
       typeof structurePreview.speakers === "number" ||
       typeof structurePreview.transcriptPercent === "number"
     );
-  const showStructurePreview = hasMedia && indexedTaskCount > 0 && hasStructureMetrics;
+  const showStructurePreview = hasMedia && availableTaskCount > 0 && hasStructureMetrics;
   const preview = showStructurePreview ? structurePreview : undefined;
 
   return (
@@ -340,7 +342,7 @@ export function IndexingDashboard({
           subtitle={
             ready
               ? "All signals ready"
-              : `${indexedTaskCount} of 9`
+              : `${availableTaskCount} of 9 ready`
           }
         >
           <Stack gap="2">
@@ -455,8 +457,8 @@ export function IndexingDashboard({
               <Stack gap="3">
                 <SectionHeader title="Index insights" />
                 {[
-                  [`${indexedTaskCount} signals available`, indexStateLabel],
-                  [`${activeTaskCount} indexers still running`, activeTaskCount > 0 ? "In progress" : "Idle"],
+                  [`${availableTaskCount} signals available`, indexStateLabel],
+                  [`${activeTaskCount} signal jobs running`, activeTaskCount > 0 ? "In progress" : "Idle"],
                   [`${mediaCount} source items tracked`, "Local"],
                 ].map(([label, value]) => (
                   <Inline key={label} justify="between" gap="3" align="baseline">

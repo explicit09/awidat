@@ -737,34 +737,62 @@ function App() {
     }));
   }, [activeJobs, proxies, sources]);
 
+  const loadedTranscript =
+    transcriptState?.state === "loaded" ? transcriptState.transcript : null;
+
   const realIndexingTasks: IndexingTask[] = useMemo(() => {
-    const taskJobs: Array<[IndexingTask["kind"], JobKind]> = [
-      ["transcripts", "indexing"],
-      ["scenes", "thumbnails"],
-      ["audio", "waveform"],
-      ["face", "indexing"],
-      ["motion", "motion"],
-      ["color", "indexing"],
-      ["silence", "silences"],
-      ["speaker", "indexing"],
-      ["captions", "indexing"],
-    ];
-    return taskJobs.map(([kind, jobKind]) => {
-      const runningJob = activeJobs.find((job) => job.job_kind === jobKind);
-      const completed = completedJobKinds.has(jobKind);
+    const globalIndexJob = activeJobs.find((job) => job.job_kind === "indexing");
+    const specificJobs: Partial<Record<IndexingTask["kind"], JobKind>> = {
+      scenes: "thumbnails",
+      audio: "waveform",
+      motion: "motion",
+      silence: "silences",
+    };
+    return ([
+      "transcripts",
+      "scenes",
+      "audio",
+      "face",
+      "motion",
+      "color",
+      "silence",
+      "speaker",
+      "captions",
+    ] satisfies IndexingTask["kind"][]).map((kind) => {
+      if (kind === "transcripts") {
+        if (loadedTranscript) {
+          return {
+            id: "real-transcripts",
+            kind,
+            status: "indexed" as const,
+            progress: 100,
+            detail: "Transcript sidecar loaded",
+          };
+        }
+        if (globalIndexJob) {
+          return {
+            id: "real-transcripts",
+            kind,
+            status: "indexing" as const,
+            progress: globalIndexJob.percent ?? undefined,
+            detail: globalIndexJob.status,
+          };
+        }
+      }
+      const jobKind = specificJobs[kind];
+      const runningJob = jobKind ? activeJobs.find((job) => job.job_kind === jobKind) : undefined;
+      const completed = jobKind ? completedJobKinds.has(jobKind) : false;
       return {
         id: `real-${kind}`,
         kind,
         status: runningJob ? "indexing" : completed ? "indexed" : hasImportedMedia ? "missing" : "missing",
         progress: runningJob?.percent ?? (completed ? 100 : undefined),
-        detail: runningJob?.status ?? (completed ? "Completed from local job state" : "Waiting for local indexer"),
+        detail: runningJob?.status ?? (completed ? "Completed from local job state" : globalIndexJob ? "Waiting for index output" : "Waiting for local indexer"),
       };
     });
-  }, [activeJobs, completedJobKinds, hasImportedMedia]);
+  }, [activeJobs, completedJobKinds, hasImportedMedia, loadedTranscript]);
 
   const realIndexingReady = realIndexingTasks.some((task) => task.status === "indexed");
-  const loadedTranscript =
-    transcriptState?.state === "loaded" ? transcriptState.transcript : null;
   const realIndexingStructure: IndexingStructurePreview | undefined = useMemo(() => {
     if (sourceMediaCount === 0) return undefined;
     const duration = timelineDuration > 0
