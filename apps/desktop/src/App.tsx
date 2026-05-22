@@ -145,7 +145,11 @@ function App() {
   const [activeChatSession, setActiveChatSession] = useState<ChatSessionSummary | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [agentFocusMode, setAgentFocusMode] = useState(false);
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  // Default-collapsed: the right rail is empty 95% of the time when no
+  // proposal exists. We auto-expand it when an active proposal arrives
+  // (see effect below) and let the user pin it open via the existing
+  // collapse/maximize buttons in the inspector header.
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(true);
   const [leftPanel, setLeftPanel] = useState<"agent" | "media">("agent");
   const [rightPanel, setRightPanel] = useState<"inspector" | "index">("inspector");
   const [editDockTab, setEditDockTab] = useState<"timeline" | "transcript" | "vedit">("timeline");
@@ -568,6 +572,21 @@ function App() {
       console.warn("reject_proposal failed", e),
     );
   }
+
+  // Auto-expand the inspector rail when a proposal lands. Trust-audit
+  // is load-bearing for an agent-driven editor — the user shouldn't
+  // have to click anything to see *why* the agent suggested a cut.
+  // If they manually collapsed it again, that decision survives until
+  // the next proposal swap.
+  const lastProposalIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const currentId = activeProposal?.callId ?? null;
+    if (currentId && currentId !== lastProposalIdRef.current) {
+      setInspectorCollapsed(false);
+      setRightPanel("inspector");
+    }
+    lastProposalIdRef.current = currentId;
+  }, [activeProposal]);
 
   function inspectActiveProposal() {
     setInspectorCollapsed(false);
@@ -1474,7 +1493,12 @@ function App() {
       timelineCollapsed={isEditStage && editDockState !== "docked"}
       inspector={
         isEditStage && inspectorCollapsed ? (
-          <CollapsedInspectorButton onOpen={() => setInspectorCollapsed(false)} />
+          <CollapsedInspectorButton
+            onOpen={(panel) => {
+              setRightPanel(panel);
+              setInspectorCollapsed(false);
+            }}
+          />
         ) : isEditStage ? (
           <RightEditPanel
             active={rightPanel}
@@ -2366,21 +2390,47 @@ function indexTaskDetail(status: IndexingTask["status"]): string {
   return "Missing";
 }
 
-function CollapsedInspectorButton({ onOpen }: { onOpen: () => void }) {
+function CollapsedInspectorButton({
+  onOpen,
+}: {
+  onOpen: (panel: "inspector" | "index") => void;
+}) {
+  return (
+    <div className="flex h-full w-full flex-col items-stretch gap-1 py-2">
+      <CollapsedRailSpine
+        label="Index"
+        onOpen={() => onOpen("index")}
+      />
+      <div className="mx-1 h-px shrink-0 bg-[var(--color-border-subtle)]" aria-hidden />
+      <CollapsedRailSpine
+        label="Inspector"
+        onOpen={() => onOpen("inspector")}
+      />
+    </div>
+  );
+}
+
+function CollapsedRailSpine({
+  label,
+  onOpen,
+}: {
+  label: string;
+  onOpen: () => void;
+}) {
   return (
     <button
       type="button"
       onClick={onOpen}
-      className="flex h-full w-full flex-col items-center justify-start gap-2 px-1 py-3 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
-      aria-label="Open proposal inspector"
-      title="Open proposal inspector"
+      className="group flex flex-1 min-h-[100px] flex-col items-center justify-center gap-2 px-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+      aria-label={`Open ${label}`}
+      title={`Open ${label}`}
     >
-      <PanelRightOpen className="h-4 w-4 shrink-0 stroke-[1.75]" />
+      <PanelRightOpen className="h-4 w-4 shrink-0 stroke-[1.75] opacity-70 group-hover:opacity-100" />
       <span
         className="font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--text-caption)]"
         style={{ writingMode: "vertical-rl" }}
       >
-        Inspector
+        {label}
       </span>
     </button>
   );
