@@ -58,7 +58,7 @@ export function StageIndicator({ className }: StageIndicatorProps) {
               aria-selected={isCurrent}
               onClick={() => set(stage)}
               className={cn(
-                "group inline-flex items-center gap-1.5 h-7 px-2.5 rounded-[var(--radius-sm)]",
+                "group inline-flex items-center gap-1 h-7 px-2 rounded-[var(--radius-sm)]",
                 "border text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)]",
                 "transition-[background-color,border-color,color] duration-[120ms] ease-[cubic-bezier(0.2,0,0,1)]",
                 "focus-visible:outline-2 focus-visible:outline-[var(--color-border-focus)] focus-visible:outline-offset-1",
@@ -87,7 +87,7 @@ export function StageIndicator({ className }: StageIndicatorProps) {
               <span
                 aria-hidden
                 className={cn(
-                  "h-px w-3 mx-0.5",
+                  "h-px w-1.5 mx-px",
                   isComplete ? "bg-[var(--color-success)] opacity-60" : "bg-[var(--color-border-subtle)]",
                 )}
               />

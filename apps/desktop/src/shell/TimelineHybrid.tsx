@@ -128,7 +128,7 @@ export function TimelineHybrid({
               {t === tab ? (
                 <span
                   aria-hidden
-                  className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-[var(--color-brand)]"
+                  className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-[var(--color-brand-secondary)]"
                 />
               ) : null}
             </button>
@@ -224,7 +224,7 @@ function ViewToggle({
 
 function Legend() {
   const items = [
-    { color: "var(--color-success)", label: "Accepted" },
+    { color: "var(--color-viz-accepted)", label: "Accepted" },
     { color: "var(--color-warning)", label: "Pending" },
     { color: "var(--color-danger)", label: "Removed" },
     { color: "var(--color-risk)", label: "Warning" },
@@ -346,7 +346,7 @@ function TimelineLanes({
         aria-hidden
         className="pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 bg-[var(--color-viz-playhead)]"
         style={{
-          left: `calc(80px + ${playheadPct}% * (1 - 80px / 100%))`,
+          left: `calc(96px + (100% - 96px) * ${playheadPct} / 100)`,
           boxShadow: "0 0 8px var(--color-viz-playhead)",
         }}
       />
@@ -366,9 +366,9 @@ function Lane({
   children: ReactNode;
 }) {
   return (
-    <div className={cn("grid grid-cols-[80px_1fr] items-stretch", !last && "border-b border-[var(--color-border-subtle)]")}>
+    <div className={cn("grid grid-cols-[96px_minmax(0,1fr)] items-stretch", !last && "border-b border-[var(--color-border-subtle)]")}>
       <div
-        className="flex items-center justify-end pr-3 border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] sticky left-0"
+        className="z-10 flex items-center justify-end pr-3 border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] sticky left-0"
         style={{ height: rowHeight }}
       >
         <span className="text-[var(--text-micro)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
@@ -400,14 +400,20 @@ function VideoStrip({ frames }: { frames: string[] }) {
     );
   }
   return (
-    <div className="absolute inset-0 flex gap-px p-1">
+    <div className="absolute inset-0 flex gap-px p-1 bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(0,0,0,0))]">
       {frames.map((src, i) => (
-        <img
-          key={i}
-          src={src}
-          alt=""
-          className="flex-1 object-cover rounded-[2px] min-w-0"
-        />
+        <div key={i} className="relative flex-1 min-w-0 overflow-hidden rounded-[2px] border border-black/30">
+          <img
+            src={src}
+            alt=""
+            className="h-full w-full object-cover"
+          />
+          {i % 4 === 0 ? (
+            <span className="absolute bottom-0.5 left-1 rounded-[2px] bg-black/55 px-1 font-mono text-[8px] text-white/70">
+              {String(i + 1).padStart(2, "0")}
+            </span>
+          ) : null}
+        </div>
       ))}
     </div>
   );
@@ -449,10 +455,10 @@ function AudioWaveform({ peaks }: { peaks: number[] }) {
 }
 
 const STATUS_TO_VIZ: Partial<Record<PillStatus, string>> = {
-  accepted: "var(--color-viz-accepted)",
-  pending: "var(--color-viz-pending)",
-  rejected: "var(--color-viz-rejected)",
-  warning: "var(--color-viz-warning)",
+  accepted: "rgba(34, 197, 94, 0.72)",
+  pending: "rgba(245, 158, 11, 0.78)",
+  rejected: "rgba(239, 68, 68, 0.78)",
+  warning: "rgba(250, 204, 21, 0.72)",
   reviewing: "var(--color-brand-purple)",
 };
 
@@ -466,13 +472,12 @@ function AgentEditsLane({ edits, durationS }: { edits: AgentEdit[]; durationS: n
         return (
           <div
             key={e.id}
-            className="absolute top-1 bottom-1 rounded-[var(--radius-xs)] border opacity-90"
+            className="absolute top-1 bottom-1 rounded-[var(--radius-xs)] border"
             style={{
               left: `${left}%`,
               width: `${width}%`,
               backgroundColor: color,
               borderColor: color,
-              filter: "brightness(1.05)",
             }}
             title={e.label}
           />
@@ -516,10 +521,10 @@ function DiffStrip({ diff, durationS }: { diff: DiffChip[]; durationS: number })
         const width = Math.max(0.6, ((d.endS - d.startS) / durationS) * 100);
         const color =
           d.kind === "keep"
-            ? "var(--color-viz-accepted)"
+            ? "rgba(34, 197, 94, 0.82)"
             : d.kind === "trim"
-              ? "var(--color-viz-pending)"
-              : "var(--color-viz-rejected)";
+              ? "rgba(245, 158, 11, 0.86)"
+              : "rgba(239, 68, 68, 0.84)";
         return (
           <div
             key={d.id}

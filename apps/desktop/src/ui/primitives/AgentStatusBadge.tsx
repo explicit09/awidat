@@ -31,6 +31,7 @@ export function AgentStatusBadge({ status, detail, className, pulse = true }: Ag
     <div
       className={cn(
         "inline-flex items-center gap-2",
+        "max-w-full shrink-0 overflow-hidden whitespace-nowrap",
         "h-7 px-2.5 rounded-[var(--radius-sm)]",
         "border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)]",
         className,
@@ -47,11 +48,11 @@ export function AgentStatusBadge({ status, detail, className, pulse = true }: Ag
         />
         <span className="absolute inset-0 rounded-full" style={{ backgroundColor: meta.color }} />
       </span>
-      <span className="text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
+      <span className="shrink-0 text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
         {meta.label}
       </span>
       {detail ? (
-        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">· {detail}</span>
+        <span className="min-w-0 truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">· {detail}</span>
       ) : null}
     </div>
   );

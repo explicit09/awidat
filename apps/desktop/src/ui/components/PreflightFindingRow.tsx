@@ -21,6 +21,7 @@ export type PreflightFindingRowProps = {
   suggestedFix?: string;
   actions?: ReactNode;
   className?: string;
+  compact?: boolean;
   onClick?: () => void;
 };
 
@@ -32,6 +33,7 @@ export function PreflightFindingRow({
   suggestedFix,
   actions,
   className,
+  compact = false,
   onClick,
 }: PreflightFindingRowProps) {
   const meta = META[severity];
@@ -45,29 +47,45 @@ export function PreflightFindingRow({
         "w-full text-left",
         "flex items-start gap-3",
         "rounded-[var(--radius-md)] border border-[var(--color-border-subtle)]",
-        "bg-[var(--color-surface-card)] px-3 py-2.5",
+        "bg-[var(--color-surface-card)]",
+        compact ? "px-2.5 py-1" : "px-3 py-2.5",
         isInteractive && "hover:bg-[var(--color-surface-card-hover)] cursor-pointer",
         className,
       )}
     >
       <span
-        className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center [&_svg]:h-4 [&_svg]:w-4"
+        className={cn(
+          "mt-0.5 flex shrink-0 items-center justify-center",
+          compact ? "h-4 w-4 [&_svg]:h-3.5 [&_svg]:w-3.5" : "h-5 w-5 [&_svg]:h-4 [&_svg]:w-4",
+        )}
         style={{ color: meta.color }}
         aria-label={meta.label}
       >
         {meta.icon}
       </span>
-      <Stack gap="1" className="min-w-0 flex-1">
+      <Stack gap={compact ? "0" : "1"} className="min-w-0 flex-1">
         <Inline gap="2" align="center" wrap="wrap">
-          <span className="text-[var(--text-body)] text-[var(--color-text-primary)]">{message}</span>
+          <span className={cn(compact ? "text-[var(--text-body-sm)]" : "text-[var(--text-body)]", "text-[var(--color-text-primary)]")}>{message}</span>
           {time ? (
             <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">{time}</span>
           ) : null}
         </Inline>
-        {asset ? (
+        {compact && (asset || suggestedFix) ? (
+          <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            {asset}
+            {suggestedFix ? (
+              <>
+                <span className="text-[var(--color-text-disabled)]"> · </span>
+                <span className="font-semibold uppercase tracking-[var(--text-label--letter-spacing)]">Fix</span>
+                <span className="text-[var(--color-text-disabled)]"> · </span>
+                <span className="text-[var(--color-text-secondary)]">{suggestedFix}</span>
+              </>
+            ) : null}
+          </span>
+        ) : asset ? (
           <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">{asset}</span>
         ) : null}
-        {suggestedFix ? (
+        {!compact && suggestedFix ? (
           <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)]">
             <span className="font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-muted)]">
               Fix

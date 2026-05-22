@@ -5,7 +5,6 @@ import {
   FileImage,
   FileVideo,
   Image as ImageIcon,
-  PackageCheck,
   Play,
   Save,
   Settings as SettingsIcon,
@@ -25,6 +24,7 @@ import {
   cn,
   type PreflightSeverity,
 } from "../ui";
+import podcastWide from "./assets/podcast-wide.jpg";
 
 /**
  * DeliverySurface — concept Screen 7.
@@ -121,128 +121,309 @@ export function DeliverySurface({
     const provided = targets.find((t) => t.key === key);
     return provided ?? { key, active: false };
   });
+  const activeTargetCount = resolvedTargets.filter((target) => target.active).length;
 
   const counts = countBySeverity(findings);
   const filtered = severityFilter === "all"
     ? findings
     : findings.filter((f) => f.severity === severityFilter);
 
+  const selectedIssue = findings.find((f) => f.severity === "warning" || f.severity === "error" || f.severity === "failure") ?? findings[0];
+
   return (
-    <div className="grid h-full grid-cols-[260px_1fr_320px] bg-[var(--color-surface-app)] min-h-0">
-      {/* Targets */}
+    <div className="grid h-full grid-cols-[292px_minmax(0,1fr)_334px] bg-[var(--color-surface-app)] min-h-0">
+      {/* Agent delivery command */}
       <aside className="border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
-        <div className="h-10 px-3 flex items-center border-b border-[var(--color-border-subtle)] shrink-0">
-          <Inline gap="2" align="center">
-            <PackageCheck className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-text-muted)]" />
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
-              Targets
-            </span>
-          </Inline>
+        <div className="border-b border-[var(--color-border-subtle)] p-2.5">
+          <Stack gap="2">
+            <Inline justify="between" align="center">
+              <Inline gap="2" align="center">
+                <span className="text-[var(--color-brand-secondary)]">›</span>
+                <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
+                  Agent command
+                </span>
+              </Inline>
+              <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">Delivery</span>
+            </Inline>
+            <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2.5">
+              <p className="text-[var(--text-body-sm)] leading-relaxed text-[var(--color-text-primary)]">
+                Check this project for delivery and fix anything that could affect export quality.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <DeliveryContextChip label="Clip: Interview_A" tone="blue" />
+              <DeliveryContextChip label="Range: 00:12-18:40" tone="blue" />
+              <DeliveryContextChip label="Transcript region selected" tone="green" />
+              <DeliveryContextChip label="Target: Delivery" tone="purple" />
+            </div>
+          </Stack>
         </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          <Stack gap="1">
-            {resolvedTargets.map((t) => {
-              const meta = TARGET_META[t.key];
-              const Icon = meta.icon;
-              return (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => onToggleTarget?.(t.key)}
-                  aria-pressed={t.active}
-                  className={cn(
-                    "w-full text-left rounded-[var(--radius-md)] border px-2.5 py-2 transition-colors",
-                    t.active
-                      ? "border-[var(--color-border-active)] bg-[var(--color-surface-selected)] glow-active"
-                      : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]",
-                  )}
-                >
-                  <Inline gap="2" align="center">
-                    <Icon className="h-4 w-4 stroke-[1.75] text-[var(--color-text-primary)] shrink-0" />
-                    <Stack gap="0" className="min-w-0 flex-1">
-                      <span className="text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)] truncate">
-                        {t.label ?? meta.label}
-                      </span>
-                      <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] truncate">
-                        {t.spec ?? meta.spec}
-                      </span>
-                    </Stack>
-                    {t.active ? (
-                      <CircleCheck className="h-4 w-4 stroke-[1.75] text-[var(--color-success)] shrink-0" />
-                    ) : null}
-                  </Inline>
-                </button>
-              );
-            })}
+        <div className="border-b border-[var(--color-border-subtle)] p-2.5">
+          <Stack gap="2">
+            <Inline justify="between" align="baseline">
+              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
+                Agent plan
+              </span>
+              <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">100%</span>
+            </Inline>
+            <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+              <div className="h-full rounded-full bg-[var(--color-success)]" style={{ width: "100%" }} />
+            </div>
+            <span className="text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
+              Delivery / Preflight
+            </span>
+            {[
+              "Analyze timeline & media",
+              "Run technical preflight",
+              "Check captions & safe areas",
+              "Validate delivery requirements",
+              "Estimate render & file size",
+            ].map((item, index) => (
+              <div key={item} className="grid grid-cols-[20px_1fr_auto] items-center gap-2">
+                <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">{index + 1}.</span>
+                <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)]">{item}</span>
+                <CircleCheck className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-success)]" />
+              </div>
+            ))}
+            <Inline justify="between" align="baseline">
+              <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">Est. time remaining</span>
+              <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">00:00:00</span>
+            </Inline>
+          </Stack>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2.5">
+          <Stack gap="2">
+            <Inline justify="between" align="baseline">
+              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
+                Activity log
+              </span>
+              <span className="rounded-full bg-[var(--color-surface-card)] px-2 py-0.5 font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                {findings.length}
+              </span>
+            </Inline>
+            {[
+              "Checked active delivery preset",
+              `${activeTargetCount} target${activeTargetCount === 1 ? "" : "s"} selected for export`,
+              `${counts.warning} warnings and ${counts.error + counts.failure} failures flagged`,
+            ].map((item, index) => (
+              <div key={item} className="grid grid-cols-[24px_1fr] gap-2 text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+                <span className="font-mono text-[var(--color-text-muted)]">{String(index + 1).padStart(2, "0")}</span>
+                <span className="leading-snug">{item}</span>
+              </div>
+            ))}
+            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
+              Suggested next actions
+            </span>
+            <DeliverySuggestion
+              icon={<Download />}
+              title="Generate platform variants"
+              detail="Auto reframe for TikTok, Shorts, Reels"
+              onClick={onGenerateVariants}
+            />
+            <DeliverySuggestion
+              icon={<Captions />}
+              title="Burn in captions"
+              detail="Create a captioned version"
+              onClick={() => onToggleTarget?.("captions")}
+            />
+            <DeliverySuggestion
+              icon={<Save />}
+              title="Save delivery preset"
+              detail="Save these settings as a preset"
+              onClick={onSavePreset}
+            />
           </Stack>
         </div>
       </aside>
 
       {/* Preflight */}
-      <main className="flex flex-col min-h-0">
-        <div className="h-10 px-4 flex items-center justify-between border-b border-[var(--color-border-subtle)] shrink-0">
-          <Inline gap="2" align="center">
-            <ShieldCheck className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-text-muted)]" />
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
-              Preflight
-            </span>
-            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              {findings.length} {findings.length === 1 ? "finding" : "findings"}
-            </span>
-          </Inline>
-          <Inline gap="1" align="center">
-            <SeverityChip label="All" count={findings.length} active={severityFilter === "all"} onClick={() => setSeverityFilter("all")} />
-            <SeverityChip label="Pass" count={counts.pass} color="var(--color-success)" active={severityFilter === "pass"} onClick={() => setSeverityFilter("pass")} />
-            <SeverityChip label="Warn" count={counts.warning} color="var(--color-warning)" active={severityFilter === "warning"} onClick={() => setSeverityFilter("warning")} />
-            <SeverityChip label="Error" count={counts.error + counts.failure} color="var(--color-danger)" active={severityFilter === "error"} onClick={() => setSeverityFilter("error")} />
-          </Inline>
-        </div>
-        <div className="flex-1 overflow-y-auto p-3">
-          {filtered.length === 0 ? (
-            <EmptyPreflight />
-          ) : (
+      <main className="grid min-h-0 grid-rows-[98px_minmax(0,1fr)_190px]">
+        <section className="border-b border-[var(--color-border-subtle)] p-1.5">
+          <div className="grid h-full grid-cols-6 gap-2">
+            {resolvedTargets.map((target) => {
+              const meta = TARGET_META[target.key];
+              const Icon = meta.icon;
+              return (
+                <button
+                  key={`preset-${target.key}`}
+                  type="button"
+                  onClick={() => onToggleTarget?.(target.key)}
+                  aria-pressed={target.active}
+                  className={cn(
+                    "rounded-[var(--radius-md)] border px-2 py-1.5 text-left transition-colors",
+                    target.active
+                      ? "border-[var(--color-border-active)] bg-[var(--color-surface-selected)] glow-active"
+                      : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] hover:border-[var(--color-border)]",
+                  )}
+                >
+                  <Stack gap="1">
+                    <Inline justify="between" align="center">
+                      <Icon className="h-4 w-4 stroke-[1.5] text-[var(--color-text-primary)]" />
+                      {target.active ? <CircleCheck className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-success)]" /> : null}
+                    </Inline>
+                    <Stack gap="0">
+                      <span className="truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+                        {target.label ?? meta.label}
+                      </span>
+                      <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                        {target.spec ?? meta.spec}
+                      </span>
+                    </Stack>
+                  </Stack>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+        <section className="flex min-h-0 flex-col">
+          <div className="h-8 px-3 flex items-center justify-between border-b border-[var(--color-border-subtle)] shrink-0">
+            <Inline gap="2" align="center">
+              <ShieldCheck className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-text-muted)]" />
+              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
+                Preflight
+              </span>
+              <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                {findings.length} {findings.length === 1 ? "finding" : "findings"}
+              </span>
+            </Inline>
+            <Inline gap="1" align="center">
+              <SeverityChip label="All" count={findings.length} active={severityFilter === "all"} onClick={() => setSeverityFilter("all")} />
+              <SeverityChip label="Pass" count={counts.pass} color="var(--color-success)" active={severityFilter === "pass"} onClick={() => setSeverityFilter("pass")} />
+              <SeverityChip label="Warn" count={counts.warning} color="var(--color-warning)" active={severityFilter === "warning"} onClick={() => setSeverityFilter("warning")} />
+              <SeverityChip label="Error" count={counts.error + counts.failure} color="var(--color-danger)" active={severityFilter === "error"} onClick={() => setSeverityFilter("error")} />
+            </Inline>
+          </div>
+          <div className="flex-1 overflow-y-auto p-2">
+            {filtered.length === 0 ? (
+              <EmptyPreflight />
+            ) : (
+              <Stack gap="1">
+                {filtered.map((f) => (
+                  <PreflightFindingRow
+                    key={f.id}
+                    severity={f.severity}
+                    time={f.time}
+                    message={f.message}
+                    asset={f.asset}
+                    suggestedFix={f.suggestedFix}
+                    compact
+                    className={cn(
+                      f.message === selectedIssue?.message &&
+                        f.severity === "warning" &&
+                        "border-[rgba(245,158,11,0.75)] bg-[rgba(245,158,11,0.07)]",
+                      (f.severity === "failure" || f.severity === "error") &&
+                        "border-[rgba(239,68,68,0.65)] bg-[rgba(239,68,68,0.06)]",
+                    )}
+                    actions={
+                      onAgentRepair && (f.severity === "warning" || f.severity === "error" || f.severity === "failure") ? (
+                        <Button
+                          variant="repair"
+                          size="xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAgentRepair(f);
+                          }}
+                        >
+                          Repair
+                        </Button>
+                      ) : undefined
+                    }
+                  />
+                ))}
+                <div className="mt-0.5 rounded-[var(--radius-md)] border border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.08)] px-2.5 py-1.5">
+                  <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
+                    Preflight complete. {counts.error + counts.failure} failure, {counts.warning} warnings found.
+                  </span>
+                  <p className="mt-1 text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+                    Address these issues to ensure the best quality and platform performance.
+                  </p>
+                </div>
+              </Stack>
+            )}
+          </div>
+        </section>
+        <section className="grid grid-cols-[minmax(0,1fr)_248px] gap-2 border-t border-[var(--color-border-subtle)] p-2">
+          <div className="relative overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-black">
+            <img src={podcastWide} alt="" className="absolute inset-0 h-full w-full object-cover opacity-55" />
+            <div className="absolute inset-0 bg-black/30" />
+            <div className="absolute inset-[10%] border border-[rgba(56,189,248,0.55)]" />
+            <div className="absolute inset-y-[6%] left-[36%] right-[36%] border border-[rgba(168,85,247,0.65)] bg-[rgba(168,85,247,0.08)]" />
+            <div className="absolute inset-x-[10%] bottom-[16%] h-10 border border-[rgba(245,158,11,0.7)] bg-[rgba(245,158,11,0.08)]" />
+            <div className="absolute bottom-2 left-2 rounded-[var(--radius-xs)] border border-white/10 bg-black/65 px-2 py-1 text-[var(--text-caption)] text-white/75">
+              Preview · safe areas
+            </div>
+          </div>
+          <Card padding="md">
             <Stack gap="2">
-              {filtered.map((f) => (
-                <PreflightFindingRow
-                  key={f.id}
-                  severity={f.severity}
-                  time={f.time}
-                  message={f.message}
-                  asset={f.asset}
-                  suggestedFix={f.suggestedFix}
-                  actions={
-                    onAgentRepair && (f.severity === "warning" || f.severity === "error" || f.severity === "failure") ? (
-                      <Button
-                        variant="repair"
-                        size="xs"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onAgentRepair(f);
-                        }}
-                      >
-                        Repair
-                      </Button>
-                    ) : undefined
-                  }
-                />
+              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+                Safe-area legend
+              </span>
+              {[
+                ["YouTube 16:9", "1920x1080", "var(--color-brand-secondary)"],
+                ["TikTok 9:16", "1080x1920", "var(--color-brand-purple)"],
+                ["Caption safe", "mobile / TV", "var(--color-warning)"],
+                ["Title safe", "1546x874", "var(--color-success)"],
+              ].map(([label, value, color]) => (
+                <Inline key={label} justify="between" gap="3" align="center">
+                  <Inline gap="2" align="center">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                    <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)]">{label}</span>
+                  </Inline>
+                  <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">{value}</span>
+                </Inline>
               ))}
             </Stack>
-          )}
-        </div>
+          </Card>
+        </section>
       </main>
 
       {/* Summary */}
       <aside className="border-l border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
-        <div className="h-10 px-3 flex items-center border-b border-[var(--color-border-subtle)] shrink-0">
+        <div className="h-8 px-3 flex items-center border-b border-[var(--color-border-subtle)] shrink-0">
           <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
-            Render summary
+            Issue inspector
           </span>
         </div>
-        <div className="flex-1 overflow-y-auto p-3">
-          <Stack gap="4">
+        <div className="flex-1 overflow-y-auto p-2.5">
+          <Stack gap="3">
+            {selectedIssue ? (
+              <Card padding="md" tone={selectedIssue.severity === "pass" ? "default" : "warning"}>
+                <Stack gap="3">
+                  <Inline justify="between" align="center">
+                    <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
+                      {selectedIssue.message}
+                    </span>
+                    <span className="text-[var(--text-caption)] uppercase font-semibold text-[var(--color-warning)]">
+                      {selectedIssue.severity}
+                    </span>
+                  </Inline>
+                  <KV label="Asset" value={selectedIssue.asset ?? "Timeline"} />
+                  {selectedIssue.time ? <KV label="Time" value={selectedIssue.time} /> : null}
+                  <p className="text-[var(--text-body-sm)] leading-relaxed text-[var(--color-text-secondary)]">
+                    Captions or render constraints may affect platform quality. Use the agent repair flow to apply the safest automatic fix before export.
+                  </p>
+                  {selectedIssue.suggestedFix ? (
+                    <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-3 py-2 text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+                      {selectedIssue.suggestedFix}
+                    </div>
+                  ) : null}
+                  <Button
+                    variant="repair"
+                    size="sm"
+                    onClick={() => onAgentRepair?.(selectedIssue)}
+                    leadingIcon={<SettingsIcon className="h-3.5 w-3.5 stroke-[1.75]" />}
+                  >
+                    Agent Repair
+                  </Button>
+                </Stack>
+              </Card>
+            ) : null}
             {summary ? (
               <Card padding="md">
                 <Stack gap="3">
+                  <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+                    Render summary
+                  </span>
                   <KV label="Duration" value={summary.duration} />
                   <KV
                     label="Outputs"
@@ -251,6 +432,9 @@ export function DeliverySurface({
                   {summary.estimatedSize ? (
                     <KV label="Est. size" value={summary.estimatedSize} />
                   ) : null}
+                  <KV label="Preset" value="YouTube 16:9" />
+                  <KV label="Format" value="MP4 · H.264 High" />
+                  <KV label="Render time" value="00:38:42" />
                   <Stack gap="1">
                     <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
                       Delivery confidence
@@ -295,6 +479,65 @@ export function DeliverySurface({
         </div>
       </aside>
     </div>
+  );
+}
+
+function DeliveryContextChip({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "blue" | "green" | "purple";
+}) {
+  const toneClass = {
+    blue: "border-[rgba(59,130,246,0.5)] bg-[rgba(59,130,246,0.12)] text-[var(--color-pill-proposed-text)]",
+    green: "border-[rgba(32,201,151,0.5)] bg-[rgba(32,201,151,0.12)] text-[var(--color-pill-ready-text)]",
+    purple: "border-[rgba(168,85,247,0.5)] bg-[rgba(168,85,247,0.12)] text-[var(--color-pill-reviewing-text)]",
+  }[tone];
+
+  return (
+    <span
+      className={cn(
+        "min-w-0 truncate rounded-[var(--radius-sm)] border px-2 py-1 text-[var(--text-caption)]",
+        toneClass,
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function DeliverySuggestion({
+  icon,
+  title,
+  detail,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  detail: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
+    >
+      <Inline gap="3" align="center">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius-sm)] bg-[var(--color-surface-input)] text-[var(--color-brand-secondary)] [&>svg]:h-4 [&>svg]:w-4 [&>svg]:stroke-[1.75]">
+          {icon}
+        </span>
+        <Stack gap="0" className="min-w-0">
+          <span className="truncate text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
+            {title}
+          </span>
+          <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            {detail}
+          </span>
+        </Stack>
+      </Inline>
+    </button>
   );
 }
 
@@ -370,6 +613,3 @@ function KV({ label, value }: { label: string; value: string | ReactNode }) {
     </Inline>
   );
 }
-
-// Suppress unused warning — SettingsIcon kept available for a settings-shortcut iteration.
-void SettingsIcon;

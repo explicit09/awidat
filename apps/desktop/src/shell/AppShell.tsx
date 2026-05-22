@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import wordmark from "../brand/awidat-wordmark.svg";
-import { AgentStatusBadge, Inline } from "../ui";
+import { AgentStatusBadge, Inline, cn } from "../ui";
 
 /**
  * AppShell — the v2 application shell.
@@ -14,7 +14,7 @@ import { AgentStatusBadge, Inline } from "../ui";
  *   ││  agent   │└─────────────────────────────────┘│  proposal  ││
  *   ││  command ││         timeline / transcript    ││  inspector ││
  *   ││  rail    │└─────────────────────────────────┘│            ││
- *   ││  320     ││                                  ││  320       ││
+ *   ││  360     ││                                  ││  336       ││
  *   │└──────────┘└────────────────────────────────-─┘└────────────┘│
  *   ├───────────────────────────────────────────────────────── 32 ─┤   footer
  *   └────────────────────────────────────────────────────────────-─┘
@@ -31,6 +31,9 @@ export type AppShellProps = {
   preview?: ReactNode;
   timeline?: ReactNode;
   inspector?: ReactNode;
+  inspectorCollapsed?: boolean;
+  /** Optional whole-workspace override for screens whose spec layout is not the three-pane cockpit. */
+  workspace?: ReactNode;
   footer?: ReactNode;
 };
 
@@ -43,27 +46,29 @@ export function AppShell({
   preview,
   timeline,
   inspector,
+  inspectorCollapsed = false,
+  workspace,
   footer,
 }: AppShellProps) {
   return (
-    <div className="grid h-screen w-screen grid-rows-[var(--layout-chrome-h)_var(--layout-lens-h)_1fr_var(--layout-footer-h)] bg-[var(--color-surface-app)] text-[var(--color-text-primary)] font-sans">
+    <div className="grid h-screen w-screen min-w-0 overflow-hidden grid-rows-[var(--layout-chrome-h)_var(--layout-lens-h)_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
       {/* Top chrome */}
-      <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-4 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] px-4">
-        <div className="flex items-center justify-start">
+      <header className="grid min-w-0 grid-cols-[auto_minmax(160px,1fr)_auto] items-center gap-3 overflow-hidden border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3">
+        <div className="flex min-w-0 items-center justify-start">
           {topChromeStart ?? (
             <Inline gap="2" align="center">
               <img src={wordmark} alt="Awidat" className="h-7" />
             </Inline>
           )}
         </div>
-        <div className="flex items-center justify-center">{topChromeCenter}</div>
-        <div className="flex items-center justify-end">
+        <div className="flex min-w-0 items-center justify-center overflow-hidden">{topChromeCenter}</div>
+        <div className="flex min-w-0 items-center justify-end overflow-hidden">
           {topChromeEnd ?? <AgentStatusBadge status="idle" detail="No project" />}
         </div>
       </header>
 
       {/* Workflow lens row */}
-      <nav className="border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] px-4 flex items-center">
+      <nav className="min-w-0 overflow-hidden border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3 flex items-center">
         {lensRow ?? (
           <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold">
             Lens nav — pending Phase 2.3
@@ -72,25 +77,38 @@ export function AppShell({
       </nav>
 
       {/* Workspace */}
-      <div className="grid grid-cols-[var(--layout-rail-w)_1fr_var(--layout-inspector-w)] min-h-0 overflow-hidden">
-        <aside className="border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] min-h-0 overflow-y-auto">
-          {commandRail ?? <RegionPlaceholder label="Agent / Command Rail · Phase 2.4" />}
-        </aside>
-        <main className="grid grid-rows-[1fr_280px] min-h-0 min-w-0">
-          <section className="bg-[var(--color-surface-app)] min-h-0 min-w-0 overflow-hidden">
-            {preview ?? <RegionPlaceholder label="Preview / Review surface · Phase 2.5" />}
-          </section>
-          <section className="border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] min-h-0 min-w-0 overflow-hidden">
-            {timeline ?? <RegionPlaceholder label="Timeline / Transcript hybrid · Phase 2.6" />}
-          </section>
-        </main>
-        <aside className="border-l border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] min-h-0 overflow-y-auto">
-          {inspector ?? <RegionPlaceholder label="Proposal Inspector · Phase 2.7" />}
-        </aside>
-      </div>
+      {workspace ? (
+        <div className="min-h-0 min-w-0 overflow-hidden p-2">
+          <section className="panel h-full min-h-0 overflow-hidden">{workspace}</section>
+        </div>
+      ) : (
+        <div
+          className={cn(
+            "grid min-h-0 min-w-0 overflow-hidden gap-2 p-2",
+            inspectorCollapsed
+              ? "grid-cols-[var(--layout-rail-w)_minmax(0,1fr)_44px]"
+              : "grid-cols-[var(--layout-rail-w)_minmax(0,1fr)_var(--layout-inspector-w)]",
+          )}
+        >
+          <aside className="panel min-h-0 overflow-y-auto">
+            {commandRail ?? <RegionPlaceholder label="Agent / Command Rail · Phase 2.4" />}
+          </aside>
+          <main className="grid grid-rows-[minmax(260px,48vh)_minmax(220px,1fr)] min-h-0 min-w-0 gap-2">
+            <section className="panel min-h-0 min-w-0 overflow-hidden">
+              {preview ?? <RegionPlaceholder label="Preview / Review surface · Phase 2.5" />}
+            </section>
+            <section className="panel min-h-0 min-w-0 overflow-hidden">
+              {timeline ?? <RegionPlaceholder label="Timeline / Transcript hybrid · Phase 2.6" />}
+            </section>
+          </main>
+          <aside className={cn("panel min-h-0", inspectorCollapsed ? "overflow-hidden" : "overflow-y-auto")}>
+            {inspector ?? <RegionPlaceholder label="Proposal Inspector · Phase 2.7" />}
+          </aside>
+        </div>
+      )}
 
       {/* Status footer */}
-      <footer className="border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] px-4 flex items-center justify-between">
+      <footer className="min-w-0 overflow-hidden border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3 flex items-center justify-between">
         {footer ?? (
           <>
             <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">

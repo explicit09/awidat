@@ -1,12 +1,16 @@
 import {
+  Check,
   ChevronDown,
+  Edit3,
   Maximize2,
   MoreHorizontal,
   Pause,
   Play,
+  Search,
   SkipBack,
   SkipForward,
   Volume2,
+  X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import {
@@ -87,6 +91,10 @@ export type PreviewSurfaceProps = {
   onSetRate?: (r: number) => void;
   onSetViewMode?: (m: PreviewViewMode) => void;
   onOpenProposalMenu?: () => void;
+  onInspectProposal?: () => void;
+  onReviseProposal?: () => void;
+  onAcceptProposal?: () => void;
+  onRejectProposal?: () => void;
   onFullscreen?: () => void;
 };
 
@@ -113,9 +121,14 @@ export function PreviewSurface({
   onSetRate,
   onSetViewMode,
   onOpenProposalMenu,
+  onInspectProposal,
+  onReviseProposal,
+  onAcceptProposal,
+  onRejectProposal,
   onFullscreen,
 }: PreviewSurfaceProps) {
   const [rateMenuOpen, setRateMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   return (
     <Stack gap="0" className="h-full w-full bg-[var(--color-surface-app)]">
@@ -146,7 +159,25 @@ export function PreviewSurface({
           <ViewModeToggle value={viewMode} onChange={onSetViewMode} />
         </Inline>
         <Inline gap="1" align="center">
-          <IconButton icon={<MoreHorizontal />} label="More" size="sm" />
+          <div className="relative">
+            <IconButton
+              icon={<MoreHorizontal />}
+              label="More"
+              size="sm"
+              onClick={() => setMoreMenuOpen((x) => !x)}
+              aria-haspopup="menu"
+              aria-expanded={moreMenuOpen}
+            />
+            {moreMenuOpen ? (
+              <PreviewMoreMenu
+                onClose={() => setMoreMenuOpen(false)}
+                onInspect={onInspectProposal}
+                onRevise={onReviseProposal}
+                onAccept={onAcceptProposal}
+                onReject={onRejectProposal}
+              />
+            ) : null}
+          </div>
           <IconButton icon={<Maximize2 />} label="Fullscreen" size="sm" onClick={onFullscreen} />
         </Inline>
       </div>
@@ -275,6 +306,54 @@ export function PreviewSurface({
         </Inline>
       </div>
     </Stack>
+  );
+}
+
+function PreviewMoreMenu({
+  onClose,
+  onInspect,
+  onRevise,
+  onAccept,
+  onReject,
+}: {
+  onClose: () => void;
+  onInspect?: () => void;
+  onRevise?: () => void;
+  onAccept?: () => void;
+  onReject?: () => void;
+}) {
+  const actions = [
+    { label: "Inspect deeper", icon: Search, action: onInspect },
+    { label: "Revise", icon: Edit3, action: onRevise },
+    { label: "Accept", icon: Check, action: onAccept },
+    { label: "Reject", icon: X, action: onReject },
+  ];
+  return (
+    <div
+      role="menu"
+      className="absolute right-0 top-full z-20 mt-1 w-40 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-modal)] p-1 elev-2"
+    >
+      {actions.map(({ label, icon: Icon, action }) => (
+        <button
+          key={label}
+          type="button"
+          role="menuitem"
+          disabled={!action}
+          onClick={() => {
+            action?.();
+            onClose();
+          }}
+          className={cn(
+            "flex h-7 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left text-[var(--text-body-sm)]",
+            "text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
+            "disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--color-text-secondary)]",
+          )}
+        >
+          <Icon className="h-3.5 w-3.5 shrink-0 stroke-[1.75]" />
+          <span>{label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 

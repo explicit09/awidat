@@ -1,18 +1,18 @@
 import {
   AudioWaveform,
   Captions,
-  ChevronDown,
   ChevronRight,
   Eye,
   FileText,
   Info,
   Maximize2,
+  PanelRightClose,
   SearchCheck,
   Users,
   VolumeX,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   Button,
   ConfidenceMeter,
@@ -110,6 +110,7 @@ export type ProposalInspectorProps = {
   onSelectAlternative?: (alt: Alternative) => void;
   /** Fired when the user clicks the title-row maximize icon (opens the deep-dive view). */
   onMaximize?: () => void;
+  onCollapse?: () => void;
 };
 
 export function ProposalInspector({
@@ -121,11 +122,12 @@ export function ProposalInspector({
   onInspectDeeper,
   onSelectAlternative,
   onMaximize,
+  onCollapse,
 }: ProposalInspectorProps) {
   if (!data) {
     return (
-      <Stack gap="3" className="p-4 h-full">
-        <Header />
+      <Stack gap="3" className="p-3 h-full">
+        <Header onCollapse={onCollapse} />
         <Stack gap="2" className="text-[var(--color-text-muted)]">
           <span className="text-[var(--text-body-sm)]">
             No proposal selected. Pick a change from the timeline to see why the agent suggested it.
@@ -137,10 +139,10 @@ export function ProposalInspector({
 
   return (
     <div className="flex h-full flex-col">
-      <Header onMaximize={onMaximize} />
+      <Header onMaximize={onMaximize} onCollapse={onCollapse} />
 
       <div className="flex-1 overflow-y-auto">
-        <Stack gap="4" className="p-4 pb-2">
+        <Stack gap="3" className="p-3 pb-2">
           {/* Title + status */}
           <Stack gap="2">
             <Inline justify="between" align="start" gap="2">
@@ -176,8 +178,8 @@ export function ProposalInspector({
           {/* Confidence */}
           {typeof data.confidence === "number" ? (
             <Section title="Confidence">
-              <Inline gap="4" align="center">
-                <ConfidenceRing score={data.confidence} size={56} thickness={5} />
+              <Inline gap="3" align="center">
+                <ConfidenceRing score={data.confidence} size={48} thickness={4} />
                 <div className="flex-1">
                   <ConfidenceMeter score={data.confidence} label="" size="sm" />
                 </div>
@@ -274,7 +276,7 @@ export function ProposalInspector({
   );
 }
 
-function Header({ onMaximize }: { onMaximize?: () => void } = {}) {
+function Header({ onMaximize, onCollapse }: { onMaximize?: () => void; onCollapse?: () => void } = {}) {
   return (
     <div className="h-9 px-3 border-b border-[var(--color-border-subtle)] flex items-center justify-between shrink-0">
       <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
@@ -293,10 +295,11 @@ function Header({ onMaximize }: { onMaximize?: () => void } = {}) {
         ) : null}
         <button
           type="button"
+          onClick={onCollapse}
           className="h-6 w-6 inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
           aria-label="Collapse"
         >
-          <ChevronDown className="h-3 w-3 stroke-[1.75]" />
+          <PanelRightClose className="h-3 w-3 stroke-[1.75]" />
         </button>
       </Inline>
     </div>
@@ -377,6 +380,3 @@ function toLevel(score: number): ConfidenceLevel {
 function defaultStatusLabel(status: PillStatus): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
-
-// Suppress unused warning — useState is reserved for future collapsible sections.
-void useState;

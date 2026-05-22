@@ -4,7 +4,7 @@ import { cn } from "../cn";
 
 const card = cva(
   [
-    "rounded-[var(--radius-lg)] border bg-[var(--color-surface-card)]",
+    "rounded-[var(--radius-md)] border bg-[var(--color-surface-card)]",
     "border-[var(--color-border)]",
     "transition-[background-color,border-color,box-shadow] duration-[120ms]",
     "ease-[cubic-bezier(0.2,0,0,1)]",
@@ -26,8 +26,8 @@ const card = cva(
       padding: {
         none: "p-0",
         sm: "p-2",
-        md: "p-3",
-        lg: "p-4",
+        md: "p-2.5",
+        lg: "p-3",
       },
     },
     defaultVariants: { interactive: false, tone: "default", padding: "md" },

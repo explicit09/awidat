@@ -21,8 +21,8 @@ export type PillStatus = (typeof PILL_STATUSES)[number];
 
 const pill = cva(
   [
-    "inline-flex items-center gap-1.5",
-    "h-[var(--layout-pill-h)] px-2",
+    "inline-flex items-center gap-1",
+    "h-[var(--layout-pill-h)] px-1.5",
     "rounded-[var(--radius-sm)] border",
     "font-semibold",
     "text-[var(--text-label)] leading-[1] tracking-[var(--text-label--letter-spacing)]",

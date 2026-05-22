@@ -30,20 +30,20 @@ const button = cva(
           "hover:bg-[var(--color-surface-hover)]",
         ],
         accept: [
-          "bg-[var(--color-success-active)] border-[var(--color-success)] text-[#ECFDF5]",
-          "hover:bg-[var(--color-success)] hover:border-[var(--color-success-hover)]",
+          "bg-[rgba(34,197,94,0.14)] border-[rgba(34,197,94,0.46)] text-[var(--color-pill-accepted-text)]",
+          "hover:bg-[rgba(34,197,94,0.2)] hover:border-[rgba(74,222,128,0.58)]",
         ],
         reject: [
-          "bg-[#7F1D1D] border-[var(--color-danger)] text-[var(--color-text-on-danger)]",
-          "hover:bg-[#991B1B] hover:border-[#F87171]",
+          "bg-[rgba(239,68,68,0.13)] border-[rgba(239,68,68,0.46)] text-[var(--color-pill-rejected-text)]",
+          "hover:bg-[rgba(239,68,68,0.2)] hover:border-[rgba(248,113,113,0.58)]",
         ],
         revise: [
-          "bg-[var(--color-surface-modal)] border-[var(--color-border-strong)] text-[var(--color-text-primary)]",
-          "hover:bg-[#281A4D] hover:border-[var(--color-brand-purple)] hover:text-[#DDD6FE]",
+          "bg-[rgba(59,130,246,0.12)] border-[rgba(59,130,246,0.55)] text-[var(--color-pill-proposed-text)]",
+          "hover:bg-[rgba(59,130,246,0.2)] hover:border-[var(--color-border-strong)] hover:text-[#DBEAFE]",
         ],
         repair: [
-          "bg-[#3B0764] border-[var(--color-brand-purple)] text-[#EDE9FE]",
-          "hover:bg-[#5B21B6]",
+          "bg-[rgba(168,85,247,0.14)] border-[rgba(168,85,247,0.55)] text-[var(--color-pill-reviewing-text)]",
+          "hover:bg-[rgba(168,85,247,0.22)]",
         ],
         danger: [
           "bg-[var(--color-failure)] border-[var(--color-failure)] text-[var(--color-text-on-danger)]",
@@ -51,8 +51,8 @@ const button = cva(
         ],
       },
       size: {
-        md: "h-[var(--layout-btn-h)] px-3 text-[var(--text-body)]",
-        sm: "h-[var(--layout-btn-h-compact)] px-2.5 text-[var(--text-body-sm)]",
+        md: "h-[var(--layout-btn-h)] px-2.5 text-[var(--text-body-sm)]",
+        sm: "h-[var(--layout-btn-h-compact)] px-2 text-[var(--text-caption)]",
         xs: "h-5 px-1.5 text-[var(--text-caption)] gap-1",
       },
     },

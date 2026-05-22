@@ -40,7 +40,7 @@ export function LensNav({ className }: LensNavProps) {
   const set = useLensStore((s) => s.set);
 
   return (
-    <div role="tablist" aria-label="Workflow lens" className={cn("flex items-center gap-1 h-full", className)}>
+    <div role="tablist" aria-label="Workflow lens" className={cn("flex h-full min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden", className)}>
       {LENSES.map((lens) => {
         const Icon = LENS_ICON[lens];
         const isCurrent = lens === current;
@@ -52,7 +52,7 @@ export function LensNav({ className }: LensNavProps) {
             aria-selected={isCurrent}
             onClick={() => set(lens)}
             className={cn(
-              "relative inline-flex items-center gap-2 h-9 px-3",
+              "relative inline-flex shrink-0 items-center gap-1.5 h-7 px-2",
               "text-[var(--text-body-sm)] font-medium",
               "transition-[color,background-color] duration-[120ms] ease-[cubic-bezier(0.2,0,0,1)]",
               "focus-visible:outline-2 focus-visible:outline-[var(--color-border-focus)] focus-visible:outline-offset-[-2px]",
@@ -62,17 +62,17 @@ export function LensNav({ className }: LensNavProps) {
             )}
           >
             <Icon
-              className="h-4 w-4"
+              className="h-3.5 w-3.5"
               strokeWidth={1.75}
               style={{
-                color: isCurrent ? "var(--color-brand)" : "currentColor",
+                color: isCurrent ? "var(--color-brand-secondary)" : "currentColor",
               }}
             />
             <span>{LENS_LABEL[lens]}</span>
             {isCurrent ? (
               <span
                 aria-hidden
-                className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--color-brand)]"
+                className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[var(--color-brand-secondary)]"
               />
             ) : null}
           </button>

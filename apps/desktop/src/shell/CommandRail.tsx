@@ -9,7 +9,7 @@ import {
   Terminal,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { Button, Divider, IconButton, Inline, Pill, Stack, cn } from "../ui";
+import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
 
 /**
  * Command Rail — the left rail of the cockpit.
@@ -57,11 +57,13 @@ export type CommandRailProps = {
   /** What the agent intends to do for the current turn. */
   plan?: PlanItem[];
   /** Current task progress label, e.g. "Reading transcript… 67%". */
-  taskProgress?: { label: string; progress?: number };
+  taskProgress?: { label: string; progress?: number; eta?: string };
   /** Activity log entries — collapsed by default. */
   activity?: ActivityEntry[];
   /** Suggestions the agent surfaces for the user's next move. */
   suggestions?: SuggestedAction[];
+  /** Optional prefilled command for static/demo review surfaces. */
+  initialDraft?: string;
   /** True while a turn is running — toggles Send → Stop. */
   running?: boolean;
   /** Called when the user submits the command field. */
@@ -81,13 +83,14 @@ export function CommandRail({
   taskProgress,
   activity = [],
   suggestions = [],
+  initialDraft = "",
   running = false,
   onSubmit,
   onCancel,
   onSuggestion,
   onRemoveChip,
 }: CommandRailProps) {
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(initialDraft);
   const [activityOpen, setActivityOpen] = useState(false);
 
   function submit() {
@@ -101,29 +104,13 @@ export function CommandRail({
     <div className="flex h-full flex-col">
       {/* Composer */}
       <div className="p-3 border-b border-[var(--color-border-subtle)]">
-        <Stack gap="2">
+        <Stack gap="3">
           <Inline gap="2" align="center">
-            <Terminal className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand)]" />
+            <Terminal className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand-secondary)]" />
             <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
-              Command
+              Agent Command
             </span>
           </Inline>
-          {contextChips.length > 0 ? (
-            <Inline gap="1" wrap="wrap">
-              {contextChips.map((chip, i) => (
-                <button
-                  key={`${chip.label}-${i}`}
-                  type="button"
-                  onClick={() => onRemoveChip?.(chip, i)}
-                  className="inline-flex items-center gap-1 h-5 px-1.5 rounded-[var(--radius-xs)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors"
-                  aria-label={`Remove ${chip.label}`}
-                >
-                  <Paperclip className="h-3 w-3 stroke-[1.75]" />
-                  <span>{chip.label}</span>
-                </button>
-              ))}
-            </Inline>
-          ) : null}
           <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] focus-within:border-[var(--color-border-focus)] transition-colors">
             <textarea
               value={draft}
@@ -173,28 +160,36 @@ export function CommandRail({
               )}
             </Inline>
           </div>
+          {contextChips.length > 0 ? (
+            <Inline gap="1" wrap="wrap">
+              {contextChips.map((chip, i) => (
+                <button
+                  key={`${chip.label}-${i}`}
+                  type="button"
+                  onClick={() => onRemoveChip?.(chip, i)}
+                  className={cn(
+                    "inline-flex items-center gap-1 h-5 px-1.5 rounded-[var(--radius-xs)] border text-[var(--text-caption)] hover:text-[var(--color-text-primary)] transition-colors",
+                    contextChipClass(chip.kind),
+                  )}
+                  aria-label={`Remove ${chip.label}`}
+                >
+                  <Paperclip className="h-3 w-3 stroke-[1.75]" />
+                  <span>{chip.label}</span>
+                </button>
+              ))}
+            </Inline>
+          ) : null}
         </Stack>
       </div>
 
       {/* Scroll region: plan, progress, activity, suggestions */}
       <div className="flex-1 overflow-y-auto p-3">
-        <Stack gap="4">
-          {/* Agent plan */}
-          {plan.length > 0 ? (
-            <Section icon={<ListChecks className="h-3.5 w-3.5 stroke-[1.75]" />} label="Plan">
-              <Stack gap="1" className="!gap-[6px]">
-                {plan.map((step) => (
-                  <PlanRow key={step.id} step={step} />
-                ))}
-              </Stack>
-            </Section>
-          ) : null}
-
+        <Stack gap="3">
           {/* Task progress */}
           {taskProgress ? (
             <Section
-              icon={<Sparkles className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand-purple)]" />}
-              label="In flight"
+              icon={<Sparkles className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand-secondary)]" />}
+              label="Agent plan"
             >
               <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2.5">
                 <Inline justify="between" align="center" className="mb-1.5">
@@ -210,7 +205,7 @@ export function CommandRail({
                 {typeof taskProgress.progress === "number" ? (
                   <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--color-surface-input)]">
                     <div
-                      className="h-full rounded-full bg-[var(--color-processing)] transition-[width] duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
+                      className="h-full rounded-full bg-[var(--color-brand-secondary)] transition-[width] duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
                       style={{ width: `${Math.max(0, Math.min(100, taskProgress.progress))}%` }}
                     />
                   </div>
@@ -225,23 +220,26 @@ export function CommandRail({
                     ))}
                   </div>
                 )}
+                {taskProgress.eta ? (
+                  <Inline justify="between" align="center" className="mt-2">
+                    <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                      Est. time remaining
+                    </span>
+                    <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+                      {taskProgress.eta}
+                    </span>
+                  </Inline>
+                ) : null}
               </div>
             </Section>
           ) : null}
 
-          {/* Suggested next actions */}
-          {suggestions.length > 0 ? (
-            <Section label="Suggested">
-              <Stack gap="1">
-                {suggestions.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => onSuggestion?.(s)}
-                    className="text-left rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] hover:bg-[var(--color-surface-card-hover)] hover:border-[var(--color-border)] px-2.5 py-2 transition-colors"
-                  >
-                    <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">{s.label}</span>
-                  </button>
+          {/* Agent plan */}
+          {plan.length > 0 ? (
+            <Section icon={<ListChecks className="h-3.5 w-3.5 stroke-[1.75]" />} label={taskProgress ? "Steps" : "Plan"}>
+              <Stack gap="1" className="!gap-[6px]">
+                {plan.map((step) => (
+                  <PlanRow key={step.id} step={step} />
                 ))}
               </Stack>
             </Section>
@@ -274,6 +272,27 @@ export function CommandRail({
                   ))}
                 </Stack>
               ) : null}
+            </Section>
+          ) : null}
+
+          {/* Suggested next actions */}
+          {suggestions.length > 0 ? (
+            <Section label="Suggested next actions">
+              <Stack gap="1">
+                {suggestions.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => onSuggestion?.(s)}
+                    className="text-left rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] hover:bg-[var(--color-surface-card-hover)] hover:border-[var(--color-border)] px-2.5 py-2 transition-colors"
+                  >
+                    <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">{s.label}</span>
+                    <span className="mt-0.5 block text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                      {s.prompt}
+                    </span>
+                  </button>
+                ))}
+              </Stack>
             </Section>
           ) : null}
 
@@ -361,8 +380,19 @@ function EmptyState() {
   );
 }
 
+function contextChipClass(kind: ContextChip["kind"]) {
+  switch (kind) {
+    case "media":
+    case "selection":
+      return "border-[rgba(59,130,246,0.36)] bg-[rgba(59,130,246,0.08)] text-[var(--color-pill-proposed-text)]";
+    case "project":
+      return "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.08)] text-[var(--color-pill-ready-text)]";
+    case "lens":
+      return "border-[rgba(168,85,247,0.34)] bg-[rgba(168,85,247,0.08)] text-[var(--color-pill-reviewing-text)]";
+    default:
+      return "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-secondary)]";
+  }
+}
+
 // Re-export for any consumers that want to assemble a row manually.
 export { Section as CommandRailSection };
-
-// Suppress unused import warnings (IconButton may be used by composing components later).
-void IconButton;
