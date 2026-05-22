@@ -96,6 +96,7 @@ fn split_trim_move_marker_and_professional_intents_lower_to_existing_edl_ops() {
             EdlOp::SplitClip {
                 anchor: bravo_anchor(),
                 at_s: 2.0,
+                snap: None,
             },
             EdlOp::TrimClip {
                 anchor: bravo_anchor(),
