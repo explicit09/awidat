@@ -1,111 +1,42 @@
 # AGENTS.md
 
-Guidance for coding agents working in this repository.
+Awidat is a Rust workspace with a Tauri desktop app, Python `uv` MCP indexers,
+and bundled editorial skills. Read local docs before changing behavior,
+especially `README.md`, `python/SMOKE.md`, and focused docs under `docs/`.
 
-## Project Overview
+## Agent Behavior
 
-Awidat is a terminal-first, agent-native video editing harness. The repo contains:
+- Think before coding. State assumptions before non-obvious choices; if multiple interpretations exist, surface the tradeoff instead of picking silently. If something is unclear, stop and ask.
+- Simplicity first. Write the minimum code that solves the problem: no speculative features, no single-use abstractions, no unrequested flexibility/configurability, and no error handling for impossible scenarios. If 200 lines could be 50, rewrite it. Ask whether a senior engineer would call the solution overcomplicated.
+- Make surgical changes. Touch only files and lines needed for the request, match existing style, and avoid opportunistic refactors, formatting churn, or adjacent cleanup.
+- Clean up only artifacts introduced by your change, such as now-unused imports, variables, functions, or tests. Mention unrelated dead code instead of deleting it.
+- For multi-step work, state a brief plan with verifiable success criteria, then loop until verified.
+- For bug fixes, prefer a reproducing test or focused verification before and after the fix when practical.
+- Every changed line should trace directly to the user's request.
 
-- Rust workspace crates under `crates/` for the CLI, TUI, core agent loop, project protocol, MCP client, config, indexing, rendering, and desktop protocol.
-- A Tauri 2 desktop app under `apps/desktop/` with a React/Vite frontend and Rust backend.
-- Python MCP indexers under `python/`, managed as a `uv` workspace.
-- Bundled editorial skills under `skills/`.
-- Packaging and install support under `dist/`.
+## Commands
 
-Prefer reading the local code and docs before changing behavior. `README.md`, `dist/README.md`, and `python/SMOKE.md` are useful orientation docs.
+- Workspace check: `make check`
+- Rust checks: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`
+- CLI dev: `cargo run -p awidat-cli -- <command>`
+- Desktop dev: `make desktop`
+- Python sync: `cd python && uv sync --all-packages`
 
-## Common Commands
+## Conventions
 
-Run workspace checks:
+- Follow workspace lints in `Cargo.toml`; avoid `unwrap` and `expect` unless the local crate or test explicitly allows them.
+- Keep changes within existing crate boundaries and match nearby patterns.
+- Do not hand-edit `apps/desktop/src/protocol/generated/` unless the generation path is unavailable and the change is explicitly scoped.
+- Python indexers live under `python/packages/*-mcp/`; use shared `awidat-mcp` patterns and avoid broad smoke tests that trigger model downloads unless required.
+- Bundled skills live under `skills/<name>/SKILL.md`; prefer scripts for repeatable skill logic.
 
-```bash
-make check
-```
+## Testing
 
-Run individual Rust checks:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-Run the CLI during development:
-
-```bash
-cargo run -p awidat-cli -- <command>
-```
-
-Run the desktop app:
-
-```bash
-make desktop
-```
-
-Install/sync Python indexers:
-
-```bash
-cd python
-uv sync --all-packages
-```
-
-Build a release tarball:
-
-```bash
-make package
-```
-
-## Rust Conventions
-
-- The workspace uses Rust 2024 and forbids unsafe code through workspace lints.
-- Most crates inherit strict workspace lints from `Cargo.toml`; keep code clippy-clean under `-D warnings`.
-- Avoid `unwrap` and `expect`; the workspace denies them in most crates.
-- Prefer existing crate boundaries:
-  - `crates/proto` for project-format types and validation.
-  - `crates/core` for agent/session/tool behavior.
-  - `crates/config` for defaults and config loading.
-  - `crates/mcp` for MCP client behavior.
-  - `crates/render` for ffmpeg/rendering work.
-  - `crates/index` for index orchestration.
-  - `crates/cli` for CLI commands.
-  - `crates/tui` for terminal UI.
-- Keep public APIs documented where the crate already expects docs.
-
-## Desktop Conventions
-
-- Frontend code lives in `apps/desktop/src/`.
-- Tauri backend code lives in `apps/desktop/src-tauri/src/`.
-- Generated protocol TypeScript lives in `apps/desktop/src/protocol/generated/`; avoid editing generated files by hand unless the generation path is unavailable and the change is explicitly scoped.
-- The desktop dev server uses Tauri's fixed Vite port `1420`; use `make desktop-stop` if it is occupied.
-- `make desktop` also fetches the host `yt-dlp` sidecar binary expected by the Tauri bundle.
-
-## Python Indexer Conventions
-
-- Python packages live under `python/packages/*-mcp/`.
-- Each indexer should be a `uv` workspace member in `python/pyproject.toml`.
-- Use the shared `awidat-mcp` Python package for common MCP sidecar behavior.
-- Heavy model downloads and gated model access are expected for some indexers; see `python/SMOKE.md` before adding broad smoke tests.
-- `AWIDAT_PYTHON_ROOT` can override Python workspace discovery in development.
-
-## Skills Conventions
-
-- Bundled skills live under `skills/<name>/SKILL.md`.
-- A bundled skills directory is identified by `skills/.bundled-marker`.
-- `AWIDAT_SKILLS_ROOT` can override bundled skills discovery.
-- Keep skill instructions direct and task-specific. Use scripts under a skill directory for repeatable analysis instead of embedding large procedural logic in prose.
-
-## Testing Guidance
-
-- For Rust-only changes, run the narrow relevant test first, then `cargo test --workspace` if the blast radius is broad.
-- For lint-sensitive changes, run `cargo fmt --all -- --check` and clippy before handing off.
+- Run the narrow relevant check first, then broader checks when the blast radius justifies it.
 - For desktop UI changes, run or build the desktop app when feasible.
-- For Python indexer changes, prefer targeted `uv run --package <package> ...` checks. Avoid triggering large model downloads unless the task requires it.
-- For packaging changes, read `dist/README.md` and test with `make package` when practical.
+- Release packaging references may exist in Makefile or CI, but this checkout has no top-level `dist/`; do not rely on `make package` unless that path is restored.
 
 ## Operational Notes
 
-- Required local tools commonly include Rust, Node.js, `pnpm`, Python 3.11, `uv`, and `ffmpeg`.
-- Agent-backed commands and some indexers need `ANTHROPIC_API_KEY`.
-- Some diarization flows need `HF_TOKEN` and accepted Hugging Face model terms.
-- Keep unrelated worktree changes intact. Do not revert files you did not change unless explicitly asked.
-- Keep edits scoped to the requested behavior and the subsystem you are touching.
+- Keep unrelated worktree changes intact.
+- Keep edits scoped to the requested behavior and subsystem.
