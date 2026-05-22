@@ -355,6 +355,23 @@ await check("timeline and inspector expose review evidence", async () => {
   await page.close();
 });
 
+await check("timeline dock avoids duplicate transcript and video lanes", async () => {
+  const { page } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  const dock = page.locator(".edit-lower-dock");
+  const dockText = (await dock.textContent()).toLowerCase();
+  for (const expected of ["timeline", "changes", "evidence", "audio"]) {
+    assert.ok(dockText.includes(expected), `missing simplified timeline text: ${expected}`);
+  }
+  for (const removed of ["selects", "channel lanes", "agent edits", "diff"]) {
+    assert.ok(!dockText.includes(removed), `duplicate lower timeline text should be gone: ${removed}`);
+  }
+  const dockButtons = await dock.getByRole("button").allTextContents();
+  assert.ok(dockButtons.some((label) => label.trim() === "Transcript"), "Transcript should remain a dock-level panel");
+  assert.ok(!dockButtons.some((label) => label.trim() === "Selects"), "Selects should not remain as a lower timeline tab");
+  await page.close();
+});
+
 await check("edit dock exposes transcript and Vedit without leaving Edit", async () => {
   const { page, errors } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });

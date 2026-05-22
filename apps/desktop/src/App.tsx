@@ -43,14 +43,12 @@ import {
   type IndexingTask,
   type IndexerConfigEntry,
   type IndexerConfigSnapshot,
-  type AgentEdit,
   type PlanItem,
   type PreflightFinding,
   type PreviewChange,
   type PreviewViewMode,
   type TimelineTab,
   type TimelineViewMode,
-  type TranscriptCell,
 } from "./shell";
 import { AgentStatusBadge, Button, Card, IconButton, Inline, Pill, Stack } from "./ui";
 import { useStageStore } from "./state";
@@ -59,22 +57,18 @@ import { useProposalInspectorData } from "./state/proposalAdapter";
 import { useTimelineStore } from "./timeline/store";
 import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
-import type { JobKind, TimelineSnapshot, Transcript } from "./protocol";
+import type { JobKind, TimelineSnapshot } from "./protocol";
 import {
   screen2Activity,
   SCREEN2_CURRENT_TIME_S,
   SCREEN2_DURATION_S,
   Screen2MediaSlot,
-  screen2AgentEdits,
   screen2AudioPeaks,
   screen2Changes,
   screen2ContextChips,
-  screen2Diff,
-  screen2Frames,
   screen2Inspector,
   screen2Plan,
   screen2Suggestions,
-  screen2Transcript,
 } from "./shell/screen2Demo";
 import { demoScreens, resolveDemoScreenId } from "./shell/demoScreens";
 import "./ui/tokens.css";
@@ -859,15 +853,6 @@ function App() {
     };
   }, [effectiveDeliveryTargets, realPreflightFindings, timelineDuration]);
 
-  const realTranscriptCells: TranscriptCell[] = useMemo(
-    () => (loadedTranscript ? transcriptToTimelineCells(loadedTranscript) : []),
-    [loadedTranscript],
-  );
-  const realAgentEdits: AgentEdit[] = useMemo(
-    () => timelineToAgentEdits(timelineSnapshot),
-    [timelineSnapshot],
-  );
-
   const realBatchProposals: BatchProposal[] = useMemo(() => {
     return items
       .filter(
@@ -1235,11 +1220,7 @@ function App() {
                 durationS={effectiveDuration}
                 currentTimeS={effectiveCurrentTime}
                 changeCount={effectiveChanges.length}
-                videoFrames={demoMode ? screen2Frames : realVideoFrames}
                 audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
-                agentEdits={demoMode ? screen2AgentEdits : realAgentEdits}
-                transcript={demoMode ? screen2Transcript : realTranscriptCells}
-                diff={demoMode ? screen2Diff : []}
               />
             }
             transcript={<TranscriptView stem={selectedStem} />}
@@ -1315,11 +1296,7 @@ function App() {
             durationS={effectiveDuration}
             currentTimeS={effectiveCurrentTime}
             changeCount={effectiveChanges.length}
-            videoFrames={demoMode ? screen2Frames : realVideoFrames}
             audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
-            agentEdits={demoMode ? screen2AgentEdits : realAgentEdits}
-            transcript={demoMode ? screen2Transcript : realTranscriptCells}
-            diff={demoMode ? screen2Diff : []}
           />
         }
         transcript={<TranscriptView stem={selectedStem} />}
@@ -2270,66 +2247,6 @@ function downsamplePeaks(peaks: number[], targetCount: number): number[] {
 function normalizePeak(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0.04, Math.min(1, Math.abs(value)));
-}
-
-function transcriptToTimelineCells(transcript: Transcript): TranscriptCell[] {
-  return transcript.segments.slice(0, 80).map((segment, index) => ({
-    id: `${transcript.asset_stem}-tl-${index}`,
-    startS: segment.start_s,
-    endS: segment.end_s,
-    text: segment.text,
-    speakerColor: speakerColor(segment.speaker_id, index),
-  }));
-}
-
-function timelineToAgentEdits(snapshot: TimelineSnapshot): AgentEdit[] {
-  const edits: AgentEdit[] = [];
-  for (const boundary of snapshot.cut_boundaries) {
-    const at = findClipStart(snapshot, boundary.to_clip_id);
-    if (at === null) continue;
-    edits.push({
-      id: boundary.key,
-      startS: Math.max(0, at - 0.25),
-      endS: at + 0.75,
-      status:
-        boundary.confidence !== null && boundary.confidence < 0.55
-          ? "warning"
-          : "reviewing",
-      label: `${boundary.cut_type} · ${boundary.intent}`,
-    });
-  }
-  for (const track of snapshot.tracks) {
-    for (const item of track.items) {
-      if (item.kind !== "clip") continue;
-      if (item.audio_lead_s || item.audio_trail_s || item.split_edit_reason) {
-        edits.push({
-          id: `${track.name}-${item.index}-split`,
-          startS: item.track_start_s,
-          endS: item.track_start_s + Math.max(0.6, Math.min(4, item.duration_s)),
-          status: item.split_edit_confidence !== null && item.split_edit_confidence < 0.6 ? "warning" : "reviewing",
-          label: item.split_edit_reason ?? "Split edit",
-        });
-      }
-    }
-  }
-  return edits.slice(0, 80);
-}
-
-function findClipStart(snapshot: TimelineSnapshot, clipId: string): number | null {
-  for (const track of snapshot.tracks) {
-    for (const item of track.items) {
-      if (item.kind === "clip" && item.clip_uuid === clipId) {
-        return item.track_start_s;
-      }
-    }
-  }
-  return null;
-}
-
-function speakerColor(speakerId: string | null, index: number): string {
-  const n = speakerId?.match(/\d+$/)?.[0];
-  const speakerIndex = n ? Number.parseInt(n, 10) : index;
-  return speakerIndex % 2 === 0 ? "var(--color-viz-speaker-a)" : "var(--color-viz-speaker-b)";
 }
 
 type AnyAgentItem = ReturnType<typeof useAgentStore.getState>["items"][number];

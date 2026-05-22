@@ -2,27 +2,12 @@ import { CheckCircle2, Circle, Scissors, ShieldCheck, Sparkles } from "lucide-re
 import beforeFrame from "./assets/podcast-before.jpg";
 import afterFrame from "./assets/podcast-after.jpg";
 import wideFrame from "./assets/podcast-wide.jpg";
-import thumb01 from "./assets/podcast-thumb-01.jpg";
-import thumb02 from "./assets/podcast-thumb-02.jpg";
-import thumb03 from "./assets/podcast-thumb-03.jpg";
-import thumb04 from "./assets/podcast-thumb-04.jpg";
-import thumb05 from "./assets/podcast-thumb-05.jpg";
-import thumb06 from "./assets/podcast-thumb-06.jpg";
-import thumb07 from "./assets/podcast-thumb-07.jpg";
-import thumb08 from "./assets/podcast-thumb-08.jpg";
-import thumb09 from "./assets/podcast-thumb-09.jpg";
-import thumb10 from "./assets/podcast-thumb-10.jpg";
-import thumb11 from "./assets/podcast-thumb-11.jpg";
-import thumb12 from "./assets/podcast-thumb-12.jpg";
 import type {
   ActivityEntry,
-  AgentEdit,
   ContextChip,
-  DiffChip,
   PlanItem,
   PreviewChange,
   SuggestedAction,
-  TranscriptCell,
 } from ".";
 import type { ProposalInspectorData } from "./ProposalInspector";
 
@@ -83,89 +68,11 @@ export const screen2Changes: PreviewChange[] = [
   { id: "c12", index: 12, kind: "warning", timeS: 486, label: "Check breath cut" },
 ];
 
-export const screen2Frames = [
-  thumb01,
-  thumb02,
-  thumb03,
-  thumb04,
-  thumb05,
-  thumb06,
-  thumb07,
-  thumb08,
-  thumb09,
-  thumb10,
-  thumb11,
-  thumb12,
-  thumb01,
-  thumb02,
-  thumb03,
-  thumb04,
-  thumb05,
-  thumb06,
-  thumb07,
-  thumb08,
-  thumb09,
-  thumb10,
-  thumb11,
-  thumb12,
-];
-
 export const screen2AudioPeaks = Array.from({ length: 220 }, (_, i) => {
   const carrier = Math.sin(i * 0.18) * 0.45 + Math.sin(i * 0.61) * 0.24;
   const phrase = i % 37 > 24 ? 0.32 : 0.82;
   return Math.max(0.08, Math.min(1, 0.42 + carrier + phrase * 0.38));
 });
-
-export const screen2AgentEdits: AgentEdit[] = [
-  { id: "a1", startS: 45, endS: 72, status: "accepted", label: "Trim intro silence" },
-  { id: "a2", startS: 84, endS: 101, status: "pending", label: "Remove 1.3s filler" },
-  { id: "a3", startS: 158, endS: 187, status: "warning", label: "Soft pacing risk" },
-  { id: "a4", startS: 226, endS: 247, status: "accepted", label: "Keep beat" },
-  { id: "a5", startS: 284, endS: 318, status: "rejected", label: "Rejected hard cut" },
-  { id: "a6", startS: 394, endS: 423, status: "pending", label: "Cut 07 · J-cut" },
-  { id: "a7", startS: 438, endS: 461, status: "pending", label: "Trim end pause" },
-];
-
-export const screen2Transcript: TranscriptCell[] = [
-  {
-    id: "t1",
-    startS: 34,
-    endS: 92,
-    text: "So, the short answer is yes, but the long answer is a bit more nuanced.",
-    speakerColor: "var(--color-viz-speaker-a)",
-  },
-  {
-    id: "t2",
-    startS: 108,
-    endS: 168,
-    text: "What changed everything was the way users actually behaved.",
-    speakerColor: "var(--color-viz-speaker-b)",
-  },
-  {
-    id: "t3",
-    startS: 188,
-    endS: 246,
-    text: "Yeah exactly, and I think that's a really good point.",
-    speakerColor: "var(--color-viz-speaker-a)",
-  },
-  {
-    id: "t4",
-    startS: 382,
-    endS: 431,
-    text: "Um, so basically what we found was the timing mattered more than the feature.",
-    speakerColor: "var(--color-viz-speaker-a)",
-  },
-];
-
-export const screen2Diff: DiffChip[] = [
-  { id: "d1", startS: 34, endS: 70, kind: "keep", label: "Keep" },
-  { id: "d2", startS: 84, endS: 104, kind: "remove", label: "Remove 1.3s" },
-  { id: "d3", startS: 130, endS: 160, kind: "trim", label: "Trim 0.7s" },
-  { id: "d4", startS: 190, endS: 245, kind: "keep", label: "Keep" },
-  { id: "d5", startS: 286, endS: 315, kind: "remove", label: "Remove 2.1s" },
-  { id: "d6", startS: 394, endS: 423, kind: "trim", label: "J-cut 0.6s" },
-  { id: "d7", startS: 438, endS: 462, kind: "trim", label: "Trim 0.8s" },
-];
 
 export const screen2Inspector: ProposalInspectorData = {
   title: "Cut 07 · J-cut",

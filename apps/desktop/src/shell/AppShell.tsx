@@ -88,7 +88,7 @@ export function AppShell({
               "grid min-h-0 min-w-0 gap-2",
               timelineCollapsed
                 ? "grid-rows-[minmax(260px,1fr)_44px]"
-                : "grid-rows-[minmax(260px,48vh)_minmax(220px,1fr)]",
+                : "grid-rows-[minmax(360px,1fr)_minmax(132px,22vh)]",
             )}
           >
             <section className="panel min-h-0 min-w-0 overflow-hidden">

@@ -21,9 +21,6 @@ export {
   type TimelineHybridProps,
   type TimelineTab,
   type TimelineViewMode,
-  type AgentEdit,
-  type TranscriptCell,
-  type DiffChip,
 } from "./TimelineHybrid";
 export {
   ProposalInspector,

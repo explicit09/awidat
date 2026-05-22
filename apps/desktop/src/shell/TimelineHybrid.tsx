@@ -1,66 +1,32 @@
 import { Filter, MoreHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 import {
-  ChannelLanes,
   Inline,
   Pill,
   Stack,
   cn,
-  type ChannelLane,
-  type PillStatus,
 } from "../ui";
 
 /**
  * TimelineHybrid — the bottom surface from the design spec (Screen 2 + Screen 4).
  *
- * Sub-tabs (own state): Timeline / Transcript / Selects / Changes / Evidence
+ * Sub-tabs (own state): Timeline / Changes / Evidence
  * View toggle (own state): Proposed Timeline / Current Timeline
  *
  * Lanes (rendered for the Timeline sub-tab):
- *   - VIDEO       : thumbnail strip (placeholder until 2.11 wires real frames)
  *   - AUDIO       : waveform strip
- *   - AGENT EDITS : per-cut markers with status colors
- *   - TRANSCRIPT  : word/sentence cards
- *   - DIFF        : kept / trimmed / removed chips beneath the cut points
  */
 
-export const TIMELINE_TABS = ["timeline", "transcript", "selects", "changes", "evidence"] as const;
+export const TIMELINE_TABS = ["timeline", "changes", "evidence"] as const;
 export type TimelineTab = (typeof TIMELINE_TABS)[number];
 
 export const TIMELINE_TAB_LABEL: Record<TimelineTab, string> = {
   timeline: "Timeline",
-  transcript: "Transcript",
-  selects: "Selects",
   changes: "Changes",
   evidence: "Evidence",
 };
 
 export type TimelineViewMode = "proposed" | "current";
-
-export type AgentEdit = {
-  id: string;
-  startS: number;
-  endS: number;
-  /** Maps to the same Pill statuses we use elsewhere. */
-  status: PillStatus;
-  label?: string;
-};
-
-export type TranscriptCell = {
-  id: string;
-  startS: number;
-  endS: number;
-  text: string;
-  speakerColor?: string;
-};
-
-export type DiffChip = {
-  id: string;
-  startS: number;
-  endS: number;
-  kind: "keep" | "trim" | "remove";
-  label?: string;
-};
 
 export type TimelineHybridProps = {
   tab?: TimelineTab;
@@ -68,18 +34,11 @@ export type TimelineHybridProps = {
   viewMode?: TimelineViewMode;
   onChangeViewMode?: (m: TimelineViewMode) => void;
   durationS?: number;
-  /** Source frames for the VIDEO lane (placeholder strip if absent). */
-  videoFrames?: string[];
   /** Audio waveform peaks (0..1 normalized) for the AUDIO lane. */
   audioPeaks?: number[];
-  agentEdits?: AgentEdit[];
-  transcript?: TranscriptCell[];
-  diff?: DiffChip[];
   currentTimeS?: number;
   /** Per-cut changes counter shown in the "Changes" tab pill (e.g. 12). */
   changeCount?: number;
-  /** Channel lanes shown on the Transcript sub-tab (sentiment, energy, etc.). */
-  channelLanes?: ChannelLane[];
   /** Allows the parent to slot custom content per tab (overrides built-in lane render). */
   contentForTab?: Partial<Record<TimelineTab, ReactNode>>;
 };
@@ -90,14 +49,9 @@ export function TimelineHybrid({
   viewMode = "proposed",
   onChangeViewMode,
   durationS = 0,
-  videoFrames = [],
   audioPeaks = [],
-  agentEdits = [],
-  transcript = [],
-  diff = [],
   currentTimeS = 0,
   changeCount = 0,
-  channelLanes = [],
   contentForTab,
 }: TimelineHybridProps) {
   return (
@@ -164,13 +118,9 @@ export function TimelineHybrid({
           <DefaultTabBody
             tab={tab}
             durationS={durationS}
-            videoFrames={videoFrames}
             audioPeaks={audioPeaks}
-            agentEdits={agentEdits}
-            transcript={transcript}
-            diff={diff}
             currentTimeS={currentTimeS}
-            channelLanes={channelLanes}
+            changeCount={changeCount}
           />
         )}
       </div>
@@ -247,60 +197,29 @@ function Legend() {
 type DefaultTabBodyProps = {
   tab: TimelineTab;
   durationS: number;
-  videoFrames: string[];
   audioPeaks: number[];
-  agentEdits: AgentEdit[];
-  transcript: TranscriptCell[];
-  diff: DiffChip[];
   currentTimeS: number;
-  channelLanes: ChannelLane[];
+  changeCount: number;
 };
 
 function DefaultTabBody({
   tab,
   durationS,
-  videoFrames,
   audioPeaks,
-  agentEdits,
-  transcript,
-  diff,
   currentTimeS,
-  channelLanes,
+  changeCount,
 }: DefaultTabBodyProps) {
   if (tab === "timeline") {
     return (
       <TimelineLanes
         durationS={durationS}
-        videoFrames={videoFrames}
         audioPeaks={audioPeaks}
-        agentEdits={agentEdits}
-        transcript={transcript}
-        diff={diff}
         currentTimeS={currentTimeS}
       />
     );
   }
-  if (tab === "transcript") {
-    return (
-      <Stack gap="3" className="p-4 overflow-y-auto h-full">
-        <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-          Channel lanes
-        </span>
-        {channelLanes.length > 0 ? (
-          <ChannelLanes
-            durationS={durationS}
-            lanes={channelLanes}
-            currentTimeS={currentTimeS}
-          />
-        ) : (
-          <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-            No signals computed yet — sentiment, energy, and confidence lanes
-            appear here once the indexing pipeline produces them.
-          </span>
-        )}
-      </Stack>
-    );
-  }
+  if (tab === "changes") return <CompactEmpty label="Changes" detail={changeCount > 0 ? `${changeCount} proposal changes available in the preview and inspector.` : "No proposal changes yet."} />;
+  if (tab === "evidence") return <CompactEmpty label="Evidence" detail="Evidence lives with the selected proposal in the inspector." />;
   return (
     <div className="flex h-full items-center justify-center">
       <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
@@ -310,35 +229,34 @@ function DefaultTabBody({
   );
 }
 
+function CompactEmpty({ label, detail }: { label: string; detail: string }) {
+  return (
+    <div className="flex h-full items-center justify-center px-4 text-center">
+      <Stack gap="1" align="center">
+        <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+          {label}
+        </span>
+        <span className="max-w-xl text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
+          {detail}
+        </span>
+      </Stack>
+    </div>
+  );
+}
+
 function TimelineLanes({
   durationS,
-  videoFrames,
   audioPeaks,
-  agentEdits,
-  transcript,
-  diff,
   currentTimeS,
-}: Omit<DefaultTabBodyProps, "tab" | "channelLanes">) {
+}: Pick<DefaultTabBodyProps, "durationS" | "audioPeaks" | "currentTimeS">) {
   const safeDuration = durationS > 0 ? durationS : 1;
   const playheadPct = Math.max(0, Math.min(100, (currentTimeS / safeDuration) * 100));
 
   return (
     <div className="relative h-full overflow-auto">
       <div className="min-w-full">
-        <Lane label="VIDEO" rowHeight={36}>
-          <VideoStrip frames={videoFrames} />
-        </Lane>
-        <Lane label="AUDIO" rowHeight={48}>
+        <Lane label="AUDIO" rowHeight={72} last>
           <AudioWaveform peaks={audioPeaks} />
-        </Lane>
-        <Lane label="AGENT EDITS" rowHeight={36}>
-          <AgentEditsLane edits={agentEdits} durationS={safeDuration} />
-        </Lane>
-        <Lane label="TRANSCRIPT" rowHeight={48}>
-          <TranscriptStrip cells={transcript} durationS={safeDuration} />
-        </Lane>
-        <Lane label="DIFF" rowHeight={36} last>
-          <DiffStrip diff={diff} durationS={safeDuration} />
         </Lane>
       </div>
       {/* Global playhead overlay */}
@@ -382,36 +300,6 @@ function Lane({
   );
 }
 
-function VideoStrip({ frames }: { frames: string[] }) {
-  if (frames.length === 0) {
-    return (
-      <div className="absolute inset-0 grid place-items-center px-3">
-        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-          No thumbnail index yet
-        </span>
-      </div>
-    );
-  }
-  return (
-    <div className="absolute inset-0 flex gap-px p-1 bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(0,0,0,0))]">
-      {frames.map((src, i) => (
-        <div key={i} className="relative flex-1 min-w-0 overflow-hidden rounded-[2px] border border-black/30">
-          <img
-            src={src}
-            alt=""
-            className="h-full w-full object-cover"
-          />
-          {i % 4 === 0 ? (
-            <span className="absolute bottom-0.5 left-1 rounded-[2px] bg-black/55 px-1 font-mono text-[8px] text-white/70">
-              {String(i + 1).padStart(2, "0")}
-            </span>
-          ) : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function AudioWaveform({ peaks }: { peaks: number[] }) {
   if (peaks.length === 0) {
     return (
@@ -444,95 +332,5 @@ function AudioWaveform({ peaks }: { peaks: number[] }) {
         );
       })}
     </svg>
-  );
-}
-
-const STATUS_TO_VIZ: Partial<Record<PillStatus, string>> = {
-  accepted: "rgba(34, 197, 94, 0.72)",
-  pending: "rgba(245, 158, 11, 0.78)",
-  rejected: "rgba(239, 68, 68, 0.78)",
-  warning: "rgba(250, 204, 21, 0.72)",
-  reviewing: "var(--color-brand-purple)",
-};
-
-function AgentEditsLane({ edits, durationS }: { edits: AgentEdit[]; durationS: number }) {
-  return (
-    <div className="absolute inset-0 p-1">
-      {edits.map((e) => {
-        const left = (e.startS / durationS) * 100;
-        const width = Math.max(0.4, ((e.endS - e.startS) / durationS) * 100);
-        const color = STATUS_TO_VIZ[e.status] ?? "var(--color-text-muted)";
-        return (
-          <div
-            key={e.id}
-            className="absolute top-1 bottom-1 rounded-[var(--radius-xs)] border"
-            style={{
-              left: `${left}%`,
-              width: `${width}%`,
-              backgroundColor: color,
-              borderColor: color,
-            }}
-            title={e.label}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-function TranscriptStrip({ cells, durationS }: { cells: TranscriptCell[]; durationS: number }) {
-  return (
-    <div className="absolute inset-0">
-      {cells.map((c) => {
-        const left = (c.startS / durationS) * 100;
-        const width = Math.max(2, ((c.endS - c.startS) / durationS) * 100);
-        return (
-          <div
-            key={c.id}
-            className="absolute top-1 bottom-1 px-1.5 py-1 rounded-[var(--radius-xs)] bg-[var(--color-surface-card)] border border-[var(--color-border-subtle)] text-[var(--text-caption)] text-[var(--color-text-secondary)] truncate"
-            style={{
-              left: `${left}%`,
-              width: `${width}%`,
-              borderTopColor: c.speakerColor ?? "var(--color-viz-speaker-a)",
-              borderTopWidth: 2,
-            }}
-            title={c.text}
-          >
-            {c.text}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function DiffStrip({ diff, durationS }: { diff: DiffChip[]; durationS: number }) {
-  return (
-    <div className="absolute inset-0 p-1">
-      {diff.map((d) => {
-        const left = (d.startS / durationS) * 100;
-        const width = Math.max(0.6, ((d.endS - d.startS) / durationS) * 100);
-        const color =
-          d.kind === "keep"
-            ? "rgba(34, 197, 94, 0.82)"
-            : d.kind === "trim"
-              ? "rgba(245, 158, 11, 0.86)"
-              : "rgba(239, 68, 68, 0.84)";
-        return (
-          <div
-            key={d.id}
-            className="absolute top-1 bottom-1 rounded-[var(--radius-xs)] flex items-center justify-center text-[var(--text-micro)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[#070A0F]"
-            style={{
-              left: `${left}%`,
-              width: `${width}%`,
-              backgroundColor: color,
-            }}
-            title={d.label ?? d.kind}
-          >
-            {width > 5 ? (d.label ?? d.kind) : null}
-          </div>
-        );
-      })}
-    </div>
   );
 }
