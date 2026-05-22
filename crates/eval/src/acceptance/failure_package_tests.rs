@@ -20,6 +20,7 @@ fn failure_packet_copies_core_artifacts_and_writes_summary()
 
     for name in [
         "artifact_bundle.json",
+        "render.render-manifest.json",
         "final_edl.edl",
         "edit_manifest.json",
         "ffprobe.json",
@@ -43,6 +44,7 @@ fn failure_packet_copies_core_artifacts_and_writes_summary()
             "output_path": output_path,
             "artifacts": {
                 "artifact_bundle_json": artifacts.join("artifact_bundle.json"),
+                "render_manifest": artifacts.join("render.render-manifest.json"),
                 "final_edl": artifacts.join("final_edl.edl"),
                 "edit_manifest": artifacts.join("edit_manifest.json"),
                 "ffprobe_json": artifacts.join("ffprobe.json"),
@@ -71,6 +73,12 @@ fn failure_packet_copies_core_artifacts_and_writes_summary()
 
     assert!(packet.packet_root.join("scorecard.json").is_file());
     assert!(packet.packet_root.join("artifact_bundle.json").is_file());
+    assert!(
+        packet
+            .packet_root
+            .join("render.render-manifest.json")
+            .is_file()
+    );
     assert!(packet.packet_root.join("final_edl.edl").is_file());
     assert!(packet.packet_root.join("edit_manifest.json").is_file());
     assert!(packet.packet_root.join("ffprobe.json").is_file());

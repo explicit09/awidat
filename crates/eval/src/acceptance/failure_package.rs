@@ -43,6 +43,11 @@ pub fn package_failure(
             "/artifacts/artifact_bundle_json",
             "artifact_bundle.json",
         ),
+        (
+            "render_manifest",
+            "/artifacts/render_manifest",
+            "render.render-manifest.json",
+        ),
         ("final_edl", "/artifacts/final_edl", "final_edl.edl"),
         (
             "edit_manifest",

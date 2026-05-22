@@ -169,6 +169,7 @@ pub(crate) async fn run_case(case: &AcceptanceCase) -> Result<AcceptanceRun> {
     let artifact_bundle_path = artifacts_root.join("artifact_bundle.json");
     let required_artifacts = required_artifact_entries(RequiredArtifactInput {
         output_path: &render.output_path,
+        render_manifest_path: &render.render_manifest_path,
         final_edl_path: &final_edl_path,
         edit_manifest_path: &edit_manifest_path,
         ffprobe_json_path: &ffprobe_json_path,
@@ -207,6 +208,7 @@ pub(crate) async fn run_case(case: &AcceptanceCase) -> Result<AcceptanceRun> {
         run_root: &run_root,
         artifacts_root: &artifacts_root,
         output_path: &render.output_path,
+        render_manifest_path: &render.render_manifest_path,
         final_edl_path: &final_edl_path,
         edit_manifest_path: &edit_manifest_path,
         ffprobe_json_path: &ffprobe_json_path,
@@ -225,6 +227,7 @@ pub(crate) async fn run_case(case: &AcceptanceCase) -> Result<AcceptanceRun> {
     let artifact_bundle = build_artifact_bundle_manifest(ArtifactBundleInput {
         run_root: &run_root,
         output_path: &render.output_path,
+        render_manifest_path: &render.render_manifest_path,
         final_edl_path: &final_edl_path,
         edit_manifest_path: &edit_manifest_path,
         ffprobe_json_path: &ffprobe_json_path,

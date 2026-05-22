@@ -294,6 +294,7 @@ fn scorecard_status_warns_when_only_soft_gates_fail() {
 fn artifact_bundle_manifest_reports_required_files() {
     let dir = tempfile::tempdir().unwrap();
     let output_path = dir.path().join("render.mp4");
+    let render_manifest_path = dir.path().join("render.render-manifest.json");
     let final_edl_path = dir.path().join("final_edl.edl");
     let edit_manifest_path = dir.path().join("edit_manifest.json");
     let ffprobe_json_path = dir.path().join("ffprobe.json");
@@ -304,6 +305,7 @@ fn artifact_bundle_manifest_reports_required_files() {
     let generator_stderr_path = dir.path().join("edl_generator_stderr.txt");
     for path in [
         &output_path,
+        &render_manifest_path,
         &final_edl_path,
         &edit_manifest_path,
         &ffprobe_json_path,
@@ -319,6 +321,7 @@ fn artifact_bundle_manifest_reports_required_files() {
     let manifest = build_artifact_bundle_manifest(ArtifactBundleInput {
         run_root: dir.path(),
         output_path: &output_path,
+        render_manifest_path: &render_manifest_path,
         final_edl_path: &final_edl_path,
         edit_manifest_path: &edit_manifest_path,
         ffprobe_json_path: &ffprobe_json_path,
@@ -331,7 +334,13 @@ fn artifact_bundle_manifest_reports_required_files() {
     });
 
     assert!(manifest.complete);
-    assert_eq!(manifest.entries.len(), 9);
+    assert_eq!(manifest.entries.len(), 10);
+    assert!(
+        manifest
+            .entries
+            .iter()
+            .any(|entry| entry.name == "render_manifest")
+    );
     assert!(
         manifest
             .entries

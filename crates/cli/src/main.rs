@@ -112,6 +112,11 @@ enum Command {
         /// Project directory.
         path: PathBuf,
     },
+    /// Replay an FFmpeg render execution manifest.
+    ReplayRender {
+        /// Path to a `.render-manifest.json` file.
+        manifest: PathBuf,
+    },
     /// Detect long silences in the primary source clip and emit a cleanup EDL.
     PlanDeadAirEdl {
         /// Project directory.
@@ -320,6 +325,7 @@ fn main() -> ExitCode {
         } => index_cmd::run(&path, assets, indexers, concurrency),
         Command::ApplyEdl { path, edl } => apply_edl_cmd::run(&path, &edl),
         Command::Render { path } => render_cmd::run(&path),
+        Command::ReplayRender { manifest } => cmd_replay_render(&manifest),
         Command::PlanDeadAirEdl {
             path,
             asset,
@@ -458,6 +464,17 @@ fn print_version() {
         "supported OTIO schemas: {}",
         awidat_proto::project::supported_schema_summary()
     );
+}
+
+fn cmd_replay_render(manifest: &std::path::Path) -> Result<()> {
+    let outcome = awidat_render::replay_render_manifest(manifest)
+        .with_context(|| format!("failed to replay render manifest {}", manifest.display()))?;
+    println!("replay manifest: {}", outcome.manifest_path.display());
+    println!("status: {}", outcome.status);
+    for output in outcome.output_paths {
+        println!("output: {}", output.display());
+    }
+    Ok(())
 }
 
 fn cmd_init(path: &std::path::Path) -> Result<()> {

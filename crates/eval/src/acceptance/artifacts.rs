@@ -9,6 +9,7 @@ pub(crate) fn build_artifact_bundle_manifest(
 ) -> ArtifactBundleManifest {
     let entries = artifact_entries(vec![
         ("rendered_output", input.output_path, true),
+        ("render_manifest", input.render_manifest_path, true),
         ("final_edl", input.final_edl_path, true),
         ("edit_manifest", input.edit_manifest_path, true),
         ("ffprobe_json", input.ffprobe_json_path, true),
@@ -43,6 +44,7 @@ pub(crate) fn required_artifact_entries(
 ) -> Vec<ArtifactBundleEntry> {
     let mut entries = artifact_entries(vec![
         ("rendered_output", input.output_path, true),
+        ("render_manifest", input.render_manifest_path, true),
         ("final_edl", input.final_edl_path, true),
         ("edit_manifest", input.edit_manifest_path, true),
         ("ffprobe_json", input.ffprobe_json_path, true),
@@ -121,6 +123,7 @@ pub(crate) struct ArtifactBundleEntry {
 
 pub(crate) struct RequiredArtifactInput<'a> {
     pub(crate) output_path: &'a Path,
+    pub(crate) render_manifest_path: &'a Path,
     pub(crate) final_edl_path: &'a Path,
     pub(crate) edit_manifest_path: &'a Path,
     pub(crate) ffprobe_json_path: &'a Path,
@@ -134,6 +137,7 @@ pub(crate) struct RequiredArtifactInput<'a> {
 pub(crate) struct ArtifactBundleInput<'a> {
     pub(crate) run_root: &'a Path,
     pub(crate) output_path: &'a Path,
+    pub(crate) render_manifest_path: &'a Path,
     pub(crate) final_edl_path: &'a Path,
     pub(crate) edit_manifest_path: &'a Path,
     pub(crate) ffprobe_json_path: &'a Path,

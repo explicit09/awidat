@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -186,16 +187,20 @@ pub(crate) fn render_project(project_root: &Path) -> Result<RenderOutput> {
         run_command(cmd, "run external Awidat CLI render")?;
         let output_path = newest_render(project_root)
             .with_context(|| format!("find rendered MP4 under {}", project_root.display()))?;
+        let render_manifest_path = awidat_render::manifest_path_for_output(&output_path);
         return Ok(RenderOutput {
             output_path,
+            render_manifest_path,
             driver: "external_cli".into(),
         });
     }
 
     let spec = build_timeline_render_spec(project_root).context("plan timeline render")?;
     run_render_spec(&spec)?;
+    let render_manifest_path = write_acceptance_render_manifest(project_root, &spec)?;
     Ok(RenderOutput {
         output_path: spec.output_path,
+        render_manifest_path,
         driver: "shared_render_spec".into(),
     })
 }
@@ -208,6 +213,53 @@ fn run_render_spec(spec: &RenderJobSpec) -> Result<()> {
         cmd.current_dir(cwd);
     }
     run_command(cmd, "render acceptance timeline")
+}
+
+fn write_acceptance_render_manifest(project_root: &Path, spec: &RenderJobSpec) -> Result<PathBuf> {
+    let project_path = project_root.join("project.otio.json");
+    let project_hash = if project_path.is_file() {
+        Some(
+            awidat_render::fingerprint_file(&project_path, true)
+                .with_context(|| format!("fingerprint {}", project_path.display()))?
+                .sha256,
+        )
+    } else {
+        None
+    };
+    let ffmpeg = ffmpeg_path().context("locate ffmpeg for render manifest")?;
+    let mut argv = vec![ffmpeg.to_string_lossy().into_owned()];
+    argv.extend(spec.args.iter().cloned());
+    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+        created_at: String::new(),
+        awidat_version: env!("CARGO_PKG_VERSION").into(),
+        project_root: project_root.to_string_lossy().into_owned(),
+        project_hash: project_hash.clone(),
+        timeline_hash: project_hash,
+        backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+        replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+            argv,
+            cwd: spec
+                .cwd
+                .as_ref()
+                .map(|cwd| cwd.to_string_lossy().into_owned()),
+        },
+        inputs: Vec::new(),
+        outputs: vec![awidat_render::output_artifact(&spec.output_path, true)],
+        sidecars: Vec::new(),
+        limitations: spec
+            .limitations
+            .iter()
+            .map(|limitation| {
+                awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
+            })
+            .collect(),
+        verification: None,
+        metadata: BTreeMap::from([("render_driver".into(), "shared_render_spec".into())]),
+    });
+    let path = awidat_render::manifest_path_for_output(&spec.output_path);
+    awidat_render::write_render_manifest(&path, &manifest)
+        .with_context(|| format!("write acceptance render manifest {}", path.display()))?;
+    Ok(path)
 }
 
 fn newest_render(project_root: &Path) -> Result<PathBuf> {
@@ -341,6 +393,7 @@ fn run_command_output(mut cmd: Command, label: &str) -> Result<std::process::Out
 #[derive(Debug)]
 pub(crate) struct RenderOutput {
     pub(crate) output_path: PathBuf,
+    pub(crate) render_manifest_path: PathBuf,
     pub(crate) driver: String,
 }
 #[derive(Debug, Serialize)]

@@ -47,6 +47,7 @@ pub(crate) fn build_scorecard(input: ScorecardInput<'_>) -> AcceptanceScorecard 
         artifacts: AcceptanceArtifacts {
             artifacts_root: input.artifacts_root.to_string_lossy().into_owned(),
             final_edl: input.final_edl_path.to_string_lossy().into_owned(),
+            render_manifest: input.render_manifest_path.to_string_lossy().into_owned(),
             edit_manifest: input.edit_manifest_path.to_string_lossy().into_owned(),
             ffprobe_json: input.ffprobe_json_path.to_string_lossy().into_owned(),
             silence_json: input.silence_path.to_string_lossy().into_owned(),
@@ -104,6 +105,7 @@ pub(crate) struct AcceptanceScorecard {
 pub(crate) struct AcceptanceArtifacts {
     pub(crate) artifacts_root: String,
     pub(crate) final_edl: String,
+    pub(crate) render_manifest: String,
     pub(crate) edit_manifest: String,
     pub(crate) ffprobe_json: String,
     pub(crate) silence_json: String,
@@ -131,6 +133,7 @@ pub(crate) struct ScorecardInput<'a> {
     pub(crate) run_root: &'a Path,
     pub(crate) artifacts_root: &'a Path,
     pub(crate) output_path: &'a Path,
+    pub(crate) render_manifest_path: &'a Path,
     pub(crate) final_edl_path: &'a Path,
     pub(crate) edit_manifest_path: &'a Path,
     pub(crate) ffprobe_json_path: &'a Path,

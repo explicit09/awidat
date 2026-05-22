@@ -20,6 +20,7 @@ fn batch_entry_reports_paths_status_score_and_top_failing_gates() {
         artifacts: AcceptanceArtifacts {
             artifacts_root: "/tmp/run/artifacts".into(),
             final_edl: "/tmp/run/artifacts/final_edl.edl".into(),
+            render_manifest: "/tmp/run/artifacts/render.render-manifest.json".into(),
             edit_manifest: "/tmp/run/artifacts/edit_manifest.json".into(),
             ffprobe_json: "/tmp/run/artifacts/ffprobe.json".into(),
             silence_json: "/tmp/run/artifacts/silence.json".into(),
