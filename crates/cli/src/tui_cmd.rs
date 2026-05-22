@@ -24,18 +24,18 @@ use awidat_core::tools::{
     find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
     find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, import_media::ImportLocalTool,
-    import_media::ImportUrlTool, inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool,
-    list_assets::ListAssetsTool, list_looks::ListLooksTool, list_markers::ListMarkersTool,
-    load_skill::LoadSkillTool, local_review_package::LocalReviewPackageTool,
-    manage_assets::CreateBinTool, manage_assets::MarkSelectTool, manage_assets::MoveToBinTool,
-    manage_assets::RateAssetTool, manage_assets::RenameAssetTool, manage_assets::TagAssetTool,
-    plan_emphasis::PlanEmphasisTool, plan_look_regions::PlanLookRegionsTool,
-    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
-    plan_multicam::PlanMulticamTool, plan_transition::PlanTransitionTool,
+    find_speaker_oncam::FindSpeakerOncamTool, granular_timeline::register_granular_timeline_tools,
+    import_media::ImportLocalTool, import_media::ImportUrlTool, inspect_clip::InspectClipTool,
+    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_looks::ListLooksTool,
+    list_markers::ListMarkersTool, load_skill::LoadSkillTool,
+    local_review_package::LocalReviewPackageTool, manage_assets::CreateBinTool,
+    manage_assets::MarkSelectTool, manage_assets::MoveToBinTool, manage_assets::RateAssetTool,
+    manage_assets::RenameAssetTool, manage_assets::TagAssetTool, plan_emphasis::PlanEmphasisTool,
+    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
+    plan_look_regions::StartLookRegionPassTool, plan_multicam::PlanMulticamTool,
+    plan_reframe::PlanReframeTool, plan_transition::PlanTransitionTool,
     poll_render::PollRenderTool, proxy_media::GenerateProxyTool, proxy_media::ProxyStatusTool,
     read_index::ReadIndexTool, relink_media::RelinkMediaTool,
-    plan_reframe::PlanReframeTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, transcript_search::TranscriptSearchTool,
@@ -184,6 +184,7 @@ pub fn run(project_root: &Path, model_override: Option<&str>) -> Result<()> {
 pub fn build_full_registry(model: &str) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ApplyEdlTool));
+    register_granular_timeline_tools(&mut registry);
     registry.register(Arc::new(AnalyzeSyncTool));
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(DiagnoseProjectMediaTool));
