@@ -1,9 +1,6 @@
 import {
   Database,
-  Eye,
-  MessageSquareText,
   SlidersHorizontal,
-  Sparkles,
   Upload,
   type LucideIcon,
 } from "lucide-react";
@@ -22,11 +19,8 @@ import { cn } from "../ui";
  * stage in tiny chrome. Color comes from the active/complete state, not the icon.
  */
 const STAGE_ICON: Record<Stage, LucideIcon> = {
-  intent: MessageSquareText,
   indexing: Database,
-  proposal: Sparkles,
-  review: Eye,
-  revise: SlidersHorizontal,
+  edit: SlidersHorizontal,
   deliver: Upload,
 };
 
@@ -35,7 +29,7 @@ export type StageIndicatorProps = {
 };
 
 /**
- * The six-stage indicator in the top chrome. Click to set the current stage.
+ * The stage indicator in the top chrome. Click to set the current stage.
  * In production the agent advances stages too — this is the user-facing surface.
  */
 export function StageIndicator({ className }: StageIndicatorProps) {

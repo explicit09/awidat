@@ -172,24 +172,24 @@ export function useAppGlue() {
           .then((fullscreen) => win.setFullscreen(!fullscreen))
           .catch((e) => console.warn("toggle fullscreen failed", e));
       } else if (id === MENU_COMMANDS.NAV_PROJECT) {
-        setStage("intent");
+        setStage("indexing");
       } else if (id === MENU_COMMANDS.NAV_WORKSPACE) {
-        setStage(current ? "proposal" : "intent");
+        setStage(current ? "edit" : "indexing");
       } else if (id === MENU_COMMANDS.NAV_AGENT) {
-        setStage(current ? "proposal" : "intent");
+        setStage(current ? "edit" : "indexing");
       } else if (id === MENU_COMMANDS.NAV_MEDIA || id === MENU_COMMANDS.VIEW_MEDIA) {
-        setStage(current ? "indexing" : "intent");
+        setStage("indexing");
       } else if (
         id === MENU_COMMANDS.NAV_REVIEW ||
         id === MENU_COMMANDS.VIEW_TIMELINE ||
         id === MENU_COMMANDS.VIEW_TRANSCRIPT ||
         id === MENU_COMMANDS.VIEW_EDITS
       ) {
-        setStage(current ? "proposal" : "intent");
+        setStage(current ? "edit" : "indexing");
       } else if (id === MENU_COMMANDS.NAV_DELIVER) {
-        setStage(current ? "deliver" : "intent");
+        setStage(current ? "deliver" : "indexing");
       } else if (id === MENU_COMMANDS.NAV_SETTINGS) {
-        setStage(current ? "indexing" : "intent");
+        setStage("indexing");
       }
       // The legacy pane toggles that do not map to v2 lenses are kept
       // enabled for menu completeness but intentionally do not resize panes.

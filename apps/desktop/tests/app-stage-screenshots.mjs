@@ -32,12 +32,9 @@ async function snap(stage, outPath) {
   await page.close();
 }
 
-await snap("Intent", "tests/app-intent.png");
-await snap("Indexing", "tests/app-indexing.png");
-await snap("Proposal", "tests/app-proposal.png");
-await snap("Review", "tests/app-review.png");
-await snap("Revise", "tests/app-revise.png");
+await snap("Index", "tests/app-indexing.png");
+await snap("Edit", "tests/app-edit.png");
 await snap("Deliver", "tests/app-deliver.png");
 
 await browser.close();
-console.log("OK — wrote 6 stage screenshots to tests/");
+console.log("OK - wrote 3 stage screenshots to tests/");

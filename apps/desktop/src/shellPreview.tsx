@@ -109,7 +109,7 @@ function Root() {
   // for prior stages — purely a preview convenience.
   if (useStageStore.getState().visited.size === 1) {
     useStageStore.getState().set("indexing");
-    useStageStore.getState().set("proposal");
+    useStageStore.getState().set("edit");
   }
   const [activeChangeId, setActiveChangeId] = useState<string | undefined>("c7");
   const [currentTime, setCurrentTime] = useState(242);

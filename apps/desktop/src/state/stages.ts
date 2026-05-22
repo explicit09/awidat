@@ -1,25 +1,18 @@
 /**
- * Stages — the six-step human-in-the-loop loop from the design spec:
- *   Intent → Indexing → Proposal → Review → Revise → Deliver.
+ * Stages — the three human-facing workflow destinations:
+ *   Indexing → Edit → Deliver.
  *
- * The stage represents *where in the work* the user is. It is state, not navigation
- * (the user does not freely jump between stages; the agent advances them, and the
- * user reviews/corrects within a stage).
- *
- * This is one of the two orthogonal nav axes — see ./lenses.ts for the other.
+ * Intent is handled by the command rail, and proposal/review/revise are one edit loop.
  */
 
 import { create } from "zustand";
 
-export const STAGES = ["intent", "indexing", "proposal", "review", "revise", "deliver"] as const;
+export const STAGES = ["indexing", "edit", "deliver"] as const;
 export type Stage = (typeof STAGES)[number];
 
 export const STAGE_LABEL: Record<Stage, string> = {
-  intent: "Intent",
-  indexing: "Indexing",
-  proposal: "Proposal",
-  review: "Review",
-  revise: "Revise",
+  indexing: "Index",
+  edit: "Edit",
   deliver: "Deliver",
 };
 
@@ -37,14 +30,14 @@ export type StageStore = {
 };
 
 export const useStageStore = create<StageStore>((set) => ({
-  current: "intent",
-  visited: new Set<Stage>(["intent"]),
+  current: "indexing",
+  visited: new Set<Stage>(["indexing"]),
   set: (stage) =>
     set((s) => ({
       current: stage,
       visited: new Set([...s.visited, stage]),
     })),
-  reset: () => set({ current: "intent", visited: new Set<Stage>(["intent"]) }),
+  reset: () => set({ current: "indexing", visited: new Set<Stage>(["indexing"]) }),
 }));
 
 /**

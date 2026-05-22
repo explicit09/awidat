@@ -33,23 +33,12 @@ export {
   type EvidenceKind,
   type Alternative,
 } from "./ProposalInspector";
-export { StageStub, type StageStubProps } from "./StageStub";
-export {
-  ReviewLensSurface,
-  type ReviewLensSurfaceProps,
-  type ReviewTranscriptSegment,
-} from "./ReviewLensSurface";
 export {
   BatchReviewSurface,
   type BatchReviewSurfaceProps,
   type AgentCommand,
   type BatchProposal,
 } from "./BatchReviewSurface";
-export {
-  ReviseSurface,
-  type ReviseSurfaceProps,
-  type RevisionEntry,
-} from "./ReviseSurface";
 export {
   IndexingDashboard,
   type IndexingDashboardProps,

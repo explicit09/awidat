@@ -1,7 +1,7 @@
 /**
  * Awidat v2 state stores.
  *
- * - useStageStore: Intent → Indexing → Proposal → Review → Revise → Deliver
+ * - useStageStore: Indexing → Edit → Deliver
  *
  * Stage is the single global workflow navigation surface. Specialist review
  * controls live inside their workspace instead of a second global nav row.

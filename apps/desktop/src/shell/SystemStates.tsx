@@ -8,7 +8,7 @@ import { Button, Card, Inline, Stack, cn } from "../ui";
  * Three primitives used across every stage:
  *   - LoadingState   — long-running work with current/up-next/progress
  *   - ErrorState     — what / impact / how-to-resolve + Agent repair + Retry
- *   - GenericEmpty   — generic empty pattern when StageStub doesn't fit
+ *   - GenericEmpty   — generic empty pattern for local empty states
  *
  * Each renders centered inside the parent.
  */

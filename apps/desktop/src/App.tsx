@@ -28,10 +28,7 @@ import {
   IndexingDashboard,
   PreviewSurface,
   ProposalInspector,
-  ReviewLensSurface,
-  ReviseSurface,
   StageIndicator,
-  StageStub,
   TimelineHybrid,
   type ActivityEntry,
   type AgentCommand,
@@ -51,7 +48,6 @@ import {
   type TimelineTab,
   type TimelineViewMode,
   type TranscriptCell,
-  type ReviewTranscriptSegment,
 } from "./shell";
 import { AgentStatusBadge, Button, Card, IconButton, Inline, Pill, Stack } from "./ui";
 import { useStageStore } from "./state";
@@ -216,7 +212,7 @@ function App() {
       if (typeof picked !== "string") return;
       await invoke("set_project_root", { path: picked });
       await refreshProject();
-      setStage("intent");
+      setStage("indexing");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -225,7 +221,7 @@ function App() {
   async function completeNewProject(path: string) {
     await refreshProject().catch(() => {});
     setShowNewProject(false);
-    setStage("intent");
+    setStage("indexing");
     const importPaths = pendingImportPaths;
     const importUrlValue = pendingImportUrl;
     setPendingImportPaths(null);
@@ -429,11 +425,11 @@ function App() {
   }
 
   function openDeliveryFromChrome() {
-    setStage(current ? "deliver" : "intent");
+    setStage(current ? "deliver" : "indexing");
   }
 
   function openSettingsFromChrome() {
-    setStage(current ? "indexing" : "intent");
+    setStage("indexing");
     if (current) {
       void loadIndexerConfig();
     }
@@ -470,7 +466,7 @@ function App() {
     }
     if (current === null) {
       routedProjectRef.current = { project: null, mode: null };
-      setStage("intent");
+      setStage("indexing");
       return;
     }
 
@@ -493,7 +489,7 @@ function App() {
     routedProjectRef.current = { project: current, mode };
 
     if (mode === "proposal" || mode === "timeline") {
-      setStage("proposal");
+      setStage("edit");
       return;
     }
 
@@ -844,10 +840,6 @@ function App() {
     };
   }, [effectiveDeliveryTargets, realPreflightFindings, timelineDuration]);
 
-  const realReviewSegments: ReviewTranscriptSegment[] = useMemo(
-    () => (loadedTranscript ? transcriptToReviewSegments(loadedTranscript) : []),
-    [loadedTranscript],
-  );
   const realTranscriptCells: TranscriptCell[] = useMemo(
     () => (loadedTranscript ? transcriptToTimelineCells(loadedTranscript) : []),
     [loadedTranscript],
@@ -913,18 +905,15 @@ function App() {
     }));
   }, [activeProposal]);
 
-  // Stage routing — Proposal is the main working surface; Review,
-  // Revise, Indexing, Deliver each take over the center pane with
-  // their own surface. Intent still routes to the StageStub.
-  const isProposalStage = stage === "proposal";
-  const isReviewStage = stage === "review";
-  const isReviseStage = stage === "revise";
+  // Stage routing — Edit is the main working surface. Proposal preview,
+  // transcript review, evidence, and revisions all live inside this stage.
+  const isEditStage = stage === "edit";
 
   useEffect(() => {
-    if (!isProposalStage) {
+    if (!isEditStage) {
       setInspectorCollapsed(false);
     }
-  }, [isProposalStage]);
+  }, [isEditStage]);
 
   useEffect(() => {
     setInspectorCollapsed(false);
@@ -949,7 +938,7 @@ function App() {
       onImport={() => void chooseAndImportFiles()}
       onImportUrl={() => setShowUrlImport(true)}
       onAskAgent={() => {
-        setStage("proposal");
+        setStage("edit");
         void runEngineCommand("Create a first cut from the indexed media and explain the edit decisions.");
       }}
       onReviewIndexResults={() => {
@@ -981,7 +970,7 @@ function App() {
   const realWorkspace =
     !demoMode && !hasProject ? (
       <NoProjectWorkspace />
-    ) : !demoMode && isReviewStage && realBatchProposals.length > 0 ? (
+    ) : !demoMode && isEditStage && realBatchProposals.length > 0 ? (
       <BatchReviewSurface
         commands={realBatchCommands}
         proposals={realBatchProposals}
@@ -1128,7 +1117,7 @@ function App() {
         />
       }
       preview={
-        isProposalStage ? (
+        isEditStage ? (
           <PreviewSurface
             proposalName={demoMode ? "Podcast Tightening v1" : activeProposal?.summary ?? "Source review"}
             pendingCount={effectiveChanges.length}
@@ -1161,34 +1150,18 @@ function App() {
             onReviseProposal={reviseActiveProposal}
             onAcceptProposal={activeProposal ? acceptActiveProposal : undefined}
             onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
-            onFullscreen={() => {
-              setStage("review");
-            }}
-          />
-        ) : isReviewStage ? (
-          <ReviewLensSurface
-            segments={realReviewSegments}
-            durationS={effectiveDuration}
-            currentTimeS={effectiveCurrentTime}
-          />
-        ) : isReviseStage ? (
-          <ReviseSurface
-            suggestions={[
-              "Tighten the open by lifting the host's welcome.",
-              "Make this section slower.",
-              "Use fewer transitions.",
-            ]}
+            onFullscreen={() => setInspectorCollapsed(false)}
           />
         ) : stage === "indexing" ? (
           realIndexingWorkspace
         ) : stage === "deliver" ? (
           realDeliveryWorkspace
         ) : (
-          <StageStub stage={stage} onPrimaryAction={() => setStage("proposal")} />
+          <span />
         )
       }
       timeline={
-        isProposalStage ? (
+        isEditStage ? (
           <TimelineHybrid
             tab={timelineTab}
             onChangeTab={setTimelineTab}
@@ -1208,9 +1181,9 @@ function App() {
         )
       }
       inspector={
-        isProposalStage && inspectorCollapsed ? (
+        isEditStage && inspectorCollapsed ? (
           <CollapsedInspectorButton onOpen={() => setInspectorCollapsed(false)} />
-        ) : isProposalStage ? (
+        ) : isEditStage ? (
           <ProposalInspector
             data={effectiveInspector}
             onAccept={acceptActiveProposal}
@@ -1220,16 +1193,14 @@ function App() {
             onAgentRepair={() => {
               void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
             }}
-            onMaximize={() => {
-              setStage("review");
-            }}
+            onMaximize={() => setInspectorCollapsed(false)}
             onCollapse={() => setInspectorCollapsed(true)}
           />
         ) : (
           <span />
         )
       }
-      inspectorCollapsed={isProposalStage && inspectorCollapsed}
+      inspectorCollapsed={isEditStage && inspectorCollapsed}
       footer={<Footer demoMode={demoMode} />}
     />
     {showNewProject && (
@@ -1673,24 +1644,6 @@ function normalizePeak(value: number): number {
   return Math.max(0.04, Math.min(1, Math.abs(value)));
 }
 
-function transcriptToReviewSegments(transcript: Transcript): ReviewTranscriptSegment[] {
-  return transcript.segments.slice(0, 120).map((segment, index) => {
-    const confidence = confidenceForSegment(segment.text);
-    return {
-      id: `${transcript.asset_stem}-${index}`,
-      speaker: speakerLabel(segment.speaker_id, index),
-      speakerColor: speakerColor(segment.speaker_id, index),
-      startTime: formatClock(segment.start_s),
-      startS: segment.start_s,
-      endS: segment.end_s,
-      text: segment.text,
-      confidence,
-      state: confidence < 0.55 ? "warning" : "default",
-      evidence: evidenceForTranscriptSegment(segment.text),
-    };
-  });
-}
-
 function transcriptToTimelineCells(transcript: Transcript): TranscriptCell[] {
   return transcript.segments.slice(0, 80).map((segment, index) => ({
     id: `${transcript.asset_stem}-tl-${index}`,
@@ -1745,50 +1698,10 @@ function findClipStart(snapshot: TimelineSnapshot, clipId: string): number | nul
   return null;
 }
 
-function speakerLabel(speakerId: string | null, index: number): string {
-  if (!speakerId) return index % 2 === 0 ? "A" : "B";
-  const numeric = speakerId.match(/\d+$/)?.[0];
-  if (numeric) return String.fromCharCode(65 + (Number.parseInt(numeric, 10) % 26));
-  return speakerId.slice(0, 1).toUpperCase();
-}
-
 function speakerColor(speakerId: string | null, index: number): string {
   const n = speakerId?.match(/\d+$/)?.[0];
   const speakerIndex = n ? Number.parseInt(n, 10) : index;
   return speakerIndex % 2 === 0 ? "var(--color-viz-speaker-a)" : "var(--color-viz-speaker-b)";
-}
-
-function confidenceForSegment(text: string): number {
-  const lower = text.toLowerCase();
-  const fillerHits = [" um ", " uh ", " basically ", " kind of ", " sort of "].filter((token) =>
-    ` ${lower} `.includes(token),
-  ).length;
-  return Math.max(0.42, 0.92 - fillerHits * 0.14);
-}
-
-function evidenceForTranscriptSegment(text: string): { id: string; label: string }[] {
-  const lower = ` ${text.toLowerCase()} `;
-  const evidence: { id: string; label: string }[] = [];
-  if ([" um ", " uh ", " basically ", " kind of ", " sort of "].some((token) => lower.includes(token))) {
-    evidence.push({ id: "filler", label: "Filler language" });
-  }
-  if (text.length > 140) {
-    evidence.push({ id: "long", label: "Long sentence" });
-  }
-  if (evidence.length === 0) {
-    evidence.push({ id: "transcript", label: "Transcript boundary" });
-  }
-  return evidence;
-}
-
-function formatClock(totalSeconds: number): string {
-  const safe = Math.max(0, Math.floor(totalSeconds));
-  const hours = Math.floor(safe / 3600);
-  const minutes = Math.floor((safe % 3600) / 60);
-  const seconds = safe % 60;
-  return `${hours.toString().padStart(2, "0")}:${minutes
-    .toString()
-    .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 }
 
 type AnyAgentItem = ReturnType<typeof useAgentStore.getState>["items"][number];

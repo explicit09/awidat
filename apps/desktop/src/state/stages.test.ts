@@ -26,22 +26,21 @@ function it(name: string, fn: () => void) {
 
 describe("stageProgress", () => {
   it("marks the current stage as 'current'", () => {
-    assert.equal(stageProgress("proposal", "proposal", new Set<Stage>(["intent", "indexing", "proposal"])), "current");
+    assert.equal(stageProgress("edit", "edit", new Set<Stage>(["indexing", "edit"])), "current");
   });
 
   it("marks visited non-current stages as 'complete'", () => {
-    const visited = new Set<Stage>(["intent", "indexing", "proposal"]);
-    assert.equal(stageProgress("intent", "proposal", visited), "complete");
-    assert.equal(stageProgress("indexing", "proposal", visited), "complete");
+    const visited = new Set<Stage>(["indexing", "edit"]);
+    assert.equal(stageProgress("indexing", "edit", visited), "complete");
   });
 
   it("marks unvisited stages as 'upcoming'", () => {
-    const visited = new Set<Stage>(["intent", "indexing", "proposal"]);
-    assert.equal(stageProgress("review", "proposal", visited), "upcoming");
-    assert.equal(stageProgress("deliver", "proposal", visited), "upcoming");
+    const visited = new Set<Stage>(["indexing"]);
+    assert.equal(stageProgress("edit", "indexing", visited), "upcoming");
+    assert.equal(stageProgress("deliver", "indexing", visited), "upcoming");
   });
 
-  it("STAGES order matches the design spec", () => {
-    assert.deepEqual([...STAGES], ["intent", "indexing", "proposal", "review", "revise", "deliver"]);
+  it("STAGES order matches the simplified editor workflow", () => {
+    assert.deepEqual([...STAGES], ["indexing", "edit", "deliver"]);
   });
 });

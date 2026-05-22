@@ -15,7 +15,6 @@ import {
   Layers3,
   LayoutDashboard,
   Loader,
-  MessageSquareText,
   PackageCheck,
   PanelRight,
   Play,
@@ -54,7 +53,6 @@ import { BatchReviewSurface, type AgentCommand, type BatchProposal } from "./Bat
 import { DeliverySurface, type DeliveryRenderSummary, type DeliveryTarget, type PreflightFinding } from "./DeliverySurface";
 import { IndexingDashboard, type IndexingMediaItem, type IndexingTask } from "./IndexingDashboard";
 import { ProposalInspector, type ProposalInspectorData } from "./ProposalInspector";
-import type { ReviewTranscriptSegment } from "./ReviewLensSurface";
 import podcastAfter from "./assets/podcast-after.jpg";
 import podcastBefore from "./assets/podcast-before.jpg";
 import podcastThumb01 from "./assets/podcast-thumb-01.jpg";
@@ -78,6 +76,19 @@ export type DemoScreenDefinition = {
   workspace?: ReactNode;
   standalone?: boolean;
   smokeText: string[];
+};
+
+type ReviewTranscriptSegment = {
+  id: string;
+  speaker: string;
+  speakerColor?: string;
+  startTime: string;
+  startS: number;
+  endS: number;
+  text: string;
+  confidence?: number;
+  evidence?: { id: string; label: string }[];
+  state?: "default" | "selected" | "accepted" | "rejected" | "warning";
 };
 
 export function resolveDemoScreenId(search: string): DemoScreenId {
@@ -509,7 +520,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen1",
     specLabel: "Screen 1",
     title: "Product Concept & Information Architecture",
-    stage: "intent",
+    stage: "indexing",
     statusLabel: "Concept board",
     pendingLabel: "Concept",
     workspace: <ProductConceptBoard />,
@@ -517,9 +528,8 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     smokeText: [
       "Product Concept & Information Architecture",
       "AI-assisted podcast editing",
-      "Intent",
       "Indexing",
-      "Proposal",
+      "Edit",
       "Evidence & Feedback Loop",
       "Information architecture",
       "Transparent",
@@ -531,7 +541,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen2",
     specLabel: "Screen 2",
     title: "Main Desktop Workspace",
-    stage: "proposal",
+    stage: "edit",
     statusLabel: "Awaiting review",
     pendingLabel: "12 pending",
     smokeText: [
@@ -547,7 +557,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen3",
     specLabel: "Screen 3",
     title: "Agent Proposal Review",
-    stage: "review",
+    stage: "edit",
     statusLabel: "Reviewing clip pack",
     pendingLabel: "5 proposals",
     commandRail: screen3CommandRail,
@@ -574,7 +584,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen4",
     specLabel: "Screen 4",
     title: "Timeline / Transcript Hybrid",
-    stage: "review",
+    stage: "edit",
     statusLabel: "Semantic timeline",
     pendingLabel: "12 pending",
     workspace: <SemanticTimelineWorkspace />,
@@ -592,7 +602,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen5",
     specLabel: "Screen 5",
     title: "Cut / Proposal Inspector",
-    stage: "review",
+    stage: "edit",
     statusLabel: "Inspecting cut",
     pendingLabel: "Cut 12",
     workspace: <CutInspectorWorkspace />,
@@ -671,7 +681,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen8",
     specLabel: "Screen 8",
     title: "Empty / Loading / Error States",
-    stage: "intent",
+    stage: "indexing",
     statusLabel: "System states",
     workspace: <SystemStateBoard />,
     smokeText: [
@@ -686,7 +696,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     id: "screen9",
     specLabel: "Screen 9",
     title: "Component System",
-    stage: "review",
+    stage: "edit",
     statusLabel: "Component system",
     pendingLabel: "Tokens",
     workspace: <ComponentSystemBoard />,
@@ -711,18 +721,15 @@ const conceptStages: Array<{
   color: string;
   icon: LucideIcon;
 }> = [
-  { label: "Intent", description: "Define the goal and constraints in plain language.", color: "var(--color-success)", icon: MessageSquareText },
-  { label: "Indexing", description: "Index media and generate rich understanding.", color: "var(--color-info)", icon: Database },
-  { label: "Proposal", description: "Propose a walkthrough with edits and rationale.", color: "var(--color-warning)", icon: Sparkles },
-  { label: "Review", description: "Review with evidence and full context.", color: "var(--color-brand-secondary)", icon: Eye },
-  { label: "Revise", description: "Refine instructions or accept changes selectively.", color: "var(--color-brand-purple)", icon: SlidersHorizontal },
+  { label: "Indexing", description: "Import media and generate transcript, scene, audio, and visual signals.", color: "var(--color-info)", icon: Database },
+  { label: "Edit", description: "One review loop for proposals, transcript, evidence, notes, and revisions.", color: "var(--color-brand-secondary)", icon: SlidersHorizontal },
   { label: "Deliver", description: "Export with confidence, captions, and assets.", color: "var(--color-success)", icon: PackageCheck },
 ];
 
 const informationArchitecture = [
   ["Project", "Projects", "Episodes", "Seasons", "Assets", "Team", "Activity"],
   ["Workspace", "Command Rail", "Timeline", "Transcript", "Selects", "Evidence", "Inspector"],
-  ["Agent", "Intent", "Plan", "Actions", "Suggestions", "Activity Log", "Constraints"],
+  ["Agent", "Command", "Plan", "Actions", "Suggestions", "Activity Log", "Constraints"],
   ["Media", "Sources", "Clips", "Sequences", "Audio", "Images", "Documents"],
   ["Review", "Proposals", "Changes", "Evidence", "Alternatives", "Notes", "Compare"],
   ["Deliver", "Exports", "Packages", "Captions", "Shorts", "Destinations", "History"],
@@ -967,17 +974,17 @@ function ProductConceptBoard() {
         <footer className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] p-2">
           <Inline justify="between" align="baseline" className="mb-1.5">
             <span className="text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">Stage-driven workflow</span>
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">Review active</span>
+            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">Edit active</span>
           </Inline>
-          <div className="grid grid-cols-4 gap-1.5">
-            {["Import", "Index", "Review", "Delivery"].map((lens) => (
+          <div className="grid grid-cols-3 gap-1.5">
+            {["Index", "Edit", "Deliver"].map((lens) => (
               <div
                 key={lens}
                 className="rounded-[var(--radius-sm)] border px-2 py-1 text-center text-[10px] font-semibold"
                 style={{
-                  borderColor: lens === "Review" ? "var(--color-border-active)" : "var(--color-border-subtle)",
-                  background: lens === "Review" ? "var(--color-surface-selected)" : "var(--color-surface-card)",
-                  color: lens === "Review" ? "var(--color-brand-secondary)" : "var(--color-text-secondary)",
+                  borderColor: lens === "Edit" ? "var(--color-border-active)" : "var(--color-border-subtle)",
+                  background: lens === "Edit" ? "var(--color-surface-selected)" : "var(--color-surface-card)",
+                  color: lens === "Edit" ? "var(--color-brand-secondary)" : "var(--color-text-secondary)",
                 }}
               >
                 {lens}
