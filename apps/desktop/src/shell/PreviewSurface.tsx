@@ -21,6 +21,7 @@ import {
   cn,
   type TimelineMarkerKind,
 } from "../ui";
+import type { PreviewQualityMode } from "../media/previewSource";
 
 /**
  * PreviewSurface — the center "Preview / Review" surface from the design spec
@@ -75,6 +76,8 @@ export type PreviewSurfaceProps = {
   volume?: number;
   /** Playback rate. */
   rate?: number;
+  /** Viewer media quality preference for source review. */
+  qualityMode?: PreviewQualityMode;
   /** View mode for the dual-cam preview. */
   viewMode?: PreviewViewMode;
 
@@ -89,6 +92,7 @@ export type PreviewSurfaceProps = {
   onSeek?: (timeS: number) => void;
   onSetVolume?: (v: number) => void;
   onSetRate?: (r: number) => void;
+  onSetQualityMode?: (m: PreviewQualityMode) => void;
   onSetViewMode?: (m: PreviewViewMode) => void;
   onOpenProposalMenu?: () => void;
   onInspectProposal?: () => void;
@@ -110,6 +114,7 @@ export function PreviewSurface({
   isPlaying = false,
   volume = 0.7,
   rate = 1,
+  qualityMode = "auto",
   viewMode = "before-after",
   videoSlot,
   onSelectChange,
@@ -119,6 +124,7 @@ export function PreviewSurface({
   onSeek,
   onSetVolume,
   onSetRate,
+  onSetQualityMode,
   onSetViewMode,
   onOpenProposalMenu,
   onInspectProposal,
@@ -276,6 +282,7 @@ export function PreviewSurface({
               </div>
             ) : null}
           </div>
+          <QualityModeSelect value={qualityMode} onChange={onSetQualityMode} />
           <Inline gap="2" align="center" className="w-32">
             <Volume2 className="h-4 w-4 stroke-[1.75] text-[var(--color-text-muted)] shrink-0" />
             <input
@@ -420,6 +427,32 @@ function ViewModeToggle({
         </button>
       ))}
     </div>
+  );
+}
+
+function QualityModeSelect({
+  value,
+  onChange,
+}: {
+  value: PreviewQualityMode;
+  onChange?: (m: PreviewQualityMode) => void;
+}) {
+  return (
+    <label className="inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2 text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+      <span className="uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-muted)]">
+        Quality
+      </span>
+      <select
+        value={value}
+        onChange={(event) => onChange?.(event.target.value as PreviewQualityMode)}
+        className="bg-transparent font-mono text-[var(--text-caption)] text-[var(--color-text-primary)] outline-none"
+        aria-label="Preview quality"
+      >
+        <option value="auto">Auto</option>
+        <option value="full">Full</option>
+        <option value="proxy">Proxy</option>
+      </select>
+    </label>
   );
 }
 

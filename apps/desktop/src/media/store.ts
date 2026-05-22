@@ -125,15 +125,20 @@ export const useMediaStore = create<MediaState>((set, get) => ({
         invoke<ProxyEntry[]>("list_proxies"),
       ]);
       set((state) => {
-        // Keep current selection if still present; otherwise pick
-        // the first proxy if any. Falling back to null when the
-        // project has no proxies yet.
+        // Keep the current selection if it still resolves against
+        // either the proxies (post-transcode) or the sources (pre-
+        // transcode); otherwise fall back to the first proxy, then
+        // the first source's filename-minus-extension. The source
+        // fallback matters when an asset's whisper sidecar lands
+        // before its proxy — without it the transcript pane stays
+        // empty even though the indexer is done.
         const stillThere =
           state.selectedStem !== null &&
-          proxies.some((p) => p.stem === state.selectedStem);
+          (proxies.some((p) => p.stem === state.selectedStem) ||
+            sources.some((s) => stripExt(s.name) === state.selectedStem));
         const selectedStem = stillThere
           ? state.selectedStem
-          : proxies[0]?.stem ?? null;
+          : proxies[0]?.stem ?? (sources[0] ? stripExt(sources[0].name) : null);
         return { sources, proxies, selectedStem };
       });
     } catch (e) {
@@ -152,8 +157,15 @@ export const useMediaStore = create<MediaState>((set, get) => ({
       });
       return;
     }
-    const proxies = get().proxies;
-    if (proxies.some((p) => p.stem === stem)) {
+    // Accept either a proxy stem (post-transcode) or a source
+    // filename-without-extension (pre-transcode). Without this,
+    // selecting a freshly-imported asset before its proxy has
+    // finished transcoding would be silently refused.
+    const { proxies, sources } = get();
+    const resolves =
+      proxies.some((p) => p.stem === stem) ||
+      sources.some((s) => stripExt(s.name) === stem);
+    if (resolves) {
       set({
         selectedStem: stem,
         currentTime: 0,
@@ -199,4 +211,11 @@ export const useMediaStore = create<MediaState>((set, get) => ({
 function clampTimelineTime(t: number, durationS: number): number {
   const safe = Number.isFinite(t) ? Math.max(0, t) : 0;
   return durationS > 0 ? Math.min(safe, durationS) : safe;
+}
+
+function stripExt(filename: string): string {
+  const slash = Math.max(filename.lastIndexOf("/"), filename.lastIndexOf("\\"));
+  const base = slash >= 0 ? filename.slice(slash + 1) : filename;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(0, dot) : base;
 }

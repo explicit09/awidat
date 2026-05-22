@@ -19,6 +19,7 @@ import { useProjectStore } from "./app/state";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { useMediaStore } from "./media/store";
 import { mediaStreamUrl } from "./media/mediaStreamUrl";
+import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
 import { useTranscriptStore } from "./transcript/store";
 import { TranscriptView } from "./transcript/TranscriptView";
@@ -51,7 +52,7 @@ import {
   type TimelineTab,
   type TimelineViewMode,
 } from "./shell";
-import { AgentStatusBadge, Button, Card, IconButton, Inline, Pill, Stack, type PillStatus } from "./ui";
+import { AgentStatusBadge, Button, Card, IconButton, Inline, Pill, Stack, type MediaIndexingStatus, type PillStatus } from "./ui";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
 import { useProposalInspectorData } from "./state/proposalAdapter";
@@ -74,6 +75,7 @@ import {
 } from "./shell/screen2Demo";
 import { demoScreens, resolveDemoScreenId } from "./shell/demoScreens";
 import "./ui/tokens.css";
+import "./App.css";
 
 function App() {
   // Side effects (Tauri channels, menu routing, project lifecycle).
@@ -119,10 +121,11 @@ function App() {
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("timeline");
   const [timelineViewMode, setTimelineViewMode] = useState<TimelineViewMode>("proposed");
   const [previewViewMode, setPreviewViewMode] = useState<PreviewViewMode>("before-after");
+  const [previewQualityMode, setPreviewQualityMode] = useState<PreviewQualityMode>("auto");
   const [previewVolume, setPreviewVolume] = useState(0.8);
   const [previewRate, setPreviewRate] = useState(1);
   const [activePreviewChangeId, setActivePreviewChangeId] = useState<string | undefined>(undefined);
-  const [realVideoFrames, setRealVideoFrames] = useState<string[]>([]);
+  const [, setRealVideoFrames] = useState<string[]>([]);
   const [realAudioPeaks, setRealAudioPeaks] = useState<number[]>([]);
   const [realPreviewSrc, setRealPreviewSrc] = useState<string | null>(null);
   const [showNewProject, setShowNewProject] = useState(false);
@@ -174,22 +177,12 @@ function App() {
     );
   }, [selectedStem, sources]);
   const selectedPreviewMedia = useMemo(() => {
-    if (selectedProxy) {
-      return {
-        path: selectedProxy.proxy_path,
-        label: "Source proxy",
-        name: selectedProxy.stem,
-      };
-    }
-    if (selectedSource) {
-      return {
-        path: selectedSource.path,
-        label: "Source media",
-        name: selectedSource.name,
-      };
-    }
-    return null;
-  }, [selectedProxy, selectedSource]);
+    return resolvePreviewMedia({
+      mode: previewQualityMode,
+      source: selectedSource,
+      proxy: selectedProxy,
+    });
+  }, [previewQualityMode, selectedProxy, selectedSource]);
   const sourceMediaCount = Math.max(sources.length, proxies.length);
   const hasImportedMedia = sourceMediaCount > 0;
   const routedProjectRef = useRef<{
@@ -916,6 +909,11 @@ function App() {
 
   const realIndexingTasks: IndexingTask[] = useMemo(() => {
     const globalIndexJob = activeJobs.find((job) => job.job_kind === "indexing");
+    // Per-signal mapping to a dedicated JobKind. Signals not listed
+    // here (face, color, speaker, captions) don't have a standalone
+    // background job — they're produced as part of the global
+    // "indexing" run, so when that's active they should read as
+    // queued, not missing.
     const specificJobs: Partial<Record<IndexingTask["kind"], JobKind>> = {
       scenes: "thumbnails",
       audio: "waveform",
@@ -965,12 +963,32 @@ function App() {
       const jobKind = specificJobs[kind];
       const runningJob = jobKind ? activeJobs.find((job) => job.job_kind === jobKind) : undefined;
       const completed = jobKind ? completedJobKinds.has(jobKind) : false;
+      // Precedence: a dedicated job for this signal wins, then a
+      // completed-from-local-state marker, then the global indexer
+      // (which queues every remaining signal behind it). Only fall
+      // through to "missing" when no indexer is doing anything on
+      // our behalf — that's the real "user must click Run" state.
+      let status: MediaIndexingStatus;
+      let detail: string;
+      if (runningJob) {
+        status = "indexing";
+        detail = runningJob.status;
+      } else if (completed) {
+        status = "indexed";
+        detail = "Completed from local job state";
+      } else if (globalIndexJob) {
+        status = "queued";
+        detail = "Waiting for index output";
+      } else {
+        status = "missing";
+        detail = "Waiting for local indexer";
+      }
       return {
         id: `real-${kind}`,
         kind,
-        status: runningJob ? "indexing" : completed ? "indexed" : hasImportedMedia ? "missing" : "missing",
+        status,
         progress: runningJob?.percent ?? (completed ? 100 : undefined),
-        detail: runningJob?.status ?? (completed ? "Completed from local job state" : globalIndexJob ? "Waiting for index output" : "Waiting for local indexer"),
+        detail,
       };
     });
   }, [activeJobs, completedJobKinds, hasImportedMedia, indexReadiness, loadedTranscript]);
@@ -1372,6 +1390,7 @@ function App() {
             isPlaying={demoMode ? false : isPlaying}
             volume={previewVolume}
             rate={previewRate}
+            qualityMode={previewQualityMode}
             viewMode={previewViewMode}
             videoSlot={
               demoMode ? (
@@ -1388,7 +1407,6 @@ function App() {
                   rate={previewRate}
                   seekRequestId={sourceSeekRequestId}
                   seekTargetS={sourceSeekTargetS}
-                  posterSrc={realVideoFrames[0]}
                   onTime={setSourceTime}
                   onDuration={setSourceDuration}
                   onPlaying={setMediaPlaying}
@@ -1402,6 +1420,7 @@ function App() {
             onSeek={seekPreview}
             onSetVolume={setPreviewVolume}
             onSetRate={setPreviewRate}
+            onSetQualityMode={setPreviewQualityMode}
             onSetViewMode={setPreviewViewMode}
             onOpenProposalMenu={() => setInspectorCollapsed(false)}
             onInspectProposal={inspectActiveProposal}
@@ -1638,6 +1657,40 @@ function RealMediaPreviewSlot({
     video.volume = Math.max(0, Math.min(1, volume));
     video.playbackRate = Math.max(0.0625, Math.min(16, rate));
   }, [rate, volume]);
+
+  // Per-frame time push via requestVideoFrameCallback. The browser's
+  // `timeupdate` event only fires ~4 times per second, which makes
+  // downstream consumers (transcript active-word highlight, scrubber
+  // tick) trail the audio by up to ~250ms. rVFC fires once per
+  // rendered video frame (~60Hz) so the highlight stays locked to
+  // the audio. `onTimeUpdate` on the <video> below still runs as a
+  // safety net in case the browser drops rVFC support.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    type RVFCMetadata = { mediaTime: number };
+    type RVFCVideo = HTMLVideoElement & {
+      requestVideoFrameCallback?: (
+        cb: (now: number, metadata: RVFCMetadata) => void,
+      ) => number;
+      cancelVideoFrameCallback?: (id: number) => void;
+    };
+    const rvfc = video as RVFCVideo;
+    if (typeof rvfc.requestVideoFrameCallback !== "function") return;
+    let cancelled = false;
+    let handle = 0;
+    const tick = (_now: number, metadata: RVFCMetadata) => {
+      if (cancelled) return;
+      onTime(metadata.mediaTime);
+      const next = rvfc.requestVideoFrameCallback;
+      if (next) handle = next(tick);
+    };
+    handle = rvfc.requestVideoFrameCallback(tick);
+    return () => {
+      cancelled = true;
+      rvfc.cancelVideoFrameCallback?.(handle);
+    };
+  }, [onTime, src]);
 
   return (
     <div className="relative h-full w-full bg-black">
@@ -2078,6 +2131,7 @@ function mediaStatusPill(status: IndexingMediaItem["status"]): PillStatus {
     case "indexing":
       return "processing";
     case "processing":
+    case "queued":
       return "reviewing";
     case "partial":
       return "warning";
@@ -2086,6 +2140,14 @@ function mediaStatusPill(status: IndexingMediaItem["status"]): PillStatus {
     case "missing":
       return "missing";
   }
+}
+
+function formatIndexerActivity(runningCount: number, queuedCount: number): string {
+  if (runningCount === 0 && queuedCount === 0) return "idle";
+  const parts: string[] = [];
+  if (runningCount > 0) parts.push(`${runningCount} running`);
+  if (queuedCount > 0) parts.push(`${queuedCount} queued`);
+  return parts.join(", ");
 }
 
 function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
@@ -2098,6 +2160,8 @@ function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
       return "Indexing";
     case "processing":
       return "Processing";
+    case "queued":
+      return "Queued";
     case "partial":
       return "Partial";
     case "failed":
@@ -2132,11 +2196,13 @@ function IndexReadinessPanel({
 }) {
   const readyCount = tasks.filter((task) => task.status === "indexed" || task.status === "imported").length;
   const runningCount = tasks.filter((task) => task.status === "indexing" || task.status === "processing" || task.status === "partial").length;
+  const queuedCount = tasks.filter((task) => task.status === "queued").length;
+  const inFlightCount = runningCount + queuedCount;
   const activeIndexers = indexerConfig?.indexers.filter((indexer) => indexer.enabled) ?? [];
   const complete = readyCount === tasks.length && tasks.length > 0;
   const usable = ready || readyCount > 0;
-  const readinessLabel = complete ? "Complete" : usable ? "Usable" : runningCount > 0 ? "Indexing" : "Needs index";
-  const readinessStatus: PillStatus = complete ? "ready" : usable ? "warning" : runningCount > 0 ? "processing" : "missing";
+  const readinessLabel = complete ? "Complete" : usable ? "Usable" : inFlightCount > 0 ? "Indexing" : "Needs index";
+  const readinessStatus: PillStatus = complete ? "ready" : usable ? "warning" : inFlightCount > 0 ? "processing" : "missing";
   const readinessProgress = tasks.length > 0 ? Math.round((readyCount / tasks.length) * 100) : 0;
   return (
     <Stack gap="4" className="p-3">
@@ -2149,7 +2215,7 @@ function IndexReadinessPanel({
             {readyCount} of {tasks.length} signals ready
           </span>
           <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-            {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {runningCount > 0 ? `${runningCount} running` : "idle"}
+            {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {formatIndexerActivity(runningCount, queuedCount)}
           </span>
         </Stack>
         <Pill status={readinessStatus} dot>

@@ -12,6 +12,10 @@ target/
 # Distribution build output (tarballs + staging dirs).
 dist/build/
 
+# Desktop test compile output (per-suite TS → JS staging dirs).
+apps/desktop/dist-test-play-segments/
+apps/desktop/dist-test/
+
 # Python workspace
 python/.venv/
 python/**/__pycache__/

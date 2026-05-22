@@ -7,6 +7,7 @@ export type MediaIndexingStatus =
   | "imported"
   | "indexing"
   | "processing"
+  | "queued"
   | "indexed"
   | "partial"
   | "failed"
@@ -16,6 +17,7 @@ const PILL_FOR: Record<MediaIndexingStatus, PillStatus> = {
   imported: "ready",
   indexing: "processing",
   processing: "reviewing",
+  queued: "reviewing",
   indexed: "ready",
   partial: "warning",
   failed: "failed",
@@ -26,6 +28,7 @@ const LABEL: Record<MediaIndexingStatus, string> = {
   imported: "Imported",
   indexing: "Indexing",
   processing: "Processing",
+  queued: "Queued",
   indexed: "Indexed",
   partial: "Partial",
   failed: "Failed",

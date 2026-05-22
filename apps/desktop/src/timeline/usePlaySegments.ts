@@ -22,9 +22,9 @@
 // render.
 //
 // v1 scope: video tracks only, single-track flat (V1). Multi-video
-// (V2 overlay) lands when we tackle B-roll preview. When explicit
-// audio tracks exist, preview mutes embedded video audio so it does
-// not double with the first-class mix used by export.
+// (V2 overlay) lands when we tackle B-roll preview. Until the preview
+// owns a separate audio mixer, linked audio tracks are visual/editing
+// state only; the proxy video remains the audible preview source.
 
 import { useMemo } from "react";
 import type { TimelineParameterAnimation } from "../protocol";
@@ -189,13 +189,11 @@ function clampNumber(
   return Math.max(min, Math.min(max, value as number));
 }
 
-function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
+export function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
   const videoTrack = snapshot.tracks.find(
     (t) => t.kind === "video" && t.role !== "titles",
   );
   if (!videoTrack) return { segments: [], transitions: [], duration: 0 };
-  const hasExplicitAudio = snapshot.tracks.some((t) => t.kind === "audio");
-
   const segments: PlaySegment[] = [];
   const transitions: PreviewTransition[] = [];
   let pendingTransition: {
@@ -235,7 +233,7 @@ function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
       sourceEnd: originalSourceStart + item.duration_s,
       timelineStart: item.track_start_s,
       timelineEnd: item.track_start_s + item.duration_s,
-      volume: hasExplicitAudio ? 0 : item.volume ?? 1,
+      volume: item.volume ?? 1,
       speed: item.speed ?? 1,
       clipIndex: item.index,
     };

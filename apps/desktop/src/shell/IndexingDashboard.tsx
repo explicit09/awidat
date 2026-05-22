@@ -682,6 +682,8 @@ function statusDetail(status: MediaIndexingStatus): string {
       return "Pending — not yet computed";
     case "indexing":
       return "Computing now";
+    case "queued":
+      return "Queued — waiting in the indexer pipeline";
     case "indexed":
       return "Indexed";
     case "imported":
