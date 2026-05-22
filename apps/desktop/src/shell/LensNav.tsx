@@ -33,15 +33,17 @@ const LENS_ICON: Record<Lens, LucideIcon> = {
 
 export type LensNavProps = {
   className?: string;
+  showImport?: boolean;
 };
 
-export function LensNav({ className }: LensNavProps) {
+export function LensNav({ className, showImport = true }: LensNavProps) {
   const current = useLensStore((s) => s.current);
   const set = useLensStore((s) => s.set);
+  const visibleLenses = showImport ? LENSES : LENSES.filter((lens) => lens !== "import");
 
   return (
     <div role="tablist" aria-label="Workflow lens" className={cn("flex h-full min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden", className)}>
-      {LENSES.map((lens) => {
+      {visibleLenses.map((lens) => {
         const Icon = LENS_ICON[lens];
         const isCurrent = lens === current;
         return (

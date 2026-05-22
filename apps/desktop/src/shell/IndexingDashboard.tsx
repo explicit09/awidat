@@ -89,6 +89,14 @@ export type IndexerConfigSnapshot = {
   indexers: IndexerConfigEntry[];
 };
 
+export type IndexingStructurePreview = {
+  duration?: string;
+  scenes?: number;
+  segments?: number;
+  speakers?: number;
+  transcriptPercent?: number;
+};
+
 export type IndexingDashboardProps = {
   projectName?: string;
   sourceCount?: number;
@@ -97,6 +105,7 @@ export type IndexingDashboardProps = {
   tasks?: IndexingTask[];
   system?: IndexingSystemStatus;
   indexerConfig?: IndexerConfigSnapshot;
+  structurePreview?: IndexingStructurePreview;
   /** True when all 9 tasks are at least partially indexed. */
   ready?: boolean;
   onImport?: () => void;
@@ -144,6 +153,7 @@ export function IndexingDashboard({
   tasks = [],
   system,
   indexerConfig,
+  structurePreview,
   ready = false,
   onImport,
   onImportUrl,
@@ -176,21 +186,52 @@ export function IndexingDashboard({
       return sum;
     }, 0) / resolved.length,
   );
+  const hasMedia = sourceCount > 0 || media.length > 0;
+  const mediaCount = Math.max(sourceCount, media.length);
+  const indexedMediaCount = media.filter((item) => item.status === "indexed").length;
+  const activeMediaCount = media.filter((item) =>
+    item.status === "indexing" || item.status === "processing" || item.status === "partial",
+  ).length;
+  const failedMediaCount = media.filter((item) => item.status === "failed").length;
+  const activeTaskCount = resolved.filter((task) =>
+    task.status === "indexing" || task.status === "processing" || task.status === "partial",
+  ).length;
+  const indexStateLabel = !hasMedia
+    ? "No media"
+    : ready
+      ? "Indexed"
+      : activeTaskCount > 0
+        ? "Indexing"
+        : indexedTaskCount > 0
+          ? "Partially indexed"
+          : "Ready to index";
+  const showStructurePreview = hasMedia && indexedTaskCount > 0;
+  const preview = structurePreview ?? (showStructurePreview
+    ? {
+        duration: "00:42:11",
+        scenes: 31,
+        segments: 126,
+        speakers: 2,
+        transcriptPercent: 78,
+      }
+    : undefined);
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(250px,0.82fr)_minmax(300px,1fr)_minmax(390px,1.68fr)_minmax(220px,0.78fr)] bg-[var(--color-surface-app)]">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(230px,0.74fr)_minmax(280px,0.9fr)_minmax(430px,1.9fr)_minmax(210px,0.7fr)] bg-[var(--color-surface-app)]">
       <aside className="border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
         <div className="px-4 py-4 border-b border-[var(--color-border-subtle)]">
           <Stack gap="3">
             <Stack gap="1">
               <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-                Project & import
+                {hasMedia ? "Project media" : "Project & import"}
               </span>
               <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
                 {projectName ?? "Untitled"}
               </span>
               <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-                {sourceCount} {sourceCount === 1 ? "file" : "files"} · {media.length > 0 ? "12.4 GB" : "No media imported"}
+                {hasMedia
+                  ? `${mediaCount} ${mediaCount === 1 ? "item" : "items"} · ${indexStateLabel}`
+                  : "No media imported"}
               </span>
             </Stack>
             {deliveryTarget ? (
@@ -198,22 +239,26 @@ export function IndexingDashboard({
                 {deliveryTarget}
               </Pill>
             ) : null}
-            {showImportActions ? (
-              <Inline gap="2">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={onImport}
-                  leadingIcon={<Import className="h-3.5 w-3.5 stroke-[1.75]" />}
-                  className="flex-1"
-                >
-                  Import files
-                </Button>
-                <Button variant="secondary" size="sm" onClick={onImportUrl} className="flex-1">
-                  Import URL
-                </Button>
-              </Inline>
-            ) : null}
+            {hasMedia ? <SectionHeader title="Add media" /> : null}
+            <Inline gap="2">
+              <Button
+                variant={hasMedia ? "secondary" : "primary"}
+                size={hasMedia ? "xs" : "sm"}
+                onClick={onImport}
+                leadingIcon={<Import className="h-3.5 w-3.5 stroke-[1.75]" />}
+                className={hasMedia ? undefined : "flex-1"}
+              >
+                {hasMedia ? "Add files" : "Import files"}
+              </Button>
+              <Button
+                variant="secondary"
+                size={hasMedia ? "xs" : "sm"}
+                onClick={onImportUrl}
+                className={hasMedia ? undefined : "flex-1"}
+              >
+                {hasMedia ? "Add URL" : "Import URL"}
+              </Button>
+            </Inline>
           </Stack>
         </div>
         {showImportActions ? (
@@ -223,28 +268,44 @@ export function IndexingDashboard({
         ) : null}
         <div className="flex-1 overflow-y-auto p-4">
           <Stack gap="3">
-            <SectionHeader title="Import status" subtitle="Complete" />
-            <ProgressStat label="Importing 9 of 9 files" value="12.4 GB / 12.4 GB" progress={100} />
-            <SectionHeader title="Activity log" />
-            {[
-              "Scanned folder and matched 9 supported files",
-              "Generated proxies for A and B camera",
-              "Queued transcript, scene, and speaker analysis",
-              "Audio waveform cache is ready",
-            ].map((item, index) => (
-              <div key={item} className="grid grid-cols-[24px_1fr] gap-2 text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-                <span className="font-mono text-[var(--color-text-muted)]">{String(index + 1).padStart(2, "0")}</span>
-                <span className="leading-snug">{item}</span>
-              </div>
-            ))}
+            {hasMedia ? (
+              <>
+                <SectionHeader title="Source status" subtitle={indexStateLabel} />
+                <Stack gap="2">
+                  <StatusLine label="Total media" value={`${mediaCount} ${mediaCount === 1 ? "item" : "items"}`} />
+                  <StatusLine label="Indexed" value={`${indexedMediaCount}`} />
+                  <StatusLine label="Processing" value={`${activeMediaCount}`} />
+                  {failedMediaCount > 0 ? <StatusLine label="Needs attention" value={`${failedMediaCount}`} /> : null}
+                </Stack>
+                <SectionHeader title="Next action" />
+                <span className="text-[var(--text-caption)] leading-relaxed text-[var(--color-text-secondary)]">
+                  Keep indexing current sources or add more media from this panel.
+                </span>
+              </>
+            ) : (
+              <>
+                <SectionHeader title="Import status" subtitle="Waiting" />
+                <span className="text-[var(--text-caption)] leading-relaxed text-[var(--color-text-secondary)]">
+                  Choose media files or a URL to start building the local index.
+                </span>
+              </>
+            )}
           </Stack>
         </div>
       </aside>
 
       <section className="grid min-h-0 grid-rows-[1fr_auto] border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)]">
-        <Section title={`Imported media (${media.length})`} subtitle="Local sources" fill>
+        <Section
+          title={hasMedia ? `Source media (${mediaCount})` : "Source media"}
+          subtitle={hasMedia ? "Local sources" : "Waiting for import"}
+          fill
+        >
           {media.length === 0 ? (
-            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">No media yet.</span>
+            <span className="text-[var(--text-caption)] leading-relaxed text-[var(--color-text-muted)]">
+              {hasMedia
+                ? "Media metadata is still loading. Indexing can continue while source details appear."
+                : "No media yet. Import files or a URL to populate this list."}
+            </span>
           ) : (
             <Stack gap="2">
               {media.map((m) => (
@@ -263,16 +324,16 @@ export function IndexingDashboard({
         <div className="border-t border-[var(--color-border-subtle)] px-4 py-2">
           <Inline justify="between" align="center">
             <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              {media.length} items · 12.4 GB
+              {mediaCount} {mediaCount === 1 ? "item" : "items"}
             </span>
             <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              Indexed locally
+              {indexStateLabel}
             </span>
           </Inline>
         </div>
       </section>
 
-      <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_218px] overflow-hidden">
+      <main className={cn("grid min-h-0 overflow-hidden", showStructurePreview ? "grid-rows-[minmax(0,1fr)_218px]" : "grid-rows-[minmax(0,1fr)]")}>
         <Section
           title="Indexing pipeline"
           subtitle={
@@ -316,33 +377,40 @@ export function IndexingDashboard({
           </div>
         </Section>
 
-        <section className="border-t border-[var(--color-border-subtle)] px-5 py-4 bg-[var(--color-surface-panel)]">
-          <Stack gap="3">
-            <SectionHeader title="Extracted structure preview" subtitle="Updating live" />
-            <div className="grid grid-cols-3 gap-2 xl:grid-cols-5">
-              <MetricTile label="Duration" value="00:42:11" />
-              <MetricTile label="Scenes" value="368" />
-              <MetricTile label="Segments" value="126" />
-              <MetricTile label="Speakers" value="2" />
-              <MetricTile label="Transcript" value="78%" />
-            </div>
-            <div className="grid grid-cols-[1fr_140px] gap-3">
-              <div className="flex h-10 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)]">
-                {Array.from({ length: 14 }).map((_, index) => (
-                  <div
-                    key={index}
-                    className="border-r border-black/40"
-                    style={{
-                      width: `${index % 3 === 0 ? 9 : index % 2 === 0 ? 6 : 8}%`,
-                      background: index % 4 === 0 ? "rgba(56,189,248,0.38)" : index % 3 === 0 ? "rgba(168,85,247,0.34)" : "rgba(100,116,139,0.28)",
-                    }}
-                  />
-                ))}
+        {showStructurePreview && preview ? (
+          <section className="border-t border-[var(--color-border-subtle)] px-5 py-4 bg-[var(--color-surface-panel)]">
+            <Stack gap="3">
+              <SectionHeader title="Structure preview" subtitle="From local index" />
+              <div className="grid grid-cols-3 gap-2 xl:grid-cols-5">
+                <MetricTile label="Duration" value={preview.duration ?? "—"} />
+                <MetricTile label="Scenes" value={formatMetric(preview.scenes)} />
+                <MetricTile label="Segments" value={formatMetric(preview.segments)} />
+                <MetricTile label="Speakers" value={formatMetric(preview.speakers)} />
+                <MetricTile
+                  label="Transcript"
+                  value={typeof preview.transcriptPercent === "number" ? `${preview.transcriptPercent}%` : "—"}
+                />
               </div>
-              <span className="self-center text-[var(--text-caption)] text-[var(--color-text-muted)]">+363 scene markers</span>
-            </div>
-          </Stack>
-        </section>
+              <div className="grid grid-cols-[1fr_140px] gap-3">
+                <div className="flex h-10 overflow-hidden rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)]">
+                  {Array.from({ length: 14 }).map((_, index) => (
+                    <div
+                      key={index}
+                      className="border-r border-black/40"
+                      style={{
+                        width: `${index % 3 === 0 ? 9 : index % 2 === 0 ? 6 : 8}%`,
+                        background: index % 4 === 0 ? "rgba(56,189,248,0.38)" : index % 3 === 0 ? "rgba(168,85,247,0.34)" : "rgba(100,116,139,0.28)",
+                      }}
+                    />
+                  ))}
+                </div>
+                <span className="self-center text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                  {typeof preview.scenes === "number" ? `${preview.scenes} scene markers` : "Scene markers pending"}
+                </span>
+              </div>
+            </Stack>
+          </section>
+        ) : null}
       </main>
 
       <aside className="border-l border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
@@ -382,13 +450,13 @@ export function IndexingDashboard({
               </Stack>
             </Card>
 
-            <Card padding="md">
+            <Card padding="md" className="border-transparent bg-transparent p-0 shadow-none">
               <Stack gap="3">
-                <SectionHeader title="Smart hints" />
+                <SectionHeader title="Index insights" />
                 {[
-                  ["2 segments may benefit from tighter cuts", "Review now"],
-                  ["Audio levels vary across 3% of the timeline", "View in Audio"],
-                  ["Faces detected in 95% of the timeline", "Good coverage"],
+                  [`${indexedTaskCount} signals available`, indexStateLabel],
+                  [`${activeTaskCount} indexers still running`, activeTaskCount > 0 ? "In progress" : "Idle"],
+                  [`${mediaCount} source items tracked`, "Local"],
                 ].map(([label, value]) => (
                   <Inline key={label} justify="between" gap="3" align="baseline">
                     <span className="text-[var(--text-caption)] leading-snug text-[var(--color-text-secondary)]">{label}</span>
@@ -581,17 +649,12 @@ function SectionHeader({ title, subtitle }: { title: string; subtitle?: string }
   );
 }
 
-function ProgressStat({ label, value, progress }: { label: string; value: string; progress: number }) {
+function StatusLine({ label, value }: { label: string; value: string }) {
   return (
-    <Stack gap="2">
-      <Inline justify="between" align="baseline">
-        <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">{label}</span>
-        <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">{value}</span>
-      </Inline>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-input)]">
-        <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
-      </div>
-    </Stack>
+    <Inline justify="between" align="baseline" gap="3">
+      <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">{label}</span>
+      <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-primary)]">{value}</span>
+    </Inline>
   );
 }
 
@@ -602,6 +665,10 @@ function MetricTile({ label, value }: { label: string; value: string }) {
       <div className="text-[var(--text-caption)] text-[var(--color-text-muted)]">{label}</div>
     </div>
   );
+}
+
+function formatMetric(value: number | undefined): string {
+  return typeof value === "number" ? value.toLocaleString() : "—";
 }
 
 function statusDetail(status: MediaIndexingStatus): string {

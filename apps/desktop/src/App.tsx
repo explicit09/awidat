@@ -41,6 +41,7 @@ import {
   type DeliveryRenderSummary,
   type DeliveryTarget,
   type IndexingMediaItem,
+  type IndexingStructurePreview,
   type IndexingTask,
   type IndexerConfigEntry,
   type IndexerConfigSnapshot,
@@ -145,6 +146,7 @@ function App() {
     () => proxies.find((proxy) => proxy.stem === selectedStem) ?? proxies[0] ?? null,
     [proxies, selectedStem],
   );
+  const hasImportedMedia = proxies.length > 0;
   const routedProjectRef = useRef<{
     project: string | null;
     mode: "empty" | "proxy" | "timeline" | "proposal" | null;
@@ -156,7 +158,7 @@ function App() {
     try {
       await invoke("import_locals", { srcPaths: paths, link: false });
       setStage("indexing");
-      setLens("import");
+      setLens("index");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -169,7 +171,7 @@ function App() {
     try {
       await invoke("import_url", { url: trimmed });
       setStage("indexing");
-      setLens("import");
+      setLens("index");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -483,7 +485,7 @@ function App() {
         ? "proposal"
         : timelineDuration > 0
           ? "timeline"
-          : proxies.length > 0
+          : hasImportedMedia
             ? "proxy"
             : "empty";
 
@@ -503,8 +505,14 @@ function App() {
     }
 
     setStage("indexing");
-    setLens("import");
-  }, [activeProposal, current, demoMode, proxies.length, setLens, setStage, timelineDuration]);
+    setLens(mode === "proxy" ? "index" : "import");
+  }, [activeProposal, current, demoMode, hasImportedMedia, setLens, setStage, timelineDuration]);
+
+  useEffect(() => {
+    if (!demoMode && hasImportedMedia && currentLens === "import") {
+      setLens("index");
+    }
+  }, [currentLens, demoMode, hasImportedMedia, setLens]);
 
   useEffect(() => {
     resetSurfaceControls();
@@ -729,6 +737,24 @@ function App() {
   }, [activeJobs, completedJobKinds, proxies.length]);
 
   const realIndexingReady = realIndexingTasks.some((task) => task.status === "indexed");
+  const loadedTranscript =
+    transcriptState?.state === "loaded" ? transcriptState.transcript : null;
+  const realIndexingStructure: IndexingStructurePreview | undefined = useMemo(() => {
+    if (proxies.length === 0) return undefined;
+    const duration = timelineDuration > 0
+      ? timelineDuration
+      : loadedTranscript?.segments.reduce((max, segment) => Math.max(max, segment.end_s), 0) ?? 0;
+    const speakers = loadedTranscript
+      ? loadedTranscript.speakers.length || new Set(loadedTranscript.segments.map((segment) => segment.speaker_id).filter(Boolean)).size
+      : undefined;
+    return {
+      duration: duration > 0 ? formatDuration(duration) : undefined,
+      scenes: timelineSnapshot.cut_boundaries.length || undefined,
+      segments: loadedTranscript?.segments.length,
+      speakers,
+      transcriptPercent: loadedTranscript ? 100 : completedJobKinds.has("indexing") ? 100 : undefined,
+    };
+  }, [completedJobKinds, loadedTranscript, proxies.length, timelineDuration, timelineSnapshot.cut_boundaries.length]);
 
   const realDeliveryTargets: DeliveryTarget[] = useMemo(
     () => [
@@ -783,8 +809,6 @@ function App() {
     };
   }, [effectiveDeliveryTargets, realPreflightFindings, timelineDuration]);
 
-  const loadedTranscript =
-    transcriptState?.state === "loaded" ? transcriptState.transcript : null;
   const realReviewSegments: ReviewTranscriptSegment[] = useMemo(
     () => (loadedTranscript ? transcriptToReviewSegments(loadedTranscript) : []),
     [loadedTranscript],
@@ -880,10 +904,11 @@ function App() {
     <IndexingDashboard
       projectName={current ? projectName(current) : undefined}
       sourceCount={proxies.length}
-      showImportActions={proxies.length === 0}
+      showImportActions={!hasImportedMedia}
       deliveryTarget={timelineDuration > 0 ? `Timeline ${formatDuration(timelineDuration)}` : undefined}
       media={realIndexingMedia}
       tasks={realIndexingTasks}
+      structurePreview={realIndexingStructure}
       indexerConfig={indexerConfig}
       ready={realIndexingReady}
       onImport={() => void chooseAndImportFiles()}
@@ -1011,7 +1036,16 @@ function App() {
           )}
         </Inline>
       }
-      topChromeCenter={<StageIndicator />}
+      topChromeCenter={
+        <Inline gap="3" align="center" className="min-w-0">
+          <StageIndicator className="shrink-0" />
+          {demoMode ? (
+            <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-secondary)]">
+              {demoScreen.specLabel} · {demoScreen.title}
+            </span>
+          ) : null}
+        </Inline>
+      }
       topChromeEnd={
           <Inline gap="1" align="center">
           {activeProposal || demoMode ? (
@@ -1046,7 +1080,7 @@ function App() {
           <IconButton icon={<SettingsIcon />} label="Settings" size="md" onClick={openSettingsFromChrome} />
         </Inline>
       }
-      lensRow={<LensNav />}
+      lensRow={<LensNav showImport={!hasImportedMedia} />}
       workspace={demoMode && demoScreen.workspace ? demoScreen.workspace : realWorkspace}
       commandRail={
         <CommandRail

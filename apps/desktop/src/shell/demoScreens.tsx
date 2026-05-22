@@ -633,8 +633,9 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
       />
     ),
     smokeText: [
-      "Import files",
-      "Import from URL",
+      "Add media",
+      "Add files",
+      "Add URL",
       "Indexing pipeline",
       "Transcripts",
       "Speaker diarization",
