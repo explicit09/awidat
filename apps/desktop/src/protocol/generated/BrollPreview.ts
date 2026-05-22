@@ -7,25 +7,25 @@
  * The UI renders a thumbnail row with click-to-place; clicking
  * triggers a chat directive that calls `use_broll(pexels_id, ...)`.
  */
-export type BrollPreview = {
+export type BrollPreview = { 
 /**
  * Pexels video id — pass to `use_broll` to download.
  */
-pexels_id: bigint,
+pexels_id: bigint, 
 /**
  * JPEG thumbnail URL the UI shows in the preview row.
  */
-thumbnail_url: string,
+thumbnail_url: string, 
 /**
  * Native length of the source clip in seconds. Informational —
  * the actual cutaway in the timeline is `duration_s` from the
  * note (or whatever the user picks).
  */
-duration_s: number,
+duration_s: number, 
 /**
  * Attribution string ready to display ("by Alice").
  */
-attribution: string,
+attribution: string, 
 /**
  * Pexels page URL — link target for the attribution string.
  */

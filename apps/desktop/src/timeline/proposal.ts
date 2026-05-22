@@ -13,7 +13,10 @@ import { create } from "zustand";
 import type {
   AppliedDiff,
   Item,
+  ProposalAlternative,
+  ProposalEvidence,
   ProposalSource,
+  RiskLevel,
   TimelineSnapshot,
 } from "../protocol";
 
@@ -27,6 +30,13 @@ export type ActiveProposal = {
   diffHints: AppliedDiff[];
   summary: string;
   revision: number;
+  /** Inspector fields — all optional. Phase 2.8 added them to the protocol. */
+  intent?: string;
+  explanation?: string;
+  confidence?: number;
+  risk?: RiskLevel;
+  evidence?: ProposalEvidence[];
+  alternatives?: ProposalAlternative[];
 };
 
 type ProposalState = {
@@ -66,6 +76,12 @@ export const useProposalStore = create<ProposalState>((set) => ({
             diffHints: item.diff_hints,
             summary: item.summary,
             revision: item.revision,
+            intent: item.intent ?? undefined,
+            explanation: item.explanation ?? undefined,
+            confidence: item.confidence ?? undefined,
+            risk: item.risk ?? undefined,
+            evidence: item.evidence ?? [],
+            alternatives: item.alternatives ?? [],
           },
         };
       }
@@ -85,6 +101,16 @@ export const useProposalStore = create<ProposalState>((set) => ({
             diffHints: item.diff_hints,
             summary: item.summary,
             revision: item.revision,
+            // Newer deltas can carry richer inspector fields; preserve
+            // the previous values if the delta omits them.
+            intent: item.intent ?? state.active.intent,
+            explanation: item.explanation ?? state.active.explanation,
+            confidence: item.confidence ?? state.active.confidence,
+            risk: item.risk ?? state.active.risk,
+            evidence: item.evidence?.length ? item.evidence : state.active.evidence,
+            alternatives: item.alternatives?.length
+              ? item.alternatives
+              : state.active.alternatives,
           },
         };
       }

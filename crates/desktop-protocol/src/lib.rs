@@ -224,6 +224,49 @@ pub enum Item {
         /// drops Deltas with older revisions to absorb rapid-drag
         /// races.
         revision: u32,
+        /// Optional agent-supplied long-form intent shown at the top
+        /// of the Proposal Inspector ("Remove filler phrase and
+        /// trailing pause while preserving speaker cadence…").
+        ///
+        /// All five inspector fields below are optional: the agent
+        /// populates them progressively as Awidat's reasoning matures.
+        /// The frontend renders each block only when its field is
+        /// present, so older producers (User-source edits, simple
+        /// trims, legacy agent paths) keep working unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        intent: Option<String>,
+        /// Optional long-form explanation rendered under "EXPLANATION"
+        /// in the Inspector. May overlap with `summary` (which stays
+        /// one-line) — when both are present, `summary` is the chip,
+        /// `explanation` is the body.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        explanation: Option<String>,
+        /// Optional 0..=1 confidence the agent assigns to this proposal.
+        /// The Inspector renders both a ConfidenceRing and a bar.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        confidence: Option<f32>,
+        /// Optional risk tier. The Inspector renders this as a 4-dot
+        /// indicator next to a colored label. Tier mapping:
+        /// Low → safe to accept, Medium → review first,
+        /// High → likely needs revision, VeryHigh → block.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        risk: Option<RiskLevel>,
+        /// Optional list of evidence rows. The Inspector renders each
+        /// with a kind-specific icon and a High/Med/Low tier label
+        /// derived from `confidence` if `confidence_level` is absent.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        evidence: Vec<ProposalEvidence>,
+        /// Optional alternative proposals the user can compare or
+        /// switch to. Empty list means no alternatives — the Inspector
+        /// hides the section. Each entry is a *summary* of a sibling
+        /// proposal, not a full ProposedEdit (the agent re-emits the
+        /// full thing if the user picks one).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        alternatives: Vec<ProposalAlternative>,
     },
     /// Long-running background work (asset import, indexing,
     /// timeline render). Streams over the same item channel as
@@ -1299,6 +1342,104 @@ pub enum Side {
     Right,
 }
 
+/// Risk tier the agent assigns to a `ProposedEdit`.
+///
+/// Maps to the Inspector's RiskIndicator dots:
+/// `Low` → 1 dot (green), `Medium` → 2 (amber), `High` → 3 (orange),
+/// `VeryHigh` → 4 (red). Color alone is never load-bearing — the label is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum RiskLevel {
+    /// Safe to accept. The agent has high confidence and no flagged risks.
+    Low,
+    /// Review before accepting. Some heuristic flagged a concern.
+    Medium,
+    /// Likely needs revision. The agent suggests but recommends a closer look.
+    High,
+    /// Block by default. The user must explicitly opt in.
+    VeryHigh,
+}
+
+/// One row in a `ProposedEdit`'s evidence list. Each kind maps to an
+/// icon in the Inspector (see `EVIDENCE_ICON` on the frontend).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProposalEvidenceKind {
+    /// Transcript boundary or token-level signal.
+    Transcript,
+    /// Audio energy drop, peak, or boundary.
+    AudioEnergy,
+    /// Speaker handoff detected via diarization.
+    SpeakerHandoff,
+    /// Silence detected (above the project's silence threshold).
+    Silence,
+    /// Pacing deviation vs the surrounding context.
+    Pacing,
+    /// Filler phrase / disfluency.
+    Filler,
+    /// Visual continuity / cut-boundary signal.
+    Visual,
+    /// Generic cut-boundary heuristic.
+    CutBoundary,
+}
+
+/// One row in the Inspector's "EVIDENCE" section. Producers can set
+/// either `confidence` (0..1) or `confidence_level` (categorical) —
+/// when both are present, the categorical wins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct ProposalEvidence {
+    /// What kind of evidence this row represents.
+    pub kind: ProposalEvidenceKind,
+    /// Human-readable label ("Transcript boundary", "Audio energy drop").
+    pub label: String,
+    /// Optional confidence 0..=1 for this specific signal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub confidence: Option<f32>,
+    /// Optional categorical tier. When present, overrides `confidence`
+    /// for tier color rendering on the frontend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub confidence_level: Option<ConfidenceTier>,
+}
+
+/// Coarse confidence tier surfaced when a numeric score isn't meaningful.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceTier {
+    /// 80–100% — safe.
+    High,
+    /// 55–79% — review.
+    Medium,
+    /// 30–54% — revise.
+    Low,
+    /// 0–29% — block.
+    VeryLow,
+}
+
+/// Sibling proposal the user can switch to from the Inspector's
+/// "ALTERNATIVES" section. This is a *summary*; switching emits a
+/// fresh `ProposedEdit` with the full payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct ProposalAlternative {
+    /// Stable id for this alternative. Used by the frontend when the
+    /// user picks one — the backend re-emits the full ProposedEdit
+    /// keyed on this id.
+    pub id: Id,
+    /// Short label ("Keep more context", "Tighter cut", "Hard cut").
+    pub label: String,
+    /// Optional one-line detail ("+0.9s", "-1.2s", "—"). Rendered in
+    /// the right column of the alternative chip in mono.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<String>,
+}
+
 /// Per-op diff metadata. Tells the canvas how to color the proposed
 /// snapshot relative to the original — the canvas doesn't compute
 /// the diff itself; the backend produced it from the `apply()`
@@ -1599,6 +1740,12 @@ mod tests {
             }],
             summary: "trim 1 clip".into(),
             revision: 0,
+            intent: None,
+            explanation: None,
+            confidence: None,
+            risk: None,
+            evidence: vec![],
+            alternatives: vec![],
         };
         let json = serde_json::to_string(&item).unwrap();
         let back: Item = serde_json::from_str(&json).unwrap();

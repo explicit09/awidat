@@ -1,0 +1,484 @@
+@import "tailwindcss";
+
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/inter/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/600.css";
+
+/*
+ * Awidat design tokens. Values pulled directly from the canonical design spec at
+ * ~/Downloads/Awidat UI Design Concept.md. When the spec moves, the source of
+ * truth for tokens lives there; this file is its implementation.
+ */
+
+@theme {
+  /* surfaces */
+  --color-surface-page: #070B10;
+  --color-surface-app: #0B0F14;
+  --color-surface-panel: #0F151C;
+  --color-surface-panel-hover: #151D27;
+  --color-surface-panel-active: #18212C;
+  --color-surface-card: #111821;
+  --color-surface-card-hover: #151D27;
+  --color-surface-card-active: #1B2633;
+  --color-surface-modal: #18212C;
+  --color-surface-modal-hover: #1B2633;
+  --color-surface-modal-active: #243244;
+  --color-surface-hover: #1B2633;
+  --color-surface-input: #0B121A;
+  --color-surface-input-hover: #101925;
+  --color-surface-input-active: #142033;
+  --color-surface-selected: #10243A;
+  --color-surface-selected-hover: #14304D;
+  --color-surface-selected-active: #183A5E;
+
+  /* borders */
+  --color-border: #23303C;
+  --color-border-subtle: #1A2530;
+  --color-border-strong: #3B82F6;
+  --color-border-focus: #38BDF8;
+  --color-border-active: #38BDF8;
+
+  /* text */
+  --color-text-primary: #E5E7EB;
+  --color-text-secondary: #AAB4C0;
+  --color-text-muted: #7C8794;
+  --color-text-disabled: #586272;
+  --color-text-inverse: #071016;
+  --color-text-on-accent: #ECFEFF;
+  --color-text-on-danger: #FEF2F2;
+
+  /* brand */
+  --color-brand: #20C997;
+  --color-brand-hover: #2EE6AE;
+  --color-brand-active: #17A77E;
+  --color-brand-secondary: #38BDF8;
+  --color-brand-secondary-hover: #7DD3FC;
+  --color-brand-secondary-active: #0284C7;
+  --color-brand-purple: #A855F7;
+  --color-brand-purple-hover: #C084FC;
+  --color-brand-purple-active: #7E22CE;
+
+  /* semantic base */
+  --color-success: #22C55E;
+  --color-success-hover: #4ADE80;
+  --color-success-active: #15803D;
+  --color-warning: #F59E0B;
+  --color-risk: #F97316;
+  --color-danger: #EF4444;
+  --color-failure: #DC2626;
+  --color-processing: #3B82F6;
+  --color-info: #3B82F6;
+
+  /* status pills — fill / border / text / dot */
+  --color-pill-proposed-fill: rgba(59, 130, 246, 0.14);
+  --color-pill-proposed-border: rgba(59, 130, 246, 0.55);
+  --color-pill-proposed-text: #93C5FD;
+  --color-pill-proposed-dot: #38BDF8;
+
+  --color-pill-pending-fill: rgba(245, 158, 11, 0.14);
+  --color-pill-pending-border: rgba(245, 158, 11, 0.55);
+  --color-pill-pending-text: #FBBF24;
+  --color-pill-pending-dot: #F59E0B;
+
+  --color-pill-accepted-fill: rgba(34, 197, 94, 0.14);
+  --color-pill-accepted-border: rgba(34, 197, 94, 0.55);
+  --color-pill-accepted-text: #86EFAC;
+  --color-pill-accepted-dot: #22C55E;
+
+  --color-pill-rejected-fill: rgba(239, 68, 68, 0.14);
+  --color-pill-rejected-border: rgba(239, 68, 68, 0.55);
+  --color-pill-rejected-text: #FCA5A5;
+  --color-pill-rejected-dot: #EF4444;
+
+  --color-pill-reviewing-fill: rgba(168, 85, 247, 0.14);
+  --color-pill-reviewing-border: rgba(168, 85, 247, 0.55);
+  --color-pill-reviewing-text: #D8B4FE;
+  --color-pill-reviewing-dot: #A855F7;
+
+  --color-pill-processing-fill: rgba(56, 189, 248, 0.14);
+  --color-pill-processing-border: rgba(56, 189, 248, 0.55);
+  --color-pill-processing-text: #7DD3FC;
+  --color-pill-processing-dot: #38BDF8;
+
+  --color-pill-ready-fill: rgba(32, 201, 151, 0.14);
+  --color-pill-ready-border: rgba(32, 201, 151, 0.55);
+  --color-pill-ready-text: #5EEAD4;
+  --color-pill-ready-dot: #20C997;
+
+  --color-pill-failed-fill: rgba(220, 38, 38, 0.16);
+  --color-pill-failed-border: rgba(220, 38, 38, 0.6);
+  --color-pill-failed-text: #F87171;
+  --color-pill-failed-dot: #DC2626;
+
+  --color-pill-warning-fill: rgba(245, 158, 11, 0.14);
+  --color-pill-warning-border: rgba(245, 158, 11, 0.55);
+  --color-pill-warning-text: #FBBF24;
+  --color-pill-warning-dot: #F59E0B;
+
+  --color-pill-missing-fill: rgba(124, 135, 148, 0.12);
+  --color-pill-missing-border: rgba(124, 135, 148, 0.48);
+  --color-pill-missing-text: #D1D5DB;
+  --color-pill-missing-dot: #7C8794;
+
+  --color-pill-revised-fill: rgba(139, 92, 246, 0.14);
+  --color-pill-revised-border: rgba(139, 92, 246, 0.55);
+  --color-pill-revised-text: #C7D2FE;
+  --color-pill-revised-dot: #818CF8;
+
+  /* data viz */
+  --color-viz-speaker-a: #3B82F6;
+  --color-viz-speaker-b: #8B5CF6;
+  --color-viz-accepted: #16A34A;
+  --color-viz-pending: #F59E0B;
+  --color-viz-rejected: #DC2626;
+  --color-viz-warning: #EAB308;
+  --color-viz-audio: #64748B;
+  --color-viz-playhead: #38BDF8;
+
+  /* typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  --text-display: 1.5rem;        /* 24 */
+  --text-display--line-height: 2rem;
+  --text-display--letter-spacing: 0;
+  --text-display--font-weight: 700;
+
+  --text-h1: 1.25rem;            /* 20 */
+  --text-h1--line-height: 1.75rem;
+  --text-h1--letter-spacing: 0;
+  --text-h1--font-weight: 700;
+
+  --text-h2: 1rem;               /* 16 */
+  --text-h2--line-height: 1.5rem;
+  --text-h2--letter-spacing: 0;
+  --text-h2--font-weight: 650;
+
+  --text-h3: 0.875rem;           /* 14 */
+  --text-h3--line-height: 1.25rem;
+  --text-h3--letter-spacing: 0;
+  --text-h3--font-weight: 600;
+
+  --text-body: 0.78125rem;       /* 12.5 */
+  --text-body--line-height: 1.15625rem;
+  --text-body--font-weight: 400;
+
+  --text-body-sm: 0.71875rem;    /* 11.5 */
+  --text-body-sm--line-height: 1.0625rem;
+  --text-body-sm--font-weight: 400;
+
+  --text-label: 0.6875rem;       /* 11 */
+  --text-label--line-height: 0.9375rem;
+  --text-label--letter-spacing: 0.01em;
+  --text-label--font-weight: 600;
+
+  --text-caption: 0.625rem;      /* 10 */
+  --text-caption--line-height: 0.875rem;
+  --text-caption--letter-spacing: 0.01em;
+  --text-caption--font-weight: 500;
+
+  --text-micro: 0.625rem;        /* 10 */
+  --text-micro--line-height: 0.875rem;
+  --text-micro--letter-spacing: 0.03em;
+  --text-micro--font-weight: 500;
+
+  --text-timecode: 0.75rem;      /* 12 mono */
+  --text-timecode--line-height: 1rem;
+  --text-timecode--font-weight: 500;
+
+  /* spacing — Tailwind already ships 0/1/2/3/4/5/6/8/10/12/16; we keep its 4px base. */
+
+  /* radius */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  /* motion */
+  --ease-fast: cubic-bezier(0.2, 0, 0, 1);
+  --ease-snap: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* layout sizing (px) */
+  --layout-chrome-h: 44px;
+  --layout-lens-h: 36px;
+  --layout-rail-w: 336px;
+  --layout-inspector-w: 320px;
+  --layout-footer-h: 22px;
+  --layout-btn-h: 26px;
+  --layout-btn-h-compact: 22px;
+  --layout-pill-h: 18px;
+  --layout-row-h-timeline: 26px;
+  --layout-row-h-transcript: 36px;
+}
+
+/* base reset and global typography */
+@layer base {
+  :root {
+    color-scheme: dark;
+    font-synthesis: none;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    background-color: var(--color-surface-page);
+    color: var(--color-text-primary);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    line-height: 1.34;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+
+  ::selection {
+    background: rgba(56, 189, 248, 0.28);
+  }
+
+  /* a focus ring that respects keyboard-only users */
+  :focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 1px;
+    border-radius: var(--radius-xs);
+  }
+}
+
+/* glow tokens — used by primitives that need active/warning/danger emphasis */
+@layer utilities {
+  .glow-active {
+    box-shadow:
+      0 0 0 1px rgba(20, 184, 166, 0.35),
+      0 0 24px rgba(20, 184, 166, 0.12);
+  }
+  .glow-warning {
+    box-shadow:
+      0 0 0 1px rgba(245, 158, 11, 0.35),
+      0 0 24px rgba(245, 158, 11, 0.10);
+  }
+  .glow-danger {
+    box-shadow:
+      0 0 0 1px rgba(239, 68, 68, 0.35),
+      0 0 24px rgba(239, 68, 68, 0.10);
+  }
+  .elev-1 { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24); }
+  .elev-2 { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); }
+  .elev-3 { box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38); }
+  .panel {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0) 34px),
+      var(--color-surface-panel);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.035),
+      0 10px 30px rgba(0, 0, 0, 0.18);
+  }
+  .aw-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(3, 7, 12, 0.68);
+    backdrop-filter: blur(10px);
+  }
+
+  .modal {
+    width: min(520px, calc(100vw - 48px));
+    max-height: calc(100vh - 48px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 52px),
+      var(--color-surface-modal);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.54);
+  }
+
+  .modal-header,
+  .modal-footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-color: var(--color-border-subtle);
+    background: var(--color-surface-panel);
+  }
+
+  .modal-header {
+    justify-content: space-between;
+    border-bottom: 1px solid var(--color-border-subtle);
+  }
+
+  .modal-footer {
+    justify-content: flex-end;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .modal-header h2 {
+    margin: 0;
+    color: var(--color-text-primary);
+    font-size: var(--text-h2);
+    line-height: var(--text-h2--line-height);
+    font-weight: var(--text-h2--font-weight);
+  }
+
+  .modal-close {
+    display: grid;
+    width: 26px;
+    height: 26px;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .modal-close:hover {
+    border-color: var(--color-border-subtle);
+    background: var(--color-surface-hover);
+    color: var(--color-text-primary);
+  }
+
+  .modal-body {
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .field {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .field > span {
+    color: var(--color-text-muted);
+    font-size: var(--text-label);
+    line-height: var(--text-label--line-height);
+    font-weight: var(--text-label--font-weight);
+    letter-spacing: var(--text-label--letter-spacing);
+    text-transform: uppercase;
+  }
+
+  .field-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .field input[type="text"],
+  .field input:not([type]),
+  .properties-select {
+    min-width: 0;
+    width: 100%;
+    height: 30px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-input);
+    color: var(--color-text-primary);
+    padding: 0 10px;
+    font: inherit;
+    font-size: var(--text-body-sm);
+  }
+
+  .field input:focus,
+  .properties-select:focus {
+    border-color: var(--color-border-focus);
+    outline: none;
+  }
+
+  .field input::placeholder {
+    color: var(--color-text-disabled);
+  }
+
+  .field-hint {
+    margin: 0;
+    color: var(--color-text-secondary);
+    font-size: var(--text-body-sm);
+    line-height: 1.45;
+  }
+
+  .field-hint code {
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-xs);
+    background: var(--color-surface-input);
+    padding: 1px 4px;
+    color: var(--color-text-primary);
+    font-family: var(--font-mono);
+    font-size: var(--text-caption);
+  }
+
+  .field-error {
+    border-left: 2px solid var(--color-danger);
+    border-radius: var(--radius-xs);
+    background: rgba(239, 68, 68, 0.1);
+    color: #fca5a5;
+    padding: 7px 9px;
+    font-size: var(--text-body-sm);
+  }
+
+  .modal-footer button,
+  .field-row button {
+    height: 30px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-card);
+    color: var(--color-text-primary);
+    padding: 0 12px;
+    font: inherit;
+    font-size: var(--text-body-sm);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .modal-footer button:hover,
+  .field-row button:hover {
+    background: var(--color-surface-card-hover);
+  }
+
+  .modal-footer button.primary {
+    border-color: var(--color-brand);
+    background: var(--color-brand);
+    color: var(--color-text-inverse);
+  }
+
+  .modal-footer button:disabled,
+  .field-row button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

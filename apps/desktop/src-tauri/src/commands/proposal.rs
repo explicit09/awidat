@@ -136,6 +136,14 @@ pub async fn build_proposal(
             diff_hints,
             summary,
             revision: 0,
+            // Inspector fields — populated by future producers; legacy
+            // call sites omit them and the frontend degrades gracefully.
+            intent: None,
+            explanation: None,
+            confidence: None,
+            risk: None,
+            evidence: vec![],
+            alternatives: vec![],
         },
     );
     Ok(())
@@ -303,6 +311,12 @@ pub async fn accept_proposal(
             diff_hints,
             summary: final_summary,
             revision: proposal.revision,
+            intent: None,
+            explanation: None,
+            confidence: None,
+            risk: None,
+            evidence: vec![],
+            alternatives: vec![],
         },
     );
     Ok(())
@@ -345,6 +359,12 @@ pub async fn reject_proposal(
             diff_hints: Vec::new(),
             summary: "rejected".into(),
             revision: proposal.revision,
+            intent: None,
+            explanation: None,
+            confidence: None,
+            risk: None,
+            evidence: vec![],
+            alternatives: vec![],
         },
     );
     Ok(())
@@ -415,6 +435,12 @@ pub async fn adjust_proposal(
             diff_hints,
             summary,
             revision,
+            intent: None,
+            explanation: None,
+            confidence: None,
+            risk: None,
+            evidence: vec![],
+            alternatives: vec![],
         },
     );
     Ok(())

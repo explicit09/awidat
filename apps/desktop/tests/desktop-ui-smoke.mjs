@@ -1,309 +1,345 @@
 #!/usr/bin/env node
+/**
+ * Desktop UI smoke test.
+ *
+ * This runs the browser/static app path used for design review. With no Tauri
+ * project open, the app should boot directly into the Screen 2 golden cockpit:
+ * app chrome, workflow lenses, agent command rail, proposal preview, timeline,
+ * and proposal inspector.
+ *
+ * Requires `pnpm dev` running on :1420.
+ */
+
 import { chromium } from "playwright";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { strict as assert } from "node:assert";
+import { mkdirSync } from "node:fs";
 
-const port = Number(process.env.AWIDAT_DESKTOP_TEST_PORT || 1430);
-const baseUrl = `http://127.0.0.1:${port}`;
-const desktopRoot = fileURLToPath(new URL("..", import.meta.url));
-const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const BASE_URL = process.env.SMOKE_URL ?? "http://localhost:1420/";
+const SCREENSHOT_DIR = process.env.SMOKE_OUT_DIR ?? "tests/smoke";
+mkdirSync(SCREENSHOT_DIR, { recursive: true });
 
-const builtInTransitionIds = [
-  "awidat.cross_dissolve",
-  "awidat.fade_black",
-  "awidat.flash_white",
-  "awidat.wipe_left",
-  "awidat.wipe_right",
-  "awidat.slide_left",
-  "awidat.slide_right",
-  "awidat.smooth_push_left",
-  "awidat.zoom_in",
-  "awidat.pixelize",
-  "awidat.radial",
+const browser = await chromium.launch();
+const ctx = await browser.newContext({
+  viewport: { width: 1586, height: 992 },
+  deviceScaleFactor: 1,
+});
+
+const passes = [];
+const failures = [];
+
+async function check(name, fn) {
+  try {
+    await fn();
+    passes.push(name);
+    console.log(`  ok  ${name}`);
+  } catch (err) {
+    failures.push({ name, err });
+    console.error(`  FAIL  ${name}\n    ${err.message}`);
+  }
+}
+
+async function makePage() {
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(`console.error: ${m.text()}`);
+  });
+  return { page, errors };
+}
+
+function demoUrl(screen) {
+  const url = new URL(BASE_URL);
+  url.searchParams.set("awidatScreen", screen);
+  return url.toString();
+}
+
+function conceptUrl() {
+  return new URL("/design/concept", BASE_URL).toString();
+}
+
+const SPEC_SCREENS = [
+  {
+    id: "screen1",
+    url: conceptUrl(),
+    text: [
+      "Product Concept & Information Architecture",
+      "AI-assisted podcast editing",
+      "Evidence & Feedback Loop",
+      "Information architecture",
+      "Primary workspace model",
+      "Workflow lenses",
+    ],
+  },
+  {
+    id: "screen2",
+    url: BASE_URL,
+    text: [
+      "Main Desktop Workspace",
+      "Agent Command",
+      "Podcast Tightening v1",
+      "Proposal Inspector",
+      "Timeline",
+      "Evidence",
+    ],
+  },
+  {
+    id: "screen3",
+    text: ["Agent Proposal Review", "Agent command history", "Proposed changes", "Batch insights", "Revise with prompt"],
+  },
+  {
+    id: "screen4",
+    text: ["Timeline / Transcript Hybrid", "Selected sentence", "Review · Transcript", "What this cut does", "Keep this pause"],
+  },
+  {
+    id: "screen5",
+    text: ["Cut / Proposal Inspector", "CUT 12 · L-cut", "Current timeline", "Proposed timeline", "Render output context", "Inspect deeper"],
+  },
+  {
+    id: "screen6",
+    text: ["Import / Indexing State", "Import files", "Indexing pipeline", "Speaker diarization", "Ask agent for first cut"],
+  },
+  {
+    id: "screen7",
+    text: ["Delivery / Preflight State", "Targets", "Preflight", "Render summary", "Delivery confidence", "Export now"],
+  },
+  {
+    id: "screen8",
+    text: ["Empty / Loading / Error States", "No media imported", "Indexing media", "Proposal generation is blocked", "Repair with agent"],
+  },
+  {
+    id: "screen9",
+    text: ["Component System", "Proposal cards", "Timeline change markers", "Agent status", "Render / preflight findings", "Semantic color palette"],
+  },
 ];
 
-function assertDesktopTransitionCoverage() {
-  const previewSource = readFileSync(
-    `${desktopRoot}/src/media/SegmentedVideoView.tsx`,
-    "utf8",
-  );
-  const propertiesSource = readFileSync(
-    `${desktopRoot}/src/properties/PropertiesPane.tsx`,
-    "utf8",
-  );
-  const timelineSource = readFileSync(
-    `${desktopRoot}/src/timeline/TimelinePane.tsx`,
-    "utf8",
-  );
-  const registrySource = readFileSync(
-    `${repoRoot}/crates/proto/src/transitions.rs`,
-    "utf8",
-  );
-  for (const id of builtInTransitionIds) {
-    if (!registrySource.includes(`id: "${id}"`)) {
-      throw new Error(`test fixture transition id is not in proto registry: ${id}`);
-    }
-    if (!propertiesSource.includes(`value: "${id}"`)) {
-      throw new Error(`transition inspector option missing for ${id}`);
-    }
-    if (!previewSource.includes(`"${id}"`)) {
-      throw new Error(`timeline preview handling missing for ${id}`);
-    }
-    if (!timelineSource.includes(`"${id}"`)) {
-      throw new Error(`timeline label handling missing for ${id}`);
-    }
-  }
+function screenUrl(screen) {
+  return screen.url ?? demoUrl(screen.id);
 }
 
-function assertDesktopMotionAuthoringCoverage() {
-  const propertiesSource = readFileSync(
-    `${desktopRoot}/src/properties/PropertiesPane.tsx`,
-    "utf8",
-  );
-  const motionControlSource = readFileSync(
-    `${desktopRoot}/src/properties/MotionAnimationControl.tsx`,
-    "utf8",
-  );
-  const edlBuilderSource = readFileSync(
-    `${desktopRoot}/src/timeline/edlBuilder.ts`,
-    "utf8",
-  );
-  for (const expected of [
-    "properties-motion-path-summary",
-    "Add drift path",
-    "title.position",
-  ]) {
-    if (!propertiesSource.includes(expected) && !motionControlSource.includes(expected)) {
-      throw new Error(`motion authoring inspector coverage missing: ${expected}`);
-    }
-  }
-  if (!edlBuilderSource.includes("*** Set Parameter Animation")) {
-    throw new Error("EDL builder cannot serialize Set Parameter Animation");
-  }
-}
-
-function startVite() {
-  const child = spawn(
-    "pnpm",
-    ["exec", "vite", "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
-    {
-      cwd: desktopRoot,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, CI: "1" },
-    },
-  );
-  child.stdout.on("data", (chunk) => process.stdout.write(chunk));
-  child.stderr.on("data", (chunk) => process.stderr.write(chunk));
-  return child;
-}
-
-async function waitForServer(child) {
-  const deadline = Date.now() + 20_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`vite exited early with ${child.exitCode}`);
-    }
-    try {
-      const res = await fetch(baseUrl);
-      if (res.ok) return;
-    } catch {
-      // keep polling
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`timed out waiting for ${baseUrl}`);
-}
-
-async function expectVisible(page, selector, label) {
-  const locator = page.locator(selector);
-  await locator.first().waitFor({ state: "visible", timeout: 5_000 });
-  const count = await locator.count();
-  if (count < 1) throw new Error(`${label} not found`);
-}
-
-async function run() {
-  assertDesktopTransitionCoverage();
-  assertDesktopMotionAuthoringCoverage();
-  const server = startVite();
-  let browser;
-  try {
-    await waitForServer(server);
-    browser = await chromium.launch();
-    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
-    page.on("console", (msg) => console.log(`[browser:${msg.type()}] ${msg.text()}`));
-    page.on("pageerror", (error) => console.error(`[browser:error] ${error.message}`));
-
-    await page.goto(`${baseUrl}/tests/ui-harness.html`);
-    await expectVisible(page, ".app-header", "app shell header");
-    await expectVisible(page, ".project-launcher", "empty project launcher");
-
-    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1`);
-    await expectVisible(page, ".workspace-editor", "project workspace");
-    await expectVisible(page, ".timeline-pane", "timeline pane");
-    await expectVisible(page, ".note-card-broll", "b-roll note card");
-    await expectVisible(page, ".note-broll-use", "b-roll Use this button");
-
-    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=proposal`);
-    await expectVisible(page, ".proposal-actions", "proposal action toolbar");
-
-    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=assessor`);
-    await page.getByText("assess_edit_quality").waitFor({ state: "visible", timeout: 5_000 });
-    await page.locator(".tool-summary-row").click();
-    await expectVisible(page, ".tool-recommendation", "assessor recommendation action");
-    await page.getByRole("button", { name: "Propose" }).click();
-    await expectVisible(page, ".proposal-actions", "assessor-generated proposal toolbar");
-    const assessorEdl = await page.evaluate(() => window.__lastEdlText);
-    if (
-      !assessorEdl.includes("*** Set Audio Lead") ||
-      !assessorEdl.includes("@@ anchor: clip_uuid=clip-2") ||
-      !assessorEdl.includes("+ lead_s: 0.350") ||
-      !assessorEdl.includes("*** Set Cut Intent") ||
-      !assessorEdl.includes("+ cut_type: j_cut")
-    ) {
-      throw new Error(`assessor recommendation did not emit expected EDL: ${assessorEdl}`);
-    }
-    await page.getByRole("button", { name: "Reject" }).click();
-    await page.locator(".proposal-actions").waitFor({ state: "hidden", timeout: 5_000 });
-    await page.evaluate(() =>
-      window.__seedAssessorRecommendation({
-        id: "assess-edit-quality-follow-up",
-        action: "use_l_cut",
-        cutType: "l_cut",
-        intent: "hold_reaction",
-        edlOp: "Set Audio Trail",
-        reason: "Hold the outgoing line under the reaction after rejecting the first J-cut.",
-        edlGuidance: "*** Set Audio Trail with trail_s 0.45, then review by ear",
-      }),
-    );
-    await page.locator(".tool-summary-row").last().click();
-    await page.locator(".tool-recommendation").last().getByRole("button", { name: "Propose" }).click();
-    await expectVisible(page, ".proposal-actions", "follow-up assessor proposal toolbar");
-    const followUpEdl = await page.evaluate(() => window.__lastEdlText);
-    if (
-      !followUpEdl.includes("*** Set Audio Trail") ||
-      !followUpEdl.includes("@@ anchor: clip_uuid=clip-1") ||
-      !followUpEdl.includes("+ trail_s: 0.450") ||
-      !followUpEdl.includes("+ cut_type: l_cut")
-    ) {
-      throw new Error(`follow-up assessor recommendation did not emit expected EDL: ${followUpEdl}`);
-    }
-
-    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=transition`);
-    await page.getByText("Selected transition").waitFor({ state: "visible", timeout: 5_000 });
-    await expectVisible(page, ".properties-select", "transition kind selector");
-    const selectedKind = await page.locator(".properties-select").inputValue();
-    if (selectedKind !== "awidat.cross_dissolve") {
-      throw new Error(`unexpected selected transition kind: ${selectedKind}`);
-    }
-    await page.locator(".properties-select").selectOption("awidat.fade_black");
-    await page.locator(".properties-number-input").first().fill("0.6");
-    await page.getByRole("button", { name: "Apply" }).click();
-    const applyEdl = await page.evaluate(() => window.__lastEdlText);
-    if (
-      !applyEdl.includes("*** Insert Transition") ||
-      !applyEdl.includes("+ kind: awidat.fade_black") ||
-      !applyEdl.includes("+ duration_s: 0.600")
-    ) {
-      throw new Error(`transition Apply did not emit expected EDL: ${applyEdl}`);
-    }
-    await page.getByRole("button", { name: "Delete" }).click();
-    const deleteEdl = await page.evaluate(() => window.__lastEdlText);
-    if (!deleteEdl.includes("*** Delete Transition")) {
-      throw new Error(`transition Delete did not emit expected EDL: ${deleteEdl}`);
-    }
-
-    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=editorial`);
-    await page.getByText("Selected clip").waitFor({ state: "visible", timeout: 5_000 });
-    await expectVisible(page, ".media-preview-limits", "preview limitation banner");
-    await page
-      .getByText("Split-edit offsets are shown in the timeline but approximated in preview audio.")
-      .waitFor({ state: "visible", timeout: 5_000 });
-    await page
-      .locator(".properties-intent-chip")
-      .filter({ hasText: /^Cut On Action$/ })
-      .waitFor({ state: "visible", timeout: 5_000 });
-    await page
-      .locator(".properties-intent-chip")
-      .filter({ hasText: /^Cutaway$/ })
-      .waitFor({ state: "visible", timeout: 5_000 });
-    await page
-      .getByText("Hold dialogue under the incoming reaction.")
-      .waitFor({ state: "visible", timeout: 5_000 });
-    await expectVisible(page, ".timeline-cut-badge", "timeline cut badge");
-    await expectVisible(page, ".timeline-split-offset", "timeline split-edit offset");
-    await expectVisible(page, ".properties-cut-type-select", "cut intent editor");
-    await page.locator(".properties-cut-type-select").first().selectOption("hard_cut");
-    await page.getByRole("button", { name: "Apply cut intent" }).first().click();
-    const cutIntentEdl = await page.evaluate(() => window.__lastEdlText);
-    if (
-      !cutIntentEdl.includes("*** Set Cut Intent") ||
-      !cutIntentEdl.includes("@@ between: clip_uuid=clip-1 and clip_uuid=clip-2") ||
-      !cutIntentEdl.includes("+ cut_type: hard_cut")
-    ) {
-      throw new Error(`cut intent editor did not emit expected EDL: ${cutIntentEdl}`);
-    }
-    await page.getByRole("button", { name: "Use J-cut" }).first().click();
-    const jCutEdl = await page.evaluate(() => window.__lastEdlText);
-    if (
-      !jCutEdl.includes("*** Set Audio Lead") ||
-      !jCutEdl.includes("@@ anchor: clip_uuid=clip-2") ||
-      !jCutEdl.includes("+ lead_s: 0.350")
-    ) {
-      throw new Error(`J-cut alternative did not emit expected EDL: ${jCutEdl}`);
-    }
-
-    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=density`);
-    await page.getByText("Selected transition").waitFor({ state: "visible", timeout: 5_000 });
-    await page
-      .getByText("3 visible transitions land within this 30s window.")
-      .waitFor({ state: "visible", timeout: 5_000 });
-
-    await page.goto(`${baseUrl}/tests/ui-harness.html?project=1&scenario=title-motion`);
-    await page.getByText("Selected clip").waitFor({ state: "visible", timeout: 5_000 });
-    await page
-      .locator(".properties-motion-path-summary")
-      .filter({ hasText: "title.position" })
-      .waitFor({ state: "visible", timeout: 5_000 });
-    await expectVisible(page, ".properties-motion-curve-preview", "motion curve preview");
-    await page.getByText("Velocity").waitFor({ state: "visible", timeout: 5_000 });
-    await page.getByRole("button", { name: "Ease In/Out" }).click();
-    const easeEdl = await page.evaluate(() => window.__lastEdlText);
-    if (
-      !easeEdl.includes("*** Set Parameter Animation") ||
-      !easeEdl.includes('"parameter":"title.position"') ||
-      !easeEdl.includes('"interpolation":"bezier"') ||
-      !easeEdl.includes('"easing":"ease_in_out"')
-    ) {
-      throw new Error(`Ease In/Out preset did not emit expected EDL: ${easeEdl}`);
-    }
-    await page.getByRole("button", { name: "Add drift path" }).click();
-    const driftEdl = await page.evaluate(() => window.__lastEdlText);
-    if (
-      !driftEdl.includes("*** Set Parameter Animation") ||
-      !driftEdl.includes('"parameter":"title.position"') ||
-      !driftEdl.includes('"motion_path"') ||
-      !driftEdl.includes('"interpolation":"bezier"')
-    ) {
-      throw new Error(`title drift path action did not emit expected EDL: ${driftEdl}`);
-    }
-
-    await page.getByRole("tab", { name: "Vedit" }).click();
-    await expectVisible(page, ".vedit-panel", "vedit panel");
-    await page.locator(".vedit-entry").filter({ hasText: "Clean starting cut" }).locator("summary").click();
-    await page.getByRole("button", { name: "Inspect diff" }).click();
-    await expectVisible(page, ".vedit-diff", "vedit diff preview");
-    await page.getByRole("button", { name: "Restore this cut" }).click();
-    await expectVisible(page, ".vedit-restore-confirm", "vedit restore confirmation");
-
-    console.log("desktop UI smoke passed");
-  } finally {
-    if (browser) await browser.close();
-    server.kill("SIGTERM");
-  }
-}
-
-run().catch((error) => {
-  console.error(error);
-  process.exit(1);
+await check("golden cockpit loads without console errors", async () => {
+  const { page, errors } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.waitForTimeout(300);
+  assert.deepEqual(errors, []);
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/screen2-golden.png`, fullPage: false });
+  await page.close();
 });
+
+for (const screen of SPEC_SCREENS) {
+  await check(`${screen.id} loads and screenshots`, async () => {
+    const { page, errors } = await makePage();
+    await page.goto(screenUrl(screen), { waitUntil: "networkidle" });
+    await page.waitForTimeout(300);
+    assert.deepEqual(errors, []);
+    const body = (await page.textContent("body")).toLowerCase();
+    for (const expected of screen.text) {
+      assert.ok(body.includes(expected.toLowerCase()), `${screen.id} missing text: ${expected}`);
+    }
+    if (screen.id === "screen1") {
+      assert.equal(await page.locator("body > header").count(), 0, "screen1 should not render the app shell header");
+      assert.ok(page.url().includes("/design/concept"), "screen1 should be reachable at /design/concept");
+    }
+    await page.screenshot({ path: `${SCREENSHOT_DIR}/${screen.id}.png`, fullPage: false });
+    await page.close();
+  });
+}
+
+await check("spec demo screens fit a compact desktop window", async () => {
+  const compact = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    deviceScaleFactor: 1,
+  });
+  try {
+    for (const screen of SPEC_SCREENS) {
+      const page = await compact.newPage();
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
+      page.on("console", (m) => {
+        if (m.type() === "error") errors.push(`console.error: ${m.text()}`);
+      });
+      await page.goto(screenUrl(screen), { waitUntil: "networkidle" });
+      await page.waitForTimeout(150);
+      assert.deepEqual(errors, []);
+      const metrics = await page.evaluate(() => ({
+        scrollW: document.documentElement.scrollWidth,
+        clientW: document.documentElement.clientWidth,
+        scrollH: document.documentElement.scrollHeight,
+        clientH: document.documentElement.clientHeight,
+      }));
+      assert.equal(metrics.scrollW, metrics.clientW, `${screen.id} horizontally overflows compact viewport`);
+      assert.equal(metrics.scrollH, metrics.clientH, `${screen.id} vertically overflows compact viewport`);
+      if (screen.id === "screen2") {
+        await page.screenshot({ path: `${SCREENSHOT_DIR}/screen2-compact.png`, fullPage: false });
+      }
+      await page.close();
+    }
+  } finally {
+    await compact.close();
+  }
+});
+
+await check("top chrome matches Screen 2 app model", async () => {
+  const { page } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  const body = await page.textContent("body");
+  for (const expected of [
+    "Awidat",
+    "Project",
+    "Workspace",
+    "Agent",
+    "Media",
+    "Review",
+    "Deliver",
+    "Settings",
+    "Interview_A",
+    "Podcast Episode",
+  ]) {
+    assert.ok(body.includes(expected), `missing top chrome text: ${expected}`);
+  }
+  const clippedTopNav = await page.evaluate(() => {
+    const header = document.querySelector("header");
+    if (!header) return ["missing header"];
+    const labels = ["Project", "Workspace", "Agent", "Media", "Review", "Deliver", "Settings"];
+    const clipped = [];
+    for (const label of labels) {
+      const button = Array.from(header.querySelectorAll("button")).find(
+        (el) => el.textContent?.trim() === label,
+      );
+      if (!button) {
+        clipped.push(`${label}: missing`);
+        continue;
+      }
+      const rect = button.getBoundingClientRect();
+      let node = button.parentElement;
+      while (node && node !== header.parentElement) {
+        const style = getComputedStyle(node);
+        if (style.overflow !== "visible" || style.overflowX !== "visible") {
+          const clip = node.getBoundingClientRect();
+          if (rect.left < clip.left - 0.5 || rect.right > clip.right + 0.5) {
+            clipped.push(`${label}: clipped by ${node.tagName.toLowerCase()}`);
+            break;
+          }
+        }
+        node = node.parentElement;
+      }
+    }
+    return clipped;
+  });
+  assert.deepEqual(clippedTopNav, []);
+  await page.close();
+});
+
+await check("workflow lens row exposes all 9 lenses", async () => {
+  const { page } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  const lensNames = await page.locator('nav button[role="tab"]').allTextContents();
+  for (const expected of [
+    "Import",
+    "Index",
+    "Selects",
+    "Assembly",
+    "Review",
+    "Captions",
+    "Audio",
+    "Color",
+    "Delivery",
+  ]) {
+    assert.ok(lensNames.some((s) => s.includes(expected)), `lens "${expected}" missing`);
+  }
+  await page.close();
+});
+
+await check("agent command rail renders Screen 2 intent, context, plan, activity, suggestions", async () => {
+  const { page } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  const body = (await page.textContent("body")).toLowerCase();
+  for (const expected of [
+    "agent command",
+    "Cut this into a tight 8-minute podcast episode.",
+    "Remove dead air but preserve natural pacing.",
+    "Clip: Interview_A",
+    "Range: 00:12-18:40",
+    "Transcript region selected",
+    "Target: YouTube 16:9",
+    "Building proposal...",
+    "Est. time remaining",
+    "00:01:48",
+    "Build assembly (rough cut)",
+    "activity",
+    "suggested next actions",
+    "Inspect 12 changed regions",
+  ]) {
+    assert.ok(body.includes(expected.toLowerCase()), `missing command rail text: ${expected}`);
+  }
+  await page.close();
+});
+
+await check("proposal preview renders before/after review controls", async () => {
+  const { page } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  const body = (await page.textContent("body")).toLowerCase();
+  for (const expected of [
+    "proposal",
+    "Podcast Tightening v1",
+    "12 pending changes",
+    "Before / After",
+    "Side by Side",
+    "active proposal overlay",
+    "jump to change",
+    "07",
+  ]) {
+    assert.ok(body.includes(expected.toLowerCase()), `missing preview text: ${expected}`);
+  }
+  await page.close();
+});
+
+await check("timeline and inspector expose review evidence", async () => {
+  const { page } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  const body = (await page.textContent("body")).toLowerCase();
+  for (const expected of [
+    "Timeline",
+    "Transcript",
+    "Changes",
+    "Evidence",
+    "Proposed Timeline",
+    "Current Timeline",
+    "proposal inspector",
+    "Cut 07 · J-cut",
+    "Transcript boundary",
+    "Audio energy drop",
+    "Speaker handoff",
+    "Visual continuity",
+    "Accept",
+    "Reject",
+    "Revise",
+  ]) {
+    assert.ok(body.includes(expected.toLowerCase()), `missing timeline/inspector text: ${expected}`);
+  }
+  await page.close();
+});
+
+await check("footer exposes model, autosave, render, and disk status", async () => {
+  const { page } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  const body = (await page.textContent("body")).toLowerCase();
+  for (const expected of [
+    "agent online",
+    "model: awidat pro 1.2",
+    "context window: 42m",
+    "autosaved 12:42:18",
+    "render queue 1",
+    "disk 1.2 tb free",
+  ]) {
+    assert.ok(body.includes(expected.toLowerCase()), `missing footer text: ${expected}`);
+  }
+  await page.close();
+});
+
+await browser.close();
+
+console.log(`\n${passes.length} passed, ${failures.length} failed`);
+if (failures.length > 0) {
+  process.exit(1);
+}

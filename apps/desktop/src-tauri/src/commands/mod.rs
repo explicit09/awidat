@@ -3,6 +3,7 @@
 
 pub mod auto_insert;
 pub mod color_scopes;
+pub mod config;
 pub mod dismissal;
 pub mod history;
 pub mod import;
