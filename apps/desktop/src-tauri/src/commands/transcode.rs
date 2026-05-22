@@ -294,6 +294,9 @@ pub async fn transcode_single_asset_in_project(
         return Ok(Some(proxy_path));
     }
     transcode_one(app, state, asset_path, &proxy_path).await?;
+    // Newly-finished proxy: tell the frontend so the playable URL
+    // swaps from source to proxy mid-playback.
+    crate::events::emit_timeline_changed(app, project_root);
     Ok(Some(proxy_path))
 }
 
