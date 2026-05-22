@@ -7,7 +7,7 @@
 //!   Used by `view_frame`.
 //! - [`ffmpeg::probe_duration_s`] — ffprobe wrapper returning the
 //!   asset's duration in seconds.
-//! - [`ffmpeg::transcode_proxy`] — produce a 720p H.264 all-keyframe
+//! - [`ffmpeg::transcode_proxy`] — produce a 1080p H.264 all-keyframe
 //!   proxy of an asset, with progress callbacks. Used by the desktop
 //!   import flow to make scrubbable previews.
 //! - [`ffmpeg::generate_thumbnails`] — extract one filmstrip JPEG per

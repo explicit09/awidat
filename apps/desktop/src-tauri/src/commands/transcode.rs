@@ -1,7 +1,8 @@
-//! Proxy transcoding: 720p H.264 all-keyframe mp4 under
+//! Proxy transcoding: 1080p H.264 all-keyframe mp4 under
 //! `<project>/.awidat/proxies/` for every asset in `raw/` that
 //! doesn't already have an up-to-date proxy. The live preview pane
-//! scrubs against the proxy, never the original.
+//! can use the proxy as a performance fallback while source review
+//! can still prefer original media.
 //!
 //! Idempotency: if `<asset>.mp4`'s mtime under proxies/ is newer
 //! than the source's mtime, we skip it. The check is mtime-based
@@ -17,7 +18,7 @@ use std::sync::Arc;
 use awidat_desktop_protocol::{Id, JobKind};
 use awidat_render::{TranscodeProgress, TranscodeProgressCallback};
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -157,6 +158,116 @@ pub async fn proxy_cache_lifecycle_report(
         .clone()
         .ok_or_else(|| "no project loaded".to_string())?;
     plan_proxy_cache_cleanup(&project_root)
+}
+
+/// Delete every orphaned proxy artifact in `project_root`'s cache —
+/// any `.mp4` (or `.mp4.pending`) under `.awidat/proxies/` that doesn't
+/// match the expected filename for some asset currently in `raw/`.
+///
+/// Targets two cases: proxies left behind after a raw file is deleted,
+/// and proxies whose filename schema is stale because the encoder
+/// target changed (e.g. the 720p → 1080p bump that adds a quality
+/// marker to the path). Both leave files the timeline flattener can't
+/// match against; without cleanup the next backfill would also skip
+/// the new transcode if the *old* file happened to satisfy a freshness
+/// check by accident.
+///
+/// Returns the number of files deleted and bytes freed. Errors from
+/// individual deletes are logged and swallowed — cleanup is best-
+/// effort cache hygiene, not a load-bearing operation.
+pub fn cleanup_orphaned_proxies_in(project_root: &Path) -> Result<(usize, u64), String> {
+    let manifest = build_proxy_cache_manifest(project_root)?;
+    let mut deleted = 0usize;
+    let mut bytes_freed = 0u64;
+    for entry in manifest.entries {
+        if entry.status != ProxyCacheStatus::Orphan {
+            continue;
+        }
+        match std::fs::remove_file(&entry.proxy_path) {
+            Ok(()) => {
+                deleted += 1;
+                bytes_freed += entry.size_bytes.unwrap_or(0);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %entry.proxy_path,
+                    "failed to delete orphan proxy; leaving on disk",
+                );
+            }
+        }
+    }
+    Ok((deleted, bytes_freed))
+}
+
+/// Spawn the project-load proxy reconciliation: prune orphaned files
+/// from a previous schema, then backfill any missing 1080p proxy.
+/// Runs in the background so `set_project_root` returns immediately —
+/// the UI shows "Generating preview…" until each clip's proxy lands,
+/// at which point `emit_timeline_changed` triggers a re-flatten and
+/// the segmented player picks it up.
+///
+/// Takes an owned `PathBuf` so a fast project switch doesn't redirect
+/// transcodes into whichever project is current when the spawned task
+/// happens to wake up.
+pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
+    tokio::spawn(async move {
+        match tokio::task::spawn_blocking({
+            let project_root = project_root.clone();
+            move || cleanup_orphaned_proxies_in(&project_root)
+        })
+        .await
+        {
+            Ok(Ok((0, _))) => {}
+            Ok(Ok((count, bytes))) => {
+                tracing::info!(
+                    deleted = count,
+                    bytes_freed = bytes,
+                    project = %project_root.display(),
+                    "pruned orphan proxies on project load",
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, project = %project_root.display(), "orphan proxy scan failed");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "orphan proxy scan join failed");
+            }
+        }
+
+        let raw_dir = project_root.join("raw");
+        if !raw_dir.is_dir() {
+            return;
+        }
+        let assets = match collect_media(&raw_dir) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "backfill scan raw/ failed");
+                return;
+            }
+        };
+        if assets.is_empty() {
+            return;
+        }
+        let state = app.state::<AwidatState>();
+        let mut touched = false;
+        for asset in assets {
+            match transcode_single_asset_in_project(&app, &state, &project_root, &asset).await {
+                Ok(Some(_)) => touched = true,
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        asset = %asset.display(),
+                        "project-load proxy backfill failed for asset; continuing",
+                    );
+                }
+            }
+        }
+        if touched {
+            crate::events::emit_timeline_changed(&app, &project_root);
+        }
+    });
 }
 
 /// Transcode one asset into the proxy directory for a specific project.
@@ -629,5 +740,48 @@ mod tests {
         assert!(stale_proxy.exists());
         assert!(orphan_proxy.exists());
         assert!(pending_proxy.exists());
+    }
+
+    #[test]
+    fn cleanup_deletes_orphan_proxies_but_keeps_stale_and_pending() {
+        // The schema-bump case: a proxy from a previous encoder target
+        // (`old-720p` here, the 720p→1080p bump in production) lives
+        // in the cache but doesn't match any current `proxy_path_for`.
+        // Cleanup deletes it so the next backfill can write the new
+        // file without colliding. Stale + pending are *not* touched —
+        // an in-flight transcode would lose its `.pending` file, and
+        // a stale-by-mtime proxy may just be a cloud-sync artifact.
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("camera.mov");
+        std::fs::write(&asset, b"source").unwrap();
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let current_proxy = proxy_path_for(&proxies_dir, &asset);
+        std::fs::write(&current_proxy, b"current").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&asset, b"updated-source").unwrap();
+        let orphan_old_schema = proxies_dir.join("camera-deadbeef.mp4");
+        std::fs::write(&orphan_old_schema, b"old-720p-proxy").unwrap();
+        let pending_inflight = proxy_pending_path(&current_proxy);
+        std::fs::write(&pending_inflight, b"in-flight").unwrap();
+
+        let (deleted, bytes_freed) = cleanup_orphaned_proxies_in(dir.path()).unwrap();
+
+        assert_eq!(deleted, 1);
+        assert_eq!(bytes_freed, b"old-720p-proxy".len() as u64);
+        assert!(!orphan_old_schema.exists(), "orphan should be removed");
+        assert!(current_proxy.exists(), "stale-by-mtime proxy must be kept");
+        assert!(pending_inflight.exists(), "in-flight pending must be kept");
+    }
+
+    #[test]
+    fn cleanup_is_a_noop_when_proxies_dir_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("raw")).unwrap();
+        let (deleted, bytes_freed) = cleanup_orphaned_proxies_in(dir.path()).unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(bytes_freed, 0);
     }
 }

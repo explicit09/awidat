@@ -529,9 +529,15 @@ pub enum TranscodeProgress {
 pub type TranscodeProgressCallback =
     std::sync::Arc<dyn Fn(TranscodeProgress) + Send + Sync + 'static>;
 
-/// Transcode `asset_path` into a 720p H.264 proxy at `output_path`.
+const PROXY_TARGET_HEIGHT: u32 = 1080;
+
+fn proxy_scale_filter() -> String {
+    format!("scale=-2:{PROXY_TARGET_HEIGHT}")
+}
+
+/// Transcode `asset_path` into a 1080p H.264 proxy at `output_path`.
 ///
-/// Pipeline: `ffmpeg -i <src> -vf scale=-2:720 -c:v libx264 -preset
+/// Pipeline: `ffmpeg -i <src> -vf scale=-2:1080 -c:v libx264 -preset
 /// veryfast -crf 26 -g 1 -keyint_min 1 -sc_threshold 0 -c:a aac
 /// -b:a 128k -movflags +faststart -y <out>`
 ///
@@ -575,7 +581,7 @@ pub async fn transcode_proxy(
         .arg("-i")
         .arg(asset_path)
         .arg("-vf")
-        .arg("scale=-2:720")
+        .arg(proxy_scale_filter())
         .arg("-c:v")
         .arg("libx264")
         .arg("-preset")
@@ -1387,6 +1393,11 @@ fn tail_string(bytes: &[u8], cap: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_scale_filter_targets_viewer_grade_1080p() {
+        assert_eq!(proxy_scale_filter(), "scale=-2:1080");
+    }
 
     #[test]
     fn bad_timestamp_is_error() {

@@ -475,19 +475,21 @@ fn media_token(path: &Path) -> String {
 /// for each clip's segment. Both paths must agree byte-for-byte —
 /// hence one shared helper rather than parallel implementations.
 ///
-/// The proxy filename is `<asset-stem>-<hash>.mp4`. The hash is FNV-1a
-/// over the asset's absolute path string and disambiguates two raw/
-/// files that share the same stem in nested subdirectories. Callers
-/// must pass the absolute path (not project-relative) — feeding in a
-/// relative path produces a different hash and the resulting proxy
-/// path won't match the one the transcoder wrote.
+/// The proxy filename is `<asset-stem>-1080p-<hash>.mp4`. The hash is
+/// FNV-1a over the asset's absolute path string and disambiguates two
+/// raw/ files that share the same stem in nested subdirectories. The
+/// quality marker intentionally invalidates older 720p proxies without
+/// probing every cache entry. Callers must pass the absolute path (not
+/// project-relative) — feeding in a relative path produces a different
+/// hash and the resulting proxy path won't match the one the transcoder
+/// wrote.
 pub fn proxy_path_for(proxies_dir: &Path, asset_abs_path: &Path) -> PathBuf {
     let stem = asset_abs_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
     proxies_dir.join(format!(
-        "{stem}-{:08x}.mp4",
+        "{stem}-1080p-{:08x}.mp4",
         stable_path_hash(asset_abs_path)
     ))
 }
@@ -706,7 +708,7 @@ mod tests {
             p.file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
-                .starts_with("foo-")
+                .starts_with("foo-1080p-")
         );
     }
 

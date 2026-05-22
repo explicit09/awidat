@@ -44,7 +44,10 @@ pub fn proxy_path_for(project_root: &Path, asset_path: &Path) -> PathBuf {
         .and_then(|stem| stem.to_str())
         .filter(|stem| !stem.trim().is_empty())
         .unwrap_or("asset");
-    proxies_dir.join(format!("{stem}-{:016x}.mp4", stable_path_hash(asset_path)))
+    proxies_dir.join(format!(
+        "{stem}-1080p-{:016x}.mp4",
+        stable_path_hash(asset_path)
+    ))
 }
 
 /// Return the pending path used while ffmpeg writes a proxy.
@@ -145,7 +148,11 @@ mod tests {
         let second = proxy_path_for(root, asset);
 
         assert_eq!(first, second);
-        assert!(first.to_string_lossy().contains(".awidat/proxies/camera-"));
+        assert!(
+            first
+                .to_string_lossy()
+                .contains(".awidat/proxies/camera-1080p-")
+        );
     }
 
     #[test]

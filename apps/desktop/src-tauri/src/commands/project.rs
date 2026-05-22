@@ -73,6 +73,15 @@ pub async fn set_project_root(
         tracing::warn!(error = %e, "failed to update recents file");
     }
 
+    // Reconcile the proxy cache against the current schema. Prunes
+    // orphaned proxies from previous encoder targets and backfills
+    // any missing 1080p proxy in the background. Without this the
+    // preview hangs on "Generating preview…" forever when a user
+    // opens a project that was previously proxied under an older
+    // filename schema (the auto-transcode otherwise only runs on
+    // fresh imports).
+    crate::commands::transcode::spawn_proxy_backfill_on_load(app.clone(), buf);
+
     Ok(())
 }
 
@@ -337,6 +346,156 @@ async fn update_recents(p: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Symmetric counterpart to [`update_recents`]: drop every entry whose
+/// stored string equals `p`. Matching is byte-for-byte against what
+/// `update_recents` originally wrote (no canonicalization), so the
+/// caller must pass the same path string the recents UI is showing.
+async fn remove_from_recents(p: &std::path::Path) -> std::io::Result<()> {
+    let Some(file) = recents_path() else {
+        return Ok(());
+    };
+    prune_recents_file(&file, p).await
+}
+
+/// Internal helper for [`remove_from_recents`] that takes the recents
+/// file path explicitly. Split out so unit tests can target a tempdir
+/// instead of mutating the user's real config dir.
+async fn prune_recents_file(
+    file: &std::path::Path,
+    p: &std::path::Path,
+) -> std::io::Result<()> {
+    let existing_bytes = match fs::read(file).await {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let mut existing: Vec<String> =
+        serde_json::from_slice(&existing_bytes).unwrap_or_default();
+    let p_str = p.to_string_lossy();
+    let before = existing.len();
+    existing.retain(|x| x.as_str() != p_str.as_ref());
+    if existing.len() == before {
+        return Ok(());
+    }
+    let serialized = serde_json::to_vec_pretty(&existing).unwrap_or_else(|_| b"[]".to_vec());
+    fs::write(file, serialized).await?;
+    Ok(())
+}
+
+/// Compute the on-disk size of `path` recursively (files + dirs). Used
+/// by the delete-project confirm modal so the user sees how much they
+/// are about to free. Errors on individual entries (permission, broken
+/// symlink) are skipped so the total is best-effort rather than
+/// load-bearing — better to under-report than refuse to open the modal.
+#[tauri::command]
+pub async fn project_size_bytes(path: String) -> Result<u64, String> {
+    let root = PathBuf::from(&path);
+    if !root.is_dir() {
+        return Err(format!("not a directory: {path}"));
+    }
+    tokio::task::spawn_blocking(move || dir_size_recursive(&root))
+        .await
+        .map_err(|e| format!("size join: {e}"))
+}
+
+fn dir_size_recursive(dir: &Path) -> u64 {
+    let mut total: u64 = 0;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(it) => it,
+        Err(_) => return 0,
+    };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            total = total.saturating_add(dir_size_recursive(&entry.path()));
+        } else if meta.is_file() {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    total
+}
+
+/// Permanently delete `path` from disk and from the recents list. The
+/// destructive shape requires extra care:
+///
+/// - `expected_basename` is a guard the frontend sends along with the
+///   path it last saw; if the on-disk folder was renamed (Finder,
+///   another process) between the modal opening and the user clicking
+///   Delete, the basename mismatch refuses the request rather than
+///   nuking an unrelated directory.
+/// - We require a `project.otio.json` sentinel before removing, so a
+///   stale recents entry pointing at an unrelated folder cannot lead
+///   to a wrong `rm -rf`.
+/// - When the path matches the currently-loaded project, we close it
+///   first using the same `ensure_project_switch_allowed` guard that
+///   guards every other project switch. That ensures no in-flight
+///   turn / proposal / transcode is holding state against the doomed
+///   directory.
+/// - Recents prune happens BEFORE the `remove_dir_all` so a partial
+///   delete still results in a consistent UI: `recent_projects`'
+///   stale-path filter cleans up whatever's left.
+#[tauri::command]
+pub async fn delete_project(
+    state: State<'_, AwidatState>,
+    path: String,
+    expected_basename: String,
+) -> Result<(), String> {
+    let buf = validate_delete_target(&path, &expected_basename)?;
+
+    let is_active = state
+        .project_root
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|current| current == &buf);
+    if is_active {
+        ensure_project_switch_allowed(&state).await?;
+        *state.project_root.lock().await = None;
+        *state.session.lock().await = None;
+        *state.resume_log_path.lock().await = None;
+        crate::commands::media::clear_media_server_files(&state)?;
+    }
+
+    if let Err(e) = remove_from_recents(&buf).await {
+        tracing::warn!(error = %e, path = %path, "failed to prune recents; continuing with delete");
+    }
+
+    tokio::fs::remove_dir_all(&buf)
+        .await
+        .map_err(|e| format!("delete: {e}"))?;
+    Ok(())
+}
+
+/// Pure validation half of [`delete_project`], split out for testability.
+/// Confirms the path is a real directory, that the on-disk basename
+/// matches what the UI thought it was deleting (catches rename races),
+/// and that the folder carries the Awidat sentinel so we cannot be
+/// tricked into `rm -rf`ing an unrelated directory.
+fn validate_delete_target(
+    path: &str,
+    expected_basename: &str,
+) -> Result<PathBuf, String> {
+    let buf = PathBuf::from(path);
+    if !buf.is_dir() {
+        return Err(format!("not a directory: {path}"));
+    }
+    let basename = buf
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    if basename != expected_basename {
+        return Err(format!(
+            "project folder was renamed (expected {expected_basename:?}, found {basename:?}); refresh and try again"
+        ));
+    }
+    if !buf.join("project.otio.json").is_file() {
+        return Err(format!(
+            "refusing to delete non-Awidat directory: {path} (no project.otio.json sentinel)"
+        ));
+    }
+    Ok(buf)
+}
+
 /// Cancel an in-flight long job (yt-dlp download, indexer run) by
 /// its protocol-Item id. No-op if the id isn't currently running.
 #[tauri::command]
@@ -394,3 +553,127 @@ scope.
 - Master: 1080p, ProRes 422 (or full-quality H.264 if no ProRes pipeline)
 - Social: 1080×1920 (vertical) crops of standalone moments
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_fake_project(parent: &Path, name: &str) -> PathBuf {
+        let dir = parent.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("project.otio.json"), b"{}").unwrap();
+        dir
+    }
+
+    #[test]
+    fn validate_delete_target_accepts_real_awidat_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = make_fake_project(tmp.path(), "demo");
+        let buf =
+            validate_delete_target(project.to_str().unwrap(), "demo").unwrap();
+        assert_eq!(buf, project);
+    }
+
+    #[test]
+    fn validate_delete_target_refuses_missing_path() {
+        let err = validate_delete_target("/no/such/awidat/project", "project")
+            .unwrap_err();
+        assert!(err.contains("not a directory"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_delete_target_refuses_basename_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = make_fake_project(tmp.path(), "renamed-on-disk");
+        let err = validate_delete_target(
+            project.to_str().unwrap(),
+            "what-the-ui-thought",
+        )
+        .unwrap_err();
+        assert!(err.contains("renamed"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_delete_target_refuses_directory_without_otio_sentinel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bogus = tmp.path().join("definitely-not-awidat");
+        std::fs::create_dir_all(&bogus).unwrap();
+        std::fs::write(bogus.join("README.md"), b"not a project").unwrap();
+        let err = validate_delete_target(
+            bogus.to_str().unwrap(),
+            "definitely-not-awidat",
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("non-Awidat directory"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prune_recents_file_drops_only_the_targeted_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let recents = tmp.path().join("recents.json");
+        let initial = serde_json::to_vec(&vec![
+            "/a/keep".to_string(),
+            "/b/delete".to_string(),
+            "/c/keep".to_string(),
+        ])
+        .unwrap();
+        fs::write(&recents, initial).await.unwrap();
+
+        prune_recents_file(&recents, std::path::Path::new("/b/delete"))
+            .await
+            .unwrap();
+
+        let after: Vec<String> =
+            serde_json::from_slice(&fs::read(&recents).await.unwrap()).unwrap();
+        assert_eq!(after, vec!["/a/keep".to_string(), "/c/keep".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn prune_recents_file_is_noop_when_entry_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let recents = tmp.path().join("recents.json");
+        let initial =
+            serde_json::to_vec(&vec!["/a".to_string(), "/b".to_string()]).unwrap();
+        fs::write(&recents, &initial).await.unwrap();
+
+        prune_recents_file(&recents, std::path::Path::new("/missing"))
+            .await
+            .unwrap();
+
+        assert_eq!(fs::read(&recents).await.unwrap(), initial);
+    }
+
+    #[tokio::test]
+    async fn prune_recents_file_is_noop_when_file_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let recents = tmp.path().join("does-not-exist.json");
+        prune_recents_file(&recents, std::path::Path::new("/anything"))
+            .await
+            .unwrap();
+        assert!(!recents.exists());
+    }
+
+    #[tokio::test]
+    async fn project_size_bytes_sums_files_recursively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = make_fake_project(tmp.path(), "sized");
+        std::fs::write(project.join("a.bin"), vec![0u8; 100]).unwrap();
+        let nested = project.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("b.bin"), vec![0u8; 250]).unwrap();
+        let total = project_size_bytes(project.to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        // 350 from our writes + 2 bytes for "{}" in project.otio.json.
+        assert_eq!(total, 100 + 250 + 2);
+    }
+
+    #[tokio::test]
+    async fn project_size_bytes_errors_on_non_dir() {
+        let err = project_size_bytes("/no/such/place".into()).await.unwrap_err();
+        assert!(err.contains("not a directory"), "got: {err}");
+    }
+}
