@@ -5,8 +5,11 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { Trash2 } from "lucide-react";
 import { useProjectStore } from "./state";
 import { NewProjectForm } from "./NewProjectForm";
+import { DeleteProjectConfirm } from "./DeleteProjectConfirm";
+import { ManageProjectsDialog } from "./ManageProjectsDialog";
 import type { ProjectType } from "../protocol";
 import { MENU_COMMANDS, onMenuCommand } from "./menuCommands";
 
@@ -22,6 +25,8 @@ export function ProjectBanner({ onChange }: Props) {
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [showManage, setShowManage] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [projectType, setProjectType] = useState<ProjectType | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
 
@@ -132,16 +137,35 @@ export function ProjectBanner({ onChange }: Props) {
             <>
               <div className="popover-divider">Recent</div>
               {recent.map((p) => (
-                <button
-                  key={p}
-                  className="popover-recent"
-                  onClick={() => openRecent(p)}
-                  title={p}
-                >
-                  <span className="recent-name">{basename(p)}</span>
-                  <span className="recent-path">{p}</span>
-                </button>
+                <div key={p} className="popover-recent-row">
+                  <button
+                    className="popover-recent"
+                    onClick={() => openRecent(p)}
+                    title={p}
+                  >
+                    <span className="recent-name">{basename(p)}</span>
+                    <span className="recent-path">{p}</span>
+                  </button>
+                  <button
+                    className="popover-recent-delete"
+                    onClick={() => setPendingDelete(p)}
+                    title={`Delete "${basename(p)}" permanently`}
+                    aria-label={`Delete ${basename(p)} permanently`}
+                  >
+                    <Trash2 size={14} strokeWidth={1.75} />
+                  </button>
+                </div>
               ))}
+              <button
+                className="popover-action popover-manage"
+                onClick={() => {
+                  setShowManage(true);
+                  setOpen(false);
+                }}
+              >
+                <strong>Manage projects…</strong>
+                <span className="popover-hint">delete from disk</span>
+              </button>
             </>
           )}
           {error && <div className="popover-error">{error}</div>}
@@ -155,6 +179,25 @@ export function ProjectBanner({ onChange }: Props) {
             onChange(path);
             refresh().catch(() => {});
           }}
+        />
+      )}
+      {pendingDelete && (
+        <DeleteProjectConfirm
+          path={pendingDelete}
+          isActive={pendingDelete === current}
+          onCancel={() => setPendingDelete(null)}
+          onDeleted={() => {
+            const wasActive = pendingDelete === current;
+            setPendingDelete(null);
+            refresh().catch(() => {});
+            if (wasActive) onChange(null);
+          }}
+        />
+      )}
+      {showManage && (
+        <ManageProjectsDialog
+          onClose={() => setShowManage(false)}
+          onDeletedActive={() => onChange(null)}
         />
       )}
     </div>
