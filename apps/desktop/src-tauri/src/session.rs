@@ -18,10 +18,10 @@ use awidat_core::tools::{
     find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
     find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
     find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, import_media::ImportLocalTool,
-    import_media::ImportUrlTool, inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool,
-    list_assets::ListAssetsTool, list_bins::ListBinsTool, list_looks::ListLooksTool,
-    list_stringouts::ListStringoutsTool, load_skill::LoadSkillTool,
+    find_speaker_oncam::FindSpeakerOncamTool, granular_timeline::register_granular_timeline_tools,
+    import_media::ImportLocalTool, import_media::ImportUrlTool, inspect_clip::InspectClipTool,
+    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_bins::ListBinsTool,
+    list_looks::ListLooksTool, list_stringouts::ListStringoutsTool, load_skill::LoadSkillTool,
     local_review_package::LocalReviewPackageTool, manage_assets::CreateBinTool,
     manage_assets::MarkSelectTool, manage_assets::MoveToBinTool, manage_assets::RateAssetTool,
     manage_assets::RenameAssetTool, manage_assets::TagAssetTool, plan_emphasis::PlanEmphasisTool,
@@ -48,6 +48,7 @@ use tokio::sync::mpsc;
 pub fn build_registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(ApplyEdlTool));
+    register_granular_timeline_tools(&mut registry);
     registry.register(Arc::new(AnalyzeSyncTool));
     registry.register(Arc::new(BashTool));
     registry.register(Arc::new(DiagnoseProjectMediaTool));

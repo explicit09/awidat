@@ -29,6 +29,7 @@ pub mod find_false_starts;
 pub mod find_filler_words;
 pub mod find_moment;
 pub mod find_speaker_oncam;
+pub mod granular_timeline;
 pub mod import_media;
 pub mod inspect_clip;
 pub mod inspect_moment;
