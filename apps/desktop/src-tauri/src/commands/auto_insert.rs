@@ -85,14 +85,6 @@ pub async fn append_asset(
     insert_asset(project_root, asset_abs_path, duration_s, InsertMode::Append).await
 }
 
-pub async fn auto_insert_media_if_empty(
-    project_root: &Path,
-    asset_abs_path: &Path,
-    probe: &awidat_render::MediaProbe,
-) -> Result<bool, String> {
-    insert_media(project_root, asset_abs_path, probe, InsertMode::IfEmpty).await
-}
-
 pub async fn append_media(
     project_root: &Path,
     asset_abs_path: &Path,
@@ -101,10 +93,20 @@ pub async fn append_media(
     insert_media(project_root, asset_abs_path, probe, InsertMode::Append).await
 }
 
+pub async fn insert_media_at(
+    project_root: &Path,
+    asset_abs_path: &Path,
+    probe: &awidat_render::MediaProbe,
+    at_s: f64,
+) -> Result<bool, String> {
+    insert_media(project_root, asset_abs_path, probe, InsertMode::At(at_s)).await
+}
+
 #[derive(Debug, Clone, Copy)]
 enum InsertMode {
     IfEmpty,
     Append,
+    At(f64),
 }
 
 #[allow(dead_code)]
@@ -256,6 +258,17 @@ async fn insert_media(
         if matches!(mode, InsertMode::IfEmpty) && timeline_has_any_clips(&project) {
             return Ok(false);
         }
+        let at_s = match mode {
+            InsertMode::At(at_s) => {
+                if !at_s.is_finite() || at_s < 0.0 {
+                    return Err(format!(
+                        "auto-insert: at_s must be a finite non-negative timeline time, got {at_s}"
+                    ));
+                }
+                Some(at_s)
+            }
+            InsertMode::IfEmpty | InsertMode::Append => None,
+        };
         let asset_rel = match asset_abs_path.strip_prefix(&project_root) {
             Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
             Err(_) => {
@@ -282,7 +295,7 @@ async fn insert_media(
                 track: "Video 1".into(),
                 track_kind: Some(InsertTrackKind::Video),
                 at_position: None,
-                at_s: None,
+                at_s,
                 start: Some(0.0),
                 end: Some(duration_s),
                 name: None,
@@ -296,7 +309,7 @@ async fn insert_media(
                 track: "A1".into(),
                 track_kind: Some(InsertTrackKind::Audio),
                 at_position: None,
-                at_s: None,
+                at_s,
                 start: Some(0.0),
                 end: Some(duration_s),
                 name: None,

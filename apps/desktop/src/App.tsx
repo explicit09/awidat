@@ -50,11 +50,12 @@ import {
   type TimelineTab,
   type TimelineViewMode,
 } from "./shell";
-import { AgentStatusBadge, Button, Card, IconButton, Inline, Pill, Stack } from "./ui";
+import { AgentStatusBadge, Button, Card, IconButton, Inline, Pill, Stack, type PillStatus } from "./ui";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
 import { useProposalInspectorData } from "./state/proposalAdapter";
 import { useTimelineStore } from "./timeline/store";
+import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
 import type { JobKind, TimelineSnapshot } from "./protocol";
@@ -88,6 +89,7 @@ function App() {
 
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
+  const refreshTimeline = useTimelineStore((s) => s.refresh);
   const sourceCurrentTimeS = useMediaStore((s) => s.currentTime);
   const sourceDurationS = useMediaStore((s) => s.durationS);
   const timelineTimeS = useMediaStore((s) => s.timelineTime);
@@ -98,6 +100,7 @@ function App() {
   const requestSourceSeek = useMediaStore((s) => s.requestSeek);
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
   const refreshMedia = useMediaStore((s) => s.refresh);
+  const selectMedia = useMediaStore((s) => s.select);
   const sourceSeekRequestId = useMediaStore((s) => s.seekRequestId);
   const sourceSeekTargetS = useMediaStore((s) => s.seekTargetS);
   const sources = useMediaStore((s) => s.sources);
@@ -129,6 +132,7 @@ function App() {
   const [dismissedContextChips, setDismissedContextChips] = useState<string[]>([]);
   const [deliveryTargetOverrides, setDeliveryTargetOverrides] = useState<Record<string, boolean>>({});
   const [indexerConfig, setIndexerConfig] = useState<IndexerConfigSnapshot | undefined>(undefined);
+  const [indexReadiness, setIndexReadiness] = useState<IndexReadinessSnapshot | undefined>(undefined);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [leftPanel, setLeftPanel] = useState<"agent" | "media">("agent");
   const [rightPanel, setRightPanel] = useState<"inspector" | "index">("inspector");
@@ -144,7 +148,14 @@ function App() {
     : "screen2";
   const demoScreen = demoScreens[demoScreenId];
   const selectedProxy = useMemo(
-    () => proxies.find((proxy) => proxy.stem === selectedStem) ?? proxies[0] ?? null,
+    () =>
+      proxies.find(
+        (proxy) =>
+          proxy.stem === selectedStem ||
+          (selectedStem !== null && proxy.stem.startsWith(`${selectedStem}-`)),
+      ) ??
+      proxies[0] ??
+      null,
     [proxies, selectedStem],
   );
   const selectedSource = useMemo(() => {
@@ -184,8 +195,9 @@ function App() {
     if (paths.length === 0) return;
     setCommandError(null);
     try {
-      await invoke("import_locals", { srcPaths: paths, link: false });
+      const imported = await invoke<string[]>("import_locals", { srcPaths: paths, link: false });
       await refreshMedia();
+      selectMedia(stemFromPath(imported[imported.length - 1] ?? paths[paths.length - 1]));
       setStage("edit");
       setLeftPanel("media");
       setRightPanel("index");
@@ -199,11 +211,27 @@ function App() {
     if (!trimmed) return;
     setCommandError(null);
     try {
-      await invoke("import_url", { url: trimmed });
+      const imported = await invoke<string>("import_url", { url: trimmed });
       await refreshMedia();
+      selectMedia(stemFromPath(imported));
       setStage("edit");
       setLeftPanel("media");
       setRightPanel("index");
+    } catch (e) {
+      setCommandError(String(e));
+    }
+  }
+
+  async function placeMediaOnTimeline(assetId: string, atS?: number) {
+    if (!isTauri()) return;
+    setCommandError(null);
+    try {
+      await invoke<boolean>("insert_media_on_timeline", {
+        assetId,
+        atS: atS ?? null,
+      });
+      await refreshTimeline();
+      setEditDockTab("timeline");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -316,8 +344,14 @@ function App() {
     setCommandError(null);
     try {
       await invoke("index_project");
+      await Promise.all([
+        refreshMedia(),
+        useTimelineStore.getState().refresh(),
+        loadIndexReadiness(),
+      ]);
     } catch (e) {
       setCommandError(String(e));
+      await loadIndexReadiness();
     }
   }
 
@@ -398,6 +432,20 @@ function App() {
     } catch (e) {
       console.warn("read_indexer_config failed", e);
       setIndexerConfig(undefined);
+    }
+  }
+
+  async function loadIndexReadiness() {
+    if (demoMode || !isTauri() || !current) {
+      setIndexReadiness(undefined);
+      return;
+    }
+    try {
+      const snapshot = await invoke<IndexReadinessSnapshot>("index_readiness");
+      setIndexReadiness(snapshot);
+    } catch (e) {
+      console.warn("index_readiness failed", e);
+      setIndexReadiness(undefined);
     }
   }
 
@@ -660,6 +708,7 @@ function App() {
           it.kind === "tool_call" || it.kind === "text" || it.kind === "job",
       )
       .slice(-12)
+      .reverse()
       .map((it) => activityFor(it));
   }, [items]);
 
@@ -682,6 +731,11 @@ function App() {
         .map((job) => job.job_kind),
     );
   }, [items]);
+
+  useEffect(() => {
+    void loadIndexReadiness();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, demoMode, completedJobKinds.size, activeJobs.length]);
 
   const realContextChips: ContextChip[] = useMemo(() => {
     const chips: ContextChip[] = [];
@@ -740,7 +794,9 @@ function App() {
         const proxy = proxies.find((entry) => entry.stem.startsWith(`${sourceStem}-`));
         return {
           id: source.id,
+          assetId: source.id,
           title: source.name,
+          stem: proxy?.stem ?? sourceStem,
           detail: proxy
             ? `${formatBytes(source.size_bytes)} source · proxy ready`
             : `${formatBytes(source.size_bytes)} source · awaiting proxy/index`,
@@ -752,6 +808,7 @@ function App() {
     return proxies.map((proxy) => ({
       id: proxy.stem,
       title: proxy.stem,
+      stem: proxy.stem,
       detail: `${formatBytes(proxy.size_bytes)} proxy · ${proxy.proxy_path.split("/").pop() ?? "media"}`,
       status: transcodeJob ? "processing" : importBusy ? "imported" : "indexed",
       progress: transcodeJob?.percent ?? undefined,
@@ -800,6 +857,15 @@ function App() {
           };
         }
       }
+      if (indexReadiness && indexTaskReady(indexReadiness, kind)) {
+        return {
+          id: `real-${kind}`,
+          kind,
+          status: "indexed" as const,
+          progress: 100,
+          detail: "Found local index output",
+        };
+      }
       const jobKind = specificJobs[kind];
       const runningJob = jobKind ? activeJobs.find((job) => job.job_kind === jobKind) : undefined;
       const completed = jobKind ? completedJobKinds.has(jobKind) : false;
@@ -811,7 +877,7 @@ function App() {
         detail: runningJob?.status ?? (completed ? "Completed from local job state" : globalIndexJob ? "Waiting for index output" : "Waiting for local indexer"),
       };
     });
-  }, [activeJobs, completedJobKinds, hasImportedMedia, loadedTranscript]);
+  }, [activeJobs, completedJobKinds, hasImportedMedia, indexReadiness, loadedTranscript]);
 
   const realIndexingReady = realIndexingTasks.some((task) => task.status === "indexed");
   const realIndexingStructure: IndexingStructurePreview | undefined = useMemo(() => {
@@ -827,9 +893,9 @@ function App() {
       scenes: timelineSnapshot.cut_boundaries.length || undefined,
       segments: loadedTranscript?.segments.length,
       speakers,
-      transcriptPercent: loadedTranscript ? 100 : completedJobKinds.has("indexing") ? 100 : undefined,
+      transcriptPercent: loadedTranscript || indexReadiness?.transcripts ? 100 : completedJobKinds.has("indexing") ? 100 : undefined,
     };
-  }, [completedJobKinds, loadedTranscript, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
+  }, [completedJobKinds, indexReadiness?.transcripts, loadedTranscript, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
 
   const realDeliveryTargets: DeliveryTarget[] = useMemo(
     () => [
@@ -1173,6 +1239,9 @@ function App() {
               ready={realIndexingReady}
               onImport={() => void chooseAndImportFiles()}
               onImportUrl={() => setShowUrlImport(true)}
+              onOpenProject={() => void chooseAndOpenProject()}
+              onSelectMedia={(stem) => useMediaStore.getState().select(stem)}
+              onPlaceMedia={(assetId) => void placeMediaOnTimeline(assetId)}
             />
           }
         />
@@ -1253,6 +1322,7 @@ function App() {
                 currentTimeS={effectiveCurrentTime}
                 changeCount={effectiveChanges.length}
                 audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
+                contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
               />
             }
             transcript={<TranscriptView stem={selectedStem} />}
@@ -1329,6 +1399,7 @@ function App() {
             currentTimeS={effectiveCurrentTime}
             changeCount={effectiveChanges.length}
             audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
+            contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
           />
         }
         transcript={<TranscriptView stem={selectedStem} />}
@@ -1740,7 +1811,7 @@ function PanelSwitch<T extends string>({
             className={[
               "h-7 flex-1 rounded-[var(--radius-sm)] border px-2 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] transition-colors",
               selected
-                ? "border-[var(--color-border-active)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
+                ? "border-[var(--color-border)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]"
                 : "border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-secondary)]",
             ].join(" ")}
             aria-pressed={selected}
@@ -1760,6 +1831,9 @@ function ProjectMediaPanel({
   ready,
   onImport,
   onImportUrl,
+  onOpenProject,
+  onSelectMedia,
+  onPlaceMedia,
 }: {
   projectName?: string;
   sourceCount: number;
@@ -1767,7 +1841,19 @@ function ProjectMediaPanel({
   ready: boolean;
   onImport: () => void;
   onImportUrl: () => void;
+  onOpenProject: () => void;
+  onSelectMedia: (stem: string) => void;
+  onPlaceMedia: (assetId: string) => void;
 }) {
+  const indexedCount = media.filter((item) => item.status === "indexed").length;
+  const activeCount = media.filter((item) => item.status === "indexing" || item.status === "processing" || item.status === "partial").length;
+  const mediaState = sourceCount === 0
+    ? "no media"
+    : ready
+      ? "agent usable"
+      : activeCount > 0
+        ? "indexing"
+        : "needs index";
   return (
     <Stack gap="4" className="p-3">
       <Stack gap="1">
@@ -1778,15 +1864,23 @@ function ProjectMediaPanel({
           {projectName ?? "No project"}
         </span>
         <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-          {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {ready ? "index ready" : "index pending"}
+          {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {mediaState}
         </span>
       </Stack>
-      <Inline gap="1" wrap="wrap">
-        <Button variant="secondary" size="sm" onClick={onImport}>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <Button variant="secondary" size="sm" onClick={onImport} className="justify-center">
           Add files
         </Button>
         <Button variant="ghost" size="sm" onClick={onImportUrl}>
           Add URL
+        </Button>
+      </div>
+      <Inline justify="between" align="center" gap="2">
+        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+          {indexedCount} indexed · {activeCount} active
+        </span>
+        <Button variant="ghost" size="sm" onClick={onOpenProject}>
+          Change project
         </Button>
       </Inline>
       <Stack gap="2">
@@ -1794,7 +1888,18 @@ function ProjectMediaPanel({
           <button
             key={item.id}
             type="button"
+            onClick={() => {
+              if (item.stem) onSelectMedia(item.stem);
+            }}
             className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
+            title={item.title}
+            draggable={item.assetId !== undefined}
+            onDragStart={(event) => {
+              if (!item.assetId) return;
+              event.dataTransfer.setData("application/x-awidat-media", item.assetId);
+              event.dataTransfer.setData("text/plain", item.assetId);
+              event.dataTransfer.effectAllowed = "copy";
+            }}
           >
             <Inline justify="between" align="start" gap="2">
               <Stack gap="1" className="min-w-0">
@@ -1806,11 +1911,33 @@ function ProjectMediaPanel({
                     {item.detail}
                   </span>
                 ) : null}
+                {typeof item.progress === "number" ? (
+                  <div className="mt-1 h-1 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+                    <div
+                      className="h-full rounded-full bg-[var(--color-processing)]"
+                      style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }}
+                    />
+                  </div>
+                ) : null}
               </Stack>
-              <span className="shrink-0 rounded-full border border-[var(--color-border-subtle)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-[var(--color-text-secondary)]">
-                {item.status}
-              </span>
+              <Pill status={mediaStatusPill(item.status)} dot={false} className="shrink-0">
+                {mediaStatusLabel(item.status)}
+              </Pill>
             </Inline>
+            {item.assetId ? (
+              <div className="mt-2 flex justify-end">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    if (item.assetId) onPlaceMedia(item.assetId);
+                  }}
+                >
+                  Add to timeline
+                </Button>
+              </div>
+            ) : null}
           </button>
         )) : (
           <Card padding="sm" tone="flat">
@@ -1827,6 +1954,43 @@ function ProjectMediaPanel({
       </Stack>
     </Stack>
   );
+}
+
+function mediaStatusPill(status: IndexingMediaItem["status"]): PillStatus {
+  switch (status) {
+    case "indexed":
+    case "imported":
+      return "ready";
+    case "indexing":
+      return "processing";
+    case "processing":
+      return "reviewing";
+    case "partial":
+      return "warning";
+    case "failed":
+      return "failed";
+    case "missing":
+      return "missing";
+  }
+}
+
+function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
+  switch (status) {
+    case "indexed":
+      return "Indexed";
+    case "imported":
+      return "Imported";
+    case "indexing":
+      return "Indexing";
+    case "processing":
+      return "Processing";
+    case "partial":
+      return "Partial";
+    case "failed":
+      return "Failed";
+    case "missing":
+      return "Missing";
+  }
 }
 
 function IndexReadinessPanel({
@@ -1855,6 +2019,11 @@ function IndexReadinessPanel({
   const readyCount = tasks.filter((task) => task.status === "indexed" || task.status === "imported").length;
   const runningCount = tasks.filter((task) => task.status === "indexing" || task.status === "processing" || task.status === "partial").length;
   const activeIndexers = indexerConfig?.indexers.filter((indexer) => indexer.enabled) ?? [];
+  const complete = readyCount === tasks.length && tasks.length > 0;
+  const usable = ready || readyCount > 0;
+  const readinessLabel = complete ? "Complete" : usable ? "Usable" : runningCount > 0 ? "Indexing" : "Needs index";
+  const readinessStatus: PillStatus = complete ? "ready" : usable ? "warning" : runningCount > 0 ? "processing" : "missing";
+  const readinessProgress = tasks.length > 0 ? Math.round((readyCount / tasks.length) * 100) : 0;
   return (
     <Stack gap="4" className="p-3">
       <Inline justify="between" align="start" gap="2">
@@ -1869,10 +2038,29 @@ function IndexReadinessPanel({
             {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {runningCount > 0 ? `${runningCount} running` : "idle"}
           </span>
         </Stack>
-        <Pill status={ready ? "ready" : runningCount > 0 ? "processing" : "missing"} dot>
-          {ready ? "Ready" : runningCount > 0 ? "Indexing" : "Missing"}
+        <Pill status={readinessStatus} dot>
+          {readinessLabel}
         </Pill>
       </Inline>
+      <Stack gap="1">
+        <Inline justify="between" align="center">
+          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            Evidence coverage
+          </span>
+          <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+            {readinessProgress}%
+          </span>
+        </Inline>
+        <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+          <div
+            className="h-full rounded-full bg-[var(--color-warning)]"
+            style={{
+              width: `${readinessProgress}%`,
+              backgroundColor: complete ? "var(--color-brand)" : usable ? "var(--color-warning)" : "var(--color-processing)",
+            }}
+          />
+        </div>
+      </Stack>
       {structurePreview ? (
         <div className="grid grid-cols-2 gap-2">
           <Metric label="Duration" value={structurePreview.duration ?? "—"} />
@@ -1898,9 +2086,9 @@ function IndexReadinessPanel({
                 {task.detail ?? indexTaskDetail(task.status)}
               </span>
             </Stack>
-            <span className="shrink-0 rounded-full border border-[var(--color-border-subtle)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.04em] text-[var(--color-text-secondary)]">
-              {task.status}
-            </span>
+            <Pill status={mediaStatusPill(task.status)} dot={false} className="shrink-0">
+              {mediaStatusLabel(task.status)}
+            </Pill>
           </Inline>
         ))}
       </Stack>
@@ -1909,7 +2097,7 @@ function IndexReadinessPanel({
           Run indexers
         </Button>
         <Button variant="primary" onClick={onAskAgent} disabled={sourceCount === 0}>
-          Ask agent for first cut
+          {usable ? "Ask agent for first cut" : "Ask agent once media is added"}
         </Button>
       </Stack>
       {indexerConfig ? (
@@ -2154,10 +2342,10 @@ function Footer({ demoMode = false }: { demoMode?: boolean }) {
           style={{ backgroundColor: running ? "var(--color-warning)" : "var(--color-success)" }}
           aria-hidden
         />
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
+        <span className="shrink-0 text-[var(--text-body-sm)] font-semibold text-[var(--color-text-secondary)] font-mono">
           {running ? "Agent working" : "Agent online"}
         </span>
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
+        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
           Model: Awidat Pro 1.2
         </span>
         <span className="min-w-0 truncate text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
@@ -2165,10 +2353,10 @@ function Footer({ demoMode = false }: { demoMode?: boolean }) {
         </span>
       </Inline>
       <Inline gap="3" align="center" className="min-w-0 justify-end">
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
+        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
           Autosaved local ✓
         </span>
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
+        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
           Render queue {renderQueueLabel}
         </span>
         <span className="inline-flex h-3.5 shrink-0 items-end gap-0.5" aria-hidden>
@@ -2193,6 +2381,14 @@ function projectName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+function stemFromPath(path: string | undefined): string | null {
+  if (!path) return null;
+  const normalized = path.replace(/\\/g, "/");
+  const file = normalized.split("/").pop() ?? normalized;
+  const dot = file.lastIndexOf(".");
+  return dot > 0 ? file.slice(0, dot) : file;
+}
+
 function formatDuration(totalSeconds: number): string {
   const safe = Math.max(0, Math.floor(totalSeconds));
   const hours = Math.floor(safe / 3600);
@@ -2215,6 +2411,26 @@ function formatBytes(bytes: number): string {
   }
   const precision = unit === 0 || value >= 10 ? 0 : 1;
   return `${value.toFixed(precision)} ${units[unit]}`;
+}
+
+type IndexReadinessSnapshot = {
+  transcripts: boolean;
+  scenes: boolean;
+  audio: boolean;
+  face: boolean;
+  motion: boolean;
+  color: boolean;
+  silence: boolean;
+  speaker: boolean;
+  captions: boolean;
+  ready_count: number;
+};
+
+function indexTaskReady(
+  readiness: IndexReadinessSnapshot,
+  kind: IndexingTask["kind"],
+): boolean {
+  return readiness[kind];
 }
 
 function jobKindLabel(kind: string): string {
@@ -2300,18 +2516,42 @@ function activityFor(item: ActivitySourceItem): ActivityEntry {
     };
   }
   if (item.kind === "text") {
+    const text = item.text.trim();
     return {
       id,
       timestamp: shortTime(),
-      text: item.text.slice(0, 80),
+      text: text.length > 96 ? `${text.slice(0, 96)}...` : text,
       kind: "thought",
     };
   }
+  const status = summarizeJobStatus(item.status);
   return {
     id,
     timestamp: shortTime(),
-    text: `${item.job_kind} · ${item.status}`,
+    text: `${jobKindLabel(item.job_kind)} · ${status.summary}`,
+    detail: status.detail,
     kind: "result",
+  };
+}
+
+function summarizeJobStatus(status: string): { summary: string; detail?: string } {
+  const firstLine = status.split("\n").find((line) => line.trim().length > 0)?.trim() ?? status;
+  const failureCounts = firstLine.match(
+    /(\d+)\s+wrote,\s+(\d+)\s+skipped,\s+(\d+)\s+failed,\s+(\d+)\s+dep-skipped/,
+  );
+  if (failureCounts) {
+    const [, wrote, skipped, failed, depSkipped] = failureCounts;
+    return {
+      summary: `${wrote} wrote, ${failed} failed`,
+      detail: `${skipped} skipped, ${depSkipped} dependency-skipped. Open the Index panel for the failing indexers.`,
+    };
+  }
+  if (firstLine.length <= 120) {
+    return { summary: firstLine };
+  }
+  return {
+    summary: `${firstLine.slice(0, 96)}...`,
+    detail: firstLine.slice(96, 360),
   };
 }
 

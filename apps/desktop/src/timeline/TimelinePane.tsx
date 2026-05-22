@@ -257,6 +257,7 @@ function TimelineCanvas({
   // a multi-clip timeline these two axes diverge; with a single-clip
   // timeline they coincide for now (until trim shifts source_start_s).
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+  const refreshTimeline = useTimelineStore((s) => s.refresh);
   const proposal = useProposalStore((s) => s.active);
   // Cursor hint when hovering near a clip edge (without dragging).
   const [edgeHover, setEdgeHover] = useState<EdgeHit | null>(null);
@@ -727,6 +728,31 @@ function TimelineCanvas({
     setEdgeHover(null);
   }
 
+  function onDragOver(e: React.DragEvent<HTMLCanvasElement>) {
+    if (proposal) return;
+    if (e.dataTransfer.types.includes("application/x-awidat-media")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  async function onDrop(e: React.DragEvent<HTMLCanvasElement>) {
+    if (proposal) return;
+    const assetId = e.dataTransfer.getData("application/x-awidat-media");
+    if (!assetId) return;
+    e.preventDefault();
+    try {
+      await invoke<boolean>("insert_media_on_timeline", {
+        assetId,
+        atS: timeFromClientX(e.clientX),
+      });
+      await refreshTimeline();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("insert_media_on_timeline failed", err);
+    }
+  }
+
   // CSS cursor depending on state. ew-resize over an edge or while
   // dragging; col-resize (timeline scrub) elsewhere; default outside
   // the canvas. The cursor shows up on the canvas style; setting it
@@ -745,8 +771,8 @@ function TimelineCanvas({
     <div className="timeline-canvas-wrap" ref={containerRef}>
       {snapshot.tracks.length === 0 && (
         <div className="timeline-empty">
-          No clips on the timeline yet — ask the agent for an edit
-          ("trim filler", "cut to the punchline") and they'll show up here.
+          No clips on the timeline yet. Drag source media here, use
+          Add to timeline, or ask the agent for a first cut.
         </div>
       )}
       <canvas
@@ -758,6 +784,8 @@ function TimelineCanvas({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onPointerLeave={onPointerLeave}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
       />
       {userTrim && (
         <UserTrimTooltip drag={userTrim} pps={ppsRef.current} />

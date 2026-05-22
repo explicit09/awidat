@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::state::{AwidatState, MediaServerInner};
 
@@ -40,6 +40,51 @@ pub struct SourceMediaEntry {
     pub path: String,
     /// File size in bytes.
     pub size_bytes: u64,
+}
+
+/// Place a source media asset from the bin onto the timeline. This is
+/// the explicit editor path for "imported but not yet used" sources.
+#[tauri::command]
+pub async fn insert_media_on_timeline(
+    app: AppHandle,
+    state: State<'_, AwidatState>,
+    asset_id: String,
+    at_s: Option<f64>,
+) -> Result<bool, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    if asset_id.contains("..") || asset_id.starts_with('/') || asset_id.starts_with('\\') {
+        return Err("asset id must be project-relative".into());
+    }
+    let asset_path = project_root.join(&asset_id);
+    let requested = std::fs::canonicalize(&asset_path)
+        .map_err(|e| format!("source media does not exist: {e}"))?;
+    let raw_dir = std::fs::canonicalize(project_root.join("raw"))
+        .map_err(|e| format!("raw/ is not available: {e}"))?;
+    if !requested.starts_with(&raw_dir) || !is_preview_media_file(&requested) {
+        return Err("asset is not a source media file in this project's raw/ directory".into());
+    }
+
+    let probe = awidat_render::probe_media(&requested)
+        .await
+        .map_err(|e| format!("probe source media: {e}"))?;
+    let inserted = match at_s {
+        Some(at_s) => {
+            crate::commands::auto_insert::insert_media_at(&project_root, &requested, &probe, at_s)
+                .await?
+        }
+        None => {
+            crate::commands::auto_insert::append_media(&project_root, &requested, &probe).await?
+        }
+    };
+    if inserted {
+        crate::events::emit_timeline_changed(&app, &project_root);
+    }
+    Ok(inserted)
 }
 
 /// Return every source media file currently sitting under

@@ -40,7 +40,9 @@ import {
 
 export type IndexingMediaItem = {
   id: string;
+  assetId?: string;
   title: string;
+  stem?: string;
   detail?: string;
   status: MediaIndexingStatus;
   progress?: number;
