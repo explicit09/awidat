@@ -118,6 +118,20 @@ pub fn flatten_timeline_public(
                     let proxy_path = asset_id.as_deref().and_then(|aid| {
                         crate::commands::media::proxy_path_for_asset_id(project_root, aid)
                     });
+                    // Resolve the path the player should actually feed
+                    // to <video src>. Falls back to the source asset
+                    // when no proxy is ready so playback never blocks
+                    // on a pending transcode.
+                    let playable = asset_id.as_deref().map(|aid| {
+                        crate::commands::playable::playable_for_asset_id(project_root, aid)
+                    });
+                    let playable_path = playable
+                        .as_ref()
+                        .and_then(|p| p.path.as_ref().map(|pb| pb.to_string_lossy().into_owned()));
+                    let playable_kind = playable
+                        .as_ref()
+                        .map(|p| p.kind)
+                        .unwrap_or(awidat_desktop_protocol::PlayableKind::Missing);
                     // Thumbnails dir: `None` while the post-import
                     // [`JobKind::Thumbnails`] job is still pending.
                     let thumbnail_dir = asset_id.as_deref().and_then(|aid| {
@@ -289,6 +303,8 @@ pub fn flatten_timeline_public(
                         asset_id,
                         source_start_s,
                         proxy_path,
+                        playable_path,
+                        playable_kind,
                         thumbnail_dir,
                         waveform_path,
                         volume,
@@ -1042,5 +1058,42 @@ mod tests {
             .insert("clip_uuid".to_string(), serde_json::json!(uuid));
         clip.metadata.awidat = Some(metadata);
         clip
+    }
+
+    #[test]
+    fn flatten_assigns_playable_source_when_proxy_missing() {
+        use awidat_desktop_protocol::PlayableKind;
+
+        let tmp = tempfile::tempdir().unwrap();
+        // Write the source file so playable_for_asset_id finds it.
+        let raw_dir = tmp.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        std::fs::write(raw_dir.join("test.mov"), b"fake").unwrap();
+
+        let mut timeline = Timeline::empty("playable-test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut clip = Clip::empty("test-clip".to_string());
+        clip.media_reference =
+            MediaReference::External(ExternalReference::new("raw/test.mov"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(clip));
+        timeline.tracks.children.push(StackChild::Track(track));
+
+        let snapshot = flatten_timeline_public(&timeline, tmp.path());
+
+        let TimelineItem::Clip {
+            playable_path,
+            playable_kind,
+            ..
+        } = &snapshot.tracks[0].items[0]
+        else {
+            panic!("expected a Clip item");
+        };
+
+        assert_eq!(*playable_kind, PlayableKind::Source);
+        assert!(playable_path.is_some());
     }
 }
