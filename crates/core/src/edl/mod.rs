@@ -12,13 +12,16 @@
 pub mod anchor;
 pub mod apply;
 pub mod bundle;
+pub mod intent;
 pub mod op;
 pub mod parser;
 
 pub use anchor::{AnchorContext, AnchorMiss, ClipLocator, resolve};
 pub use apply::{AppliedOp, ApplyError, ApplyOutcome, apply};
 pub use bundle::{DEFAULT_DISSOLVE_S, bundle_with_dissolve, envelope_needs_continuity_check};
+pub use intent::{EditorialCommand, EditorialIntent, EditorialIntentResolver};
 pub use op::{
-    Anchor, BRollPosition, EdlEnvelope, EdlOp, InsertTrackKind, PiPCorner, TransitionBetween,
+    Anchor, BRollPosition, EdlEnvelope, EdlOp, InsertTrackKind, PiPCorner,
+    ProfessionalTimelineEdit, TransitionBetween,
 };
 pub use parser::{EdlParseError, parse};
