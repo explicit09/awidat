@@ -239,6 +239,29 @@ def _regions_from_sidecars(
     ]
 
 
+def _verify_regions(regions: list[dict[str, Any]]) -> dict[str, Any]:
+    issues: list[str] = []
+    previous_end: float | None = None
+    for index, region in enumerate(regions):
+        start_s = float(region.get("start_s", region.get("start", 0.0)))
+        end_s = float(region.get("end_s", region.get("end", start_s)))
+        if not (start_s < end_s and start_s >= 0.0):
+            issues.append(f"region {index} has non-positive or non-finite range")
+        if previous_end is not None and start_s < previous_end:
+            issues.append(f"region {index} overlaps the previous region")
+        previous_end = end_s
+        confidence = region.get("composition_confidence")
+        if confidence is None or not (0.0 <= float(confidence) <= 1.0):
+            issues.append(f"region {index} composition_confidence is outside 0..=1")
+        if not str(region.get("composition_source", "")).strip():
+            issues.append(f"region {index} missing composition_source")
+    return {
+        "passed": not issues,
+        "checked_regions": len(regions),
+        "issues": issues,
+    }
+
+
 def _handle(req: IndexAssetRequest) -> dict[str, Any]:
     project_root = _project_root_from(req.asset_path)
     scenes_doc = _read_sidecar(project_root, "scenedetect", req.asset_id)
@@ -267,6 +290,7 @@ def _handle(req: IndexAssetRequest) -> dict[str, Any]:
     )
     return {
         "regions": regions,
+        "verification": _verify_regions(regions),
         "depends_on": ["scenedetect", "face", "gaze", "composition-model"],
     }
 
