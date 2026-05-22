@@ -892,6 +892,28 @@ button {
   margin-bottom: 10px;
 }
 
+.approval-capabilities {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+
+.approval-capabilities div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.approval-capabilities dt {
+  color: var(--text-muted);
+}
+
+.approval-capabilities dd {
+  margin: 0;
+  color: var(--text);
+}
+
 .approval-actions {
   display: flex;
   gap: 8px;

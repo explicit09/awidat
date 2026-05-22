@@ -168,6 +168,10 @@ pub enum Item {
         /// Short caller-built summary of the args. Full args stay on the
         /// matching ToolCall item; this is the user-facing one-liner.
         args_summary: String,
+        /// Typed capability metadata for this approval. Kept as JSON so the
+        /// desktop protocol does not depend on core internals.
+        #[ts(type = "unknown")]
+        capability_metadata: serde_json::Value,
     },
     /// A turn-fatal error from the agent loop. Renders as a banner /
     /// red card. The turn ends after emitting this.
@@ -1528,6 +1532,45 @@ mod tests {
                 assert!(result.is_none());
             }
             _ => panic!("expected Item::ToolCall"),
+        }
+    }
+
+    #[test]
+    fn item_approval_request_roundtrips_capability_metadata() {
+        let item = Item::ApprovalRequest {
+            id: Id::new("approval-1"),
+            phase: ItemLifecycle::Started,
+            tool_name: "start_render".into(),
+            args_summary: "{\"output\":\"out.mp4\"}".into(),
+            capability_metadata: serde_json::json!({
+                "graph_mutates": false,
+                "preview_supported": "not_supported",
+                "export_supported": "supported",
+                "required_indexes": [],
+                "approval_required": true,
+                "side_effects": ["starts an ffmpeg render job", "writes render output files"],
+                "known_limitations": []
+            }),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        let back: Item = serde_json::from_str(&json).unwrap();
+        match back {
+            Item::ApprovalRequest {
+                tool_name,
+                capability_metadata,
+                ..
+            } => {
+                assert_eq!(tool_name, "start_render");
+                assert_eq!(capability_metadata["export_supported"], "supported");
+                assert_eq!(
+                    capability_metadata["side_effects"],
+                    serde_json::json!([
+                        "starts an ffmpeg render job",
+                        "writes render output files"
+                    ])
+                );
+            }
+            _ => panic!("expected Item::ApprovalRequest"),
         }
     }
 

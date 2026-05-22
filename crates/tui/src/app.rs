@@ -1028,6 +1028,7 @@ mod tests {
             operation_keys: vec![],
             retry_reason: None,
             args_full: serde_json::Value::Null,
+            capability_metadata: awidat_core::CapabilityMetadata::tool_default(true),
             reply: tx,
         };
         let mutated = app.handle_event(AppEvent::Approval(req));
@@ -1052,6 +1053,7 @@ mod tests {
             operation_keys: vec![],
             retry_reason: None,
             args_full: serde_json::Value::Null,
+            capability_metadata: awidat_core::CapabilityMetadata::tool_default(true),
             reply: tx,
         };
         app.handle_event(AppEvent::Approval(req));
@@ -1075,6 +1077,7 @@ mod tests {
             operation_keys: vec![],
             retry_reason: None,
             args_full: serde_json::Value::Null,
+            capability_metadata: awidat_core::CapabilityMetadata::tool_default(true),
             reply: tx,
         };
         app.handle_event(AppEvent::Approval(req));
@@ -1096,6 +1099,7 @@ mod tests {
             operation_keys: vec![],
             retry_reason: None,
             args_full: serde_json::Value::Null,
+            capability_metadata: awidat_core::CapabilityMetadata::tool_default(true),
             reply: tx,
         };
         app.handle_event(AppEvent::Approval(req));
@@ -1115,6 +1119,7 @@ mod tests {
             operation_keys: vec![],
             retry_reason: None,
             args_full: serde_json::Value::Null,
+            capability_metadata: awidat_core::CapabilityMetadata::tool_default(true),
             reply: tx,
         };
         app.handle_event(AppEvent::Approval(req));
