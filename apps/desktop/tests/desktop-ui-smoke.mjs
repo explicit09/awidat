@@ -229,7 +229,7 @@ await check("top chrome matches Screen 2 app model", async () => {
   await page.close();
 });
 
-await check("workflow lens row exposes all 9 lenses", async () => {
+await check("workflow lens row exposes the reduced agent-first lenses", async () => {
   const { page } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   const lensNames = await page.locator('nav button[role="tab"]').allTextContents();
@@ -237,7 +237,6 @@ await check("workflow lens row exposes all 9 lenses", async () => {
     "Import",
     "Index",
     "Selects",
-    "Assembly",
     "Review",
     "Captions",
     "Audio",
@@ -246,6 +245,7 @@ await check("workflow lens row exposes all 9 lenses", async () => {
   ]) {
     assert.ok(lensNames.some((s) => s.includes(expected)), `lens "${expected}" missing`);
   }
+  assert.ok(!lensNames.some((s) => s.includes("Assembly")), "Assembly should be folded into Proposal/Review");
   await page.close();
 });
 

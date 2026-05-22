@@ -1,7 +1,6 @@
 import {
   AudioWaveform,
   BadgeCheck,
-  Blocks,
   Captions,
   Database,
   Eye,
@@ -17,13 +16,12 @@ import { cn } from "../ui";
  * Lens icons mapped from the canonical design spec §7.
  *
  * Lenses are the *working surface* the user is in — they're navigation, not state.
- * Selects/Assembly use Lucide icons that match the spec's recommendations.
+ * Assembly is folded into Proposal/Review because rough-cut assembly is agent work.
  */
 const LENS_ICON: Record<Lens, LucideIcon> = {
   import: Import,
   index: Database,
   selects: BadgeCheck,
-  assembly: Blocks,
   review: Eye,
   captions: Captions,
   audio: AudioWaveform,

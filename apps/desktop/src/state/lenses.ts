@@ -1,10 +1,13 @@
 /**
- * Workflow lenses — the nine working surfaces from the design spec:
- *   Import · Index · Selects · Assembly · Review · Captions · Audio · Color · Delivery.
+ * Workflow lenses — the human-facing working surfaces:
+ *   Import · Index · Selects · Review · Captions · Audio · Color · Delivery.
  *
  * A lens represents *which view the user is working in*. It is navigation, not state.
  * Stages (see ./stages.ts) and lenses are orthogonal — a user can be in the Proposal
  * stage viewing the Review lens, or in the Deliver stage viewing the Color lens, etc.
+ *
+ * Assembly is intentionally not a top-level lens: in an agent-first editor, building
+ * the rough cut is agent work surfaced inside Proposal/Review.
  */
 
 import { create } from "zustand";
@@ -13,7 +16,6 @@ export const LENSES = [
   "import",
   "index",
   "selects",
-  "assembly",
   "review",
   "captions",
   "audio",
@@ -26,7 +28,6 @@ export const LENS_LABEL: Record<Lens, string> = {
   import: "Import",
   index: "Index",
   selects: "Selects",
-  assembly: "Assembly",
   review: "Review",
   captions: "Captions",
   audio: "Audio",

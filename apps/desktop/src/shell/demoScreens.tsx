@@ -980,8 +980,8 @@ function ProductConceptBoard() {
             <span className="text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">Workflow lenses</span>
             <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">Review active</span>
           </Inline>
-          <div className="grid grid-cols-9 gap-1.5">
-            {["Import", "Index", "Selects", "Assembly", "Review", "Captions", "Audio", "Color", "Delivery"].map((lens) => (
+          <div className="grid grid-cols-8 gap-1.5">
+            {["Import", "Index", "Selects", "Review", "Captions", "Audio", "Color", "Delivery"].map((lens) => (
               <div
                 key={lens}
                 className="rounded-[var(--radius-sm)] border px-2 py-1 text-center text-[10px] font-semibold"
