@@ -8,7 +8,6 @@
 // composer must not accidentally accept a pending proposal.
 
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useProposalStore } from "./proposal";
 import { Tooltip } from "../components/ui/Tooltip";
 import {
@@ -17,6 +16,7 @@ import {
   PopoverTrigger,
 } from "../components/ui/Popover";
 import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
+import { editorDispatch } from "../editor/tauriDispatch";
 
 export function ProposalActions() {
   const proposal = useProposalStore((s) => s.active);
@@ -68,7 +68,7 @@ export function ProposalActions() {
     setError(null);
     setBusy(true);
     try {
-      await invoke("accept_proposal", { callId: proposal.callId });
+      await editorDispatch.acceptProposal(proposal.callId);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -81,7 +81,7 @@ export function ProposalActions() {
     setError(null);
     setBusy(true);
     try {
-      await invoke("reject_proposal", { callId: proposal.callId });
+      await editorDispatch.rejectProposal(proposal.callId);
     } catch (e) {
       setError(String(e));
     } finally {

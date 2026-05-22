@@ -22,6 +22,7 @@ import { useNotesStore } from "../notes/store";
 import { type SelectedClipKey, useTimelineSelectionStore } from "../properties/store";
 import { isProposedEditItem, useProposalStore } from "../timeline/proposal";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
+import { editorDispatch } from "../editor/tauriDispatch";
 import { useTimelineStore } from "../timeline/store";
 import {
   MENU_COMMANDS,
@@ -150,16 +151,16 @@ export function useAppGlue() {
       } else if (id === MENU_COMMANDS.DELETE_CLIP && current && !activeProposal) {
         const edlText = buildDeleteSelectionEdl(timelineSnapshot, selectedClipKey);
         if (edlText) {
-          invoke<string>("propose_user_edit", { edlText })
+          editorDispatch.proposeUserEditText(edlText)
             .then(() => clearSelection())
             .catch((e) => console.warn("propose_user_edit (delete selection) failed", e));
         }
       } else if (id === MENU_COMMANDS.ACCEPT_PROPOSAL && activeProposal) {
-        invoke("accept_proposal", { callId: activeProposal.callId }).catch((e) =>
+        editorDispatch.acceptProposal(activeProposal.callId).catch((e) =>
           console.warn("accept_proposal failed", e),
         );
       } else if (id === MENU_COMMANDS.REJECT_PROPOSAL && activeProposal) {
-        invoke("reject_proposal", { callId: activeProposal.callId }).catch((e) =>
+        editorDispatch.rejectProposal(activeProposal.callId).catch((e) =>
           console.warn("reject_proposal failed", e),
         );
       } else if (id === MENU_COMMANDS.TIMELINE_ZOOM_IN) {

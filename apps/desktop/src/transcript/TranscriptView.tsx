@@ -18,7 +18,6 @@
 // select + delete-range lands in 6.7.
 
 import { useEffect, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranscriptStore } from "./store";
 import { useMediaStore } from "../media/store";
@@ -29,7 +28,8 @@ import {
   timelineTimeForSource,
   usePlaySegments,
 } from "../timeline/usePlaySegments";
-import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
+import type { EdlOp } from "../timeline/edlBuilder";
+import { editorDispatch } from "../editor/tauriDispatch";
 import type {
   Transcript,
   TranscriptSegment,
@@ -343,8 +343,7 @@ function LoadedTranscript({
         );
         return;
       }
-      const edl = serializeEdl(ops);
-      invoke<string>("propose_user_edit", { edlText: edl }).catch(
+      editorDispatch.proposeUserEdit(ops).catch(
         (err: unknown) => {
           // eslint-disable-next-line no-console
           console.warn("propose_user_edit (transcript delete) failed", err);

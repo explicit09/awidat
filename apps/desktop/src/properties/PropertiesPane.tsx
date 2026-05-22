@@ -8,13 +8,13 @@
 // Future Step 16 grows a Title editor into this same pane.
 
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useTimelineStore } from "../timeline/store";
 import type { TimelineItem, TimelineTrack } from "../timeline/store";
 import { useTimelineSelectionStore } from "./store";
 import { useMediaStore } from "../media/store";
-import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
+import type { EdlOp } from "../timeline/edlBuilder";
 import { MotionAnimationControl } from "./MotionAnimationControl";
+import { editorDispatch } from "../editor/tauriDispatch";
 
 /** Default values when a clip carries no awidat.volume / awidat.speed effect.
  *  Surface as "1.0" so the slider/input shows unity rather than empty. */
@@ -149,7 +149,7 @@ export function PropertiesPane() {
         anchor: { kind: "clip_uuid", uuid: clip.clip_uuid },
       }));
     if (ops.length === 0) return;
-    await invoke<string>("propose_user_edit", { edlText: serializeEdl(ops) });
+    await editorDispatch.proposeUserEdit(ops);
     clearSelection();
   };
 
@@ -407,9 +407,7 @@ function TransitionEditor({
       inOffsetS: inOffset,
       outOffsetS: outOffset,
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (transition edit) failed", err);
     });
@@ -422,9 +420,7 @@ function TransitionEditor({
       from: { kind: "clip_uuid", uuid: adjacent.from.clip_uuid },
       to: { kind: "clip_uuid", uuid: adjacent.to.clip_uuid },
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    })
+    editorDispatch.proposeUserEdit([op])
       .then(() => clearSelection())
       .catch((err) => {
         // eslint-disable-next-line no-console
@@ -697,9 +693,7 @@ function TitleEditor({
         fontWeight,
         animation,
       };
-      invoke<string>("propose_user_edit", {
-        edlText: serializeEdl([op]),
-      }).catch((err) => {
+      editorDispatch.proposeUserEdit([op]).catch((err) => {
         // eslint-disable-next-line no-console
         console.warn("propose_user_edit (set_title) failed", err);
       });
@@ -847,9 +841,7 @@ function CutBoundaryField({
       confidence: boundary.confidence ?? 1,
       reason,
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (cut intent) failed", err);
     });
@@ -872,9 +864,7 @@ function CutBoundaryField({
             reason: "inspector alternative: use an L-cut instead of a visible transition",
             confidence: boundary.confidence ?? 1,
           };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (split alternative) failed", err);
     });
@@ -987,9 +977,7 @@ function SplitEditControl({
       kind === "lead"
         ? { kind: "set_audio_lead", leadS: value, ...shared }
         : { kind: "set_audio_trail", trailS: value, ...shared };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (split edit) failed", err);
     });
@@ -1080,9 +1068,7 @@ function VolumeControl({
       anchor: { kind: "clip_uuid", uuid: clipUuid },
       value: local,
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (set_volume) failed", err);
     });
@@ -1143,9 +1129,7 @@ function AudioFadeControl({
       fadeInS: Math.max(0, localIn),
       fadeOutS: Math.max(0, localOut),
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (set_audio_fade) failed", err);
     });
@@ -1239,9 +1223,7 @@ function TrackAudioControl({
         releaseMs: 300,
       });
     }
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl(ops),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit(ops).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (set_track_audio) failed", err);
     });
@@ -1360,9 +1342,7 @@ function SpeedControl({
       anchor: { kind: "clip_uuid", uuid: clipUuid },
       factor: local,
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (set_speed) failed", err);
     });
@@ -1469,9 +1449,7 @@ function ColorCorrectionControl({
       shadows: local.shadows,
       highlights: local.highlights,
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (set_color_correction) failed", err);
     });
@@ -1623,9 +1601,7 @@ function LutControl({
       anchor: { kind: "clip_uuid", uuid: clipUuid },
       lutPath: trimmed,
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (apply_lut) failed", err);
     });
@@ -1638,9 +1614,7 @@ function LutControl({
       kind: "remove_lut",
       anchor: { kind: "clip_uuid", uuid: clipUuid },
     };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
+    editorDispatch.proposeUserEdit([op]).catch((err) => {
       // eslint-disable-next-line no-console
       console.warn("propose_user_edit (remove_lut) failed", err);
     });

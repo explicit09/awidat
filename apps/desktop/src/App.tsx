@@ -59,6 +59,7 @@ import { useAppGlue } from "./state/appGlue";
 import { useProposalInspectorData } from "./state/proposalAdapter";
 import { useTimelineStore } from "./timeline/store";
 import { useProposalStore } from "./timeline/proposal";
+import { editorDispatch } from "./editor/tauriDispatch";
 import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
 import type { JobKind, TimelineSnapshot, Transcript } from "./protocol";
 import {
@@ -303,7 +304,7 @@ function App() {
     const commandTargets = realBatchProposals.slice();
     await Promise.all(
       commandTargets.map((proposal) =>
-        invoke("accept_proposal", { callId: proposal.id }).catch((e) =>
+        editorDispatch.acceptProposal(proposal.id).catch((e) =>
           console.warn("accept_proposal failed", e),
         ),
       ),
@@ -315,7 +316,7 @@ function App() {
     const commandTargets = realBatchProposals.slice();
     await Promise.all(
       commandTargets.map((proposal) =>
-        invoke("reject_proposal", { callId: proposal.id }).catch((e) =>
+        editorDispatch.rejectProposal(proposal.id).catch((e) =>
           console.warn("reject_proposal failed", e),
         ),
       ),
@@ -406,14 +407,14 @@ function App() {
 
   function acceptActiveProposal() {
     if (!isTauri() || !activeProposal) return;
-    invoke("accept_proposal", { callId: activeProposal.callId }).catch((e) =>
+    editorDispatch.acceptProposal(activeProposal.callId).catch((e) =>
       console.warn("accept_proposal failed", e),
     );
   }
 
   function rejectActiveProposal() {
     if (!isTauri() || !activeProposal) return;
-    invoke("reject_proposal", { callId: activeProposal.callId }).catch((e) =>
+    editorDispatch.rejectProposal(activeProposal.callId).catch((e) =>
       console.warn("reject_proposal failed", e),
     );
   }
@@ -942,13 +943,13 @@ function App() {
         }}
         onAcceptOne={(proposal) => {
           if (!isTauri()) return;
-          invoke("accept_proposal", { callId: proposal.id }).catch((e) =>
+          editorDispatch.acceptProposal(proposal.id).catch((e) =>
             console.warn("accept_proposal failed", e),
           );
         }}
         onRejectOne={(proposal) => {
           if (!isTauri()) return;
-          invoke("reject_proposal", { callId: proposal.id }).catch((e) =>
+          editorDispatch.rejectProposal(proposal.id).catch((e) =>
             console.warn("reject_proposal failed", e),
           );
         }}

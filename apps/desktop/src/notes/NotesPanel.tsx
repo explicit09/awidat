@@ -15,12 +15,12 @@
 // anchor_at_s.
 
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { useNotesStore, type DismissalBucket, type Note } from "./store";
 import { useProjectStore } from "../app/state";
 import { useMediaStore } from "../media/store";
 import type { EditorialNoteKind } from "../protocol";
 import { BrollNoteCard } from "./BrollNoteCard";
+import { editorDispatch } from "../editor/tauriDispatch";
 
 /** Cap on visible open notes before the panel collapses tail
  *  entries behind a "show all" affordance. Long podcasts can
@@ -171,9 +171,7 @@ function NoteCard({
     if (!note.suggestedProposal) return;
     setBusy(true);
     try {
-      await invoke<string>("propose_user_edit", {
-        edlText: note.suggestedProposal,
-      });
+      await editorDispatch.proposeUserEditText(note.suggestedProposal);
       // The agent loop will fire an EditorialNote re-emit on
       // proposal acceptance to mark it resolved; in the meantime
       // we leave the note open. Worst case the user clicks
