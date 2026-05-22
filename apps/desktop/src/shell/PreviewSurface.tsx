@@ -133,28 +133,29 @@ export function PreviewSurface({
   return (
     <Stack gap="0" className="h-full w-full bg-[var(--color-surface-app)]">
       {/* Header */}
-      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 px-4 h-12 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] shrink-0">
-        <Inline gap="3" align="center">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-3 h-11 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] shrink-0">
+        <Inline gap="2" align="center" className="min-w-0 overflow-hidden">
           <button
             type="button"
             onClick={onOpenProposalMenu}
-            className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-card)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border)] transition-colors"
+            className="inline-flex min-w-0 items-center gap-1.5 h-7 px-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-card)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border)] transition-colors"
+            title={proposalName}
           >
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+            <span className="shrink-0 text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
               Proposal
             </span>
-            <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
+            <span className="min-w-0 truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
               {proposalName}
             </span>
-            <ChevronDown className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-text-muted)]" />
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 stroke-[1.75] text-[var(--color-text-muted)]" />
           </button>
           {pendingCount > 0 ? (
-            <Pill status="warning">{pendingCount} pending changes</Pill>
+            <Pill status="warning" className="shrink-0">{pendingCount} pending changes</Pill>
           ) : null}
         </Inline>
-        <Inline gap="2" align="center">
+        <Inline gap="2" align="center" className="shrink-0">
           <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-            View
+            Mode
           </span>
           <ViewModeToggle value={viewMode} onChange={onSetViewMode} />
         </Inline>
@@ -409,7 +410,7 @@ function ViewModeToggle({
           onClick={() => onChange?.(opt.key)}
           aria-pressed={value === opt.key}
           className={cn(
-            "h-6 px-2.5 rounded-[var(--radius-xs)] text-[var(--text-caption)] font-medium transition-colors",
+            "h-6 px-2 rounded-[var(--radius-xs)] text-[var(--text-caption)] font-medium transition-colors",
             value === opt.key
               ? "bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
               : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",

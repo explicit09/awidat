@@ -85,11 +85,11 @@ export function MediaStatusRow({
         </span>
       ) : null}
       <Stack gap="1" className="min-w-0 flex-1">
-        <span className="text-[var(--text-body)] font-medium text-[var(--color-text-primary)] truncate">
+        <span className="text-[var(--text-body)] font-medium text-[var(--color-text-primary)] truncate" title={title}>
           {title}
         </span>
         {detail ? (
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] truncate">{detail}</span>
+          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] truncate" title={detail}>{detail}</span>
         ) : null}
         {typeof progress === "number" ? (
           <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-[var(--color-surface-input)]">
@@ -100,7 +100,7 @@ export function MediaStatusRow({
           </div>
         ) : null}
       </Stack>
-      <Inline gap="2" align="center" className="shrink-0">
+      <Inline gap="2" align="center" className="shrink-0 max-w-[45%]">
         {meta}
         <Pill status={PILL_FOR[status]}>{LABEL[status]}</Pill>
       </Inline>

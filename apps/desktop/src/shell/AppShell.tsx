@@ -80,7 +80,7 @@ export function AppShell({
               : "grid-cols-[var(--layout-rail-w)_minmax(0,1fr)_var(--layout-inspector-w)]",
           )}
         >
-          <aside className="panel min-h-0 overflow-y-auto">
+          <aside className="panel min-h-0 overflow-hidden">
             {commandRail ?? <RegionPlaceholder label="Agent / Command Rail · Phase 2.4" />}
           </aside>
           <main

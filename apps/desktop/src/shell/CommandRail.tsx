@@ -7,6 +7,7 @@ import {
   SendHorizontal,
   Sparkles,
   Terminal,
+  X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
@@ -40,6 +41,7 @@ export type ActivityEntry = {
   id: string;
   timestamp: string;
   text: string;
+  detail?: string;
   kind?: "tool" | "thought" | "result";
 };
 
@@ -92,18 +94,23 @@ export function CommandRail({
 }: CommandRailProps) {
   const [draft, setDraft] = useState(initialDraft);
   const [activityOpen, setActivityOpen] = useState(false);
+  const trimmedDraft = draft.trim();
+  const sendDisabledReason = !hasProject
+    ? "Open a project before sending commands."
+    : trimmedDraft.length === 0
+      ? "Type a command to enable Send."
+      : undefined;
 
   function submit() {
-    const trimmed = draft.trim();
-    if (!trimmed || !hasProject) return;
-    onSubmit?.(trimmed);
+    if (!trimmedDraft || !hasProject) return;
+    onSubmit?.(trimmedDraft);
     setDraft("");
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Composer */}
-      <div className="p-3 border-b border-[var(--color-border-subtle)]">
+      <div className="shrink-0 p-3 border-b border-[var(--color-border-subtle)]">
         <Stack gap="3">
           <Inline gap="2" align="center">
             <Terminal className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand-secondary)]" />
@@ -134,9 +141,15 @@ export function CommandRail({
                 "outline-none disabled:cursor-not-allowed disabled:opacity-50",
               )}
             />
-            <Inline justify="between" align="center" className="px-2 py-1.5 border-t border-[var(--color-border-subtle)]">
-              <span className="text-[var(--text-micro)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-                ⌘↩ to send
+            <Inline justify="between" align="center" gap="2" className="px-2 py-1.5 border-t border-[var(--color-border-subtle)]">
+              <span
+                className={cn(
+                  "min-w-0 truncate text-[var(--text-micro)] font-semibold",
+                  sendDisabledReason ? "text-[var(--color-text-muted)]" : "text-[var(--color-text-secondary)]",
+                )}
+                title={sendDisabledReason ?? "Command-Enter sends the command."}
+              >
+                {sendDisabledReason ?? "⌘↩ sends"}
               </span>
               {running ? (
                 <Button
@@ -151,9 +164,10 @@ export function CommandRail({
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={!hasProject || draft.trim().length === 0}
+                  disabled={Boolean(sendDisabledReason)}
                   onClick={submit}
                   trailingIcon={<SendHorizontal className="h-3.5 w-3.5 stroke-[1.75]" />}
+                  title={sendDisabledReason}
                 >
                   Send
                 </Button>
@@ -161,29 +175,31 @@ export function CommandRail({
             </Inline>
           </div>
           {contextChips.length > 0 ? (
-            <Inline gap="1" wrap="wrap">
+            <div className="flex min-w-0 flex-col gap-1">
               {contextChips.map((chip, i) => (
                 <button
                   key={`${chip.label}-${i}`}
                   type="button"
                   onClick={() => onRemoveChip?.(chip, i)}
                   className={cn(
-                    "inline-flex items-center gap-1 h-5 px-1.5 rounded-[var(--radius-xs)] border text-[var(--text-caption)] hover:text-[var(--color-text-primary)] transition-colors",
+                    "flex min-h-5 w-full min-w-0 items-center gap-1 rounded-[var(--radius-xs)] border px-1.5 py-0.5 text-left text-[var(--text-caption)] hover:text-[var(--color-text-primary)] transition-colors",
                     contextChipClass(chip.kind),
                   )}
                   aria-label={`Remove ${chip.label}`}
+                  title={`Remove ${chip.label}`}
                 >
-                  <Paperclip className="h-3 w-3 stroke-[1.75]" />
-                  <span>{chip.label}</span>
+                  <Paperclip className="h-3 w-3 shrink-0 stroke-[1.75]" />
+                  <span className="min-w-0 flex-1 truncate">{chip.label}</span>
+                  {onRemoveChip ? <X className="h-3 w-3 shrink-0 stroke-[1.75] opacity-70" /> : null}
                 </button>
               ))}
-            </Inline>
+            </div>
           ) : null}
         </Stack>
       </div>
 
       {/* Scroll region: plan, progress, activity, suggestions */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <Stack gap="3">
           {/* Task progress */}
           {taskProgress ? (
@@ -263,11 +279,26 @@ export function CommandRail({
                 </span>
               </button>
               {activityOpen ? (
-                <Stack gap="1" className="mt-2">
+                <Stack gap="1" className="mt-2 max-h-[360px] overflow-y-auto pr-1">
                   {activity.map((a) => (
-                    <div key={a.id} className="flex items-baseline gap-2 text-[var(--text-caption)]">
-                      <span className="font-mono text-[var(--color-text-muted)] shrink-0">{a.timestamp}</span>
-                      <span className="text-[var(--color-text-secondary)] leading-snug">{a.text}</span>
+                    <div
+                      key={a.id}
+                      className={cn(
+                        "rounded-[var(--radius-sm)] border px-2 py-1.5 text-[var(--text-caption)]",
+                        a.kind === "thought"
+                          ? "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)]"
+                          : "border-transparent bg-transparent",
+                      )}
+                    >
+                      <div className="flex min-w-0 items-baseline gap-2">
+                        <span className="shrink-0 font-mono text-[var(--color-text-muted)]">{a.timestamp}</span>
+                        <span className="min-w-0 truncate text-[var(--color-text-secondary)] leading-snug">{a.text}</span>
+                      </div>
+                      {a.detail ? (
+                        <p className="mt-1 line-clamp-3 pl-[3.25rem] leading-snug text-[var(--color-text-muted)]">
+                          {a.detail}
+                        </p>
+                      ) : null}
                     </div>
                   ))}
                 </Stack>
@@ -356,26 +387,22 @@ function PlanRow({ step }: { step: PlanItem }) {
 
 function EmptyState() {
   return (
-    <Stack gap="3" className="text-[var(--color-text-muted)] mt-2">
+    <Stack gap="2" className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2.5 text-[var(--color-text-muted)]">
       <span className="text-[var(--text-caption)] leading-relaxed">
-        Awidat works from your intent. Type a goal — “Cut this into a tight 8-minute podcast”, “Find 5 short clips for TikTok”, “Remove dead air but keep pacing” — and the agent will index, propose, and explain.
+        Type an editing goal and Awidat will use the attached project, clip, and timeline context.
       </span>
       <Divider />
-      <span className="text-[var(--text-micro)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold">
-        Examples
-      </span>
-      <Stack gap="1">
+      <div className="grid gap-1">
         {[
-          "Show me why you made this cut.",
+          "Show why this cut was made.",
           "Make this section slower.",
           "Replace this b-roll.",
-          "Keep that pause.",
         ].map((s) => (
           <span key={s} className="text-[var(--text-caption)] text-[var(--color-text-secondary)] leading-snug">
             · {s}
           </span>
         ))}
-      </Stack>
+      </div>
     </Stack>
   );
 }

@@ -3,6 +3,7 @@
 //! [`Item::Job`] (kind = `Indexing`) that streams percent + status
 //! as pairs complete.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use awidat_config::Config;
@@ -10,6 +11,7 @@ use awidat_desktop_protocol::{Id, JobKind};
 use awidat_index::{AssetInput, IndexProgress, PairOutcome, ProgressCallback};
 use awidat_mcp::ClientInfo;
 use awidat_proto::index::AssetId;
+use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -23,6 +25,35 @@ use crate::state::{AwidatState, JobHandle};
 #[tauri::command]
 pub async fn index_project(app: AppHandle, state: State<'_, AwidatState>) -> Result<(), String> {
     index_project_inner(&app, &state).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexReadinessSnapshot {
+    pub transcripts: bool,
+    pub scenes: bool,
+    pub audio: bool,
+    pub face: bool,
+    pub motion: bool,
+    pub color: bool,
+    pub silence: bool,
+    pub speaker: bool,
+    pub captions: bool,
+    pub ready_count: usize,
+}
+
+#[tauri::command]
+pub async fn index_readiness(
+    state: State<'_, AwidatState>,
+) -> Result<IndexReadinessSnapshot, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    tokio::task::spawn_blocking(move || compute_index_readiness_at(&project_root))
+        .await
+        .map_err(|e| format!("index readiness join: {e}"))
 }
 
 /// Run every configured indexer over every asset under the project's
@@ -308,4 +339,113 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
 
 async fn unregister_job(state: &State<'_, AwidatState>, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
+}
+
+fn compute_index_readiness_at(project_root: &Path) -> IndexReadinessSnapshot {
+    let transcripts = any_json_file(&project_root.join("index").join("whisper"));
+    let scenes = any_json_file(&project_root.join("index").join("scenedetect"));
+    let audio = any_json_file(&project_root.join("index").join("audio-energy"));
+    let face = any_json_file(&project_root.join("index").join("face"));
+    let motion = any_json_file(&project_root.join(".awidat").join("motion"));
+    let color = any_json_file(&project_root.join("index").join("color-analysis"));
+    let silence = any_json_file(&project_root.join(".awidat").join("silences"))
+        || any_json_file(&project_root.join("index").join("audio-energy"));
+    let speaker = transcripts && any_json_file(&project_root.join("index").join("speaker"));
+    let captions = transcripts;
+    let ready_count = [
+        transcripts,
+        scenes,
+        audio,
+        face,
+        motion,
+        color,
+        silence,
+        speaker,
+        captions,
+    ]
+    .into_iter()
+    .filter(|ready| *ready)
+    .count();
+    IndexReadinessSnapshot {
+        transcripts,
+        scenes,
+        audio,
+        face,
+        motion,
+        color,
+        silence,
+        speaker,
+        captions,
+        ready_count,
+    }
+}
+
+fn any_json_file(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if any_json_file(&path) {
+                return true;
+            }
+        } else if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_readiness_detects_existing_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("index/whisper/raw")).unwrap();
+        std::fs::create_dir_all(dir.path().join("index/scenedetect/raw")).unwrap();
+        std::fs::create_dir_all(dir.path().join("index/audio-energy/raw")).unwrap();
+        std::fs::create_dir_all(dir.path().join("index/face/raw")).unwrap();
+        std::fs::create_dir_all(dir.path().join("index/color-analysis/raw")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".awidat/motion")).unwrap();
+        std::fs::create_dir_all(dir.path().join(".awidat/silences")).unwrap();
+
+        std::fs::write(dir.path().join("index/whisper/raw/source.mov.json"), "{}").unwrap();
+        std::fs::write(
+            dir.path().join("index/scenedetect/raw/source.mov.json"),
+            "{}",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("index/audio-energy/raw/source.mov.json"),
+            "{}",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("index/face/raw/source.mov.json"), "{}").unwrap();
+        std::fs::write(
+            dir.path().join("index/color-analysis/raw/source.mov.json"),
+            "{}",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(".awidat/motion/source.json"), "{}").unwrap();
+        std::fs::write(dir.path().join(".awidat/silences/source.json"), "{}").unwrap();
+
+        let readiness = compute_index_readiness_at(dir.path());
+
+        assert!(readiness.transcripts);
+        assert!(readiness.scenes);
+        assert!(readiness.audio);
+        assert!(readiness.face);
+        assert!(readiness.motion);
+        assert!(readiness.color);
+        assert!(readiness.silence);
+        assert!(readiness.captions);
+        assert_eq!(readiness.ready_count, 8);
+    }
 }

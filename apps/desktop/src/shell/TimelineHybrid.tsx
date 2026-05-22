@@ -57,8 +57,8 @@ export function TimelineHybrid({
   return (
     <Stack gap="0" className="h-full w-full bg-[var(--color-surface-panel)]">
       {/* Header: tabs + view toggle + actions */}
-      <div className="px-3 h-10 border-b border-[var(--color-border-subtle)] grid grid-cols-[1fr_auto_auto] items-center gap-3 shrink-0">
-        <Inline gap="0" align="center" className="h-full">
+      <div className="px-3 h-10 border-b border-[var(--color-border-subtle)] grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 shrink-0">
+        <Inline gap="0" align="center" className="h-full min-w-0 overflow-hidden">
           {TIMELINE_TABS.map((t) => (
             <button
               key={t}
@@ -67,7 +67,7 @@ export function TimelineHybrid({
               aria-selected={t === tab}
               onClick={() => onChangeTab?.(t)}
               className={cn(
-                "relative inline-flex items-center gap-1.5 h-full px-3",
+                "relative inline-flex min-w-0 items-center gap-1.5 h-full px-3",
                 "text-[var(--text-body-sm)] font-medium",
                 "transition-[color,background-color] duration-[120ms]",
                 t === tab
@@ -75,7 +75,7 @@ export function TimelineHybrid({
                   : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
               )}
             >
-              <span>{TIMELINE_TAB_LABEL[t]}</span>
+              <span className="truncate">{TIMELINE_TAB_LABEL[t]}</span>
               {t === "changes" && changeCount > 0 ? (
                 <Pill status="warning" dot={false}>{changeCount}</Pill>
               ) : null}
@@ -88,9 +88,9 @@ export function TimelineHybrid({
             </button>
           ))}
         </Inline>
-        <Inline gap="2" align="center">
+        <Inline gap="2" align="center" className="shrink-0">
           <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-            View
+            Mode
           </span>
           <ViewToggle value={viewMode} onChange={onChangeViewMode} />
         </Inline>
@@ -126,11 +126,11 @@ export function TimelineHybrid({
       </div>
 
       {/* Legend */}
-      <div className="px-3 h-9 border-t border-[var(--color-border-subtle)] flex items-center justify-between shrink-0">
-        <Inline gap="3" align="center">
+      <div className="px-3 h-8 border-t border-[var(--color-border-subtle)] flex items-center justify-between gap-3 shrink-0">
+        <Inline gap="2" align="center" className="min-w-0 overflow-hidden">
           <Legend />
         </Inline>
-        <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
+        <span className="shrink-0 font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
           {viewMode === "proposed" ? "Proposed Timeline" : "Current Timeline"}
         </span>
       </div>
@@ -159,7 +159,7 @@ function ViewToggle({
           onClick={() => onChange?.(opt.key)}
           aria-pressed={value === opt.key}
           className={cn(
-            "h-6 px-2.5 rounded-[var(--radius-xs)] text-[var(--text-caption)] font-medium transition-colors",
+            "h-6 px-2 rounded-[var(--radius-xs)] text-[var(--text-caption)] font-medium transition-colors",
             value === opt.key
               ? "bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
               : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
