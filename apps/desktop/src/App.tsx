@@ -147,6 +147,32 @@ function App() {
     () => proxies.find((proxy) => proxy.stem === selectedStem) ?? proxies[0] ?? null,
     [proxies, selectedStem],
   );
+  const selectedSource = useMemo(() => {
+    if (sources.length === 0) return null;
+    if (!selectedStem) return sources[0] ?? null;
+    return (
+      sources.find((source) => source.name.startsWith(selectedStem)) ??
+      sources[0] ??
+      null
+    );
+  }, [selectedStem, sources]);
+  const selectedPreviewMedia = useMemo(() => {
+    if (selectedProxy) {
+      return {
+        path: selectedProxy.proxy_path,
+        label: "Source proxy",
+        name: selectedProxy.stem,
+      };
+    }
+    if (selectedSource) {
+      return {
+        path: selectedSource.path,
+        label: "Source media",
+        name: selectedSource.name,
+      };
+    }
+    return null;
+  }, [selectedProxy, selectedSource]);
   const sourceMediaCount = Math.max(sources.length, proxies.length);
   const hasImportedMedia = sourceMediaCount > 0;
   const routedProjectRef = useRef<{
@@ -448,6 +474,11 @@ function App() {
   }
 
   useEffect(() => {
+    if (!isTauri()) return;
+    void refreshProject();
+  }, [refreshProject]);
+
+  useEffect(() => {
     return onMenuCommand((id) => {
       if (id === MENU_COMMANDS.IMPORT_FILES) {
         void chooseAndImportFiles();
@@ -568,12 +599,12 @@ function App() {
   }, [demoMode, timelineSnapshot]);
 
   useEffect(() => {
-    if (demoMode || !isTauri() || !selectedProxy) {
+    if (demoMode || !isTauri() || !selectedPreviewMedia) {
       setRealPreviewSrc(null);
       return;
     }
     let cancelled = false;
-    mediaStreamUrl(selectedProxy.proxy_path)
+    mediaStreamUrl(selectedPreviewMedia.path)
       .then((url) => {
         if (!cancelled) setRealPreviewSrc(url);
       })
@@ -584,7 +615,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [demoMode, selectedProxy]);
+  }, [demoMode, selectedPreviewMedia]);
 
   useEffect(() => {
     if (demoMode || !isTauri()) {
@@ -1164,10 +1195,11 @@ function App() {
                 <Screen2MediaSlot />
               ) : isTimelinePreview ? (
                 <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
-              ) : realPreviewSrc && selectedProxy ? (
-                <RealProxyPreviewSlot
+              ) : realPreviewSrc && selectedPreviewMedia ? (
+                <RealMediaPreviewSlot
                   src={realPreviewSrc}
-                  stem={selectedProxy.stem}
+                  label={selectedPreviewMedia.label}
+                  name={selectedPreviewMedia.name}
                   isPlaying={isPlaying}
                   volume={previewVolume}
                   rate={previewRate}
@@ -1367,9 +1399,10 @@ function App() {
   );
 }
 
-function RealProxyPreviewSlot({
+function RealMediaPreviewSlot({
   src,
-  stem,
+  label,
+  name,
   isPlaying,
   volume,
   rate,
@@ -1381,7 +1414,8 @@ function RealProxyPreviewSlot({
   onPlaying,
 }: {
   src: string;
-  stem: string;
+  label: string;
+  name: string;
   isPlaying: boolean;
   volume: number;
   rate: number;
@@ -1456,9 +1490,9 @@ function RealProxyPreviewSlot({
       />
       <div className="pointer-events-none absolute left-3 top-3 rounded-[var(--radius-sm)] border border-black/50 bg-black/70 px-2 py-1">
         <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-white/70">
-          Source proxy
+          {label}
         </span>
-        <span className="ml-2 font-mono text-[var(--text-caption)] text-white/90">{stem}</span>
+        <span className="ml-2 font-mono text-[var(--text-caption)] text-white/90">{name}</span>
       </div>
     </div>
   );

@@ -165,9 +165,9 @@ pub async fn proxy_path_for_stem(
     })
 }
 
-/// Return a localhost streaming URL for a proxy file. Unlike Tauri's
+/// Return a localhost streaming URL for project media. Unlike Tauri's
 /// `asset:` URL, this preserves audio in WKWebView; unlike a blob URL,
-/// it does not load a multi-GB proxy into WebKit memory.
+/// it does not load multi-GB media into WebKit memory.
 #[tauri::command]
 pub async fn media_url_for_path(
     state: State<'_, AwidatState>,
@@ -181,10 +181,8 @@ pub async fn media_url_for_path(
         .ok_or_else(|| "no project loaded".to_string())?;
     let requested =
         std::fs::canonicalize(&path).map_err(|e| format!("media path does not exist: {e}"))?;
-    let proxies_dir = std::fs::canonicalize(project_root.join(".awidat").join("proxies"))
-        .map_err(|e| format!("proxies dir unavailable: {e}"))?;
-    if !requested.starts_with(&proxies_dir) || !is_proxy_file(&requested) {
-        return Err("media path is outside this project's proxy directory".into());
+    if !is_project_media_path(&project_root, &requested) {
+        return Err("media path is outside this project's media directories".into());
     }
 
     let (port, files) = ensure_media_server(&state)?;
@@ -194,6 +192,32 @@ pub async fn media_url_for_path(
         .map_err(|_| "media server lock poisoned".to_string())?
         .insert(token.clone(), requested);
     Ok(format!("http://127.0.0.1:{port}/media/{token}"))
+}
+
+fn is_project_media_path(project_root: &Path, requested: &Path) -> bool {
+    if let Ok(proxies_dir) = std::fs::canonicalize(project_root.join(".awidat").join("proxies")) {
+        if requested.starts_with(&proxies_dir) && is_proxy_file(requested) {
+            return true;
+        }
+    }
+    let Ok(raw_dir) = std::fs::canonicalize(project_root.join("raw")) else {
+        return false;
+    };
+    requested.starts_with(raw_dir) && is_preview_media_file(requested)
+}
+
+fn is_preview_media_file(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| {
+                matches!(
+                    e.to_ascii_lowercase().as_str(),
+                    "mp4" | "m4v" | "mov" | "webm" | "mp3" | "wav" | "m4a"
+                )
+            })
+            .unwrap_or(false)
 }
 
 fn ensure_media_server(
@@ -339,8 +363,9 @@ fn serve_file(stream: &mut TcpStream, path: &Path, range: Option<RangeSpec>, hea
         None => ("200 OK", 0, len - 1),
     };
     let content_len = end - start + 1;
+    let content_type = preview_media_content_type(path);
     let mut header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: video/mp4\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {content_len}\r\nConnection: close\r\n"
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nContent-Length: {content_len}\r\nConnection: close\r\n"
     );
     if status.starts_with("206") {
         header.push_str(&format!("Content-Range: bytes {start}-{end}/{len}\r\n"));
@@ -366,6 +391,22 @@ fn serve_file(stream: &mut TcpStream, path: &Path, range: Option<RangeSpec>, hea
             break;
         }
         remaining -= read as u64;
+    }
+}
+
+fn preview_media_content_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("mov") => "video/quicktime",
+        Some("webm") => "video/webm",
+        Some("mp3") => "audio/mpeg",
+        Some("wav") => "audio/wav",
+        Some("m4a") => "audio/mp4",
+        _ => "video/mp4",
     }
 }
 
@@ -656,6 +697,78 @@ mod tests {
         let path = PathBuf::from("/tmp/proj/.awidat/proxies/foo.mp4");
 
         assert_eq!(media_token(&path), media_token(&path));
+    }
+
+    #[test]
+    fn project_media_path_allows_raw_media_without_proxy_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("foo.mov");
+        std::fs::write(&asset, b"x").unwrap();
+        let asset = std::fs::canonicalize(asset).unwrap();
+
+        assert!(is_project_media_path(dir.path(), &asset));
+    }
+
+    #[test]
+    fn project_media_path_allows_proxy_media() {
+        let dir = tempfile::tempdir().unwrap();
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let proxy = proxies_dir.join("foo.mp4");
+        std::fs::write(&proxy, b"x").unwrap();
+        let proxy = std::fs::canonicalize(proxy).unwrap();
+
+        assert!(is_project_media_path(dir.path(), &proxy));
+    }
+
+    #[test]
+    fn project_media_path_rejects_non_media_raw_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("notes.txt");
+        std::fs::write(&asset, b"x").unwrap();
+        let asset = std::fs::canonicalize(asset).unwrap();
+
+        assert!(!is_project_media_path(dir.path(), &asset));
+    }
+
+    #[test]
+    fn project_media_path_rejects_outside_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+
+        assert!(!is_project_media_path(dir.path(), outside.path()));
+    }
+
+    #[test]
+    fn preview_media_content_type_matches_preview_extension() {
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("clip.mov")),
+            "video/quicktime"
+        );
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("clip.webm")),
+            "video/webm"
+        );
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("audio.mp3")),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("audio.wav")),
+            "audio/wav"
+        );
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("audio.m4a")),
+            "audio/mp4"
+        );
+        assert_eq!(
+            preview_media_content_type(&PathBuf::from("proxy.mp4")),
+            "video/mp4"
+        );
     }
 
     #[test]
