@@ -114,7 +114,7 @@ export function SegmentedVideoView({
           <div className="media-empty media-empty-stacked">
             <p className="media-empty-title">Generating preview…</p>
             <p className="media-empty-hint">
-              The 720p proxy for this timeline is being transcoded.
+              The 1080p proxy for this timeline is being transcoded.
               Playback will start as soon as the first clip is ready.
             </p>
           </div>

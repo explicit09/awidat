@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::state::{AwidatState, MediaServerInner};
 
@@ -83,6 +83,41 @@ pub async fn insert_media_on_timeline(
     };
     if inserted {
         crate::events::emit_timeline_changed(&app, &project_root);
+        // Kick off a proxy transcode for the just-placed asset if it
+        // doesn't already have a fresh 1080p proxy on disk. Without
+        // this the timeline preview shows "Generating preview…"
+        // forever for any clip whose proxy isn't already cached —
+        // the only other code path that runs `transcode_single_asset
+        // _in_project` is the import flow, which only fires for
+        // fresh imports, not for assets the user is re-adding to
+        // the timeline. Idempotent (proxy_is_fresh short-circuits)
+        // so it's safe to fire on every insert.
+        let project_root_for_task = project_root.clone();
+        let asset_for_task = requested.clone();
+        let app_for_task = app.clone();
+        tokio::spawn(async move {
+            let state = app_for_task.state::<AwidatState>();
+            match crate::commands::transcode::transcode_single_asset_in_project(
+                &app_for_task,
+                &state,
+                &project_root_for_task,
+                &asset_for_task,
+            )
+            .await
+            {
+                Ok(Some(_)) => {
+                    crate::events::emit_timeline_changed(&app_for_task, &project_root_for_task);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        asset = %asset_for_task.display(),
+                        "insert-time proxy transcode failed; timeline preview will stay empty for this clip",
+                    );
+                }
+            }
+        });
     }
     Ok(inserted)
 }
