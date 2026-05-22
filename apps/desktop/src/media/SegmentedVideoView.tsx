@@ -66,7 +66,17 @@ import {
   useVideoOverlaySegments,
 } from "../timeline/usePlaySegments";
 
-export function SegmentedVideoView() {
+type SegmentedVideoViewProps = {
+  chrome?: boolean;
+  volume?: number;
+  rate?: number;
+};
+
+export function SegmentedVideoView({
+  chrome = true,
+  volume = 1,
+  rate = 1,
+}: SegmentedVideoViewProps = {}) {
   const segments = usePlaySegments();
   const previewDurationS = usePreviewDuration();
   const setTimelineDuration = useMediaStore((s) => s.setTimelineDuration);
@@ -112,7 +122,7 @@ export function SegmentedVideoView() {
       </div>
     );
   }
-  return <SegmentedPlayer segments={segments} />;
+  return <SegmentedPlayer segments={segments} chrome={chrome} volume={volume} rate={rate} />;
 }
 
 // One slot in the double-buffer.
@@ -122,7 +132,17 @@ type Slot = {
   segIdx: number;
 };
 
-function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
+function SegmentedPlayer({
+  segments,
+  chrome,
+  volume,
+  rate,
+}: {
+  segments: PlaySegment[];
+  chrome: boolean;
+  volume: number;
+  rate: number;
+}) {
   const videoOverlays = useVideoOverlaySegments();
   const previewTransitions = usePreviewTransitions();
   // For diagnostics: how many clips are on the OTIO but missing a
@@ -468,16 +488,39 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
     }
   }
 
+  useEffect(() => {
+    const v = slotsRef.current[activeKeyRef.current].ref.current;
+    if (!v) return;
+    if (isPlaying && v.paused) {
+      v.play().catch((err) => {
+        setMediaError(`Playback failed: ${String(err)}`);
+        setPlaying(false);
+      });
+    } else if (!isPlaying && !v.paused) {
+      v.pause();
+    }
+  }, [activeKey, isPlaying, setMediaError, setPlaying]);
+
   function applySegmentPlaybackSettings(v: HTMLVideoElement, seg: PlaySegment) {
-    const volume = Number.isFinite(seg.volume)
+    const segmentVolume = Number.isFinite(seg.volume)
       ? Math.max(0, Math.min(1, seg.volume))
       : 1;
     const speed = Number.isFinite(seg.speed)
       ? Math.max(0.0625, Math.min(16, seg.speed))
       : 1;
-    if (Math.abs(v.volume - volume) > 0.001) v.volume = volume;
-    if (Math.abs(v.playbackRate - speed) > 0.001) v.playbackRate = speed;
+    const effectiveVolume = Math.max(0, Math.min(1, segmentVolume * volume));
+    const effectiveRate = Math.max(0.0625, Math.min(16, speed * rate));
+    if (Math.abs(v.volume - effectiveVolume) > 0.001) v.volume = effectiveVolume;
+    if (Math.abs(v.playbackRate - effectiveRate) > 0.001) v.playbackRate = effectiveRate;
   }
+
+  useEffect(() => {
+    const slot = slotsRef.current[activeKeyRef.current];
+    const v = slot.ref.current;
+    const seg = segmentsRef.current[slot.segIdx];
+    if (v && seg) applySegmentPlaybackSettings(v, seg);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey, volume, rate]);
 
   function onVideoError(e: React.SyntheticEvent<HTMLVideoElement>) {
     const err = e.currentTarget.error;
@@ -631,44 +674,48 @@ function SegmentedPlayer({ segments }: { segments: PlaySegment[] }) {
           projectRoot={projectRoot}
         />
       </div>
-      <div className="transport">
-        <button
-          className="transport-play"
-          onClick={togglePlay}
-          aria-label={isPlaying ? "Pause" : "Play"}
-        >
-          {isPlaying ? <PauseIcon /> : <PlayIcon />}
-        </button>
-        <input
-          className="transport-scrub"
-          type="range"
-          min={0}
-          max={timelineDurationS || 0}
-          step={0.01}
-          value={Math.min(timelineTime, timelineDurationS)}
-          onChange={onScrub}
-          onInput={onScrubInput}
-          onPointerDown={onScrubPointerDown}
-          onPointerMove={onScrubPointerMove}
-          disabled={timelineDurationS === 0}
-        />
-        <div className="transport-time">
-          <span>{formatTime(timelineTime)}</span>
-          <span className="transport-time-sep">/</span>
-          <span className="transport-time-total">
-            {formatTime(timelineDurationS)}
-          </span>
-        </div>
-      </div>
-      <div className="video-meta">
-        <span className="video-meta-label">timeline preview</span>
-        <code className="video-stem">
-          {segments.length} segment{segments.length === 1 ? "" : "s"}
-          {transcodingCount > 0
-            ? ` · +${transcodingCount} transcoding…`
-            : ""}
-        </code>
-      </div>
+      {chrome ? (
+        <>
+          <div className="transport">
+            <button
+              className="transport-play"
+              onClick={togglePlay}
+              aria-label={isPlaying ? "Pause" : "Play"}
+            >
+              {isPlaying ? <PauseIcon /> : <PlayIcon />}
+            </button>
+            <input
+              className="transport-scrub"
+              type="range"
+              min={0}
+              max={timelineDurationS || 0}
+              step={0.01}
+              value={Math.min(timelineTime, timelineDurationS)}
+              onChange={onScrub}
+              onInput={onScrubInput}
+              onPointerDown={onScrubPointerDown}
+              onPointerMove={onScrubPointerMove}
+              disabled={timelineDurationS === 0}
+            />
+            <div className="transport-time">
+              <span>{formatTime(timelineTime)}</span>
+              <span className="transport-time-sep">/</span>
+              <span className="transport-time-total">
+                {formatTime(timelineDurationS)}
+              </span>
+            </div>
+          </div>
+          <div className="video-meta">
+            <span className="video-meta-label">timeline preview</span>
+            <code className="video-stem">
+              {segments.length} segment{segments.length === 1 ? "" : "s"}
+              {transcodingCount > 0
+                ? ` · +${transcodingCount} transcoding…`
+                : ""}
+            </code>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

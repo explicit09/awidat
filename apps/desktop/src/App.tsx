@@ -19,6 +19,7 @@ import { useProjectStore } from "./app/state";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { useMediaStore } from "./media/store";
 import { mediaStreamUrl } from "./media/mediaStreamUrl";
+import { SegmentedVideoView } from "./media/SegmentedVideoView";
 import { useTranscriptStore } from "./transcript/store";
 import { TranscriptView } from "./transcript/TranscriptView";
 import { VeditPanel } from "./vedit/VeditPanel";
@@ -46,6 +47,7 @@ import {
   type PlanItem,
   type PreflightFinding,
   type PreviewChange,
+  type PreviewViewMode,
   type TimelineTab,
   type TimelineViewMode,
   type TranscriptCell,
@@ -100,6 +102,7 @@ function App() {
   const setSourceDuration = useMediaStore((s) => s.setDuration);
   const setMediaPlaying = useMediaStore((s) => s.setPlaying);
   const requestSourceSeek = useMediaStore((s) => s.requestSeek);
+  const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
   const refreshMedia = useMediaStore((s) => s.refresh);
   const sourceSeekRequestId = useMediaStore((s) => s.seekRequestId);
   const sourceSeekTargetS = useMediaStore((s) => s.seekTargetS);
@@ -116,6 +119,10 @@ function App() {
 
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("timeline");
   const [timelineViewMode, setTimelineViewMode] = useState<TimelineViewMode>("proposed");
+  const [previewViewMode, setPreviewViewMode] = useState<PreviewViewMode>("before-after");
+  const [previewVolume, setPreviewVolume] = useState(0.8);
+  const [previewRate, setPreviewRate] = useState(1);
+  const [activePreviewChangeId, setActivePreviewChangeId] = useState<string | undefined>(undefined);
   const [realVideoFrames, setRealVideoFrames] = useState<string[]>([]);
   const [realAudioPeaks, setRealAudioPeaks] = useState<number[]>([]);
   const [realPreviewSrc, setRealPreviewSrc] = useState<string | null>(null);
@@ -932,6 +939,7 @@ function App() {
     if (activeProposal) {
       setRightPanel("inspector");
     }
+    setActivePreviewChangeId(undefined);
   }, [activeProposal?.callId]);
 
   const effectiveDuration = demoMode ? SCREEN2_DURATION_S : timelineDuration > 0 ? timelineDuration : sourceDurationS;
@@ -939,6 +947,40 @@ function App() {
   const effectiveChanges = demoMode ? screen2Changes : previewChanges;
   const effectivePlan = demoMode ? screen2Plan : plan;
   const effectiveInspector = demoMode ? screen2Inspector : inspectorData;
+  const isTimelinePreview = !demoMode && timelineDuration > 0;
+  const selectedPreviewChangeId = demoMode ? "c07" : activePreviewChangeId;
+  const seekPreview = (timeS: number) => {
+    if (demoMode) return;
+    if (isTimelinePreview) {
+      requestTimelineSeek(timeS);
+    } else {
+      requestSourceSeek(timeS);
+    }
+  };
+  const selectPreviewChange = (change: PreviewChange) => {
+    setActivePreviewChangeId(change.id);
+    seekPreview(change.timeS);
+  };
+  const jumpPreviewChange = (direction: -1 | 1) => {
+    if (effectiveChanges.length === 0 || demoMode) return;
+    const sorted = [...effectiveChanges].sort((a, b) => a.timeS - b.timeS);
+    const currentIndex = selectedPreviewChangeId
+      ? sorted.findIndex((change) => change.id === selectedPreviewChangeId)
+      : -1;
+    const fallbackIndex =
+      direction > 0
+        ? sorted.findIndex((change) => change.timeS > effectiveCurrentTime + 0.01)
+        : findLastIndex(sorted, (change) => change.timeS < effectiveCurrentTime - 0.01);
+    const nextIndex =
+      currentIndex >= 0
+        ? Math.max(0, Math.min(sorted.length - 1, currentIndex + direction))
+        : fallbackIndex >= 0
+          ? fallbackIndex
+          : direction > 0
+            ? sorted.length - 1
+            : 0;
+    selectPreviewChange(sorted[nextIndex]);
+  };
   const realDeliveryWorkspace = (
     <DeliverySurface
       targets={effectiveDeliveryTargets}
@@ -1125,18 +1167,25 @@ function App() {
             proposalName={demoMode ? "Podcast Tightening v1" : activeProposal?.summary ?? "Source review"}
             pendingCount={effectiveChanges.length}
             changes={effectiveChanges}
-            activeChangeId={demoMode ? "c07" : undefined}
+            activeChangeId={selectedPreviewChangeId}
             currentTimeS={effectiveCurrentTime}
             durationS={effectiveDuration}
             isPlaying={demoMode ? false : isPlaying}
+            volume={previewVolume}
+            rate={previewRate}
+            viewMode={previewViewMode}
             videoSlot={
               demoMode ? (
                 <Screen2MediaSlot />
+              ) : isTimelinePreview ? (
+                <SegmentedVideoView chrome={false} volume={previewVolume} rate={previewRate} />
               ) : realPreviewSrc && selectedProxy ? (
                 <RealProxyPreviewSlot
                   src={realPreviewSrc}
                   stem={selectedProxy.stem}
                   isPlaying={isPlaying}
+                  volume={previewVolume}
+                  rate={previewRate}
                   seekRequestId={sourceSeekRequestId}
                   seekTargetS={sourceSeekTargetS}
                   posterSrc={realVideoFrames[0]}
@@ -1147,7 +1196,13 @@ function App() {
               ) : undefined
             }
             onPlayPause={() => setMediaPlaying(!isPlaying)}
-            onSeek={requestSourceSeek}
+            onSelectChange={selectPreviewChange}
+            onPrevCut={() => jumpPreviewChange(-1)}
+            onNextCut={() => jumpPreviewChange(1)}
+            onSeek={seekPreview}
+            onSetVolume={setPreviewVolume}
+            onSetRate={setPreviewRate}
+            onSetViewMode={setPreviewViewMode}
             onOpenProposalMenu={() => setInspectorCollapsed(false)}
             onInspectProposal={inspectActiveProposal}
             onReviseProposal={reviseActiveProposal}
@@ -1339,6 +1394,8 @@ function RealProxyPreviewSlot({
   src,
   stem,
   isPlaying,
+  volume,
+  rate,
   seekRequestId,
   seekTargetS,
   posterSrc,
@@ -1349,6 +1406,8 @@ function RealProxyPreviewSlot({
   src: string;
   stem: string;
   isPlaying: boolean;
+  volume: number;
+  rate: number;
   seekRequestId: number;
   seekTargetS: number;
   posterSrc?: string;
@@ -1376,6 +1435,13 @@ function RealProxyPreviewSlot({
       video.pause();
     }
   }, [isPlaying, onPlaying]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = Math.max(0, Math.min(1, volume));
+    video.playbackRate = Math.max(0.0625, Math.min(16, rate));
+  }, [rate, volume]);
 
   return (
     <div className="relative h-full w-full bg-black">
@@ -1577,6 +1643,13 @@ function EditDockHeader({
 
 function dockLabel(tab: "timeline" | "transcript" | "vedit") {
   return tab === "vedit" ? "Vedit" : tab[0].toUpperCase() + tab.slice(1);
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (predicate(items[i])) return i;
+  }
+  return -1;
 }
 
 function LeftWorkspaceRail({
