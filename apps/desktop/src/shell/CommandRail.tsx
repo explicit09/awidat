@@ -42,7 +42,7 @@ export type ActivityEntry = {
   timestamp: string;
   text: string;
   detail?: string;
-  kind?: "tool" | "thought" | "result";
+  kind?: "tool" | "user" | "assistant" | "result";
 };
 
 export type SuggestedAction = {
@@ -62,6 +62,8 @@ export type CommandRailProps = {
   taskProgress?: { label: string; progress?: number; eta?: string };
   /** Activity log entries — collapsed by default. */
   activity?: ActivityEntry[];
+  /** Human conversation only. System jobs and tool calls do not belong here. */
+  conversation?: ActivityEntry[];
   /** Suggestions the agent surfaces for the user's next move. */
   suggestions?: SuggestedAction[];
   /** Optional prefilled command for static/demo review surfaces. */
@@ -84,6 +86,7 @@ export function CommandRail({
   plan = [],
   taskProgress,
   activity = [],
+  conversation = [],
   suggestions = [],
   initialDraft = "",
   running = false,
@@ -261,9 +264,40 @@ export function CommandRail({
             </Section>
           ) : null}
 
+          {/* Conversation */}
+          {conversation.length > 0 ? (
+            <Section label="Conversation">
+              <Stack gap="1" className="max-h-[320px] overflow-y-auto pr-1">
+                {conversation.map((message) => (
+                  <div
+                    key={message.id}
+                    className={cn(
+                      "rounded-[var(--radius-sm)] border px-2.5 py-2 text-[var(--text-caption)]",
+                      message.kind === "user"
+                        ? "border-[rgba(32,201,151,0.28)] bg-[rgba(32,201,151,0.07)]"
+                        : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)]",
+                    )}
+                  >
+                    <div className="flex min-w-0 items-baseline gap-2">
+                      <span className="shrink-0 font-mono text-[var(--color-text-muted)]">
+                        {message.timestamp}
+                      </span>
+                      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.04em] text-[var(--color-text-muted)]">
+                        {message.kind === "user" ? "You" : "Agent"}
+                      </span>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap break-words leading-snug text-[var(--color-text-secondary)]">
+                      {message.text}
+                    </p>
+                  </div>
+                ))}
+              </Stack>
+            </Section>
+          ) : null}
+
           {/* Activity log */}
           {activity.length > 0 ? (
-            <Section label="Activity">
+            <Section label="System activity">
               <button
                 type="button"
                 onClick={() => setActivityOpen((x) => !x)}
@@ -285,7 +319,7 @@ export function CommandRail({
                       key={a.id}
                       className={cn(
                         "rounded-[var(--radius-sm)] border px-2 py-1.5 text-[var(--text-caption)]",
-                        a.kind === "thought"
+                        a.kind === "result"
                           ? "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)]"
                           : "border-transparent bg-transparent",
                       )}
@@ -327,7 +361,7 @@ export function CommandRail({
             </Section>
           ) : null}
 
-          {plan.length === 0 && !taskProgress && suggestions.length === 0 && activity.length === 0 ? (
+          {plan.length === 0 && !taskProgress && suggestions.length === 0 && conversation.length === 0 && activity.length === 0 ? (
             <EmptyState />
           ) : null}
         </Stack>

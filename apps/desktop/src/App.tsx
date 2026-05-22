@@ -705,11 +705,21 @@ function App() {
     return items
       .filter(
         (it): it is ActivitySourceItem =>
-          it.kind === "tool_call" || it.kind === "text" || it.kind === "job",
+          it.kind === "tool_call" || it.kind === "job",
       )
       .slice(-12)
       .reverse()
       .map((it) => activityFor(it));
+  }, [items]);
+
+  const conversation: ActivityEntry[] = useMemo(() => {
+    return items
+      .filter(
+        (it): it is ConversationSourceItem =>
+          it.kind === "user_input" || it.kind === "text",
+      )
+      .slice(-8)
+      .map((it) => conversationFor(it));
   }, [items]);
 
   const activeJobs = useMemo(
@@ -1141,6 +1151,7 @@ function App() {
           ? { label: "Building proposal...", progress: 62, eta: "00:01:48" }
           : realTaskProgress,
         activity: demoMode ? screen2Activity : activity,
+        conversation: demoMode ? [] : conversation,
         suggestions: demoMode ? screen2Suggestions : [],
         initialDraft: demoMode
           ? "Cut this into a tight 8-minute podcast episode.\nRemove dead air but preserve natural pacing."
@@ -2502,8 +2513,10 @@ function normalizePeak(value: number): number {
 type AnyAgentItem = ReturnType<typeof useAgentStore.getState>["items"][number];
 type ToolCallItem = Extract<AnyAgentItem, { kind: "tool_call" }>;
 type TextItem = Extract<AnyAgentItem, { kind: "text" }>;
+type UserInputItem = Extract<AnyAgentItem, { kind: "user_input" }>;
 type JobItem = Extract<AnyAgentItem, { kind: "job" }>;
-type ActivitySourceItem = ToolCallItem | TextItem | JobItem;
+type ActivitySourceItem = ToolCallItem | JobItem;
+type ConversationSourceItem = UserInputItem | TextItem;
 
 function activityFor(item: ActivitySourceItem): ActivityEntry {
   const id = item.id.toString();
@@ -2515,15 +2528,6 @@ function activityFor(item: ActivitySourceItem): ActivityEntry {
       kind: "tool",
     };
   }
-  if (item.kind === "text") {
-    const text = item.text.trim();
-    return {
-      id,
-      timestamp: shortTime(),
-      text: text.length > 96 ? `${text.slice(0, 96)}...` : text,
-      kind: "thought",
-    };
-  }
   const status = summarizeJobStatus(item.status);
   return {
     id,
@@ -2531,6 +2535,16 @@ function activityFor(item: ActivitySourceItem): ActivityEntry {
     text: `${jobKindLabel(item.job_kind)} · ${status.summary}`,
     detail: status.detail,
     kind: "result",
+  };
+}
+
+function conversationFor(item: ConversationSourceItem): ActivityEntry {
+  const text = item.text.trim();
+  return {
+    id: item.id.toString(),
+    timestamp: shortTime(),
+    text,
+    kind: item.kind === "user_input" ? "user" : "assistant",
   };
 }
 
