@@ -130,12 +130,12 @@ tool_name: string,
  * Short caller-built summary of the args. Full args stay on the
  * matching ToolCall item; this is the user-facing one-liner.
  */
-args_summary: string,
+args_summary: string, 
 /**
  * Typed capability metadata for this approval. Kept as JSON so the
  * desktop protocol does not depend on core internals.
  */
-capability_metadata: unknown, } | { "kind": "error",
+capability_metadata: unknown, } | { "kind": "error", 
 /**
  * Stable id (one per error).
  */
