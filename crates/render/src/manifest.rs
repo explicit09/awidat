@@ -523,10 +523,12 @@ pub fn replay_render_manifest(
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let status = command.status().map_err(|source| RenderReplayError::Spawn {
-        path: manifest_path.to_string_lossy().into_owned(),
-        source,
-    })?;
+    let status = command
+        .status()
+        .map_err(|source| RenderReplayError::Spawn {
+            path: manifest_path.to_string_lossy().into_owned(),
+            source,
+        })?;
     Ok(RenderReplayOutcome {
         manifest_path: manifest_path.to_path_buf(),
         output_paths: manifest
@@ -622,9 +624,8 @@ mod tests {
 
     #[test]
     fn manifest_path_sits_next_to_output() {
-        let path = manifest_path_for_output(std::path::Path::new(
-            "/project/renders/final-youtube.mp4",
-        ));
+        let path =
+            manifest_path_for_output(std::path::Path::new("/project/renders/final-youtube.mp4"));
 
         assert_eq!(
             path,

@@ -41,8 +41,8 @@ pub(crate) mod ass;
 pub mod ffmpeg;
 pub mod frame_io;
 pub mod job;
-pub mod master_loudnorm;
 pub mod manifest;
+pub mod master_loudnorm;
 pub mod output_safety;
 pub mod professional;
 pub mod progress;
@@ -65,8 +65,8 @@ pub use job::{
 pub use manifest::{
     RENDER_MANIFEST_SCHEMA_VERSION, RenderBackendKind, RenderExecutionManifest,
     RenderExecutionManifestInput, RenderInputFingerprint, RenderManifestError,
-    RenderManifestLimitation, RenderOutputArtifact, RenderReplayPlan, RenderSidecarFingerprint,
-    RenderReplayError, RenderReplayOutcome, RenderVerificationSummary, fingerprint_file,
+    RenderManifestLimitation, RenderOutputArtifact, RenderReplayError, RenderReplayOutcome,
+    RenderReplayPlan, RenderSidecarFingerprint, RenderVerificationSummary, fingerprint_file,
     limitation, manifest_path_for_output, output_artifact, planned_at_now, read_render_manifest,
     replay_render_manifest, validate_replay_manifest, write_render_manifest,
 };

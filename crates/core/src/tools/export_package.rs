@@ -1,6 +1,6 @@
 //! `export_package` tool — render timeline and write delivery sidecars.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -179,6 +179,36 @@ impl ToolHandler for ExportPackageTool {
         tokio::fs::write(&recipe_md_path, format_enhancement_recipe_markdown(&recipe))
             .await
             .map_err(io_err("write enhancement recipe markdown"))?;
+        let hardware_label = format!("{hardware_policy:?}").to_lowercase();
+        let sidecar_paths = [
+            srt_path.as_path(),
+            vtt_path.as_path(),
+            chapter_path.as_path(),
+            thumbnail_path.as_path(),
+            preflight_path.as_path(),
+            recipe_json_path.as_path(),
+            recipe_md_path.as_path(),
+        ];
+        let render_manifest = build_package_render_manifest(PackageRenderManifestInput {
+            project_root: &ctx.project_root,
+            output_path: &mp4_path,
+            argv: &spec.args,
+            sidecar_paths: &sidecar_paths,
+            limitations: &spec.limitations,
+            format: &args.format,
+            export_preset_id: &export_preset.id,
+            hardware_acceleration: &hardware_label,
+        })?;
+        awidat_render::write_render_manifest(
+            &render_manifest.manifest_path,
+            &render_manifest.manifest,
+        )
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "export_package: failed to write render manifest {}: {e}",
+                render_manifest.manifest_path.display()
+            ))
+        })?;
         let job_id = ctx
             .job_manager
             .start(RenderJobSpec {
@@ -213,7 +243,8 @@ impl ToolHandler for ExportPackageTool {
             "preflight_profile_id": preflight.profile_id,
             "preflight_finding_count": preflight.findings.len(),
             "export_preset_id": export_preset.id,
-            "hardware_acceleration": format!("{:?}", hardware_policy).to_lowercase(),
+            "hardware_acceleration": hardware_label,
+            "render_manifest": render_manifest.manifest_path.display().to_string(),
             "cue_count": cues.len(),
             "chapter_count": chapters.len(),
             "subtitle_timing": "timeline_relative",
@@ -235,10 +266,105 @@ impl ToolHandler for ExportPackageTool {
             "artifacts": metadata["artifacts"],
             "export_preset_id": metadata["export_preset_id"],
             "hardware_acceleration": metadata["hardware_acceleration"],
+            "manifest_path": render_manifest.manifest_path.display().to_string(),
             "next_step": format!("Call poll_render(job_id=\"{job_id}\") to track the final MP4. Subtitle and metadata sidecars are already written.")
         });
         Ok(ToolOutput::text(body.to_string()))
     }
+}
+
+struct PackageRenderManifestInput<'a> {
+    project_root: &'a Path,
+    output_path: &'a Path,
+    argv: &'a [String],
+    sidecar_paths: &'a [&'a Path],
+    limitations: &'a [awidat_render::RenderPlanLimitation],
+    format: &'a str,
+    export_preset_id: &'a str,
+    hardware_acceleration: &'a str,
+}
+
+struct BuiltPackageRenderManifest {
+    manifest_path: PathBuf,
+    manifest: awidat_render::RenderExecutionManifest,
+}
+
+fn build_package_render_manifest(
+    input: PackageRenderManifestInput<'_>,
+) -> Result<BuiltPackageRenderManifest, FunctionCallError> {
+    let project_path = input.project_root.join("project.otio.json");
+    let project_hash = optional_file_hash(&project_path)?;
+    let ffmpeg_path = awidat_render::ffmpeg_path().map_err(|e| {
+        FunctionCallError::RespondToModel(format!("export_package: failed to locate ffmpeg: {e}"))
+    })?;
+    let mut replay_argv = vec![ffmpeg_path.to_string_lossy().into_owned()];
+    replay_argv.extend(input.argv.iter().cloned());
+    let mut sidecars = Vec::new();
+    for path in input.sidecar_paths {
+        let fingerprint = awidat_render::fingerprint_file(path, true).map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "export_package: failed to fingerprint sidecar {}: {e}",
+                path.display()
+            ))
+        })?;
+        sidecars.push(awidat_render::RenderSidecarFingerprint {
+            path: fingerprint.path,
+            sha256: fingerprint.sha256,
+            size_bytes: fingerprint.size_bytes,
+            required: fingerprint.required,
+        });
+    }
+    let limitations = input
+        .limitations
+        .iter()
+        .map(|limitation| {
+            awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
+        })
+        .collect();
+    let metadata = BTreeMap::from([
+        ("format".into(), input.format.into()),
+        ("export_preset_id".into(), input.export_preset_id.into()),
+        (
+            "hardware_acceleration".into(),
+            input.hardware_acceleration.into(),
+        ),
+    ]);
+    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+        created_at: String::new(),
+        awidat_version: env!("CARGO_PKG_VERSION").into(),
+        project_root: input.project_root.to_string_lossy().into_owned(),
+        project_hash: project_hash.clone(),
+        timeline_hash: project_hash,
+        backend: awidat_render::RenderBackendKind::PackageExport,
+        replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+            argv: replay_argv,
+            cwd: Some(input.project_root.to_string_lossy().into_owned()),
+        },
+        inputs: Vec::new(),
+        outputs: vec![awidat_render::output_artifact(input.output_path, true)],
+        sidecars,
+        limitations,
+        verification: None,
+        metadata,
+    });
+    Ok(BuiltPackageRenderManifest {
+        manifest_path: awidat_render::manifest_path_for_output(input.output_path),
+        manifest,
+    })
+}
+
+fn optional_file_hash(path: &Path) -> Result<Option<String>, FunctionCallError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    awidat_render::fingerprint_file(path, true)
+        .map(|fingerprint| Some(fingerprint.sha256))
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "export_package: failed to fingerprint {}: {e}",
+                path.display()
+            ))
+        })
 }
 
 fn parse_hardware_acceleration(
@@ -1703,6 +1829,56 @@ mod tests {
             .to_string(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn package_export_manifest_records_preset_and_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("project.otio.json");
+        std::fs::write(&project_path, br#"{"OTIO_SCHEMA":"Timeline.1"}"#).unwrap();
+        let package_dir = dir.path().join("renders/package");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        let mp4_path = package_dir.join("final-youtube.mp4");
+        let srt_path = package_dir.join("final-youtube.srt");
+        std::fs::write(&srt_path, b"1\n00:00:00,000 --> 00:00:01,000\nHi\n").unwrap();
+        let argv = vec![
+            "-i".into(),
+            "raw/x.mp4".into(),
+            mp4_path.to_string_lossy().into_owned(),
+        ];
+        let export_preset = ExportPreset {
+            id: "package_youtube_1080p".into(),
+            name: "YouTube Package Export".into(),
+            mode: ExportMode::AudioVideo,
+            profile: DeliveryProfile::youtube_1080p(),
+            output: ExportOutputSettings::mp4(),
+            video: Some(VideoExportSettings::h264(12_000)),
+            audio: Some(AudioExportSettings::aac(192)),
+            range: Default::default(),
+        };
+
+        let built = build_package_render_manifest(PackageRenderManifestInput {
+            project_root: dir.path(),
+            output_path: &mp4_path,
+            argv: &argv,
+            sidecar_paths: &[srt_path.as_path()],
+            limitations: &[],
+            format: "youtube",
+            export_preset_id: &export_preset.id,
+            hardware_acceleration: "off",
+        })
+        .unwrap();
+
+        assert_eq!(
+            built.manifest.backend,
+            awidat_render::RenderBackendKind::PackageExport
+        );
+        assert_eq!(built.manifest.metadata["format"], "youtube");
+        assert_eq!(
+            built.manifest.metadata["export_preset_id"],
+            export_preset.id
+        );
+        assert_eq!(built.manifest.sidecars.len(), 1);
     }
 
     #[test]

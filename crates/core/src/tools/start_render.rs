@@ -23,6 +23,7 @@
 //! Output naming: `<project>/renders/<scope>-<asset-stem>-<job_id>.mp4`.
 //! Predictable so the user can find it; job_id-suffixed to avoid clobber.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -180,9 +181,14 @@ impl ToolHandler for StartRenderTool {
         // shared planner so the agent and the desktop's Export button
         // produce identical specs. The asset-based scopes keep their
         // original path-validation flow.
-        let (argv, total_duration_s, asset_label, output_path, limitations) = if args.scope
-            == "timeline"
-        {
+        let (
+            argv,
+            total_duration_s,
+            asset_label,
+            output_path,
+            limitations,
+            asset_path_for_manifest,
+        ) = if args.scope == "timeline" {
             crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
                 .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
             let mut spec = match args.guide.as_ref() {
@@ -297,6 +303,7 @@ impl ToolHandler for StartRenderTool {
                 "<timeline>".to_string(),
                 spec.output_path,
                 spec.limitations,
+                None,
             )
         } else {
             // Asset-based scope: preview / segment / full.
@@ -340,8 +347,35 @@ impl ToolHandler for StartRenderTool {
                 asset.to_string(),
                 output_path,
                 Vec::<RenderPlanLimitation>::new(),
+                Some(asset_path),
             )
         };
+
+        let manifest = build_start_render_manifest(StartRenderManifestInput {
+            project_root: &ctx.project_root,
+            scope: &args.scope,
+            asset_path: asset_path_for_manifest.as_deref(),
+            output_path: &output_path,
+            argv: &argv,
+            limitations: &limitations,
+            metadata: serde_json::json!({
+                "scope": args.scope.as_str(),
+                "asset": asset_label.as_str(),
+                "guide": args.guide.as_ref().map(|guide| serde_json::json!({
+                    "track_id": guide.track_id,
+                    "marker_id": guide.marker_id,
+                })),
+                "preset": args.preset.as_deref(),
+            }),
+        })?;
+        awidat_render::write_render_manifest(&manifest.manifest_path, &manifest.manifest).map_err(
+            |e| {
+                FunctionCallError::RespondToModel(format!(
+                    "start_render: failed to write render manifest {}: {e}",
+                    manifest.manifest_path.display()
+                ))
+            },
+        )?;
 
         let spec = RenderJobSpec {
             args: argv,
@@ -366,6 +400,7 @@ impl ToolHandler for StartRenderTool {
             },
             "asset": asset_label,
             "output_path": output_path.display().to_string(),
+            "manifest_path": manifest.manifest_path.display().to_string(),
             "render_limitations": limitations,
             "started_at": chrono::Utc::now().to_rfc3339(),
             "guide": args.guide.as_ref().map(|guide| serde_json::json!({
@@ -380,6 +415,117 @@ impl ToolHandler for StartRenderTool {
         });
         Ok(ToolOutput::text(body.to_string()))
     }
+}
+
+struct StartRenderManifestInput<'a> {
+    project_root: &'a Path,
+    scope: &'a str,
+    asset_path: Option<&'a Path>,
+    output_path: &'a Path,
+    argv: &'a [String],
+    limitations: &'a [RenderPlanLimitation],
+    metadata: serde_json::Value,
+}
+
+struct BuiltStartRenderManifest {
+    manifest_path: PathBuf,
+    manifest: awidat_render::RenderExecutionManifest,
+}
+
+fn build_start_render_manifest(
+    input: StartRenderManifestInput<'_>,
+) -> Result<BuiltStartRenderManifest, FunctionCallError> {
+    let backend = awidat_render::RenderBackendKind::from_start_render_scope(input.scope)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "start_render: scope '{}' not recognized for render manifest",
+                input.scope
+            ))
+        })?;
+    let mut inputs = Vec::new();
+    if let Some(asset_path) = input.asset_path {
+        inputs.push(
+            awidat_render::fingerprint_file(asset_path, true).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "start_render: failed to fingerprint input {}: {e}",
+                    asset_path.display()
+                ))
+            })?,
+        );
+    }
+    let project_otio_path = input.project_root.join("project.otio.json");
+    let project_hash = optional_file_hash(&project_otio_path)?;
+    let timeline_hash = if input.scope == "timeline" {
+        project_hash.clone()
+    } else {
+        None
+    };
+    let ffmpeg_path = awidat_render::ffmpeg_path().map_err(|e| {
+        FunctionCallError::RespondToModel(format!("start_render: failed to locate ffmpeg: {e}"))
+    })?;
+    let mut replay_argv = vec![ffmpeg_path.to_string_lossy().into_owned()];
+    replay_argv.extend(input.argv.iter().cloned());
+    let limitations = input
+        .limitations
+        .iter()
+        .map(|limitation| {
+            awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
+        })
+        .collect();
+    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+        created_at: String::new(),
+        awidat_version: env!("CARGO_PKG_VERSION").into(),
+        project_root: input.project_root.to_string_lossy().into_owned(),
+        project_hash,
+        timeline_hash,
+        backend,
+        replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+            argv: replay_argv,
+            cwd: Some(input.project_root.to_string_lossy().into_owned()),
+        },
+        inputs,
+        outputs: vec![awidat_render::output_artifact(input.output_path, true)],
+        sidecars: Vec::new(),
+        limitations,
+        verification: None,
+        metadata: json_object_to_string_map(input.metadata),
+    });
+    Ok(BuiltStartRenderManifest {
+        manifest_path: awidat_render::manifest_path_for_output(input.output_path),
+        manifest,
+    })
+}
+
+fn optional_file_hash(path: &Path) -> Result<Option<String>, FunctionCallError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    awidat_render::fingerprint_file(path, true)
+        .map(|fingerprint| Some(fingerprint.sha256))
+        .map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "start_render: failed to fingerprint {}: {e}",
+                path.display()
+            ))
+        })
+}
+
+fn json_object_to_string_map(value: serde_json::Value) -> BTreeMap<String, String> {
+    value
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let rendered = value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string());
+                    (key.clone(), rendered)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn asset_stem(asset: &str) -> String {
@@ -660,6 +806,76 @@ mod tests {
             name: "start_render".into(),
             args,
         }
+    }
+
+    #[test]
+    fn start_render_manifest_for_preview_records_ffmpeg_replay() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = dir.path().join("raw/x.mp4");
+        std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        std::fs::write(&asset, b"asset").unwrap();
+        let output = dir.path().join("renders/preview-x-120000.mp4");
+        let argv = vec![
+            "-i".into(),
+            asset.to_string_lossy().into_owned(),
+            output.to_string_lossy().into_owned(),
+        ];
+
+        let built = build_start_render_manifest(StartRenderManifestInput {
+            project_root: dir.path(),
+            scope: "preview",
+            asset_path: Some(&asset),
+            output_path: &output,
+            argv: &argv,
+            limitations: &[],
+            metadata: serde_json::json!({"scope": "preview"}),
+        })
+        .unwrap();
+
+        assert_eq!(
+            built.manifest.backend,
+            awidat_render::RenderBackendKind::AssetPreview
+        );
+        assert_eq!(
+            built.manifest_path,
+            awidat_render::manifest_path_for_output(&output)
+        );
+        assert_eq!(built.manifest.inputs.len(), 1);
+        assert!(matches!(
+            built.manifest.replay,
+            awidat_render::RenderReplayPlan::FfmpegArgv { .. }
+        ));
+    }
+
+    #[test]
+    fn start_render_manifest_for_timeline_hashes_project_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_path = dir.path().join("project.otio.json");
+        std::fs::write(&project_path, br#"{"OTIO_SCHEMA":"Timeline.1"}"#).unwrap();
+        let output = dir.path().join("renders/timeline.mp4");
+        let argv = vec![
+            "-i".into(),
+            "raw/x.mp4".into(),
+            output.to_string_lossy().into_owned(),
+        ];
+
+        let built = build_start_render_manifest(StartRenderManifestInput {
+            project_root: dir.path(),
+            scope: "timeline",
+            asset_path: None,
+            output_path: &output,
+            argv: &argv,
+            limitations: &[],
+            metadata: serde_json::json!({"scope": "timeline"}),
+        })
+        .unwrap();
+
+        assert_eq!(
+            built.manifest.backend,
+            awidat_render::RenderBackendKind::TimelineFfmpegReencode
+        );
+        assert!(built.manifest.project_hash.is_some());
+        assert!(built.manifest.timeline_hash.is_some());
     }
 
     #[tokio::test]
