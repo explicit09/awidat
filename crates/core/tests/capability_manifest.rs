@@ -200,11 +200,13 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
 
     let manifest = build_capability_manifest(&registry, None);
 
-    let find_moment = manifest
+    let Some(find_moment) = manifest
         .tools
         .iter()
         .find(|tool| tool.name == "find_moment")
-        .expect("find_moment capability");
+    else {
+        panic!("find_moment capability");
+    };
     assert_eq!(
         find_moment.metadata.required_indexes,
         vec!["editorial_moments"]
@@ -215,11 +217,13 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
         awidat_core::capabilities::SupportLevel::NotSupported
     );
 
-    let start_render = manifest
+    let Some(start_render) = manifest
         .tools
         .iter()
         .find(|tool| tool.name == "start_render")
-        .expect("start_render capability");
+    else {
+        panic!("start_render capability");
+    };
     assert!(start_render.metadata.approval_required);
     assert_eq!(
         start_render.metadata.export_supported,
@@ -243,11 +247,13 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     assert!(effect_ids.contains(&"awidat.speed"));
     assert!(effect_ids.contains(&"awidat.color_pipeline"));
 
-    let speed = manifest
+    let Some(speed) = manifest
         .effects
         .iter()
         .find(|effect| effect.id == "awidat.speed")
-        .expect("speed effect");
+    else {
+        panic!("speed effect");
+    };
     assert_eq!(speed.display_name, "Speed");
     assert_eq!(
         speed.metadata.preview_supported,
@@ -258,11 +264,13 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
         awidat_core::capabilities::SupportLevel::Supported
     );
 
-    let color_pipeline = manifest
+    let Some(color_pipeline) = manifest
         .effects
         .iter()
         .find(|effect| effect.id == "awidat.color_pipeline")
-        .expect("color pipeline effect");
+    else {
+        panic!("color pipeline effect");
+    };
     assert_eq!(
         color_pipeline.metadata.known_limitations,
         vec![
@@ -285,11 +293,13 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
         ]
     );
 
-    let gpu = manifest
+    let Some(gpu) = manifest
         .render_features
         .iter()
         .find(|feature| feature.id == "gpu_transition_raw_stream")
-        .expect("gpu transition feature");
+    else {
+        panic!("gpu transition feature");
+    };
     assert_eq!(
         gpu.metadata.known_limitations,
         vec!["mixed xfade/GPU transition renders are not supported"]

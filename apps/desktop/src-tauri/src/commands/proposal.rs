@@ -884,7 +884,9 @@ fn summarize_envelope(envelope: &EdlEnvelope) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use awidat_core::edl::{Anchor, AppliedOp, ClipLocator, EdlOp};
+    use std::collections::BTreeMap;
+
+    use awidat_core::edl::{Anchor, AppliedOp, AppliedOpMetadata, ClipLocator, EdlOp};
     use awidat_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
         TrackChild, TrackKind,
@@ -1037,6 +1039,13 @@ mod tests {
                 track_index: 0,
                 child_index: 0,
             }),
+            metadata: AppliedOpMetadata {
+                kind: "trim_clip".into(),
+                affected_clip_ids: vec!["clip-0".into()],
+                affected_track_ids: vec![],
+                source: Some("agent".into()),
+                parameters: BTreeMap::new(),
+            },
         }];
 
         let hints = build_diff_hints(&envelope, &applied, &original, &proposed);
@@ -1187,6 +1196,13 @@ mod tests {
                 track_index,
                 child_index,
             }),
+            metadata: AppliedOpMetadata {
+                kind: "test".into(),
+                affected_clip_ids: Vec::new(),
+                affected_track_ids: Vec::new(),
+                source: Some("agent".into()),
+                parameters: BTreeMap::new(),
+            },
         }
     }
 }
