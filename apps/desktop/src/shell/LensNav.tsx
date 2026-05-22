@@ -1,11 +1,7 @@
 import {
-  AudioWaveform,
-  BadgeCheck,
-  Captions,
   Database,
   Eye,
   Import,
-  Palette,
   Upload,
   type LucideIcon,
 } from "lucide-react";
@@ -17,15 +13,13 @@ import { cn } from "../ui";
  *
  * Lenses are the *working surface* the user is in — they're navigation, not state.
  * Assembly is folded into Proposal/Review because rough-cut assembly is agent work.
+ * Specialist edit domains live inside the review/proposal surfaces until they have
+ * standalone workflows.
  */
 const LENS_ICON: Record<Lens, LucideIcon> = {
   import: Import,
   index: Database,
-  selects: BadgeCheck,
   review: Eye,
-  captions: Captions,
-  audio: AudioWaveform,
-  color: Palette,
   delivery: Upload,
 };
 

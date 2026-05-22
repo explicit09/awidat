@@ -236,16 +236,15 @@ await check("workflow lens row exposes the reduced agent-first lenses", async ()
   for (const expected of [
     "Import",
     "Index",
-    "Selects",
     "Review",
-    "Captions",
-    "Audio",
-    "Color",
     "Delivery",
   ]) {
     assert.ok(lensNames.some((s) => s.includes(expected)), `lens "${expected}" missing`);
   }
   assert.ok(!lensNames.some((s) => s.includes("Assembly")), "Assembly should be folded into Proposal/Review");
+  for (const folded of ["Selects", "Captions", "Audio", "Color"]) {
+    assert.ok(!lensNames.some((s) => s.includes(folded)), `${folded} should be folded into Review`);
+  }
   await page.close();
 });
 
