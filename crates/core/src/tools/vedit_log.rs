@@ -91,6 +91,7 @@ impl ToolHandler for VeditLogTool {
                     "timestamp": e.timestamp,
                     "header": e.header,
                     "full_message": e.full_message,
+                    "action_metadata": vc::action_metadata_from_message(&e.full_message),
                     "parents": e.parents,
                 })
             })
@@ -107,7 +108,7 @@ impl ToolHandler for VeditLogTool {
 
 const DESCRIPTION: &str = "\
 List recent vedit commits, newest-first. Each entry: { commit_hash, \
-timeline_hash, timestamp, header, full_message, parents }. The header \
+timeline_hash, timestamp, header, full_message, action_metadata, parents }. The header \
 is the first line of the commit message — what to show in compact \
 listings; full_message is the body for deep dives.\
 \n\nUse this for: 'what's the edit history?', 'show me the last few \

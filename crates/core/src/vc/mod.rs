@@ -55,6 +55,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::edl::OperationMetadata;
 use vedit_core::commit::{Author, Commit};
 use vedit_core::diff;
 use vedit_core::otio;
@@ -280,6 +281,90 @@ pub fn auto_commit_apply(
     let header = compose_auto_header(op_descriptions);
     commit_current_timeline(repo, &header, agent_reasoning)
 }
+
+/// Auto-commit an apply_edl envelope with command-history-style metadata.
+pub fn auto_commit_apply_with_metadata(
+    repo: &Repo,
+    op_descriptions: &[String],
+    operations: &[OperationMetadata],
+    agent_reasoning: Option<&str>,
+) -> Result<CommitOutcome, VcError> {
+    let header = compose_auto_header(op_descriptions);
+    commit_current_timeline_with_action_metadata(
+        repo,
+        &header,
+        agent_reasoning,
+        Some(ActionLogMetadata {
+            source: "apply_edl".to_string(),
+            operations: operations.to_vec(),
+        }),
+    )
+}
+
+fn commit_current_timeline_with_action_metadata(
+    repo: &Repo,
+    header: &str,
+    agent_reasoning: Option<&str>,
+    action_metadata: Option<ActionLogMetadata>,
+) -> Result<CommitOutcome, VcError> {
+    let bytes = std::fs::read(&repo.project_otio)
+        .map_err(|e| VcError::Project(format!("reading {}: {e}", repo.project_otio.display())))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| VcError::Project(format!("parsing {}: {e}", repo.project_otio.display())))?;
+
+    let timeline_hash = repo.inner.write_timeline(&value).map_err(vedit_err)?;
+    let message = format_commit_message_with_action_metadata(
+        header,
+        agent_reasoning,
+        action_metadata.as_ref(),
+    );
+    let author = awidat_author();
+    let commit_hash = repo
+        .inner
+        .commit(&timeline_hash, author, &message)
+        .map_err(vedit_err)?;
+    Ok(CommitOutcome {
+        commit_hash,
+        timeline_hash,
+        message,
+    })
+}
+
+/// Structured action metadata embedded in newer Awidat vedit commits.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ActionLogMetadata {
+    /// Source surface that created the operations.
+    pub source: String,
+    /// Applied operations in source order.
+    pub operations: Vec<OperationMetadata>,
+}
+
+/// Parse action metadata from a commit message. Old commits return `None`.
+pub fn action_metadata_from_message(message: &str) -> Option<ActionLogMetadata> {
+    let raw = message
+        .split_once(ACTION_LOG_MARKER)
+        .map(|(_, json)| json.trim())?;
+    serde_json::from_str(raw).ok()
+}
+
+fn format_commit_message_with_action_metadata(
+    header: &str,
+    agent_reasoning: Option<&str>,
+    action_metadata: Option<&ActionLogMetadata>,
+) -> String {
+    let mut message = format_commit_message(header, agent_reasoning);
+    if let Some(action_metadata) = action_metadata
+        && let Ok(json) = serde_json::to_string(action_metadata)
+    {
+        message.push_str("\n\n");
+        message.push_str(ACTION_LOG_MARKER);
+        message.push('\n');
+        message.push_str(&json);
+    }
+    message
+}
+
+const ACTION_LOG_MARKER: &str = "Awidat action log:";
 
 /// Build a one-line header from a list of op descriptions.
 /// - 1 op  → use the description verbatim (capitalized).
@@ -1617,6 +1702,16 @@ mod tests {
         assert_eq!(lines[1], "");
         assert!(lines[2].starts_with("Agent reasoning: "));
         assert!(lines[2].contains("tighter pacing"));
+    }
+
+    #[test]
+    fn old_commit_messages_have_no_action_metadata() {
+        let message = format_commit_message(
+            "Trim clip-1",
+            Some("User asked for tighter pacing before action logs existed."),
+        );
+
+        assert_eq!(action_metadata_from_message(&message), None);
     }
 
     #[test]

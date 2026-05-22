@@ -213,9 +213,12 @@ impl ToolHandler for ApplyEdlTool {
                         .iter()
                         .map(|a| a.description.clone())
                         .collect();
-                    if let Err(e) = crate::vc::auto_commit_apply(
+                    let operation_metadata: Vec<_> =
+                        outcome.applied.iter().map(|a| a.metadata.clone()).collect();
+                    if let Err(e) = crate::vc::auto_commit_apply_with_metadata(
                         &repo,
                         &descriptions,
+                        &operation_metadata,
                         args.reasoning.as_deref(),
                     ) {
                         tracing::warn!(
@@ -270,6 +273,11 @@ impl ToolHandler for ApplyEdlTool {
         };
         for op in &outcome.applied {
             summary.push_str(&format!("\n  {}. {}", op.index + 1, op.description));
+        }
+        let operation_metadata: Vec<_> = outcome.applied.iter().map(|op| &op.metadata).collect();
+        if let Ok(json) = serde_json::to_string(&operation_metadata) {
+            summary.push_str("\nmetadata: ");
+            summary.push_str(&json);
         }
         Ok(ToolOutput::text(summary))
     }
@@ -969,6 +977,87 @@ mod tests {
             head.header.contains("clip-1") || head.header.contains("trim"),
             "auto-commit header doesn't reflect the op: {}",
             head.header
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_output_includes_command_history_metadata() {
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        let out = ApplyEdlTool
+            .handle(
+                invoke(serde_json::json!({
+                    "edl": edl,
+                    "reasoning": "User asked for tighter pacing on the bravo segment."
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        assert!(out.content.contains("committed 1 op"));
+        assert!(out.content.contains("\"operation_kind\":\"trim_clip\""));
+        assert!(out.content.contains("\"affected_clip_ids\":[\"clip-1\"]"));
+        assert!(out.content.contains("\"affected_track_ids\":[\"V1\"]"));
+        assert!(out.content.contains("\"source\":\"apply_edl\""));
+        assert!(out.content.contains("\"end_s\":3.0"));
+
+        let p = Project::read(dir.path()).unwrap();
+        let StackChild::Track(t) = &p.timeline.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &t.children[1] else {
+            panic!()
+        };
+        assert!((c.source_range.as_ref().unwrap().duration.to_seconds() - 3.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn vedit_auto_commit_records_structured_action_metadata() {
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        ApplyEdlTool
+            .handle(
+                invoke(serde_json::json!({
+                    "edl": edl,
+                    "reasoning": "User asked for tighter pacing on the bravo segment."
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        let repo = crate::vc::open_or_init(dir.path()).unwrap();
+        let entries = crate::vc::log(&repo, 5).unwrap();
+        let head = &entries[0];
+        assert!(head.header.contains("clip-1") || head.header.contains("trim"));
+        assert!(
+            head.full_message
+                .contains("Agent reasoning: User asked for tighter pacing"),
+            "{}",
+            head.full_message
+        );
+        let metadata = crate::vc::action_metadata_from_message(&head.full_message).unwrap();
+        assert_eq!(metadata.source, "apply_edl");
+        assert_eq!(metadata.operations.len(), 1);
+        assert_eq!(metadata.operations[0].operation_kind, "trim_clip");
+        assert_eq!(metadata.operations[0].affected_clip_ids, ["clip-1"]);
+        assert_eq!(metadata.operations[0].affected_track_ids, ["V1"]);
+        assert_eq!(
+            metadata.operations[0].parameters["end_s"],
+            serde_json::json!(3.0)
         );
     }
 

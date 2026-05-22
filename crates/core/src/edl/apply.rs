@@ -46,6 +46,23 @@ pub struct AppliedOp {
     pub description: String,
     /// The clip locator that resolved (when applicable).
     pub locator: Option<ClipLocator>,
+    /// Compact command-history-style metadata for audit surfaces.
+    pub metadata: OperationMetadata,
+}
+
+/// Compact command-history-style metadata for one applied EDL operation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct OperationMetadata {
+    /// Stable snake_case operation kind.
+    pub operation_kind: String,
+    /// Stable clip identifiers touched by the operation.
+    pub affected_clip_ids: Vec<String>,
+    /// Track identifiers touched by the operation.
+    pub affected_track_ids: Vec<String>,
+    /// Source surface that produced the operation.
+    pub source: String,
+    /// Compact structured operation parameters.
+    pub parameters: BTreeMap<String, serde_json::Value>,
 }
 
 /// Outcome of applying one envelope.
@@ -113,6 +130,7 @@ pub fn apply(
 
     for (index, op) in envelope.ops.iter().enumerate() {
         let locator = resolve_locator_for_op(&working, index, op, ctx)?;
+        let metadata = operation_metadata(&working, op, locator);
         let description = apply_one(&mut working, index, op, ctx, locator)?;
         prune_stale_cut_boundaries(&mut working);
         prune_stale_split_edits(&mut working);
@@ -120,6 +138,7 @@ pub fn apply(
             index,
             description,
             locator,
+            metadata,
         });
     }
 
@@ -799,6 +818,291 @@ fn required_locator(index: usize, locator: Option<ClipLocator>) -> Result<ClipLo
         index,
         message: "internal error: anchored op applied without a resolved locator".into(),
     })
+}
+
+fn operation_metadata(
+    working: &Timeline,
+    op: &EdlOp,
+    locator: Option<ClipLocator>,
+) -> OperationMetadata {
+    let mut parameters = BTreeMap::new();
+    let (operation_kind, op_source) = match op {
+        EdlOp::TrimClip { start, end, .. } => {
+            insert_optional_f64(&mut parameters, "start_s", *start);
+            insert_optional_f64(&mut parameters, "end_s", *end);
+            ("trim_clip", None)
+        }
+        EdlOp::DeleteClip { .. } => ("delete_clip", None),
+        EdlOp::SplitClip { at_s, .. } => {
+            parameters.insert("at_s".into(), serde_json::json!(at_s));
+            ("split_clip", None)
+        }
+        EdlOp::UntrimClip { start, end, .. } => {
+            insert_optional_f64(&mut parameters, "start_s", *start);
+            insert_optional_f64(&mut parameters, "end_s", *end);
+            ("untrim_clip", None)
+        }
+        EdlOp::InsertClip {
+            asset,
+            track,
+            at_position,
+            start,
+            end,
+            name,
+            ..
+        } => {
+            parameters.insert("asset".into(), serde_json::json!(asset));
+            parameters.insert("track".into(), serde_json::json!(track));
+            insert_optional_usize(&mut parameters, "at_position", *at_position);
+            insert_optional_f64(&mut parameters, "start_s", *start);
+            insert_optional_f64(&mut parameters, "end_s", *end);
+            insert_optional_str(&mut parameters, "name", name.as_deref());
+            ("insert_clip", Some(asset.as_str()))
+        }
+        EdlOp::InsertBRoll {
+            asset,
+            duration_s,
+            position,
+            ..
+        } => {
+            parameters.insert("asset".into(), serde_json::json!(asset));
+            parameters.insert("duration_s".into(), serde_json::json!(duration_s));
+            parameters.insert(
+                "position".into(),
+                serde_json::json!(format!("{position:?}")),
+            );
+            ("insert_broll", Some(asset.as_str()))
+        }
+        EdlOp::InsertPiP {
+            asset,
+            duration_s,
+            source_start_s,
+            corner,
+            scale,
+            margin_pct,
+            ..
+        } => {
+            parameters.insert("asset".into(), serde_json::json!(asset));
+            parameters.insert("duration_s".into(), serde_json::json!(duration_s));
+            parameters.insert("source_start_s".into(), serde_json::json!(source_start_s));
+            parameters.insert("corner".into(), serde_json::json!(format!("{corner:?}")));
+            parameters.insert("scale".into(), serde_json::json!(scale));
+            parameters.insert("margin_pct".into(), serde_json::json!(margin_pct));
+            ("insert_pip", Some(asset.as_str()))
+        }
+        EdlOp::MoveClip {
+            to_position, at_s, ..
+        } => {
+            parameters.insert("to_position".into(), serde_json::json!(to_position));
+            insert_optional_f64(&mut parameters, "at_s", *at_s);
+            ("move_clip", None)
+        }
+        EdlOp::SetVolume { value, .. } => {
+            parameters.insert("value".into(), serde_json::json!(value));
+            ("set_volume", None)
+        }
+        EdlOp::SetAudioFade {
+            fade_in_s,
+            fade_out_s,
+            ..
+        } => {
+            insert_optional_f64(&mut parameters, "fade_in_s", *fade_in_s);
+            insert_optional_f64(&mut parameters, "fade_out_s", *fade_out_s);
+            ("set_audio_fade", None)
+        }
+        EdlOp::SetAudioLead { lead_s, .. } => {
+            parameters.insert("lead_s".into(), serde_json::json!(lead_s));
+            ("set_audio_lead", None)
+        }
+        EdlOp::SetAudioTrail { trail_s, .. } => {
+            parameters.insert("trail_s".into(), serde_json::json!(trail_s));
+            ("set_audio_trail", None)
+        }
+        EdlOp::SetTrackAudio {
+            track,
+            role,
+            volume,
+            muted,
+            solo,
+        } => {
+            parameters.insert("track".into(), serde_json::json!(track));
+            insert_optional_str(&mut parameters, "role", role.as_deref());
+            insert_optional_f64(&mut parameters, "volume", *volume);
+            insert_optional_bool(&mut parameters, "muted", *muted);
+            insert_optional_bool(&mut parameters, "solo", *solo);
+            ("set_track_audio", None)
+        }
+        EdlOp::SetSpeed { factor, .. } => {
+            parameters.insert("factor".into(), serde_json::json!(factor));
+            ("set_speed", None)
+        }
+        EdlOp::SetOutputFormat {
+            aspect_ratio,
+            platform,
+            safe_area,
+        } => {
+            parameters.insert("aspect_ratio".into(), serde_json::json!(aspect_ratio));
+            insert_optional_str(&mut parameters, "platform", platform.as_deref());
+            insert_optional_str(&mut parameters, "safe_area", safe_area.as_deref());
+            ("set_output_format", None)
+        }
+        EdlOp::SetLoudnessTarget {
+            integrated_lufs,
+            true_peak_db,
+        } => {
+            parameters.insert("integrated_lufs".into(), serde_json::json!(integrated_lufs));
+            insert_optional_f64(&mut parameters, "true_peak_db", *true_peak_db);
+            ("set_loudness_target", None)
+        }
+        other => {
+            if let Some(value) = serde_json::to_value(other).ok() {
+                parameters.insert("op".into(), value);
+            }
+            (generic_operation_kind(other), None)
+        }
+    };
+    let (affected_clip_ids, affected_track_ids) =
+        affected_ids_from_locator(working, locator, op, op_source);
+    OperationMetadata {
+        operation_kind: operation_kind.to_string(),
+        affected_clip_ids,
+        affected_track_ids,
+        source: "apply_edl".to_string(),
+        parameters,
+    }
+}
+
+fn affected_ids_from_locator(
+    working: &Timeline,
+    locator: Option<ClipLocator>,
+    op: &EdlOp,
+    op_source: Option<&str>,
+) -> (Vec<String>, Vec<String>) {
+    if let Some(locator) = locator
+        && let Some(StackChild::Track(track)) = working.tracks.children.get(locator.track_index)
+    {
+        let track_ids = vec![track.name.clone()];
+        let clip_ids = track
+            .children
+            .get(locator.child_index)
+            .and_then(|child| match child {
+                TrackChild::Clip(clip) => Some(clip.name.clone()),
+                _ => None,
+            })
+            .into_iter()
+            .collect();
+        return (clip_ids, track_ids);
+    }
+    match op {
+        EdlOp::InsertClip { track, name, .. } => {
+            (name.iter().cloned().collect(), vec![track.clone()])
+        }
+        EdlOp::SetTrackAudio { track, .. }
+        | EdlOp::SetTrackAudioFx { track, .. }
+        | EdlOp::SetDucking { track, .. } => (Vec::new(), vec![track.clone()]),
+        _ => (
+            op_source.map(str::to_string).into_iter().collect(),
+            Vec::new(),
+        ),
+    }
+}
+
+fn generic_operation_kind(op: &EdlOp) -> &'static str {
+    match op {
+        EdlOp::ApplyMulticamPlan { .. } => "apply_multicam_plan",
+        EdlOp::InsertTransition { .. } => "insert_transition",
+        EdlOp::DeleteTransition { .. } => "delete_transition",
+        EdlOp::SetCutIntent { .. } => "set_cut_intent",
+        EdlOp::SetDucking { .. } => "set_ducking",
+        EdlOp::SetSyncGroup { .. } => "set_sync_group",
+        EdlOp::SetClipAudioFx { .. } => "set_clip_audio_fx",
+        EdlOp::SetTrackAudioFx { .. } => "set_track_audio_fx",
+        EdlOp::SetEffect { .. } => "set_effect",
+        EdlOp::SetTimeRemap { .. } => "set_time_remap",
+        EdlOp::SetFreeze { .. } => "set_freeze",
+        EdlOp::SetColorCorrection { .. } => "set_color_correction",
+        EdlOp::ApplyLut { .. } => "apply_lut",
+        EdlOp::RemoveLut { .. } => "remove_lut",
+        EdlOp::InsertTitle { .. } => "insert_title",
+        EdlOp::InsertRichTitle { .. } => "insert_rich_title",
+        EdlOp::InstantiateMotionTemplate { .. } => "instantiate_motion_template",
+        EdlOp::SetTitle { .. } => "set_title",
+        EdlOp::InsertCaption { .. } => "insert_caption",
+        EdlOp::InsertAnnotation { .. } => "insert_annotation",
+        EdlOp::SetPackageMetadata { .. } => "set_package_metadata",
+        EdlOp::SetBroadcastOverlay { .. } => "set_broadcast_overlay",
+        EdlOp::SetAssetCatalog { .. } => "set_asset_catalog",
+        EdlOp::SetSourceReview { .. } => "set_source_review",
+        EdlOp::ProfessionalTimelineEdit { .. } => "professional_timeline_edit",
+        EdlOp::AddProposalPackage { .. } => "add_proposal_package",
+        EdlOp::SetParameterAnimation { .. } => "set_parameter_animation",
+        EdlOp::SetMotionTemplate { .. } => "set_motion_template",
+        EdlOp::AttachComposition { .. } => "attach_composition",
+        EdlOp::SetTrackingPackage { .. } => "set_tracking_package",
+        EdlOp::AuthorSubjectReframeFromTrack { .. } => "author_subject_reframe_from_track",
+        EdlOp::SetColorFinishing { .. } => "set_color_finishing",
+        EdlOp::SetAudioFinishing { .. } => "set_audio_finishing",
+        EdlOp::SelectDeliveryProfile { .. } => "select_delivery_profile",
+        EdlOp::AddPreflightReport { .. } => "add_preflight_report",
+        EdlOp::SetWorkflowLens { .. } => "set_workflow_lens",
+        EdlOp::SetPipelineReadiness { .. } => "set_pipeline_readiness",
+        EdlOp::TrimClip { .. }
+        | EdlOp::DeleteClip { .. }
+        | EdlOp::SplitClip { .. }
+        | EdlOp::UntrimClip { .. }
+        | EdlOp::InsertClip { .. }
+        | EdlOp::InsertBRoll { .. }
+        | EdlOp::InsertPiP { .. }
+        | EdlOp::MoveClip { .. }
+        | EdlOp::SetVolume { .. }
+        | EdlOp::SetAudioFade { .. }
+        | EdlOp::SetAudioLead { .. }
+        | EdlOp::SetAudioTrail { .. }
+        | EdlOp::SetTrackAudio { .. }
+        | EdlOp::SetSpeed { .. }
+        | EdlOp::SetOutputFormat { .. }
+        | EdlOp::SetLoudnessTarget { .. } => "edl_op",
+    }
+}
+
+fn insert_optional_f64(
+    parameters: &mut BTreeMap<String, serde_json::Value>,
+    key: &str,
+    value: Option<f64>,
+) {
+    if let Some(value) = value {
+        parameters.insert(key.to_string(), serde_json::json!(value));
+    }
+}
+
+fn insert_optional_usize(
+    parameters: &mut BTreeMap<String, serde_json::Value>,
+    key: &str,
+    value: Option<usize>,
+) {
+    if let Some(value) = value {
+        parameters.insert(key.to_string(), serde_json::json!(value));
+    }
+}
+
+fn insert_optional_bool(
+    parameters: &mut BTreeMap<String, serde_json::Value>,
+    key: &str,
+    value: Option<bool>,
+) {
+    if let Some(value) = value {
+        parameters.insert(key.to_string(), serde_json::json!(value));
+    }
+}
+
+fn insert_optional_str(
+    parameters: &mut BTreeMap<String, serde_json::Value>,
+    key: &str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        parameters.insert(key.to_string(), serde_json::json!(value));
+    }
 }
 
 fn apply_author_subject_reframe_from_track(

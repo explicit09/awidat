@@ -74,6 +74,7 @@ impl ToolHandler for VeditShowTool {
             "timestamp": details.timestamp,
             "header": details.header,
             "full_message": details.full_message,
+            "action_metadata": vc::action_metadata_from_message(&details.full_message),
             "parents": details.parents,
             "diff": {
                 "from": diff.from_ref,
