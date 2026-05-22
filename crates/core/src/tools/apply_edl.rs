@@ -213,10 +213,12 @@ impl ToolHandler for ApplyEdlTool {
                         .iter()
                         .map(|a| a.description.clone())
                         .collect();
-                    if let Err(e) = crate::vc::auto_commit_apply(
+                    let action_metadata = action_metadata_for_applied(&outcome.applied);
+                    if let Err(e) = crate::vc::auto_commit_apply_with_metadata(
                         &repo,
                         &descriptions,
                         args.reasoning.as_deref(),
+                        Some(&action_metadata),
                     ) {
                         tracing::warn!(
                             error = %e,
@@ -269,10 +271,33 @@ impl ToolHandler for ApplyEdlTool {
             )
         };
         for op in &outcome.applied {
-            summary.push_str(&format!("\n  {}. {}", op.index + 1, op.description));
+            summary.push_str(&format!(
+                "\n  {}. {} ({})",
+                op.index + 1,
+                op.description,
+                format_applied_metadata(&op.metadata)
+            ));
         }
         Ok(ToolOutput::text(summary))
     }
+}
+
+fn action_metadata_for_applied(applied: &[crate::edl::AppliedOp]) -> crate::vc::ActionMetadata {
+    crate::vc::ActionMetadata {
+        source: Some("agent".to_string()),
+        operations: applied.iter().map(|op| op.metadata.clone()).collect(),
+    }
+}
+
+fn format_applied_metadata(metadata: &crate::edl::AppliedOpMetadata) -> String {
+    let clip_ids = metadata.affected_clip_ids.join(",");
+    let track_ids = metadata.affected_track_ids.join(",");
+    let params = serde_json::to_string(&metadata.parameters).unwrap_or_else(|_| "{}".into());
+    let source = metadata.source.as_deref().unwrap_or("unknown");
+    format!(
+        "kind={} affected_clip_ids=[{}] affected_track_ids=[{}] source={} params={}",
+        metadata.kind, clip_ids, track_ids, source, params
+    )
 }
 
 fn short_sha256(bytes: &[u8]) -> String {
@@ -903,6 +928,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_output_includes_command_style_metadata_without_changing_timeline() {
+        let dir = project_with_three_clips();
+        let before = Project::read(dir.path()).unwrap();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        let out = ApplyEdlTool
+            .handle(invoke(serde_json::json!({"edl": edl})), ctx_at(dir.path()))
+            .await
+            .unwrap();
+
+        assert!(out.content.contains("committed 1 op"));
+        assert!(out.content.contains("kind=trim_clip"), "{out:?}");
+        assert!(
+            out.content.contains("affected_clip_ids=[clip-1]"),
+            "{out:?}"
+        );
+        assert!(out.content.contains("affected_track_ids=[V1]"), "{out:?}");
+        assert!(out.content.contains("source=agent"), "{out:?}");
+        assert!(out.content.contains("params={\"end\":3.0}"), "{out:?}");
+
+        let after = Project::read(dir.path()).unwrap();
+        let StackChild::Track(before_track) = &before.timeline.tracks.children[0] else {
+            panic!()
+        };
+        let StackChild::Track(after_track) = &after.timeline.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(
+            before_track.children.len(),
+            after_track.children.len(),
+            "metadata enrichment must not add/remove timeline children"
+        );
+        let TrackChild::Clip(c) = &after_track.children[1] else {
+            panic!()
+        };
+        assert!((c.source_range.as_ref().unwrap().duration.to_seconds() - 3.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
     async fn dry_run_does_not_commit() {
         let dir = project_with_three_clips();
         let edl = "\
@@ -969,6 +1038,58 @@ mod tests {
             head.header.contains("clip-1") || head.header.contains("trim"),
             "auto-commit header doesn't reflect the op: {}",
             head.header
+        );
+    }
+
+    #[tokio::test]
+    async fn vedit_auto_commit_preserves_history_and_adds_action_metadata() {
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        ApplyEdlTool
+            .handle(
+                invoke(serde_json::json!({
+                    "edl": edl,
+                    "reasoning": "User asked for a shorter bravo beat."
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        let repo = crate::vc::open_or_init(dir.path()).unwrap();
+        let entries = crate::vc::log(&repo, 5).unwrap();
+        assert_eq!(entries.len(), 1);
+        let head = &entries[0];
+        assert!(
+            head.header.contains("clip-1") || head.header.contains("trim"),
+            "old compact history header should remain useful: {}",
+            head.header
+        );
+        assert!(
+            head.full_message
+                .contains("Agent reasoning: User asked for a shorter bravo beat."),
+            "old reasoning body should remain present: {}",
+            head.full_message
+        );
+        let metadata = head
+            .action_metadata
+            .as_ref()
+            .expect("auto-commit should expose action metadata");
+        assert_eq!(metadata.source.as_deref(), Some("agent"));
+        assert_eq!(metadata.operations.len(), 1);
+        let op = &metadata.operations[0];
+        assert_eq!(op.kind, "trim_clip");
+        assert_eq!(op.affected_clip_ids, vec!["clip-1"]);
+        assert_eq!(op.affected_track_ids, vec!["V1"]);
+        assert_eq!(
+            op.parameters.get("end").and_then(serde_json::Value::as_f64),
+            Some(3.0)
         );
     }
 

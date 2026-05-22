@@ -73,6 +73,7 @@ impl ToolHandler for VeditShowTool {
             "timeline_hash": details.timeline_hash,
             "timestamp": details.timestamp,
             "header": details.header,
+            "action_metadata": details.action_metadata,
             "full_message": details.full_message,
             "parents": details.parents,
             "diff": {

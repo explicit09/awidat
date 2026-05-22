@@ -202,6 +202,14 @@ pub async fn accept_proposal(
         // would stamp every desktop apply_edl as "awidat agent" even
         // though the user is the one driving the keyboard.
         let seat_author = crate::commands::vedit::desktop_commit_author();
+        let action_metadata = awidat_core::vc::ActionMetadata {
+            source: Some("agent".into()),
+            operations: proposal
+                .applied
+                .iter()
+                .map(|a| a.metadata.clone())
+                .collect(),
+        };
         tokio::task::spawn_blocking(move || -> Result<(), String> {
             let mut project =
                 Project::read(&project_root).map_err(|e| format!("project read: {e}"))?;
@@ -217,11 +225,12 @@ pub async fn accept_proposal(
             // `None` for the author falls back to the env + default chain.
             match awidat_core::vc::open_or_init(&project_root) {
                 Ok(repo) => {
-                    if let Err(e) = awidat_core::vc::auto_commit_apply_as(
+                    if let Err(e) = awidat_core::vc::auto_commit_apply_as_with_metadata(
                         &repo,
                         &applied_descriptions,
                         None,
                         seat_author,
+                        Some(&action_metadata),
                     ) {
                         tracing::warn!(
                             error = %e,
