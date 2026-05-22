@@ -21,6 +21,7 @@ import { useMediaStore } from "./media/store";
 import { mediaStreamUrl } from "./media/mediaStreamUrl";
 import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
+import { MediaOfflineBanner } from "./media/MediaOfflineBanner";
 import { useTranscriptStore } from "./transcript/store";
 import { TranscriptView } from "./transcript/TranscriptView";
 import { VeditPanel } from "./vedit/VeditPanel";
@@ -1382,7 +1383,9 @@ function App() {
       }
       preview={
         isEditStage ? (
-          <PreviewSurface
+          <>
+            <MediaOfflineBanner />
+            <PreviewSurface
             proposalName={demoMode ? "Podcast Tightening v1" : activeProposal?.summary ?? "Source review"}
             pendingCount={effectiveChanges.length}
             changes={effectiveChanges}
@@ -1431,6 +1434,7 @@ function App() {
             onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
             onFullscreen={() => setInspectorCollapsed(false)}
           />
+          </>
         ) : stage === "deliver" ? (
           realDeliveryWorkspace
         ) : (

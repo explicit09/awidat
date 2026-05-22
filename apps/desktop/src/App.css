@@ -5866,3 +5866,95 @@ button {
   color: var(--text-muted);
   margin: 4px 6px;
 }
+
+/* ─── Media offline banner ────────────────────────────────────────
+   Compact red strip listing every clip whose source asset has moved
+   or been deleted on disk. Each row exposes a Locate button that
+   re-points the OTIO at the new location via `relink_missing_asset`. */
+.media-offline-banner {
+  border: 1px solid rgba(248, 81, 73, 0.45);
+  background: linear-gradient(
+    180deg,
+    rgba(248, 81, 73, 0.10),
+    rgba(248, 81, 73, 0.04)
+  );
+  color: #ffd6d1;
+  padding: 10px 14px;
+  font-size: 12px;
+}
+
+.media-offline-banner header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.media-offline-banner header strong {
+  color: #ff9a8d;
+  font-weight: 600;
+}
+
+.media-offline-banner-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.media-offline-banner ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.media-offline-banner li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.media-offline-banner-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-offline-banner-count {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.media-offline-banner li button {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(248, 81, 73, 0.55);
+  border-radius: var(--radius-sm);
+  background: rgba(248, 81, 73, 0.18);
+  color: #ffb4ae;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.media-offline-banner li button:hover {
+  background: rgba(248, 81, 73, 0.28);
+}
+
+.media-offline-banner li button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.media-offline-banner-error {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  color: #ffb4ae;
+  font-size: 11px;
+}
