@@ -1528,11 +1528,6 @@ function App() {
                   void loadIndexerConfig();
                   void runIndexers();
                 }}
-                onAskAgent={() => {
-                  setStage("edit");
-                  setRightPanel("inspector");
-                  void runEngineCommand("Create a first cut from the indexed media and explain the edit decisions.");
-                }}
                 onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
                 onOpenConfigPath={openConfigPath}
                 onRevealConfigPath={revealConfigPath}
@@ -2252,7 +2247,6 @@ function IndexReadinessPanel({
   indexerConfig,
   ready,
   onRunIndex,
-  onAskAgent,
   onToggleIndexer,
   onOpenConfigPath,
   onRevealConfigPath,
@@ -2263,7 +2257,6 @@ function IndexReadinessPanel({
   indexerConfig?: IndexerConfigSnapshot;
   ready: boolean;
   onRunIndex: () => void;
-  onAskAgent: () => void;
   onToggleIndexer: (indexer: IndexerConfigEntry) => void;
   onOpenConfigPath: (path: string) => void;
   onRevealConfigPath: (path: string) => void;
@@ -2420,10 +2413,27 @@ function IndexReadinessPanel({
           </Stack>
         ))}
       </Stack>
+      {/* Status footer — when indexing is finished and usable, tell
+          the user to switch to the Agent rail to actually do work.
+          The action surface for "ask the agent" belongs in the rail
+          where they're typing commands, not in the index panel. */}
       <Stack gap="2">
-        <Button variant="primary" onClick={onAskAgent} disabled={sourceCount === 0}>
-          {usable ? "Ask agent for first cut" : "Ask agent once media is added"}
-        </Button>
+        <div
+          className={cn(
+            "rounded-[var(--radius-sm)] border px-3 py-2 text-[var(--text-caption)]",
+            usable
+              ? "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.06)] text-[var(--color-pill-ready-text)]"
+              : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-muted)]",
+          )}
+        >
+          {sourceCount === 0
+            ? "Import media to start indexing."
+            : usable
+              ? "Indexed — ready for the agent. Open the Agent rail to direct an edit."
+              : inFlightCount > 0
+                ? `Indexing… ${inFlightCount} signal${inFlightCount === 1 ? "" : "s"} in flight.`
+                : "Index pending. Re-run indexers to populate evidence."}
+        </div>
         <button
           type="button"
           onClick={onRunIndex}

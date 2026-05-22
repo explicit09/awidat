@@ -449,7 +449,7 @@ export function CommandRail({
           // card so the empty rail doesn't read as a pinned-to-top
           // half-rendered panel.
           <div className="w-full max-w-[320px]">
-            <EmptyState />
+            <EmptyState onUseSuggestion={(prompt) => setDraft(prompt)} />
           </div>
         ) : (
         <Stack gap="3">
@@ -678,23 +678,53 @@ function PlanRow({ step }: { step: PlanItem }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({
+  onUseSuggestion,
+}: {
+  onUseSuggestion?: (prompt: string) => void;
+}) {
+  // Starter prompts the agent can actually act on. Click to drop the
+  // text into the composer (the user can tweak before sending). These
+  // replace the now-removed "Ask agent for first cut" button — moving
+  // the agent-launch surface here lets the user pick *what kind* of
+  // cut they want instead of getting a generic one.
+  const starters = [
+    "Cut this into a 60-second highlight reel.",
+    "Remove silences and filler words.",
+    "Find the strongest opening hook.",
+    "Show why each cut was made.",
+  ];
   return (
     <Stack gap="2" className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-3 text-[var(--color-text-muted)]">
       <span className="text-[var(--text-caption)] leading-relaxed">
-        Type an editing goal and Awidat will use the attached project, clip, and timeline context.
+        Type an editing goal — Awidat uses the attached project, clip, and timeline context.
       </span>
       <Divider />
       <div className="grid gap-1">
-        {[
-          "Show why this cut was made.",
-          "Make this section slower.",
-          "Replace this b-roll.",
-        ].map((s) => (
-          <span key={s} className="text-[var(--text-caption)] text-[var(--color-text-secondary)] leading-snug">
-            · {s}
-          </span>
-        ))}
+        {starters.map((s) =>
+          onUseSuggestion ? (
+            <button
+              key={s}
+              type="button"
+              onClick={() => onUseSuggestion(s)}
+              className="group flex items-start gap-1.5 rounded-[var(--radius-xs)] px-1 py-0.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+            >
+              <span className="mt-0.5 text-[var(--color-text-muted)] group-hover:text-[var(--color-brand-secondary)]">
+                ›
+              </span>
+              <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)] leading-snug group-hover:text-[var(--color-text-primary)]">
+                {s}
+              </span>
+            </button>
+          ) : (
+            <span
+              key={s}
+              className="text-[var(--text-caption)] text-[var(--color-text-secondary)] leading-snug"
+            >
+              · {s}
+            </span>
+          ),
+        )}
       </div>
     </Stack>
   );
