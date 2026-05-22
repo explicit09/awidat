@@ -145,154 +145,180 @@ export function CommandRail({
     setDraft("");
   }
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-[var(--color-border-subtle)] p-2">
-        <Inline justify="between" align="center" gap="2">
+  const hasWork =
+    conversation.length > 0 ||
+    activity.length > 0 ||
+    plan.length > 0 ||
+    suggestions.length > 0 ||
+    taskProgress !== undefined;
+
+  const sessionChrome = (
+    <div className={cn("shrink-0 p-2", focused ? "" : "border-b border-[var(--color-border-subtle)]")}>
+      <Inline justify="between" align="center" gap="2">
+        <button
+          type="button"
+          className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+          onClick={() => setHistoryOpen((open) => !open)}
+          disabled={chatLoading}
+          aria-expanded={historyOpen}
+          title="Chat history"
+        >
+          <span className="block truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
+            {chatLoading ? "Loading chats..." : activeChatSession?.title ?? "New chat"}
+          </span>
+          <span className="block truncate font-mono text-[10px] text-[var(--color-text-muted)]">
+            {activeChatSession ? `${activeChatSession.messageCount} messages` : "Fresh context"}
+          </span>
+        </button>
+        <Inline gap="1" align="center" className="shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={chatLoading}
+            onClick={() => setHistoryOpen((open) => !open)}
+            leadingIcon={<History className="h-3.5 w-3.5 stroke-[1.75]" />}
+            title="Past chats"
+          >
+            History
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={running || chatLoading}
+            onClick={onNewChat}
+            leadingIcon={<Plus className="h-3.5 w-3.5 stroke-[1.75]" />}
+            title="New chat"
+          >
+            New
+          </Button>
+          {onToggleFocus ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onToggleFocus}
+              leadingIcon={
+                focused ? (
+                  <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+                )
+              }
+              title={focused ? "Restore workspace" : "Focus mode"}
+            >
+              {focused ? "Restore" : "Focus"}
+            </Button>
+          ) : null}
+        </Inline>
+      </Inline>
+      {historyOpen ? (
+        <div className="mt-2 max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-md)]">
           <button
             type="button"
-            className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
-            onClick={() => setHistoryOpen((open) => !open)}
-            disabled={chatLoading}
-            aria-expanded={historyOpen}
-            title="Chat history"
+            className={cn(
+              "flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
+              activeChatSession === null ? "bg-[var(--color-surface-selected)]" : "",
+            )}
+            disabled={running || chatLoading}
+            onClick={() => {
+              onNewChat?.();
+              setHistoryOpen(false);
+            }}
           >
-            <span className="block truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
-              {chatLoading ? "Loading chats..." : activeChatSession?.title ?? "New chat"}
+            <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
+              New chat
             </span>
-            <span className="block truncate font-mono text-[10px] text-[var(--color-text-muted)]">
-              {activeChatSession
-                ? `${activeChatSession.messageCount} messages`
-                : "Fresh context"}
+            <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
+              ready
             </span>
           </button>
-          <Inline gap="1" align="center" className="shrink-0">
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={chatLoading}
-              onClick={() => setHistoryOpen((open) => !open)}
-              leadingIcon={<History className="h-3.5 w-3.5 stroke-[1.75]" />}
-              title="Past chats"
-            >
-              History
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={running || chatLoading}
-              onClick={onNewChat}
-              leadingIcon={<Plus className="h-3.5 w-3.5 stroke-[1.75]" />}
-              title="New chat"
-            >
-              New
-            </Button>
-            {onToggleFocus ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onToggleFocus}
-                leadingIcon={
-                  focused ? (
-                    <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
-                  ) : (
-                    <Maximize2 className="h-3.5 w-3.5 stroke-[1.75]" />
-                  )
-                }
-                title={focused ? "Restore workspace" : "Focus mode"}
-              >
-                {focused ? "Restore" : "Focus"}
-              </Button>
-            ) : null}
-          </Inline>
-        </Inline>
-        {historyOpen ? (
-          <div className="mt-2 max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-md)]">
+          {chatSessions.map((session) => (
             <button
+              key={session.logPath}
               type="button"
               className={cn(
-                "flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
-                activeChatSession === null ? "bg-[var(--color-surface-selected)]" : "",
+                "mt-1 flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
+                activeChatSession?.logPath === session.logPath
+                  ? "bg-[var(--color-surface-selected)]"
+                  : "",
               )}
               disabled={running || chatLoading}
               onClick={() => {
-                onNewChat?.();
+                onSelectChatSession?.(session);
                 setHistoryOpen(false);
               }}
             >
               <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
-                New chat
+                {session.title}
               </span>
               <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
-                ready
+                {formatChatDate(session.startedAt)}
               </span>
             </button>
-            {chatSessions.map((session) => (
-              <button
-                key={session.logPath}
-                type="button"
-                className={cn(
-                  "mt-1 flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
-                  activeChatSession?.logPath === session.logPath
-                    ? "bg-[var(--color-surface-selected)]"
-                    : "",
-                )}
-                disabled={running || chatLoading}
-                onClick={() => {
-                  onSelectChatSession?.(session);
-                  setHistoryOpen(false);
-                }}
-              >
-                <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
-                  {session.title}
-                </span>
-                <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
-                  {formatChatDate(session.startedAt)}
-                </span>
-              </button>
-            ))}
-            {!chatLoading && chatSessions.length === 0 ? (
-              <p className="px-2 py-2 text-[var(--text-caption)] text-[var(--color-text-muted)]">
-                No saved chats for this project yet.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+          ))}
+          {!chatLoading && chatSessions.length === 0 ? (
+            <p className="px-2 py-2 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+              No saved chats for this project yet.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 
-      {/* Composer */}
-      <div className="shrink-0 p-3 border-b border-[var(--color-border-subtle)]">
-        <Stack gap="3">
+  const composer = (
+    <div
+      className={cn(
+        "shrink-0 p-3",
+        focused ? "pb-6" : "border-t border-[var(--color-border-subtle)]",
+      )}
+    >
+      <Stack gap={focused ? "2" : "3"}>
+        {focused ? (
+          <Inline gap="2" align="center" className="px-1">
+            <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-muted)]">
+              {activeChatSession?.title ?? "New chat"}
+            </span>
+            <span className="font-mono text-[10px] text-[var(--color-text-muted)]">Local</span>
+          </Inline>
+        ) : (
           <Inline gap="2" align="center">
             <Terminal className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand-secondary)]" />
             <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
               Agent Command
             </span>
           </Inline>
-          <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] focus-within:border-[var(--color-border-focus)] transition-colors">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder={
-                hasProject
-                  ? "Cut this into a tight 8-minute episode."
-                  : "Open a project to begin."
+        )}
+        <div
+          className={cn(
+            "rounded-[var(--radius-md)] border bg-[var(--color-surface-input)] transition-colors focus-within:border-[var(--color-border-focus)]",
+            focused ? "border-[rgba(255,255,255,0.22)] shadow-[0_18px_70px_rgba(0,0,0,0.3)]" : "border-[var(--color-border-subtle)]",
+          )}
+        >
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                submit();
               }
-              rows={3}
-              disabled={!hasProject}
-              className={cn(
-                "w-full resize-none bg-transparent px-3 py-2",
-                "text-[var(--text-body)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]",
-                "outline-none disabled:cursor-not-allowed disabled:opacity-50",
-              )}
-            />
-            <Inline justify="between" align="center" gap="2" className="px-2 py-1.5 border-t border-[var(--color-border-subtle)]">
+            }}
+            placeholder={
+              hasProject
+                ? "Plan, Build, / for commands, @ for context"
+                : "Open a project to begin."
+            }
+            rows={focused ? 4 : 3}
+            disabled={!hasProject}
+            className={cn(
+              "w-full resize-none bg-transparent px-3 py-2.5",
+              "text-[var(--text-body)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]",
+              "outline-none disabled:cursor-not-allowed disabled:opacity-50",
+            )}
+          />
+          <Inline justify="between" align="center" gap="2" className="px-2 py-1.5 border-t border-[var(--color-border-subtle)]">
+            <Inline gap="2" align="center" className="min-w-0">
+              <Pill status="ready" dot={false}>Agent</Pill>
               <span
                 className={cn(
                   "min-w-0 truncate text-[var(--text-micro)] font-semibold",
@@ -300,57 +326,76 @@ export function CommandRail({
                 )}
                 title={sendDisabledReason ?? "Command-Enter sends the command."}
               >
-                {sendDisabledReason ?? "⌘↩ sends"}
+                {sendDisabledReason ?? "Auto · ⌘↩ sends"}
               </span>
-              {running ? (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={onCancel}
-                  leadingIcon={<CircleStop className="h-3.5 w-3.5 stroke-[1.75]" />}
-                >
-                  Stop
-                </Button>
-              ) : (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={Boolean(sendDisabledReason)}
-                  onClick={submit}
-                  trailingIcon={<SendHorizontal className="h-3.5 w-3.5 stroke-[1.75]" />}
-                  title={sendDisabledReason}
-                >
-                  Send
-                </Button>
-              )}
             </Inline>
+            {running ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={onCancel}
+                leadingIcon={<CircleStop className="h-3.5 w-3.5 stroke-[1.75]" />}
+              >
+                Stop
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={Boolean(sendDisabledReason)}
+                onClick={submit}
+                trailingIcon={<SendHorizontal className="h-3.5 w-3.5 stroke-[1.75]" />}
+                title={sendDisabledReason}
+              >
+                Send
+              </Button>
+            )}
+          </Inline>
+        </div>
+        {contextChips.length > 0 ? (
+          <div className={cn("flex min-w-0 gap-1", focused ? "flex-row flex-wrap" : "flex-col")}>
+            {contextChips.map((chip, i) => (
+              <button
+                key={`${chip.label}-${i}`}
+                type="button"
+                onClick={() => onRemoveChip?.(chip, i)}
+                className={cn(
+                  "flex min-h-5 min-w-0 items-center gap-1 rounded-[var(--radius-xs)] border px-1.5 py-0.5 text-left text-[var(--text-caption)] hover:text-[var(--color-text-primary)] transition-colors",
+                  focused ? "max-w-[220px]" : "w-full",
+                  contextChipClass(chip.kind),
+                )}
+                aria-label={`Remove ${chip.label}`}
+                title={`Remove ${chip.label}`}
+              >
+                <Paperclip className="h-3 w-3 shrink-0 stroke-[1.75]" />
+                <span className="min-w-0 flex-1 truncate">{chip.label}</span>
+                {onRemoveChip ? <X className="h-3 w-3 shrink-0 stroke-[1.75] opacity-70" /> : null}
+              </button>
+            ))}
           </div>
-          {contextChips.length > 0 ? (
-            <div className="flex min-w-0 flex-col gap-1">
-              {contextChips.map((chip, i) => (
-                <button
-                  key={`${chip.label}-${i}`}
-                  type="button"
-                  onClick={() => onRemoveChip?.(chip, i)}
-                  className={cn(
-                    "flex min-h-5 w-full min-w-0 items-center gap-1 rounded-[var(--radius-xs)] border px-1.5 py-0.5 text-left text-[var(--text-caption)] hover:text-[var(--color-text-primary)] transition-colors",
-                    contextChipClass(chip.kind),
-                  )}
-                  aria-label={`Remove ${chip.label}`}
-                  title={`Remove ${chip.label}`}
-                >
-                  <Paperclip className="h-3 w-3 shrink-0 stroke-[1.75]" />
-                  <span className="min-w-0 flex-1 truncate">{chip.label}</span>
-                  {onRemoveChip ? <X className="h-3 w-3 shrink-0 stroke-[1.75] opacity-70" /> : null}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </Stack>
-      </div>
+        ) : null}
+      </Stack>
+    </div>
+  );
 
-      {/* Scroll region: plan, progress, activity, suggestions */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+  return (
+    <div
+      className={cn(
+        "flex h-full min-h-0 flex-col",
+        focused ? "bg-transparent" : "",
+      )}
+    >
+      {sessionChrome}
+
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto p-3",
+          focused && !hasWork ? "flex items-center justify-center" : "",
+        )}
+      >
+        {focused && !hasWork ? (
+          <div className="w-full max-w-[720px]">{composer}</div>
+        ) : (
         <Stack gap="3">
           {/* Task progress */}
           {taskProgress ? (
@@ -513,7 +558,9 @@ export function CommandRail({
             <EmptyState />
           ) : null}
         </Stack>
+        )}
       </div>
+      {focused && !hasWork ? null : composer}
     </div>
   );
 }
