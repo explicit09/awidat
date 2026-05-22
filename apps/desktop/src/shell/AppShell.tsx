@@ -28,6 +28,7 @@ export type AppShellProps = {
   commandRail?: ReactNode;
   preview?: ReactNode;
   timeline?: ReactNode;
+  timelineCollapsed?: boolean;
   inspector?: ReactNode;
   inspectorCollapsed?: boolean;
   /** Optional whole-workspace override for screens whose spec layout is not the three-pane cockpit. */
@@ -42,6 +43,7 @@ export function AppShell({
   commandRail,
   preview,
   timeline,
+  timelineCollapsed = false,
   inspector,
   inspectorCollapsed = false,
   workspace,
@@ -81,7 +83,14 @@ export function AppShell({
           <aside className="panel min-h-0 overflow-y-auto">
             {commandRail ?? <RegionPlaceholder label="Agent / Command Rail · Phase 2.4" />}
           </aside>
-          <main className="grid grid-rows-[minmax(260px,48vh)_minmax(220px,1fr)] min-h-0 min-w-0 gap-2">
+          <main
+            className={cn(
+              "grid min-h-0 min-w-0 gap-2",
+              timelineCollapsed
+                ? "grid-rows-[minmax(260px,1fr)_44px]"
+                : "grid-rows-[minmax(260px,48vh)_minmax(220px,1fr)]",
+            )}
+          >
             <section className="panel min-h-0 min-w-0 overflow-hidden">
               {preview ?? <RegionPlaceholder label="Preview / Review surface · Phase 2.5" />}
             </section>

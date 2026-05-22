@@ -80,6 +80,7 @@ const SPEC_SCREENS = [
       "Podcast Tightening v1",
       "Proposal Inspector",
       "Timeline",
+      "Vedit",
       "Evidence",
     ],
   },
@@ -351,6 +352,30 @@ await check("timeline and inspector expose review evidence", async () => {
   ]) {
     assert.ok(body.includes(expected.toLowerCase()), `missing timeline/inspector text: ${expected}`);
   }
+  await page.close();
+});
+
+await check("edit dock exposes transcript and Vedit without leaving Edit", async () => {
+  const { page, errors } = await makePage();
+  await page.goto(BASE_URL, { waitUntil: "networkidle" });
+  await page.locator(".edit-dock-header").getByRole("button", { name: "Transcript" }).click();
+  let body = (await page.textContent("body")).toLowerCase();
+  assert.ok(
+    body.includes("no transcript") || body.includes("loading transcript") || body.includes("segments"),
+    "transcript panel should be reachable",
+  );
+  await page.locator(".edit-dock-header").getByRole("button", { name: "Vedit" }).click();
+  body = (await page.textContent("body")).toLowerCase();
+  assert.ok(body.includes("timeline history") || body.includes("no vedit commits yet"), "Vedit panel should be reachable");
+  await page.getByTitle("Collapse panel").click();
+  body = (await page.textContent("body")).toLowerCase();
+  assert.ok(body.includes("vedit panel collapsed"), "collapsed dock state should be visible");
+  await page.getByRole("button", { name: "Pop out" }).click();
+  const dialog = page.getByRole("dialog", { name: "Vedit popout" });
+  await dialog.waitFor({ state: "visible" });
+  const box = await dialog.boundingBox();
+  assert.ok(box && box.y < 120 && box.height > 400, "Vedit popout should be visible in the viewport");
+  assert.deepEqual(errors, []);
   await page.close();
 });
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useTimelineStore } from "../timeline/store";
 
 type VeditCommitEntry = {
@@ -34,6 +34,14 @@ export function VeditPanel() {
   function load() {
     let cancelled = false;
     setLoading(true);
+    if (!isTauri()) {
+      setEntries([]);
+      setError(null);
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
     invoke<VeditCommitEntry[]>("list_vedit_commits", { limit: 30 })
       .then((next) => {
         if (!cancelled) {
