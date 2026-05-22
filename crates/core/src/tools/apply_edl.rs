@@ -278,6 +278,11 @@ impl ToolHandler for ApplyEdlTool {
                 format_applied_metadata(&op.metadata)
             ));
         }
+        let operation_metadata: Vec<_> = outcome.applied.iter().map(|op| &op.metadata).collect();
+        if let Ok(json) = serde_json::to_string(&operation_metadata) {
+            summary.push_str("\nmetadata: ");
+            summary.push_str(&json);
+        }
         Ok(ToolOutput::text(summary))
     }
 }
@@ -1039,6 +1044,44 @@ mod tests {
             "auto-commit header doesn't reflect the op: {}",
             head.header
         );
+    }
+
+    #[tokio::test]
+    async fn apply_output_includes_command_history_metadata() {
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        let out = ApplyEdlTool
+            .handle(
+                invoke(serde_json::json!({
+                    "edl": edl,
+                    "reasoning": "User asked for tighter pacing on the bravo segment."
+                })),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+
+        assert!(out.content.contains("committed 1 op"));
+        assert!(out.content.contains("\"kind\":\"trim_clip\""));
+        assert!(out.content.contains("\"affected_clip_ids\":[\"clip-1\"]"));
+        assert!(out.content.contains("\"affected_track_ids\":[\"V1\"]"));
+        assert!(out.content.contains("\"source\":\"agent\""));
+        assert!(out.content.contains("\"end\":3.0"));
+
+        let p = Project::read(dir.path()).unwrap();
+        let StackChild::Track(t) = &p.timeline.tracks.children[0] else {
+            panic!()
+        };
+        let TrackChild::Clip(c) = &t.children[1] else {
+            panic!()
+        };
+        assert!((c.source_range.as_ref().unwrap().duration.to_seconds() - 3.0).abs() < 1e-9);
     }
 
     #[tokio::test]

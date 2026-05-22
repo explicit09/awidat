@@ -156,6 +156,7 @@ fn push_lowered(intent: EditorialIntent, ops: &mut Vec<EdlOp>) {
         EditorialIntent::SplitClip(intent) => ops.push(EdlOp::SplitClip {
             anchor: intent.anchor,
             at_s: intent.at_s,
+            snap: None::<SnapOptions>,
         }),
         EditorialIntent::TrimClip(intent) => ops.push(EdlOp::TrimClip {
             anchor: intent.anchor,

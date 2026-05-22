@@ -408,7 +408,13 @@ pub fn auto_commit_apply_as(
     agent_reasoning: Option<&str>,
     author_override: Option<CommitAuthor>,
 ) -> Result<CommitOutcome, VcError> {
-    auto_commit_apply_as_with_metadata(repo, op_descriptions, agent_reasoning, author_override, None)
+    auto_commit_apply_as_with_metadata(
+        repo,
+        op_descriptions,
+        agent_reasoning,
+        author_override,
+        None,
+    )
 }
 
 /// Auto-commit an apply_edl envelope with optional structured action metadata.
@@ -418,7 +424,13 @@ pub fn auto_commit_apply_with_metadata(
     agent_reasoning: Option<&str>,
     action_metadata: Option<&ActionMetadata>,
 ) -> Result<CommitOutcome, VcError> {
-    auto_commit_apply_as_with_metadata(repo, op_descriptions, agent_reasoning, None, action_metadata)
+    auto_commit_apply_as_with_metadata(
+        repo,
+        op_descriptions,
+        agent_reasoning,
+        None,
+        action_metadata,
+    )
 }
 
 /// Auto-commit an apply_edl envelope with optional author attribution and metadata.
@@ -448,6 +460,11 @@ pub fn auto_commit_apply_as_with_metadata(
         timeline_hash,
         message,
     })
+}
+
+/// Parse action metadata from a commit message. Old commits return `None`.
+pub fn action_metadata_from_message(message: &str) -> Option<ActionMetadata> {
+    parse_action_metadata(message)
 }
 
 /// Build a one-line header from a list of op descriptions.
@@ -1870,6 +1887,16 @@ mod tests {
         assert_eq!(lines[1], "");
         assert!(lines[2].starts_with("Agent reasoning: "));
         assert!(lines[2].contains("tighter pacing"));
+    }
+
+    #[test]
+    fn old_commit_messages_have_no_action_metadata() {
+        let message = format_commit_message(
+            "Trim clip-1",
+            Some("User asked for tighter pacing before action logs existed."),
+        );
+
+        assert_eq!(action_metadata_from_message(&message), None);
     }
 
     #[test]
