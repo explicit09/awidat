@@ -28,6 +28,7 @@ import { getBuckets, onWaveformDecoded } from "./waveformCache";
 import { useTimelineSelectionStore } from "../properties/store";
 import { shouldKeepMoveDraft } from "./moveDraft";
 import { collectSnapTargets, snapTime } from "./snap";
+import { cacheStripSegments, type CacheStripInput } from "./cacheStrip";
 
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the
  *  default pane width without horizontal scroll. */
@@ -323,7 +324,10 @@ function TimelineCanvas({
       ppsRef.current = pps;
       onLayout(pps, cssWidth);
 
-      drawRuler(ctx, cssWidth, totalDuration, pps);
+      const cacheSegments = cacheStripSegments(
+        collectCacheStripInputs(snapshot.tracks),
+      );
+      drawRuler(ctx, cssWidth, totalDuration, pps, cacheSegments);
 
       const selectedKey = selectedClipKey
         ? `${selectedClipKey.trackIndex}:${selectedClipKey.clipIndex}`
@@ -969,6 +973,38 @@ function drawMoveGhost(
   }
 }
 
+/** Walk every video-bearing clip in the timeline and emit (start, end,
+ *  kind) ranges for the cache strip. Audio-only clips are skipped —
+ *  the strip is about visual playback, not audio buffering. */
+function collectCacheStripInputs(
+  tracks: { kind: string; items: TimelineItem[] }[],
+): CacheStripInput[] {
+  const ranges: CacheStripInput[] = [];
+  for (const track of tracks) {
+    if (track.kind === "audio") continue;
+    for (const item of track.items) {
+      if (item.kind !== "clip") continue;
+      if (item.duration_s <= 0) continue;
+      const start = item.track_start_s;
+      const end = start + item.duration_s;
+      const kind = item.playable_kind ?? "missing";
+      ranges.push({ startS: start, endS: end, kind });
+    }
+  }
+  // Order by start time so cacheStripSegments can merge consecutive
+  // same-kind ranges in one pass.
+  ranges.sort((a, b) => a.startS - b.startS);
+  return ranges;
+}
+
+function cacheStripColor(kind: CacheStripInput["kind"]): string {
+  switch (kind) {
+    case "proxy":   return "#5ab676"; // var(--accent-success)
+    case "source":  return "#d8a043"; // var(--accent-warning)
+    case "missing": return "#e25b5b"; // var(--accent-danger)
+  }
+}
+
 /** Draw the time ruler with tick marks every 1, 5, or 10 seconds
  *  depending on zoom. Larger ticks are labeled. */
 function drawRuler(
@@ -976,6 +1012,7 @@ function drawRuler(
   width: number,
   duration: number,
   pps: number,
+  cacheSegments: CacheStripInput[],
 ) {
   ctx.fillStyle = "#151711";
   ctx.fillRect(0, 0, width, RULER_HEIGHT);
@@ -1005,6 +1042,21 @@ function drawRuler(
     ctx.lineTo(x, RULER_HEIGHT);
     ctx.stroke();
     ctx.fillText(formatTime(t), x + 4, RULER_HEIGHT / 2 - 1);
+  }
+
+  // Paint the cache strip — a thin colored bar along the bottom edge
+  // of the ruler that tints each region by cache state. Helps the user
+  // see at a glance which parts of the timeline will play smoothly
+  // (proxy = green), which fall back to source (amber), and which are
+  // missing media (red).
+  const stripHeight = 3;
+  const stripY = RULER_HEIGHT - stripHeight - 0.5;
+  for (const seg of cacheSegments) {
+    const x0 = Math.max(0, Math.round(seg.startS * pps));
+    const x1 = Math.min(width, Math.round(seg.endS * pps));
+    if (x1 <= x0) continue;
+    ctx.fillStyle = cacheStripColor(seg.kind);
+    ctx.fillRect(x0, stripY, x1 - x0, stripHeight);
   }
 }
 
