@@ -218,7 +218,7 @@ impl ToolHandler for VerifyRenderTool {
     }
 
     fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        false
+        true
     }
 
     async fn handle(
@@ -405,7 +405,7 @@ async fn verify_render_output(
         &long_black_ranges,
     );
 
-    Ok(VerifyRenderReport {
+    let report = VerifyRenderReport {
         passed: gates.iter().all(|gate| gate.passed),
         mode: options.mode,
         output_path: output_path.display().to_string(),
@@ -413,6 +413,61 @@ async fn verify_render_output(
         actual_duration_s: probe.duration_s,
         gates,
         timeline_manifest,
+    };
+    write_verification_evidence(output_path, &report)?;
+    Ok(report)
+}
+
+fn verification_report_path_for_output(output_path: &Path) -> PathBuf {
+    let stem = output_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("render");
+    output_path.with_file_name(format!("{stem}.verify-render.json"))
+}
+
+fn write_verification_evidence(
+    output_path: &Path,
+    report: &VerifyRenderReport,
+) -> Result<PathBuf, FunctionCallError> {
+    let report_path = verification_report_path_for_output(output_path);
+    let bytes = serde_json::to_vec_pretty(report).map_err(|e| {
+        FunctionCallError::RespondToModel(format!("verify_render: encode report artifact: {e}"))
+    })?;
+    std::fs::write(&report_path, bytes).map_err(|e| {
+        FunctionCallError::RespondToModel(format!(
+            "verify_render: write report {}: {e}",
+            report_path.display()
+        ))
+    })?;
+    attach_verification_summary(output_path, &report_path, report)?;
+    Ok(report_path)
+}
+
+fn attach_verification_summary(
+    output_path: &Path,
+    report_path: &Path,
+    report: &VerifyRenderReport,
+) -> Result<(), FunctionCallError> {
+    let manifest_path = awidat_render::manifest_path_for_output(output_path);
+    if !manifest_path.is_file() {
+        return Ok(());
+    }
+    let mut manifest = awidat_render::read_render_manifest(&manifest_path).map_err(|e| {
+        FunctionCallError::RespondToModel(format!(
+            "verify_render: read render manifest {}: {e}",
+            manifest_path.display()
+        ))
+    })?;
+    manifest.verification = Some(awidat_render::RenderVerificationSummary {
+        status: if report.passed { "passed" } else { "failed" }.into(),
+        report_path: report_path.to_string_lossy().into_owned(),
+    });
+    awidat_render::write_render_manifest(&manifest_path, &manifest).map_err(|e| {
+        FunctionCallError::RespondToModel(format!(
+            "verify_render: update render manifest {}: {e}",
+            manifest_path.display()
+        ))
     })
 }
 
@@ -941,8 +996,9 @@ const DESCRIPTION: &str = "\
 Verify an existing rendered MP4 against the current Awidat timeline. \
 Checks duration, audio/video stream presence, missing media, long black \
 segments, long unexpected silence, source-range manifest consistency, and \
-edited-boundary probes. This tool is read-only and does not start, poll, or \
-change render jobs; call start_render/poll_render separately, then pass the \
+edited-boundary probes. Writes a verify-render report beside the output and \
+updates the adjacent render manifest when one exists. It does not start, poll, \
+or change render jobs; call start_render/poll_render separately, then pass the \
 finished output_path here.";
 
 #[cfg(test)]
@@ -1079,6 +1135,28 @@ mod tests {
         let output_path = dir.path().join("renders").join("out.mp4");
         std::fs::create_dir_all(output_path.parent().unwrap()).unwrap();
         synthesize_fixture(&output_path, 1.2, false).unwrap();
+        let render_manifest_path = awidat_render::manifest_path_for_output(&output_path);
+        let manifest = awidat_render::RenderExecutionManifest::planned(
+            awidat_render::RenderExecutionManifestInput {
+                created_at: "2026-05-22T10:00:00Z".into(),
+                awidat_version: "test".into(),
+                project_root: dir.path().to_string_lossy().into_owned(),
+                project_hash: None,
+                timeline_hash: None,
+                backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+                replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+                    argv: vec!["ffmpeg".into()],
+                    cwd: Some(dir.path().to_string_lossy().into_owned()),
+                },
+                inputs: Vec::new(),
+                outputs: vec![awidat_render::output_artifact(&output_path, true)],
+                sidecars: Vec::new(),
+                limitations: Vec::new(),
+                verification: None,
+                metadata: std::collections::BTreeMap::new(),
+            },
+        );
+        awidat_render::write_render_manifest(&render_manifest_path, &manifest).unwrap();
 
         let report = verify_render_output(dir.path(), &output_path, VerifyRenderOptions::default())
             .await
@@ -1102,6 +1180,15 @@ mod tests {
                 .gates
                 .iter()
                 .any(|gate| gate.name == "edited_boundary_probes" && gate.passed)
+        );
+        let verification_report_path = verification_report_path_for_output(&output_path);
+        assert!(verification_report_path.is_file());
+        let updated_manifest = awidat_render::read_render_manifest(&render_manifest_path).unwrap();
+        let summary = updated_manifest.verification.unwrap();
+        assert_eq!(summary.status, "passed");
+        assert_eq!(
+            summary.report_path,
+            verification_report_path.to_string_lossy()
         );
     }
 

@@ -100,6 +100,16 @@ impl CapabilityMetadata {
                 metadata.approval_required = false;
                 metadata.side_effects = Vec::new();
             }
+            "verify_render" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::NotSupported;
+                metadata.export_supported = SupportLevel::Supported;
+                metadata.approval_required = true;
+                metadata.side_effects = vec![
+                    "writes render verification reports".into(),
+                    "updates render manifest verification summaries".into(),
+                ];
+            }
             "export_package" => {
                 metadata.preview_supported = SupportLevel::NotSupported;
                 metadata.export_supported = SupportLevel::Supported;
