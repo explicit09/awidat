@@ -38,6 +38,8 @@ pub fn run(project_root: &Path) -> Result<()> {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    awidat_render::finalize_render_manifest_file(&manifest_path)
+        .with_context(|| format!("finalize render manifest {}", manifest_path.display()))?;
     println!("Render complete: {}", spec.output_path.display());
     println!("Render manifest: {}", manifest_path.display());
     Ok(())
@@ -74,7 +76,7 @@ fn write_cli_render_manifest(
                 .as_ref()
                 .map(|cwd| cwd.to_string_lossy().into_owned()),
         },
-        inputs: Vec::new(),
+        inputs: fingerprint_manifest_inputs(project_root, &spec.input_paths)?,
         outputs: vec![awidat_render::output_artifact(&spec.output_path, true)],
         sidecars: Vec::new(),
         limitations: spec
@@ -91,6 +93,24 @@ fn write_cli_render_manifest(
     awidat_render::write_render_manifest(&manifest_path, &manifest)
         .with_context(|| format!("write render manifest {}", manifest_path.display()))?;
     Ok(manifest_path)
+}
+
+fn fingerprint_manifest_inputs(
+    project_root: &Path,
+    input_paths: &[std::path::PathBuf],
+) -> Result<Vec<awidat_render::RenderInputFingerprint>> {
+    input_paths
+        .iter()
+        .map(|path| {
+            let path = if path.is_absolute() {
+                path.clone()
+            } else {
+                project_root.join(path)
+            };
+            awidat_render::fingerprint_file(&path, true)
+                .with_context(|| format!("fingerprint input {}", path.display()))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -111,6 +131,8 @@ mod tests {
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: output_path.clone(),
+            input_paths: Vec::new(),
+            manifest_path: None,
             limitations: Vec::new(),
         };
 

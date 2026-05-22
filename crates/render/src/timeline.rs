@@ -9475,6 +9475,8 @@ fn build_timeline_render_spec_inner(
             total_duration_s: Some(section.duration_s),
             cwd: Some(project_root.to_path_buf()),
             output_path,
+            input_paths,
+            manifest_path: None,
             limitations: render_limitations,
         });
     }
@@ -9483,6 +9485,8 @@ fn build_timeline_render_spec_inner(
         total_duration_s: Some(total_duration_s),
         cwd: Some(project_root.to_path_buf()),
         output_path,
+        input_paths,
+        manifest_path: None,
         limitations: render_limitations,
     })
 }
@@ -10347,6 +10351,7 @@ mod tests {
         assert!(cmd.contains("concat=n=1:v=1:a=1"));
         assert!(cmd.contains("libx264"));
         assert!(!cmd.contains(" copy "));
+        assert_eq!(spec.input_paths, vec![dir.path().join("raw/x.mp4")]);
         // Output under renders/ with timeline-<HHMMSS>.mp4 naming.
         assert!(spec.output_path.starts_with(dir.path().join("renders")));
         assert!(

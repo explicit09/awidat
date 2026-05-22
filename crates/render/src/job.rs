@@ -152,6 +152,10 @@ pub struct RenderJobSpec {
     /// Output path the model can read after `Done`. Used to resolve frame-
     /// strip extraction at poll time.
     pub output_path: PathBuf,
+    /// Source and generated-input files used by the planned render.
+    pub input_paths: Vec<PathBuf>,
+    /// Optional render manifest to finalize after a successful render.
+    pub manifest_path: Option<PathBuf>,
     /// Non-fatal render planning limitations. These are explicit records of
     /// animation/effect metadata that was ignored so export callers can
     /// report partial parity instead of silently dropping it.
@@ -277,7 +281,14 @@ impl JobManager {
         let manager = self.clone();
         let id_for_runner = id.clone();
         tokio::spawn(async move {
-            run_job(child, tx, runner_cancel, spec.total_duration_s).await;
+            run_job(
+                child,
+                tx,
+                runner_cancel,
+                spec.total_duration_s,
+                spec.manifest_path,
+            )
+            .await;
             // Grace window so one more poll after terminal state still works.
             tokio::time::sleep(POST_TERMINAL_RETENTION).await;
             manager.inner.jobs.write().await.remove(&id_for_runner);
@@ -353,6 +364,7 @@ async fn run_job(
     tx: watch::Sender<JobStatus>,
     cancel: CancellationToken,
     total_duration_s: Option<f64>,
+    manifest_path: Option<PathBuf>,
 ) {
     let stderr = match child.stderr.take() {
         Some(s) => s,
@@ -454,6 +466,18 @@ async fn run_job(
     } else {
         JobState::Failed
     };
+    let finalize_error = if matches!(final_state, JobState::Done) {
+        manifest_path.as_ref().and_then(|path| {
+            crate::finalize_render_manifest_file(path)
+                .err()
+                .map(|error| format!("\n[awidat-render: manifest finalize failed: {error}]\n"))
+        })
+    } else {
+        None
+    };
+    if let Some(error) = finalize_error.as_deref() {
+        log_buf.push(error);
+    }
     tx.send_modify(|s| {
         s.state = final_state;
         s.exit_code = exit.code();
@@ -568,6 +592,8 @@ mod tests {
             total_duration_s: None,
             cwd: None,
             output_path: PathBuf::from("renders/out.mp4"),
+            input_paths: Vec::new(),
+            manifest_path: None,
             limitations: Vec::new(),
         };
 
@@ -590,6 +616,27 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let out_path = dir.path().join("test.mp4");
+        let manifest_path = dir.path().join("test.render-manifest.json");
+        let manifest =
+            crate::RenderExecutionManifest::planned(crate::RenderExecutionManifestInput {
+                created_at: "2026-05-22T10:00:00Z".into(),
+                awidat_version: "test".into(),
+                project_root: dir.path().to_string_lossy().into_owned(),
+                project_hash: None,
+                timeline_hash: None,
+                backend: crate::RenderBackendKind::TimelineFfmpegReencode,
+                replay: crate::RenderReplayPlan::FfmpegArgv {
+                    argv: vec!["ffmpeg".into()],
+                    cwd: Some(dir.path().to_string_lossy().into_owned()),
+                },
+                inputs: Vec::new(),
+                outputs: vec![crate::output_artifact(&out_path, true)],
+                sidecars: Vec::new(),
+                limitations: Vec::new(),
+                verification: None,
+                metadata: std::collections::BTreeMap::new(),
+            });
+        crate::write_render_manifest(&manifest_path, &manifest).unwrap();
         let m = JobManager::new();
         let spec = RenderJobSpec {
             args: vec![
@@ -607,6 +654,8 @@ mod tests {
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: out_path.clone(),
+            input_paths: Vec::new(),
+            manifest_path: Some(manifest_path.clone()),
             limitations: Vec::new(),
         };
         let id = m.start(spec).await.unwrap();
@@ -630,5 +679,8 @@ mod tests {
             m.status(&id).await.unwrap()
         );
         assert!(out_path.exists(), "output file must exist");
+        let finalized_manifest = crate::read_render_manifest(&manifest_path).unwrap();
+        assert!(finalized_manifest.outputs[0].sha256.is_some());
+        assert!(finalized_manifest.outputs[0].size_bytes.is_some());
     }
 }

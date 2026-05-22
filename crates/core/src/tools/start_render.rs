@@ -188,6 +188,7 @@ impl ToolHandler for StartRenderTool {
             output_path,
             limitations,
             asset_path_for_manifest,
+            input_paths_for_manifest,
         ) = if args.scope == "timeline" {
             crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
                 .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
@@ -304,6 +305,7 @@ impl ToolHandler for StartRenderTool {
                 spec.output_path,
                 spec.limitations,
                 None,
+                spec.input_paths,
             )
         } else {
             // Asset-based scope: preview / segment / full.
@@ -347,7 +349,8 @@ impl ToolHandler for StartRenderTool {
                 asset.to_string(),
                 output_path,
                 Vec::<RenderPlanLimitation>::new(),
-                Some(asset_path),
+                Some(asset_path.clone()),
+                vec![asset_path],
             )
         };
 
@@ -355,6 +358,7 @@ impl ToolHandler for StartRenderTool {
             project_root: &ctx.project_root,
             scope: &args.scope,
             asset_path: asset_path_for_manifest.as_deref(),
+            input_paths: &input_paths_for_manifest,
             output_path: &output_path,
             argv: &argv,
             limitations: &limitations,
@@ -382,6 +386,8 @@ impl ToolHandler for StartRenderTool {
             total_duration_s,
             cwd: Some(ctx.project_root.clone()),
             output_path: output_path.clone(),
+            input_paths: input_paths_for_manifest,
+            manifest_path: Some(manifest.manifest_path.clone()),
             limitations: limitations.clone(),
         };
         let job_id = ctx.job_manager.start(spec).await.map_err(|e| {
@@ -421,6 +427,7 @@ struct StartRenderManifestInput<'a> {
     project_root: &'a Path,
     scope: &'a str,
     asset_path: Option<&'a Path>,
+    input_paths: &'a [PathBuf],
     output_path: &'a Path,
     argv: &'a [String],
     limitations: &'a [RenderPlanLimitation],
@@ -449,6 +456,19 @@ fn build_start_render_manifest(
                 FunctionCallError::RespondToModel(format!(
                     "start_render: failed to fingerprint input {}: {e}",
                     asset_path.display()
+                ))
+            })?,
+        );
+    }
+    for input_path in input.input_paths {
+        if Some(input_path.as_path()) == input.asset_path {
+            continue;
+        }
+        inputs.push(
+            awidat_render::fingerprint_file(input_path, true).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "start_render: failed to fingerprint input {}: {e}",
+                    input_path.display()
                 ))
             })?,
         );
@@ -748,6 +768,8 @@ fn apply_preset_to_argv(
         total_duration_s: None,
         cwd: None,
         output_path: output_path.to_path_buf(),
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: Vec::new(),
     };
     let lowered =
@@ -825,6 +847,7 @@ mod tests {
             project_root: dir.path(),
             scope: "preview",
             asset_path: Some(&asset),
+            input_paths: std::slice::from_ref(&asset),
             output_path: &output,
             argv: &argv,
             limitations: &[],
@@ -863,6 +886,7 @@ mod tests {
             project_root: dir.path(),
             scope: "timeline",
             asset_path: None,
+            input_paths: &[],
             output_path: &output,
             argv: &argv,
             limitations: &[],

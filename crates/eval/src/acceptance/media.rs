@@ -229,7 +229,7 @@ fn write_acceptance_render_manifest(project_root: &Path, spec: &RenderJobSpec) -
     let ffmpeg = ffmpeg_path().context("locate ffmpeg for render manifest")?;
     let mut argv = vec![ffmpeg.to_string_lossy().into_owned()];
     argv.extend(spec.args.iter().cloned());
-    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+    let mut manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
         created_at: String::new(),
         awidat_version: env!("CARGO_PKG_VERSION").into(),
         project_root: project_root.to_string_lossy().into_owned(),
@@ -243,7 +243,7 @@ fn write_acceptance_render_manifest(project_root: &Path, spec: &RenderJobSpec) -
                 .as_ref()
                 .map(|cwd| cwd.to_string_lossy().into_owned()),
         },
-        inputs: Vec::new(),
+        inputs: fingerprint_manifest_inputs(project_root, &spec.input_paths)?,
         outputs: vec![awidat_render::output_artifact(&spec.output_path, true)],
         sidecars: Vec::new(),
         limitations: spec
@@ -256,10 +256,30 @@ fn write_acceptance_render_manifest(project_root: &Path, spec: &RenderJobSpec) -
         verification: None,
         metadata: BTreeMap::from([("render_driver".into(), "shared_render_spec".into())]),
     });
+    awidat_render::finalize_render_manifest_outputs(&mut manifest)
+        .with_context(|| "finalize acceptance render manifest outputs")?;
     let path = awidat_render::manifest_path_for_output(&spec.output_path);
     awidat_render::write_render_manifest(&path, &manifest)
         .with_context(|| format!("write acceptance render manifest {}", path.display()))?;
     Ok(path)
+}
+
+fn fingerprint_manifest_inputs(
+    project_root: &Path,
+    input_paths: &[PathBuf],
+) -> Result<Vec<awidat_render::RenderInputFingerprint>> {
+    input_paths
+        .iter()
+        .map(|path| {
+            let path = if path.is_absolute() {
+                path.clone()
+            } else {
+                project_root.join(path)
+            };
+            awidat_render::fingerprint_file(&path, true)
+                .with_context(|| format!("fingerprint input {}", path.display()))
+        })
+        .collect()
 }
 
 fn newest_render(project_root: &Path) -> Result<PathBuf> {

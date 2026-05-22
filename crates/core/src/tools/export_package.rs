@@ -193,6 +193,7 @@ impl ToolHandler for ExportPackageTool {
             project_root: &ctx.project_root,
             output_path: &mp4_path,
             argv: &spec.args,
+            input_paths: &spec.input_paths,
             sidecar_paths: &sidecar_paths,
             limitations: &spec.limitations,
             format: &args.format,
@@ -216,6 +217,8 @@ impl ToolHandler for ExportPackageTool {
                 total_duration_s: spec.total_duration_s,
                 cwd: Some(ctx.project_root.clone()),
                 output_path: mp4_path.clone(),
+                input_paths: spec.input_paths.clone(),
+                manifest_path: Some(render_manifest.manifest_path.clone()),
                 limitations: spec.limitations.clone(),
             })
             .await
@@ -277,6 +280,7 @@ struct PackageRenderManifestInput<'a> {
     project_root: &'a Path,
     output_path: &'a Path,
     argv: &'a [String],
+    input_paths: &'a [PathBuf],
     sidecar_paths: &'a [&'a Path],
     limitations: &'a [awidat_render::RenderPlanLimitation],
     format: &'a str,
@@ -340,7 +344,7 @@ fn build_package_render_manifest(
             argv: replay_argv,
             cwd: Some(input.project_root.to_string_lossy().into_owned()),
         },
-        inputs: Vec::new(),
+        inputs: fingerprint_manifest_inputs(input.project_root, input.input_paths)?,
         outputs: vec![awidat_render::output_artifact(input.output_path, true)],
         sidecars,
         limitations,
@@ -365,6 +369,28 @@ fn optional_file_hash(path: &Path) -> Result<Option<String>, FunctionCallError> 
                 path.display()
             ))
         })
+}
+
+fn fingerprint_manifest_inputs(
+    project_root: &Path,
+    input_paths: &[PathBuf],
+) -> Result<Vec<awidat_render::RenderInputFingerprint>, FunctionCallError> {
+    input_paths
+        .iter()
+        .map(|path| {
+            let path = if path.is_absolute() {
+                path.clone()
+            } else {
+                project_root.join(path)
+            };
+            awidat_render::fingerprint_file(&path, true).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "export_package: failed to fingerprint input {}: {e}",
+                    path.display()
+                ))
+            })
+        })
+        .collect()
 }
 
 fn parse_hardware_acceleration(
@@ -1861,6 +1887,7 @@ mod tests {
             project_root: dir.path(),
             output_path: &mp4_path,
             argv: &argv,
+            input_paths: &[],
             sidecar_paths: &[srt_path.as_path()],
             limitations: &[],
             format: "youtube",

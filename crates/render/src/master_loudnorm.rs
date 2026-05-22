@@ -629,6 +629,8 @@ mod tests {
             total_duration_s: None,
             cwd: None,
             output_path: std::path::PathBuf::from("/tmp/out.mp4"),
+            input_paths: Vec::new(),
+            manifest_path: None,
             limitations: Vec::new(),
         };
         retarget_argv_to_null_muxer(&mut spec);

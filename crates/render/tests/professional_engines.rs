@@ -1827,6 +1827,8 @@ fn delivery_profile_updates_render_spec_and_queue_manifest() {
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: Vec::new(),
     };
     let profiled = apply_delivery_profile_to_spec(spec, &profile);
@@ -1868,6 +1870,8 @@ fn export_preset_lowers_codecs_container_and_audio_settings() {
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: Vec::new(),
     };
 
@@ -1894,6 +1898,8 @@ fn export_preset_sets_faststart_for_mp4_delivery() {
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: Vec::new(),
     };
 
@@ -1920,6 +1926,8 @@ fn export_preset_auto_hardware_uses_videotoolbox_for_h264_on_macos() {
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: Vec::new(),
     };
 
@@ -1946,6 +1954,8 @@ fn export_preset_auto_hardware_keeps_software_codec_when_no_native_mapping_exist
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: Vec::new(),
     };
 
@@ -1973,6 +1983,8 @@ fn export_preset_require_hardware_errors_when_codec_has_no_mapping() {
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: Vec::new(),
     };
 
