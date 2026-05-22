@@ -27,7 +27,6 @@ import { TranscriptView } from "./transcript/TranscriptView";
 import { VeditPanel } from "./vedit/VeditPanel";
 import {
   AppShell,
-  BatchReviewSurface,
   CommandRail,
   DeliverySurface,
   PreviewSurface,
@@ -35,8 +34,6 @@ import {
   StageIndicator,
   TimelineHybrid,
   type ActivityEntry,
-  type AgentCommand,
-  type BatchProposal,
   type ChatSessionSummary,
   type ContextChip,
   type DeliveryRenderSummary,
@@ -369,36 +366,6 @@ function App() {
     } catch (e) {
       setCommandError(String(e));
     }
-  }
-
-  async function acceptAllProposals() {
-    if (!isTauri()) return;
-    const commandTargets = realBatchProposals.slice();
-    await Promise.all(
-      commandTargets.map((proposal) =>
-        invoke("accept_proposal", { callId: proposal.id }).catch((e) =>
-          console.warn("accept_proposal failed", e),
-        ),
-      ),
-    );
-  }
-
-  async function rejectAllProposals() {
-    if (!isTauri()) return;
-    const commandTargets = realBatchProposals.slice();
-    await Promise.all(
-      commandTargets.map((proposal) =>
-        invoke("reject_proposal", { callId: proposal.id }).catch((e) =>
-          console.warn("reject_proposal failed", e),
-        ),
-      ),
-    );
-  }
-
-  function reviseAllProposals() {
-    void runEngineCommand(
-      "Revise the current batch of proposals for stronger framing and cleaner transitions.",
-    );
   }
 
   function toggleDeliveryTarget(key: string) {
@@ -1086,51 +1053,6 @@ function App() {
     };
   }, [effectiveDeliveryTargets, realPreflightFindings, timelineDuration]);
 
-  const realBatchProposals: BatchProposal[] = useMemo(() => {
-    return items
-      .filter(
-        (it): it is Extract<typeof items[number], { kind: "proposed_edit" }> =>
-          it.kind === "proposed_edit" && it.phase !== "completed",
-      )
-      .map((proposal, index) => ({
-        id: proposal.id.toString(),
-        title: proposal.summary || `Proposal ${index + 1}`,
-        status: proposal.phase === "started" ? "processing" : "pending",
-        timeRange: proposal.snapshot.duration_s > 0 ? formatDuration(proposal.snapshot.duration_s) : "Timeline proposal",
-        cutType: proposal.source.source === "agent" ? "Agent proposal" : "User proposal",
-        explanation: proposal.explanation ?? proposal.intent ?? proposal.summary,
-        confidence: proposal.confidence,
-        risk: mapProtocolRisk(proposal.risk),
-      }));
-  }, [items]);
-
-  const realBatchCommands: AgentCommand[] = useMemo(() => {
-    const userInputs = items.filter(
-      (it): it is Extract<typeof items[number], { kind: "user_input" }> =>
-        it.kind === "user_input",
-    );
-    if (userInputs.length === 0) {
-      return activeProposal
-        ? [
-            {
-              id: activeProposal.callId,
-              text: activeProposal.summary,
-              status: running ? "running" : "complete",
-              proposalCount: realBatchProposals.length,
-              startedAt: shortTime(),
-            },
-          ]
-        : [];
-    }
-    return userInputs.slice(-8).map((input, index) => ({
-      id: input.id.toString(),
-      text: input.text,
-      status: index === userInputs.length - 1 && running ? "running" : "complete",
-      proposalCount: realBatchProposals.length || undefined,
-      startedAt: shortTime(),
-    }));
-  }, [activeProposal, items, realBatchProposals.length, running]);
-
   const previewChanges: PreviewChange[] = useMemo(() => {
     if (!activeProposal) return [];
     // Until backend ships per-cut surfaces, render one chip per diff hint.
@@ -1216,48 +1138,17 @@ function App() {
       }}
     />
   );
+  // Multi-proposal review used to route through `BatchReviewSurface`,
+  // but that component was full of demo placeholders (fake titles,
+  // hard-coded constraints, fabricated risk notes) that lied to the
+  // user when real proposals landed. Multi-proposal review now flows
+  // through the normal Edit-stage layout: the inspector rail handles
+  // the active proposal, and the "{n} pending" pill in the header
+  // tells the user there are more. A real multi-proposal picker can
+  // land later as a small list above the inspector.
   const realWorkspace =
     !demoMode && !hasProject ? (
       <NoProjectWorkspace />
-    ) : !demoMode && isEditStage && realBatchProposals.length > 0 ? (
-      <BatchReviewSurface
-        commands={realBatchCommands}
-        proposals={realBatchProposals}
-        selectedProposalId={activeProposal?.callId ?? realBatchProposals[0]?.id}
-        insights={{
-          pending: realBatchProposals.filter((proposal) => proposal.status === "pending" || proposal.status === "processing").length,
-          accepted: realBatchProposals.filter((proposal) => proposal.status === "accepted").length,
-          rejected: realBatchProposals.filter((proposal) => proposal.status === "rejected").length,
-          avgConfidence: averageConfidence(realBatchProposals),
-          riskLow: realBatchProposals.filter((proposal) => proposal.risk === "low").length,
-          riskMedium: realBatchProposals.filter((proposal) => proposal.risk === "medium").length,
-          riskHigh: realBatchProposals.filter((proposal) => proposal.risk === "high" || proposal.risk === "very-high").length,
-        }}
-        onAcceptOne={(proposal) => {
-          if (!isTauri()) return;
-          invoke("accept_proposal", { callId: proposal.id }).catch((e) =>
-            console.warn("accept_proposal failed", e),
-          );
-        }}
-        onRejectOne={(proposal) => {
-          if (!isTauri()) return;
-          invoke("reject_proposal", { callId: proposal.id }).catch((e) =>
-            console.warn("reject_proposal failed", e),
-          );
-        }}
-        onAcceptAll={() => void acceptAllProposals()}
-        onRejectAll={() => void rejectAllProposals()}
-        onReviseAll={reviseAllProposals}
-        onPickCommand={(command) => {
-          void runEngineCommand(`Continue this prior request: ${command.text}`);
-        }}
-        onInspectDeeper={(proposal) => {
-          void runEngineCommand(`Inspect this proposal in detail and explain the evidence: ${proposal.title}`);
-        }}
-        onSendFeedback={(proposal) => {
-          void runEngineCommand(`Revise this proposal using stricter pacing and delivery criteria: ${proposal.title}`);
-        }}
-      />
     ) : !demoMode && stage === "deliver" ? (
       realDeliveryWorkspace
     ) : undefined;
@@ -2812,19 +2703,6 @@ function jobKindLabel(kind: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function mapProtocolRisk(risk: "low" | "medium" | "high" | "very_high" | undefined) {
-  if (!risk) return undefined;
-  return risk === "very_high" ? "very-high" : risk;
-}
-
-function averageConfidence(proposals: BatchProposal[]): number | undefined {
-  const values = proposals
-    .map((proposal) => proposal.confidence)
-    .filter((value): value is number => typeof value === "number");
-  if (values.length === 0) return undefined;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
 function firstTimelineSidecars(snapshot: TimelineSnapshot): {
