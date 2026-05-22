@@ -75,37 +75,37 @@ const SPEC_SCREENS = [
     id: "screen2",
     url: BASE_URL,
     text: [
-      "Main Desktop Workspace",
       "Agent Command",
       "Podcast Tightening v1",
       "Proposal Inspector",
       "Timeline",
+      "Transcript",
       "Evidence",
     ],
   },
   {
     id: "screen3",
-    text: ["Agent Proposal Review", "Agent command history", "Proposed changes", "Batch insights", "Revise with prompt"],
+    text: ["Agent command history", "Proposed changes", "The #1 thing that kills startups", "Before (Source)", "After (Proposed Clip)", "Batch insights", "Revise with prompt"],
   },
   {
     id: "screen4",
-    text: ["Timeline / Transcript Hybrid", "Selected sentence", "Review · Transcript", "What this cut does", "Keep this pause"],
+    text: ["Selected sentence", "Review · Transcript", "What this cut does", "Pending trim", "Keep this pause", "Edit around selection"],
   },
   {
     id: "screen5",
-    text: ["Cut / Proposal Inspector", "CUT 12 · L-cut", "Current timeline", "Proposed timeline", "Render output context", "Inspect deeper"],
+    text: ["CUT 12 · L-cut", "Current timeline", "Proposed timeline", "Render output context", "Compare alternatives", "Inspect deeper"],
   },
   {
     id: "screen6",
-    text: ["Import / Indexing State", "Import files", "Indexing pipeline", "Speaker diarization", "Ask agent for first cut"],
+    text: ["Import files", "Import URL", "Indexing pipeline", "Transcripts", "Speaker diarization", "Indexing in progress", "Ask agent for first cut"],
   },
   {
     id: "screen7",
-    text: ["Delivery / Preflight State", "Targets", "Preflight", "Render summary", "Delivery confidence", "Export now"],
+    text: ["Targets", "YouTube", "TikTok", "Preflight", "Render summary", "Delivery confidence", "Export now"],
   },
   {
     id: "screen8",
-    text: ["Empty / Loading / Error States", "No media imported", "Indexing media", "Proposal generation is blocked", "Repair with agent"],
+    text: ["No media imported", "Indexing media", "Review transitions", "Proposal generation is blocked", "Repair with agent"],
   },
   {
     id: "screen9",
@@ -185,22 +185,24 @@ await check("top chrome matches Screen 2 app model", async () => {
   const body = await page.textContent("body");
   for (const expected of [
     "Awidat",
-    "Project",
-    "Workspace",
-    "Agent",
-    "Media",
+    "Intent",
+    "Indexing",
+    "Proposal",
     "Review",
+    "Revise",
     "Deliver",
-    "Settings",
     "Interview_A",
-    "Podcast Episode",
+    "Podcast Tightening v1",
   ]) {
     assert.ok(body.includes(expected), `missing top chrome text: ${expected}`);
+  }
+  for (const label of ["Share", "Settings"]) {
+    assert.equal(await page.locator(`header button[aria-label="${label}"]`).count(), 1, `missing top chrome action: ${label}`);
   }
   const clippedTopNav = await page.evaluate(() => {
     const header = document.querySelector("header");
     if (!header) return ["missing header"];
-    const labels = ["Project", "Workspace", "Agent", "Media", "Review", "Deliver", "Settings"];
+    const labels = ["Intent", "Indexing", "Proposal", "Review", "Revise", "Deliver"];
     const clipped = [];
     for (const label of labels) {
       const button = Array.from(header.querySelectorAll("button")).find(
