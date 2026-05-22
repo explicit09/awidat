@@ -628,6 +628,13 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
         deliveryTarget="YouTube 16:9 (1920x1080)"
         media={indexingMedia}
         tasks={indexingTasks}
+        structurePreview={{
+          duration: "00:42:11",
+          scenes: 31,
+          segments: 126,
+          speakers: 2,
+          transcriptPercent: 78,
+        }}
         system={{ cpu: 62, diskFreeGB: 1242.4, tempC: 61 }}
         ready={false}
       />

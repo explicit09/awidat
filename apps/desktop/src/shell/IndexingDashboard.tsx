@@ -205,16 +205,17 @@ export function IndexingDashboard({
         : indexedTaskCount > 0
           ? "Partially indexed"
           : "Ready to index";
-  const showStructurePreview = hasMedia && indexedTaskCount > 0;
-  const preview = structurePreview ?? (showStructurePreview
-    ? {
-        duration: "00:42:11",
-        scenes: 31,
-        segments: 126,
-        speakers: 2,
-        transcriptPercent: 78,
-      }
-    : undefined);
+  const hasStructureMetrics =
+    !!structurePreview &&
+    (
+      !!structurePreview.duration ||
+      typeof structurePreview.scenes === "number" ||
+      typeof structurePreview.segments === "number" ||
+      typeof structurePreview.speakers === "number" ||
+      typeof structurePreview.transcriptPercent === "number"
+    );
+  const showStructurePreview = hasMedia && indexedTaskCount > 0 && hasStructureMetrics;
+  const preview = showStructurePreview ? structurePreview : undefined;
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(230px,0.74fr)_minmax(280px,0.9fr)_minmax(430px,1.9fr)_minmax(210px,0.7fr)] bg-[var(--color-surface-app)]">

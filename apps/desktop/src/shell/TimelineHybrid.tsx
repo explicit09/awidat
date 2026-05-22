@@ -384,18 +384,11 @@ function Lane({
 
 function VideoStrip({ frames }: { frames: string[] }) {
   if (frames.length === 0) {
-    // 16 placeholder slats with subtle gradient — looks like a thumbnail strip.
     return (
-      <div className="absolute inset-0 flex gap-px p-1">
-        {Array.from({ length: 16 }).map((_, i) => (
-          <div
-            key={i}
-            className="flex-1 rounded-[2px]"
-            style={{
-              background: `linear-gradient(180deg, hsl(210 ${10 + (i * 3) % 20}% ${12 + (i * 3) % 8}%) 0%, #0B0F14 100%)`,
-            }}
-          />
-        ))}
+      <div className="absolute inset-0 grid place-items-center px-3">
+        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+          No thumbnail index yet
+        </span>
       </div>
     );
   }
@@ -420,16 +413,16 @@ function VideoStrip({ frames }: { frames: string[] }) {
 }
 
 function AudioWaveform({ peaks }: { peaks: number[] }) {
-  const data =
-    peaks.length > 0
-      ? peaks
-      : Array.from({ length: 240 }).map((_, i) => {
-          // Synthetic but plausible-looking waveform.
-          const t = i / 240;
-          const env = Math.sin(t * Math.PI * 3) * 0.5 + 0.5;
-          const noise = Math.sin(i * 0.83) * 0.3 + Math.sin(i * 1.7) * 0.2;
-          return Math.max(0.06, Math.min(1, env * 0.85 + noise * 0.35));
-        });
+  if (peaks.length === 0) {
+    return (
+      <div className="absolute inset-0 grid place-items-center px-3">
+        <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+          No waveform index yet
+        </span>
+      </div>
+    );
+  }
+  const data = peaks;
   return (
     <svg
       className="absolute inset-0 w-full h-full"
