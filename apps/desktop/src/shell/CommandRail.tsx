@@ -14,6 +14,8 @@ import {
   X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
 
 /**
@@ -159,22 +161,37 @@ export function CommandRail({
   const isOnlyEmptyState = !hasWork && !focused;
 
   const sessionChrome = (
-    <div className={cn("shrink-0 p-2", focused ? "" : "border-b border-[var(--color-border-subtle)]")}>
+    <div className={cn("shrink-0 px-3 py-2", focused ? "" : "border-b border-[var(--color-border-subtle)]")}>
       <Inline justify="between" align="center" gap="2">
         <button
           type="button"
-          className="min-w-0 flex-1 rounded-[var(--radius-sm)] px-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+          className={cn(
+            "group min-w-0 flex-1 rounded-[var(--radius-md)] px-2 py-1.5 text-left",
+            "transition-[background-color,border-color] duration-[120ms]",
+            "border border-transparent hover:border-[var(--color-border-subtle)] hover:bg-[var(--color-surface-card)]",
+          )}
           onClick={() => setHistoryOpen((open) => !open)}
           disabled={chatLoading}
           aria-expanded={historyOpen}
           title="Chat history"
         >
-          <span className="block truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
-            {chatLoading ? "Loading chats..." : activeChatSession?.title ?? "New chat"}
-          </span>
-          <span className="block truncate font-mono text-[10px] text-[var(--color-text-muted)]">
-            {activeChatSession ? `${activeChatSession.messageCount} messages` : "Fresh context"}
-          </span>
+          <Inline gap="2" align="center" className="min-w-0">
+            <span
+              className={cn(
+                "h-1.5 w-1.5 shrink-0 rounded-full",
+                activeChatSession
+                  ? "bg-[var(--color-brand-secondary)]"
+                  : "bg-[var(--color-text-muted)] opacity-50",
+              )}
+              aria-hidden
+            />
+            <span className="min-w-0 truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+              {chatLoading ? "Loading chats…" : activeChatSession?.title ?? "New chat"}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+              {activeChatSession ? `${activeChatSession.messageCount} msgs` : "fresh"}
+            </span>
+          </Inline>
         </button>
         <Inline gap="1" align="center" className="shrink-0">
           <Button
@@ -359,24 +376,48 @@ export function CommandRail({
           </Inline>
         </div>
         {contextChips.length > 0 ? (
-          <div className={cn("flex min-w-0 gap-1", focused ? "flex-row flex-wrap" : "flex-col")}>
+          <div className={cn("flex min-w-0 gap-1.5", focused ? "flex-row flex-wrap" : "flex-col")}>
             {contextChips.map((chip, i) => (
-              <button
+              <div
                 key={`${chip.label}-${i}`}
-                type="button"
-                onClick={() => onRemoveChip?.(chip, i)}
                 className={cn(
-                  "flex min-h-5 min-w-0 items-center gap-1 rounded-[var(--radius-xs)] border px-1.5 py-0.5 text-left text-[var(--text-caption)] hover:text-[var(--color-text-primary)] transition-colors",
-                  focused ? "max-w-[220px]" : "w-full",
+                  "group flex min-h-7 min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] border pl-2 pr-1 py-1 text-[var(--text-caption)]",
+                  "transition-[background-color,border-color] duration-[120ms]",
+                  focused ? "max-w-[260px]" : "w-full",
                   contextChipClass(chip.kind),
                 )}
-                aria-label={`Remove ${chip.label}`}
-                title={`Remove ${chip.label}`}
               >
-                <Paperclip className="h-3 w-3 shrink-0 stroke-[1.75]" />
-                <span className="min-w-0 flex-1 truncate">{chip.label}</span>
-                {onRemoveChip ? <X className="h-3 w-3 shrink-0 stroke-[1.75] opacity-70" /> : null}
-              </button>
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 shrink-0 rounded-full",
+                    contextChipDotClass(chip.kind),
+                  )}
+                  aria-hidden
+                />
+                <Paperclip className="h-3 w-3 shrink-0 stroke-[1.75] opacity-70" />
+                <span
+                  className="min-w-0 flex-1 truncate font-mono text-[11px]"
+                  title={chip.label}
+                >
+                  {chip.label}
+                </span>
+                {onRemoveChip ? (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveChip(chip, i)}
+                    className={cn(
+                      "ml-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-xs)]",
+                      "text-[var(--color-text-muted)] opacity-0 transition-opacity duration-[100ms]",
+                      "group-hover:opacity-100 focus-visible:opacity-100",
+                      "hover:bg-[rgba(248,81,73,0.18)] hover:text-[#ffb4ae]",
+                    )}
+                    aria-label={`Remove ${chip.label}`}
+                    title={`Remove ${chip.label}`}
+                  >
+                    <X className="h-3 w-3 stroke-[2]" />
+                  </button>
+                ) : null}
+              </div>
             ))}
           </div>
         ) : null}
@@ -494,9 +535,17 @@ export function CommandRail({
                         {message.kind === "user" ? "You" : "Agent"}
                       </span>
                     </div>
-                    <p className="mt-1 whitespace-pre-wrap break-words leading-snug text-[var(--color-text-secondary)]">
-                      {message.text}
-                    </p>
+                    {message.kind === "user" ? (
+                      <p className="mt-1 whitespace-pre-wrap break-words leading-snug text-[var(--color-text-secondary)]">
+                        {message.text}
+                      </p>
+                    ) : (
+                      <div className="markdown mt-1 break-words leading-snug text-[var(--color-text-secondary)]">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {message.text}
+                        </ReactMarkdown>
+                      </div>
+                    )}
                   </div>
                 ))}
               </Stack>
@@ -655,13 +704,32 @@ function contextChipClass(kind: ContextChip["kind"]) {
   switch (kind) {
     case "media":
     case "selection":
-      return "border-[rgba(59,130,246,0.36)] bg-[rgba(59,130,246,0.08)] text-[var(--color-pill-proposed-text)]";
+      return "border-[rgba(59,130,246,0.36)] bg-[rgba(59,130,246,0.08)] text-[var(--color-pill-proposed-text)] hover:bg-[rgba(59,130,246,0.14)]";
     case "project":
-      return "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.08)] text-[var(--color-pill-ready-text)]";
+      return "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.08)] text-[var(--color-pill-ready-text)] hover:bg-[rgba(32,201,151,0.14)]";
     case "lens":
-      return "border-[rgba(168,85,247,0.34)] bg-[rgba(168,85,247,0.08)] text-[var(--color-pill-reviewing-text)]";
+      return "border-[rgba(168,85,247,0.34)] bg-[rgba(168,85,247,0.08)] text-[var(--color-pill-reviewing-text)] hover:bg-[rgba(168,85,247,0.14)]";
     default:
-      return "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-secondary)]";
+      return "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-card-hover)]";
+  }
+}
+
+/**
+ * Solid-color dot prefix per chip kind so the eye can scan a stack of
+ * chips by color even before reading the label. Matches the
+ * border/background tints used by [`contextChipClass`].
+ */
+function contextChipDotClass(kind: ContextChip["kind"]) {
+  switch (kind) {
+    case "media":
+    case "selection":
+      return "bg-[rgb(96,165,250)]";
+    case "project":
+      return "bg-[rgb(74,222,128)]";
+    case "lens":
+      return "bg-[rgb(192,132,252)]";
+    default:
+      return "bg-[var(--color-text-muted)]";
   }
 }
 
