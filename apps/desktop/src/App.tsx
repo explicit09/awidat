@@ -52,6 +52,8 @@ import {
   type TimelineTab,
   type TimelineViewMode,
 } from "./shell";
+import { JobsStatusBar } from "./shell/JobsStatusBar";
+import { toActiveJobLike, aggregatePercent } from "./shell/activeJobs";
 import { AgentStatusBadge, Button, Card, IconButton, Inline, Pill, Stack, type MediaIndexingStatus, type PillStatus } from "./ui";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
@@ -2514,6 +2516,7 @@ function Footer({ demoMode = false }: { demoMode?: boolean }) {
   }
   const activeJobs = items.filter((item) => item.kind === "job" && item.phase !== "completed");
   const renderQueueLabel = activeJobs.length > 0 ? activeJobs.length.toString() : "0";
+  const jobsForBar = activeJobs.map((it) => toActiveJobLike({ id: it.id, job_kind: (it as any).job_kind, status: (it as any).status, percent: (it as any).percent }));
   return (
     <>
       <Inline gap="3" align="center" className="min-w-0">
@@ -2536,6 +2539,10 @@ function Footer({ demoMode = false }: { demoMode?: boolean }) {
         <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
           Autosaved local ✓
         </span>
+        <JobsStatusBar
+          jobs={jobsForBar}
+          totalPercent={aggregatePercent(jobsForBar)}
+        />
         <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
           Render queue {renderQueueLabel}
         </span>
