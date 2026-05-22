@@ -460,7 +460,7 @@ export function CommandRail({
           {/* Conversation */}
           {conversation.length > 0 ? (
             <Section label="Conversation">
-              <Stack gap="1" className="max-h-[320px] overflow-y-auto pr-1">
+              <Stack gap="1">
                 {conversation.map((message) => (
                   <div
                     key={message.id}
