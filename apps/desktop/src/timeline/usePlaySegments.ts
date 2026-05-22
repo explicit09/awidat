@@ -16,7 +16,7 @@
 // to the next segment is sub-frame.
 //
 // This hook is a pure derivation from the snapshot. We do NOT
-// fetch anything: `proxy_path` is already on every clip, resolved
+// fetch anything: `playable_path` is already on every clip, resolved
 // by the backend in `flatten_timeline_public`. Memoized on snapshot
 // identity so the SegmentedVideoView doesn't re-derive on every
 // render.
@@ -93,7 +93,7 @@ type PreviewPlan = {
  * segments. Empty array when:
  *   - no project loaded
  *   - timeline has no video clips yet (pre-import / pre-auto-insert)
- *   - every clip's proxy is still transcoding (proxy_path === null)
+ *   - every clip's playable_path is null or missing
  *
  * The empty case signals to the MediaPane that it should fall back
  * to the source-asset preview (current behavior when there's nothing
@@ -129,13 +129,23 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
     overlayTracks.forEach((track, trackOffset) => {
       for (const item of track.items) {
         if (item.kind !== "clip") continue;
-        if (item.proxy_path === null || item.duration_s <= 0) continue;
+        const playable = item.playable_path;
+        if (
+          playable === null ||
+          playable === undefined ||
+          item.playable_kind === "missing" ||
+          item.duration_s <= 0
+        ) {
+          // Asset is gone or clip has zero length. Tier 5 surfaces
+          // the missing-media state separately.
+          continue;
+        }
         const sourceStart = item.source_start_s ?? 0;
         const overlay = item.video_overlay;
         const isPip = overlay?.mode === "pip";
         segments.push({
-          proxyPath: item.proxy_path,
-          proxyStem: stemFromProxyPath(item.proxy_path),
+          proxyPath: playable,
+          proxyStem: stemFromProxyPath(playable),
           sourceStart,
           sourceEnd: sourceStart + item.duration_s,
           timelineStart: item.track_start_s,
@@ -220,15 +230,21 @@ export function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
       continue;
     }
     if (item.kind !== "clip") continue;
-    if (item.proxy_path === null || item.duration_s <= 0) {
+    const playable = item.playable_path;
+    if (
+      playable === null ||
+      playable === undefined ||
+      item.playable_kind === "missing" ||
+      item.duration_s <= 0
+    ) {
       pendingTransition = null;
       continue;
     }
 
     const originalSourceStart = item.source_start_s ?? 0;
     const segment: PlaySegment = {
-      proxyPath: item.proxy_path,
-      proxyStem: stemFromProxyPath(item.proxy_path),
+      proxyPath: playable,
+      proxyStem: stemFromProxyPath(playable),
       sourceStart: originalSourceStart,
       sourceEnd: originalSourceStart + item.duration_s,
       timelineStart: item.track_start_s,

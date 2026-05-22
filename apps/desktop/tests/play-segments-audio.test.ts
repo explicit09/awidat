@@ -24,6 +24,8 @@ const snapshot = {
           name: "video",
           asset_id: "asset-1",
           proxy_path: "/tmp/source-proxy.mp4",
+          playable_path: "/tmp/source-proxy.mp4",
+          playable_kind: "proxy",
           thumbnail_dir: null,
           waveform_path: null,
           track_start_s: 0,
