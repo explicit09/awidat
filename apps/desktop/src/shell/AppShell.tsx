@@ -8,7 +8,6 @@ import { AgentStatusBadge, Inline, cn } from "../ui";
  * Layout from the canonical design spec (~/Downloads/Awidat UI Design Concept.md §4):
  *
  *   ┌───────────────────────────────────────────────────────── 44 ─┐   top chrome
- *   ├───────────────────────────────────────────────────────── 44 ─┤   lens row
  *   │┌──────────┐┌─────────────────────────────────┐┌────────────┐│
  *   ││          ││         preview / review        ││            ││
  *   ││  agent   │└─────────────────────────────────┘│  proposal  ││
@@ -26,7 +25,6 @@ export type AppShellProps = {
   topChromeStart?: ReactNode;
   topChromeCenter?: ReactNode;
   topChromeEnd?: ReactNode;
-  lensRow?: ReactNode;
   commandRail?: ReactNode;
   preview?: ReactNode;
   timeline?: ReactNode;
@@ -41,7 +39,6 @@ export function AppShell({
   topChromeStart,
   topChromeCenter,
   topChromeEnd,
-  lensRow,
   commandRail,
   preview,
   timeline,
@@ -51,7 +48,7 @@ export function AppShell({
   footer,
 }: AppShellProps) {
   return (
-    <div className="grid h-screen w-screen min-w-0 overflow-hidden grid-rows-[var(--layout-chrome-h)_var(--layout-lens-h)_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
+    <div className="grid h-screen w-screen min-w-0 overflow-hidden grid-rows-[var(--layout-chrome-h)_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
       {/* Top chrome */}
       <header className="grid min-w-0 grid-cols-[auto_minmax(160px,1fr)_auto] items-center gap-3 overflow-hidden border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3">
         <div className="flex min-w-0 items-center justify-start">
@@ -66,15 +63,6 @@ export function AppShell({
           {topChromeEnd ?? <AgentStatusBadge status="idle" detail="No project" />}
         </div>
       </header>
-
-      {/* Workflow lens row */}
-      <nav className="min-w-0 overflow-hidden border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3 flex items-center">
-        {lensRow ?? (
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold">
-            Lens nav — pending Phase 2.3
-          </span>
-        )}
-      </nav>
 
       {/* Workspace */}
       {workspace ? (

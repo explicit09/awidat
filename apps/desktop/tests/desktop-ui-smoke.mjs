@@ -68,7 +68,7 @@ const SPEC_SCREENS = [
       "Evidence & Feedback Loop",
       "Information architecture",
       "Primary workspace model",
-      "Workflow lenses",
+      "Stage-driven workflow",
     ],
   },
   {
@@ -229,21 +229,24 @@ await check("top chrome matches Screen 2 app model", async () => {
   await page.close();
 });
 
-await check("workflow lens row exposes the reduced agent-first lenses", async () => {
+await check("top stage row is the only global workflow navigation", async () => {
   const { page } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
-  const lensNames = await page.locator('nav button[role="tab"]').allTextContents();
+  const lensRows = await page.locator('[role="tablist"][aria-label="Workflow lens"]').count();
+  assert.equal(lensRows, 0, "secondary workflow lens row should not render");
+  const stageNames = await page.locator('[role="tablist"][aria-label="Stage"] button[role="tab"]').allTextContents();
   for (const expected of [
-    "Import",
-    "Index",
+    "Intent",
+    "Indexing",
+    "Proposal",
     "Review",
-    "Delivery",
+    "Revise",
+    "Deliver",
   ]) {
-    assert.ok(lensNames.some((s) => s.includes(expected)), `lens "${expected}" missing`);
+    assert.ok(stageNames.some((s) => s.includes(expected)), `stage "${expected}" missing`);
   }
-  assert.ok(!lensNames.some((s) => s.includes("Assembly")), "Assembly should be folded into Proposal/Review");
-  for (const folded of ["Selects", "Captions", "Audio", "Color"]) {
-    assert.ok(!lensNames.some((s) => s.includes(folded)), `${folded} should be folded into Review`);
+  for (const folded of ["Import", "Selects", "Assembly", "Captions", "Audio", "Color", "Delivery"]) {
+    assert.ok(!stageNames.some((s) => s.includes(folded)), `${folded} should not be a second-level global tab`);
   }
   await page.close();
 });

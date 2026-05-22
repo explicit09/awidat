@@ -1,11 +1,10 @@
 /**
- * Awidat v2 state stores — the orthogonal nav axes from the design spec.
+ * Awidat v2 state stores.
  *
  * - useStageStore: Intent → Indexing → Proposal → Review → Revise → Deliver
- * - useLensStore:  Import / Index / Review / Delivery
  *
- * Stages = state (where in the work). Lenses = navigation (which view).
- * They are NOT a single nav tree — a user can be in any stage viewing any lens.
+ * Stage is the single global workflow navigation surface. Specialist review
+ * controls live inside their workspace instead of a second global nav row.
  */
 
 export {
@@ -17,11 +16,3 @@ export {
   type StageProgress,
   type StageStore,
 } from "./stages";
-
-export {
-  useLensStore,
-  LENSES,
-  LENS_LABEL,
-  type Lens,
-  type LensStore,
-} from "./lenses";

@@ -31,7 +31,6 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Stage } from "../state/stages";
-import type { Lens } from "../state/lenses";
 import {
   AgentStatusBadge,
   Button,
@@ -73,7 +72,6 @@ export type DemoScreenDefinition = {
   specLabel: string;
   title: string;
   stage: Stage;
-  lens: Lens;
   statusLabel: string;
   pendingLabel?: string;
   commandRail?: CommandRailProps;
@@ -512,7 +510,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 1",
     title: "Product Concept & Information Architecture",
     stage: "intent",
-    lens: "review",
     statusLabel: "Concept board",
     pendingLabel: "Concept",
     workspace: <ProductConceptBoard />,
@@ -527,7 +524,7 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
       "Information architecture",
       "Transparent",
       "Primary workspace model",
-      "Workflow lenses",
+      "Stage-driven workflow",
     ],
   },
   screen2: {
@@ -535,7 +532,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 2",
     title: "Main Desktop Workspace",
     stage: "proposal",
-    lens: "review",
     statusLabel: "Awaiting review",
     pendingLabel: "12 pending",
     smokeText: [
@@ -552,7 +548,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 3",
     title: "Agent Proposal Review",
     stage: "review",
-    lens: "review",
     statusLabel: "Reviewing clip pack",
     pendingLabel: "5 proposals",
     commandRail: screen3CommandRail,
@@ -580,7 +575,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 4",
     title: "Timeline / Transcript Hybrid",
     stage: "review",
-    lens: "review",
     statusLabel: "Semantic timeline",
     pendingLabel: "12 pending",
     workspace: <SemanticTimelineWorkspace />,
@@ -599,7 +593,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 5",
     title: "Cut / Proposal Inspector",
     stage: "review",
-    lens: "review",
     statusLabel: "Inspecting cut",
     pendingLabel: "Cut 12",
     workspace: <CutInspectorWorkspace />,
@@ -618,7 +611,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 6",
     title: "Import / Indexing State",
     stage: "indexing",
-    lens: "index",
     statusLabel: "Indexing locally",
     pendingLabel: "9 signals",
     workspace: (
@@ -655,7 +647,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 7",
     title: "Delivery / Preflight State",
     stage: "deliver",
-    lens: "delivery",
     statusLabel: "Preflight open",
     pendingLabel: "2 warnings",
     workspace: (
@@ -681,7 +672,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 8",
     title: "Empty / Loading / Error States",
     stage: "intent",
-    lens: "import",
     statusLabel: "System states",
     workspace: <SystemStateBoard />,
     smokeText: [
@@ -697,7 +687,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
     specLabel: "Screen 9",
     title: "Component System",
     stage: "review",
-    lens: "review",
     statusLabel: "Component system",
     pendingLabel: "Tokens",
     workspace: <ComponentSystemBoard />,
@@ -977,7 +966,7 @@ function ProductConceptBoard() {
 
         <footer className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] p-2">
           <Inline justify="between" align="baseline" className="mb-1.5">
-            <span className="text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">Workflow lenses</span>
+            <span className="text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">Stage-driven workflow</span>
             <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">Review active</span>
           </Inline>
           <div className="grid grid-cols-4 gap-1.5">

@@ -26,7 +26,6 @@ import {
   CommandRail,
   DeliverySurface,
   IndexingDashboard,
-  LensNav,
   PreviewSurface,
   ProposalInspector,
   ReviewLensSurface,
@@ -55,7 +54,7 @@ import {
   type ReviewTranscriptSegment,
 } from "./shell";
 import { AgentStatusBadge, Button, Card, IconButton, Inline, Pill, Stack } from "./ui";
-import { useLensStore, useStageStore } from "./state";
+import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
 import { useProposalInspectorData } from "./state/proposalAdapter";
 import { useTimelineStore } from "./timeline/store";
@@ -93,8 +92,6 @@ function App() {
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
   const setStage = useStageStore((s) => s.set);
-  const currentLens = useLensStore((s) => s.current);
-  const setLens = useLensStore((s) => s.set);
 
   const timelineDuration = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineSnapshot = useTimelineStore((s) => s.snapshot);
@@ -162,7 +159,6 @@ function App() {
       await invoke("import_locals", { srcPaths: paths, link: false });
       await refreshMedia();
       setStage("indexing");
-      setLens("index");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -176,7 +172,6 @@ function App() {
       await invoke("import_url", { url: trimmed });
       await refreshMedia();
       setStage("indexing");
-      setLens("index");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -222,7 +217,6 @@ function App() {
       await invoke("set_project_root", { path: picked });
       await refreshProject();
       setStage("intent");
-      setLens("import");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -232,7 +226,6 @@ function App() {
     await refreshProject().catch(() => {});
     setShowNewProject(false);
     setStage("intent");
-    setLens("import");
     const importPaths = pendingImportPaths;
     const importUrlValue = pendingImportUrl;
     setPendingImportPaths(null);
@@ -437,12 +430,10 @@ function App() {
 
   function openDeliveryFromChrome() {
     setStage(current ? "deliver" : "intent");
-    setLens(current ? "delivery" : "import");
   }
 
   function openSettingsFromChrome() {
     setStage(current ? "indexing" : "intent");
-    setLens(current ? "index" : "import");
     if (current) {
       void loadIndexerConfig();
     }
@@ -469,9 +460,8 @@ function App() {
       if (stage !== demoScreen.stage) {
         setStage(demoScreen.stage);
       }
-      setLens(demoScreen.lens);
     }
-  }, [demoMode, demoScreen.lens, demoScreen.stage, setLens, setStage, stage]);
+  }, [demoMode, demoScreen.stage, setStage, stage]);
 
   useEffect(() => {
     if (demoMode) {
@@ -481,7 +471,6 @@ function App() {
     if (current === null) {
       routedProjectRef.current = { project: null, mode: null };
       setStage("intent");
-      setLens("import");
       return;
     }
 
@@ -505,19 +494,11 @@ function App() {
 
     if (mode === "proposal" || mode === "timeline") {
       setStage("proposal");
-      setLens("review");
       return;
     }
 
     setStage("indexing");
-    setLens(mode === "proxy" ? "index" : "import");
-  }, [activeProposal, current, demoMode, hasImportedMedia, setLens, setStage, timelineDuration]);
-
-  useEffect(() => {
-    if (!demoMode && hasImportedMedia && currentLens === "import") {
-      setLens("index");
-    }
-  }, [currentLens, demoMode, hasImportedMedia, setLens]);
+  }, [activeProposal, current, demoMode, hasImportedMedia, setStage, timelineDuration]);
 
   useEffect(() => {
     if (!demoMode) {
@@ -969,7 +950,6 @@ function App() {
       onImportUrl={() => setShowUrlImport(true)}
       onAskAgent={() => {
         setStage("proposal");
-        setLens("review");
         void runEngineCommand("Create a first cut from the indexed media and explain the edit decisions.");
       }}
       onReviewIndexResults={() => {
@@ -1001,10 +981,6 @@ function App() {
   const realWorkspace =
     !demoMode && !hasProject ? (
       <NoProjectWorkspace />
-    ) : !demoMode && (currentLens === "import" || currentLens === "index") ? (
-      realIndexingWorkspace
-    ) : !demoMode && currentLens === "delivery" ? (
-      realDeliveryWorkspace
     ) : !demoMode && isReviewStage && realBatchProposals.length > 0 ? (
       <BatchReviewSurface
         commands={realBatchCommands}
@@ -1134,7 +1110,6 @@ function App() {
           <IconButton icon={<SettingsIcon />} label="Settings" size="md" onClick={openSettingsFromChrome} />
         </Inline>
       }
-      lensRow={<LensNav showImport={!hasImportedMedia} />}
       workspace={demoMode && demoScreen.workspace ? demoScreen.workspace : realWorkspace}
       commandRail={
         <CommandRail
@@ -1188,7 +1163,6 @@ function App() {
             onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
             onFullscreen={() => {
               setStage("review");
-              setLens("review");
             }}
           />
         ) : isReviewStage ? (
@@ -1248,7 +1222,6 @@ function App() {
             }}
             onMaximize={() => {
               setStage("review");
-              setLens("review");
             }}
             onCollapse={() => setInspectorCollapsed(true)}
           />

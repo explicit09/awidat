@@ -5,7 +5,6 @@ import { useState } from "react";
 import {
   AppShell,
   CommandRail,
-  LensNav,
   PreviewSurface,
   ProposalInspector,
   StageIndicator,
@@ -135,7 +134,6 @@ function Root() {
           <AgentStatusBadge status="awaiting-review" detail="12 pending changes" />
         </Inline>
       }
-      lensRow={<LensNav />}
       inspector={<ProposalInspector data={MOCK_INSPECTOR} />}
       timeline={
         <TimelineHybrid

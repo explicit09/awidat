@@ -28,7 +28,7 @@ import {
   emitMenuCommand,
   onMenuCommand,
 } from "../app/menuCommands";
-import { useLensStore, useStageStore } from "./index";
+import { useStageStore } from "./index";
 import {
   ITEM_EVENT,
   MENU_COMMAND_EVENT,
@@ -44,7 +44,6 @@ export function useAppGlue() {
   const current = useProjectStore((s) => s.current);
   const setCurrent = useProjectStore((s) => s.setCurrent);
   const refresh = useProjectStore((s) => s.refresh);
-  const setLens = useLensStore((s) => s.set);
   const setStage = useStageStore((s) => s.set);
 
   const clearAgent = useAgentStore((s) => s.clear);
@@ -137,13 +136,11 @@ export function useAppGlue() {
         );
       } else if (id === MENU_COMMANDS.RUN_INDEXERS && current) {
         setStage("indexing");
-        setLens("index");
         invoke("index_project").catch((e) =>
           console.warn("index_project failed", e),
         );
       } else if (id === MENU_COMMANDS.EXPORT_TIMELINE && current) {
         setStage("deliver");
-        setLens("delivery");
         invoke("start_timeline_render").catch((e) =>
           console.warn("start_timeline_render failed", e),
         );
@@ -176,16 +173,12 @@ export function useAppGlue() {
           .catch((e) => console.warn("toggle fullscreen failed", e));
       } else if (id === MENU_COMMANDS.NAV_PROJECT) {
         setStage("intent");
-        setLens("import");
       } else if (id === MENU_COMMANDS.NAV_WORKSPACE) {
         setStage(current ? "proposal" : "intent");
-        setLens(current ? "review" : "import");
       } else if (id === MENU_COMMANDS.NAV_AGENT) {
         setStage(current ? "proposal" : "intent");
-        setLens(current ? "review" : "import");
       } else if (id === MENU_COMMANDS.NAV_MEDIA || id === MENU_COMMANDS.VIEW_MEDIA) {
         setStage(current ? "indexing" : "intent");
-        setLens("import");
       } else if (
         id === MENU_COMMANDS.NAV_REVIEW ||
         id === MENU_COMMANDS.VIEW_TIMELINE ||
@@ -193,13 +186,10 @@ export function useAppGlue() {
         id === MENU_COMMANDS.VIEW_EDITS
       ) {
         setStage(current ? "proposal" : "intent");
-        setLens(current ? "review" : "import");
       } else if (id === MENU_COMMANDS.NAV_DELIVER) {
         setStage(current ? "deliver" : "intent");
-        setLens(current ? "delivery" : "import");
       } else if (id === MENU_COMMANDS.NAV_SETTINGS) {
         setStage(current ? "indexing" : "intent");
-        setLens(current ? "index" : "import");
       }
       // The legacy pane toggles that do not map to v2 lenses are kept
       // enabled for menu completeness but intentionally do not resize panes.
@@ -211,7 +201,6 @@ export function useAppGlue() {
     fitZoom,
     selectedClipKey,
     setCurrent,
-    setLens,
     setStage,
     timelineSnapshot,
     zoomIn,
