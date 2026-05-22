@@ -42,6 +42,7 @@
 pub mod anthropic;
 pub mod awidat_md;
 pub mod capabilities;
+pub mod capability_metadata;
 pub mod compact;
 pub mod context;
 pub mod continuity;
@@ -70,6 +71,7 @@ pub mod vc;
 pub mod verify;
 pub mod visual_signals;
 
+pub use capability_metadata::{CapabilityMetadata, SupportLevel};
 pub use error::FunctionCallError;
 pub use session::{Session, SessionError, SessionEvent};
 pub use tool::{

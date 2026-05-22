@@ -204,6 +204,10 @@ pub struct ApprovalRequest {
     /// re-serializing — preserves number precision, key order on
     /// objects, and avoids the parser round-trip cost.
     pub args_full: serde_json::Value,
+    /// Typed support metadata for the requested tool. Desktop approval
+    /// cards use this to avoid hiding side effects or unsupported export
+    /// behavior in prose-only descriptions.
+    pub capability_metadata: crate::capability_metadata::CapabilityMetadata,
     /// Reply channel. The receiver lives in the loop; the UI sends the
     /// user's decision here. Dropping the oneshot signals `Deny`.
     pub reply: oneshot::Sender<ApprovalDecision>,
@@ -367,6 +371,21 @@ pub trait ToolHandler: Send + Sync {
     /// concurrently.
     fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
         true
+    }
+
+    /// Typed capability metadata for manifest and UI consumers.
+    ///
+    /// Tools can override this for argument-sensitive support, but the
+    /// default central table keeps existing tool behavior intact while
+    /// avoiding unsupported claims in descriptions.
+    fn capability_metadata(
+        &self,
+        invocation: &ToolInvocation,
+    ) -> crate::capability_metadata::CapabilityMetadata {
+        crate::capability_metadata::CapabilityMetadata::for_tool_name(
+            self.name(),
+            self.is_mutating(invocation),
+        )
     }
 
     /// Operation-keyed approval cache entries for this invocation.

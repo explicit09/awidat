@@ -182,6 +182,7 @@ impl ToolOrchestrator {
             approval_tx,
             invocation,
             summary,
+            handler.capability_metadata(invocation),
             keys.clone(),
             retry_reason.map(str::to_string),
             cancel,
@@ -218,6 +219,7 @@ async fn request_approval(
     approval_tx: &mpsc::Sender<ApprovalRequest>,
     invocation: &ToolInvocation,
     args_summary: String,
+    capability_metadata: crate::capability_metadata::CapabilityMetadata,
     operation_keys: Vec<crate::tool::ApprovalKey>,
     retry_reason: Option<String>,
     cancel: &CancellationToken,
@@ -230,6 +232,7 @@ async fn request_approval(
         operation_keys,
         retry_reason,
         args_full: invocation.args.clone(),
+        capability_metadata,
         reply: reply_tx,
     };
     if approval_tx.send(req).await.is_err() {

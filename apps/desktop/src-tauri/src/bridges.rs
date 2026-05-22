@@ -141,6 +141,8 @@ pub fn spawn_approval_bridge(app: AppHandle, mut rx: mpsc::Receiver<ApprovalRequ
                     .as_ref()
                     .map(|reason| format!("{reason}\n{}", req.args_summary))
                     .unwrap_or_else(|| req.args_summary.clone()),
+                capability_metadata: serde_json::to_value(&req.capability_metadata)
+                    .unwrap_or(serde_json::Value::Null),
             };
             state
                 .pending_approvals

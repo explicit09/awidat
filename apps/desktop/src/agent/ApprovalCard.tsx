@@ -29,6 +29,7 @@ export function ApprovalCard({ item }: Props) {
       setDecision(null);
     }
   }
+  const capability = readCapabilityMetadata(item.capability_metadata);
 
   return (
     <article className="item item-approval">
@@ -36,6 +37,28 @@ export function ApprovalCard({ item }: Props) {
         approval · <code>{item.tool_name}</code>
       </div>
       <div className="approval-summary">{item.args_summary}</div>
+      {capability && (
+        <dl className="approval-capabilities">
+          <div>
+            <dt>Graph</dt>
+            <dd>{capability.graph_mutates ? "mutates" : "read-only"}</dd>
+          </div>
+          <div>
+            <dt>Preview</dt>
+            <dd>{formatSupport(capability.preview_supported)}</dd>
+          </div>
+          <div>
+            <dt>Export</dt>
+            <dd>{formatSupport(capability.export_supported)}</dd>
+          </div>
+          {capability.side_effects.length > 0 && (
+            <div>
+              <dt>Effects</dt>
+              <dd>{capability.side_effects.join(", ")}</dd>
+            </div>
+          )}
+        </dl>
+      )}
       <div className="approval-actions">
         <button
           onClick={() => respond("allow")}
@@ -62,4 +85,48 @@ export function ApprovalCard({ item }: Props) {
       {error && <div className="result-err">{error}</div>}
     </article>
   );
+}
+
+type SupportLevel = "supported" | "not_supported" | "unknown";
+
+type CapabilityMetadata = {
+  graph_mutates: boolean;
+  preview_supported: SupportLevel;
+  export_supported: SupportLevel;
+  side_effects: string[];
+};
+
+function readCapabilityMetadata(value: unknown): CapabilityMetadata | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.graph_mutates !== "boolean" ||
+    !isSupportLevel(record.preview_supported) ||
+    !isSupportLevel(record.export_supported)
+  ) {
+    return null;
+  }
+  return {
+    graph_mutates: record.graph_mutates,
+    preview_supported: record.preview_supported,
+    export_supported: record.export_supported,
+    side_effects: Array.isArray(record.side_effects)
+      ? record.side_effects.filter((entry): entry is string => typeof entry === "string")
+      : [],
+  };
+}
+
+function isSupportLevel(value: unknown): value is SupportLevel {
+  return value === "supported" || value === "not_supported" || value === "unknown";
+}
+
+function formatSupport(value: SupportLevel): string {
+  switch (value) {
+    case "supported":
+      return "supported";
+    case "not_supported":
+      return "not supported";
+    case "unknown":
+      return "unknown";
+  }
 }
