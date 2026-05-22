@@ -134,6 +134,17 @@ fn walk_for_match(
     proxies_dir: &Path,
     target_proxy_name: &str,
 ) -> Option<std::path::PathBuf> {
+    // The incoming stem can come from two places:
+    //   - a proxy filename (post-transcode, e.g. `foo-1080p-deadbeef`)
+    //   - a raw asset filename (when no proxy exists yet, the frontend
+    //     falls back to `<source-basename>` so the transcript pane can
+    //     still resolve a clip whose whisper sidecar landed before the
+    //     proxy did)
+    // Strip the `.mp4` we appended in `read_transcript` so we can also
+    // compare against raw filenames directly.
+    let raw_stem_target = target_proxy_name
+        .strip_suffix(".mp4")
+        .unwrap_or(target_proxy_name);
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -152,6 +163,17 @@ fn walk_for_match(
             .and_then(|s| s.to_str())
             .is_some_and(|n| n == target_proxy_name)
         {
+            return Some(path);
+        }
+        // Fallback: match the raw filename (with or without extension)
+        // so transcripts work for assets that have a whisper sidecar
+        // but no proxy yet. Both `copy_F65206FA....MOV` and
+        // `copy_F65206FA....` are accepted; the indexer keys its
+        // sidecars on the source filename, so either reaches the right
+        // sidecar.
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if file_name == raw_stem_target || file_stem == raw_stem_target {
             return Some(path);
         }
     }
@@ -330,5 +352,62 @@ mod tests {
         });
         let err = parse_transcript("x".into(), sidecar).unwrap_err();
         assert!(err.contains("missing `data`"), "got: {err}");
+    }
+
+    #[test]
+    fn walk_for_match_resolves_by_proxy_stem_when_proxy_exists() {
+        // Normal case: caller hands us a proxy-stem-shaped string and
+        // we recompute the expected proxy filename from each raw asset
+        // to find the matching one.
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let asset = raw_dir.join("clip.MOV");
+        std::fs::write(&asset, b"src").unwrap();
+        let expected_proxy_name = proxy_path_for(&proxies_dir, &asset)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let found = walk_for_match(&raw_dir, &proxies_dir, &expected_proxy_name).unwrap();
+        assert_eq!(found, asset);
+    }
+
+    #[test]
+    fn walk_for_match_resolves_by_raw_filename_when_no_proxy_exists() {
+        // The bug-fix path: whisper sidecar landed but no proxy yet.
+        // Frontend passes `<source-basename>` (with or without
+        // extension), backend has to resolve it via raw/ filename
+        // match rather than the proxy-stem reverse lookup.
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let asset = raw_dir.join("clip.MOV");
+        std::fs::write(&asset, b"src").unwrap();
+        // With extension — the `.mp4` suffix added by read_transcript
+        // gets stripped before the raw-filename comparison, so the
+        // target is e.g. "clip.MOV".
+        let target_with_ext = "clip.MOV.mp4";
+        let found = walk_for_match(&raw_dir, &proxies_dir, target_with_ext).unwrap();
+        assert_eq!(found, asset);
+        // Without extension.
+        let target_no_ext = "clip.mp4";
+        let found = walk_for_match(&raw_dir, &proxies_dir, target_no_ext).unwrap();
+        assert_eq!(found, asset);
+    }
+
+    #[test]
+    fn walk_for_match_returns_none_when_nothing_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        std::fs::write(raw_dir.join("clip.MOV"), b"src").unwrap();
+        assert!(walk_for_match(&raw_dir, &proxies_dir, "unrelated.mp4").is_none());
     }
 }

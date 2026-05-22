@@ -143,10 +143,15 @@ function LoadedTranscript({
   });
 
   // Active-word highlight + auto-scroll. Imperative DOM toggle on
-  // [data-word-idx] spans driven by `timelineTime`; React doesn't
-  // re-render on each timeupdate (which happens ~60 Hz from the
-  // segmented player's rVFC tick).
+  // [data-word-idx] spans driven by whichever playhead is active —
+  // the timeline preview when a clip is on the OTIO timeline that
+  // matches this transcript's stem, otherwise the source-preview
+  // currentTime. Without the source-preview fallback the highlight
+  // never fires for assets that haven't been auto-inserted onto the
+  // timeline yet, which is exactly the case immediately after import.
   const timelineTime = useMediaStore((s) => s.timelineTime);
+  const sourcePreviewTime = useMediaStore((s) => s.currentTime);
+  const selectedStem = useMediaStore((s) => s.selectedStem);
   const tlSegments = segments;
   const activeWordIdxRef = useRef<number>(-1);
   const lastScrolledSegmentRef = useRef<number>(-1);
@@ -158,19 +163,35 @@ function LoadedTranscript({
   );
 
   useEffect(() => {
-    // Translate timeline-time → (active asset stem, source-time).
-    const segIdx = findActiveSegment(tlSegments, timelineTime);
-    if (segIdx < 0) return;
-    const seg = tlSegments[segIdx];
-    if (seg.proxyStem !== stem) {
-      // The active segment's asset isn't this transcript's asset.
-      // Clear any lingering highlight; this transcript pane just
-      // isn't the one being played right now.
+    // Resolve source-time for this transcript's stem. Prefer the
+    // timeline-time path (the timeline preview is the canonical
+    // playhead when there's a clip on the OTIO); fall back to the
+    // source-preview currentTime when no timeline segment covers the
+    // playhead OR the timeline's active segment is for a different
+    // asset. The fallback is what makes highlighting work for a clip
+    // that's been imported + indexed but not yet placed on the
+    // timeline.
+    const tlSegIdx = findActiveSegment(tlSegments, timelineTime);
+    let sourceTime: number | null = null;
+    if (tlSegIdx >= 0 && tlSegments[tlSegIdx].proxyStem === stem) {
+      const seg = tlSegments[tlSegIdx];
+      sourceTime = seg.sourceStart + (timelineTime - seg.timelineStart);
+    } else if (selectedStem === stem) {
+      // Source-preview branch — the user is reviewing the source
+      // asset directly; `currentTime` is already source-time on the
+      // same asset this transcript belongs to.
+      sourceTime = sourcePreviewTime;
+    }
+
+    if (sourceTime === null) {
+      // Neither path matches — the active asset is something else.
+      // Clear any lingering highlight so a stale word doesn't stay
+      // lit on a transcript that isn't being followed.
       clearActive(scrollRef.current, activeWordIdxRef.current);
       activeWordIdxRef.current = -1;
       return;
     }
-    const sourceTime = seg.sourceStart + (timelineTime - seg.timelineStart);
+
     activeSourceTimeRef.current = sourceTime;
     // Find the word whose [start_s, end_s] covers sourceTime via
     // binary search on the pre-built starts array.
@@ -206,6 +227,8 @@ function LoadedTranscript({
     }
   }, [
     timelineTime,
+    sourcePreviewTime,
+    selectedStem,
     tlSegments,
     stem,
     t.words,
