@@ -99,6 +99,26 @@ pub enum RenderReplayError {
         #[source]
         source: crate::OutputPathSafetyError,
     },
+    /// A required input or sidecar was missing during replay preflight.
+    #[error("render manifest {path} required {kind} is missing: {artifact}")]
+    MissingRequiredArtifact {
+        /// Manifest path.
+        path: String,
+        /// Artifact kind.
+        kind: &'static str,
+        /// Artifact path.
+        artifact: String,
+    },
+    /// A required input or sidecar no longer matches the manifest fingerprint.
+    #[error("render manifest {path} required {kind} fingerprint mismatch at {artifact}")]
+    FingerprintMismatch {
+        /// Manifest path.
+        path: String,
+        /// Artifact kind.
+        kind: &'static str,
+        /// Artifact path.
+        artifact: String,
+    },
     /// The FFmpeg process could not be spawned.
     #[error("render manifest {path} ffmpeg replay failed to spawn: {source}")]
     Spawn {
@@ -418,6 +438,40 @@ pub fn output_artifact(path: &Path, required: bool) -> RenderOutputArtifact {
     }
 }
 
+/// Fill output artifact fingerprints for outputs that exist.
+pub fn finalize_render_manifest_outputs(
+    manifest: &mut RenderExecutionManifest,
+) -> Result<(), RenderManifestError> {
+    let project_root = Path::new(&manifest.project_root);
+    for output in &mut manifest.outputs {
+        let path = resolve_manifest_artifact_path(project_root, &output.path);
+        if !path.exists() {
+            if output.required {
+                return Err(RenderManifestError::Io {
+                    path: path.to_string_lossy().into_owned(),
+                    source: io::Error::new(io::ErrorKind::NotFound, "required output missing"),
+                });
+            }
+            continue;
+        }
+        let fingerprint = fingerprint_file(&path, output.required)?;
+        output.sha256 = Some(fingerprint.sha256);
+        output.size_bytes = Some(fingerprint.size_bytes);
+    }
+    Ok(())
+}
+
+/// Read, finalize, and rewrite a render manifest.
+pub fn finalize_render_manifest_file(path: &Path) -> Result<(), RenderManifestError> {
+    let bytes = fs::read(path).map_err(|source| RenderManifestError::Io {
+        path: path.to_string_lossy().into_owned(),
+        source,
+    })?;
+    let mut manifest: RenderExecutionManifest = serde_json::from_slice(&bytes)?;
+    finalize_render_manifest_outputs(&mut manifest)?;
+    write_render_manifest(path, &manifest)
+}
+
 /// Build a render manifest limitation entry.
 pub fn limitation(code: impl Into<String>, message: impl Into<String>) -> RenderManifestLimitation {
     RenderManifestLimitation {
@@ -437,7 +491,9 @@ pub fn write_render_manifest(
             source,
         })?;
     }
-    let mut bytes = serde_json::to_vec_pretty(manifest)?;
+    let mut manifest = manifest.clone();
+    manifest.manifest_id = stable_manifest_id(&manifest);
+    let mut bytes = serde_json::to_vec_pretty(&manifest)?;
     bytes.push(b'\n');
     fs::write(path, bytes).map_err(|source| RenderManifestError::Io {
         path: path.to_string_lossy().into_owned(),
@@ -489,6 +545,16 @@ pub fn validate_replay_manifest(
                     cwd: cwd.clone(),
                 });
             }
+            validate_required_fingerprints(
+                &path,
+                Path::new(&manifest.project_root),
+                &manifest.inputs,
+            )?;
+            validate_required_sidecars(
+                &path,
+                Path::new(&manifest.project_root),
+                &manifest.sidecars,
+            )?;
             for output in &manifest.outputs {
                 if output.required {
                     validate_render_output_path(
@@ -496,7 +562,9 @@ pub fn validate_replay_manifest(
                         Path::new(&output.path),
                         &[],
                         &[],
-                        OutputPathPolicy::default(),
+                        OutputPathPolicy {
+                            allow_overwrite: true,
+                        },
                     )
                     .map_err(|source| RenderReplayError::OutputPreflight {
                         path: manifest_path.to_string_lossy().into_owned(),
@@ -552,6 +620,79 @@ pub fn planned_at_now(input: RenderExecutionManifestInput) -> RenderExecutionMan
 fn hex_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     format!("{digest:x}")
+}
+
+fn resolve_manifest_artifact_path(project_root: &Path, path: &str) -> PathBuf {
+    let artifact_path = Path::new(path);
+    if artifact_path.is_absolute() {
+        artifact_path.to_path_buf()
+    } else {
+        project_root.join(artifact_path)
+    }
+}
+
+fn validate_required_fingerprints(
+    manifest_path: &str,
+    project_root: &Path,
+    inputs: &[RenderInputFingerprint],
+) -> Result<(), RenderReplayError> {
+    for input in inputs.iter().filter(|input| input.required) {
+        let path = resolve_manifest_artifact_path(project_root, &input.path);
+        if !path.is_file() {
+            return Err(RenderReplayError::MissingRequiredArtifact {
+                path: manifest_path.to_owned(),
+                kind: "input",
+                artifact: input.path.clone(),
+            });
+        }
+        let live = fingerprint_file(&path, true).map_err(|_| {
+            RenderReplayError::MissingRequiredArtifact {
+                path: manifest_path.to_owned(),
+                kind: "input",
+                artifact: input.path.clone(),
+            }
+        })?;
+        if live.sha256 != input.sha256 || live.size_bytes != input.size_bytes {
+            return Err(RenderReplayError::FingerprintMismatch {
+                path: manifest_path.to_owned(),
+                kind: "input",
+                artifact: input.path.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_required_sidecars(
+    manifest_path: &str,
+    project_root: &Path,
+    sidecars: &[RenderSidecarFingerprint],
+) -> Result<(), RenderReplayError> {
+    for sidecar in sidecars.iter().filter(|sidecar| sidecar.required) {
+        let path = resolve_manifest_artifact_path(project_root, &sidecar.path);
+        if !path.is_file() {
+            return Err(RenderReplayError::MissingRequiredArtifact {
+                path: manifest_path.to_owned(),
+                kind: "sidecar",
+                artifact: sidecar.path.clone(),
+            });
+        }
+        let live = fingerprint_file(&path, true).map_err(|_| {
+            RenderReplayError::MissingRequiredArtifact {
+                path: manifest_path.to_owned(),
+                kind: "sidecar",
+                artifact: sidecar.path.clone(),
+            }
+        })?;
+        if live.sha256 != sidecar.sha256 || live.size_bytes != sidecar.size_bytes {
+            return Err(RenderReplayError::FingerprintMismatch {
+                path: manifest_path.to_owned(),
+                kind: "sidecar",
+                artifact: sidecar.path.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -713,5 +854,89 @@ mod tests {
         let err = validate_replay_manifest(&manifest, &path).unwrap_err();
 
         assert!(err.to_string().contains("cwd does not exist"));
+    }
+
+    #[test]
+    fn replay_validation_allows_existing_required_output() {
+        let dir = tempdir().unwrap();
+        let output = dir.path().join("renders/out.mp4");
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::write(&output, b"old output").unwrap();
+        let mut manifest = planned_manifest("2026-05-22T10:00:00Z");
+        manifest.project_root = dir.path().to_string_lossy().into_owned();
+        manifest.inputs = Vec::new();
+        manifest.outputs = vec![output_artifact(&output, true)];
+        manifest.replay = RenderReplayPlan::FfmpegArgv {
+            argv: vec!["ffmpeg".into(), "-version".into()],
+            cwd: Some(dir.path().to_string_lossy().into_owned()),
+        };
+        let manifest_path = dir.path().join("out.render-manifest.json");
+
+        validate_replay_manifest(&manifest, &manifest_path).unwrap();
+    }
+
+    #[test]
+    fn replay_validation_rejects_changed_required_input() {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("raw/a.mp4");
+        let output = dir.path().join("renders/out.mp4");
+        std::fs::create_dir_all(input.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::write(&input, b"first").unwrap();
+        let fingerprint = fingerprint_file(&input, true).unwrap();
+        std::fs::write(&input, b"changed").unwrap();
+
+        let mut manifest = planned_manifest("2026-05-22T10:00:00Z");
+        manifest.project_root = dir.path().to_string_lossy().into_owned();
+        manifest.inputs = vec![fingerprint];
+        manifest.outputs = vec![output_artifact(&output, true)];
+        manifest.replay = RenderReplayPlan::FfmpegArgv {
+            argv: vec!["ffmpeg".into(), "-version".into()],
+            cwd: Some(dir.path().to_string_lossy().into_owned()),
+        };
+        let manifest_path = dir.path().join("out.render-manifest.json");
+
+        let err = validate_replay_manifest(&manifest, &manifest_path).unwrap_err();
+
+        assert!(err.to_string().contains("fingerprint mismatch"));
+    }
+
+    #[test]
+    fn finalize_manifest_records_existing_output_hashes() {
+        let dir = tempdir().unwrap();
+        let output = dir.path().join("renders/out.mp4");
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::write(&output, b"rendered").unwrap();
+        let mut manifest = planned_manifest("2026-05-22T10:00:00Z");
+        manifest.project_root = dir.path().to_string_lossy().into_owned();
+        manifest.outputs = vec![output_artifact(&output, true)];
+
+        finalize_render_manifest_outputs(&mut manifest).unwrap();
+
+        assert_eq!(manifest.outputs[0].size_bytes, Some(8));
+        assert_eq!(
+            manifest.outputs[0].sha256.as_deref(),
+            Some("69d0044d65bc72753132efe821effd54c8072b5f75703772caa15a13d400dc5a")
+        );
+    }
+
+    #[test]
+    fn manifest_write_refreshes_manifest_id_after_output_finalization() {
+        let dir = tempdir().unwrap();
+        let output = dir.path().join("renders/out.mp4");
+        let manifest_path = dir.path().join("renders/out.render-manifest.json");
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        std::fs::write(&output, b"rendered").unwrap();
+        let mut manifest = planned_manifest("2026-05-22T10:00:00Z");
+        manifest.project_root = dir.path().to_string_lossy().into_owned();
+        manifest.outputs = vec![output_artifact(&output, true)];
+        let planned_id = manifest.manifest_id.clone();
+        write_render_manifest(&manifest_path, &manifest).unwrap();
+
+        finalize_render_manifest_file(&manifest_path).unwrap();
+
+        let finalized = read_render_manifest(&manifest_path).unwrap();
+        assert_ne!(finalized.manifest_id, planned_id);
+        assert_eq!(finalized.manifest_id, stable_manifest_id(&finalized));
     }
 }

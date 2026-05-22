@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{self, Context, Result};
+use anyhow::{self, Context, Result, bail};
 use awidat_proto::project::Project;
 use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
@@ -474,6 +474,9 @@ fn cmd_replay_render(manifest: &std::path::Path) -> Result<()> {
     for output in outcome.output_paths {
         println!("output: {}", output.display());
     }
+    if !outcome.status.success() {
+        bail!("render replay failed with status {}", outcome.status);
+    }
     Ok(())
 }
 
@@ -638,5 +641,43 @@ fn print_index_warning(w: &ValidationWarning) {
         ValidationWarning::TimelineMediaMissing { path, target_url } => {
             println!("  - {path}: timeline media reference '{target_url}' is missing");
         }
+    }
+}
+
+#[cfg(test)]
+mod replay_render_tests {
+    use super::*;
+
+    #[test]
+    fn replay_render_command_fails_on_nonzero_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("renders/out.mp4");
+        std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+        let manifest = awidat_render::RenderExecutionManifest::planned(
+            awidat_render::RenderExecutionManifestInput {
+                created_at: "2026-05-22T10:00:00Z".into(),
+                awidat_version: "test".into(),
+                project_root: dir.path().to_string_lossy().into_owned(),
+                project_hash: None,
+                timeline_hash: None,
+                backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+                replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+                    argv: vec!["false".into()],
+                    cwd: Some(dir.path().to_string_lossy().into_owned()),
+                },
+                inputs: Vec::new(),
+                outputs: vec![awidat_render::output_artifact(&output, true)],
+                sidecars: Vec::new(),
+                limitations: Vec::new(),
+                verification: None,
+                metadata: std::collections::BTreeMap::new(),
+            },
+        );
+        let manifest_path = dir.path().join("out.render-manifest.json");
+        awidat_render::write_render_manifest(&manifest_path, &manifest).unwrap();
+
+        let err = cmd_replay_render(&manifest_path).unwrap_err();
+
+        assert!(err.to_string().contains("failed with status"));
     }
 }
