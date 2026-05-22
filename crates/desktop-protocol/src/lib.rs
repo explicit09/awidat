@@ -1036,6 +1036,24 @@ pub struct DuckingControls {
     pub release_ms: f64,
 }
 
+/// What kind of media URL the frontend should play for a clip.
+///
+/// `Proxy` — a 1080p H.264 all-keyframe mp4 is ready; cheap to scrub.
+/// `Source` — no proxy yet, but the original asset is playable; heavier.
+/// `Missing` — the source asset isn't on disk; the player must show
+/// an offline overlay rather than try to play.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum PlayableKind {
+    /// A 1080p H.264 all-keyframe proxy mp4 is ready; cheap to scrub.
+    Proxy,
+    /// No proxy yet, but the original asset is playable; heavier to scrub.
+    Source,
+    /// The source asset isn't on disk; show an offline overlay.
+    Missing,
+}
+
 /// One drawable item on a track. Variant-tagged so the frontend can
 /// render each kind differently.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1875,5 +1893,15 @@ mod tests {
                 "PROTOCOL_VERSION components must be numeric"
             );
         }
+    }
+
+    #[test]
+    fn playable_kind_serializes_as_snake_case() {
+        let proxy = serde_json::to_string(&PlayableKind::Proxy).unwrap();
+        let source = serde_json::to_string(&PlayableKind::Source).unwrap();
+        let missing = serde_json::to_string(&PlayableKind::Missing).unwrap();
+        assert_eq!(proxy, "\"proxy\"");
+        assert_eq!(source, "\"source\"");
+        assert_eq!(missing, "\"missing\"");
     }
 }
