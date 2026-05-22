@@ -29,6 +29,60 @@ pub struct ProxyEntry {
     pub size_bytes: u64,
 }
 
+/// One source asset discovered under the project's `raw/` directory.
+#[derive(Debug, Clone, Serialize)]
+pub struct SourceMediaEntry {
+    /// Stable project-relative asset id, e.g. `raw/interview.mov`.
+    pub id: String,
+    /// Display name including extension.
+    pub name: String,
+    /// Absolute source path on disk.
+    pub path: String,
+    /// File size in bytes.
+    pub size_bytes: u64,
+}
+
+/// Return every source media file currently sitting under
+/// `<project>/raw/`. Unlike [`list_proxies`], this reflects the actual
+/// project assets before transcoding/indexing has produced sidecars.
+#[tauri::command]
+pub async fn list_source_media(
+    state: State<'_, AwidatState>,
+) -> Result<Vec<SourceMediaEntry>, String> {
+    let project_root = match state.project_root.lock().await.clone() {
+        Some(p) => p,
+        None => return Ok(Vec::new()),
+    };
+    let files = tokio::task::spawn_blocking(move || {
+        awidat_index::media_files::collect_project_media_files(
+            &project_root,
+            awidat_index::media_files::MediaScanOptions {
+                include_raw: true,
+                include_renders: false,
+                max_files: None,
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("scan source media join: {e}"))?
+    .map_err(|e| format!("scan source media: {e}"))?;
+
+    Ok(files
+        .into_iter()
+        .map(|file| SourceMediaEntry {
+            id: file.project_relative_path,
+            name: file
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("media")
+                .to_string(),
+            path: file.path.to_string_lossy().into_owned(),
+            size_bytes: file.size_bytes,
+        })
+        .collect())
+}
+
 /// Return every proxy currently sitting in
 /// `<project>/.awidat/proxies/`. Empty list when no project is
 /// loaded or the dir doesn't exist yet (first import will create

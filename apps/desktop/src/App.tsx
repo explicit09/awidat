@@ -106,8 +106,10 @@ function App() {
   const setSourceDuration = useMediaStore((s) => s.setDuration);
   const setMediaPlaying = useMediaStore((s) => s.setPlaying);
   const requestSourceSeek = useMediaStore((s) => s.requestSeek);
+  const refreshMedia = useMediaStore((s) => s.refresh);
   const sourceSeekRequestId = useMediaStore((s) => s.seekRequestId);
   const sourceSeekTargetS = useMediaStore((s) => s.seekTargetS);
+  const sources = useMediaStore((s) => s.sources);
   const proxies = useMediaStore((s) => s.proxies);
   const selectedStem = useMediaStore((s) => s.selectedStem);
   const setActiveTranscriptStem = useTranscriptStore((s) => s.setActiveStem);
@@ -146,7 +148,8 @@ function App() {
     () => proxies.find((proxy) => proxy.stem === selectedStem) ?? proxies[0] ?? null,
     [proxies, selectedStem],
   );
-  const hasImportedMedia = proxies.length > 0;
+  const sourceMediaCount = Math.max(sources.length, proxies.length);
+  const hasImportedMedia = sourceMediaCount > 0;
   const routedProjectRef = useRef<{
     project: string | null;
     mode: "empty" | "proxy" | "timeline" | "proposal" | null;
@@ -157,6 +160,7 @@ function App() {
     setCommandError(null);
     try {
       await invoke("import_locals", { srcPaths: paths, link: false });
+      await refreshMedia();
       setStage("indexing");
       setLens("index");
     } catch (e) {
@@ -170,6 +174,7 @@ function App() {
     setCommandError(null);
     try {
       await invoke("import_url", { url: trimmed });
+      await refreshMedia();
       setStage("indexing");
       setLens("index");
     } catch (e) {
@@ -515,6 +520,12 @@ function App() {
   }, [currentLens, demoMode, hasImportedMedia, setLens]);
 
   useEffect(() => {
+    if (!demoMode) {
+      void refreshMedia();
+    }
+  }, [current, demoMode, refreshMedia]);
+
+  useEffect(() => {
     resetSurfaceControls();
   }, [current]);
 
@@ -658,8 +669,8 @@ function App() {
     }
     if (selectedStem) {
       chips.push({ label: `Clip: ${selectedStem}`, kind: "media" });
-    } else if (proxies.length > 0) {
-      chips.push({ label: `${proxies.length} proxy assets`, kind: "media" });
+    } else if (sourceMediaCount > 0) {
+      chips.push({ label: `${sourceMediaCount} source assets`, kind: "media" });
     }
     if (timelineDuration > 0) {
       chips.push({ label: `Timeline: ${formatDuration(timelineDuration)}`, kind: "selection" });
@@ -671,7 +682,7 @@ function App() {
       chips.push({ label: `Proposal: ${activeProposal.summary}`, kind: "lens" });
     }
     return chips;
-  }, [activeProposal, current, proxies.length, selectedStem, timelineDuration, timelineSnapshot.cut_boundaries.length]);
+  }, [activeProposal, current, selectedStem, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
 
   const effectiveContextChips: ContextChip[] = useMemo(() => {
     return realContextChips.filter(
@@ -702,6 +713,21 @@ function App() {
   const realIndexingMedia: IndexingMediaItem[] = useMemo(() => {
     const importBusy = activeJobs.some((job) => job.job_kind === "local_import" || job.job_kind === "url_import");
     const transcodeJob = activeJobs.find((job) => job.job_kind === "transcode");
+    if (sources.length > 0) {
+      return sources.map((source) => {
+        const sourceStem = source.name.replace(/\.[^.]+$/, "");
+        const proxy = proxies.find((entry) => entry.stem.startsWith(`${sourceStem}-`));
+        return {
+          id: source.id,
+          title: source.name,
+          detail: proxy
+            ? `${formatBytes(source.size_bytes)} source · proxy ready`
+            : `${formatBytes(source.size_bytes)} source · awaiting proxy/index`,
+          status: transcodeJob ? "processing" : proxy ? "indexed" : importBusy ? "imported" : "partial",
+          progress: transcodeJob?.percent ?? undefined,
+        };
+      });
+    }
     return proxies.map((proxy) => ({
       id: proxy.stem,
       title: proxy.stem,
@@ -709,7 +735,7 @@ function App() {
       status: transcodeJob ? "processing" : importBusy ? "imported" : "indexed",
       progress: transcodeJob?.percent ?? undefined,
     }));
-  }, [activeJobs, proxies]);
+  }, [activeJobs, proxies, sources]);
 
   const realIndexingTasks: IndexingTask[] = useMemo(() => {
     const taskJobs: Array<[IndexingTask["kind"], JobKind]> = [
@@ -729,18 +755,18 @@ function App() {
       return {
         id: `real-${kind}`,
         kind,
-        status: runningJob ? "indexing" : completed ? "indexed" : proxies.length > 0 ? "missing" : "missing",
+        status: runningJob ? "indexing" : completed ? "indexed" : hasImportedMedia ? "missing" : "missing",
         progress: runningJob?.percent ?? (completed ? 100 : undefined),
         detail: runningJob?.status ?? (completed ? "Completed from local job state" : "Waiting for local indexer"),
       };
     });
-  }, [activeJobs, completedJobKinds, proxies.length]);
+  }, [activeJobs, completedJobKinds, hasImportedMedia]);
 
   const realIndexingReady = realIndexingTasks.some((task) => task.status === "indexed");
   const loadedTranscript =
     transcriptState?.state === "loaded" ? transcriptState.transcript : null;
   const realIndexingStructure: IndexingStructurePreview | undefined = useMemo(() => {
-    if (proxies.length === 0) return undefined;
+    if (sourceMediaCount === 0) return undefined;
     const duration = timelineDuration > 0
       ? timelineDuration
       : loadedTranscript?.segments.reduce((max, segment) => Math.max(max, segment.end_s), 0) ?? 0;
@@ -754,7 +780,7 @@ function App() {
       speakers,
       transcriptPercent: loadedTranscript ? 100 : completedJobKinds.has("indexing") ? 100 : undefined,
     };
-  }, [completedJobKinds, loadedTranscript, proxies.length, timelineDuration, timelineSnapshot.cut_boundaries.length]);
+  }, [completedJobKinds, loadedTranscript, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
 
   const realDeliveryTargets: DeliveryTarget[] = useMemo(
     () => [
@@ -903,7 +929,7 @@ function App() {
   const realIndexingWorkspace = (
     <IndexingDashboard
       projectName={current ? projectName(current) : undefined}
-      sourceCount={proxies.length}
+      sourceCount={sourceMediaCount}
       showImportActions={!hasImportedMedia}
       deliveryTarget={timelineDuration > 0 ? `Timeline ${formatDuration(timelineDuration)}` : undefined}
       media={realIndexingMedia}

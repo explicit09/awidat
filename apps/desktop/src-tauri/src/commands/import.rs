@@ -402,8 +402,17 @@ async fn run_local_import(
         .ok_or_else(|| format!("source path has no filename: {src_path}"))?;
     let dst = raw.join(filename);
     if dst.exists() {
+        let src_abs = src
+            .canonicalize()
+            .map_err(|e| format!("resolve source path: {e}"))?;
+        let dst_abs = dst
+            .canonicalize()
+            .map_err(|e| format!("resolve existing raw asset: {e}"))?;
+        if src_abs == dst_abs {
+            return Ok(dst);
+        }
         return Err(format!(
-            "a file named {} already exists in raw/",
+            "a different file named {} already exists in raw/",
             filename.to_string_lossy()
         ));
     }
@@ -664,5 +673,48 @@ mod tests {
     fn parse_progress_rejects_non_download_lines() {
         assert!(parse_progress("[info] bla").is_none());
         assert!(parse_progress("yt-dlp 2024.x").is_none());
+    }
+
+    #[tokio::test]
+    async fn local_import_accepts_existing_raw_asset_when_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = dir.path().join("raw");
+        std::fs::create_dir_all(&raw).unwrap();
+        let asset = raw.join("clip.mov");
+        std::fs::write(&asset, b"media").unwrap();
+
+        let imported = run_local_import(
+            dir.path(),
+            &asset.to_string_lossy(),
+            false,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(imported, asset);
+    }
+
+    #[tokio::test]
+    async fn local_import_rejects_existing_raw_asset_with_different_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = dir.path().join("raw");
+        let source_dir = dir.path().join("source");
+        std::fs::create_dir_all(&raw).unwrap();
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(raw.join("clip.mov"), b"first").unwrap();
+        let duplicate = source_dir.join("clip.mov");
+        std::fs::write(&duplicate, b"second").unwrap();
+
+        let err = run_local_import(
+            dir.path(),
+            &duplicate.to_string_lossy(),
+            false,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("a different file named clip.mov already exists in raw/"));
     }
 }

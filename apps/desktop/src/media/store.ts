@@ -29,7 +29,16 @@ export type ProxyEntry = {
   size_bytes: number;
 };
 
+export type SourceMediaEntry = {
+  id: string;
+  name: string;
+  path: string;
+  size_bytes: number;
+};
+
 type MediaState = {
+  /** All source assets under `raw/`, sorted by project-relative id. */
+  sources: SourceMediaEntry[];
   /** All proxies in `.awidat/proxies/`, sorted by stem. */
   proxies: ProxyEntry[];
   /** Stem of the currently-selected asset, or null if none / no proxies. */
@@ -95,6 +104,7 @@ type MediaState = {
 };
 
 export const useMediaStore = create<MediaState>((set, get) => ({
+  sources: [],
   proxies: [],
   selectedStem: null,
   currentTime: 0,
@@ -110,7 +120,10 @@ export const useMediaStore = create<MediaState>((set, get) => ({
 
   refresh: async () => {
     try {
-      const proxies = await invoke<ProxyEntry[]>("list_proxies");
+      const [sources, proxies] = await Promise.all([
+        invoke<SourceMediaEntry[]>("list_source_media"),
+        invoke<ProxyEntry[]>("list_proxies"),
+      ]);
       set((state) => {
         // Keep current selection if still present; otherwise pick
         // the first proxy if any. Falling back to null when the
@@ -121,7 +134,7 @@ export const useMediaStore = create<MediaState>((set, get) => ({
         const selectedStem = stillThere
           ? state.selectedStem
           : proxies[0]?.stem ?? null;
-        return { proxies, selectedStem };
+        return { sources, proxies, selectedStem };
       });
     } catch (e) {
       // eslint-disable-next-line no-console
