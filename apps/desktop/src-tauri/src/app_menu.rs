@@ -35,6 +35,13 @@ pub mod id {
     pub const TIMELINE_ZOOM_OUT: &str = "timeline:zoom_out";
     pub const TIMELINE_ZOOM_FIT: &str = "timeline:zoom_fit";
     pub const TOGGLE_FULLSCREEN: &str = "window:toggle_fullscreen";
+    pub const NAV_PROJECT: &str = "nav:project";
+    pub const NAV_WORKSPACE: &str = "nav:workspace";
+    pub const NAV_AGENT: &str = "nav:agent";
+    pub const NAV_MEDIA: &str = "nav:media";
+    pub const NAV_REVIEW: &str = "nav:review";
+    pub const NAV_DELIVER: &str = "nav:deliver";
+    pub const NAV_SETTINGS: &str = "nav:settings";
 }
 
 const DISABLED_SETTINGS: &str = "app:settings";
@@ -160,6 +167,13 @@ fn build_macos(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
 
     MenuBuilder::new(app)
         .item(&app_menu)
+        .item(&project_menu(app)?)
+        .item(&workspace_menu(app)?)
+        .item(&agent_menu(app)?)
+        .item(&media_menu(app)?)
+        .item(&review_menu(app)?)
+        .item(&deliver_menu(app)?)
+        .item(&settings_menu(app)?)
         .item(&file_menu(app, "Reveal Project in Finder", false, true)?)
         .item(&edit_menu(app)?)
         .item(&view_menu(app)?)
@@ -170,6 +184,13 @@ fn build_macos(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
 
 fn build_windows(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     MenuBuilder::new(app)
+        .item(&project_menu(app)?)
+        .item(&workspace_menu(app)?)
+        .item(&agent_menu(app)?)
+        .item(&media_menu(app)?)
+        .item(&review_menu(app)?)
+        .item(&deliver_menu(app)?)
+        .item(&settings_menu(app)?)
         .item(&file_menu(
             app,
             "Reveal Project in File Explorer",
@@ -180,6 +201,80 @@ fn build_windows(app: &AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
         .item(&view_menu(app)?)
         .item(&tools_menu(app)?)
         .item(&help_menu(app, true)?)
+        .build()
+}
+
+fn project_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    SubmenuBuilder::new(app, "Project")
+        .item(&item(app, id::NAV_PROJECT, "Project Overview", true, None)?)
+        .separator()
+        .item(&item(app, id::NEW_PROJECT, "New Project…", true, Some("CmdOrCtrl+N"))?)
+        .item(&item(app, id::OPEN_PROJECT, "Open Project…", true, Some("CmdOrCtrl+O"))?)
+        .item(&item(app, id::OPEN_RECENT, "Open Recent", true, None)?)
+        .separator()
+        .item(&item(app, id::CLOSE_PROJECT, "Close Project", false, Some("CmdOrCtrl+W"))?)
+        .item(&item(app, id::REVEAL_PROJECT, "Reveal Project", false, None)?)
+        .build()
+}
+
+fn workspace_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    SubmenuBuilder::new(app, "Workspace")
+        .item(&item(app, id::NAV_WORKSPACE, "Review Workspace", true, None)?)
+        .separator()
+        .item(&item(app, id::VIEW_TIMELINE, "Timeline", false, None)?)
+        .item(&item(app, id::VIEW_TRANSCRIPT, "Transcript", false, None)?)
+        .item(&item(app, id::VIEW_NOTES, "Notes", false, None)?)
+        .item(&item(app, id::VIEW_PROPERTIES, "Inspector", false, None)?)
+        .separator()
+        .item(&item(app, id::TIMELINE_ZOOM_IN, "Zoom Timeline In", false, Some("CmdOrCtrl+="))?)
+        .item(&item(app, id::TIMELINE_ZOOM_OUT, "Zoom Timeline Out", false, Some("CmdOrCtrl+-"))?)
+        .item(&item(app, id::TIMELINE_ZOOM_FIT, "Fit Timeline", false, Some("CmdOrCtrl+0"))?)
+        .build()
+}
+
+fn agent_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    SubmenuBuilder::new(app, "Agent")
+        .item(&item(app, id::NAV_AGENT, "Agent Command Rail", true, None)?)
+        .separator()
+        .item(&item(app, id::RUN_INDEXERS, "Run Indexers", false, None)?)
+        .item(&item(app, id::VIEW_CHAT, "Activity / Chat", false, None)?)
+        .build()
+}
+
+fn media_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    SubmenuBuilder::new(app, "Media")
+        .item(&item(app, id::NAV_MEDIA, "Media / Import Workspace", true, None)?)
+        .separator()
+        .item(&item(app, id::IMPORT_FILES, "Import Files…", false, Some("CmdOrCtrl+I"))?)
+        .item(&item(app, id::IMPORT_URL, "Import URL…", false, Some("CmdOrCtrl+Shift+I"))?)
+        .item(&item(app, id::VIEW_MEDIA, "Media Viewer", false, None)?)
+        .build()
+}
+
+fn review_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    SubmenuBuilder::new(app, "Review")
+        .item(&item(app, id::NAV_REVIEW, "Review Workspace", true, None)?)
+        .separator()
+        .item(&item(app, id::ACCEPT_PROPOSAL, "Accept Proposal", false, Some("Enter"))?)
+        .item(&item(app, id::REJECT_PROPOSAL, "Reject Proposal", false, Some("Esc"))?)
+        .item(&item(app, id::VIEW_EDITS, "Edit History", false, None)?)
+        .build()
+}
+
+fn deliver_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    SubmenuBuilder::new(app, "Deliver")
+        .item(&item(app, id::NAV_DELIVER, "Delivery / Preflight Workspace", true, None)?)
+        .separator()
+        .item(&item(app, id::EXPORT_TIMELINE, "Export Timeline…", false, Some("CmdOrCtrl+E"))?)
+        .build()
+}
+
+fn settings_menu(app: &AppHandle<Wry>) -> tauri::Result<tauri::menu::Submenu<Wry>> {
+    SubmenuBuilder::new(app, "Settings")
+        .item(&item(app, id::NAV_SETTINGS, "Settings Overview", true, None)?)
+        .separator()
+        .item(&disabled(app, DISABLED_SETTINGS, "Preferences…")?)
+        .item(&disabled(app, DISABLED_LOGS, "Open Logs")?)
         .build()
 }
 
@@ -458,14 +553,48 @@ fn frontend_command_ids() -> &'static [&'static str] {
         id::TIMELINE_ZOOM_OUT,
         id::TIMELINE_ZOOM_FIT,
         id::TOGGLE_FULLSCREEN,
+        id::NAV_PROJECT,
+        id::NAV_WORKSPACE,
+        id::NAV_AGENT,
+        id::NAV_MEDIA,
+        id::NAV_REVIEW,
+        id::NAV_DELIVER,
+        id::NAV_SETTINGS,
     ]
 }
 
 #[cfg(test)]
 fn top_level_menu_labels(platform: MenuPlatform) -> Vec<&'static str> {
     match platform {
-        MenuPlatform::Macos => vec!["Awidat", "File", "Edit", "View", "Window", "Help"],
-        MenuPlatform::Windows => vec!["File", "Edit", "View", "Tools", "Help"],
+        MenuPlatform::Macos => vec![
+            "Awidat",
+            "Project",
+            "Workspace",
+            "Agent",
+            "Media",
+            "Review",
+            "Deliver",
+            "Settings",
+            "File",
+            "Edit",
+            "View",
+            "Window",
+            "Help",
+        ],
+        MenuPlatform::Windows => vec![
+            "Project",
+            "Workspace",
+            "Agent",
+            "Media",
+            "Review",
+            "Deliver",
+            "Settings",
+            "File",
+            "Edit",
+            "View",
+            "Tools",
+            "Help",
+        ],
     }
 }
 
@@ -477,11 +606,38 @@ mod tests {
     fn top_level_labels_follow_platform_conventions() {
         assert_eq!(
             top_level_menu_labels(MenuPlatform::Macos),
-            vec!["Awidat", "File", "Edit", "View", "Window", "Help"]
+            vec![
+                "Awidat",
+                "Project",
+                "Workspace",
+                "Agent",
+                "Media",
+                "Review",
+                "Deliver",
+                "Settings",
+                "File",
+                "Edit",
+                "View",
+                "Window",
+                "Help"
+            ]
         );
         assert_eq!(
             top_level_menu_labels(MenuPlatform::Windows),
-            vec!["File", "Edit", "View", "Tools", "Help"]
+            vec![
+                "Project",
+                "Workspace",
+                "Agent",
+                "Media",
+                "Review",
+                "Deliver",
+                "Settings",
+                "File",
+                "Edit",
+                "View",
+                "Tools",
+                "Help"
+            ]
         );
     }
 
@@ -499,6 +655,13 @@ mod tests {
             id::REJECT_PROPOSAL,
             id::TIMELINE_ZOOM_IN,
             id::TOGGLE_FULLSCREEN,
+            id::NAV_PROJECT,
+            id::NAV_WORKSPACE,
+            id::NAV_AGENT,
+            id::NAV_MEDIA,
+            id::NAV_REVIEW,
+            id::NAV_DELIVER,
+            id::NAV_SETTINGS,
         ] {
             assert!(ids.contains(&required), "missing {required}");
         }

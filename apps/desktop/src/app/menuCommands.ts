@@ -25,6 +25,13 @@ export const MENU_COMMANDS = {
   TIMELINE_ZOOM_OUT: "timeline:zoom_out",
   TIMELINE_ZOOM_FIT: "timeline:zoom_fit",
   TOGGLE_FULLSCREEN: "window:toggle_fullscreen",
+  NAV_PROJECT: "nav:project",
+  NAV_WORKSPACE: "nav:workspace",
+  NAV_AGENT: "nav:agent",
+  NAV_MEDIA: "nav:media",
+  NAV_REVIEW: "nav:review",
+  NAV_DELIVER: "nav:deliver",
+  NAV_SETTINGS: "nav:settings",
 } as const;
 
 export type MenuCommandId =
