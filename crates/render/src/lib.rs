@@ -49,6 +49,7 @@ pub mod progress;
 pub mod raw_stream;
 pub mod raw_stream_audio;
 pub mod raw_stream_render;
+pub mod reframe_smoothing;
 pub mod timeline;
 
 pub use ass::{build_ass_document_for_test, default_caption_font_name, resolve_caption_font_name};

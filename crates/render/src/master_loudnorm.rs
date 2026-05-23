@@ -627,9 +627,13 @@ mod tests {
                 "/tmp/out.mp4".into(),
             ],
             total_duration_s: None,
+            backend: crate::RenderBackendKind::TimelineFfmpegReencode,
             cwd: None,
             output_path: std::path::PathBuf::from("/tmp/out.mp4"),
+            input_paths: Vec::new(),
+            manifest_path: None,
             limitations: Vec::new(),
+            metadata: Default::default(),
         };
         retarget_argv_to_null_muxer(&mut spec);
         assert!(!spec.args.iter().any(|a| a == "libx264"));
