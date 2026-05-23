@@ -136,8 +136,17 @@ export function DeliverySurface({
 
   return (
     <div className="grid h-full grid-cols-[292px_minmax(0,1fr)_334px] bg-[var(--color-surface-app)] min-h-0">
-      {/* Agent delivery command */}
+      {/* Targets + repair affordance — replaces the duplicated agent
+          rail. The Edit-tab CommandRail owns the agent on its tab;
+          Deliver is about picking outputs and shipping them. */}
       <aside className="border-r border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] flex flex-col min-h-0">
+        <TargetsRail
+          resolvedTargets={resolvedTargets}
+          findings={findings}
+          onToggleTarget={onToggleTarget}
+          onAgentRepair={onAgentRepair}
+        />
+        <div hidden>
         <div className="border-b border-[var(--color-border-subtle)] p-2.5">
           <Stack gap="2">
             <Inline justify="between" align="center">
@@ -237,6 +246,7 @@ export function DeliverySurface({
               onClick={onSavePreset}
             />
           </Stack>
+        </div>
         </div>
       </aside>
 
@@ -613,6 +623,109 @@ function KV({ label, value }: { label: string; value: string | ReactNode }) {
       </span>
       <span className="font-mono text-[var(--text-body-sm)] text-[var(--color-text-primary)]">{value}</span>
     </Inline>
+  );
+}
+
+/** Slim left-rail replacement: target multi-select + a single
+ *  "Repair with agent" button when there's a finding worth fixing.
+ *  The Edit-tab CommandRail owns the agent on its tab; replicating
+ *  it here added noise without adding power. */
+function TargetsRail({
+  resolvedTargets,
+  findings,
+  onToggleTarget,
+  onAgentRepair,
+}: {
+  resolvedTargets: DeliveryTarget[];
+  findings: PreflightFinding[];
+  onToggleTarget?: (key: DeliveryTargetKey) => void;
+  onAgentRepair?: (finding: PreflightFinding) => void;
+}) {
+  const counts = countBySeverity(findings);
+  const blocker = findings.find(
+    (f) =>
+      f.severity === "error" ||
+      f.severity === "failure" ||
+      f.severity === "warning",
+  );
+  return (
+    <div className="flex flex-col min-h-0 p-3 gap-4">
+      <div>
+        <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+          Targets
+        </span>
+        <Stack gap="1" className="mt-2">
+          {resolvedTargets.map((target) => {
+            const meta = TARGET_META[target.key];
+            const Icon = meta.icon;
+            return (
+              <button
+                key={target.key}
+                type="button"
+                onClick={() => onToggleTarget?.(target.key)}
+                className={cn(
+                  "flex items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-2 text-left",
+                  "border transition-colors",
+                  target.active
+                    ? "border-[var(--color-brand-secondary)] bg-[color-mix(in_oklab,var(--color-brand-secondary)_12%,var(--color-surface-card))]"
+                    : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] hover:border-[var(--color-text-muted)]",
+                )}
+              >
+                <Icon
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 stroke-[1.75]",
+                    target.active
+                      ? "text-[var(--color-brand-secondary)]"
+                      : "text-[var(--color-text-muted)]",
+                  )}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
+                    {target.label ?? meta.label}
+                  </p>
+                  <p className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                    {target.spec ?? meta.spec}
+                  </p>
+                </div>
+                {target.active ? (
+                  <span className="font-mono text-[10px] text-[var(--color-brand-secondary)]">
+                    ✓
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </Stack>
+      </div>
+      {blocker ? (
+        <div>
+          <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+            Repair
+          </span>
+          <button
+            type="button"
+            onClick={() => onAgentRepair?.(blocker)}
+            className="mt-2 w-full rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2.5 text-left hover:border-[var(--color-text-muted)]"
+          >
+            <Inline gap="2" align="center" className="mb-1">
+              <ShieldCheck className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-warning)]" />
+              <span className="text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
+                Ask agent to fix
+              </span>
+            </Inline>
+            <p className="text-[var(--text-caption)] text-[var(--color-text-muted)] leading-snug line-clamp-3">
+              {blocker.message}
+            </p>
+          </button>
+          {counts.warning + counts.error + counts.failure > 1 ? (
+            <p className="mt-2 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+              +{counts.warning + counts.error + counts.failure - 1} more finding
+              {counts.warning + counts.error + counts.failure - 1 === 1 ? "" : "s"}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
