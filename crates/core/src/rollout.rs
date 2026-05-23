@@ -56,6 +56,28 @@ pub enum RolloutItem {
     /// rendered to the user in the modal — not the full args, since
     /// EDLs can be large.
     EditorialDecision(EditorialDecision),
+    /// Marker written at the start of every `run_turn` call. Resume
+    /// scans for an unmatched `TurnStarted` (one without a later
+    /// `TurnComplete` carrying the same `turn_id`) and trims every
+    /// message captured under that turn from the replayed history.
+    /// Prevents partial mid-crash turns from poisoning the model's
+    /// view of conversation history on the next session.
+    TurnStarted {
+        /// Stable id for this turn. Matched against `TurnComplete`.
+        turn_id: String,
+        /// When the turn started (UTC). Useful for debug + retention.
+        started_at: DateTime<Utc>,
+    },
+    /// Marker written at the end of a successful `run_turn` call.
+    /// Paired with the matching `TurnStarted.turn_id`. The presence
+    /// of this record means every message between the two markers is
+    /// safe to replay on resume.
+    TurnComplete {
+        /// Same id as the matching `TurnStarted`.
+        turn_id: String,
+        /// When the turn finished (UTC).
+        ended_at: DateTime<Utc>,
+    },
 }
 
 /// One captured editorial decision. Stable on disk: extending this
@@ -221,10 +243,23 @@ impl Recorder {
     /// Replay a log into a `(SessionMeta, Vec<Message>)` for `--resume`.
     /// Lines that fail to parse (older/newer schema, partial last line
     /// from an unflushed crash) are warned-and-skipped.
+    ///
+    /// Turn-boundary handling: every message captured between a
+    /// `TurnStarted` and its matching `TurnComplete` is treated as
+    /// the body of one turn. If we reach EOF with an unmatched
+    /// `TurnStarted` (i.e. the app crashed mid-turn), every message
+    /// captured under that turn is discarded — partial turns
+    /// poison the model's view of history and produced the
+    /// "silent stuck" symptom on the very next prompt.
     pub fn resume(path: &Path) -> std::io::Result<(SessionMeta, Vec<Message>)> {
         let body = std::fs::read_to_string(path)?;
         let mut meta: Option<SessionMeta> = None;
         let mut messages: Vec<Message> = Vec::new();
+        // Index in `messages` where the current open turn began. None
+        // when no turn is in flight. Truncating to this index on EOF-
+        // with-open-turn drops the partial turn's messages.
+        let mut open_turn_start_msg_idx: Option<usize> = None;
+        let mut open_turn_id: Option<String> = None;
         for (lineno, line) in body.lines().enumerate() {
             if line.trim().is_empty() {
                 continue;
@@ -246,6 +281,29 @@ impl Recorder {
                         "rollout: compaction marker; clearing replayed history"
                     );
                     messages.clear();
+                    // A compaction also implicitly closes any open
+                    // turn (compaction can only run between turns).
+                    open_turn_start_msg_idx = None;
+                    open_turn_id = None;
+                }
+                Ok(RolloutItem::TurnStarted { turn_id, .. }) => {
+                    open_turn_start_msg_idx = Some(messages.len());
+                    open_turn_id = Some(turn_id);
+                }
+                Ok(RolloutItem::TurnComplete { turn_id, .. }) => {
+                    if open_turn_id.as_deref() == Some(turn_id.as_str()) {
+                        open_turn_start_msg_idx = None;
+                        open_turn_id = None;
+                    } else {
+                        // Mismatch — log and clear. Defensive against
+                        // schema drift or out-of-order writes.
+                        warn!(
+                            line = lineno + 1,
+                            "rollout: TurnComplete with unmatched turn_id; clearing open-turn state",
+                        );
+                        open_turn_start_msg_idx = None;
+                        open_turn_id = None;
+                    }
                 }
                 Ok(RolloutItem::EditorialDecision(_)) => {
                     // Decisions are pure metadata — they don't affect
@@ -267,6 +325,20 @@ impl Recorder {
                 format!("{}: no SessionMeta line found", path.display()),
             ));
         };
+        // EOF with an open turn = the previous run crashed mid-turn.
+        // Drop every message captured under that turn so the model's
+        // resumed history is internally consistent.
+        if let Some(idx) = open_turn_start_msg_idx {
+            let dropped = messages.len() - idx;
+            if dropped > 0 {
+                warn!(
+                    dropped_messages = dropped,
+                    turn_id = ?open_turn_id,
+                    "rollout: incomplete final turn — dropping its messages from resume",
+                );
+                messages.truncate(idx);
+            }
+        }
         Ok((meta, sanitize_resume_messages(messages)))
     }
 
@@ -338,6 +410,32 @@ impl Recorder {
     pub fn record_compaction(&self, replaced_messages: usize) {
         self.send(WriterCmd::Append(RolloutItem::Compaction {
             replaced_messages,
+        }));
+    }
+
+    /// Record the start of a new turn. The companion `record_turn_complete`
+    /// must be called on success — resume scans for unmatched
+    /// TurnStarted records and treats their messages as a partial
+    /// (crashed-mid-turn) sequence to discard. Returns the id the
+    /// caller passes to `record_turn_complete`.
+    pub fn record_turn_start(&self) -> String {
+        let turn_id = format!(
+            "{:016x}",
+            (Utc::now().timestamp_nanos_opt().unwrap_or(0) as u128) ^ (std::process::id() as u128),
+        );
+        self.send(WriterCmd::Append(RolloutItem::TurnStarted {
+            turn_id: turn_id.clone(),
+            started_at: Utc::now(),
+        }));
+        turn_id
+    }
+
+    /// Record successful turn completion. `turn_id` must match a
+    /// prior `record_turn_start`.
+    pub fn record_turn_complete(&self, turn_id: String) {
+        self.send(WriterCmd::Append(RolloutItem::TurnComplete {
+            turn_id,
+            ended_at: Utc::now(),
         }));
     }
 
@@ -602,6 +700,59 @@ mod tests {
             }
             _ => panic!("first line must be SessionMeta"),
         }
+    }
+
+    #[tokio::test]
+    async fn resume_trims_messages_under_an_unmatched_turn_started() {
+        // Simulate a crash mid-turn: TurnStarted, two messages, no
+        // TurnComplete, EOF. Those two messages should be dropped.
+        let dir = tempfile::tempdir().unwrap();
+        let rec = Recorder::create(
+            dir.path(),
+            PathBuf::from("/tmp/proj"),
+            "claude-opus-4-7".into(),
+        )
+        .unwrap();
+        // Turn 1 — completed cleanly.
+        let id1 = rec.record_turn_start();
+        rec.record_message(Message::user_text("first turn user"));
+        rec.record_message(Message::assistant_text("first turn assistant"));
+        rec.record_turn_complete(id1);
+        // Turn 2 — started but never completed (crash).
+        let _ = rec.record_turn_start();
+        rec.record_message(Message::user_text("second turn user — partial"));
+        rec.record_message(Message::assistant_text("second turn assistant — partial"));
+        rec.flush().await.unwrap();
+        rec.shutdown().await;
+
+        let (_meta, messages) = Recorder::resume(rec.path()).unwrap();
+        // Only the first turn's two messages should survive.
+        assert_eq!(
+            messages.len(),
+            2,
+            "expected 2 messages from completed turn; got {}",
+            messages.len(),
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_keeps_messages_when_turn_completes() {
+        // Sanity: when the turn DOES complete, all messages survive.
+        let dir = tempfile::tempdir().unwrap();
+        let rec = Recorder::create(
+            dir.path(),
+            PathBuf::from("/tmp/proj"),
+            "claude-opus-4-7".into(),
+        )
+        .unwrap();
+        let id = rec.record_turn_start();
+        rec.record_message(Message::user_text("u"));
+        rec.record_message(Message::assistant_text("a"));
+        rec.record_turn_complete(id);
+        rec.flush().await.unwrap();
+        rec.shutdown().await;
+        let (_, messages) = Recorder::resume(rec.path()).unwrap();
+        assert_eq!(messages.len(), 2);
     }
 
     #[tokio::test]

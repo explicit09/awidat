@@ -544,6 +544,16 @@ impl Session {
     ) -> Result<(), SessionError> {
         let _ = self.events_tx.send(SessionEvent::TurnStart);
 
+        // Bracket this turn in the rollout with TurnStarted /
+        // TurnComplete markers. Resume scans for an unmatched
+        // TurnStarted and drops every message captured under it,
+        // so a crash/kill mid-turn doesn't poison the next session's
+        // history.
+        let turn_id = self
+            .recorder
+            .as_ref()
+            .map(|rec| rec.record_turn_start());
+
         let user_msg = Message::user_text(user_input);
         if let Some(rec) = &self.recorder {
             rec.record_message(user_msg.clone());
@@ -738,6 +748,9 @@ impl Session {
                     }
                     // end_turn / max_tokens / stop_sequence / refusal /
                     // pause_turn — outer loop ends.
+                    if let (Some(rec), Some(id)) = (&self.recorder, turn_id.clone()) {
+                        rec.record_turn_complete(id);
+                    }
                     let _ = self.events_tx.send(SessionEvent::TurnEnd);
                     return Ok(());
                 }
@@ -748,6 +761,11 @@ impl Session {
         let _ = self.events_tx.send(SessionEvent::Error(format!(
             "turn exceeded {max_inner_iterations} sampling iterations; ending"
         )));
+        // Cap-reached is still a clean shutdown of the turn — record
+        // the boundary so resume doesn't re-discard the cap'd turn.
+        if let (Some(rec), Some(id)) = (&self.recorder, turn_id) {
+            rec.record_turn_complete(id);
+        }
         let _ = self.events_tx.send(SessionEvent::TurnEnd);
         Ok(())
     }
