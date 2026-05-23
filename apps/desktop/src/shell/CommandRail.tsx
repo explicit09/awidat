@@ -518,36 +518,58 @@ export function CommandRail({
           {conversation.length > 0 ? (
             <Section label="Conversation">
               <Stack gap="3">
-                {conversation.map((message) => (
-                  <div key={message.id} className="min-w-0">
-                    <div className="flex min-w-0 items-baseline gap-2 mb-1">
-                      <span
+                {conversation.map((message) => {
+                  const isUser = message.kind === "user";
+                  return (
+                    <div
+                      key={message.id}
+                      className={cn(
+                        "flex min-w-0 flex-col",
+                        isUser ? "items-end" : "items-start",
+                      )}
+                    >
+                      <div
                         className={cn(
-                          "shrink-0 text-[var(--text-caption)]",
-                          message.kind === "user"
-                            ? "text-[var(--color-text-primary)] font-medium"
-                            : "text-[var(--color-brand-secondary)] font-medium",
+                          "flex min-w-0 items-baseline gap-2 mb-1",
+                          isUser ? "flex-row-reverse" : "",
                         )}
                       >
-                        {message.kind === "user" ? "You" : "Agent"}
-                      </span>
-                      <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)] opacity-60">
-                        {message.timestamp}
-                      </span>
-                    </div>
-                    {message.kind === "user" ? (
-                      <p className="whitespace-pre-wrap break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-                        {message.text}
-                      </p>
-                    ) : (
-                      <div className="markdown break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {message.text}
-                        </ReactMarkdown>
+                        <span
+                          className={cn(
+                            "shrink-0 text-[var(--text-caption)] font-medium",
+                            isUser
+                              ? "text-[var(--color-brand-secondary)]"
+                              : "text-[var(--color-text-primary)]",
+                          )}
+                        >
+                          {isUser ? "You" : "Agent"}
+                        </span>
+                        <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)] opacity-60">
+                          {message.timestamp}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                ))}
+                      {isUser ? (
+                        <p
+                          className={cn(
+                            "max-w-[85%] whitespace-pre-wrap break-words leading-relaxed",
+                            "rounded-[var(--radius-md)] px-2.5 py-1.5",
+                            "text-[var(--text-body-sm)] text-[var(--color-text-primary)]",
+                            "bg-[color-mix(in_oklab,var(--color-brand-secondary)_14%,transparent)]",
+                            "border border-[color-mix(in_oklab,var(--color-brand-secondary)_24%,transparent)]",
+                          )}
+                        >
+                          {message.text}
+                        </p>
+                      ) : (
+                        <div className="markdown break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                            {message.text}
+                          </ReactMarkdown>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </Stack>
             </Section>
           ) : null}
