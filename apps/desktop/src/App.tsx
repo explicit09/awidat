@@ -2216,12 +2216,15 @@ const SIGNAL_INDEXER_DEPS: Partial<Record<IndexingTask["kind"], string[]>> = {
   transcripts: ["whisper"],
   scenes: ["scenedetect"],
   audio: ["audio-energy", "beats"],
-  silence: ["audio-energy"],
   captions: ["whisper"],
   speaker: ["whisper"],
   face: ["face"],
-  motion: ["motion"],
   color: ["color-analysis"],
+  // motion and silence are built-in FFmpeg passes, not MCP indexers,
+  // so they have no entry in indexerConfig to check enabled-ness on.
+  // The previous deps ("motion" / "audio-energy") made the panel
+  // permanently render them as "Disabled". They follow normal
+  // missing/indexing/indexed status flow via the readiness sidecars.
 };
 
 /**
