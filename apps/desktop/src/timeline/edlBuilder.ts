@@ -59,6 +59,7 @@ export type EdlOp =
   | { kind: "delete_clip"; anchor: EdlAnchor }
   | { kind: "split_clip"; anchor: EdlAnchor; atS: number }
   | { kind: "move_clip"; anchor: EdlAnchor; toPosition?: number; atS?: number }
+  | { kind: "ripple_move"; anchor: EdlAnchor; deltaS: number }
   | {
       kind: "insert_transition";
       from: EdlAnchor;
@@ -234,6 +235,11 @@ function appendOp(lines: string[], op: EdlOp): void {
       if (op.toPosition !== undefined)
         lines.push(`+ to_position: ${Math.max(0, Math.round(op.toPosition))}`);
       if (op.atS !== undefined) lines.push(`+ at_s: ${formatTime(op.atS)}`);
+      break;
+    case "ripple_move":
+      lines.push("*** Ripple Move");
+      lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
+      lines.push(`+ delta_s: ${formatTime(op.deltaS)}`);
       break;
     case "insert_transition":
       lines.push("*** Insert Transition");

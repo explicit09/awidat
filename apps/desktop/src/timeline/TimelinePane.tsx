@@ -26,7 +26,6 @@ import {
 import { getStrip, onThumbnailDecoded } from "./thumbnailCache";
 import { getBuckets, onWaveformDecoded } from "./waveformCache";
 import { useTimelineSelectionStore } from "../properties/store";
-import { shouldKeepMoveDraft } from "./moveDraft";
 import { collectSnapTargets, snapTime } from "./snap";
 import { cacheStripSegments, type CacheStripInput } from "./cacheStrip";
 
@@ -766,10 +765,30 @@ function TimelineCanvas({
   // no movement) just clears userTrim — no envelope is sent.
   async function commitUserTrim(drag: UserTrimDrag): Promise<void> {
     const dxPx = drag.currentX - drag.startX;
-    const dxS = pxDeltaToSourceDelta(dxPx, ppsRef.current);
+    const rawDxS = pxDeltaToSourceDelta(dxPx, ppsRef.current);
     // Tiny drags are scrub mistakes, not trim intent. Don't send.
     if (Math.abs(dxPx) < 2) return;
     const { hit } = drag;
+    // Snap the dragged edge's *track-time* position to nearby clip
+    // edges + the playhead, then convert back to a source-time delta.
+    // Within a single clip source-time and track-time are 1:1, so the
+    // dx applies symmetrically to either axis.
+    const trackEdgeBefore =
+      hit.side === "start"
+        ? trackTimeForSourceEdge(snapshot, hit.clipUuid, "start")
+        : trackTimeForSourceEdge(snapshot, hit.clipUuid, "end");
+    const targets = collectSnapTargets(snapshot, {
+      playheadS: currentTime,
+      excludeClipUuids: new Set([hit.clipUuid]),
+    });
+    const snappedTrackEdge =
+      trackEdgeBefore !== null
+        ? snapTime(trackEdgeBefore + rawDxS, targets, SNAP_TOLERANCE_S)
+        : null;
+    const dxS =
+      snappedTrackEdge !== null && trackEdgeBefore !== null
+        ? snappedTrackEdge - trackEdgeBefore
+        : rawDxS;
     let newStart = hit.sourceStart;
     let newEnd = hit.sourceEnd;
     if (hit.side === "start") {
@@ -811,55 +830,30 @@ function TimelineCanvas({
     const dyPx = drag.currentY - drag.startY;
     if (Math.hypot(dxPx, dyPx) < 5) return;
     const dxS = snapMoveDeltaS(snapshot, currentTime, drag, ppsRef.current);
+    if (Math.abs(dxS) < 0.01) return;
     const primaryTrack = snapshot.tracks[drag.trackIndex];
     const primary = primaryTrack?.items.find(
       (item) => item.kind === "clip" && item.index === drag.clipIndex,
     );
     if (!primary || primary.kind !== "clip") return;
 
-    const movingClips =
-      drag.linkGroupId !== null
-        ? snapshot.tracks.flatMap((track, trackIndex) =>
-            track.items
-              .filter(
-                (item): item is Extract<TimelineItem, { kind: "clip" }> =>
-                  item.kind === "clip" && item.link_group_id === drag.linkGroupId,
-              )
-              .map((item) => ({ trackIndex, item })),
-          )
-        : [{ trackIndex: drag.trackIndex, item: primary }];
-    const seen = new Set<string>();
-    const ops = movingClips
-      .filter(({ item }) => {
-        if (seen.has(item.clip_uuid)) return false;
-        seen.add(item.clip_uuid);
-        return true;
-      })
-      .map(({ trackIndex, item }) => {
-        const track = snapshot.tracks[trackIndex];
-        const targetStartS = item.track_start_s + dxS;
-        const toPosition = targetPositionForMove(track.items, item.index, targetStartS);
-        return {
-          kind: "move_clip" as const,
-          anchor: { kind: "clip_uuid" as const, uuid: item.clip_uuid },
-          toPosition,
-          atS: Math.max(0, targetStartS),
-          fromPosition: item.index,
-          fromAtS: item.track_start_s,
-        };
-      })
-      .filter(shouldKeepMoveDraft)
-      .map(({ fromPosition: _fromPosition, fromAtS: _fromAtS, ...op }) => op);
-
-    if (ops.length === 0) return;
+    // One ripple_move op — the backend shifts the moved clip + every
+    // clip after it on its track, plus the moved clip's link-group
+    // siblings on other tracks by the same delta. Matches
+    // Resolve/Premiere default body-drag behavior.
+    const op = {
+      kind: "ripple_move" as const,
+      anchor: { kind: "clip_uuid" as const, uuid: primary.clip_uuid },
+      deltaS: dxS,
+    };
 
     try {
       await invoke<string>("propose_user_edit", {
-        edlText: serializeEdl(ops),
+        edlText: serializeEdl([op]),
       });
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("propose_user_edit (move clip) failed", err);
+      console.warn("propose_user_edit (ripple move) failed", err);
     }
   }
 
@@ -1003,31 +997,33 @@ function computePps(durationS: number, cssWidth: number, zoom: number): number {
   return Math.min(fitPps * zoom, PX_PER_SECOND_BASE * 8);
 }
 
-function targetPositionForMove(
-  items: TimelineItem[],
-  movingIndex: number,
-  targetStartS: number,
-): number {
-  const ordered = [...items].sort(
-    (a, b) => a.track_start_s - b.track_start_s || a.index - b.index,
-  );
-  let target = 0;
-  for (const item of ordered) {
-    if (item.index === movingIndex) continue;
-    const midpoint = item.track_start_s + item.duration_s / 2;
-    if (targetStartS < midpoint) {
-      return item.index;
-    }
-    target = item.index + 1;
-  }
-  return Math.max(0, target);
-}
-
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
   const tag = target.tagName.toLowerCase();
   return tag === "input" || tag === "textarea" || tag === "select";
+}
+
+/** Resolve a clip's current track-time start or end position from a
+ *  snapshot, looked up by anchor uuid. Returns null if the clip isn't
+ *  present (e.g. proposal pruned it). Used by trim-snap to convert
+ *  the source-time edge being dragged into a timeline-time target so
+ *  it can snap against neighbor clip edges + the playhead. */
+function trackTimeForSourceEdge(
+  snapshot: TimelineSnapshot,
+  clipUuid: string,
+  side: "start" | "end",
+): number | null {
+  for (const track of snapshot.tracks) {
+    for (const item of track.items) {
+      if (item.kind !== "clip") continue;
+      if (item.clip_uuid !== clipUuid) continue;
+      return side === "start"
+        ? item.track_start_s
+        : item.track_start_s + item.duration_s;
+    }
+  }
+  return null;
 }
 
 function snapMoveDeltaS(

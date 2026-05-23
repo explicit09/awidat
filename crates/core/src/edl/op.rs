@@ -187,6 +187,28 @@ pub enum EdlOp {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         snap: Option<SnapOptions>,
     },
+    /// Move a clip and ripple every later clip on the same track (and
+    /// every clip in the same link group on other tracks) by the same
+    /// delta. Preserves total timeline duration when the moved clip
+    /// has neighbors after it — matches Premiere/Resolve's default
+    /// "drag a clip body" behavior.
+    ///
+    /// Unlike `MoveClip`, this does NOT leave a gap at the source
+    /// position: the move is implemented as a `delta_s` shift on the
+    /// moved clip + every clip strictly after it on the same track,
+    /// plus the matching delta on link-group siblings.
+    RippleMove {
+        /// Source anchor.
+        anchor: Anchor,
+        /// Signed shift in seconds. Positive moves the clip (and all
+        /// downstream clips on its track) later; negative moves them
+        /// earlier. Clamped so the moved clip's new start_s stays
+        /// non-negative.
+        delta_s: f64,
+        /// Optional snap behavior for the move's resulting start time.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        snap: Option<SnapOptions>,
+    },
     /// Atomically apply accepted multicam decisions to a flattened program track.
     ApplyMulticamPlan {
         /// Multicam plan to apply.

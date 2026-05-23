@@ -443,6 +443,19 @@ fn apply_one(
             ctx,
             locator,
         ),
+        EdlOp::RippleMove {
+            anchor,
+            delta_s,
+            snap,
+        } => apply_ripple_move(
+            working,
+            index,
+            anchor,
+            *delta_s,
+            snap.as_ref(),
+            ctx,
+            locator,
+        ),
         EdlOp::ApplyMulticamPlan { plan } => apply_multicam_plan(working, index, plan),
         EdlOp::InsertTransition {
             between,
@@ -944,6 +957,7 @@ fn resolve_locator_for_op(
         | EdlOp::SplitClip { anchor, .. }
         | EdlOp::UntrimClip { anchor, .. }
         | EdlOp::MoveClip { anchor, .. }
+        | EdlOp::RippleMove { anchor, .. }
         | EdlOp::InsertBRoll { anchor, .. }
         | EdlOp::InsertPiP { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
@@ -4657,6 +4671,230 @@ fn apply_move_clip(
         "moved clip {:?} from position {} to position {} on track {}",
         c.name, locator.child_index, target_user, locator.track_index,
     ))
+}
+
+/// Ripple-move: shift the moved clip by `delta_s` AND every clip after
+/// it on the same track by the same amount, plus every clip in the
+/// same `link_group_id` on other tracks. Implemented as a gap-resize
+/// in front of each target clip (positive delta = grow preceding gap;
+/// negative delta = shrink it, then merge gaps).
+///
+/// "Per-track ripple plus link group" matches Resolve/Premiere's
+/// default body-drag behavior.
+fn apply_ripple_move(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    delta_s: f64,
+    snap: Option<&SnapOptions>,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
+    if !delta_s.is_finite() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!("ripple_move: delta_s must be finite, got {delta_s}"),
+        });
+    }
+    let StackChild::Track(source_track) = &working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "ripple_move: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    if locator.child_index >= source_track.children.len() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "ripple_move: source index {} out of bounds for track of length {}",
+                locator.child_index,
+                source_track.children.len()
+            ),
+        });
+    }
+
+    // Identify the moved clip's link_group_id (if any) so we can ripple
+    // its synced peers on other tracks together.
+    let (link_group_id, original_name, original_start_s) =
+        match &source_track.children[locator.child_index] {
+            TrackChild::Clip(c) => (
+                c.metadata
+                    .awidat
+                    .as_ref()
+                    .and_then(|m| m.extra.get("link_group_id"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                c.name.clone(),
+                source_track.children[..locator.child_index]
+                    .iter()
+                    .map(child_duration)
+                    .sum::<f64>(),
+            ),
+            _ => {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: "ripple_move: source is not a clip".into(),
+                });
+            }
+        };
+
+    // Snap the *resulting* start time so the moved clip lands on a
+    // tidy boundary. Clamp the delta so the moved clip's new start
+    // stays non-negative.
+    let raw_target = original_start_s + delta_s;
+    let snapped_target = resolve_snap_time(working, index, raw_target.max(0.0), snap)?;
+    let effective_delta = snapped_target - original_start_s;
+    if effective_delta.abs() < 0.001 {
+        return Ok(format!(
+            "ripple_move: clip {original_name:?} already at {snapped_target:.3}s; left timeline unchanged"
+        ));
+    }
+
+    // Apply the shift on the source track first. Then walk every other
+    // track and shift each link-group sibling by the same amount.
+    let source_track_index = locator.track_index;
+    shift_clip_at_index(
+        working,
+        source_track_index,
+        locator.child_index,
+        effective_delta,
+    )?;
+    let mut shifted_siblings = 0usize;
+    if let Some(group_id) = link_group_id.as_deref() {
+        for track_index in 0..working.tracks.children.len() {
+            if track_index == source_track_index {
+                continue;
+            }
+            // Resolve the sibling's child index inside its own track.
+            let Some(sibling_child_index) =
+                first_clip_with_link_group(&working.tracks.children[track_index], group_id)
+            else {
+                continue;
+            };
+            shift_clip_at_index(working, track_index, sibling_child_index, effective_delta)?;
+            shifted_siblings += 1;
+        }
+    }
+
+    Ok(format!(
+        "ripple-moved clip {original_name:?} by {effective_delta:+.3}s on track {} ({} linked sibling{} also shifted)",
+        source_track_index,
+        shifted_siblings,
+        if shifted_siblings == 1 { "" } else { "s" },
+    ))
+}
+
+/// Find the first clip on `stack_child` (must be a Track) whose
+/// `link_group_id` matches `group_id`. Returns the child index in the
+/// track's children vec, or None.
+fn first_clip_with_link_group(
+    stack_child: &StackChild,
+    group_id: &str,
+) -> Option<usize> {
+    let StackChild::Track(track) = stack_child else {
+        return None;
+    };
+    track.children.iter().position(|child| match child {
+        TrackChild::Clip(c) => c
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|m| m.extra.get("link_group_id"))
+            .and_then(|v| v.as_str())
+            .map(|s| s == group_id)
+            .unwrap_or(false),
+        _ => false,
+    })
+}
+
+/// Shift the clip at `(track_index, child_index)` by `delta_s` by
+/// resizing the gap immediately before it. Positive delta grows the
+/// preceding gap (creating one if absent). Negative delta shrinks /
+/// removes the preceding gap, then trims earlier gaps if needed,
+/// stopping at the track start (the clip can't go below 0).
+fn shift_clip_at_index(
+    working: &mut Timeline,
+    track_index: usize,
+    child_index: usize,
+    delta_s: f64,
+) -> Result<(), ApplyError> {
+    if delta_s.abs() < 0.001 {
+        return Ok(());
+    }
+    let StackChild::Track(track) = &mut working.tracks.children[track_index] else {
+        return Err(ApplyError::Invalid {
+            index: 0,
+            message: "ripple_move: target slot is not a track".into(),
+        });
+    };
+    if child_index >= track.children.len() {
+        return Err(ApplyError::Invalid {
+            index: 0,
+            message: "ripple_move: child index out of bounds during shift".into(),
+        });
+    }
+    let rate = track.children[child_index]
+        .as_clip_rate()
+        .unwrap_or_else(|| {
+            // Fall back to scanning neighbors for a rate; default to 24.
+            track
+                .children
+                .iter()
+                .find_map(|c| c.as_clip_rate())
+                .unwrap_or(24.0)
+        });
+
+    if delta_s > 0.0 {
+        // Grow preceding gap. If the previous sibling is already a
+        // gap, extend it; otherwise insert a new gap.
+        let insert_pos = child_index;
+        if child_index > 0 {
+            let prev_dur = child_duration(&track.children[child_index - 1]);
+            if let TrackChild::Gap(gap) = &mut track.children[child_index - 1] {
+                let new_duration = prev_dur + delta_s;
+                *gap = awidat_proto::otio::Gap::of_duration(new_duration, rate);
+                return Ok(());
+            }
+        }
+        track.children.insert(
+            insert_pos,
+            TrackChild::Gap(awidat_proto::otio::Gap::of_duration(delta_s, rate)),
+        );
+        return Ok(());
+    }
+
+    // delta_s < 0 — shrink preceding gaps. Walk backwards from
+    // child_index - 1, eating gap duration off each one. Clamp at 0.
+    let mut remaining = -delta_s;
+    let mut cursor = child_index;
+    while remaining > 0.001 && cursor > 0 {
+        cursor -= 1;
+        let dur = child_duration(&track.children[cursor]);
+        match &mut track.children[cursor] {
+            TrackChild::Gap(gap) => {
+                if dur <= remaining + 0.001 {
+                    // Consume the whole gap.
+                    remaining -= dur;
+                    track.children.remove(cursor);
+                } else {
+                    // Shrink in place.
+                    let new_duration = dur - remaining;
+                    *gap = awidat_proto::otio::Gap::of_duration(new_duration, rate);
+                    remaining = 0.0;
+                }
+            }
+            _ => {
+                // Hit a clip — can't shift past it. Stop here.
+                break;
+            }
+        }
+    }
+    // `remaining > 0` here just means the move bumped into the start
+    // of the track (or another clip); the shift was clamped, which
+    // is the expected ripple behavior.
+    Ok(())
 }
 
 fn apply_move_clip_to_time(
@@ -10702,6 +10940,104 @@ mod tests {
         assert!(matches!(&track.children[0], TrackChild::Gap(_)));
         assert!((child_duration(&track.children[0]) - 5.0).abs() < 0.001);
         assert!(matches!(&track.children[1], TrackChild::Clip(c) if c.name == "clip-0"));
+    }
+
+    #[test]
+    fn apply_ripple_move_shifts_clip_forward_via_leading_gap() {
+        // Three 5s clips, move the first by +3s. Expect: a 3s gap, then
+        // clip-0, clip-1, clip-2 — the move preserves clip-0/1/2's
+        // relative spacing because we ripple by resizing the *leading
+        // gap* of the moved clip rather than removing it.
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::RippleMove {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "alpha snippet".into(),
+                },
+                delta_s: 3.0,
+                snap: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert!(matches!(&t.children[0], TrackChild::Gap(_)));
+        assert!((child_duration(&t.children[0]) - 3.0).abs() < 0.001);
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-0"));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(matches!(&t.children[3], TrackChild::Clip(c) if c.name == "clip-2"));
+    }
+
+    #[test]
+    fn apply_ripple_move_shrinks_preceding_gap_on_negative_delta() {
+        // Start: gap(5) | clip-0(5) | clip-1(5). Ripple-move clip-0 by
+        // -3s. Expect: gap(2) | clip-0 | clip-1.
+        use awidat_proto::otio::{
+            Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+            Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+        let mut tl = Tl::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Gap(
+            awidat_proto::otio::Gap::of_duration(5.0, 24.0),
+        ));
+        for (i, name) in ["clip-0", "clip-1"].iter().enumerate() {
+            let mut c = Clip::empty((*name).to_string());
+            c.media_reference =
+                MediaReference::External(ExternalReference::new(format!("raw/{i}.mp4")));
+            c.source_range = Some(TimeRange::new(
+                RationalTime::new(0.0, 24.0),
+                RationalTime::new(5.0 * 24.0, 24.0),
+            ));
+            track.children.push(TrackChild::Clip(c));
+        }
+        tl.tracks.children.push(StackChild::Track(track));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::RippleMove {
+                anchor: Anchor::ClipUuid {
+                    uuid: "clip-0".into(),
+                },
+                delta_s: -3.0,
+                snap: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert!(matches!(&t.children[0], TrackChild::Gap(_)));
+        assert!(
+            (child_duration(&t.children[0]) - 2.0).abs() < 0.001,
+            "leading gap should shrink from 5 to 2; got {}",
+            child_duration(&t.children[0])
+        );
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-0"));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-1"));
+    }
+
+    #[test]
+    fn apply_ripple_move_clamps_to_zero_on_excessive_negative_delta() {
+        // Move the first clip by -999s. Expect the leading gap to
+        // collapse to 0 (and be removed), with the clip pinned at
+        // track start.
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::RippleMove {
+                anchor: Anchor::TranscriptSnippet {
+                    text: "alpha snippet".into(),
+                },
+                delta_s: -999.0,
+                snap: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        // clip-0 is still first; no leading gap inserted.
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-0"));
     }
 
     #[test]

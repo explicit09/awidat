@@ -228,6 +228,7 @@ enum OpKind {
     InsertBRoll,
     InsertPiP,
     MoveClip,
+    RippleMove,
     ApplyMulticamPlan,
     InsertTransition,
     DeleteTransition,
@@ -286,6 +287,7 @@ impl OpBuilder {
             "Insert BRoll" => OpKind::InsertBRoll,
             "Insert PiP" => OpKind::InsertPiP,
             "Move Clip" => OpKind::MoveClip,
+            "Ripple Move" => OpKind::RippleMove,
             "Apply Multicam Plan" => OpKind::ApplyMulticamPlan,
             "Insert Transition" => OpKind::InsertTransition,
             "Delete Transition" => OpKind::DeleteTransition,
@@ -533,6 +535,24 @@ impl OpBuilder {
                     anchor,
                     to_position,
                     at_s,
+                    snap: parse_snap_options(&mut fields, head)?,
+                })
+            }
+            OpKind::RippleMove => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let delta_s =
+                    take_field_f64(&mut fields, "delta_s").ok_or_else(|| {
+                        EdlParseError::MissingField {
+                            line: head,
+                            field: "delta_s".into(),
+                        }
+                    })?;
+                Ok(EdlOp::RippleMove {
+                    anchor,
+                    delta_s,
                     snap: parse_snap_options(&mut fields, head)?,
                 })
             }
