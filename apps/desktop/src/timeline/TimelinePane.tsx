@@ -325,6 +325,9 @@ type UserTrimDrag = {
   startX: number;
   /** Live pointer x in canvas-local pixels. */
   currentX: number;
+  /** Cmd / Ctrl held at pointer-down → ripple-trim semantics on
+   *  commit (downstream clips shift by the trim delta). */
+  ripple: boolean;
 };
 
 type UserMoveDrag = {
@@ -557,6 +560,33 @@ function TimelineCanvas({
     return Math.max(0, Math.min(t, snapshot.duration_s || t));
   }
 
+  // Premiere/Resolve convention: Shift+Delete = ripple delete (close
+  // the gap by shifting downstream clips left). Plain Delete keeps the
+  // gap. The ripple-delete path sends one `ripple_delete` per clip
+  // (link-group siblings ride along inside the backend op).
+  const commitRippleDeleteSelection = useCallback(async (): Promise<void> => {
+    if (proposal || !selectedClipKey) return;
+    const selectedTrack = snapshot.tracks[selectedClipKey.trackIndex];
+    const selectedItem = selectedTrack?.items.find(
+      (it) => it.index === selectedClipKey.clipIndex,
+    );
+    if (!selectedItem || selectedItem.kind !== "clip") return;
+    try {
+      await invoke<string>("propose_user_edit", {
+        edlText: serializeEdl([
+          {
+            kind: "ripple_delete",
+            anchor: { kind: "clip_uuid", uuid: selectedItem.clip_uuid },
+          },
+        ]),
+      });
+      clearSelection();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (ripple delete) failed", err);
+    }
+  }, [clearSelection, proposal, selectedClipKey, snapshot]);
+
   const commitDeleteSelection = useCallback(async (): Promise<void> => {
     if (proposal || !selectedClipKey) return;
     const selectedTrack = snapshot.tracks[selectedClipKey.trackIndex];
@@ -638,7 +668,11 @@ function TimelineCanvas({
       if (isEditableTarget(e.target)) return;
       if (!selectedClipKey || proposal) return;
       e.preventDefault();
-      void commitDeleteSelection();
+      if (e.shiftKey) {
+        void commitRippleDeleteSelection();
+      } else {
+        void commitDeleteSelection();
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     const unlistenMenu = onMenuCommand((id) => {
@@ -650,7 +684,7 @@ function TimelineCanvas({
       window.removeEventListener("keydown", onKeyDown);
       unlistenMenu();
     };
-  }, [commitDeleteSelection, proposal, selectedClipKey]);
+  }, [commitDeleteSelection, commitRippleDeleteSelection, proposal, selectedClipKey]);
 
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (snapshot.duration_s <= 0) return; // nothing to interact with
@@ -666,7 +700,7 @@ function TimelineCanvas({
     const hit = hitTestEdge(x, y, snapshot, ppsRef.current, laneHeightRef.current);
     if (hit) {
       e.currentTarget.setPointerCapture(e.pointerId);
-      setUserTrim({ hit, startX: x, currentX: x });
+      setUserTrim({ hit, startX: x, currentX: x, ripple: e.metaKey || e.ctrlKey });
       // Don't seek on edge-down; the user is starting a trim, not
       // scrubbing.
       return;
@@ -806,12 +840,19 @@ function TimelineCanvas({
       return;
     }
     const edl = serializeEdl([
-      {
-        kind: "trim_clip",
-        anchor: { kind: "clip_uuid", uuid: hit.clipUuid },
-        start: newStart !== hit.sourceStart ? newStart : undefined,
-        end: newEnd !== hit.sourceEnd ? newEnd : undefined,
-      },
+      drag.ripple
+        ? {
+            kind: "ripple_trim",
+            anchor: { kind: "clip_uuid", uuid: hit.clipUuid },
+            edge: hit.side === "start" ? "start" : "end",
+            valueS: hit.side === "start" ? newStart : newEnd,
+          }
+        : {
+            kind: "trim_clip",
+            anchor: { kind: "clip_uuid", uuid: hit.clipUuid },
+            start: newStart !== hit.sourceStart ? newStart : undefined,
+            end: newEnd !== hit.sourceEnd ? newEnd : undefined,
+          },
     ]);
     try {
       await invoke<string>("propose_user_edit", { edlText: edl });

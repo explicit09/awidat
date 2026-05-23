@@ -209,6 +209,29 @@ pub enum EdlOp {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         snap: Option<SnapOptions>,
     },
+    /// Delete a clip and close the resulting gap by shifting every
+    /// downstream clip on the same track (and every link-group
+    /// sibling on other tracks) left by the deleted clip's duration.
+    /// Matches Premiere/Resolve's "ripple delete" command (Shift+Del).
+    RippleDelete {
+        /// Source anchor.
+        anchor: Anchor,
+    },
+    /// Trim one edge of a clip and ripple every later clip by the
+    /// trim delta. Cmd+drag on a clip edge in the canvas. Unlike
+    /// `TrimClip` (which leaves a gap when shortening from the right
+    /// edge, or extends into existing gap when lengthening), this
+    /// keeps the downstream timeline tight.
+    RippleTrim {
+        /// Source anchor.
+        anchor: Anchor,
+        /// Which edge is being trimmed.
+        edge: RippleTrimEdge,
+        /// New source-time value for the trimmed edge in seconds.
+        /// For the start edge, this is the new `source_start`; for
+        /// the end edge, the new `source_end`.
+        value_s: f64,
+    },
     /// Atomically apply accepted multicam decisions to a flattened program track.
     ApplyMulticamPlan {
         /// Multicam plan to apply.
@@ -939,6 +962,16 @@ pub enum SnapTargetKind {
     Marker,
     /// UI playhead time. Core apply has no session playhead, but desktop does.
     Playhead,
+}
+
+/// Which edge of a clip is the target of a ripple trim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RippleTrimEdge {
+    /// `source_start` — clip's in point.
+    Start,
+    /// `source_end` — clip's out point.
+    End,
 }
 
 /// Accepted multicam decisions to flatten into a program track.

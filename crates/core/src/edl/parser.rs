@@ -229,6 +229,8 @@ enum OpKind {
     InsertPiP,
     MoveClip,
     RippleMove,
+    RippleDelete,
+    RippleTrim,
     ApplyMulticamPlan,
     InsertTransition,
     DeleteTransition,
@@ -288,6 +290,8 @@ impl OpBuilder {
             "Insert PiP" => OpKind::InsertPiP,
             "Move Clip" => OpKind::MoveClip,
             "Ripple Move" => OpKind::RippleMove,
+            "Ripple Delete" => OpKind::RippleDelete,
+            "Ripple Trim" => OpKind::RippleTrim,
             "Apply Multicam Plan" => OpKind::ApplyMulticamPlan,
             "Insert Transition" => OpKind::InsertTransition,
             "Delete Transition" => OpKind::DeleteTransition,
@@ -554,6 +558,47 @@ impl OpBuilder {
                     anchor,
                     delta_s,
                     snap: parse_snap_options(&mut fields, head)?,
+                })
+            }
+            OpKind::RippleDelete => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                Ok(EdlOp::RippleDelete { anchor })
+            }
+            OpKind::RippleTrim => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let edge_raw = take_field_string(&mut fields, "edge").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "edge".into(),
+                    }
+                })?;
+                let edge = match edge_raw.as_str() {
+                    "start" => crate::edl::op::RippleTrimEdge::Start,
+                    "end" => crate::edl::op::RippleTrimEdge::End,
+                    other => {
+                        return Err(EdlParseError::BadField {
+                            line: head,
+                            raw: format!("+ edge: {other}"),
+                            message: format!("ripple_trim: edge must be 'start' or 'end', got {other:?}"),
+                        });
+                    }
+                };
+                let value_s = take_field_f64(&mut fields, "value_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "value_s".into(),
+                    }
+                })?;
+                Ok(EdlOp::RippleTrim {
+                    anchor,
+                    edge,
+                    value_s,
                 })
             }
             OpKind::ApplyMulticamPlan => Ok(EdlOp::ApplyMulticamPlan {
