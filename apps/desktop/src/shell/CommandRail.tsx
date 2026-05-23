@@ -10,7 +10,6 @@ import {
   Plus,
   SendHorizontal,
   Sparkles,
-  Terminal,
   X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -292,29 +291,27 @@ export function CommandRail({
     <div
       className={cn(
         "shrink-0 p-3",
-        focused ? "pb-6" : "border-t border-[var(--color-border-subtle)]",
+        focused ? "pb-6" : "",
       )}
     >
-      <Stack gap={focused ? "2" : "3"}>
+      <Stack gap={focused ? "2" : "2"}>
         {focused ? (
           <Inline gap="2" align="center" className="px-1">
-            <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-muted)]">
+            <span className="min-w-0 truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
               {activeChatSession?.title ?? "New chat"}
             </span>
-            <span className="font-mono text-[10px] text-[var(--color-text-muted)]">Local</span>
+            <span className="font-mono text-[10px] text-[var(--color-text-muted)] opacity-60">Local</span>
           </Inline>
-        ) : (
-          <Inline gap="2" align="center">
-            <Terminal className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand-secondary)]" />
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-secondary)]">
-              Agent Command
-            </span>
-          </Inline>
-        )}
+        ) : null}
+        {/* Borderless input with a focus-only hairline — reads as a
+            command bar, not a form. The submit cluster below sits
+            flush with the input edge so the whole thing feels like
+            one continuous control. */}
         <div
           className={cn(
-            "rounded-[var(--radius-md)] border bg-[var(--color-surface-input)] transition-colors focus-within:border-[var(--color-border-focus)]",
-            focused ? "border-[rgba(255,255,255,0.22)] shadow-[0_18px_70px_rgba(0,0,0,0.3)]" : "border-[var(--color-border-subtle)]",
+            "rounded-[var(--radius-md)] bg-[var(--color-surface-input)] transition-colors",
+            "border border-transparent focus-within:border-[var(--color-border-focus)]",
+            focused ? "shadow-[0_18px_70px_rgba(0,0,0,0.3)]" : "",
           )}
         >
           <textarea
@@ -339,17 +336,16 @@ export function CommandRail({
               "outline-none disabled:cursor-not-allowed disabled:opacity-50",
             )}
           />
-          <Inline justify="between" align="center" gap="2" className="px-2 py-1.5 border-t border-[var(--color-border-subtle)]">
+          <Inline justify="between" align="center" gap="2" className="px-2 py-1.5">
             <Inline gap="2" align="center" className="min-w-0">
-              <Pill status="ready" dot={false}>Agent</Pill>
               <span
                 className={cn(
-                  "min-w-0 truncate text-[var(--text-micro)] font-semibold",
-                  sendDisabledReason ? "text-[var(--color-text-muted)]" : "text-[var(--color-text-secondary)]",
+                  "min-w-0 truncate text-[var(--text-micro)]",
+                  sendDisabledReason ? "text-[var(--color-text-muted)]" : "text-[var(--color-text-muted)] opacity-70",
                 )}
                 title={sendDisabledReason ?? "Command-Enter sends the command."}
               >
-                {sendDisabledReason ?? "Auto · ⌘↩ sends"}
+                {sendDisabledReason ?? "⌘↩ to send"}
               </span>
             </Inline>
             {running ? (
@@ -513,34 +509,38 @@ export function CommandRail({
             </Section>
           ) : null}
 
-          {/* Conversation */}
+          {/* Conversation — Cursor-style flow: speaker + timestamp
+              as quiet metadata, message body as the hero. No
+              bordered cards. User turns get a subtle accent in
+              their label; agent turns stay neutral. Borders gone
+              so the rail reads as a continuous conversation, not
+              a stack of widgets. */}
           {conversation.length > 0 ? (
             <Section label="Conversation">
-              <Stack gap="1">
+              <Stack gap="3">
                 {conversation.map((message) => (
-                  <div
-                    key={message.id}
-                    className={cn(
-                      "rounded-[var(--radius-sm)] border px-2.5 py-2 text-[var(--text-caption)]",
-                      message.kind === "user"
-                        ? "border-[rgba(32,201,151,0.28)] bg-[rgba(32,201,151,0.07)]"
-                        : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)]",
-                    )}
-                  >
-                    <div className="flex min-w-0 items-baseline gap-2">
-                      <span className="shrink-0 font-mono text-[var(--color-text-muted)]">
-                        {message.timestamp}
-                      </span>
-                      <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.04em] text-[var(--color-text-muted)]">
+                  <div key={message.id} className="min-w-0">
+                    <div className="flex min-w-0 items-baseline gap-2 mb-1">
+                      <span
+                        className={cn(
+                          "shrink-0 text-[var(--text-caption)]",
+                          message.kind === "user"
+                            ? "text-[var(--color-text-primary)] font-medium"
+                            : "text-[var(--color-brand-secondary)] font-medium",
+                        )}
+                      >
                         {message.kind === "user" ? "You" : "Agent"}
+                      </span>
+                      <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)] opacity-60">
+                        {message.timestamp}
                       </span>
                     </div>
                     {message.kind === "user" ? (
-                      <p className="mt-1 whitespace-pre-wrap break-words leading-snug text-[var(--color-text-secondary)]">
+                      <p className="whitespace-pre-wrap break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
                         {message.text}
                       </p>
                     ) : (
-                      <div className="markdown mt-1 break-words leading-snug text-[var(--color-text-secondary)]">
+                      <div className="markdown break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>
                           {message.text}
                         </ReactMarkdown>
