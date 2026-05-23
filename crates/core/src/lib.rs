@@ -42,6 +42,7 @@
 pub mod anthropic;
 pub mod awidat_md;
 pub mod capabilities;
+pub mod captions;
 pub mod capability_metadata;
 pub mod compact;
 pub mod context;

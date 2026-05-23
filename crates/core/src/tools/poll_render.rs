@@ -210,10 +210,14 @@ mod tests {
                 "yuv420p".into(),
                 out_path.to_string_lossy().into_owned(),
             ],
+            backend: awidat_render::RenderBackendKind::AssetPreview,
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: out_path.clone(),
+            input_paths: Vec::new(),
+            manifest_path: None,
             limitations: Vec::new(),
+            metadata: Default::default(),
         };
         let job_id = manager.start(spec).await.unwrap();
 
