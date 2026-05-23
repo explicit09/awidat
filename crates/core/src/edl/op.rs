@@ -232,6 +232,27 @@ pub enum EdlOp {
         /// the end edge, the new `source_end`.
         value_s: f64,
     },
+    /// Delete a gap on a specific track, identified by its position
+    /// relative to a referenced clip. The op's anchor names a clip;
+    /// `side` specifies whether the gap immediately before or after
+    /// that clip is the target. Removing the gap shifts downstream
+    /// content left by the gap's duration. No-op when the indicated
+    /// side has no gap.
+    DeleteGap {
+        /// Clip the gap is positioned relative to.
+        anchor: Anchor,
+        /// Which side of the anchor clip the target gap sits on.
+        side: GapSide,
+    },
+    /// Strip every trailing gap from a track so its last child is a
+    /// real clip. Common cleanup after a delete or split that left a
+    /// gap at the end — the timeline's effective duration ends up
+    /// driven by playable content rather than dead space. No-op when
+    /// the track's last child is already a clip.
+    TrimTrackTail {
+        /// Display name of the track to clean (e.g. `"V1"`, `"A1"`).
+        track: String,
+    },
     /// Atomically apply accepted multicam decisions to a flattened program track.
     ApplyMulticamPlan {
         /// Multicam plan to apply.
@@ -972,6 +993,16 @@ pub enum RippleTrimEdge {
     Start,
     /// `source_end` — clip's out point.
     End,
+}
+
+/// Which side of an anchor clip a `DeleteGap` op targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GapSide {
+    /// The gap immediately before the anchor clip.
+    Before,
+    /// The gap immediately after the anchor clip.
+    After,
 }
 
 /// Accepted multicam decisions to flatten into a program track.

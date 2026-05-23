@@ -32,9 +32,10 @@ use thiserror::Error;
 
 use super::anchor::{AnchorContext, ClipLocator, resolve};
 use super::op::{
-    Anchor, AnnotationKind, AudioFxConfig, EdlEnvelope, EdlOp, InsertTrackKind, MarkerSelector,
-    MotionTemplateAnimation, MulticamApplyPlan, MulticamDecision, ProfessionalTimelineEdit,
-    RippleTrimEdge, SnapOptions, SnapTargetKind, TransitionAlignment, valid_graphic_color,
+    Anchor, AnnotationKind, AudioFxConfig, EdlEnvelope, EdlOp, GapSide, InsertTrackKind,
+    MarkerSelector, MotionTemplateAnimation, MulticamApplyPlan, MulticamDecision,
+    ProfessionalTimelineEdit, RippleTrimEdge, SnapOptions, SnapTargetKind, TransitionAlignment,
+    valid_graphic_color,
 };
 
 /// One record of what was applied. Surfaced back to the model + the TUI.
@@ -464,6 +465,10 @@ fn apply_one(
             edge,
             value_s,
         } => apply_ripple_trim(working, index, anchor, *edge, *value_s, ctx, locator),
+        EdlOp::DeleteGap { anchor, side } => {
+            apply_delete_gap(working, index, anchor, *side, ctx, locator)
+        }
+        EdlOp::TrimTrackTail { track } => apply_trim_track_tail(working, index, track),
         EdlOp::ApplyMulticamPlan { plan } => apply_multicam_plan(working, index, plan),
         EdlOp::InsertTransition {
             between,
@@ -968,6 +973,7 @@ fn resolve_locator_for_op(
         | EdlOp::RippleMove { anchor, .. }
         | EdlOp::RippleDelete { anchor }
         | EdlOp::RippleTrim { anchor, .. }
+        | EdlOp::DeleteGap { anchor, .. }
         | EdlOp::InsertBRoll { anchor, .. }
         | EdlOp::InsertPiP { anchor, .. }
         | EdlOp::SetVolume { anchor, .. }
@@ -1027,7 +1033,8 @@ fn resolve_locator_for_op(
         | EdlOp::SelectDeliveryProfile { .. }
         | EdlOp::AddPreflightReport { .. }
         | EdlOp::SetWorkflowLens { .. }
-        | EdlOp::SetPipelineReadiness { .. } => return Ok(None),
+        | EdlOp::SetPipelineReadiness { .. }
+        | EdlOp::TrimTrackTail { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
         .map(Some)
@@ -5219,6 +5226,117 @@ fn ripple_shift_after(
         }
     }
     Ok(())
+}
+
+/// Delete the gap immediately before/after the anchor clip on its
+/// track. Returns a descriptive no-op when the indicated side isn't
+/// a gap (e.g. the clip is already at the track start, or the
+/// trailing child is another clip).
+fn apply_delete_gap(
+    working: &mut Timeline,
+    index: usize,
+    anchor: &Anchor,
+    side: GapSide,
+    ctx: &AnchorContext,
+    locator: Option<ClipLocator>,
+) -> Result<String, ApplyError> {
+    let _ = (anchor, ctx);
+    let locator = required_locator(index, locator)?;
+    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "delete_gap: anchor resolved to a non-track stack child".into(),
+        });
+    };
+    if locator.child_index >= track.children.len() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "delete_gap: source index {} out of bounds for track of length {}",
+                locator.child_index,
+                track.children.len()
+            ),
+        });
+    }
+    let gap_index = match side {
+        GapSide::Before => {
+            if locator.child_index == 0 {
+                return Ok(format!(
+                    "delete_gap: anchor clip is at the start of track {}; no preceding gap to delete",
+                    locator.track_index,
+                ));
+            }
+            locator.child_index - 1
+        }
+        GapSide::After => {
+            if locator.child_index + 1 >= track.children.len() {
+                return Ok(format!(
+                    "delete_gap: anchor clip is the last child on track {}; no trailing gap to delete",
+                    locator.track_index,
+                ));
+            }
+            locator.child_index + 1
+        }
+    };
+    if !matches!(track.children[gap_index], TrackChild::Gap(_)) {
+        return Ok(format!(
+            "delete_gap: child at {gap_index} on track {} is not a gap; left timeline unchanged",
+            locator.track_index,
+        ));
+    }
+    let removed_dur = child_duration(&track.children[gap_index]);
+    track.children.remove(gap_index);
+    Ok(format!(
+        "deleted {side:?} gap ({removed_dur:.3}s) adjacent to anchor on track {}",
+        locator.track_index,
+    ))
+}
+
+/// Strip every trailing `Gap` from a track so its last child is a
+/// real clip (or transition). Returns a no-op description when the
+/// track's tail is already non-gap. Looks up the track by display
+/// name and errors if no track matches.
+fn apply_trim_track_tail(
+    working: &mut Timeline,
+    index: usize,
+    track_name: &str,
+) -> Result<String, ApplyError> {
+    if track_name.trim().is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "trim_track_tail: track must not be empty".into(),
+        });
+    }
+    let track = working
+        .tracks
+        .children
+        .iter_mut()
+        .find_map(|child| match child {
+            StackChild::Track(t) if t.name == track_name => Some(t),
+            _ => None,
+        })
+        .ok_or_else(|| ApplyError::Invalid {
+            index,
+            message: format!("trim_track_tail: no track named {track_name:?}"),
+        })?;
+    let mut removed_total_s = 0.0;
+    let mut removed_count = 0usize;
+    while let Some(last) = track.children.last()
+        && matches!(last, TrackChild::Gap(_))
+    {
+        removed_total_s += child_duration(last);
+        track.children.pop();
+        removed_count += 1;
+    }
+    if removed_count == 0 {
+        return Ok(format!(
+            "trim_track_tail: track {track_name:?} already ends in a clip; left timeline unchanged",
+        ));
+    }
+    Ok(format!(
+        "trim_track_tail: removed {removed_count} trailing gap{} ({removed_total_s:.3}s) from track {track_name:?}",
+        if removed_count == 1 { "" } else { "s" },
+    ))
 }
 
 fn apply_move_clip_to_time(
@@ -11393,6 +11511,137 @@ mod tests {
         // between them or a 0-length one. Verify children layout.)
         let total_children = t.children.len();
         assert!(total_children >= 3);
+    }
+
+    #[test]
+    fn apply_delete_gap_removes_preceding_gap_before_anchor_clip() {
+        // Three 5s clips + a leading 3s gap on V1. Delete the gap
+        // sitting before clip-0. Expect: clip-0 | clip-1 | clip-2.
+        use awidat_proto::otio::{
+            Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+            Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+        let mut tl = Tl::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track
+            .children
+            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(3.0, 24.0)));
+        for (i, name) in ["clip-0", "clip-1", "clip-2"].iter().enumerate() {
+            let mut c = Clip::empty((*name).to_string());
+            c.media_reference =
+                MediaReference::External(ExternalReference::new(format!("raw/{i}.mp4")));
+            c.source_range = Some(TimeRange::new(
+                RationalTime::new(0.0, 24.0),
+                RationalTime::new(5.0 * 24.0, 24.0),
+            ));
+            track.children.push(TrackChild::Clip(c));
+        }
+        tl.tracks.children.push(StackChild::Track(track));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::DeleteGap {
+                anchor: Anchor::ClipUuid {
+                    uuid: "clip-0".into(),
+                },
+                side: crate::edl::op::GapSide::Before,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.children.len(), 3);
+        assert!(matches!(&t.children[0], TrackChild::Clip(c) if c.name == "clip-0"));
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(matches!(&t.children[2], TrackChild::Clip(c) if c.name == "clip-2"));
+    }
+
+    #[test]
+    fn apply_delete_gap_after_is_a_no_op_when_no_trailing_gap() {
+        // clip-0 has nothing after it on the track. Asking to delete
+        // the trailing gap should leave the timeline unchanged with
+        // a descriptive message.
+        use awidat_proto::otio::{
+            Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+            Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+        let mut tl = Tl::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut c = Clip::empty("solo".to_string());
+        c.media_reference = MediaReference::External(ExternalReference::new("raw/solo.mp4"));
+        c.source_range = Some(TimeRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(5.0 * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(c));
+        tl.tracks.children.push(StackChild::Track(track));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::DeleteGap {
+                anchor: Anchor::ClipUuid { uuid: "solo".into() },
+                side: crate::edl::op::GapSide::After,
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(outcome.applied[0].description.contains("no trailing gap"));
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.children.len(), 1);
+    }
+
+    #[test]
+    fn apply_trim_track_tail_strips_trailing_gaps() {
+        // Two 5s clips + a 10s trailing gap. Trimming the tail should
+        // leave clip-0 | clip-1 and report 10s removed.
+        use awidat_proto::otio::{
+            Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+            Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+        let mut tl = Tl::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        for (i, name) in ["clip-0", "clip-1"].iter().enumerate() {
+            let mut c = Clip::empty((*name).to_string());
+            c.media_reference =
+                MediaReference::External(ExternalReference::new(format!("raw/{i}.mp4")));
+            c.source_range = Some(TimeRange::new(
+                RationalTime::new(0.0, 24.0),
+                RationalTime::new(5.0 * 24.0, 24.0),
+            ));
+            track.children.push(TrackChild::Clip(c));
+        }
+        track
+            .children
+            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(10.0, 24.0)));
+        tl.tracks.children.push(StackChild::Track(track));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::TrimTrackTail {
+                track: "V1".into(),
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.children.len(), 2);
+        assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-1"));
+        assert!(outcome.applied[0].description.contains("10."));
+    }
+
+    #[test]
+    fn apply_trim_track_tail_no_op_when_track_already_ends_in_clip() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::TrimTrackTail {
+                track: "V1".into(),
+            }],
+        };
+        let (_, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("already ends in a clip"),
+            "expected no-op description, got {:?}",
+            outcome.applied[0].description,
+        );
     }
 
     #[test]

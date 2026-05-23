@@ -231,6 +231,8 @@ enum OpKind {
     RippleMove,
     RippleDelete,
     RippleTrim,
+    DeleteGap,
+    TrimTrackTail,
     ApplyMulticamPlan,
     InsertTransition,
     DeleteTransition,
@@ -292,6 +294,8 @@ impl OpBuilder {
             "Ripple Move" => OpKind::RippleMove,
             "Ripple Delete" => OpKind::RippleDelete,
             "Ripple Trim" => OpKind::RippleTrim,
+            "Delete Gap" => OpKind::DeleteGap,
+            "Trim Track Tail" => OpKind::TrimTrackTail,
             "Apply Multicam Plan" => OpKind::ApplyMulticamPlan,
             "Insert Transition" => OpKind::InsertTransition,
             "Delete Transition" => OpKind::DeleteTransition,
@@ -600,6 +604,41 @@ impl OpBuilder {
                     edge,
                     value_s,
                 })
+            }
+            OpKind::DeleteGap => {
+                let anchor = self.anchor.ok_or_else(|| EdlParseError::MissingField {
+                    line: head,
+                    field: "anchor".into(),
+                })?;
+                let side_raw = take_field_string(&mut fields, "side").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "side".into(),
+                    }
+                })?;
+                let side = match side_raw.as_str() {
+                    "before" => crate::edl::op::GapSide::Before,
+                    "after" => crate::edl::op::GapSide::After,
+                    other => {
+                        return Err(EdlParseError::BadField {
+                            line: head,
+                            raw: format!("+ side: {other}"),
+                            message: format!(
+                                "delete_gap: side must be 'before' or 'after', got {other:?}"
+                            ),
+                        });
+                    }
+                };
+                Ok(EdlOp::DeleteGap { anchor, side })
+            }
+            OpKind::TrimTrackTail => {
+                let track = take_field_string(&mut fields, "track").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "track".into(),
+                    }
+                })?;
+                Ok(EdlOp::TrimTrackTail { track })
             }
             OpKind::ApplyMulticamPlan => Ok(EdlOp::ApplyMulticamPlan {
                 plan: take_required_json::<MulticamApplyPlan>(&mut fields, "plan_json", head)?,

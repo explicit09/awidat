@@ -319,7 +319,11 @@ asset filename, proxy stem, or raw media basename as clip_uuid. \
 Times are source-media seconds. view_timeline shows current \
 `source=[start..end]`; to trim the first N seconds of the visible \
 clip, set `start` to source start + N, and to trim the last N \
-seconds, set `end` to source end - N.\
+seconds, set `end` to source end - N. To remove a trailing or \
+leading gap (timeline duration driven by dead space), use \
+`*** Trim Track Tail` (drops every trailing gap on a track) or \
+`*** Delete Gap` with `+ side: before|after` anchored to a real \
+clip — gaps themselves aren't valid clip_uuid anchors.\
 \n- start_render (scope='timeline'): render the edited timeline to mp4.\
 \n- poll_render: continue tracking a render job. If a previous turn \
 was interrupted while waiting/polling, recover by using the last \

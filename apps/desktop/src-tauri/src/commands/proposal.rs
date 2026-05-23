@@ -636,6 +636,8 @@ fn build_diff_hints(
                 }
             }
             EdlOp::InsertTransition { .. }
+            | EdlOp::DeleteGap { .. }
+            | EdlOp::TrimTrackTail { .. }
             | EdlOp::ApplyMulticamPlan { .. }
             | EdlOp::DeleteTransition { .. }
             | EdlOp::SetCutIntent { .. }
@@ -853,6 +855,8 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::RippleMove { .. } => "RippleMove",
         EdlOp::RippleDelete { .. } => "RippleDelete",
         EdlOp::RippleTrim { .. } => "RippleTrim",
+        EdlOp::DeleteGap { .. } => "DeleteGap",
+        EdlOp::TrimTrackTail { .. } => "TrimTrackTail",
         EdlOp::ApplyMulticamPlan { .. } => "ApplyMulticamPlan",
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::DeleteTransition { .. } => "DeleteTransition",
