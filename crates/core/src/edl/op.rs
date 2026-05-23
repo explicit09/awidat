@@ -270,6 +270,23 @@ pub enum EdlOp {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         at_position: Option<usize>,
     },
+    /// Remove a track from the timeline. Refuses when the named track
+    /// has clips on it unless `force = true` — the default protects
+    /// against typos that would drop content. Use `Trim Track Tail`
+    /// to clean trailing gaps before deletion if needed.
+    ///
+    /// Counterpart to [`InsertTrack`]. Gives the agent a safe verb
+    /// for "delete empty track" instead of reaching for the shell
+    /// to mutate `project.otio.json` directly.
+    DeleteTrack {
+        /// Display name of the track to remove.
+        name: String,
+        /// When false (default), the op fails if the track has any
+        /// non-gap children. Set true to drop a populated track
+        /// outright.
+        #[serde(default)]
+        force: bool,
+    },
     /// Atomically apply accepted multicam decisions to a flattened program track.
     ApplyMulticamPlan {
         /// Multicam plan to apply.

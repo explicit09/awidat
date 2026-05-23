@@ -234,6 +234,7 @@ enum OpKind {
     DeleteGap,
     TrimTrackTail,
     InsertTrack,
+    DeleteTrack,
     ApplyMulticamPlan,
     InsertTransition,
     DeleteTransition,
@@ -298,6 +299,7 @@ impl OpBuilder {
             "Delete Gap" => OpKind::DeleteGap,
             "Trim Track Tail" => OpKind::TrimTrackTail,
             "Insert Track" => OpKind::InsertTrack,
+            "Delete Track" => OpKind::DeleteTrack,
             "Apply Multicam Plan" => OpKind::ApplyMulticamPlan,
             "Insert Transition" => OpKind::InsertTransition,
             "Delete Transition" => OpKind::DeleteTransition,
@@ -670,6 +672,30 @@ impl OpBuilder {
                     kind,
                     at_position,
                 })
+            }
+            OpKind::DeleteTrack => {
+                let name = take_field_string(&mut fields, "name").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "name".into(),
+                    }
+                })?;
+                // `force` defaults to false — protects against typos
+                // that would silently nuke a populated track.
+                let force = match take_field_string(&mut fields, "force").as_deref() {
+                    Some("true") => true,
+                    Some("false") | None => false,
+                    Some(other) => {
+                        return Err(EdlParseError::BadField {
+                            line: head,
+                            raw: format!("+ force: {other}"),
+                            message: format!(
+                                "delete_track: force must be 'true' or 'false', got {other:?}"
+                            ),
+                        });
+                    }
+                };
+                Ok(EdlOp::DeleteTrack { name, force })
             }
             OpKind::ApplyMulticamPlan => Ok(EdlOp::ApplyMulticamPlan {
                 plan: take_required_json::<MulticamApplyPlan>(&mut fields, "plan_json", head)?,

@@ -92,6 +92,90 @@ pub async fn start_new_chat_session(state: State<'_, AwidatState>) -> Result<Cha
     })
 }
 
+/// Persist a user-supplied title for a chat session. Pass an empty
+/// `new_title` to clear the override and fall back to the derived
+/// title (first user message).
+#[tauri::command]
+pub async fn rename_chat_session(
+    state: State<'_, AwidatState>,
+    log_path: String,
+    new_title: String,
+) -> Result<(), String> {
+    let path = PathBuf::from(&log_path);
+    // Belt-and-suspenders: confirm the path is under the configured
+    // state root before touching the registry, so a bogus `log_path`
+    // from the renderer can't rewrite an unrelated session row.
+    let state_root = awidat_config::defaults::state_root()
+        .ok_or_else(|| "state root unavailable".to_string())?;
+    if !path.starts_with(&state_root) {
+        return Err(format!(
+            "log path {} is not under state root {}",
+            path.display(),
+            state_root.display()
+        ));
+    }
+    let registry = awidat_core::session_registry::SessionRegistry::open(&state_root)
+        .map_err(|e| format!("open session registry: {e}"))?;
+    let row = registry
+        .get_by_log_path(&path)
+        .map_err(|e| format!("lookup session: {e}"))?
+        .ok_or_else(|| format!("no session registered for {}", path.display()))?;
+    let trimmed = new_title.trim();
+    let next = if trimmed.is_empty() { None } else { Some(trimmed) };
+    registry
+        .set_custom_title(&row.id, next)
+        .map_err(|e| format!("set custom title: {e}"))?;
+    // Force-refresh any in-memory active-session state so the next
+    // list/load picks up the new title. We don't touch `state.active`
+    // directly here — `list_chat_sessions` reads from the registry.
+    let _ = state;
+    Ok(())
+}
+
+/// Delete a chat session entirely. Removes the JSONL log on disk and
+/// the registry row. If the deleted chat was the active one, also
+/// clears the active session so the next turn starts a fresh chat.
+#[tauri::command]
+pub async fn delete_chat_session(
+    state: State<'_, AwidatState>,
+    log_path: String,
+) -> Result<(), String> {
+    let path = PathBuf::from(&log_path);
+    let state_root = awidat_config::defaults::state_root()
+        .ok_or_else(|| "state root unavailable".to_string())?;
+    if !path.starts_with(&state_root) {
+        return Err(format!(
+            "log path {} is not under state root {}",
+            path.display(),
+            state_root.display()
+        ));
+    }
+    let registry = awidat_core::session_registry::SessionRegistry::open(&state_root)
+        .map_err(|e| format!("open session registry: {e}"))?;
+    let row = registry
+        .get_by_log_path(&path)
+        .map_err(|e| format!("lookup session: {e}"))?
+        .ok_or_else(|| format!("no session registered for {}", path.display()))?;
+    // If this chat is currently active, swap it out first so the
+    // recorder isn't still writing to a file we're about to delete.
+    {
+        let mut active = state.active.lock().await;
+        // `active.path()` would tell us, but its API is internal — the
+        // simpler safe path is to always replace(None) before delete.
+        // This is a no-op when nothing was active.
+        active.replace(None).await;
+    }
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("remove log file {}: {e}", path.display()));
+        }
+    }
+    registry
+        .delete_session(&row.id)
+        .map_err(|e| format!("delete session row: {e}"))?;
+    Ok(())
+}
+
 async fn load_history_from_path(
     state: &State<'_, AwidatState>,
     path: PathBuf,
@@ -167,12 +251,17 @@ fn list_project_sessions(project_root: &Path) -> Result<Vec<ChatSessionSummary>,
         .map_err(|e| format!("list registry: {e}"))?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        // The registry doesn't store the session title (it's derived
-        // from message content). Resume the log just for the title;
-        // tolerated cost since chat history listings are interactive.
-        let title = match Recorder::resume(&row.log_path) {
-            Ok((meta, messages)) => generated_session_title(&meta, &messages),
-            Err(_) => fallback_session_title(&fallback_meta_for_row(&row)),
+        // Title preference: user-supplied custom title wins. Otherwise
+        // derive from the first user message in the JSONL (paying the
+        // cost of a `Recorder::resume` is fine for an interactive
+        // listing). Falls back to the session timestamp if both miss.
+        let title = if let Some(custom) = row.custom_title.as_deref() {
+            custom.to_string()
+        } else {
+            match Recorder::resume(&row.log_path) {
+                Ok((meta, messages)) => generated_session_title(&meta, &messages),
+                Err(_) => fallback_session_title(&fallback_meta_for_row(&row)),
+            }
         };
         out.push(ChatSessionSummary {
             id: row.id,

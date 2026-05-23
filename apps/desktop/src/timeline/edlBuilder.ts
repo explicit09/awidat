@@ -69,6 +69,7 @@ export type EdlOp =
     }
   | { kind: "delete_gap"; anchor: EdlAnchor; side: "before" | "after" }
   | { kind: "trim_track_tail"; track: string }
+  | { kind: "delete_track"; name: string; force?: boolean }
   | {
       /** Catch-all for ops the backend exposes via the
        *  `*** Professional Timeline Edit` heading + an `edit_json`
@@ -276,6 +277,11 @@ function appendOp(lines: string[], op: EdlOp): void {
     case "trim_track_tail":
       lines.push("*** Trim Track Tail");
       lines.push(`+ track: ${op.track}`);
+      break;
+    case "delete_track":
+      lines.push("*** Delete Track");
+      lines.push(`+ name: ${op.name}`);
+      if (op.force) lines.push(`+ force: true`);
       break;
     case "professional_timeline_edit":
       lines.push("*** Professional Timeline Edit");

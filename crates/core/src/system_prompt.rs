@@ -329,6 +329,14 @@ on V1 also removes the matching gap on A1 when the anchor clip's \
 audio sibling shares the same link group. Paired V+A imports get \
 synced cleanup from a single op; the agent does NOT need to emit \
 parallel ops for each track.\
+\nTrack lifecycle: use `*** Insert Track` to add a track and \
+`*** Delete Track` to remove one. Delete Track refuses to drop \
+populated tracks unless `+ force: true` is set; this guards \
+against typos that would nuke content. **NEVER shell out to edit \
+`project.otio.json` directly** — the EDL ops are the only \
+sanctioned way to mutate the timeline, and an apply_edl envelope \
+roundtrips through validation/diff/proposal flows that direct \
+edits skip.\
 \n- start_render (scope='timeline'): render the edited timeline to mp4.\
 \n- poll_render: continue tracking a render job. If a previous turn \
 was interrupted while waiting/polling, recover by using the last \

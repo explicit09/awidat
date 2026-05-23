@@ -474,6 +474,9 @@ fn apply_one(
             kind,
             at_position,
         } => apply_insert_track(working, index, name, *kind, *at_position),
+        EdlOp::DeleteTrack { name, force } => {
+            apply_delete_track(working, index, name, *force)
+        }
         EdlOp::ApplyMulticamPlan { plan } => apply_multicam_plan(working, index, plan),
         EdlOp::InsertTransition {
             between,
@@ -1040,7 +1043,8 @@ fn resolve_locator_for_op(
         | EdlOp::SetWorkflowLens { .. }
         | EdlOp::SetPipelineReadiness { .. }
         | EdlOp::TrimTrackTail { .. }
-        | EdlOp::InsertTrack { .. } => return Ok(None),
+        | EdlOp::InsertTrack { .. }
+        | EdlOp::DeleteTrack { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
         .map(Some)
@@ -5596,6 +5600,81 @@ fn apply_insert_track(
     Ok(format!(
         "insert_track: added {trimmed:?} ({:?}) at stack index {insert_at}",
         resolved_kind
+    ))
+}
+
+/// Remove a track from the timeline by name. Refuses if the track
+/// has any non-gap children unless `force = true` — the default
+/// guards against typos that would silently drop content. Listing
+/// the available track names in the error means the agent (or user)
+/// can self-correct without a separate view_timeline call.
+///
+/// Counterpart to `apply_insert_track`. Gives the agent a safe verb
+/// for "delete empty track" instead of reaching for the shell to
+/// mutate `project.otio.json` directly.
+fn apply_delete_track(
+    working: &mut Timeline,
+    index: usize,
+    track_name: &str,
+    force: bool,
+) -> Result<String, ApplyError> {
+    let trimmed = track_name.trim();
+    if trimmed.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "delete_track: name must not be empty".into(),
+        });
+    }
+    let available_names = list_track_names(working);
+    let position = working
+        .tracks
+        .children
+        .iter()
+        .position(|c| matches!(c, StackChild::Track(t) if t.name == trimmed))
+        .ok_or_else(|| {
+            let hint = if available_names.is_empty() {
+                "; no tracks on the timeline".to_string()
+            } else {
+                format!("; available tracks: {}", available_names.join(", "))
+            };
+            ApplyError::Invalid {
+                index,
+                message: format!("delete_track: no track named {trimmed:?}{hint}"),
+            }
+        })?;
+
+    // Count non-gap children. A track populated only with gaps is
+    // safe to drop without `force` — gaps are placeholders, not
+    // editorial content.
+    let clip_count = match &working.tracks.children[position] {
+        StackChild::Track(t) => t
+            .children
+            .iter()
+            .filter(|c| !matches!(c, TrackChild::Gap(_)))
+            .count(),
+        _ => 0,
+    };
+    if clip_count > 0 && !force {
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "delete_track: track {trimmed:?} has {clip_count} clip(s); refusing to delete without `force: true`. \
+                 Move clips off the track first or pass `+ force: true` if intentional.",
+            ),
+        });
+    }
+
+    let kind_label = match &working.tracks.children[position] {
+        StackChild::Track(t) => match t.kind {
+            TrackKind::Video => "video",
+            TrackKind::Audio => "audio",
+        },
+        _ => "track",
+    };
+    working.tracks.children.remove(position);
+    Ok(format!(
+        "delete_track: removed {kind_label} track {trimmed:?} (had {clip_count} clip{})",
+        if clip_count == 1 { "" } else { "s" },
     ))
 }
 
@@ -12156,6 +12235,76 @@ mod tests {
         assert!(
             err.to_string().contains("exists as"),
             "expected kind-conflict, got {err}",
+        );
+    }
+
+    #[test]
+    fn apply_delete_track_removes_empty_track() {
+        // Two tracks: V1 with clips + V2 empty. Delete V2; V1 stays.
+        use awidat_proto::otio::{StackChild, Timeline as Tl, Track, TrackKind};
+        let mut tl = timeline_with_three_clips();
+        tl.tracks
+            .children
+            .push(StackChild::Track(Track::empty("V2", TrackKind::Video)));
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::DeleteTrack {
+                name: "V2".into(),
+                force: false,
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(outcome.applied[0].description.contains("removed"));
+        assert_eq!(new_tl.tracks.children.len(), 1);
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        assert_eq!(t.name, "V1");
+        let _ = Tl::empty("test"); // silence unused import in some configs
+    }
+
+    #[test]
+    fn apply_delete_track_refuses_populated_track_without_force() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::DeleteTrack {
+                name: "V1".into(),
+                force: false,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            err.to_string().contains("has 3 clip"),
+            "expected populated-track refusal, got {err}",
+        );
+    }
+
+    #[test]
+    fn apply_delete_track_with_force_drops_populated_track() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::DeleteTrack {
+                name: "V1".into(),
+                force: true,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert_eq!(new_tl.tracks.children.len(), 0);
+    }
+
+    #[test]
+    fn apply_delete_track_lists_available_names_on_miss() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::DeleteTrack {
+                name: "VNope".into(),
+                force: false,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("available tracks:") && message.contains("V1"),
+            "expected hint listing real names; got {message}"
         );
     }
 
