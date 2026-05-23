@@ -213,6 +213,41 @@ pub async fn index_project_at_root(
             let summary = format!(
                 "{wrote} wrote, {skipped} skipped, {failed} failed, {dep_skipped} dep-skipped"
             );
+            // Motion phase. Motion isn't an MCP indexer (it's a
+            // built-in FFmpeg scene-filter pass), so the dispatcher
+            // above doesn't touch it. Run it here so a user clicking
+            // "Run indexers" fills the motion sidecars for every asset
+            // — same coverage they'd get from re-importing. Per-asset
+            // calls are mtime-fresh-checked, so already-current
+            // sidecars are no-ops.
+            let mut motion_wrote = 0usize;
+            let mut motion_failed: Vec<(String, String)> = Vec::new();
+            for asset in &assets {
+                if cancel.is_cancelled() {
+                    break;
+                }
+                match crate::commands::motion::generate_motion_for_asset_in_project(
+                    app,
+                    state,
+                    &project_root,
+                    &asset.path,
+                )
+                .await
+                {
+                    Ok(_) => motion_wrote += 1,
+                    Err(e) => {
+                        motion_failed.push((asset.id.to_string(), e));
+                    }
+                }
+            }
+            let summary = if motion_wrote > 0 || !motion_failed.is_empty() {
+                format!(
+                    "{summary}; motion: {motion_wrote} ok, {} failed",
+                    motion_failed.len(),
+                )
+            } else {
+                summary
+            };
             // If a whisper sidecar was just written or refreshed,
             // drop the transcript-pane's parsed-Transcript cache so
             // the next read picks up the new shape. Cheap full-clear
@@ -224,7 +259,7 @@ pub async fn index_project_at_root(
             if whisper_wrote {
                 crate::commands::transcript::clear_transcript_cache(&state).await;
             }
-            if report.has_failures() {
+            if report.has_failures() || !motion_failed.is_empty() {
                 // Pull each PairOutcome::Failed out so the user sees
                 // *which* indexer failed on *which* asset *why*. With
                 // 10+ indexers per asset, "1 failed" alone leaves the
@@ -250,6 +285,15 @@ pub async fn index_project_at_root(
                         };
                         detail.push_str(&format!("\n  ✗ {indexer} · {asset}: {truncated}"));
                     }
+                }
+                for (asset, message) in &motion_failed {
+                    let first = message.lines().next().unwrap_or(message);
+                    let truncated = if first.len() > 200 {
+                        format!("{}…", &first[..200])
+                    } else {
+                        first.to_string()
+                    };
+                    detail.push_str(&format!("\n  ✗ motion · {asset}: {truncated}"));
                 }
                 emitter.err(detail);
                 Err(summary)
