@@ -10,9 +10,11 @@ import type { TimelineSnapshot, TimelineItem } from "./store";
 /** Pointer-pixel tolerance for "near a clip edge". */
 export const EDGE_HIT_PX = 6;
 
-/** Lane height — must stay in sync with TimelinePane's LANE_HEIGHT. */
-const LANE_HEIGHT = 38;
-/** Ruler height — must stay in sync with TimelinePane's RULER_HEIGHT. */
+/** Base lane height at trackZoom = 1. Hit-tests accept a `laneHeight`
+ *  override so they stay in sync with the canvas when the user scales
+ *  the vertical zoom. */
+export const LANE_HEIGHT_BASE = 38;
+/** Ruler height — fixed, not affected by track zoom. */
 const RULER_HEIGHT = 22;
 
 export type EdgeHit = {
@@ -46,9 +48,10 @@ export function hitTestEdge(
   canvasY: number,
   snapshot: TimelineSnapshot,
   pps: number,
+  laneHeight: number = LANE_HEIGHT_BASE,
 ): EdgeHit | null {
   if (canvasY < RULER_HEIGHT) return null;
-  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / LANE_HEIGHT);
+  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / laneHeight);
   if (trackIndex < 0 || trackIndex >= snapshot.tracks.length) return null;
   const track = snapshot.tracks[trackIndex];
 
@@ -133,9 +136,10 @@ export function hitTestClipBody(
   canvasY: number,
   snapshot: TimelineSnapshot,
   pps: number,
+  laneHeight: number = LANE_HEIGHT_BASE,
 ): { trackIndex: number; clipIndex: number } | null {
   if (canvasY < RULER_HEIGHT) return null;
-  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / LANE_HEIGHT);
+  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / laneHeight);
   if (trackIndex < 0 || trackIndex >= snapshot.tracks.length) return null;
   const track = snapshot.tracks[trackIndex];
   for (const item of track.items) {
@@ -161,9 +165,10 @@ export function hitTestSelectableBody(
   canvasY: number,
   snapshot: TimelineSnapshot,
   pps: number,
+  laneHeight: number = LANE_HEIGHT_BASE,
 ): { trackIndex: number; clipIndex: number } | null {
   if (canvasY < RULER_HEIGHT) return null;
-  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / LANE_HEIGHT);
+  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / laneHeight);
   if (trackIndex < 0 || trackIndex >= snapshot.tracks.length) return null;
   const track = snapshot.tracks[trackIndex];
   for (const item of track.items) {

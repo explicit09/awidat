@@ -16,9 +16,8 @@ import { useProposalStore } from "./proposal";
 import type { AppliedDiff, AdjustField, TimelineSnapshot } from "../protocol";
 
 /** Layout constants — must match TimelinePane.tsx exactly. The
- *  handles overlay the canvas; same lane heights and ruler offset
- *  are baked into both. */
-const LANE_HEIGHT = 38;
+ *  handles overlay the canvas; same ruler offset is baked into both.
+ *  Lane height is supplied as a prop so vertical zoom flows through. */
 const RULER_HEIGHT = 22;
 const HANDLE_WIDTH = 8;
 const PX_PER_SECOND_BASE = 12;
@@ -44,17 +43,20 @@ type HandleSpec = {
 export function ProposalHandles({
   containerWidth,
   pps,
+  laneHeight,
 }: {
   /** Width of the canvas in CSS pixels — handles position relative to it. */
   containerWidth: number;
   /** Same pps the canvas uses; passed in so we don't recompute layout. */
   pps: number;
+  /** Same lane height the canvas uses, in CSS pixels. */
+  laneHeight: number;
 }) {
   const proposal = useProposalStore((s) => s.active);
 
   if (!proposal) return null;
 
-  const handles = buildHandles(proposal.snapshot, proposal.diffHints, pps);
+  const handles = buildHandles(proposal.snapshot, proposal.diffHints, pps, laneHeight);
 
   return (
     <div className="proposal-handles" style={{ width: containerWidth }}>
@@ -139,10 +141,11 @@ function buildHandles(
   snapshot: TimelineSnapshot,
   diffs: AppliedDiff[],
   pps: number,
+  laneHeight: number,
 ): HandleSpec[] {
   const out: HandleSpec[] = [];
   for (const diff of diffs) {
-    const handle = handleForDiff(snapshot, diff, pps);
+    const handle = handleForDiff(snapshot, diff, pps, laneHeight);
     if (handle) out.push(handle);
   }
   return out;
@@ -152,6 +155,7 @@ function handleForDiff(
   snapshot: TimelineSnapshot,
   diff: AppliedDiff,
   pps: number,
+  laneHeight: number,
 ): HandleSpec | null {
   switch (diff.kind) {
     case "trim_edge": {
@@ -160,8 +164,8 @@ function handleForDiff(
       const xStart = item.track_start_s * pps;
       const xEnd = (item.track_start_s + item.duration_s) * pps;
       const x = diff.side === "left" ? xStart : xEnd;
-      const y = RULER_HEIGHT + diff.track_index * LANE_HEIGHT + 4;
-      const h = LANE_HEIGHT - 8;
+      const y = RULER_HEIGHT + diff.track_index * laneHeight + 4;
+      const h = laneHeight - 8;
       const field: AdjustField =
         diff.side === "left" ? "trim_start" : "trim_end";
       // The handle's "value" lives in source-media seconds, not
@@ -202,8 +206,8 @@ function handleForDiff(
       // Split anchor sits at the *end* of the left half on the
       // proposed snapshot. We render the handle at that x.
       const x = (item.track_start_s + item.duration_s) * pps;
-      const y = RULER_HEIGHT + diff.track_index * LANE_HEIGHT + 4;
-      const h = LANE_HEIGHT - 8;
+      const y = RULER_HEIGHT + diff.track_index * laneHeight + 4;
+      const h = laneHeight - 8;
       const sourceStart = item.source_start_s ?? 0;
       const sourceCut = sourceStart + item.duration_s;
       return {

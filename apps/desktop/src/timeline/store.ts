@@ -21,14 +21,69 @@ type State = {
   snapshot: TimelineSnapshot;
   /** True if the next refresh should auto-fit zoom. Cleared once consumed. */
   refreshing: boolean;
+  /** Horizontal zoom multiplier (1.0 = fit-to-viewport). */
   zoom: number;
+  /** Vertical zoom multiplier — scales LANE_HEIGHT so tracks can be
+   *  made taller for filmstrip-rich timelines. Independent from
+   *  horizontal zoom (DaVinci/Premiere model). */
+  trackZoom: number;
   refresh: () => Promise<void>;
   zoomIn: () => void;
   zoomOut: () => void;
   fitZoom: () => void;
+  setZoom: (zoom: number) => void;
+  setTrackZoom: (zoom: number) => void;
+  trackZoomIn: () => void;
+  trackZoomOut: () => void;
+  fitTrackZoom: () => void;
 };
 
-export const useTimelineStore = create<State>((set) => ({
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 8;
+const TRACK_ZOOM_MIN = 0.6;
+const TRACK_ZOOM_MAX = 3;
+const ZOOM_STEP = 1.25;
+const TRACK_ZOOM_STEP = 1.15;
+
+const PERSIST_KEY = "awidat.timeline.zoom.v1";
+
+type PersistedShape = {
+  zoom?: number;
+  trackZoom?: number;
+};
+
+function loadPersisted(): PersistedShape {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as PersistedShape;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persist(state: Pick<State, "zoom" | "trackZoom">) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(
+      PERSIST_KEY,
+      JSON.stringify({ zoom: state.zoom, trackZoom: state.trackZoom }),
+    );
+  } catch {
+    // localStorage may be disabled (private mode); silently ignore.
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+const persisted = loadPersisted();
+
+export const useTimelineStore = create<State>((set, get) => ({
   snapshot: {
     duration_s: 0,
     broadcast_overlay: null,
@@ -37,7 +92,8 @@ export const useTimelineStore = create<State>((set) => ({
     tracks: [],
   },
   refreshing: false,
-  zoom: 1,
+  zoom: clamp(persisted.zoom ?? 1, ZOOM_MIN, ZOOM_MAX),
+  trackZoom: clamp(persisted.trackZoom ?? 1, TRACK_ZOOM_MIN, TRACK_ZOOM_MAX),
   refresh: async () => {
     set({ refreshing: true });
     try {
@@ -49,9 +105,47 @@ export const useTimelineStore = create<State>((set) => ({
       set({ refreshing: false });
     }
   },
-  zoomIn: () =>
-    set((state) => ({ zoom: Math.min(8, state.zoom * 1.25) })),
-  zoomOut: () =>
-    set((state) => ({ zoom: Math.max(0.25, state.zoom / 1.25) })),
-  fitZoom: () => set({ zoom: 1 }),
+  zoomIn: () => {
+    const next = clamp(get().zoom * ZOOM_STEP, ZOOM_MIN, ZOOM_MAX);
+    set({ zoom: next });
+    persist(get());
+  },
+  zoomOut: () => {
+    const next = clamp(get().zoom / ZOOM_STEP, ZOOM_MIN, ZOOM_MAX);
+    set({ zoom: next });
+    persist(get());
+  },
+  fitZoom: () => {
+    set({ zoom: 1 });
+    persist(get());
+  },
+  setZoom: (zoom) => {
+    set({ zoom: clamp(zoom, ZOOM_MIN, ZOOM_MAX) });
+    persist(get());
+  },
+  setTrackZoom: (trackZoom) => {
+    set({ trackZoom: clamp(trackZoom, TRACK_ZOOM_MIN, TRACK_ZOOM_MAX) });
+    persist(get());
+  },
+  trackZoomIn: () => {
+    const next = clamp(get().trackZoom * TRACK_ZOOM_STEP, TRACK_ZOOM_MIN, TRACK_ZOOM_MAX);
+    set({ trackZoom: next });
+    persist(get());
+  },
+  trackZoomOut: () => {
+    const next = clamp(get().trackZoom / TRACK_ZOOM_STEP, TRACK_ZOOM_MIN, TRACK_ZOOM_MAX);
+    set({ trackZoom: next });
+    persist(get());
+  },
+  fitTrackZoom: () => {
+    set({ trackZoom: 1 });
+    persist(get());
+  },
 }));
+
+export const TIMELINE_ZOOM_BOUNDS = {
+  min: ZOOM_MIN,
+  max: ZOOM_MAX,
+  trackMin: TRACK_ZOOM_MIN,
+  trackMax: TRACK_ZOOM_MAX,
+} as const;
