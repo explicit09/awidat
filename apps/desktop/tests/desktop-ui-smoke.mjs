@@ -2,21 +2,79 @@
 /**
  * Desktop UI smoke test.
  *
- * This runs the browser/static app path used for design review. With no Tauri
+ * Runs the browser/static app path used for design review. With no Tauri
  * project open, the app should boot directly into the Screen 2 golden cockpit:
  * app chrome, workflow lenses, agent command rail, proposal preview, timeline,
  * and proposal inspector.
  *
- * Requires `pnpm dev` running on :1420.
+ * If nothing is already serving `BASE_URL`, this script spawns `vite preview`
+ * against the built `dist/` directory and tears it down on exit. The build
+ * step in CI runs before this script, so `dist/` is present.
  */
 
 import { chromium } from "playwright";
 import { strict as assert } from "node:assert";
 import { mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { connect } from "node:net";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 const BASE_URL = process.env.SMOKE_URL ?? "http://localhost:1420/";
 const SCREENSHOT_DIR = process.env.SMOKE_OUT_DIR ?? "tests/smoke";
 mkdirSync(SCREENSHOT_DIR, { recursive: true });
+
+function probePort(port, host = "127.0.0.1", timeoutMs = 250) {
+  return new Promise((resolvePromise) => {
+    const sock = connect({ port, host });
+    const done = (ok) => {
+      sock.destroy();
+      resolvePromise(ok);
+    };
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+    setTimeout(() => done(false), timeoutMs);
+  });
+}
+
+async function waitForPort(port, host, deadlineMs) {
+  const stop = Date.now() + deadlineMs;
+  while (Date.now() < stop) {
+    if (await probePort(port, host)) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`timed out waiting for ${host}:${port}`);
+}
+
+const baseUrlObj = new URL(BASE_URL);
+const baseHost = baseUrlObj.hostname || "127.0.0.1";
+const basePort = Number(baseUrlObj.port) || (baseUrlObj.protocol === "https:" ? 443 : 80);
+
+let spawnedServer = null;
+function killSpawnedServer() {
+  if (spawnedServer && spawnedServer.exitCode === null) {
+    spawnedServer.kill("SIGTERM");
+  }
+}
+
+if (!(await probePort(basePort, baseHost))) {
+  const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  spawnedServer = spawn(
+    "pnpm",
+    ["exec", "vite", "preview", "--host", baseHost, "--port", String(basePort), "--strictPort"],
+    { cwd: desktopDir, stdio: ["ignore", "inherit", "inherit"] },
+  );
+  process.on("exit", killSpawnedServer);
+  process.on("SIGINT", () => { killSpawnedServer(); process.exit(130); });
+  process.on("SIGTERM", () => { killSpawnedServer(); process.exit(143); });
+  try {
+    await waitForPort(basePort, baseHost, 30_000);
+  } catch (err) {
+    killSpawnedServer();
+    console.error(`failed to bring up vite preview: ${err.message}`);
+    process.exit(1);
+  }
+}
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({
@@ -342,6 +400,7 @@ await check("footer exposes model, autosave, render, and disk status", async () 
 await browser.close();
 
 console.log(`\n${passes.length} passed, ${failures.length} failed`);
+killSpawnedServer();
 if (failures.length > 0) {
   process.exit(1);
 }
