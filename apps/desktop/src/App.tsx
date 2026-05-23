@@ -161,11 +161,14 @@ function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [agentFocusMode, setAgentFocusMode] = useState(false);
   const [permissionMode, setPermissionModeState] = useState<PermissionMode>("manual");
-  // Default-collapsed: the right rail is empty 95% of the time when no
-  // proposal exists. We auto-expand it when an active proposal arrives
-  // (see effect below) and let the user pin it open via the existing
-  // collapse/maximize buttons in the inspector header.
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(true);
+  // Default-expanded: the saved layout in localStorage gives the
+  // Inspector a real proportion (~21%) and the user expects that
+  // width back on reload. Starting collapsed loaded a different
+  // layout variant (`awidat.shell.h.inspector-collapsed`) and gave
+  // the Inspector a 2% stub regardless of what was saved. The auto-
+  // expand-on-proposal effect below still kicks in when a proposal
+  // arrives, but boot doesn't force the collapse anymore.
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [leftPanel, setLeftPanel] = useState<"agent" | "media">("agent");
   const [rightPanel, setRightPanel] = useState<"inspector" | "index" | "transcript" | "vedit">("inspector");
   // The bottom dock used to host Timeline / Transcript / Vedit as
