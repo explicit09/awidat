@@ -86,6 +86,9 @@ pub struct SessionRow {
     pub message_count: usize,
     /// Lifecycle status. See [`SessionStatus`].
     pub status: SessionStatus,
+    /// User-renamed title. `None` falls back to the title derived
+    /// from the first user message in the JSONL.
+    pub custom_title: Option<String>,
 }
 
 /// SQLite-backed session registry. Cheap to clone (internally an Arc).
@@ -132,6 +135,24 @@ impl SessionRegistry {
              ON sessions(project_root, started_at DESC)",
             [],
         )?;
+        // Migration: add custom_title column on existing DBs. SQLite
+        // doesn't support `IF NOT EXISTS` for ADD COLUMN, so probe
+        // pragma table_info first.
+        let has_custom_title = {
+            let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+            let mut found = false;
+            for name in rows.flatten() {
+                if name == "custom_title" {
+                    found = true;
+                    break;
+                }
+            }
+            found
+        };
+        if !has_custom_title {
+            conn.execute("ALTER TABLE sessions ADD COLUMN custom_title TEXT", [])?;
+        }
         Ok(Self {
             inner: Arc::new(Mutex::new(conn)),
             path,
@@ -206,7 +227,7 @@ impl SessionRegistry {
         let rows = if let Some(pr) = project_root {
             stmt = conn.prepare(
                 "SELECT id, project_root, log_path, model, started_at, last_active_at,
-                        message_count, status
+                        message_count, status, custom_title
                  FROM sessions
                  WHERE project_root = ?
                  ORDER BY started_at DESC",
@@ -216,7 +237,7 @@ impl SessionRegistry {
         } else {
             stmt = conn.prepare(
                 "SELECT id, project_root, log_path, model, started_at, last_active_at,
-                        message_count, status
+                        message_count, status, custom_title
                  FROM sessions
                  ORDER BY started_at DESC",
             )?;
@@ -231,12 +252,46 @@ impl SessionRegistry {
         let conn = self.inner.lock().expect("registry mutex poisoned");
         conn.query_row(
             "SELECT id, project_root, log_path, model, started_at, last_active_at,
-                    message_count, status
+                    message_count, status, custom_title
              FROM sessions WHERE id = ?",
             [id],
             row_to_session,
         )
         .optional()
+    }
+
+    /// Look up a session by its on-disk log path. Used by the desktop
+    /// rename/delete commands which only receive the path.
+    pub fn get_by_log_path(&self, log_path: &Path) -> rusqlite::Result<Option<SessionRow>> {
+        let conn = self.inner.lock().expect("registry mutex poisoned");
+        conn.query_row(
+            "SELECT id, project_root, log_path, model, started_at, last_active_at,
+                    message_count, status, custom_title
+             FROM sessions WHERE log_path = ?",
+            [log_path.to_string_lossy().to_string()],
+            row_to_session,
+        )
+        .optional()
+    }
+
+    /// Persist a user-supplied title override for a session. Passing
+    /// `None` clears the override and falls back to the derived title.
+    pub fn set_custom_title(&self, id: &str, title: Option<&str>) -> rusqlite::Result<()> {
+        let conn = self.inner.lock().expect("registry mutex poisoned");
+        conn.execute(
+            "UPDATE sessions SET custom_title = ? WHERE id = ?",
+            params![title, id],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a session row. The caller is responsible for deleting
+    /// the corresponding JSONL log on disk; this method only drops
+    /// the metadata row.
+    pub fn delete_session(&self, id: &str) -> rusqlite::Result<()> {
+        let conn = self.inner.lock().expect("registry mutex poisoned");
+        conn.execute("DELETE FROM sessions WHERE id = ?", [id])?;
+        Ok(())
     }
 
     /// On-disk path of the SQLite file. Useful for diagnostics.
@@ -254,6 +309,7 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
     let last_active_at: String = row.get(5)?;
     let message_count: i64 = row.get(6)?;
     let status: String = row.get(7)?;
+    let custom_title: Option<String> = row.get(8).ok();
     Ok(SessionRow {
         id,
         project_root: PathBuf::from(project_root),
@@ -267,6 +323,7 @@ fn row_to_session(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
             .unwrap_or_else(|_| Utc::now()),
         message_count: message_count.max(0) as usize,
         status: SessionStatus::from_str(&status),
+        custom_title,
     })
 }
 

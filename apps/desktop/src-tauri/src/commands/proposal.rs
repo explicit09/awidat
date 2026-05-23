@@ -639,6 +639,7 @@ fn build_diff_hints(
             | EdlOp::DeleteGap { .. }
             | EdlOp::TrimTrackTail { .. }
             | EdlOp::InsertTrack { .. }
+            | EdlOp::DeleteTrack { .. }
             | EdlOp::ApplyMulticamPlan { .. }
             | EdlOp::DeleteTransition { .. }
             | EdlOp::SetCutIntent { .. }
@@ -859,6 +860,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::DeleteGap { .. } => "DeleteGap",
         EdlOp::TrimTrackTail { .. } => "TrimTrackTail",
         EdlOp::InsertTrack { .. } => "InsertTrack",
+        EdlOp::DeleteTrack { .. } => "DeleteTrack",
         EdlOp::ApplyMulticamPlan { .. } => "ApplyMulticamPlan",
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::DeleteTransition { .. } => "DeleteTransition",

@@ -104,6 +104,8 @@ pub fn run() {
             commands::history::load_chat_history,
             commands::history::load_chat_session,
             commands::history::start_new_chat_session,
+            commands::history::rename_chat_session,
+            commands::history::delete_chat_session,
             commands::notes::list_notes,
             commands::notes::upsert_note,
             commands::notes::set_note_status,

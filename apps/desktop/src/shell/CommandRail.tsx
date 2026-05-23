@@ -11,7 +11,7 @@ import {
   SendHorizontal,
   Sparkles,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
@@ -136,6 +136,10 @@ export type CommandRailProps = {
   permissionMode?: PermissionMode;
   /** Called when the user picks a new permission mode from the chip. */
   onSetPermissionMode?: (mode: PermissionMode) => void;
+  /** Called when the user renames a chat from the context menu. */
+  onRenameChat?: (session: ChatSessionSummary, newTitle: string) => Promise<void> | void;
+  /** Called when the user deletes a chat from the context menu. */
+  onDeleteChat?: (session: ChatSessionSummary) => Promise<void> | void;
 };
 
 export function CommandRail({
@@ -161,10 +165,44 @@ export function CommandRail({
   onToggleFocus,
   permissionMode,
   onSetPermissionMode,
+  onRenameChat,
+  onDeleteChat,
 }: CommandRailProps) {
   const [draft, setDraft] = useState(initialDraft);
   const [activityOpen, setActivityOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Log-path of the chat whose row-actions menu is open. Only one
+  // menu is open at a time across both the history dropdown and the
+  // focused sidebar.
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  // Log-path of the chat being inline-renamed; `null` when no rename
+  // is in flight. The matching draft is held alongside so the input
+  // is controlled.
+  const [renameFor, setRenameFor] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  // Close the chat-row menu when the user clicks anywhere outside it.
+  // The menu items stopPropagation, so this only fires for true
+  // outside clicks. Escape also closes — pairs with Esc canceling
+  // an inline rename so the user has one consistent dismissal key.
+  useEffect(() => {
+    if (menuFor === null) return;
+    function onDoc(e: MouseEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest(".awidat-chat-row-menu")) return;
+      if (target?.closest(".awidat-chat-row-more")) return;
+      setMenuFor(null);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuFor(null);
+    }
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [menuFor]);
   const trimmedDraft = draft.trim();
   const sendDisabledReason = !hasProject
     ? "Open a project before sending commands."
@@ -190,6 +228,59 @@ export function CommandRail({
   // pinning it to the top — an empty rail with a top-aligned card
   // reads as "half-loaded UI" instead of "ready, waiting for input."
   const isOnlyEmptyState = !hasWork && !focused;
+
+  // Helper: render a chat row for a given session in either the
+  // dropdown or the focused sidebar. Closes over the rename/menu
+  // state declared at the top of the component so both call sites
+  // stay in sync (only one menu open at a time, one rename in flight).
+  const renderChatRow = (
+    session: ChatSessionSummary,
+    variant: "dropdown" | "sidebar",
+    onClick: () => void,
+  ) => (
+    <ChatRow
+      key={session.logPath}
+      session={session}
+      isActive={activeChatSession?.logPath === session.logPath}
+      disabled={running || chatLoading}
+      onClick={onClick}
+      menuOpen={menuFor === session.logPath}
+      onOpenMenu={() => setMenuFor(session.logPath)}
+      onCloseMenu={() => setMenuFor(null)}
+      isRenaming={renameFor === session.logPath}
+      renameDraft={renameDraft}
+      setRenameDraft={setRenameDraft}
+      beginRename={() => {
+        setRenameDraft(session.title);
+        setRenameFor(session.logPath);
+      }}
+      commitRename={async () => {
+        const next = renameDraft.trim();
+        setRenameFor(null);
+        if (!onRenameChat) return;
+        if (next.length === 0 || next === session.title) return;
+        try {
+          await onRenameChat(session, next);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn("rename chat failed", e);
+        }
+      }}
+      cancelRename={() => setRenameFor(null)}
+      onDelete={async () => {
+        if (!onDeleteChat) return;
+        const ok = window.confirm(`Delete "${session.title}"? This can't be undone.`);
+        if (!ok) return;
+        try {
+          await onDeleteChat(session);
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.warn("delete chat failed", e);
+        }
+      }}
+      variant={variant}
+    />
+  );
 
   const sessionChrome = (
     <div className={cn("shrink-0 px-3 py-2", focused ? "" : "border-b border-[var(--color-border-subtle)]")}>
@@ -282,30 +373,12 @@ export function CommandRail({
               ready
             </span>
           </button>
-          {chatSessions.map((session) => (
-            <button
-              key={session.logPath}
-              type="button"
-              className={cn(
-                "mt-1 flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
-                activeChatSession?.logPath === session.logPath
-                  ? "bg-[var(--color-surface-selected)]"
-                  : "",
-              )}
-              disabled={running || chatLoading}
-              onClick={() => {
-                onSelectChatSession?.(session);
-                setHistoryOpen(false);
-              }}
-            >
-              <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
-                {session.title}
-              </span>
-              <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
-                {formatChatDate(session.startedAt)}
-              </span>
-            </button>
-          ))}
+          {chatSessions.map((session) =>
+            renderChatRow(session, "dropdown", () => {
+              onSelectChatSession?.(session);
+              setHistoryOpen(false);
+            }),
+          )}
           {!chatLoading && chatSessions.length === 0 ? (
             <p className="px-2 py-2 text-[var(--text-caption)] text-[var(--color-text-muted)]">
               No saved chats for this project yet.
@@ -458,8 +531,10 @@ export function CommandRail({
           chatLoading={chatLoading}
           running={running}
           onNewChat={onNewChat}
-          onSelectChatSession={onSelectChatSession}
           onToggleFocus={onToggleFocus}
+          renderRow={(session) =>
+            renderChatRow(session, "sidebar", () => onSelectChatSession?.(session))
+          }
         />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="mx-auto flex w-full min-h-0 max-w-[760px] flex-1 flex-col">
@@ -681,16 +756,16 @@ function FocusedSidebar({
   chatLoading,
   running,
   onNewChat,
-  onSelectChatSession,
   onToggleFocus,
+  renderRow,
 }: {
   chatSessions: ChatSessionSummary[];
   activeChatSession: ChatSessionSummary | null;
   chatLoading: boolean;
   running: boolean;
   onNewChat?: () => void;
-  onSelectChatSession?: (session: ChatSessionSummary) => void;
   onToggleFocus?: () => void;
+  renderRow: (session: ChatSessionSummary) => ReactNode;
 }) {
   return (
     <aside className="awidat-focused-sidebar">
@@ -719,23 +794,7 @@ function FocusedSidebar({
           <span className="truncate">New chat</span>
           <span className="awidat-focused-sidebar-meta">fresh</span>
         </button>
-        {chatSessions.map((session) => (
-          <button
-            key={session.logPath}
-            type="button"
-            className={cn(
-              "awidat-focused-sidebar-item",
-              activeChatSession?.logPath === session.logPath ? "is-active" : "",
-            )}
-            disabled={running || chatLoading}
-            onClick={() => onSelectChatSession?.(session)}
-          >
-            <span className="truncate">{session.title}</span>
-            <span className="awidat-focused-sidebar-meta">
-              {formatChatDate(session.startedAt)}
-            </span>
-          </button>
-        ))}
+        {chatSessions.map((session) => renderRow(session))}
         {!chatLoading && chatSessions.length === 0 ? (
           <p className="awidat-focused-sidebar-empty">No saved chats yet.</p>
         ) : null}
@@ -1000,6 +1059,141 @@ function PermissionModeChip({
         <option value="autopilot">Auto</option>
       </select>
     </label>
+  );
+}
+
+/** Row representing one saved chat. Click loads it; right-click opens
+ *  a context menu with Rename / Delete. Used by both the in-cockpit
+ *  history dropdown and the focused-mode sidebar. */
+function ChatRow({
+  session,
+  isActive,
+  disabled,
+  onClick,
+  onOpenMenu,
+  onCloseMenu,
+  menuOpen,
+  isRenaming,
+  renameDraft,
+  setRenameDraft,
+  commitRename,
+  cancelRename,
+  beginRename,
+  onDelete,
+  variant,
+}: {
+  session: ChatSessionSummary;
+  isActive: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  onOpenMenu: () => void;
+  onCloseMenu: () => void;
+  menuOpen: boolean;
+  isRenaming: boolean;
+  renameDraft: string;
+  setRenameDraft: (s: string) => void;
+  commitRename: () => void;
+  cancelRename: () => void;
+  beginRename: () => void;
+  onDelete: () => void;
+  variant: "dropdown" | "sidebar";
+}) {
+  const baseClass =
+    variant === "sidebar"
+      ? cn("awidat-focused-sidebar-item awidat-chat-row", isActive ? "is-active" : "")
+      : cn(
+          "awidat-chat-row mt-1 flex w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]",
+          isActive ? "bg-[var(--color-surface-selected)]" : "",
+        );
+  if (isRenaming) {
+    return (
+      <div className={baseClass}>
+        <input
+          autoFocus
+          value={renameDraft}
+          onChange={(e) => setRenameDraft(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitRename();
+            }
+            if (e.key === "Escape") {
+              e.preventDefault();
+              cancelRename();
+            }
+            // Don't bubble Enter/Escape up to global handlers.
+            e.stopPropagation();
+          }}
+          className="awidat-chat-row-rename"
+          aria-label="Rename chat"
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="awidat-chat-row-wrapper">
+      <button
+        type="button"
+        className={baseClass}
+        disabled={disabled}
+        onClick={onClick}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onOpenMenu();
+        }}
+      >
+        <span className="truncate min-w-0 text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
+          {session.title}
+        </span>
+        <span
+          className={
+            variant === "sidebar"
+              ? "awidat-focused-sidebar-meta"
+              : "shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]"
+          }
+        >
+          {formatChatDate(session.startedAt)}
+        </span>
+      </button>
+      <button
+        type="button"
+        className="awidat-chat-row-more"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenMenu();
+        }}
+        aria-label="More actions"
+        title="More actions"
+      >
+        …
+      </button>
+      {menuOpen ? (
+        <div className="awidat-chat-row-menu" role="menu" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onCloseMenu();
+              beginRename();
+            }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="awidat-chat-row-menu-danger"
+            onClick={() => {
+              onCloseMenu();
+              onDelete();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

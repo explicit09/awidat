@@ -554,6 +554,36 @@ function App() {
     }
   }
 
+  async function renameChat(session: ChatSessionSummary, newTitle: string) {
+    if (!isTauri()) return;
+    try {
+      await invoke("rename_chat_session", {
+        logPath: session.logPath,
+        newTitle,
+      });
+      await refreshChatSessions();
+    } catch (e) {
+      setCommandError(String(e));
+    }
+  }
+
+  async function deleteChat(session: ChatSessionSummary) {
+    if (!isTauri()) return;
+    try {
+      await invoke("delete_chat_session", {
+        logPath: session.logPath,
+      });
+      // If the deleted chat was active, drop it from local state too.
+      if (activeChatSession?.logPath === session.logPath) {
+        setActiveChatSession(null);
+        replaceAgentItems([]);
+      }
+      await refreshChatSessions();
+    } catch (e) {
+      setCommandError(String(e));
+    }
+  }
+
   async function toggleProjectIndexer(indexer: IndexerConfigEntry) {
     if (!isTauri()) return;
     setCommandError(null);
@@ -1330,6 +1360,8 @@ function App() {
       onRemoveChip={(chip) => dismissContextChip(chip)}
       permissionMode={permissionMode}
       onSetPermissionMode={(mode) => void changePermissionMode(mode)}
+      onRenameChat={(session, newTitle) => renameChat(session, newTitle)}
+      onDeleteChat={(session) => deleteChat(session)}
     />
   );
   const workspaceOverride = agentFocusMode ? (

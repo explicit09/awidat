@@ -6512,3 +6512,89 @@ button {
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
 }
+
+/* Chat row + context menu shared between the in-cockpit history
+   dropdown and the focused-mode sidebar. The wrapper is the position
+   anchor for the absolutely-placed menu and the …-more button. */
+.awidat-chat-row-wrapper {
+  position: relative;
+}
+.awidat-chat-row-wrapper .awidat-chat-row {
+  padding-right: 26px;
+}
+.awidat-chat-row-more {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 80ms ease, background-color 80ms ease;
+}
+.awidat-chat-row-wrapper:hover .awidat-chat-row-more,
+.awidat-chat-row-wrapper:focus-within .awidat-chat-row-more {
+  opacity: 1;
+}
+.awidat-chat-row-more:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.awidat-chat-row-menu {
+  position: absolute;
+  right: 4px;
+  top: calc(100% - 2px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  padding: 4px;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.awidat-chat-row-menu button {
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.awidat-chat-row-menu button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.awidat-chat-row-menu button.awidat-chat-row-menu-danger {
+  color: #ef7168;
+}
+.awidat-chat-row-menu button.awidat-chat-row-menu-danger:hover {
+  background: rgba(239, 113, 104, 0.12);
+  color: #ff8a82;
+}
+.awidat-chat-row-rename {
+  flex: 1;
+  background: var(--color-surface-input);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  outline: none;
+}
+.awidat-chat-row-rename:focus {
+  border-color: var(--color-border-focus);
+}
