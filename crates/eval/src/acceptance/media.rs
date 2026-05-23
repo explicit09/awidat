@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -229,13 +228,26 @@ fn write_acceptance_render_manifest(project_root: &Path, spec: &RenderJobSpec) -
     let ffmpeg = ffmpeg_path().context("locate ffmpeg for render manifest")?;
     let mut argv = vec![ffmpeg.to_string_lossy().into_owned()];
     argv.extend(spec.args.iter().cloned());
+    let mut metadata = spec.metadata.clone();
+    metadata.insert("render_driver".into(), "shared_render_spec".into());
+    metadata.extend(awidat_core::capabilities::render_feature_metadata_for_backend(&spec.backend));
+    let project = awidat_proto::project::Project::read(project_root).with_context(|| {
+        format!(
+            "read project for caption metadata {}",
+            project_root.display()
+        )
+    })?;
+    let caption_summary = awidat_core::captions::summarize_captions(&project);
+    metadata.extend(awidat_core::captions::caption_summary_metadata(
+        &caption_summary,
+    ));
     let mut manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
         created_at: String::new(),
         awidat_version: env!("CARGO_PKG_VERSION").into(),
         project_root: project_root.to_string_lossy().into_owned(),
         project_hash: project_hash.clone(),
         timeline_hash: project_hash,
-        backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+        backend: spec.backend.clone(),
         replay: awidat_render::RenderReplayPlan::FfmpegArgv {
             argv,
             cwd: spec
@@ -245,7 +257,8 @@ fn write_acceptance_render_manifest(project_root: &Path, spec: &RenderJobSpec) -
         },
         inputs: fingerprint_manifest_inputs(project_root, &spec.input_paths)?,
         outputs: vec![awidat_render::output_artifact(&spec.output_path, true)],
-        sidecars: Vec::new(),
+        sidecars: awidat_render::fingerprint_ffmpeg_subtitle_sidecars(&spec.args)
+            .context("fingerprint render sidecars")?,
         limitations: spec
             .limitations
             .iter()
@@ -254,7 +267,7 @@ fn write_acceptance_render_manifest(project_root: &Path, spec: &RenderJobSpec) -
             })
             .collect(),
         verification: None,
-        metadata: BTreeMap::from([("render_driver".into(), "shared_render_spec".into())]),
+        metadata,
     });
     awidat_render::finalize_render_manifest_outputs(&mut manifest)
         .with_context(|| "finalize acceptance render manifest outputs")?;
@@ -416,6 +429,99 @@ pub(crate) struct RenderOutput {
     pub(crate) render_manifest_path: PathBuf,
     pub(crate) driver: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use awidat_proto::otio::{Clip, Effect, StackChild, Track, TrackChild, TrackKind};
+    use awidat_proto::project::Project;
+    use std::collections::BTreeMap;
+
+    fn caption_clip(name: &str) -> Clip {
+        let mut clip = Clip::empty(name);
+        let mut effect = Effect::new("awidat.title");
+        effect
+            .metadata
+            .insert("role".into(), serde_json::json!("caption"));
+        effect
+            .metadata
+            .insert("safe_area".into(), serde_json::json!("mobile"));
+        effect.metadata.insert(
+            "word_timings".into(),
+            serde_json::json!([
+                {"text": "Hello", "start_s": 0.0, "end_s": 0.2},
+                {"text": "world", "start_s": 0.2, "end_s": 0.5}
+            ]),
+        );
+        clip.effects.push(effect);
+        clip
+    }
+
+    #[test]
+    fn acceptance_render_manifest_uses_spec_backend_and_feature_metadata()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let mut project = Project::init(dir.path())?;
+        let mut titles = Track::empty("Titles", TrackKind::Video);
+        titles
+            .children
+            .push(TrackChild::Clip(caption_clip("caption-a")));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(titles));
+        project.write(dir.path())?;
+
+        let input_path = dir.path().join("raw").join("clip.mp4");
+        let input_parent = input_path.parent().ok_or("input path has no parent")?;
+        fs::create_dir_all(input_parent)?;
+        fs::write(&input_path, b"fake-media")?;
+        let output_path = dir.path().join("renders").join("timeline.mp4");
+        let output_parent = output_path.parent().ok_or("output path has no parent")?;
+        fs::create_dir_all(output_parent)?;
+        fs::write(&output_path, b"fake-render")?;
+
+        let spec = RenderJobSpec {
+            args: vec![
+                "-y".into(),
+                "-i".into(),
+                input_path.to_string_lossy().into_owned(),
+                output_path.to_string_lossy().into_owned(),
+            ],
+            backend: awidat_render::RenderBackendKind::TimelineRawStreamGpu,
+            total_duration_s: Some(1.0),
+            cwd: Some(dir.path().to_path_buf()),
+            output_path,
+            input_paths: vec![input_path],
+            manifest_path: None,
+            limitations: Vec::new(),
+            metadata: BTreeMap::from([("render_backend_selected".into(), "raw_stream_gpu".into())]),
+        };
+
+        let manifest_path = write_acceptance_render_manifest(dir.path(), &spec)?;
+        let manifest = awidat_render::read_render_manifest(&manifest_path)?;
+
+        assert_eq!(
+            manifest.backend,
+            awidat_render::RenderBackendKind::TimelineRawStreamGpu
+        );
+        assert_eq!(
+            manifest.metadata["render_feature_id"],
+            "gpu_transition_raw_stream"
+        );
+        assert_eq!(manifest.metadata["render_driver"], "shared_render_spec");
+        assert_eq!(
+            manifest.metadata["render_backend_selected"],
+            "raw_stream_gpu"
+        );
+        assert_eq!(manifest.metadata["caption_authority"], "caption_overlays");
+        assert_eq!(manifest.metadata["caption_overlay_count"], "1");
+        assert_eq!(manifest.metadata["word_timed_caption_overlay_count"], "1");
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct BlackSegment {
     pub(crate) start_s: f64,
