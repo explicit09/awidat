@@ -2,7 +2,7 @@
 
 This document is the running ledger for the Awidat improvement goal. Update it before and after each implementation slice so the current state, next action, and verification evidence stay visible.
 
-Last updated: 2026-05-22, caption frame-pixel scorer slice complete
+Last updated: 2026-05-23, resumable preview worker pool slice complete
 
 ## Goal
 
@@ -28,14 +28,13 @@ Covered but not finished:
 | Render backend dispatch | Timeline preflight and manifests explain stream-copy eligibility and blockers; focused closure tests are green. | Continue broad verification later. |
 | Stream-copy/remux | `stream_remux` tool and simple timeline stream-copy fast path exist; manifest/report tests are green. | Continue broad verification later. |
 | Render verification | Manifest, feature evidence, libass, caption, loudness, stream-remux, boundary, and caption rendered-output evidence gates exist. Caption rendered-output evidence is now produced by the frame-pixel scorer when ffmpeg is available, with libass-layout derivation as a named fallback. | Complete. |
-| Preview/proxy cache | Cache summary, bounded refresh selection, desktop refresh command, and preflight planning exist. | Move from read-only planning toward an executable, testable refresh status/queue contract. |
+| Preview/proxy cache | Cache summary, bounded refresh selection, desktop refresh command, preflight planning, and a real executable lifecycle (PreviewRefreshExecutor trait + ffmpeg-backed production impl + run_preview_cache_refresh tool with resume semantics) exist. | Cross-process file locking is still not implemented; in-process busy guard only. |
 | Capability metadata | Capabilities mention render preflight, libass layout evidence, preview cache status, stream remux, and verification limits. | Keep metadata synchronized with each feature as it graduates. |
 
 Not yet started or not yet production-complete:
 
 | Area | Target |
 |---|---|
-| Durable preview worker pool / persisted queue | Preview-cache refresh selections can now persist a project-local lifecycle artifact. Future work: background worker pool execution with resumable progress. |
 | GPU compositor routing maturity | Raw-stream GPU routing now avoids mixed GPU/FFmpeg overclaiming; mixed transition sets fall back with explicit evidence. Future work: broader GPU effect coverage. |
 | Broad workspace verification | Run after focused slices are complete: format, clippy, package-level tests, then workspace-level checks. |
 
@@ -264,21 +263,47 @@ Verification:
 - `cargo clippy --workspace --all-targets -- -D warnings`: passed (exit 0; only pre-existing ts-rs notes from desktop generated exports).
 - `cargo test --workspace`: passed. Aggregate: 1847 passed, 0 failed, 8 ignored across 85 test binaries — up from 1838 by the 9 new focused tests added in this slice (1 manifest, 5 scorer, 3 verify_render integration).
 
-## Next Slice
+## Completed Slice
 
-Status: pending.
+Status: completed.
 
 Slice: Resumable preview worker pool.
 
-Why this is next: `PreviewCacheRefreshLifecycle` is still a planning artifact with hardcoded `status: "planned"`. The original roadmap calls for a running lifecycle with status transitions, background execution, and resume semantics.
+Why this is next: `PreviewCacheRefreshLifecycle` was a planning artifact with hardcoded `status: "planned"`. The original roadmap calls for a running lifecycle with status transitions, background execution, and resume semantics.
 
 Completion gate:
 
-- promote `PreviewCacheRefreshLifecycle` from a write-once planning artifact into a status machine with `planned → in_progress → completed/failed` transitions persisted to `.awidat/preview-cache/refresh-plan.json`;
-- introduce a `PreviewRefreshExecutor` trait + a tokio-backed production implementation that consumes selected refresh tasks and updates the lifecycle artifact as each task finishes;
-- add resume semantics so a re-invocation picks up tasks left `in_progress` or unstarted at the last persisted offset;
-- write focused tests first for the state machine + executor abstraction (in-memory fake executor), then run focused tests, fmt, and relevant clippy checks;
-- run broad workspace verification again after the slice lands.
+- `PreviewCacheRefreshLifecycle` is now a status machine with per-task `PreviewCacheRefreshTaskState` records (Pending/InProgress/Completed/Failed/Skipped) and aggregate status derivation: done;
+- `PreviewRefreshExecutor` trait + `PreviewRefreshError` define the testable executor seam: done;
+- production `FfmpegPreviewRefreshExecutor` dispatches per task kind to `awidat_render::transcode_proxy`, `generate_thumbnails`, and `generate_waveform` (writing the waveform sidecar to the desktop's existing schema): done;
+- `run_preview_cache_refresh` driver iterates tasks, dispatches each Pending/InProgress one, persists state atomically (`tmp + rename`) between transitions, isolates failures (continues past a failed task), appends new tasks from a re-supplied selection, preserves original timestamps for completed tasks, and refuses to run when a fresh `in_progress` lifecycle is present (soft busy guard): done;
+- new mutating tool `run_preview_cache_refresh` exposes the driver to agents with the same selection options as `preview_cache_status`: done;
+- capability metadata (capabilities.rs + capability_metadata.rs + capability_manifest test fixture) advertises the new lifecycle + remaining cross-process file-locking gap: done;
+- focused tests: 5 lifecycle scenarios (all-success / failure isolation / resume / append on rerun / busy guard), 1 production-executor smoke test (unknown kind), 2 tool schema/metadata tests: done;
+- broad workspace verification re-run cleanly: done.
+
+Verification:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed (exit 0; only pre-existing ts-rs notes from desktop generated exports).
+- `cargo test --workspace`: passed. Aggregate: 1855 passed, 0 failed, 8 ignored across 85 test binaries — up from 1847 by the 8 new focused tests added in this slice.
+
+## Next Slice
+
+Status: pending (optional production-hardening).
+
+Slice: Cross-process file locking for the preview-cache refresh lifecycle.
+
+Why this is next: the slice landed an in-process soft busy guard (5-minute window on `started_at_ms`), but a second process can still trample a running lifecycle. The remaining honest production gap is a real file lock (e.g. `fs2::FileExt::try_lock_exclusive` on a sibling `.lock` file) so the desktop, CLI, and agent paths can run safely on the same project.
+
+Completion gate:
+
+- introduce a portable file-lock helper (or adopt `fs2`/`fd-lock`) and wrap the lifecycle write path with try-lock-exclusive;
+- treat lock contention as `PreviewRefreshError::Busy` so callers see the same surface as the soft guard;
+- focused tests cover the contention case via two driver invocations against the same project root;
+- run broad workspace verification.
+
+Outside this slice, the remaining roadmap entry — broader GPU effect coverage — is a larger separate workstream rather than a hardening task and is not tracked under the active goal.
 
 ## Running Log
 
@@ -329,4 +354,14 @@ Completion gate:
   - `verify_render_output` now runs the scorer before its sync gate-builder and injects measured `caption_rendered_output_*` metadata; the gate reason set expands to `frame_pixel_scorer_passed`, `frame_pixel_scorer_failed`, and `frame_pixel_scorer_unavailable_fell_back_to_libass_layout`;
   - capability notes (capabilities.rs + capability_metadata.rs + capability_manifest test) advertise the new scorer surface;
   - broad verification: `cargo fmt --all -- --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo test --workspace` green at 1847 passed / 0 failed / 8 ignored across 85 test binaries.
-- Next action: schedule the resumable preview worker pool slice (promote `PreviewCacheRefreshLifecycle` from planning artifact to a status machine with a tokio-backed executor + resume semantics).
+
+### 2026-05-23
+
+- Completed resumable preview worker pool slice:
+  - extended `PreviewCacheRefreshLifecycle` with per-task `PreviewCacheRefreshTaskState` records, status-machine aggregate, and atomic write-via-rename persistence;
+  - shipped a `PreviewRefreshExecutor` trait, `PreviewRefreshError`, and `run_preview_cache_refresh` driver with resume semantics, failure isolation, soft busy guard, and append-on-rerun behavior;
+  - added a production `FfmpegPreviewRefreshExecutor` that dispatches per task kind to `awidat_render::transcode_proxy`, `generate_thumbnails`, and `generate_waveform` (writing waveform sidecars in the desktop's existing schema);
+  - exposed the driver to agents via a new mutating `run_preview_cache_refresh` tool that mirrors the `preview_cache_status` selection options;
+  - capability metadata (capabilities.rs + capability_metadata.rs + capability_manifest test) advertises the new lifecycle and the remaining cross-process file-locking gap;
+  - broad verification: `cargo fmt --all -- --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo test --workspace` green at 1855 passed / 0 failed / 8 ignored across 85 test binaries.
+- Next action: optional production hardening — replace the soft busy guard with a real file lock so desktop / CLI / agent paths can run safely on the same project.
