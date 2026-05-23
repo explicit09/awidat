@@ -15,39 +15,48 @@
  */
 
 @theme {
-  /* surfaces */
-  --color-surface-page: #070B10;
-  --color-surface-app: #0B0F14;
-  --color-surface-panel: #0F151C;
-  --color-surface-panel-hover: #151D27;
-  --color-surface-panel-active: #18212C;
-  --color-surface-card: #111821;
-  --color-surface-card-hover: #151D27;
-  --color-surface-card-active: #1B2633;
-  --color-surface-modal: #18212C;
-  --color-surface-modal-hover: #1B2633;
-  --color-surface-modal-active: #243244;
-  --color-surface-hover: #1B2633;
-  --color-surface-input: #0B121A;
-  --color-surface-input-hover: #101925;
-  --color-surface-input-active: #142033;
-  --color-surface-selected: #10243A;
-  --color-surface-selected-hover: #14304D;
-  --color-surface-selected-active: #183A5E;
+  /* surfaces — DaVinci/Cursor charcoal. Neutral grays so brand
+     teal/green only show up where semantically meaningful (status
+     pills, accepted proposals, warnings). Page is the darkest
+     backdrop; app + panel sit slightly above; card is the highest
+     elevation a static surface reaches. Hover/active tiers are pure
+     greys: no cool tint. */
+  --color-surface-page: #0B0B0C;
+  --color-surface-app: #0F0F11;
+  --color-surface-panel: #0F0F11;
+  --color-surface-panel-hover: #1A1A1C;
+  --color-surface-panel-active: #1F1F22;
+  --color-surface-card: #18181A;
+  --color-surface-card-hover: #1E1E20;
+  --color-surface-card-active: #232325;
+  --color-surface-modal: #18181A;
+  --color-surface-modal-hover: #1E1E20;
+  --color-surface-modal-active: #232325;
+  --color-surface-hover: #1E1E20;
+  --color-surface-input: #161618;
+  --color-surface-input-hover: #1B1B1D;
+  --color-surface-input-active: #232325;
+  --color-surface-selected: #262629;
+  --color-surface-selected-hover: #2D2D30;
+  --color-surface-selected-active: #36363A;
 
-  /* borders */
-  --color-border: #23303C;
-  --color-border-subtle: #1A2530;
-  --color-border-strong: #3B82F6;
-  --color-border-focus: #38BDF8;
-  --color-border-active: #38BDF8;
+  /* borders — hairline charcoal, no blue tint. Focus + active fall
+     back to a slightly brighter neutral grey instead of cyan so the
+     UI never advertises focus with a colored ring. */
+  --color-border: #2D2D30;
+  --color-border-subtle: #1F1F22;
+  --color-border-strong: #4F4F55;
+  --color-border-focus: #4F4F55;
+  --color-border-active: #5A5A60;
 
-  /* text */
-  --color-text-primary: #E5E7EB;
-  --color-text-secondary: #AAB4C0;
-  --color-text-muted: #7C8794;
-  --color-text-disabled: #586272;
-  --color-text-inverse: #071016;
+  /* text — DaVinci-style: primary near-white, secondary mid-grey,
+     muted at 6A737D (matches Cursor's comment color), disabled
+     dropped further so the disabled states read as "off". */
+  --color-text-primary: #E6E6E6;
+  --color-text-secondary: #B4B4B8;
+  --color-text-muted: #7A7A82;
+  --color-text-disabled: #4F4F55;
+  --color-text-inverse: #0B0B0C;
   --color-text-on-accent: #ECFEFF;
   --color-text-on-danger: #FEF2F2;
 
@@ -163,27 +172,31 @@
   --text-h3--letter-spacing: 0;
   --text-h3--font-weight: 600;
 
-  --text-body: 0.78125rem;       /* 12.5 */
-  --text-body--line-height: 1.15625rem;
+  /* DaVinci/Cursor type scale. Bigger body for reading surfaces,
+     looser leading so prose breathes. Labels lose the uppercase
+     tracking they had at the spec stage — section headers now read
+     as plain small text, not eyebrow chrome. */
+  --text-body: 0.875rem;         /* 14 */
+  --text-body--line-height: 1.4rem;     /* 1.6 */
   --text-body--font-weight: 400;
 
-  --text-body-sm: 0.71875rem;    /* 11.5 */
-  --text-body-sm--line-height: 1.0625rem;
+  --text-body-sm: 0.8125rem;     /* 13 */
+  --text-body-sm--line-height: 1.25rem;
   --text-body-sm--font-weight: 400;
 
-  --text-label: 0.6875rem;       /* 11 */
-  --text-label--line-height: 0.9375rem;
-  --text-label--letter-spacing: 0.01em;
+  --text-label: 0.75rem;         /* 12 */
+  --text-label--line-height: 1.125rem;
+  --text-label--letter-spacing: 0;
   --text-label--font-weight: 600;
 
-  --text-caption: 0.625rem;      /* 10 */
-  --text-caption--line-height: 0.875rem;
-  --text-caption--letter-spacing: 0.01em;
+  --text-caption: 0.75rem;       /* 12 */
+  --text-caption--line-height: 1.125rem;
+  --text-caption--letter-spacing: 0;
   --text-caption--font-weight: 500;
 
-  --text-micro: 0.625rem;        /* 10 */
-  --text-micro--line-height: 0.875rem;
-  --text-micro--letter-spacing: 0.03em;
+  --text-micro: 0.6875rem;       /* 11 */
+  --text-micro--line-height: 1rem;
+  --text-micro--letter-spacing: 0.02em;
   --text-micro--font-weight: 500;
 
   --text-timecode: 0.75rem;      /* 12 mono */

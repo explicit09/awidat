@@ -1060,7 +1060,7 @@ function Section({ icon, label, children }: { icon?: ReactNode; label: string; c
     <Stack gap="2">
       <Inline gap="2" align="center">
         {icon ? <span className="text-[var(--color-text-muted)]">{icon}</span> : null}
-        <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+        <span className="text-[var(--text-caption)] font-medium text-[var(--color-text-muted)]">
           {label}
         </span>
       </Inline>

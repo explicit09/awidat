@@ -6219,22 +6219,8 @@ button {
    button. Composer becomes one rounded card with the mode chip,
    attach + mic icons, hint text, and Send all inside the same frame. */
 .awidat-chat-rail {
-  /* Cursor-style charcoal — overrides the cool teal-tinted surfaces
-     just for the rail. */
-  --color-surface-page: #0B0B0C;
-  --color-surface-panel: #0F0F11;
-  --color-surface-card: #18181A;
-  --color-surface-card-hover: #1E1E20;
-  --color-surface-input: #161618;
-  --color-surface-input-hover: #1B1B1D;
-  --color-surface-hover: #1E1E20;
-  --color-surface-selected: #262629;
-  --color-border: #2D2D30;
-  --color-border-subtle: #1F1F22;
-  --color-border-focus: #4F4F55;
-  --color-text-primary: #E6E6E6;
-  --color-text-secondary: #B4B4B8;
-  --color-text-muted: #7A7A82;
+  /* Palette now matches the global tokens (charcoal everywhere),
+     so the rail only needs its own background pin. */
   background: var(--color-surface-page);
 }
 
