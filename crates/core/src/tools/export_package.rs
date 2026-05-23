@@ -7,7 +7,8 @@ use async_trait::async_trait;
 use awidat_proto::otio::{MediaReference, StackChild, TimeRange, TrackChild, TrackKind};
 use awidat_proto::professional::{
     AudioExportSettings, DeliveryPreflightInput, DeliveryProfile, ExportMode, ExportOutputSettings,
-    ExportPreset, HardwareAccelerationPolicy, PreflightReport, VideoExportSettings,
+    ExportPreset, FindingSeverity, HardwareAccelerationPolicy, PreflightCheckKind,
+    PreflightFinding, PreflightReport, VideoExportSettings,
 };
 use awidat_proto::project::Project;
 use awidat_proto::subtitle::{
@@ -18,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
+use crate::captions::{CaptionSummary, summarize_captions_with_sidecar_cue_count};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `export_package` tool.
@@ -118,6 +120,7 @@ impl ToolHandler for ExportPackageTool {
             FunctionCallError::RespondToModel(format!("export_package: project read failed: {e}"))
         })?;
         let cues = collect_timeline_cues(&ctx.project_root, &project)?;
+        let caption_summary = summarize_captions_with_sidecar_cue_count(&project, cues.len());
         let chapters = collect_chapters(&cues);
 
         let stem = format!("final-{}", args.format);
@@ -199,6 +202,8 @@ impl ToolHandler for ExportPackageTool {
             format: &args.format,
             export_preset_id: &export_preset.id,
             hardware_acceleration: &hardware_label,
+            caption_summary: &caption_summary,
+            render_metadata: &spec.metadata,
         })?;
         awidat_render::write_render_manifest(
             &render_manifest.manifest_path,
@@ -214,12 +219,14 @@ impl ToolHandler for ExportPackageTool {
             .job_manager
             .start(RenderJobSpec {
                 args: spec.args,
+                backend: awidat_render::RenderBackendKind::PackageExport,
                 total_duration_s: spec.total_duration_s,
                 cwd: Some(ctx.project_root.clone()),
                 output_path: mp4_path.clone(),
                 input_paths: spec.input_paths.clone(),
                 manifest_path: Some(render_manifest.manifest_path.clone()),
                 limitations: spec.limitations.clone(),
+                metadata: spec.metadata.clone(),
             })
             .await
             .map_err(|e| {
@@ -249,6 +256,7 @@ impl ToolHandler for ExportPackageTool {
             "hardware_acceleration": hardware_label,
             "render_manifest": render_manifest.manifest_path.display().to_string(),
             "cue_count": cues.len(),
+            "caption_summary": caption_summary,
             "chapter_count": chapters.len(),
             "subtitle_timing": "timeline_relative",
             "output_format": output_format_metadata(&project),
@@ -286,6 +294,8 @@ struct PackageRenderManifestInput<'a> {
     format: &'a str,
     export_preset_id: &'a str,
     hardware_acceleration: &'a str,
+    caption_summary: &'a CaptionSummary,
+    render_metadata: &'a BTreeMap<String, String>,
 }
 
 struct BuiltPackageRenderManifest {
@@ -318,6 +328,13 @@ fn build_package_render_manifest(
             required: fingerprint.required,
         });
     }
+    sidecars.extend(
+        awidat_render::fingerprint_ffmpeg_subtitle_sidecars(input.argv).map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "export_package: failed to fingerprint render sidecars: {e}"
+            ))
+        })?,
+    );
     let limitations = input
         .limitations
         .iter()
@@ -325,14 +342,26 @@ fn build_package_render_manifest(
             awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
         })
         .collect();
-    let metadata = BTreeMap::from([
-        ("format".into(), input.format.into()),
-        ("export_preset_id".into(), input.export_preset_id.into()),
-        (
-            "hardware_acceleration".into(),
-            input.hardware_acceleration.into(),
-        ),
-    ]);
+    let mut metadata = input.render_metadata.clone();
+    metadata.insert("format".into(), input.format.into());
+    metadata.insert("export_preset_id".into(), input.export_preset_id.into());
+    metadata.extend(crate::captions::caption_summary_metadata(
+        input.caption_summary,
+    ));
+    metadata.insert(
+        "hardware_acceleration".into(),
+        input.hardware_acceleration.into(),
+    );
+    metadata.extend(crate::capabilities::render_feature_metadata_for_backend(
+        &awidat_render::RenderBackendKind::PackageExport,
+    ));
+    metadata.extend(
+        awidat_render::ass_sidecar_layout_metadata(input.argv).map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "export_package: failed to inspect ASS sidecar layout: {e}"
+            ))
+        })?,
+    );
     let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
         created_at: String::new(),
         awidat_version: env!("CARGO_PKG_VERSION").into(),
@@ -1423,17 +1452,37 @@ fn build_package_preflight_report(
     duration_s: Option<f64>,
 ) -> PreflightReport {
     let profile = delivery_profile_for_format(format, project);
+    let caption_summary = summarize_captions_with_sidecar_cue_count(project, cues.len());
     let input = DeliveryPreflightInput {
         aspect_ratio: delivery_aspect_ratio(project, &profile),
         duration_s,
         video_bitrate_kbps: delivery_video_bitrate_kbps(project),
         integrated_lufs: delivery_loudness_measurement(project),
-        has_captions: !cues.is_empty() || has_caption_overlays(project),
+        has_captions: caption_summary.has_exportable_captions,
         has_required_metadata: has_required_package_metadata(project),
         has_thumbnail: has_delivery_thumbnail(project),
         safe_area_violations: delivery_safe_area_violations(project),
     };
-    profile.run_preflight(input)
+    let mut report = profile.run_preflight(input);
+    if profile
+        .preflight_checks
+        .contains(&PreflightCheckKind::Captions)
+    {
+        report
+            .findings
+            .extend(
+                caption_summary
+                    .warnings
+                    .into_iter()
+                    .map(|warning| PreflightFinding {
+                        check: PreflightCheckKind::Captions,
+                        severity: FindingSeverity::Warning,
+                        message: warning,
+                        fix_ref: None,
+                    }),
+            );
+    }
+    report
 }
 
 fn package_export_preset_for_format(
@@ -1557,27 +1606,6 @@ fn has_delivery_thumbnail(project: &Project) -> bool {
                 .map(str::to_string)
         })
         .is_some_and(|value| !value.is_empty())
-}
-
-fn has_caption_overlays(project: &Project) -> bool {
-    project.timeline.tracks.children.iter().any(|stack_child| {
-        let StackChild::Track(track) = stack_child else {
-            return false;
-        };
-        track.children.iter().any(|child| {
-            let TrackChild::Clip(clip) = child else {
-                return false;
-            };
-            clip.effects.iter().any(|effect| {
-                effect.effect_name == "awidat.title"
-                    && effect
-                        .metadata
-                        .get("role")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("caption")
-            })
-        })
-    })
 }
 
 fn output_format_metadata(project: &Project) -> Option<serde_json::Value> {
@@ -1840,6 +1868,16 @@ mod tests {
         clip
     }
 
+    fn caption_overlay_clip(name: &str) -> Clip {
+        let mut clip = Clip::empty(name);
+        let mut effect = Effect::new("awidat.title");
+        effect
+            .metadata
+            .insert("role".into(), serde_json::json!("caption"));
+        clip.effects.push(effect);
+        clip
+    }
+
     fn write_whisper_sidecar(root: &std::path::Path, asset: &str, segments: serde_json::Value) {
         let asset_id = awidat_proto::index::AssetId::new(asset.to_string());
         let path = awidat_index::sidecar_path(root, "whisper", &asset_id).unwrap();
@@ -1893,6 +1931,26 @@ mod tests {
             format: "youtube",
             export_preset_id: &export_preset.id,
             hardware_acceleration: "off",
+            caption_summary: &CaptionSummary {
+                selected_authority: crate::captions::CaptionAuthority::EditableSubtitleTracks,
+                editable_track_count: 1,
+                editable_cue_count: 1,
+                caption_overlay_count: 2,
+                word_timed_caption_overlay_count: 1,
+                safe_area_caption_overlay_count: 2,
+                mobile_safe_area_caption_overlay_count: 1,
+                missing_safe_area_caption_overlay_count: 0,
+                sidecar_cue_count: 1,
+                has_exportable_captions: true,
+                warnings: Vec::new(),
+            },
+            render_metadata: &BTreeMap::from([
+                (
+                    "timeline_backend_reason".to_string(),
+                    "ffmpeg_with_libass_captions".to_string(),
+                ),
+                ("libass_caption_count".to_string(), "2".to_string()),
+            ]),
         })
         .unwrap();
 
@@ -1904,6 +1962,33 @@ mod tests {
         assert_eq!(
             built.manifest.metadata["export_preset_id"],
             export_preset.id
+        );
+        assert_eq!(
+            built.manifest.metadata["caption_authority"],
+            "editable_subtitle_tracks"
+        );
+        assert_eq!(built.manifest.metadata["caption_overlay_count"], "2");
+        assert_eq!(
+            built.manifest.metadata["safe_area_caption_overlay_count"],
+            "2"
+        );
+        assert_eq!(
+            built.manifest.metadata["missing_safe_area_caption_overlay_count"],
+            "0"
+        );
+        assert_eq!(built.manifest.metadata["subtitle_sidecar_cue_count"], "1");
+        assert_eq!(
+            built.manifest.metadata["timeline_backend_reason"],
+            "ffmpeg_with_libass_captions"
+        );
+        assert_eq!(built.manifest.metadata["libass_caption_count"], "2");
+        assert_eq!(
+            built.manifest.metadata["render_feature_id"],
+            "delivery_package_export"
+        );
+        assert_eq!(
+            built.manifest.metadata["render_feature_export_supported"],
+            "supported"
         );
         assert_eq!(built.manifest.sidecars.len(), 1);
     }
@@ -2281,6 +2366,34 @@ mod tests {
             finding.check == PreflightCheckKind::SafeAreas
                 && finding.severity == FindingSeverity::Warning
                 && finding.message.contains("3 safe-area violations")
+        }));
+    }
+
+    #[test]
+    fn package_preflight_surfaces_caption_authority_warnings() {
+        let mut timeline = Timeline::empty("delivery-caption-warning-test");
+        let awidat = timeline.metadata.awidat.as_mut().unwrap();
+        let mut profile = DeliveryProfile::youtube_1080p();
+        profile.preflight_checks = vec![PreflightCheckKind::Captions];
+        awidat.delivery_profiles = vec![profile];
+        let mut titles = Track::empty("Titles", TrackKind::Video);
+        titles
+            .children
+            .push(TrackChild::Clip(caption_overlay_clip("caption-overlay")));
+        timeline.tracks.children.push(StackChild::Track(titles));
+        let project = project_with_timeline(timeline);
+
+        let report = build_package_preflight_report(&project, "youtube", &[], Some(30.0));
+
+        assert!(report.findings.iter().any(|finding| {
+            finding.check == PreflightCheckKind::Captions
+                && finding.severity == FindingSeverity::Warning
+                && finding.message.contains("without editable subtitle cues")
+        }));
+        assert!(report.findings.iter().any(|finding| {
+            finding.check == PreflightCheckKind::Captions
+                && finding.severity == FindingSeverity::Warning
+                && finding.message.contains("missing safe_area metadata")
         }));
     }
 

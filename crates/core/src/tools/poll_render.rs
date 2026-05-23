@@ -108,6 +108,7 @@ impl ToolHandler for PollRenderTool {
             "eta_s": status.eta_s,
             "exit_code": status.exit_code,
             "command_argv": status.command_argv,
+            "metadata": status.metadata,
             "output_path": status.output_path.display().to_string(),
             "started_at": status.started_at.to_rfc3339(),
             "log_excerpt": log_excerpt,
@@ -189,6 +190,7 @@ mod tests {
             return;
         }
         use awidat_render::{JobManager, RenderJobSpec};
+        use std::collections::BTreeMap;
         use std::time::Duration;
 
         let dir = tempfile::tempdir().unwrap();
@@ -210,12 +212,17 @@ mod tests {
                 "yuv420p".into(),
                 out_path.to_string_lossy().into_owned(),
             ],
+            backend: awidat_render::RenderBackendKind::AssetPreview,
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: out_path.clone(),
             input_paths: Vec::new(),
             manifest_path: None,
             limitations: Vec::new(),
+            metadata: BTreeMap::from([(
+                "timeline_backend_reason".into(),
+                "ffmpeg_filtergraph".into(),
+            )]),
         };
         let job_id = manager.start(spec).await.unwrap();
 
@@ -259,6 +266,10 @@ mod tests {
         assert_eq!(last["state"], "done", "expected done; got {last}");
         assert_eq!(last["exit_code"], 0);
         assert_eq!(last["progress_pct"], 100.0);
+        assert_eq!(
+            last["metadata"]["timeline_backend_reason"],
+            "ffmpeg_filtergraph"
+        );
         let command_argv = last["command_argv"]
             .as_array()
             .expect("poll_render should expose the render command argv");

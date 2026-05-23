@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use awidat_proto::professional::ExportPreset;
+use awidat_proto::project::Project;
 use awidat_render::{
     OutputPathPolicy, RenderJobSpec, RenderPlanLimitation, validate_render_output_path,
 };
@@ -189,6 +190,8 @@ impl ToolHandler for StartRenderTool {
             limitations,
             asset_path_for_manifest,
             input_paths_for_manifest,
+            backend,
+            mut render_metadata_for_manifest,
         ) = if args.scope == "timeline" {
             crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
                 .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
@@ -298,6 +301,13 @@ impl ToolHandler for StartRenderTool {
                         ))
                     })?;
             }
+            let project = Project::read(&ctx.project_root).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "start_render: failed to read project caption metadata: {e}"
+                ))
+            })?;
+            let caption_summary = crate::captions::summarize_captions(&project);
+            enrich_render_metadata_with_caption_summary(&mut spec.metadata, &caption_summary);
             (
                 spec.args,
                 spec.total_duration_s,
@@ -306,6 +316,8 @@ impl ToolHandler for StartRenderTool {
                 spec.limitations,
                 None,
                 spec.input_paths,
+                spec.backend,
+                spec.metadata,
             )
         } else {
             // Asset-based scope: preview / segment / full.
@@ -343,6 +355,13 @@ impl ToolHandler for StartRenderTool {
                 ))
             })?;
             let argv = build_ffmpeg_argv(&args, asset, &asset_path, &output_path)?;
+            let backend = awidat_render::RenderBackendKind::from_start_render_scope(&args.scope)
+                .ok_or_else(|| {
+                    FunctionCallError::RespondToModel(format!(
+                        "start_render: scope '{}' not recognized for render manifest",
+                        args.scope
+                    ))
+                })?;
             (
                 argv,
                 range_duration(&args.range),
@@ -351,9 +370,39 @@ impl ToolHandler for StartRenderTool {
                 Vec::<RenderPlanLimitation>::new(),
                 Some(asset_path.clone()),
                 vec![asset_path],
+                backend,
+                std::collections::BTreeMap::new(),
             )
         };
+        enrich_render_metadata_with_backend_capability(&mut render_metadata_for_manifest, &backend);
 
+        let use_master_loudnorm_orchestrator = args.scope == "timeline"
+            && args.guide.is_none()
+            && args.preset.is_none()
+            && matches!(
+                awidat_render::read_master_loudnorm_plan(&ctx.project_root),
+                Ok(Some(_))
+            );
+        if use_master_loudnorm_orchestrator {
+            render_metadata_for_manifest.insert(
+                "master_loudnorm_orchestration".into(),
+                "two_pass_background".into(),
+            );
+        }
+        let mut manifest_metadata = serde_json::json!({
+            "scope": args.scope.as_str(),
+            "asset": asset_label.as_str(),
+            "guide": args.guide.as_ref().map(|guide| serde_json::json!({
+                "track_id": guide.track_id,
+                "marker_id": guide.marker_id,
+            })),
+            "preset": args.preset.as_deref(),
+        });
+        if let Some(object) = manifest_metadata.as_object_mut() {
+            for (key, value) in &render_metadata_for_manifest {
+                object.insert(key.clone(), serde_json::json!(value));
+            }
+        }
         let manifest = build_start_render_manifest(StartRenderManifestInput {
             project_root: &ctx.project_root,
             scope: &args.scope,
@@ -361,66 +410,148 @@ impl ToolHandler for StartRenderTool {
             input_paths: &input_paths_for_manifest,
             output_path: &output_path,
             argv: &argv,
+            backend,
             limitations: &limitations,
-            metadata: serde_json::json!({
-                "scope": args.scope.as_str(),
-                "asset": asset_label.as_str(),
-                "guide": args.guide.as_ref().map(|guide| serde_json::json!({
-                    "track_id": guide.track_id,
-                    "marker_id": guide.marker_id,
-                })),
-                "preset": args.preset.as_deref(),
-            }),
+            metadata: manifest_metadata,
         })?;
-        awidat_render::write_render_manifest(&manifest.manifest_path, &manifest.manifest).map_err(
-            |e| {
-                FunctionCallError::RespondToModel(format!(
-                    "start_render: failed to write render manifest {}: {e}",
-                    manifest.manifest_path.display()
-                ))
-            },
-        )?;
+        if !use_master_loudnorm_orchestrator {
+            awidat_render::write_render_manifest(&manifest.manifest_path, &manifest.manifest)
+                .map_err(|e| {
+                    FunctionCallError::RespondToModel(format!(
+                        "start_render: failed to write render manifest {}: {e}",
+                        manifest.manifest_path.display()
+                    ))
+                })?;
+        }
 
         let spec = RenderJobSpec {
             args: argv,
+            backend: manifest.manifest.backend.clone(),
             total_duration_s,
             cwd: Some(ctx.project_root.clone()),
             output_path: output_path.clone(),
             input_paths: input_paths_for_manifest,
             manifest_path: Some(manifest.manifest_path.clone()),
             limitations: limitations.clone(),
+            metadata: render_metadata_for_manifest.clone(),
         };
-        let job_id = ctx.job_manager.start(spec).await.map_err(|e| {
-            FunctionCallError::RespondToModel(format!("start_render: failed to start ffmpeg: {e}"))
-        })?;
+        let job_id = if use_master_loudnorm_orchestrator {
+            let _ = spec;
+            ctx.job_manager
+                .start_master_loudnorm(awidat_render::MasterLoudnormManagedRenderSpec {
+                    project_root: ctx.project_root.clone(),
+                    output_path: output_path.clone(),
+                    manifest_path: manifest.manifest_path.clone(),
+                    manifest: manifest.manifest.clone(),
+                })
+                .await
+                .map_err(|e| {
+                    FunctionCallError::RespondToModel(format!(
+                        "start_render: failed to start master loudnorm render: {e}"
+                    ))
+                })?
+        } else {
+            ctx.job_manager.start(spec).await.map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "start_render: failed to start ffmpeg: {e}"
+                ))
+            })?
+        };
 
-        let body = serde_json::json!({
-            "job_id": job_id.to_string(),
-            "scope": args.scope,
-            "render_kind": if args.scope == "timeline" && args.guide.is_some() {
-                "timeline_section_export"
-            } else if args.scope == "timeline" {
-                "final_timeline_export"
-            } else {
-                "diagnostic_asset_render"
-            },
-            "asset": asset_label,
-            "output_path": output_path.display().to_string(),
-            "manifest_path": manifest.manifest_path.display().to_string(),
-            "render_limitations": limitations,
-            "started_at": chrono::Utc::now().to_rfc3339(),
-            "guide": args.guide.as_ref().map(|guide| serde_json::json!({
-                "track_id": guide.track_id,
-                "marker_id": guide.marker_id,
-            })),
-            "next_step": if args.scope == "timeline" {
-                format!("Call poll_render(job_id=\"{job_id}\") to track the final timeline export.")
-            } else {
-                format!("Call poll_render(job_id=\"{job_id}\") to track this diagnostic asset render; use scope=\"timeline\" for final editorial output.")
-            },
+        let started_at = chrono::Utc::now().to_rfc3339();
+        let body = build_start_render_response(StartRenderResponseInput {
+            job_id: &job_id.to_string(),
+            scope: &args.scope,
+            guide: args.guide.as_ref(),
+            asset_label: &asset_label,
+            output_path: &output_path,
+            manifest_path: &manifest.manifest_path,
+            backend: manifest.manifest.backend.clone(),
+            render_metadata: &render_metadata_for_manifest,
+            limitations: &limitations,
+            started_at: &started_at,
         });
         Ok(ToolOutput::text(body.to_string()))
     }
+}
+
+struct StartRenderResponseInput<'a> {
+    job_id: &'a str,
+    scope: &'a str,
+    guide: Option<&'a GuideSection>,
+    asset_label: &'a str,
+    output_path: &'a Path,
+    manifest_path: &'a Path,
+    backend: awidat_render::RenderBackendKind,
+    render_metadata: &'a BTreeMap<String, String>,
+    limitations: &'a [RenderPlanLimitation],
+    started_at: &'a str,
+}
+
+fn build_start_render_response(input: StartRenderResponseInput<'_>) -> serde_json::Value {
+    let backend = render_backend_json_value(&input.backend);
+    let mut backend_evidence = input.render_metadata.clone();
+    enrich_render_metadata_with_backend_capability(&mut backend_evidence, &input.backend);
+    serde_json::json!({
+        "job_id": input.job_id,
+        "scope": input.scope,
+        "render_kind": render_kind(input.scope, input.guide),
+        "asset": input.asset_label,
+        "output_path": input.output_path.display().to_string(),
+        "manifest_path": input.manifest_path.display().to_string(),
+        "backend": backend,
+        "backend_evidence": backend_evidence,
+        "render_limitations": input.limitations,
+        "started_at": input.started_at,
+        "guide": input.guide.as_ref().map(|guide| serde_json::json!({
+            "track_id": guide.track_id,
+            "marker_id": guide.marker_id,
+        })),
+        "next_step": next_render_step(input.scope, input.job_id),
+    })
+}
+
+fn render_backend_json_value(backend: &awidat_render::RenderBackendKind) -> String {
+    serde_json::to_value(backend)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{backend:?}"))
+}
+
+fn render_kind(scope: &str, guide: Option<&GuideSection>) -> &'static str {
+    if scope == "timeline" && guide.is_some() {
+        "timeline_section_export"
+    } else if scope == "timeline" {
+        "final_timeline_export"
+    } else {
+        "diagnostic_asset_render"
+    }
+}
+
+fn next_render_step(scope: &str, job_id: &str) -> String {
+    if scope == "timeline" {
+        format!("Call poll_render(job_id=\"{job_id}\") to track the final timeline export.")
+    } else {
+        format!(
+            "Call poll_render(job_id=\"{job_id}\") to track this diagnostic asset render; use scope=\"timeline\" for final editorial output."
+        )
+    }
+}
+
+fn enrich_render_metadata_with_caption_summary(
+    metadata: &mut BTreeMap<String, String>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    metadata.extend(crate::captions::caption_summary_metadata(summary));
+}
+
+fn enrich_render_metadata_with_backend_capability(
+    metadata: &mut BTreeMap<String, String>,
+    backend: &awidat_render::RenderBackendKind,
+) {
+    metadata.extend(crate::capabilities::render_feature_metadata_for_backend(
+        backend,
+    ));
 }
 
 struct StartRenderManifestInput<'a> {
@@ -430,6 +561,7 @@ struct StartRenderManifestInput<'a> {
     input_paths: &'a [PathBuf],
     output_path: &'a Path,
     argv: &'a [String],
+    backend: awidat_render::RenderBackendKind,
     limitations: &'a [RenderPlanLimitation],
     metadata: serde_json::Value,
 }
@@ -442,13 +574,6 @@ struct BuiltStartRenderManifest {
 fn build_start_render_manifest(
     input: StartRenderManifestInput<'_>,
 ) -> Result<BuiltStartRenderManifest, FunctionCallError> {
-    let backend = awidat_render::RenderBackendKind::from_start_render_scope(input.scope)
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!(
-                "start_render: scope '{}' not recognized for render manifest",
-                input.scope
-            ))
-        })?;
     let mut inputs = Vec::new();
     if let Some(asset_path) = input.asset_path {
         inputs.push(
@@ -492,23 +617,38 @@ fn build_start_render_manifest(
             awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
         })
         .collect();
+    let mut metadata = json_object_to_string_map(input.metadata);
+    enrich_render_metadata_with_backend_capability(&mut metadata, &input.backend);
+    let sidecars =
+        awidat_render::fingerprint_ffmpeg_subtitle_sidecars(input.argv).map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "start_render: failed to fingerprint render sidecars: {e}"
+            ))
+        })?;
+    metadata.extend(
+        awidat_render::ass_sidecar_layout_metadata(input.argv).map_err(|e| {
+            FunctionCallError::RespondToModel(format!(
+                "start_render: failed to inspect ASS sidecar layout: {e}"
+            ))
+        })?,
+    );
     let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
         created_at: String::new(),
         awidat_version: env!("CARGO_PKG_VERSION").into(),
         project_root: input.project_root.to_string_lossy().into_owned(),
         project_hash,
         timeline_hash,
-        backend,
+        backend: input.backend,
         replay: awidat_render::RenderReplayPlan::FfmpegArgv {
             argv: replay_argv,
             cwd: Some(input.project_root.to_string_lossy().into_owned()),
         },
         inputs,
         outputs: vec![awidat_render::output_artifact(input.output_path, true)],
-        sidecars: Vec::new(),
+        sidecars,
         limitations,
         verification: None,
-        metadata: json_object_to_string_map(input.metadata),
+        metadata,
     });
     Ok(BuiltStartRenderManifest {
         manifest_path: awidat_render::manifest_path_for_output(input.output_path),
@@ -765,12 +905,14 @@ fn apply_preset_to_argv(
 ) -> Result<Vec<String>, FunctionCallError> {
     let spec = RenderJobSpec {
         args: base,
+        backend: awidat_render::RenderBackendKind::AssetFullReencode,
         total_duration_s: None,
         cwd: None,
         output_path: output_path.to_path_buf(),
         input_paths: Vec::new(),
         manifest_path: None,
         limitations: Vec::new(),
+        metadata: Default::default(),
     };
     let lowered =
         awidat_render::professional::apply_export_preset_to_spec(spec, preset).map_err(|e| {
@@ -830,6 +972,50 @@ mod tests {
         }
     }
 
+    fn write_project_with_master_loudnorm(root: &std::path::Path) {
+        use awidat_proto::awidat_meta::AwidatTimelineMetadata;
+        use awidat_proto::otio::{
+            Clip, ExternalReference, MediaReference, RationalTime, Stack, StackChild, TimeRange,
+            Timeline, Track, TrackChild, TrackKind,
+        };
+        use awidat_proto::project::files;
+
+        awidat_proto::project::Project::init(root)
+            .unwrap()
+            .write(root)
+            .unwrap();
+        let asset = "raw/a.mp4";
+        std::fs::create_dir_all(root.join("raw")).unwrap();
+        std::fs::write(root.join(asset), b"stub").unwrap();
+        let mut clip = Clip::empty("clip-a".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip));
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        let mut meta = AwidatTimelineMetadata::default();
+        meta.extra.insert(
+            "master_loudnorm".into(),
+            serde_json::json!({
+                "target_lufs": -16.0,
+                "target_lra": 11.0,
+                "target_tp": -1.5,
+            }),
+        );
+        tl.metadata.awidat = Some(meta);
+        std::fs::write(
+            root.join(files::OTIO),
+            serde_json::to_string_pretty(&tl).unwrap(),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn start_render_manifest_for_preview_records_ffmpeg_replay() {
         let dir = tempfile::tempdir().unwrap();
@@ -850,6 +1036,7 @@ mod tests {
             input_paths: std::slice::from_ref(&asset),
             output_path: &output,
             argv: &argv,
+            backend: awidat_render::RenderBackendKind::AssetPreview,
             limitations: &[],
             metadata: serde_json::json!({"scope": "preview"}),
         })
@@ -889,6 +1076,7 @@ mod tests {
             input_paths: &[],
             output_path: &output,
             argv: &argv,
+            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
             limitations: &[],
             metadata: serde_json::json!({"scope": "timeline"}),
         })
@@ -900,6 +1088,181 @@ mod tests {
         );
         assert!(built.manifest.project_hash.is_some());
         assert!(built.manifest.timeline_hash.is_some());
+        assert_eq!(
+            built.manifest.metadata["render_feature_id"],
+            "ffmpeg_timeline_export"
+        );
+        assert_eq!(
+            built.manifest.metadata["render_feature_export_supported"],
+            "supported"
+        );
+    }
+
+    #[test]
+    fn start_render_manifest_records_ffmpeg_subtitle_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = dir.path().join("raw/a.mp4");
+        std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        std::fs::write(&asset, b"asset").unwrap();
+        let ass_path = dir.path().join("renders/.ass/caption.ass");
+        std::fs::create_dir_all(ass_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &ass_path,
+            b"[Script Info]\nPlayResX: 1920\nPlayResY: 1080\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Caption,Helvetica Neue,64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,2,160,160,216,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:01.00,0:00:02.50,Caption,,0,0,0,,{\\k60}hello\\N{\\k80}world\n",
+        )
+        .unwrap();
+        let output = dir.path().join("renders/timeline.mp4");
+        let argv = vec![
+            "-i".into(),
+            asset.to_string_lossy().into_owned(),
+            "-filter_complex".into(),
+            format!("[outv]subtitles='{}'[titled_v]", ass_path.display()),
+            output.to_string_lossy().into_owned(),
+        ];
+
+        let built = build_start_render_manifest(StartRenderManifestInput {
+            project_root: dir.path(),
+            scope: "timeline",
+            asset_path: None,
+            input_paths: std::slice::from_ref(&asset),
+            output_path: &output,
+            argv: &argv,
+            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            limitations: &[],
+            metadata: serde_json::json!({"scope": "timeline"}),
+        })
+        .unwrap();
+
+        assert_eq!(built.manifest.sidecars.len(), 1);
+        assert_eq!(built.manifest.sidecars[0].path, ass_path.to_string_lossy());
+        assert_eq!(built.manifest.metadata["libass_layout_sidecar_count"], "1");
+        assert_eq!(
+            built.manifest.metadata["libass_layout_playres"],
+            "1920x1080"
+        );
+        assert_eq!(
+            built.manifest.metadata["libass_layout_wrapped_sidecar_count"],
+            "1"
+        );
+        assert_eq!(
+            built.manifest.metadata["libass_layout_safe_area_sidecar_count"],
+            "1"
+        );
+        assert_eq!(
+            built.manifest.metadata["libass_layout_karaoke_sidecar_count"],
+            "1"
+        );
+    }
+
+    #[test]
+    fn start_render_response_includes_backend_evidence() {
+        let body = build_start_render_response(StartRenderResponseInput {
+            job_id: "job-1",
+            scope: "timeline",
+            guide: None,
+            asset_label: "<timeline>",
+            output_path: std::path::Path::new("/tmp/out.mp4"),
+            manifest_path: std::path::Path::new("/tmp/out.render-manifest.json"),
+            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            render_metadata: &BTreeMap::from([
+                (
+                    "timeline_backend".to_string(),
+                    "timeline_ffmpeg_reencode".to_string(),
+                ),
+                (
+                    "timeline_backend_reason".to_string(),
+                    "ffmpeg_with_libass_captions".to_string(),
+                ),
+                ("libass_caption_count".to_string(), "2".to_string()),
+            ]),
+            limitations: &[],
+            started_at: "2026-05-22T10:00:00Z",
+        });
+
+        assert_eq!(body["backend"], "timeline_ffmpeg_reencode");
+        assert_eq!(
+            body["backend_evidence"]["render_feature_id"],
+            "ffmpeg_timeline_export"
+        );
+        assert_eq!(
+            body["backend_evidence"]["render_feature_export_supported"],
+            "supported"
+        );
+        assert_eq!(
+            body["backend_evidence"]["timeline_backend"],
+            "timeline_ffmpeg_reencode"
+        );
+        assert_eq!(
+            body["backend_evidence"]["timeline_backend_reason"],
+            "ffmpeg_with_libass_captions"
+        );
+        assert_eq!(body["backend_evidence"]["libass_caption_count"], "2");
+    }
+
+    #[tokio::test]
+    async fn timeline_with_master_loudnorm_queues_two_pass_background_job() {
+        let dir = tempfile::tempdir().unwrap();
+        write_project_with_master_loudnorm(dir.path());
+        let ctx = ctx_at(dir.path());
+
+        let output = StartRenderTool
+            .handle(
+                invoke(serde_json::json!({"scope": "timeline"})),
+                ctx.clone(),
+            )
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&output.content).unwrap();
+
+        assert_eq!(
+            body["backend_evidence"]["master_loudnorm_orchestration"],
+            "two_pass_background"
+        );
+        assert_eq!(
+            body["backend_evidence"]["master_loudnorm_pass"],
+            "unapplied"
+        );
+        assert!(
+            body["job_id"]
+                .as_str()
+                .is_some_and(|job_id| !job_id.is_empty())
+        );
+        assert_eq!(ctx.job_manager.job_count().await, 1);
+    }
+
+    #[test]
+    fn timeline_render_metadata_includes_caption_summary_evidence() {
+        let mut metadata = BTreeMap::from([(
+            "timeline_backend_reason".to_string(),
+            "ffmpeg_with_libass_captions".to_string(),
+        )]);
+        let summary = crate::captions::CaptionSummary {
+            selected_authority: crate::captions::CaptionAuthority::CaptionOverlays,
+            editable_track_count: 0,
+            editable_cue_count: 0,
+            caption_overlay_count: 2,
+            word_timed_caption_overlay_count: 1,
+            safe_area_caption_overlay_count: 1,
+            mobile_safe_area_caption_overlay_count: 1,
+            missing_safe_area_caption_overlay_count: 1,
+            sidecar_cue_count: 0,
+            has_exportable_captions: true,
+            warnings: vec!["1 caption overlays missing safe_area metadata".into()],
+        };
+
+        enrich_render_metadata_with_caption_summary(&mut metadata, &summary);
+
+        assert_eq!(
+            metadata["timeline_backend_reason"],
+            "ffmpeg_with_libass_captions"
+        );
+        assert_eq!(metadata["caption_authority"], "caption_overlays");
+        assert_eq!(metadata["caption_overlay_count"], "2");
+        assert_eq!(metadata["word_timed_caption_overlay_count"], "1");
+        assert_eq!(metadata["safe_area_caption_overlay_count"], "1");
+        assert_eq!(metadata["mobile_safe_area_caption_overlay_count"], "1");
+        assert_eq!(metadata["missing_safe_area_caption_overlay_count"], "1");
+        assert_eq!(metadata["caption_warning_count"], "1");
     }
 
     #[tokio::test]
