@@ -1489,7 +1489,7 @@ mod tests {
         // A serialized InsertTitle that omits `phases` must still parse,
         // and the field must default to `None` so legacy EDLs round-trip.
         let json = r##"{
-            "kind": "InsertTitle",
+            "op": "insert_title",
             "start_s": 0.0,
             "end_s": 3.0,
             "text": "hi",
