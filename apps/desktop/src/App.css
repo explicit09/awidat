@@ -4960,7 +4960,8 @@ button {
   margin-left: -12px;
 }
 
-.transcript-segment:has(.transcript-word-active) {
+.transcript-segment:has(.transcript-word-active),
+.transcript-segment.transcript-segment-active {
   background: linear-gradient(
     90deg,
     rgba(95, 168, 255, 0.10),

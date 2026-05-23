@@ -50,6 +50,286 @@ type SegmentRow = {
 };
 
 export function TranscriptView({ stem }: { stem: string | null }) {
+  // When there's a timeline, render the composed view (every clip's
+  // words in timeline order, spliced on clip windows). Falls back to
+  // the single-stem view for the pre-timeline case (source-preview of
+  // a newly imported asset).
+  const playSegments = usePlaySegments();
+  if (playSegments.length > 0) {
+    return <TimelineComposedTranscript playSegments={playSegments} />;
+  }
+  return <SingleStemTranscript stem={stem} />;
+}
+
+/** One visible row in the composed timeline transcript. Each row is
+ *  one whisper segment, scoped to a single timeline clip (`playSegment`).
+ *  When the same source asset appears in multiple clips, its sidecar
+ *  contributes one row per clip — at each clip's timeline position. */
+type ComposedRow = {
+  /** The clip this row belongs to. */
+  playSegment: import("../timeline/usePlaySegments").PlaySegment;
+  /** Whisper segment from the clip's sidecar, sliced to the clip
+   *  window. `start_s` and `end_s` are still source-time; mapping to
+   *  timeline-time uses the clip's `sourceStart`/`timelineStart`. */
+  segment: TranscriptSegment;
+  /** Words belonging to this segment, also clipped to the window. */
+  words: TranscriptWord[];
+  /** Index of the first word within the parent transcript's words[].
+   *  Carries the original index so the active-word highlight (which
+   *  keys off `data-word-idx`) lines up with the global word table. */
+  firstWordIdx: number;
+};
+
+function TimelineComposedTranscript({
+  playSegments,
+}: {
+  playSegments: import("../timeline/usePlaySegments").PlaySegment[];
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+
+  // Ensure every stem on the timeline is loaded into the transcript
+  // store. The store already de-dupes in-flight loads and caches
+  // results across tab toggles.
+  const load = useTranscriptStore((s) => s.load);
+  const stems = useMemo(() => {
+    const set = new Set<string>();
+    for (const seg of playSegments) {
+      if (seg.proxyStem) set.add(seg.proxyStem);
+    }
+    return Array.from(set);
+  }, [playSegments]);
+
+  useEffect(() => {
+    for (const stem of stems) void load(stem);
+  }, [stems, load]);
+
+  // Subscribe to the whole byStem map so any sidecar arriving causes
+  // a re-render. The map identity changes on each store update, so the
+  // selector returns a new ref per change without needing equality.
+  const byStem = useTranscriptStore((s) => s.byStem);
+
+  // Build the row list: walk timeline-ordered playSegments, look up
+  // each clip's transcript, slice its segments + words to the clip's
+  // [sourceStart, sourceEnd] window. Slicing means a word whose
+  // midpoint lands outside the window is dropped, so a segment that
+  // straddles a clip cut shows on whichever clip contains the bulk
+  // of the speech (or both, partially).
+  const rows = useMemo<ComposedRow[]>(() => {
+    const out: ComposedRow[] = [];
+    for (const ps of playSegments) {
+      const stem = ps.proxyStem;
+      if (!stem) continue;
+      const st = byStem[stem];
+      if (!st || st.state !== "loaded") continue;
+      const transcript = st.transcript;
+      const lo = ps.sourceStart;
+      const hi = ps.sourceEnd;
+      for (const seg of transcript.segments) {
+        // Skip segments that don't overlap the clip window at all.
+        if (seg.end_s <= lo || seg.start_s >= hi) continue;
+        // Walk the transcript's words list to find both the slice and
+        // its global first-index. A linear scan per segment is fine
+        // here — segments are sparse (~50–100/min) and the words[]
+        // is sorted by start_s.
+        const segWords: TranscriptWord[] = [];
+        let firstWordIdx = -1;
+        for (let i = 0; i < transcript.words.length; i++) {
+          const w = transcript.words[i];
+          const mid = (w.start_s + w.end_s) / 2;
+          if (mid < seg.start_s) continue;
+          if (mid >= seg.end_s) break;
+          // Drop words whose midpoint lands outside the clip window.
+          if (mid < lo || mid >= hi) continue;
+          if (firstWordIdx < 0) firstWordIdx = i;
+          segWords.push(w);
+        }
+        out.push({
+          playSegment: ps,
+          segment: seg,
+          words: segWords,
+          firstWordIdx: firstWordIdx < 0 ? 0 : firstWordIdx,
+        });
+      }
+    }
+    return out;
+  }, [playSegments, byStem]);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 96,
+    overscan: 6,
+  });
+
+  // Active-row highlight + auto-scroll, driven by the timeline playhead.
+  // We don't manipulate per-word classes here — that pathway lives in
+  // SingleStemTranscript and assumes one sidecar's word index space.
+  // The composed view marks the active *row* instead.
+  const timelineTime = useMediaStore((s) => s.timelineTime);
+  const activeRowIdx = useMemo(() => {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (timelineTime < r.playSegment.timelineStart) continue;
+      if (timelineTime >= r.playSegment.timelineEnd) continue;
+      const sourceTime =
+        r.playSegment.sourceStart +
+        (timelineTime - r.playSegment.timelineStart);
+      if (sourceTime >= r.segment.start_s && sourceTime < r.segment.end_s) {
+        return i;
+      }
+    }
+    return -1;
+  }, [rows, timelineTime]);
+
+  const lastScrolledRef = useRef<number>(-1);
+  useEffect(() => {
+    if (activeRowIdx < 0 || activeRowIdx === lastScrolledRef.current) return;
+    lastScrolledRef.current = activeRowIdx;
+    requestAnimationFrame(() => {
+      virtualizer.scrollToIndex(activeRowIdx, { align: "center", behavior: "auto" });
+    });
+  }, [activeRowIdx, virtualizer]);
+
+  if (stems.length === 0) {
+    return (
+      <div className="media-empty">
+        <p className="media-empty-title">No clips on the timeline.</p>
+        <p className="media-empty-hint">
+          Drop a clip on the timeline to see its transcript here.
+        </p>
+      </div>
+    );
+  }
+
+  // Per-stem load status feedback so the user understands why some
+  // ranges are blank (sidecar still loading, or transcript missing
+  // entirely for that asset).
+  const pendingStems = stems.filter(
+    (s) => !byStem[s] || byStem[s]?.state === "loading",
+  );
+  const missingStems = stems.filter((s) => byStem[s]?.state === "missing");
+
+  return (
+    <div className="transcript-pane">
+      <header className="transcript-meta">
+        <span className="transcript-meta-lang">
+          Timeline · {rows.length} segments · {stems.length} sources
+        </span>
+        <span className="transcript-meta-counts">
+          {pendingStems.length > 0
+            ? `loading ${pendingStems.length}…`
+            : missingStems.length > 0
+              ? `${missingStems.length} missing transcript`
+              : ""}
+        </span>
+      </header>
+      <div
+        ref={scrollRef}
+        className="transcript-scroll"
+        onClick={(e) => {
+          // Click on a word or segment: seek the timeline playhead to
+          // the corresponding timeline-time.
+          const target = (e.target as HTMLElement).closest(
+            "[data-row-idx]",
+          ) as HTMLElement | null;
+          if (!target) return;
+          const rowIdxStr = target.getAttribute("data-row-idx");
+          if (rowIdxStr === null) return;
+          const rowIdx = Number(rowIdxStr);
+          const row = rows[rowIdx];
+          if (!row) return;
+          const wordTarget = (e.target as HTMLElement).closest(
+            "[data-word-start]",
+          ) as HTMLElement | null;
+          const sourceTime = wordTarget
+            ? Number(wordTarget.getAttribute("data-word-start"))
+            : row.segment.start_s;
+          if (!Number.isFinite(sourceTime)) return;
+          const tlTime =
+            row.playSegment.timelineStart +
+            (sourceTime - row.playSegment.sourceStart);
+          requestTimelineSeek(tlTime);
+        }}
+      >
+        <div
+          style={{
+            height: virtualizer.getTotalSize(),
+            position: "relative",
+            width: "100%",
+          }}
+        >
+          {virtualizer.getVirtualItems().map((vi) => {
+            const row = rows[vi.index];
+            const isActive = vi.index === activeRowIdx;
+            const tlStart =
+              row.playSegment.timelineStart +
+              (row.segment.start_s - row.playSegment.sourceStart);
+            return (
+              <div
+                key={vi.key}
+                ref={virtualizer.measureElement}
+                data-index={vi.index}
+                data-row-idx={vi.index}
+                className={
+                  isActive
+                    ? "transcript-segment transcript-segment-active"
+                    : "transcript-segment"
+                }
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${vi.start}px)`,
+                }}
+              >
+                {row.segment.speaker_id ? (
+                  <SpeakerLabel
+                    stem={row.playSegment.proxyStem}
+                    speakerId={row.segment.speaker_id}
+                  />
+                ) : null}
+                <ComposedSegmentBody row={row} />
+                <div className="transcript-time">{fmt(tlStart)}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ComposedSegmentBody({ row }: { row: ComposedRow }) {
+  if (row.words.length === 0) {
+    return (
+      <div
+        className="transcript-text"
+        data-segment-start={row.segment.start_s}
+      >
+        {row.segment.text}
+      </div>
+    );
+  }
+  return (
+    <div className="transcript-text">
+      {row.words.map((w, i) => (
+        <span
+          key={i}
+          data-word-start={w.start_s}
+          data-word-end={w.end_s}
+          className="transcript-word"
+        >
+          {w.text}
+          {i < row.words.length - 1 ? " " : ""}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SingleStemTranscript({ stem }: { stem: string | null }) {
   const state = useTranscriptStore((s) =>
     stem ? s.byStem[stem] : undefined,
   );
@@ -59,8 +339,7 @@ export function TranscriptView({ stem }: { stem: string | null }) {
       <div className="media-empty">
         <p className="media-empty-title">No transcript context.</p>
         <p className="media-empty-hint">
-          Pick an asset (or run an edit on the timeline) to see its
-          transcript here.
+          Pick an asset (or load a timeline) to see its transcript here.
         </p>
       </div>
     );
