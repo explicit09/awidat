@@ -5232,6 +5232,23 @@ fn ripple_shift_after(
 /// track. Returns a descriptive no-op when the indicated side isn't
 /// a gap (e.g. the clip is already at the track start, or the
 /// trailing child is another clip).
+/// Snapshot the display names of every `Track` in the timeline's
+/// top-level stack. Used to attach a "did you mean..." hint when a
+/// track-anchored op (delete_gap, trim_track_tail) names a track that
+/// isn't there — the agent otherwise has to call view_timeline first
+/// just to learn the names.
+fn list_track_names(timeline: &Timeline) -> Vec<String> {
+    timeline
+        .tracks
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            StackChild::Track(t) => Some(t.name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn apply_delete_gap(
     working: &mut Timeline,
     index: usize,
@@ -5307,6 +5324,9 @@ fn apply_trim_track_tail(
             message: "trim_track_tail: track must not be empty".into(),
         });
     }
+    // Compute the hint before the mutable iter so we don't need to
+    // re-borrow `working` inside the ok_or_else closure.
+    let available_names = list_track_names(working);
     let track = working
         .tracks
         .children
@@ -5315,9 +5335,16 @@ fn apply_trim_track_tail(
             StackChild::Track(t) if t.name == track_name => Some(t),
             _ => None,
         })
-        .ok_or_else(|| ApplyError::Invalid {
-            index,
-            message: format!("trim_track_tail: no track named {track_name:?}"),
+        .ok_or_else(|| {
+            let hint = if available_names.is_empty() {
+                "; no tracks on the timeline".to_string()
+            } else {
+                format!("; available tracks: {}", available_names.join(", "))
+            };
+            ApplyError::Invalid {
+                index,
+                message: format!("trim_track_tail: no track named {track_name:?}{hint}"),
+            }
         })?;
     let mut removed_total_s = 0.0;
     let mut removed_count = 0usize;
@@ -11624,6 +11651,29 @@ mod tests {
         assert_eq!(t.children.len(), 2);
         assert!(matches!(&t.children[1], TrackChild::Clip(c) if c.name == "clip-1"));
         assert!(outcome.applied[0].description.contains("10."));
+    }
+
+    #[test]
+    fn apply_trim_track_tail_unknown_track_lists_available_names() {
+        // Agent guessed a single-letter track name; the error message
+        // should include the real track names so the next attempt can
+        // self-correct without a separate view_timeline call.
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::TrimTrackTail {
+                track: "V".into(),
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("available tracks:"),
+            "expected hint listing available tracks; got {message}"
+        );
+        assert!(
+            message.contains("V1"),
+            "expected V1 (the fixture's track name) in the hint; got {message}"
+        );
     }
 
     #[test]
