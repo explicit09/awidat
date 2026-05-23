@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import wordmark from "../brand/awidat-wordmark.svg";
 import { AgentStatusBadge, Inline, cn } from "../ui";
 
@@ -72,35 +73,80 @@ export function AppShell({
           <section className="panel h-full min-h-0 overflow-hidden">{workspace}</section>
         </div>
       ) : (
-        <div
-          className={cn(
-            "grid min-h-0 min-w-0 overflow-hidden gap-2 p-2",
-            inspectorCollapsed
-              ? "grid-cols-[var(--layout-rail-w)_minmax(0,1fr)_44px]"
-              : "grid-cols-[var(--layout-rail-w)_minmax(0,1fr)_var(--layout-inspector-w)]",
-          )}
-        >
-          <aside className="panel min-h-0 overflow-hidden">
-            {commandRail ?? <RegionPlaceholder label="Agent / Command Rail · Phase 2.4" />}
-          </aside>
-          <main
-            className={cn(
-              "grid min-h-0 min-w-0 gap-2",
-              timelineCollapsed
-                ? "grid-rows-[minmax(260px,1fr)_44px]"
-                : "grid-rows-[minmax(360px,1fr)_minmax(132px,22vh)]",
-            )}
+        <div className="min-h-0 min-w-0 overflow-hidden p-2">
+          <PanelGroup
+            direction="horizontal"
+            autoSaveId={
+              // Avoid persisting under the same id when the inspector
+              // is in its collapsed/expanded variant — they have
+              // different default proportions.
+              inspectorCollapsed ? "awidat.shell.h.inspector-collapsed" : "awidat.shell.h"
+            }
+            className="h-full min-h-0"
           >
-            <section className="panel min-h-0 min-w-0 overflow-hidden">
-              {preview ?? <RegionPlaceholder label="Preview / Review surface · Phase 2.5" />}
-            </section>
-            <section className="panel min-h-0 min-w-0 overflow-hidden">
-              {timeline ?? <RegionPlaceholder label="Timeline / Transcript hybrid · Phase 2.6" />}
-            </section>
-          </main>
-          <aside className={cn("panel min-h-0", inspectorCollapsed ? "overflow-hidden" : "overflow-y-auto")}>
-            {inspector ?? <RegionPlaceholder label="Proposal Inspector · Phase 2.7" />}
-          </aside>
+            <Panel
+              id="command-rail"
+              order={1}
+              defaultSize={18}
+              minSize={12}
+              maxSize={40}
+              className="panel min-h-0 overflow-hidden"
+            >
+              {commandRail ?? <RegionPlaceholder label="Agent / Command Rail · Phase 2.4" />}
+            </Panel>
+            <ResizeHandle orientation="horizontal" />
+            <Panel
+              id="center"
+              order={2}
+              defaultSize={inspectorCollapsed ? 80 : 66}
+              minSize={30}
+              className="min-h-0 min-w-0"
+            >
+              <PanelGroup
+                direction="vertical"
+                autoSaveId={
+                  timelineCollapsed
+                    ? "awidat.shell.v.timeline-collapsed"
+                    : "awidat.shell.v"
+                }
+                className="h-full min-h-0"
+              >
+                <Panel
+                  id="preview"
+                  order={1}
+                  defaultSize={timelineCollapsed ? 92 : 65}
+                  minSize={20}
+                  className="panel min-h-0 min-w-0 overflow-hidden"
+                >
+                  {preview ?? <RegionPlaceholder label="Preview / Review surface · Phase 2.5" />}
+                </Panel>
+                <ResizeHandle orientation="vertical" />
+                <Panel
+                  id="timeline"
+                  order={2}
+                  defaultSize={timelineCollapsed ? 8 : 35}
+                  minSize={timelineCollapsed ? 4 : 15}
+                  className="panel min-h-0 min-w-0 overflow-hidden"
+                >
+                  {timeline ?? <RegionPlaceholder label="Timeline / Transcript hybrid · Phase 2.6" />}
+                </Panel>
+              </PanelGroup>
+            </Panel>
+            <ResizeHandle orientation="horizontal" />
+            <Panel
+              id="inspector"
+              order={3}
+              defaultSize={inspectorCollapsed ? 2 : 16}
+              minSize={inspectorCollapsed ? 2 : 10}
+              maxSize={40}
+              className={cn(
+                "panel min-h-0",
+                inspectorCollapsed ? "overflow-hidden" : "overflow-y-auto",
+              )}
+            >
+              {inspector ?? <RegionPlaceholder label="Proposal Inspector · Phase 2.7" />}
+            </Panel>
+          </PanelGroup>
         </div>
       )}
 
@@ -128,5 +174,33 @@ function RegionPlaceholder({ label }: { label: string }) {
         {label}
       </span>
     </div>
+  );
+}
+
+/** Draggable splitter between two adjacent panels. Hairline thickness
+ *  expands to a wider hit zone on hover via a `::before` pseudo so the
+ *  visual line stays minimal but the click target is comfortable. */
+function ResizeHandle({ orientation }: { orientation: "horizontal" | "vertical" }) {
+  const horizontal = orientation === "horizontal";
+  return (
+    <PanelResizeHandle
+      className={cn(
+        "group relative shrink-0 transition-colors",
+        horizontal
+          ? "mx-1 w-px cursor-col-resize hover:bg-[var(--color-brand-secondary)]"
+          : "my-1 h-px cursor-row-resize hover:bg-[var(--color-brand-secondary)]",
+        "bg-[var(--color-border-subtle)] data-[resize-handle-state=drag]:bg-[var(--color-brand-secondary)]",
+      )}
+    >
+      {/* Wider invisible hit-zone so the user doesn't have to land on
+          the 1px hairline. */}
+      <span
+        className={cn(
+          "absolute",
+          horizontal ? "-left-1 -right-1 inset-y-0" : "-top-1 -bottom-1 inset-x-0",
+        )}
+        aria-hidden
+      />
+    </PanelResizeHandle>
   );
 }
