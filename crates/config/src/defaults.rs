@@ -273,9 +273,19 @@ const RECIPES: &[IndexerRecipe] = &[
     IndexerRecipe {
         name: "whisper",
         package: "whisper-mcp",
-        // Default to the small model; users override via global/project
-        // config or via setting the env directly.
-        env: &[("WHISPER_MODEL", "small.en")],
+        // distil-large-v3 is a drop-in replacement for large-v3 in
+        // every Whisper library — same JSON shape, same wav2vec2
+        // alignment, same pyannote diarization path. ~6× faster than
+        // large-v3 on CPU with ~1% WER loss, which beats small.en's
+        // accuracy AND beats large-v3-turbo's wall-clock on Apple
+        // Silicon (no MPS for CTranslate2, so int8/CPU is the only
+        // path and large-v3-turbo runs ~0.5× realtime on a 1h source).
+        //
+        // Users override via global/project config or env directly:
+        //   [mcp.servers.env]
+        //   WHISPER_MODEL = "large-v3-turbo"   # last 1% of WER
+        //   WHISPER_MODEL = "small.en"         # weak hardware
+        env: &[("WHISPER_MODEL", "distil-large-v3")],
         depends_on: &[],
         resource_class: IndexerResourceClass::Exclusive,
         group: IndexerGroup::Navigation,
@@ -469,7 +479,7 @@ mod tests {
         let whisper = cfg.find_server("whisper").unwrap();
         assert_eq!(
             whisper.env.get("WHISPER_MODEL").map(String::as_str),
-            Some("small.en")
+            Some("distil-large-v3")
         );
     }
 
