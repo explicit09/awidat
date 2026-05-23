@@ -9,6 +9,7 @@
  */
 
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, Redo2, Settings as SettingsIcon, Share2, Undo2 } from "lucide-react";
@@ -629,14 +630,14 @@ function App() {
 
   function acceptActiveProposal() {
     if (!isTauri() || !activeProposal) return;
-    invoke("accept_proposal", { callId: activeProposal.callId }).catch((e) =>
+    editorDispatch.acceptProposal(activeProposal.callId).catch((e) =>
       console.warn("accept_proposal failed", e),
     );
   }
 
   function rejectActiveProposal() {
     if (!isTauri() || !activeProposal) return;
-    invoke("reject_proposal", { callId: activeProposal.callId }).catch((e) =>
+    editorDispatch.rejectProposal(activeProposal.callId).catch((e) =>
       console.warn("reject_proposal failed", e),
     );
   }
