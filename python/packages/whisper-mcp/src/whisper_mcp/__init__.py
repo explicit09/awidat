@@ -137,8 +137,9 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     if DIARIZE and HF_TOKEN:
         try:
             with _silence_stdout():
+                # whisperx ≥3.8 renamed `use_auth_token` → `token`.
                 diarize_model = whisperx.diarize.DiarizationPipeline(
-                    model_name=DIARIZATION_MODEL, use_auth_token=HF_TOKEN, device=device
+                    model_name=DIARIZATION_MODEL, token=HF_TOKEN, device=device
                 )
                 diarize_segments = diarize_model(audio)
                 result = whisperx.assign_word_speakers(diarize_segments, result)
