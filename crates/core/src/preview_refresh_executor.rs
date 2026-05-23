@@ -14,9 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::preview_cache::{
-    PreviewCacheRefreshTask, PreviewRefreshError, PreviewRefreshExecutor,
-};
+use crate::preview_cache::{PreviewCacheRefreshTask, PreviewRefreshError, PreviewRefreshExecutor};
 
 /// Default waveform bucket count, mirroring the desktop's
 /// `commands/waveform.rs::DEFAULT_BUCKET_COUNT`. ~4 KB JSON per asset.
@@ -67,34 +65,24 @@ struct WaveformSidecar<'a> {
 
 #[async_trait::async_trait]
 impl PreviewRefreshExecutor for FfmpegPreviewRefreshExecutor {
-    async fn execute(
-        &self,
-        task: &PreviewCacheRefreshTask,
-    ) -> Result<(), PreviewRefreshError> {
+    async fn execute(&self, task: &PreviewCacheRefreshTask) -> Result<(), PreviewRefreshError> {
         let source = self.source_path(&task.asset_id);
         let artifact = Path::new(&task.artifact_path);
         match task.artifact_kind.as_str() {
-            "proxy" => awidat_render::transcode_proxy(
-                &source,
-                artifact,
-                None,
-                self.cancel.clone(),
-            )
-            .await
-            .map_err(|e| PreviewRefreshError::Executor {
-                task_id: task.task_id.clone(),
-                message: format!("transcode_proxy: {e}"),
-            }),
-            "thumbnails" => awidat_render::generate_thumbnails(
-                &source,
-                artifact,
-                self.cancel.clone(),
-            )
-            .await
-            .map_err(|e| PreviewRefreshError::Executor {
-                task_id: task.task_id.clone(),
-                message: format!("generate_thumbnails: {e}"),
-            }),
+            "proxy" => awidat_render::transcode_proxy(&source, artifact, None, self.cancel.clone())
+                .await
+                .map_err(|e| PreviewRefreshError::Executor {
+                    task_id: task.task_id.clone(),
+                    message: format!("transcode_proxy: {e}"),
+                }),
+            "thumbnails" => {
+                awidat_render::generate_thumbnails(&source, artifact, self.cancel.clone())
+                    .await
+                    .map_err(|e| PreviewRefreshError::Executor {
+                        task_id: task.task_id.clone(),
+                        message: format!("generate_thumbnails: {e}"),
+                    })
+            }
             "waveform" => {
                 let buckets = awidat_render::generate_waveform(
                     &source,
@@ -109,13 +97,13 @@ impl PreviewRefreshExecutor for FfmpegPreviewRefreshExecutor {
                 if let Some(parent) = artifact.parent() {
                     tokio::fs::create_dir_all(parent).await?;
                 }
-                let body = serde_json::to_vec(&WaveformSidecar {
-                    buckets: &buckets,
-                })
-                .map_err(|e| PreviewRefreshError::Executor {
-                    task_id: task.task_id.clone(),
-                    message: format!("serialize waveform sidecar: {e}"),
-                })?;
+                let body =
+                    serde_json::to_vec(&WaveformSidecar { buckets: &buckets }).map_err(|e| {
+                        PreviewRefreshError::Executor {
+                            task_id: task.task_id.clone(),
+                            message: format!("serialize waveform sidecar: {e}"),
+                        }
+                    })?;
                 tokio::fs::write(artifact, body).await?;
                 Ok(())
             }
