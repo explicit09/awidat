@@ -437,7 +437,7 @@ export function CommandRail({
             }}
             placeholder={
               hasProject
-                ? "Plan, Build, / for commands, @ for context"
+                ? "Ask, edit, trim, propose. @ to attach a clip."
                 : "Open a project to begin."
             }
             rows={focused ? 4 : 3}

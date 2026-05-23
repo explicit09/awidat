@@ -6287,10 +6287,26 @@ button {
   background: var(--color-surface-card);
   border: 1px solid transparent;
   border-radius: 12px;
-  /* No outline. No focus ring. The blinking cursor + the card's own
-     surface tint vs. the panel background are enough signal. Both
-     calmer and lets the user keep typing without a colored frame
-     pulling the eye. */
+  outline: none;
+  box-shadow: none;
+}
+/* Kill every focus ring/outline inside the composer — the textarea,
+   the buttons, the wrapping divs. Some come from the WebView's
+   default :focus-visible style, some from Tailwind's preflight; both
+   show up as a faint blue/teal line on the card's edge when the
+   textarea has focus. */
+.awidat-chat-rail .awidat-composer-card,
+.awidat-chat-rail .awidat-composer-card *,
+.awidat-chat-rail .awidat-composer-card *:focus,
+.awidat-chat-rail .awidat-composer-card *:focus-visible,
+.awidat-chat-rail .awidat-composer-card:focus,
+.awidat-chat-rail .awidat-composer-card:focus-within,
+.awidat-chat-rail .awidat-composer-card:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+.awidat-chat-rail .awidat-composer-card textarea {
+  border: none !important;
 }
 .awidat-chat-rail .awidat-composer-card textarea {
   font-size: 14px;
