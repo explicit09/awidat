@@ -2,7 +2,7 @@
 
 This document is the running ledger for the Awidat improvement goal. Update it before and after each implementation slice so the current state, next action, and verification evidence stay visible.
 
-Last updated: 2026-05-22, broad verification + remaining-gaps audit complete
+Last updated: 2026-05-22, caption frame-pixel scorer slice complete
 
 ## Goal
 
@@ -27,7 +27,7 @@ Covered but not finished:
 | Caption/subtitle unification | Caption summaries, ASS/libass burn-in, sidecar fingerprints, layout metadata, verification gates, and render-preflight caption layout/readiness output exist. | Add actual rendered-frame occlusion/readability checks later under rendered-output verification. |
 | Render backend dispatch | Timeline preflight and manifests explain stream-copy eligibility and blockers; focused closure tests are green. | Continue broad verification later. |
 | Stream-copy/remux | `stream_remux` tool and simple timeline stream-copy fast path exist; manifest/report tests are green. | Continue broad verification later. |
-| Render verification | Manifest, feature evidence, libass, caption, loudness, stream-remux, boundary, and caption rendered-output evidence gates exist. | Replace explicit manifest evidence with a real frame-level scorer in a later production-hardening slice. |
+| Render verification | Manifest, feature evidence, libass, caption, loudness, stream-remux, boundary, and caption rendered-output evidence gates exist. Caption rendered-output evidence is now produced by the frame-pixel scorer when ffmpeg is available, with libass-layout derivation as a named fallback. | Complete. |
 | Preview/proxy cache | Cache summary, bounded refresh selection, desktop refresh command, and preflight planning exist. | Move from read-only planning toward an executable, testable refresh status/queue contract. |
 | Capability metadata | Capabilities mention render preflight, libass layout evidence, preview cache status, stream remux, and verification limits. | Keep metadata synchronized with each feature as it graduates. |
 
@@ -35,7 +35,6 @@ Not yet started or not yet production-complete:
 
 | Area | Target |
 |---|---|
-| Full visual subtitle occlusion/readability scoring | `verify_render` now accepts explicit rendered-output evidence and can derive a first artifact-level evidence packet from libass layout sidecars. Future work: actual frame-pixel occlusion scorer. |
 | Durable preview worker pool / persisted queue | Preview-cache refresh selections can now persist a project-local lifecycle artifact. Future work: background worker pool execution with resumable progress. |
 | GPU compositor routing maturity | Raw-stream GPU routing now avoids mixed GPU/FFmpeg overclaiming; mixed transition sets fall back with explicit evidence. Future work: broader GPU effect coverage. |
 | Broad workspace verification | Run after focused slices are complete: format, clippy, package-level tests, then workspace-level checks. |
@@ -238,21 +237,48 @@ Remaining-gap audit (against the original roadmap):
 
 Both gaps are explicitly listed as future work in the "Not yet started or not yet production-complete" table above and are out of scope for this slice; they are the next candidate slices once new implementation work is scheduled.
 
+## Completed Slice
+
+Status: completed.
+
+Slice: Frame-pixel caption rendered-output scorer.
+
+Why this is next: caption rendered-output evidence was still inferred from manifest fields and libass-layout sidecar counts. The original roadmap calls for a real frame-decoding scorer that measures safe-area and occlusion per caption event.
+
+Completion gate:
+
+- new `caption_rendered_output_scorer` module parses Dialogue lines, computes per-event bboxes against PlayRes + style margins + safe-area profile, samples the midpoint frame via a `CaptionFrameSampler` trait, and reports `probe_count`, `safe_area_pass_count`, and `occlusion_fail_count`: done;
+- production `FfmpegFrameSampler` backed by a new `awidat_render::extract_frame_raw_gray` helper (raw grayscale, no PNG roundtrip, no new image-decode workspace dep): done;
+- `verify_render_output` runs the scorer before its sync gate-builder and injects measured `caption_rendered_output_*` metadata; `add_caption_rendered_output_gate` reads the injected metadata and selects between `frame_pixel_scorer_passed`, `frame_pixel_scorer_failed`, and `frame_pixel_scorer_unavailable_fell_back_to_libass_layout` reasons: done;
+- libass-layout sidecar derivation kept as a named fallback when the scorer is unavailable: done;
+- `awidat_render::MediaProbe` learns `video_width` / `video_height` from ffprobe so the scorer knows real output dimensions: done;
+- `crates/render/src/manifest.rs` records `libass_layout_sidecar_paths` so the scorer can find sidecars from manifest metadata: done;
+- capability metadata + the capability_manifest test fixture advertise the new scorer surface: done;
+- focused unit tests cover scorer pass, safe-area fail, occlusion fail, no-events, and partial-parse paths: done;
+- integration tests cover scorer-pass, scorer-failed, and scorer-unavailable-fallback wiring through `verify_render_output`: done;
+- broad workspace verification re-run cleanly after the slice landed: done.
+
+Verification:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed (exit 0; only pre-existing ts-rs notes from desktop generated exports).
+- `cargo test --workspace`: passed. Aggregate: 1847 passed, 0 failed, 8 ignored across 85 test binaries — up from 1838 by the 9 new focused tests added in this slice (1 manifest, 5 scorer, 3 verify_render integration).
+
 ## Next Slice
 
 Status: pending.
 
-Slice: Frame-pixel caption occlusion scoring, then resumable preview worker pool.
+Slice: Resumable preview worker pool.
 
-Why this is next: these are the two remaining production-hardening gaps surfaced by the broad audit. They should be tackled in test-first slices, in this order, since the caption scorer plugs into an already-existing verification gate while the preview worker requires a larger lifecycle surface.
+Why this is next: `PreviewCacheRefreshLifecycle` is still a planning artifact with hardcoded `status: "planned"`. The original roadmap calls for a running lifecycle with status transitions, background execution, and resume semantics.
 
 Completion gate:
 
-- introduce a frame-decoding caption scorer that produces real `caption_rendered_output_probe_count`, `caption_rendered_output_safe_area_pass_count`, and `caption_rendered_output_occlusion_fail_count` evidence;
-- replace metadata/sidecar-derived passing with measured evidence when a real render is available, while keeping the sidecar derivation as an explicit fallback path with its own gate reason;
-- promote `PreviewCacheRefreshLifecycle` from a planning artifact into a running lifecycle with status transitions, a worker pool, and resume semantics;
-- write focused tests first for each behavior, then run focused tests, fmt, and relevant clippy checks;
-- run broad workspace verification again after both slices land.
+- promote `PreviewCacheRefreshLifecycle` from a write-once planning artifact into a status machine with `planned → in_progress → completed/failed` transitions persisted to `.awidat/preview-cache/refresh-plan.json`;
+- introduce a `PreviewRefreshExecutor` trait + a tokio-backed production implementation that consumes selected refresh tasks and updates the lifecycle artifact as each task finishes;
+- add resume semantics so a re-invocation picks up tasks left `in_progress` or unstarted at the last persisted offset;
+- write focused tests first for the state machine + executor abstraction (in-memory fake executor), then run focused tests, fmt, and relevant clippy checks;
+- run broad workspace verification again after the slice lands.
 
 ## Running Log
 
@@ -296,4 +322,11 @@ Completion gate:
   - `cargo test --workspace --no-run` succeeded;
   - `cargo test --workspace` green: 1838 passed, 0 failed, 8 ignored across 85 test binaries, plus 17 doc-test sections;
   - confirmed frame-pixel caption occlusion scoring and resumable preview worker pool remain the only outstanding production gaps.
-- Next action: schedule the frame-pixel caption occlusion scorer slice, then the resumable preview worker pool slice, both test-first.
+- Completed frame-pixel caption rendered-output scorer slice:
+  - shipped a new `caption_rendered_output_scorer` module + `CaptionFrameSampler` trait + production `FfmpegFrameSampler` + test-only `InMemoryFrameSampler` / `AlwaysUnavailableFrameSampler`;
+  - added `awidat_render::extract_frame_raw_gray` (raw grayscale single-frame extractor) and taught `MediaProbe` to expose `video_width` / `video_height`;
+  - recorded `libass_layout_sidecar_paths` in the render manifest so the scorer can locate ASS sidecars from manifest metadata;
+  - `verify_render_output` now runs the scorer before its sync gate-builder and injects measured `caption_rendered_output_*` metadata; the gate reason set expands to `frame_pixel_scorer_passed`, `frame_pixel_scorer_failed`, and `frame_pixel_scorer_unavailable_fell_back_to_libass_layout`;
+  - capability notes (capabilities.rs + capability_metadata.rs + capability_manifest test) advertise the new scorer surface;
+  - broad verification: `cargo fmt --all -- --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo test --workspace` green at 1847 passed / 0 failed / 8 ignored across 85 test binaries.
+- Next action: schedule the resumable preview worker pool slice (promote `PreviewCacheRefreshLifecycle` from planning artifact to a status machine with a tokio-backed executor + resume semantics).
