@@ -113,6 +113,127 @@ pub async fn clear_transcript_cache(state: &AwidatState) {
     state.transcript_cache.lock().await.clear();
 }
 
+/// Rename every occurrence of a speaker label in the whisper sidecar
+/// for `stem`. Used by the transcript pane's inline speaker rename
+/// (e.g. `SPEAKER_00` → `Host`). The sidecar is the canonical
+/// store — no separate name-map sidecar — so the change is durable
+/// across re-runs unless the user re-indexes whisper (which would
+/// regenerate the auto-labels).
+///
+/// Rewrites three locations in the sidecar:
+///   - `data.speakers[].id` where it matches `old_id`
+///   - `data.segments[].speaker_id` where it matches `old_id`
+///   - `data.words[].speaker_id` where it matches `old_id`
+///
+/// Returns the number of rewrites applied so the UI can confirm
+/// or surface "no speaker matched". Errors when nothing matched —
+/// indicates the user's `old_id` doesn't exist in the sidecar.
+#[tauri::command]
+pub async fn rename_speaker(
+    state: State<'_, AwidatState>,
+    stem: String,
+    old_id: String,
+    new_id: String,
+) -> Result<usize, String> {
+    let trimmed = new_id.trim();
+    if trimmed.is_empty() {
+        return Err("new speaker name cannot be empty".into());
+    }
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    let new_owned = trimmed.to_string();
+    let stem_clone = stem.clone();
+    let count = tokio::task::spawn_blocking(move || -> Result<usize, String> {
+        let asset_abs = resolve_asset_for_stem(&project_root, &stem_clone)
+            .ok_or_else(|| format!("no asset for stem {stem_clone}"))?;
+        let asset_id_rel = asset_abs
+            .strip_prefix(&project_root)
+            .map_err(|_| format!("asset {} not under project root", asset_abs.display()))?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let sidecar_path = project_root
+            .join("index")
+            .join("whisper")
+            .join(&asset_id_rel)
+            .with_extension("MOV.json");
+        // The `with_extension` above won't always match (asset may be
+        // .mov / .mp4 / .webm). Re-derive from raw path: replace the
+        // `raw/` prefix with `index/whisper/` and append `.json`.
+        let sidecar_path = project_root
+            .join("index")
+            .join("whisper")
+            .join(asset_id_rel.trim_start_matches("raw/"))
+            .with_extension({
+                let path = std::path::PathBuf::from(&asset_id_rel);
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("mov");
+                format!("{ext}.json")
+            });
+        let bytes = std::fs::read(&sidecar_path)
+            .map_err(|e| format!("read whisper sidecar {}: {e}", sidecar_path.display()))?;
+        let mut json: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("parse whisper sidecar: {e}"))?;
+        let mut count = 0_usize;
+        rewrite_speaker_id(&mut json, &old_id, &new_owned, &mut count);
+        if count == 0 {
+            return Err(format!("no speaker_id matched {old_id} in sidecar"));
+        }
+        let serialized = serde_json::to_vec_pretty(&json)
+            .map_err(|e| format!("serialize whisper sidecar: {e}"))?;
+        std::fs::write(&sidecar_path, serialized)
+            .map_err(|e| format!("write whisper sidecar: {e}"))?;
+        Ok(count)
+    })
+    .await
+    .map_err(|e| format!("rename_speaker join: {e}"))??;
+
+    // Drop any cached transcript so the next read sees the rename.
+    state.transcript_cache.lock().await.remove(&stem);
+    Ok(count)
+}
+
+/// Recursively rewrite every `id` (on speaker entries) and every
+/// `speaker_id` (on segments + words) that equals `old`. Mutates in
+/// place; increments `count` for each rewrite.
+fn rewrite_speaker_id(
+    value: &mut serde_json::Value,
+    old: &str,
+    new: &str,
+    count: &mut usize,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // `speakers` array entries have `id`; segments and words
+            // have `speaker_id`. Match either when the string equals
+            // `old`. We don't disambiguate by parent key — a sidecar
+            // never has a non-speaker `id == "SPEAKER_00"` field in
+            // practice, so the false-positive risk is negligible.
+            for (key, child) in map.iter_mut() {
+                if (key == "id" || key == "speaker_id")
+                    && child.as_str() == Some(old)
+                {
+                    *child = serde_json::Value::String(new.to_string());
+                    *count += 1;
+                } else {
+                    rewrite_speaker_id(child, old, new, count);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for child in arr.iter_mut() {
+                rewrite_speaker_id(child, old, new, count);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Walk `<project>/raw/` and find the asset whose proxy filename
 /// stem matches `stem`. The proxy stem is `<asset_stem>-<8hex>` —
 /// recomputing the hash off the absolute asset path is the only

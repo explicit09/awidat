@@ -350,7 +350,11 @@ fn compute_index_readiness_at(project_root: &Path) -> IndexReadinessSnapshot {
     let color = any_json_file(&project_root.join("index").join("color-analysis"));
     let silence = any_json_file(&project_root.join(".awidat").join("silences"))
         || any_json_file(&project_root.join("index").join("audio-energy"));
-    let speaker = transcripts && any_json_file(&project_root.join("index").join("speaker"));
+    // Speaker labels live INSIDE the whisper sidecar's body when
+    // diarization runs (`data.diarized: true` + `data.speakers: [...]`),
+    // not in a separate `index/speaker/` directory. Check the whisper
+    // sidecars for a diarized=true marker.
+    let speaker = transcripts && any_whisper_sidecar_diarized(&project_root.join("index").join("whisper"));
     let captions = transcripts;
     let ready_count = [
         transcripts,
@@ -401,6 +405,52 @@ fn any_json_file(dir: &Path) -> bool {
     false
 }
 
+/// True iff any whisper sidecar under `dir` has `data.diarized: true`.
+/// Used by the index-readiness check to flip the Speaker signal to
+/// "Indexed" — diarization output lands inside the whisper sidecar,
+/// not in a separate folder.
+fn any_whisper_sidecar_diarized(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if any_whisper_sidecar_diarized(&path) {
+                return true;
+            }
+            continue;
+        }
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            continue;
+        }
+        if sidecar_marks_diarized(&path) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true when a JSON file's `data.diarized` field is `true`.
+/// Quietly returns false on any read/parse error — readiness is a
+/// soft signal, not a load-bearing check.
+fn sidecar_marks_diarized(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return false;
+    };
+    json.get("data")
+        .and_then(|data| data.get("diarized"))
+        .and_then(|d| d.as_bool())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +496,42 @@ mod tests {
         assert!(readiness.color);
         assert!(readiness.silence);
         assert!(readiness.captions);
+        // No diarized whisper sidecar in this fixture → speaker stays
+        // false. The `ready_count` is 8 because every signal except
+        // `speaker` is present.
+        assert!(!readiness.speaker);
         assert_eq!(readiness.ready_count, 8);
+    }
+
+    #[test]
+    fn speaker_readiness_flips_when_whisper_sidecar_has_diarized_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let whisper_dir = dir.path().join("index/whisper/raw");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        std::fs::write(
+            whisper_dir.join("source.mov.json"),
+            r#"{"data": {"diarized": true, "speakers": [{"id": "SPEAKER_00"}]}}"#,
+        )
+        .unwrap();
+
+        let readiness = compute_index_readiness_at(dir.path());
+        assert!(readiness.transcripts, "transcripts must be ready first");
+        assert!(readiness.speaker, "diarized=true in whisper sidecar marks speaker ready");
+    }
+
+    #[test]
+    fn speaker_readiness_stays_false_when_sidecar_has_diarized_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let whisper_dir = dir.path().join("index/whisper/raw");
+        std::fs::create_dir_all(&whisper_dir).unwrap();
+        std::fs::write(
+            whisper_dir.join("source.mov.json"),
+            r#"{"data": {"diarized": false, "segments": []}}"#,
+        )
+        .unwrap();
+
+        let readiness = compute_index_readiness_at(dir.path());
+        assert!(readiness.transcripts);
+        assert!(!readiness.speaker, "diarized=false leaves speaker unready");
     }
 }

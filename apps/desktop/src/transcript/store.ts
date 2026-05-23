@@ -30,6 +30,11 @@ type State = {
   /** Kick off a fetch for `stem` if not already loading or loaded.
    *  No-op if `stem` is null. */
   load: (stem: string | null) => Promise<void>;
+  /** Force re-fetch for `stem`, bypassing the cache. Used after the
+   *  user renames a speaker via the inline speaker label — the backend
+   *  already invalidates its own cache, but we need to wipe the front-
+   *  end byStem entry too so the next render sees the new labels. */
+  reload: (stem: string) => Promise<void>;
   /** Switch the active stem. Triggers a load if needed. */
   setActiveStem: (stem: string | null) => void;
   /** Clear all cached transcripts (called on whisper-job Completed
@@ -81,6 +86,16 @@ export const useTranscriptStore = create<State>((set, get) => ({
         byStem: { ...s.byStem, [stem]: { state: "missing" } },
       }));
     }
+  },
+
+  reload: async (stem) => {
+    // Drop the cached entry so `load` doesn't short-circuit.
+    set((s) => {
+      const next = { ...s.byStem };
+      delete next[stem];
+      return { byStem: next };
+    });
+    await get().load(stem);
   },
 
   setActiveStem: (stem) => {

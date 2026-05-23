@@ -17,7 +17,7 @@
 // classList toggle keyed off useMediaStore.timelineTime). Drag-
 // select + delete-range lands in 6.7.
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranscriptStore } from "./store";
@@ -422,9 +422,7 @@ function LoadedTranscript({
                 }}
               >
                 {row.segment.speaker_id ? (
-                  <div className="transcript-speaker">
-                    {row.segment.speaker_id}
-                  </div>
+                  <SpeakerLabel stem={stem} speakerId={row.segment.speaker_id} />
                 ) : null}
                 <SegmentBody row={row} />
                 <div className="transcript-time">
@@ -484,6 +482,88 @@ function SegmentBody({ row }: { row: SegmentRow }) {
         </span>
       ))}
     </div>
+  );
+}
+
+/** Click-to-rename speaker label. Diarization seeds clips with
+ *  `SPEAKER_00`, `SPEAKER_01`, etc. The user clicks to swap them for
+ *  human names ("Host", "Guest"), which we persist by rewriting the
+ *  whisper sidecar via `rename_speaker`. Subsequent transcript reads
+ *  see the new label everywhere. */
+function SpeakerLabel({ stem, speakerId }: { stem: string; speakerId: string }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(speakerId);
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // Keep draft in sync if the parent's speakerId prop changes (e.g.,
+  // a sibling rename just rewrote the sidecar and the transcript
+  // refreshed).
+  useEffect(() => {
+    if (!editing) setDraft(speakerId);
+  }, [speakerId, editing]);
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  async function commit() {
+    const next = draft.trim();
+    if (!next || next === speakerId) {
+      setEditing(false);
+      setDraft(speakerId);
+      return;
+    }
+    setBusy(true);
+    try {
+      await invoke<number>("rename_speaker", {
+        stem,
+        oldId: speakerId,
+        newId: next,
+      });
+      // Re-fetch so every segment picks up the new label. Backend
+      // already invalidated its cache during rename; this clears the
+      // frontend's byStem entry and forces a fresh read.
+      await useTranscriptStore.getState().reload(stem);
+    } catch (e) {
+      // Revert to last-known-good label.
+      // eslint-disable-next-line no-console
+      console.warn("rename_speaker failed", e);
+      setDraft(speakerId);
+    } finally {
+      setBusy(false);
+      setEditing(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        className="transcript-speaker transcript-speaker-button"
+        title="Click to rename speaker"
+      >
+        {speakerId}
+      </button>
+    );
+  }
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") {
+          setDraft(speakerId);
+          setEditing(false);
+        }
+      }}
+      disabled={busy}
+      className="transcript-speaker transcript-speaker-input"
+      aria-label="Speaker name"
+    />
   );
 }
 

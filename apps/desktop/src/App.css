@@ -4981,6 +4981,38 @@ button {
   background: rgba(95, 168, 255, 0.16);
 }
 
+/* The transcript-speaker is now clickable to rename. The button
+   variant inherits the pill shape and adds a subtle hover lift. The
+   input variant matches the pill chrome exactly so the rename feels
+   like typing into the label, not a form. */
+.transcript-segment .transcript-speaker-button {
+  cursor: pointer;
+  /* Match button user-agent style stripping to the surrounding pill. */
+  appearance: none;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  transition: background-color 100ms ease, border-color 100ms ease;
+}
+.transcript-segment .transcript-speaker-button:hover {
+  background: rgba(95, 168, 255, 0.16);
+  border-color: rgba(95, 168, 255, 0.35);
+}
+
+.transcript-segment .transcript-speaker-input {
+  /* Editable variant — strip system look so it sits inside the pill
+     without doubling the chrome. */
+  outline: none;
+  width: 8ch;
+  min-width: 60px;
+  appearance: none;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  background: rgba(95, 168, 255, 0.20);
+  border: 1px solid rgba(95, 168, 255, 0.6);
+}
+
 /* Narrow panel — collapse the gutter, push timestamp inline as a
    small label above the speaker pill. Triggers when the transcript
    dock is < ~420px wide. */
