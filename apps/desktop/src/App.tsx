@@ -54,6 +54,7 @@ import {
 import { JobsStatusBar } from "./shell/JobsStatusBar";
 import { toActiveJobLike, aggregatePercent } from "./shell/activeJobs";
 import { AgentStatusBadge, Button, Card, cn, IconButton, Inline, Pill, Stack, type MediaIndexingStatus, type PillStatus } from "./ui";
+import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
 import { useProposalInspectorData } from "./state/proposalAdapter";
@@ -1435,18 +1436,22 @@ function App() {
             active={rightPanel}
             onChange={setRightPanel}
             inspector={
-              <ProposalInspector
-                data={effectiveInspector}
-                onAccept={acceptActiveProposal}
-                onReject={rejectActiveProposal}
-                onInspectDeeper={inspectActiveProposal}
-                onRevise={reviseActiveProposal}
-                onAgentRepair={() => {
-                  void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
-                }}
-                onMaximize={() => setInspectorCollapsed(false)}
-                onCollapse={() => setInspectorCollapsed(true)}
-              />
+              activeProposal || demoMode ? (
+                <ProposalInspector
+                  data={effectiveInspector}
+                  onAccept={acceptActiveProposal}
+                  onReject={rejectActiveProposal}
+                  onInspectDeeper={inspectActiveProposal}
+                  onRevise={reviseActiveProposal}
+                  onAgentRepair={() => {
+                    void runEngineCommand("Repair the selected proposal's risky edits before acceptance.");
+                  }}
+                  onMaximize={() => setInspectorCollapsed(false)}
+                  onCollapse={() => setInspectorCollapsed(true)}
+                />
+              ) : (
+                <ClipInspector />
+              )
             }
             index={
               <IndexReadinessPanel

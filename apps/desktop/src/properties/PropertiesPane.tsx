@@ -1063,6 +1063,7 @@ function VolumeControl({
   const initial = value ?? DEFAULT_VOLUME;
   const [local, setLocal] = useState(initial);
   const lastCommittedRef = useRef<number>(initial);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Reset local state when the clip's persisted value changes (or
   // the user selects a different clip).
@@ -1071,21 +1072,16 @@ function VolumeControl({
     lastCommittedRef.current = initial;
   }, [clipUuid, initial]);
 
-  const dirty = Math.abs(local - lastCommittedRef.current) >= 1e-6;
-
-  function apply() {
-    lastCommittedRef.current = local;
-    const op: EdlOp = {
-      kind: "set_volume",
-      anchor: { kind: "clip_uuid", uuid: clipUuid },
-      value: local,
-    };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.warn("propose_user_edit (set_volume) failed", err);
-    });
+  function handleChange(next: number) {
+    setLocal(next);
+    if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      lastCommittedRef.current = next;
+      invoke("set_clip_volume", { clipUuid, volume: next }).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("set_clip_volume failed", err);
+      });
+    }, COMMIT_DEBOUNCE_MS);
   }
 
   return (
@@ -1094,18 +1090,13 @@ function VolumeControl({
         <input
           type="range"
           min={0}
-          max={2}
+          max={4}
           step={0.01}
           value={local}
-          onChange={(e) => setLocal(parseFloat(e.target.value))}
+          onChange={(e) => handleChange(parseFloat(e.target.value))}
           className="properties-slider"
         />
         <span className="properties-control-value">{local.toFixed(2)}×</span>
-        {dirty && (
-          <button className="properties-apply" type="button" onClick={apply}>
-            Apply
-          </button>
-        )}
       </div>
     </Field>
   );
@@ -1124,31 +1115,35 @@ function AudioFadeControl({
   const initialOut = fadeOutS ?? 0;
   const [localIn, setLocalIn] = useState(initialIn);
   const [localOut, setLocalOut] = useState(initialOut);
-  const lastCommittedRef = useRef(`${initialIn}|${initialOut}`);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setLocalIn(initialIn);
     setLocalOut(initialOut);
-    lastCommittedRef.current = `${initialIn}|${initialOut}`;
   }, [clipUuid, initialIn, initialOut]);
 
-  const sig = `${localIn}|${localOut}`;
-  const dirty = sig !== lastCommittedRef.current;
+  function scheduleCommit(nextIn: number, nextOut: number) {
+    if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      invoke("set_clip_fade", {
+        clipUuid,
+        fadeInS: Math.max(0, nextIn),
+        fadeOutS: Math.max(0, nextOut),
+      }).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("set_clip_fade failed", err);
+      });
+    }, COMMIT_DEBOUNCE_MS);
+  }
 
-  function apply() {
-    lastCommittedRef.current = sig;
-    const op: EdlOp = {
-      kind: "set_audio_fade",
-      anchor: { kind: "clip_uuid", uuid: clipUuid },
-      fadeInS: Math.max(0, localIn),
-      fadeOutS: Math.max(0, localOut),
-    };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.warn("propose_user_edit (set_audio_fade) failed", err);
-    });
+  function handleInChange(next: number) {
+    setLocalIn(next);
+    scheduleCommit(next, localOut);
+  }
+
+  function handleOutChange(next: number) {
+    setLocalOut(next);
+    scheduleCommit(localIn, next);
   }
 
   return (
@@ -1160,7 +1155,7 @@ function AudioFadeControl({
           step={0.05}
           className="properties-number-input"
           value={localIn}
-          onChange={(e) => setLocalIn(parseFloat(e.target.value) || 0)}
+          onChange={(e) => handleInChange(parseFloat(e.target.value) || 0)}
           aria-label="Fade in seconds"
         />
         <input
@@ -1169,14 +1164,9 @@ function AudioFadeControl({
           step={0.05}
           className="properties-number-input"
           value={localOut}
-          onChange={(e) => setLocalOut(parseFloat(e.target.value) || 0)}
+          onChange={(e) => handleOutChange(parseFloat(e.target.value) || 0)}
           aria-label="Fade out seconds"
         />
-        {dirty && (
-          <button className="properties-apply" type="button" onClick={apply}>
-            Apply
-          </button>
-        )}
       </div>
     </Field>
   );
@@ -1343,29 +1333,22 @@ function SpeedControl({
 }) {
   const initial = factor ?? DEFAULT_SPEED;
   const [local, setLocal] = useState(initial);
-  const lastCommittedRef = useRef<number>(initial);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setLocal(initial);
-    lastCommittedRef.current = initial;
   }, [clipUuid, initial]);
 
-  const dirty = Math.abs(local - lastCommittedRef.current) >= 1e-6;
-
-  function apply() {
-    if (!isFinite(local) || local <= 0) return;
-    lastCommittedRef.current = local;
-    const op: EdlOp = {
-      kind: "set_speed",
-      anchor: { kind: "clip_uuid", uuid: clipUuid },
-      factor: local,
-    };
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([op]),
-    }).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.warn("propose_user_edit (set_speed) failed", err);
-    });
+  function handleChange(next: number) {
+    if (!isFinite(next) || next <= 0) return;
+    setLocal(next);
+    if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      invoke("set_clip_speed", { clipUuid, speed: next }).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("set_clip_speed failed", err);
+      });
+    }, COMMIT_DEBOUNCE_MS);
   }
 
   return (
@@ -1377,15 +1360,10 @@ function SpeedControl({
           max={4}
           step={0.05}
           value={local}
-          onChange={(e) => setLocal(parseFloat(e.target.value))}
+          onChange={(e) => handleChange(parseFloat(e.target.value))}
           className="properties-slider"
         />
         <span className="properties-control-value">{local.toFixed(2)}×</span>
-        {dirty && (
-          <button className="properties-apply" type="button" onClick={apply}>
-            Apply
-          </button>
-        )}
       </div>
     </Field>
   );
