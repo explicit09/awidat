@@ -289,7 +289,7 @@ await check("agent command rail renders Screen 2 intent, context, plan, activity
     "⌘↩ to send",
     "Cut this into a tight 8-minute podcast episode.",
     "Remove dead air but preserve natural pacing.",
-    "Clip: Interview_A",
+    "Clip Interview_A",
     "Range: 00:12-18:40",
     "Transcript region selected",
     "Target: YouTube 16:9",

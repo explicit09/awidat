@@ -6210,3 +6210,144 @@ button {
 .animate-edit-dock-overlay-in {
   animation: edit-dock-overlay-in 120ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+/* ─── Chat rail (Cursor-inspired calm pass) ─────────────────────────
+   Scoped to .awidat-chat-rail so the rest of the app keeps its
+   teal-accent palette. Inside the rail we shift to a flatter
+   charcoal/slate surface (Cursor's Anysphere Dark), enlarge the body
+   rhythm, and replace the green Send pill with a quiet bordered
+   button. Composer becomes one rounded card with the mode chip,
+   attach + mic icons, hint text, and Send all inside the same frame. */
+.awidat-chat-rail {
+  /* Cursor-style charcoal — overrides the cool teal-tinted surfaces
+     just for the rail. */
+  --color-surface-page: #0B0B0C;
+  --color-surface-panel: #0F0F11;
+  --color-surface-card: #18181A;
+  --color-surface-card-hover: #1E1E20;
+  --color-surface-input: #161618;
+  --color-surface-input-hover: #1B1B1D;
+  --color-surface-hover: #1E1E20;
+  --color-surface-selected: #262629;
+  --color-border: #2D2D30;
+  --color-border-subtle: #1F1F22;
+  --color-border-focus: #4F4F55;
+  --color-text-primary: #E6E6E6;
+  --color-text-secondary: #B4B4B8;
+  --color-text-muted: #7A7A82;
+  background: var(--color-surface-page);
+}
+
+/* Header — a single inline row, no card chrome behind it. The
+   chat-title button reads like a tab title; History/New/Focus
+   buttons become tiny ghost icons (less visual weight than text
+   buttons). */
+.awidat-chat-rail [aria-expanded][title="Chat history"] {
+  border-color: transparent !important;
+  background: transparent !important;
+  font-weight: 500;
+}
+.awidat-chat-rail [aria-expanded][title="Chat history"]:hover {
+  background: var(--color-surface-card) !important;
+}
+
+/* Body — generous line-height and 18px gap between assistant
+   replies so the eye has room to breathe. Tool-call rows (the
+   `• view timeline  Read timeline` lines) drop their card chrome
+   and read as plain text with a leading dot. */
+.awidat-chat-rail .chat-stream,
+.awidat-chat-rail [data-chat-stream] {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* User bubble — Cursor uses a soft pill with selection-tinted
+   background, not a vivid brand color. */
+.awidat-chat-rail [data-chat-user] {
+  background: var(--color-surface-selected);
+  color: var(--color-text-primary);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+/* Tool tags inline — calm monospace, no card. */
+.awidat-chat-rail [data-tool-tag] {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* Composer — one rounded card that contains the textarea, the
+   ⌘↩ hint, and the Send/Stop button. Focus state thickens the
+   border without changing color (keeps the rail calm). */
+.awidat-chat-rail .awidat-composer-card {
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 12px;
+  transition: border-color 120ms ease;
+}
+.awidat-chat-rail .awidat-composer-card:focus-within {
+  border-color: var(--color-border-focus);
+}
+.awidat-chat-rail .awidat-composer-card textarea {
+  font-size: 14px;
+  line-height: 1.55;
+  padding: 12px 14px 4px;
+}
+
+/* Send button override — strip the brand-green primary look and use
+   a quiet bordered button that lights up on hover. Stop button keeps
+   the warning tint because it's a destructive interrupt. */
+.awidat-chat-rail .awidat-composer-card button[title*="Command-Enter"],
+.awidat-chat-rail .awidat-composer-card .awidat-send-button {
+  background: var(--color-surface-input) !important;
+  border: 1px solid var(--color-border) !important;
+  color: var(--color-text-secondary) !important;
+  border-radius: 8px !important;
+  font-weight: 500;
+}
+.awidat-chat-rail .awidat-composer-card .awidat-send-button:hover:not(:disabled) {
+  background: var(--color-surface-hover) !important;
+  color: var(--color-text-primary) !important;
+}
+.awidat-chat-rail .awidat-composer-card .awidat-send-button:disabled {
+  opacity: 0.5;
+}
+
+/* Context strip above the composer — one inline row of dim tags
+   instead of stacked card pills. Cursor doesn't have this concept
+   but our editor needs "playhead + selected clip" context surfaced
+   somewhere — keep it minimal so it doesn't compete with the
+   composer. */
+.awidat-chat-rail .awidat-context-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  min-height: 20px;
+}
+.awidat-chat-rail .awidat-context-strip .awidat-context-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.awidat-chat-rail .awidat-context-strip .awidat-context-clear {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.awidat-chat-rail .awidat-context-strip .awidat-context-clear:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}

@@ -2,15 +2,12 @@ import {
   ChevronDown,
   ChevronRight,
   CircleStop,
-  History,
   ListChecks,
   Maximize2,
   Minimize2,
   Paperclip,
-  Plus,
   SendHorizontal,
   Sparkles,
-  X,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -188,75 +185,49 @@ export function CommandRail({
   const sessionChrome = (
     <div className={cn("shrink-0 px-3 py-2", focused ? "" : "border-b border-[var(--color-border-subtle)]")}>
       <Inline justify="between" align="center" gap="2">
+        {/* Single tab: title + chevron. Click toggles history (which
+            contains "+ New chat" at the top). Replaces the old
+            title + History + New + Focus button cluster. */}
         <button
           type="button"
           className={cn(
             "group min-w-0 flex-1 rounded-[var(--radius-md)] px-2 py-1.5 text-left",
             "transition-[background-color,border-color] duration-[120ms]",
-            "border border-transparent hover:border-[var(--color-border-subtle)] hover:bg-[var(--color-surface-card)]",
+            "border border-transparent hover:bg-[var(--color-surface-card)]",
           )}
           onClick={() => setHistoryOpen((open) => !open)}
           disabled={chatLoading}
           aria-expanded={historyOpen}
-          title="Chat history"
+          title="Chats"
         >
           <Inline gap="2" align="center" className="min-w-0">
-            <span
+            <span className="min-w-0 truncate text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
+              {chatLoading ? "Loading chats…" : activeChatSession?.title ?? "New chat"}
+            </span>
+            <ChevronDown
               className={cn(
-                "h-1.5 w-1.5 shrink-0 rounded-full",
-                activeChatSession
-                  ? "bg-[var(--accent-selection)]"
-                  : "bg-[var(--color-text-muted)] opacity-50",
+                "h-3 w-3 shrink-0 stroke-[1.75] text-[var(--color-text-muted)] transition-transform duration-[120ms]",
+                historyOpen ? "rotate-180" : "",
               )}
               aria-hidden
             />
-            <span className="min-w-0 truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
-              {chatLoading ? "Loading chats…" : activeChatSession?.title ?? "New chat"}
-            </span>
-            <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-              {activeChatSession ? `${activeChatSession.messageCount} msgs` : "fresh"}
-            </span>
           </Inline>
         </button>
-        <Inline gap="1" align="center" className="shrink-0">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={chatLoading}
-            onClick={() => setHistoryOpen((open) => !open)}
-            leadingIcon={<History className="h-3.5 w-3.5 stroke-[1.75]" />}
-            title="Past chats"
+        {onToggleFocus ? (
+          <button
+            type="button"
+            onClick={onToggleFocus}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-card)] hover:text-[var(--color-text-primary)] transition-colors"
+            title={focused ? "Restore workspace" : "Focus mode"}
+            aria-label={focused ? "Restore workspace" : "Focus mode"}
           >
-            History
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={running || chatLoading}
-            onClick={onNewChat}
-            leadingIcon={<Plus className="h-3.5 w-3.5 stroke-[1.75]" />}
-            title="New chat"
-          >
-            New
-          </Button>
-          {onToggleFocus ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onToggleFocus}
-              leadingIcon={
-                focused ? (
-                  <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
-                ) : (
-                  <Maximize2 className="h-3.5 w-3.5 stroke-[1.75]" />
-                )
-              }
-              title={focused ? "Restore workspace" : "Focus mode"}
-            >
-              {focused ? "Restore" : "Focus"}
-            </Button>
-          ) : null}
-        </Inline>
+            {focused ? (
+              <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+            ) : (
+              <Maximize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+            )}
+          </button>
+        ) : null}
       </Inline>
       {historyOpen ? (
         <div className="mt-2 max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-md)]">
@@ -335,8 +306,7 @@ export function CommandRail({
             one continuous control. */}
         <div
           className={cn(
-            "rounded-[var(--radius-md)] bg-[var(--color-surface-input)] transition-colors",
-            "border border-transparent focus-within:border-[var(--color-border-focus)]",
+            "awidat-composer-card rounded-[var(--radius-md)] transition-colors",
             focused ? "shadow-[0_18px_70px_rgba(0,0,0,0.3)]" : "",
           )}
         >
@@ -385,64 +355,59 @@ export function CommandRail({
               </Button>
             ) : (
               <Button
-                variant="primary"
+                variant="ghost"
                 size="sm"
                 disabled={Boolean(sendDisabledReason)}
                 onClick={submit}
                 trailingIcon={<SendHorizontal className="h-3.5 w-3.5 stroke-[1.75]" />}
                 title={sendDisabledReason}
+                className="awidat-send-button"
               >
                 Send
               </Button>
             )}
           </Inline>
         </div>
-        {contextChips.length > 0 ? (
-          <div className={cn("flex min-w-0 gap-1.5", focused ? "flex-row flex-wrap" : "flex-col")}>
-            {contextChips.map((chip, i) => (
-              <div
-                key={`${chip.label}-${i}`}
-                className={cn(
-                  "group flex min-h-7 min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] border pl-2 pr-1 py-1 text-[var(--text-caption)]",
-                  "transition-[background-color,border-color] duration-[120ms]",
-                  focused ? "max-w-[260px]" : "w-full",
-                  contextChipClass(chip.kind),
-                )}
-              >
+        {(() => {
+          // Filter out the Project chip — the chat is already scoped to
+          // the open project (the rail header shows the title), so
+          // restating it adds noise without information.
+          const visibleChips = contextChips.filter((c) => c.kind !== "project");
+          if (visibleChips.length === 0) return null;
+          return (
+            <div className="awidat-context-strip">
+              {visibleChips.map((chip, i) => (
                 <span
-                  className={cn(
-                    "h-1.5 w-1.5 shrink-0 rounded-full",
-                    contextChipDotClass(chip.kind),
-                  )}
-                  aria-hidden
-                />
-                <Paperclip className="h-3 w-3 shrink-0 stroke-[1.75] opacity-70" />
-                <span
-                  className="min-w-0 flex-1 truncate font-mono text-[11px]"
+                  key={`${chip.label}-${i}`}
+                  className="awidat-context-item"
                   title={chip.label}
                 >
-                  {chip.label}
+                  <Paperclip className="h-3 w-3 shrink-0 stroke-[1.75] opacity-70" />
+                  <span className="truncate max-w-[200px]">{shortenChip(chip.label)}</span>
                 </span>
-                {onRemoveChip ? (
-                  <button
-                    type="button"
-                    onClick={() => onRemoveChip(chip, i)}
-                    className={cn(
-                      "ml-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-xs)]",
-                      "text-[var(--color-text-muted)] opacity-0 transition-opacity duration-[100ms]",
-                      "group-hover:opacity-100 focus-visible:opacity-100",
-                      "hover:bg-[rgba(248,81,73,0.18)] hover:text-[#ffb4ae]",
-                    )}
-                    aria-label={`Remove ${chip.label}`}
-                    title={`Remove ${chip.label}`}
-                  >
-                    <X className="h-3 w-3 stroke-[2]" />
-                  </button>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : null}
+              ))}
+              {onRemoveChip ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Clear all visible chips in one shot. Walking
+                    // backward keeps indices stable across the removes.
+                    for (let i = visibleChips.length - 1; i >= 0; i--) {
+                      const chip = visibleChips[i];
+                      const originalIdx = contextChips.indexOf(chip);
+                      onRemoveChip(chip, originalIdx);
+                    }
+                  }}
+                  className="awidat-context-clear"
+                  aria-label="Clear attached context"
+                  title="Clear attached context"
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
+          );
+        })()}
       </Stack>
     </div>
   );
@@ -450,7 +415,7 @@ export function CommandRail({
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 flex-col",
+        "awidat-chat-rail flex h-full min-h-0 flex-col",
         focused ? "bg-transparent" : "",
       )}
     >
@@ -543,12 +508,12 @@ export function CommandRail({
               a stack of widgets. */}
           {turns.length > 0 ? (
             <Section label="Conversation">
-              <div className="flex flex-col gap-4">
-                {turns.map((turn, i) => (
+              <div className="flex flex-col gap-5">
+                {turns.map((turn) => (
                   <ConversationTurnBlock
                     key={turn.id}
                     turn={turn}
-                    showSeparator={i > 0}
+                    showSeparator={false}
                   />
                 ))}
               </div>
@@ -650,11 +615,12 @@ function ConversationTurnBlock({
       {turn.userText ? (
         <div className="flex min-w-0 justify-end">
           <p
+            data-chat-user
             className={cn(
               "max-w-[85%] whitespace-pre-wrap break-words leading-relaxed",
-              "rounded-[18px] px-3.5 py-2",
-              "text-[var(--text-body-sm)] text-[var(--color-text-primary)]",
-              "bg-[color-mix(in_oklab,#4c5b86_38%,var(--color-surface-card))]",
+              "rounded-[14px] px-3.5 py-2",
+              "text-[14px] text-[var(--color-text-primary)]",
+              "bg-[var(--color-surface-selected)]",
             )}
           >
             {turn.userText}
@@ -662,12 +628,12 @@ function ConversationTurnBlock({
         </div>
       ) : null}
       {turn.parts.length > 0 ? (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-3">
           {turn.parts.map((part) =>
             part.kind === "text" ? (
               <div
                 key={part.id}
-                className="markdown w-full break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]"
+                className="markdown w-full break-words text-[14px] leading-[1.6] text-[var(--color-text-primary)]"
               >
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {part.text}
@@ -828,37 +794,30 @@ function EmptyState({
   );
 }
 
-function contextChipClass(kind: ContextChip["kind"]) {
-  switch (kind) {
-    case "media":
-    case "selection":
-      return "border-[rgba(59,130,246,0.36)] bg-[rgba(59,130,246,0.08)] text-[var(--color-pill-proposed-text)] hover:bg-[rgba(59,130,246,0.14)]";
-    case "project":
-      return "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.08)] text-[var(--color-pill-ready-text)] hover:bg-[rgba(32,201,151,0.14)]";
-    case "lens":
-      return "border-[rgba(168,85,247,0.34)] bg-[rgba(168,85,247,0.08)] text-[var(--color-pill-reviewing-text)] hover:bg-[rgba(168,85,247,0.14)]";
-    default:
-      return "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-card-hover)]";
-  }
-}
-
 /**
- * Solid-color dot prefix per chip kind so the eye can scan a stack of
- * chips by color even before reading the label. Matches the
- * border/background tints used by [`contextChipClass`].
+ * Compress a long chip label so the inline context strip never wraps.
+ * Strategy:
+ *   - "Clip: copy_F65206FA-9AEC-...F7FA" → "Clip … F7FA"
+ *   - "Timeline: 2:49"                    → "Playhead 2:49"
+ *   - everything else: pass through.
+ *
+ * The mapping is intentional, not algorithmic — these are the labels
+ * the agent attaches today, and the goal is human-readable shorthand
+ * the user can scan in 100ms instead of decoding a UUID.
  */
-function contextChipDotClass(kind: ContextChip["kind"]) {
-  switch (kind) {
-    case "media":
-    case "selection":
-      return "bg-[rgb(96,165,250)]";
-    case "project":
-      return "bg-[rgb(74,222,128)]";
-    case "lens":
-      return "bg-[rgb(192,132,252)]";
-    default:
-      return "bg-[var(--color-text-muted)]";
+function shortenChip(raw: string): string {
+  const trimmed = raw.trim();
+  const tlMatch = trimmed.match(/^Timeline:\s*(.+)$/i);
+  if (tlMatch) return `Playhead ${tlMatch[1]}`;
+  const clipMatch = trimmed.match(/^Clip:\s*(.+)$/i);
+  if (clipMatch) {
+    const value = clipMatch[1];
+    if (value.length > 14) {
+      return `Clip … ${value.slice(-8)}`;
+    }
+    return `Clip ${value}`;
   }
+  return trimmed;
 }
 
 function formatChatDate(value: string): string {

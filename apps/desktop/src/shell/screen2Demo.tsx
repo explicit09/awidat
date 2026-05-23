@@ -17,7 +17,7 @@ export const SCREEN2_CURRENT_TIME_S = 402.46;
 export const screen2ContextChips: ContextChip[] = [
   { label: "Clip: Interview_A", kind: "media" },
   { label: "Range: 00:12-18:40", kind: "selection" },
-  { label: "Transcript region selected", kind: "project" },
+  { label: "Transcript region selected", kind: "selection" },
   { label: "Target: YouTube 16:9", kind: "lens" },
 ];
 
