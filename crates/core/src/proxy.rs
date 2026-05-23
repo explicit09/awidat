@@ -44,7 +44,7 @@ pub fn proxy_path_for(project_root: &Path, asset_path: &Path) -> PathBuf {
         .and_then(|stem| stem.to_str())
         .filter(|stem| !stem.trim().is_empty())
         .unwrap_or("asset");
-    proxies_dir.join(format!("{stem}-{:016x}.mp4", stable_path_hash(asset_path)))
+    proxies_dir.join(format!("{stem}-{:08x}.mp4", stable_path_hash(asset_path)))
 }
 
 /// Return the pending path used while ffmpeg writes a proxy.
@@ -118,11 +118,11 @@ fn modified(path: &Path) -> std::io::Result<SystemTime> {
     std::fs::metadata(path)?.modified()
 }
 
-fn stable_path_hash(path: &Path) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+fn stable_path_hash(path: &Path) -> u32 {
+    let mut hash = 0x811c_9dc5_u32;
     for byte in path.to_string_lossy().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
     }
     hash
 }
@@ -146,6 +146,19 @@ mod tests {
 
         assert_eq!(first, second);
         assert!(first.to_string_lossy().contains(".awidat/proxies/camera-"));
+    }
+
+    #[test]
+    fn proxy_path_matches_desktop_preview_cache_contract() {
+        let root = Path::new("/project");
+        let asset = Path::new("/project/raw/foo.mov");
+
+        let proxy = proxy_path_for(root, asset);
+
+        assert_eq!(
+            proxy,
+            Path::new("/project/.awidat/proxies/foo-be138985.mp4")
+        );
     }
 
     #[test]
