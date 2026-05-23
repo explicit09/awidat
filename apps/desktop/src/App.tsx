@@ -2087,6 +2087,30 @@ function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
   }
 }
 
+/** Small color dot per status for the calmer signal-row treatment.
+ *  Tiny dot + muted text label replaces the big colored pill — same
+ *  information, far less visual weight. Three semantic colors only:
+ *  ready (green), in-flight (amber), needs-attention (red). */
+function statusDotColor(
+  status: IndexingMediaItem["status"] | "disabled",
+): string {
+  switch (status) {
+    case "indexed":
+    case "imported":
+      return "rgb(74, 200, 130)"; // muted green
+    case "indexing":
+    case "processing":
+    case "queued":
+    case "partial":
+      return "rgb(217, 165, 75)"; // muted amber
+    case "failed":
+      return "rgb(220, 100, 95)"; // muted red
+    case "missing":
+    case "disabled":
+      return "rgba(255, 255, 255, 0.25)"; // neutral / inactive
+  }
+}
+
 /**
  * Map each signal kind to the indexer(s) it depends on. When none of
  * the listed indexers is enabled in the project config, the signal
@@ -2265,6 +2289,7 @@ function IndexReadinessPanel({
                 const detail = disabled
                   ? "Enable the indexer to compute this signal."
                   : task.detail ?? indexTaskDetail(task.status);
+                const statusLabel = disabled ? "Disabled" : mediaStatusLabel(task.status);
                 return (
                   <Inline
                     key={task.id}
@@ -2272,14 +2297,12 @@ function IndexReadinessPanel({
                     align="center"
                     gap="2"
                     className={cn(
-                      "rounded-[var(--radius-sm)] border px-2.5 py-1.5 transition-colors",
-                      disabled
-                        ? "border-[var(--color-border-subtle)] bg-transparent opacity-65"
-                        : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)]",
+                      "px-2.5 py-1.5 transition-colors",
+                      disabled && "opacity-60",
                     )}
                   >
                     <Stack gap="0" className="min-w-0">
-                      <span className="truncate text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
+                      <span className="truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
                         {indexTaskLabel(task.kind)}
                       </span>
                       {showDetail ? (
@@ -2288,15 +2311,18 @@ function IndexReadinessPanel({
                         </span>
                       ) : null}
                     </Stack>
-                    {disabled ? (
-                      <Pill status="missing" dot={false} className="shrink-0 opacity-80">
-                        Disabled
-                      </Pill>
-                    ) : (
-                      <Pill status={mediaStatusPill(task.status)} dot={false} className="shrink-0">
-                        {mediaStatusLabel(task.status)}
-                      </Pill>
-                    )}
+                    {/* Dot + label, not a colored pill. Color is held
+                        in reserve for active state — here we use it
+                        only to mark the status (green = ready, amber
+                        = working, red = needs attention). */}
+                    <span className="shrink-0 inline-flex items-center gap-1.5 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ backgroundColor: statusDotColor(disabled ? "disabled" : task.status) }}
+                        aria-hidden
+                      />
+                      <span>{statusLabel}</span>
+                    </span>
                   </Inline>
                 );
               })}

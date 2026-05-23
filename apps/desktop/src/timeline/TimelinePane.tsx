@@ -34,8 +34,9 @@ import { cacheStripSegments, type CacheStripInput } from "./cacheStrip";
  *  default pane width without horizontal scroll. */
 const PX_PER_SECOND_BASE = 12;
 
-/** Height of one track lane in pixels. */
-const LANE_HEIGHT = 38;
+/** Height of one track lane at trackZoom = 1, in pixels. Actual
+ *  lane height during paint is `LANE_HEIGHT_BASE * trackZoom`. */
+const LANE_HEIGHT_BASE = 38;
 
 /** Height of the time ruler at the top of the canvas. */
 const RULER_HEIGHT = 22;
@@ -107,6 +108,65 @@ export function TimelinePane() {
     }
   }, [completedEdits, projectReady, refresh]);
 
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  // Mouse-wheel handlers — must be non-passive so cmd/ctrl+wheel can
+  // preventDefault before the browser's page-zoom kicks in. React's
+  // synthetic wheel handler is passive in modern React, so we attach
+  // manually to the underlying DOM node.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    function onWheel(event: WheelEvent) {
+      // Wheel modifier semantics on macOS:
+      //   - Real Cmd+wheel (mouse) sets `metaKey`.
+      //   - Trackpad pinch fires `wheel` with `ctrlKey: true` but
+      //     `metaKey: false` — the browser fakes ctrl for pinch.
+      // Map them to different zoom axes so users get both:
+      //   - Cmd+wheel  → horizontal time-zoom (anchored at cursor)
+      //   - pinch      → vertical track-zoom
+      // Linux/Windows users can hold real Ctrl for vertical zoom (the
+      // same gesture the OS uses for browser page-zoom by default).
+      const horizontalZoom = event.metaKey;
+      const verticalZoom = event.ctrlKey && !event.metaKey;
+      if (horizontalZoom) {
+        event.preventDefault();
+        const { zoom: currentZoom, setZoom } = useTimelineStore.getState();
+        const factor = Math.exp(-event.deltaY / 240);
+        const nextZoom = currentZoom * factor;
+        const rect = el!.getBoundingClientRect();
+        const cursorContentX = (event.clientX - rect.left) + el!.scrollLeft;
+        setZoom(nextZoom);
+        // Preserve the content-x under the cursor across the zoom so
+        // the user's anchor point stays visually stable.
+        const ratio = useTimelineStore.getState().zoom / currentZoom;
+        const newContentX = cursorContentX * ratio;
+        const cursorViewportX = event.clientX - rect.left;
+        el!.scrollLeft = Math.max(0, newContentX - cursorViewportX);
+        return;
+      }
+      if (verticalZoom) {
+        event.preventDefault();
+        const { trackZoom: currentTrackZoom, setTrackZoom } =
+          useTimelineStore.getState();
+        const factor = Math.exp(-event.deltaY / 240);
+        setTrackZoom(currentTrackZoom * factor);
+        return;
+      }
+      // Shift + wheel = horizontal scroll (deltaY drives X), matching
+      // editor conventions. Without shift, deltaY is vertical scroll
+      // which the browser handles natively now that .timeline-stage
+      // has overflow-y: auto.
+      if (event.shiftKey && event.deltaY !== 0 && event.deltaX === 0) {
+        event.preventDefault();
+        el!.scrollLeft += event.deltaY;
+      }
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, []);
+
   if (!projectReady) {
     return null;
   }
@@ -120,12 +180,46 @@ export function TimelinePane() {
             ? "no tracks yet"
             : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
         </span>
+        <ZoomControls />
       </header>
-      <div className="timeline-stage">
+      <div className="timeline-stage" ref={stageRef}>
         <TimelineSurface snapshot={snapshot} currentTime={currentTime} zoom={zoom} />
         <ProposalActions />
       </div>
     </section>
+  );
+}
+
+/** Compact +/−/fit controls for horizontal time-zoom and vertical
+ *  track-zoom. Sits in the timeline header. Keyboard shortcuts
+ *  (`timeline:zoom_in/out/fit`) still drive the same store actions
+ *  for users who prefer the menu. */
+function ZoomControls() {
+  const zoom = useTimelineStore((s) => s.zoom);
+  const trackZoom = useTimelineStore((s) => s.trackZoom);
+  const zoomIn = useTimelineStore((s) => s.zoomIn);
+  const zoomOut = useTimelineStore((s) => s.zoomOut);
+  const fitZoom = useTimelineStore((s) => s.fitZoom);
+  const trackZoomIn = useTimelineStore((s) => s.trackZoomIn);
+  const trackZoomOut = useTimelineStore((s) => s.trackZoomOut);
+  const fitTrackZoom = useTimelineStore((s) => s.fitTrackZoom);
+  return (
+    <div className="timeline-zoom-controls">
+      <div className="timeline-zoom-group" title="Horizontal zoom (Cmd/Ctrl + wheel)">
+        <button type="button" onClick={zoomOut} aria-label="Zoom out">−</button>
+        <button type="button" onClick={fitZoom} aria-label="Reset zoom">
+          {zoom.toFixed(2)}×
+        </button>
+        <button type="button" onClick={zoomIn} aria-label="Zoom in">+</button>
+      </div>
+      <div className="timeline-zoom-group" title="Track height">
+        <button type="button" onClick={trackZoomOut} aria-label="Shrink tracks">▾</button>
+        <button type="button" onClick={fitTrackZoom} aria-label="Reset track height">
+          {trackZoom.toFixed(2)}×
+        </button>
+        <button type="button" onClick={trackZoomIn} aria-label="Grow tracks">▴</button>
+      </div>
+    </div>
   );
 }
 
@@ -141,16 +235,19 @@ function TimelineSurface({
   currentTime: number;
   zoom: number;
 }) {
-  const [layout, setLayout] = useState<{ pps: number; width: number }>({
+  const [layout, setLayout] = useState<{ pps: number; width: number; laneHeight: number }>({
     pps: PX_PER_SECOND_BASE,
     width: 0,
+    laneHeight: LANE_HEIGHT_BASE,
   });
-  const handleLayout = useCallback((pps: number, width: number) => {
+  const handleLayout = useCallback((pps: number, width: number, laneHeight: number) => {
     // Only update if it actually changed — paint() runs on
     // every frame React re-renders, but layout changes only
-    // on resize / snapshot swap.
+    // on resize / snapshot swap / track-zoom change.
     setLayout((prev) =>
-      prev.pps === pps && prev.width === width ? prev : { pps, width },
+      prev.pps === pps && prev.width === width && prev.laneHeight === laneHeight
+        ? prev
+        : { pps, width, laneHeight },
     );
   }, []);
   return (
@@ -165,8 +262,13 @@ function TimelineSurface({
         snapshot={snapshot}
         containerWidth={layout.width}
         pps={layout.pps}
+        laneHeight={layout.laneHeight}
       />
-      <ProposalHandles containerWidth={layout.width} pps={layout.pps} />
+      <ProposalHandles
+        containerWidth={layout.width}
+        pps={layout.pps}
+        laneHeight={layout.laneHeight}
+      />
     </>
   );
 }
@@ -175,14 +277,16 @@ function TimelineEditorialOverlay({
   snapshot,
   containerWidth,
   pps,
+  laneHeight,
 }: {
   snapshot: TimelineSnapshot;
   containerWidth: number;
   pps: number;
+  laneHeight: number;
 }) {
   if (containerWidth <= 0 || snapshot.tracks.length === 0) return null;
-  const cutBadges = buildCutBadges(snapshot, pps);
-  const splitOffsets = buildSplitOffsets(snapshot, pps);
+  const cutBadges = buildCutBadges(snapshot, pps, laneHeight);
+  const splitOffsets = buildSplitOffsets(snapshot, pps, laneHeight);
   if (cutBadges.length === 0 && splitOffsets.length === 0) return null;
   return (
     <div
@@ -244,13 +348,18 @@ function TimelineCanvas({
   snapshot: TimelineSnapshot;
   currentTime: number;
   zoom: number;
-  onLayout: (pps: number, widthPx: number) => void;
+  onLayout: (pps: number, widthPx: number, laneHeight: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // Latest pps used for paint, captured into a ref so click handlers
   // can convert x → seconds without recomputing layout.
   const ppsRef = useRef<number>(PX_PER_SECOND_BASE);
+  // Latest lane height used during paint, captured into a ref so hit
+  // tests dispatched outside the paint cycle can stay in sync when
+  // the user changes vertical zoom.
+  const laneHeightRef = useRef<number>(LANE_HEIGHT_BASE);
+  const trackZoom = useTimelineStore((s) => s.trackZoom);
   // Canvas seek + playhead use timeline-time. Single-asset / empty-
   // timeline mode keeps using source-time inside the MediaPane, but
   // the canvas itself is a timeline-time surface — clicking at x=80px
@@ -299,7 +408,8 @@ function TimelineCanvas({
         proposedTrackCount,
         1,
       );
-      const cssHeight = RULER_HEIGHT + lanesCount * LANE_HEIGHT;
+      const laneHeight = LANE_HEIGHT_BASE * trackZoom;
+      const cssHeight = RULER_HEIGHT + lanesCount * laneHeight;
       // Pps from the max of current vs proposed durations so the
       // whole post-state fits even when a proposal extends past
       // the original.
@@ -322,7 +432,8 @@ function TimelineCanvas({
       ctx.clearRect(0, 0, cssWidth, cssHeight);
 
       ppsRef.current = pps;
-      onLayout(pps, cssWidth);
+      laneHeightRef.current = laneHeight;
+      onLayout(pps, cssWidth, laneHeight);
 
       const cacheSegments = cacheStripSegments(
         collectCacheStripInputs(snapshot.tracks),
@@ -336,7 +447,7 @@ function TimelineCanvas({
         // Pass A — current state under, dimmed, with delete strike.
         const deletedKeys = collectDeletedKeys(proposal.diffHints);
         ctx.globalAlpha = 0.45;
-        drawTracks(ctx, cssWidth, snapshot.tracks, pps, {
+        drawTracks(ctx, cssWidth, snapshot.tracks, pps, laneHeight, {
           deletedKeys,
         });
         ctx.globalAlpha = 1.0;
@@ -345,12 +456,12 @@ function TimelineCanvas({
         // Selection ring rides on the post-state pass so the user
         // sees which clip in the *new* timeline they're inspecting.
         const highlightKeys = collectHighlightKeys(proposal.diffHints);
-        drawTracks(ctx, cssWidth, proposal.snapshot.tracks, pps, {
+        drawTracks(ctx, cssWidth, proposal.snapshot.tracks, pps, laneHeight, {
           highlightKeys,
           selectedKey,
         });
       } else {
-        drawTracks(ctx, cssWidth, snapshot.tracks, pps, { selectedKey });
+        drawTracks(ctx, cssWidth, snapshot.tracks, pps, laneHeight, { selectedKey });
       }
 
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
@@ -367,9 +478,9 @@ function TimelineCanvas({
             edgeHover.side === "start"
               ? item.track_start_s * pps
               : (item.track_start_s + item.duration_s) * pps;
-          const yTop = RULER_HEIGHT + edgeHover.trackIndex * LANE_HEIGHT + 4;
+          const yTop = RULER_HEIGHT + edgeHover.trackIndex * laneHeight + 4;
           ctx.fillStyle = "rgba(120, 184, 255, 0.62)";
-          ctx.fillRect(edgeX - 1, yTop, 2, LANE_HEIGHT - 8);
+          ctx.fillRect(edgeX - 1, yTop, 2, laneHeight - 8);
         }
       }
 
@@ -378,13 +489,13 @@ function TimelineCanvas({
       if (userTrim) {
         const x = userTrim.currentX;
         const yTop = RULER_HEIGHT;
-        const yBot = RULER_HEIGHT + LANE_HEIGHT * snapshot.tracks.length;
+        const yBot = RULER_HEIGHT + laneHeight * snapshot.tracks.length;
         ctx.fillStyle = "#78b8ff";
         ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
       }
 
       if (userMove) {
-        drawMoveGhost(ctx, snapshot, currentTime, userMove, pps);
+        drawMoveGhost(ctx, snapshot, currentTime, userMove, pps, laneHeight);
       }
     }
 
@@ -408,6 +519,7 @@ function TimelineCanvas({
     currentTime,
     proposal,
     zoom,
+    trackZoom,
     onLayout,
     userTrim,
     userMove,
@@ -552,7 +664,7 @@ function TimelineCanvas({
       return;
     }
     const { x, y, clientX } = canvasPos(e);
-    const hit = hitTestEdge(x, y, snapshot, ppsRef.current);
+    const hit = hitTestEdge(x, y, snapshot, ppsRef.current, laneHeightRef.current);
     if (hit) {
       e.currentTarget.setPointerCapture(e.pointerId);
       setUserTrim({ hit, startX: x, currentX: x });
@@ -564,7 +676,7 @@ function TimelineCanvas({
     // under the pointer = select; empty space = clear. Either way
     // the click also scrubs the playhead (preserving the existing
     // seek-on-click behaviour).
-    const body = hitTestSelectableBody(x, y, snapshot, ppsRef.current);
+    const body = hitTestSelectableBody(x, y, snapshot, ppsRef.current, laneHeightRef.current);
     if (body) {
       selectClip(body);
       const item = snapshot.tracks[body.trackIndex]?.items.find(
@@ -603,8 +715,31 @@ function TimelineCanvas({
       return;
     }
     // Hover state — update edge cursor hint.
-    const hover = hitTestEdge(x, y, snapshot, ppsRef.current);
+    const hover = hitTestEdge(x, y, snapshot, ppsRef.current, laneHeightRef.current);
     setEdgeHover(hover);
+    // Hover tooltip — set the canvas's `title` attribute to the full
+    // clip name so the user can see it even when the label is middle-
+    // truncated on a narrow clip. Native browser tooltip is enough;
+    // no need for a custom overlay component.
+    const body = hitTestSelectableBody(
+      x,
+      y,
+      snapshot,
+      ppsRef.current,
+      laneHeightRef.current,
+    );
+    if (body) {
+      const item = snapshot.tracks[body.trackIndex]?.items.find(
+        (candidate) => candidate.index === body.clipIndex,
+      );
+      if (item?.kind === "clip") {
+        e.currentTarget.title = item.name;
+      } else {
+        e.currentTarget.title = "";
+      }
+    } else {
+      e.currentTarget.title = "";
+    }
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       requestTimelineSeek(timeFromClientX(clientX));
     }
@@ -938,13 +1073,14 @@ function drawMoveGhost(
   currentTime: number,
   drag: UserMoveDrag,
   pps: number,
+  laneHeight: number,
 ) {
   const dx = snapMoveDeltaS(snapshot, currentTime, drag, pps) * pps;
   const drawClip = (trackIndex: number, item: Extract<TimelineItem, { kind: "clip" }>) => {
     const x = Math.round(item.track_start_s * pps + dx);
-    const y = RULER_HEIGHT + trackIndex * LANE_HEIGHT + 4;
+    const y = RULER_HEIGHT + trackIndex * laneHeight + 4;
     const w = Math.max(2, Math.round(item.duration_s * pps));
-    const h = LANE_HEIGHT - 8;
+    const h = laneHeight - 8;
     ctx.save();
     ctx.setLineDash([5, 4]);
     ctx.strokeStyle = "#78b8ff";
@@ -1070,6 +1206,7 @@ function drawTracks(
   width: number,
   tracks: { kind: string; role: string | null; items: TimelineItem[] }[],
   pps: number,
+  laneHeight: number,
   opts: {
     deletedKeys?: Set<string>;
     highlightKeys?: Set<string>;
@@ -1078,7 +1215,7 @@ function drawTracks(
 ) {
   for (let row = 0; row < tracks.length; row++) {
     const track = tracks[row];
-    const y = RULER_HEIGHT + row * LANE_HEIGHT;
+    const y = RULER_HEIGHT + row * laneHeight;
     const isTitlesRow = track.role === "titles";
 
     // Lane background. Titles row gets a darker amber-tinted band
@@ -1091,11 +1228,11 @@ function drawTracks(
     } else {
       ctx.fillStyle = "#0d0f0d";
     }
-    ctx.fillRect(0, y, width, LANE_HEIGHT);
+    ctx.fillRect(0, y, width, laneHeight);
     ctx.strokeStyle = "#30352d";
     ctx.beginPath();
-    ctx.moveTo(0, y + LANE_HEIGHT - 0.5);
-    ctx.lineTo(width, y + LANE_HEIGHT - 0.5);
+    ctx.moveTo(0, y + laneHeight - 0.5);
+    ctx.lineTo(width, y + laneHeight - 0.5);
     ctx.stroke();
 
     for (const item of track.items) {
@@ -1115,7 +1252,7 @@ function drawTracks(
         x,
         y + 4,
         w,
-        LANE_HEIGHT - 8,
+        laneHeight - 8,
         track.kind,
         flag,
         selected,
@@ -1126,6 +1263,37 @@ function drawTracks(
 }
 
 type ItemFlag = "normal" | "deleted" | "highlight";
+
+/** Per-role fill + stroke colors for a clip rect. Tuned for a calm,
+ *  DaVinci-style timeline: fills are desaturated blue/green-grey so
+ *  the clips read as material rather than glowing buttons; strokes
+ *  are barely-there white hairlines — only selected/changed clips
+ *  light up (handled by the `flag === "highlight"` and `selected`
+ *  branches in `drawItem`). Title clips keep an amber-on-black band
+ *  because that's a chyron, not a media clip. */
+function clipRoleColors(
+  item: Extract<TimelineItem, { kind: "clip" }>,
+  trackKind: string,
+  isTitleClip: boolean,
+): { fill: string; stroke: string } {
+  if (isTitleClip) {
+    return { fill: "#1f1206", stroke: "rgba(228, 174, 82, 0.55)" };
+  }
+  if (trackKind === "audio") {
+    return { fill: "#1f4d3d", stroke: "rgba(255, 255, 255, 0.08)" };
+  }
+  if (item.video_overlay) {
+    const mode = item.video_overlay.mode;
+    // PiP corner overlays vs full-frame b-roll cutaways still get
+    // distinct fills so the editor can spot insert/overlay layers
+    // at a glance — but strokes stay quiet across the board.
+    if (mode === "corner") {
+      return { fill: "#1c3a45", stroke: "rgba(255, 255, 255, 0.08)" };
+    }
+    return { fill: "#2f2843", stroke: "rgba(255, 255, 255, 0.08)" };
+  }
+  return { fill: "#263241", stroke: "rgba(255, 255, 255, 0.08)" };
+}
 
 function drawItem(
   ctx: CanvasRenderingContext2D,
@@ -1144,11 +1312,8 @@ function drawItem(
     // Title clips on the Titles track get an amber-on-black band
     // with inline text rather than the regular media-clip styling.
     const isTitleClip = isTitlesRow && item.title !== null && item.title !== undefined;
-    if (isTitleClip) {
-      ctx.fillStyle = "#0a1622";
-    } else {
-      ctx.fillStyle = trackKind === "audio" ? "#1b4a39" : "#263b48";
-    }
+    const roleColors = clipRoleColors(item, trackKind, isTitleClip);
+    ctx.fillStyle = roleColors.fill;
     fillRoundedRect(ctx, x, y, w, h, radius);
     // Filmstrip / waveform: drawn on top of the coloured fill, under
     // the border. Video tracks get filmstrips, audio tracks get
@@ -1166,18 +1331,13 @@ function drawItem(
     }
     // Border color: red for deletes (this clip is going away),
     // amber for highlights (this clip is changing in the
-    // proposal), normal accent otherwise. Title clips get an amber
-    // border to match their warm fill.
+    // proposal), otherwise the role's accent.
     const stroke =
       flag === "deleted"
         ? "#ef7168"
         : flag === "highlight"
         ? "#78b8ff"
-        : isTitleClip
-        ? "#e4ae52"
-        : trackKind === "audio"
-        ? "#71c587"
-        : "#71b7a6";
+        : roleColors.stroke;
     ctx.strokeStyle = stroke;
     ctx.lineWidth = flag === "normal" ? 1 : 2;
     strokeRoundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, radius);
@@ -1190,7 +1350,7 @@ function drawItem(
     if (w > 24 && !isTitleClip) {
       ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
       ctx.textBaseline = "middle";
-      const label = truncateToWidth(ctx, item.name, w - 2 * CLIP_PADDING_X);
+      const label = truncateToWidthMiddle(ctx, item.name, w - 2 * CLIP_PADDING_X);
       const labelY = y + h / 2;
       if (drewOverlay) {
         const metrics = ctx.measureText(label);
@@ -1202,7 +1362,11 @@ function drawItem(
           14,
         );
       }
-      ctx.fillStyle = "#eee8d7";
+      // Muted label — pro NLEs keep clip labels dim so the filmstrip
+      // / waveform reads as the clip's identity, with the label as
+      // supporting metadata. Bright white labels make every clip
+      // shout.
+      ctx.fillStyle = "rgba(238, 232, 215, 0.75)";
       ctx.fillText(label, x + CLIP_PADDING_X, labelY);
     }
     // Volume / speed badges — painted in the top-right corner so they
@@ -1221,6 +1385,15 @@ function drawItem(
       ctx.lineTo(x + w - 2, y + h / 2);
       ctx.stroke();
       ctx.lineWidth = 1;
+    }
+    // Edit handles — small bracket marks at each clip edge, modeled on
+    // DaVinci's trim affordance. Painted last (before the selection
+    // ring) so they sit on top of the filmstrip/waveform and the
+    // strike-through. Skip when the clip is too narrow to fit them
+    // without overlapping each other, and skip on title clips since
+    // titles don't trim like regular media.
+    if (w > 32 && !isTitleClip) {
+      drawClipEditHandles(ctx, x, y, w, h, stroke);
     }
     if (selected) {
       // Outer amber ring to show "this clip is the inspector's
@@ -1317,7 +1490,11 @@ type EditorialMarker = {
   title: string;
 };
 
-function buildCutBadges(snapshot: TimelineSnapshot, pps: number): EditorialMarker[] {
+function buildCutBadges(
+  snapshot: TimelineSnapshot,
+  pps: number,
+  laneHeight: number,
+): EditorialMarker[] {
   const out: EditorialMarker[] = [];
   for (const boundary of snapshot.cut_boundaries) {
     const located = locateClipByUuid(snapshot, boundary.to_clip_id);
@@ -1325,7 +1502,7 @@ function buildCutBadges(snapshot: TimelineSnapshot, pps: number): EditorialMarke
     out.push({
       key: `cut-${boundary.key}`,
       x: Math.max(2, located.item.track_start_s * pps - 10),
-      y: RULER_HEIGHT + located.trackIndex * LANE_HEIGHT + 2,
+      y: RULER_HEIGHT + located.trackIndex * laneHeight + 2,
       label: shortCutLabel(boundary.cut_type),
       title: [
         formatEditorialLabel(boundary.cut_type),
@@ -1340,13 +1517,17 @@ function buildCutBadges(snapshot: TimelineSnapshot, pps: number): EditorialMarke
   return out;
 }
 
-function buildSplitOffsets(snapshot: TimelineSnapshot, pps: number): EditorialMarker[] {
+function buildSplitOffsets(
+  snapshot: TimelineSnapshot,
+  pps: number,
+  laneHeight: number,
+): EditorialMarker[] {
   const out: EditorialMarker[] = [];
   for (let trackIndex = 0; trackIndex < snapshot.tracks.length; trackIndex += 1) {
     const track = snapshot.tracks[trackIndex];
     for (const item of track.items) {
       if (item.kind !== "clip") continue;
-      const y = RULER_HEIGHT + trackIndex * LANE_HEIGHT + LANE_HEIGHT - 18;
+      const y = RULER_HEIGHT + trackIndex * laneHeight + laneHeight - 18;
       if (item.audio_lead_s !== null && item.audio_lead_s > 0) {
         out.push({
           key: `lead-${item.clip_uuid}`,
@@ -1558,7 +1739,10 @@ function drawClipWaveform(
 
   // Stroke the upper envelope as a single path.
   ctx.beginPath();
-  ctx.strokeStyle = "rgba(113, 197, 135, 0.86)";
+  // Desaturated white-green at ~50% alpha — reads as "waveform"
+  // (mental model: subtle green = audio) without competing with
+  // selection / playhead colors. Matches the calm clip palette.
+  ctx.strokeStyle = "rgba(170, 205, 185, 0.5)";
   ctx.lineWidth = 1;
   for (let i = 0; i < w; i++) {
     // Pick the bucket(s) that map to this pixel column.
@@ -1603,6 +1787,46 @@ function drawClipWaveform(
 
   ctx.restore();
   return true;
+}
+
+/** Paint DaVinci-style trim brackets at each end of a clip rect.
+ *
+ *  Each handle is a short vertical bar with two horizontal nubs at the
+ *  top and bottom (a `[` on the head, a `]` on the tail). Drawn in the
+ *  clip's stroke color so they read as part of the clip frame. These
+ *  are purely visual today — actual trim hit-detection happens in
+ *  [`hitDetect.ts`] and operates on the clip's edge regions regardless
+ *  of whether handles are drawn. */
+function drawClipEditHandles(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  color: string,
+) {
+  const inset = 3;
+  const nubLength = 4;
+  const verticalMargin = Math.min(4, h * 0.15);
+  const topY = y + verticalMargin;
+  const bottomY = y + h - verticalMargin;
+  const leftX = x + inset + 0.5;
+  const rightX = x + w - inset - 0.5;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  // Head bracket — `[`
+  ctx.moveTo(leftX + nubLength, topY);
+  ctx.lineTo(leftX, topY);
+  ctx.lineTo(leftX, bottomY);
+  ctx.lineTo(leftX + nubLength, bottomY);
+  // Tail bracket — `]`
+  ctx.moveTo(rightX - nubLength, topY);
+  ctx.lineTo(rightX, topY);
+  ctx.lineTo(rightX, bottomY);
+  ctx.lineTo(rightX - nubLength, bottomY);
+  ctx.stroke();
+  ctx.lineWidth = 1;
 }
 
 /** Paint a title clip's text inline on its rect — the timeline-side
@@ -1805,6 +2029,40 @@ function truncateToWidth(
     }
   }
   return lo > 0 ? text.slice(0, lo) + "…" : "";
+}
+
+/** Middle-truncate `text` so head + ellipsis + tail fits within
+ *  `maxWidth`. Useful for filenames where the unique part is at the
+ *  end (e.g. `copy_F65206FA-9AEC-4CA8-BD2F-ACD63775F7FA` → end
+ *  truncation hides the disambiguating suffix; middle-truncation
+ *  preserves it). Falls back to end-truncation when the string is
+ *  short enough that splitting it doesn't help. */
+function truncateToWidthMiddle(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  if (text.length < 8) return truncateToWidth(ctx, text, maxWidth);
+  // Binary search on the split point — keep `n` chars at each end,
+  // shrinking until head+ellipsis+tail fits. Bias slightly toward
+  // the tail (where the unique part of UUID-style names lives).
+  let lo = 1;
+  let hi = Math.floor(text.length / 2);
+  let best = "";
+  while (lo <= hi) {
+    const n = Math.floor((lo + hi) / 2);
+    const head = text.slice(0, n);
+    const tail = text.slice(text.length - n);
+    const candidate = `${head}…${tail}`;
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      best = candidate;
+      lo = n + 1;
+    } else {
+      hi = n - 1;
+    }
+  }
+  return best || truncateToWidth(ctx, text, maxWidth);
 }
 
 function formatTime(seconds: number): string {
