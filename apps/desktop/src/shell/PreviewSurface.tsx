@@ -16,7 +16,6 @@ import { useState, type ReactNode } from "react";
 import {
   Inline,
   IconButton,
-  Pill,
   Stack,
   cn,
   type TimelineMarkerKind,
@@ -138,34 +137,41 @@ export function PreviewSurface({
 
   return (
     <Stack gap="0" className="h-full w-full bg-[var(--color-surface-app)]">
-      {/* Header */}
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-3 h-11 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] shrink-0">
+      {/*
+        Header — visually merged into the video stage so the viewer
+        reads as the center of gravity. Pure black background, no
+        bottom border; chrome dissolves into the stage. Only the
+        proposal selector and mode toggle stay visible. Everything
+        else moved to the overflow menu.
+      */}
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 px-3 h-10 bg-black shrink-0">
         <Inline gap="2" align="center" className="min-w-0 overflow-hidden">
           <button
             type="button"
             onClick={onOpenProposalMenu}
-            className="inline-flex min-w-0 items-center gap-1.5 h-7 px-2.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-card)] border border-[var(--color-border-subtle)] hover:border-[var(--color-border)] transition-colors"
+            className="inline-flex min-w-0 items-center gap-1.5 h-7 px-2 rounded-[var(--radius-sm)] text-[var(--color-text-secondary)] hover:bg-[rgba(255,255,255,0.04)] hover:text-[var(--color-text-primary)] transition-colors"
             title={proposalName}
           >
-            <span className="shrink-0 text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-              Proposal
-            </span>
-            <span className="min-w-0 truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
+            <span className="min-w-0 truncate text-[var(--text-body-sm)]">
               {proposalName}
             </span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 stroke-[1.75] text-[var(--color-text-muted)]" />
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 stroke-[1.75] opacity-60" />
           </button>
           {pendingCount > 0 ? (
-            <Pill status="warning" className="shrink-0">{pendingCount} pending changes</Pill>
+            <span className="shrink-0 inline-flex items-center gap-1 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: "rgb(217, 165, 75)" }}
+                aria-hidden
+              />
+              {pendingCount} pending
+            </span>
           ) : null}
         </Inline>
-        <Inline gap="2" align="center" className="shrink-0">
-          <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-            Mode
-          </span>
+        <Inline gap="0" align="center" className="shrink-0">
           <ViewModeToggle value={viewMode} onChange={onSetViewMode} />
         </Inline>
-        <Inline gap="1" align="center">
+        <Inline gap="0" align="center">
           <div className="relative">
             <IconButton
               icon={<MoreHorizontal />}
@@ -189,7 +195,9 @@ export function PreviewSurface({
         </Inline>
       </div>
 
-      {/* Video stage */}
+      {/* Video stage — pure black, no top border. The header above
+          shares the same background so the viewer extends visually
+          to the very top of the panel. */}
       <div className="relative flex-1 min-h-0 min-w-0 bg-black overflow-hidden">
         {videoSlot ?? <VideoPlaceholder viewMode={viewMode} />}
       </div>
@@ -403,8 +411,11 @@ function ViewModeToggle({
   value: PreviewViewMode;
   onChange?: (m: PreviewViewMode) => void;
 }) {
+  // Borderless on the viewer's black background — the underline on
+  // the active option is the only ink. Mirrors how Resolve / FCP
+  // signal a viewer-mode toggle without a bordered pill box.
   return (
-    <div className="inline-flex items-center rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-0.5">
+    <div className="inline-flex items-center">
       {(
         [
           { key: "before-after", label: "Before / After" },
@@ -417,10 +428,10 @@ function ViewModeToggle({
           onClick={() => onChange?.(opt.key)}
           aria-pressed={value === opt.key}
           className={cn(
-            "h-6 px-2 rounded-[var(--radius-xs)] text-[var(--text-caption)] font-medium transition-colors",
+            "h-7 px-2.5 text-[var(--text-caption)] transition-colors",
             value === opt.key
-              ? "bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
-              : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]",
+              ? "text-[var(--color-text-primary)] border-b border-[rgba(255,255,255,0.6)]"
+              : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
           )}
         >
           {opt.label}

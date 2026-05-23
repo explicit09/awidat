@@ -313,7 +313,7 @@ await check("proposal preview renders before/after review controls", async () =>
   for (const expected of [
     "proposal",
     "Podcast Tightening v1",
-    "12 pending changes",
+    "12 pending",
     "Before / After",
     "Side by Side",
     "active proposal overlay",
