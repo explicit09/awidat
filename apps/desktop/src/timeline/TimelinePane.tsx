@@ -341,7 +341,12 @@ type UserRollDrag = {
   currentX: number;
 };
 
+/** Gesture intent for a body drag, captured at pointer-down based on
+ *  the modifier keys held. The backend op is selected at commit time. */
+type BodyDragMode = "ripple" | "slip" | "slide";
+
 type UserMoveDrag = {
+  mode: BodyDragMode;
   trackIndex: number;
   clipIndex: number;
   clipUuid: string;
@@ -745,7 +750,15 @@ function TimelineCanvas({
       );
       if (item?.kind === "clip") {
         e.currentTarget.setPointerCapture(e.pointerId);
+        // Modifier semantics (Premiere/Resolve):
+        //   - Alt only        → slip (shift source range, hold position)
+        //   - Cmd/Ctrl + Alt  → slide (shift position, hold neighbors)
+        //   - no modifier     → ripple move (default body drag)
+        const altOnly = e.altKey && !(e.metaKey || e.ctrlKey);
+        const cmdAlt = e.altKey && (e.metaKey || e.ctrlKey);
+        const mode: BodyDragMode = altOnly ? "slip" : cmdAlt ? "slide" : "ripple";
         setUserMove({
+          mode,
           trackIndex: body.trackIndex,
           clipIndex: body.clipIndex,
           clipUuid: item.clip_uuid,
@@ -952,7 +965,13 @@ function TimelineCanvas({
     const dxPx = drag.currentX - drag.startX;
     const dyPx = drag.currentY - drag.startY;
     if (Math.hypot(dxPx, dyPx) < 5) return;
-    const dxS = snapMoveDeltaS(snapshot, currentTime, drag, ppsRef.current);
+    // Slip and slide don't snap to neighbor edges — the dragged
+    // pixel-delta is the intent. Ripple keeps neighbor-edge snap so
+    // the drop lands cleanly on adjacent cuts.
+    const dxS =
+      drag.mode === "ripple"
+        ? snapMoveDeltaS(snapshot, currentTime, drag, ppsRef.current)
+        : pxDeltaToSourceDelta(dxPx, ppsRef.current);
     if (Math.abs(dxS) < 0.01) return;
     const primaryTrack = snapshot.tracks[drag.trackIndex];
     const primary = primaryTrack?.items.find(
@@ -960,15 +979,40 @@ function TimelineCanvas({
     );
     if (!primary || primary.kind !== "clip") return;
 
-    // One ripple_move op — the backend shifts the moved clip + every
-    // clip after it on its track, plus the moved clip's link-group
-    // siblings on other tracks by the same delta. Matches
-    // Resolve/Premiere default body-drag behavior.
-    const op = {
-      kind: "ripple_move" as const,
-      anchor: { kind: "clip_uuid" as const, uuid: primary.clip_uuid },
-      deltaS: dxS,
-    };
+    let op;
+    if (drag.mode === "slip") {
+      // Slip: shift source range only; track position unchanged.
+      // ProfessionalTimelineEdit::SlipClip { anchor, delta_s }.
+      op = {
+        kind: "professional_timeline_edit" as const,
+        edit: {
+          edit: "slip_clip",
+          anchor: { kind: "clip_uuid", uuid: primary.clip_uuid },
+          delta_s: dxS,
+        },
+      };
+    } else if (drag.mode === "slide") {
+      // Slide: shift timeline placement, neighbors adjust their
+      // source ranges to compensate. Total duration unchanged.
+      op = {
+        kind: "professional_timeline_edit" as const,
+        edit: {
+          edit: "slide_clip",
+          anchor: { kind: "clip_uuid", uuid: primary.clip_uuid },
+          delta_s: dxS,
+        },
+      };
+    } else {
+      // Ripple (default): the backend shifts the moved clip + every
+      // clip after it on its track, plus link-group siblings on
+      // other tracks by the same delta. Matches Resolve/Premiere
+      // default body-drag behavior.
+      op = {
+        kind: "ripple_move" as const,
+        anchor: { kind: "clip_uuid" as const, uuid: primary.clip_uuid },
+        deltaS: dxS,
+      };
+    }
 
     try {
       await invoke<string>("propose_user_edit", {
@@ -976,7 +1020,7 @@ function TimelineCanvas({
       });
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("propose_user_edit (ripple move) failed", err);
+      console.warn(`propose_user_edit (${drag.mode}) failed`, err);
     }
   }
 
