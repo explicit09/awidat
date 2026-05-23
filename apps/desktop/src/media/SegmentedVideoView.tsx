@@ -441,12 +441,16 @@ function SegmentedPlayer({
     }
   }
 
-  // Push view-state (~1Hz, integer-second granularity).
+  // Push view-state (~1Hz, integer-second granularity). Use the
+  // *source* asset's stem so the agent's view-context line resolves
+  // to a file under `raw/`. The proxy stem (e.g. `<id>-1080p-<hash>`)
+  // would break tool calls like `view_frame` that look the stem up
+  // against the source asset path.
   useEffect(() => {
     const segIdx = findActiveSegment(segments, timelineTime);
     if (segIdx < 0) return;
     const seg = segments[segIdx];
-    const stem = stemFromProxyPath(seg.proxyPath);
+    const stem = seg.sourceStem ?? stemFromProxyPath(seg.proxyPath);
     if (!stem) return;
     const sec = Math.floor(timelineTime);
     const key = `${stem}:${sec}:${isPlaying ? "play" : "pause"}`;

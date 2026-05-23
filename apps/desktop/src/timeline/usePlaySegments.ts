@@ -36,6 +36,15 @@ export type PlaySegment = {
   /** Proxy stem (filename without extension). Same id used by
    *  `useMediaStore.proxies[].stem` and `read_transcript(stem)`. */
   proxyStem: string;
+  /** Project-relative path of the *source* asset (e.g. `raw/foo.MOV`).
+   *  Distinct from `proxyPath` — agent tools look this up under the
+   *  project root, so view-state hints must use this id, not the
+   *  proxy stem (which lives under `.awidat/proxies/`). */
+  assetId: string | null;
+  /** Stem of the source asset (filename without extension). The
+   *  agent's view-context line uses this so e.g. `view_frame` can
+   *  resolve it against `raw/<stem>.<ext>`. */
+  sourceStem: string | null;
   /** Start offset into the proxy media, in seconds. */
   sourceStart: number;
   /** End offset into the proxy media, in seconds. */
@@ -146,6 +155,8 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
         segments.push({
           proxyPath: playable,
           proxyStem: stemFromProxyPath(playable),
+          assetId: item.asset_id ?? null,
+          sourceStem: stemFromAssetId(item.asset_id),
           sourceStart,
           sourceEnd: sourceStart + item.duration_s,
           timelineStart: item.track_start_s,
@@ -173,6 +184,17 @@ function stemFromProxyPath(path: string): string {
   const file = slash >= 0 ? path.slice(slash + 1) : path;
   const dot = file.lastIndexOf(".");
   return dot > 0 ? file.slice(0, dot) : file;
+}
+
+/** Extract the stem (filename minus extension) from a project-relative
+ *  asset id like `raw/foo.MOV` → `foo`. Returns null when the input
+ *  is null/empty. */
+function stemFromAssetId(assetId: string | null | undefined): string | null {
+  if (!assetId) return null;
+  const slash = Math.max(assetId.lastIndexOf("/"), assetId.lastIndexOf("\\"));
+  const file = slash >= 0 ? assetId.slice(slash + 1) : assetId;
+  const dot = file.lastIndexOf(".");
+  return dot > 0 ? file.slice(0, dot) : file || null;
 }
 
 function normalizeCorner(
@@ -245,6 +267,8 @@ export function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
     const segment: PlaySegment = {
       proxyPath: playable,
       proxyStem: stemFromProxyPath(playable),
+      assetId: item.asset_id ?? null,
+      sourceStem: stemFromAssetId(item.asset_id),
       sourceStart: originalSourceStart,
       sourceEnd: originalSourceStart + item.duration_s,
       timelineStart: item.track_start_s,
