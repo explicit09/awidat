@@ -6045,3 +6045,20 @@ button {
   text-transform: none !important;
   letter-spacing: normal !important;
 }
+
+/* ─── Calm pass · Tier 2 · Quiet borders ───────────────────────────
+   The mockup tokens set borders as opaque slate (#23303C / #1A2530)
+   which reads as a "grid cage" — every panel, card, and pill gets
+   a visible outline that competes for attention. Pro NLEs use
+   nearly-invisible white-on-alpha hairlines so layout reads through
+   surface tint + spacing rather than ink. Replace the two main
+   border tokens with low-alpha whites; keep the strong/focus/active
+   colors as-is so selection states still register. */
+:root {
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255, 255, 255, 0.04);
+  /* Legacy aliases used by pre-Tailwind classes. */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-soft: rgba(255, 255, 255, 0.04);
+  --border-strong: rgba(255, 255, 255, 0.12);
+}
