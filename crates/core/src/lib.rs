@@ -58,6 +58,7 @@ pub mod media_catalog_mutation;
 pub mod notes;
 pub mod orchestrator;
 pub mod pexels;
+pub mod preview_cache;
 pub mod professional;
 pub mod proxy;
 pub mod review;
