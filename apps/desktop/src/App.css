@@ -6116,3 +6116,14 @@ button {
   --accent-danger:    rgb(220, 100, 95);   /* muted red */
   --accent-neutral:   rgba(255, 255, 255, 0.25);
 }
+
+/* ─── Edit dock overlay slide-in ─────────────────────────────────
+   Transcript / Vedit tabs slide in over the always-visible Timeline
+   surface. The timeline never unmounts; the overlay just occludes it. */
+@keyframes edit-dock-overlay-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+.animate-edit-dock-overlay-in {
+  animation: edit-dock-overlay-in 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}

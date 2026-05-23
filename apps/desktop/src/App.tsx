@@ -1745,16 +1745,39 @@ function EditLowerDock({
     );
   }
 
+  const overlayKind = active === "timeline" ? null : active;
+
+  // Esc dismisses overlay.
+  useEffect(() => {
+    if (!overlayKind) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onChangeActive("timeline");
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [overlayKind, onChangeActive]);
+
   return (
-    <div className="edit-lower-dock flex h-full min-h-0 min-w-0 flex-col bg-[var(--color-surface-panel)]">
+    <div className="edit-lower-dock relative flex h-full min-h-0 min-w-0 flex-col bg-[var(--color-surface-panel)]">
       <EditDockHeader
         active={active}
         onChangeActive={onChangeActive}
         onCollapse={() => onChangeDockState("collapsed")}
         onPopout={() => onChangeDockState("popout")}
       />
-      <div className="edit-dock-body min-h-0 min-w-0 flex-1 overflow-hidden [&>*]:h-full">
-        {active === "timeline" ? timeline : active === "transcript" ? transcript : vedit}
+      <div className="edit-dock-body relative min-h-0 min-w-0 flex-1 overflow-hidden [&>*]:h-full">
+        {/* Timeline always mounted underneath. */}
+        {timeline}
+        {/* Overlay slides over the timeline when transcript/vedit active. */}
+        {overlayKind ? (
+          <div
+            className="edit-dock-overlay absolute inset-0 z-10 flex flex-col bg-[var(--color-surface-panel)] shadow-[0_-12px_40px_rgba(0,0,0,0.35)] animate-edit-dock-overlay-in"
+            role="dialog"
+            aria-label={`${dockLabel(overlayKind)} overlay`}
+          >
+            {overlayKind === "transcript" ? transcript : vedit}
+          </div>
+        ) : null}
       </div>
     </div>
   );
