@@ -36,8 +36,14 @@ import { cacheStripSegments, type CacheStripInput } from "./cacheStrip";
 const PX_PER_SECOND_BASE = 12;
 
 /** Height of one track lane at trackZoom = 1, in pixels. Actual
- *  lane height during paint is `LANE_HEIGHT_BASE * trackZoom`. */
-const LANE_HEIGHT_BASE = 38;
+ *  lane height during paint is `LANE_HEIGHT_BASE * trackZoom`.
+ *
+ *  62px (was 38) matches DaVinci / Premiere's default video-track
+ *  density — tall enough that clip thumbnails read as real frames
+ *  rather than colored buttons, with breathing room for the label
+ *  band below. Pro NLEs never use sub-50px lanes for video tracks
+ *  in normal review density. */
+const LANE_HEIGHT_BASE = 62;
 
 /** Height of the time ruler at the top of the canvas. */
 const RULER_HEIGHT = 22;
