@@ -52,8 +52,8 @@ pub mod timeline;
 
 pub use ass::{build_ass_document_for_test, default_caption_font_name, resolve_caption_font_name};
 pub use ffmpeg::{
-    BlackFrameRange, FfmpegError, ImageFormat, MediaProbe, MotionSignal, ReframeTarget,
-    SilenceRange, TranscodeProgress, TranscodeProgressCallback, extract_frame,
+    BlackFrameRange, FfmpegError, ImageFormat, MediaProbe, MotionSignal, PROXY_SCHEMA_TAG,
+    ReframeTarget, SilenceRange, TranscodeProgress, TranscodeProgressCallback, extract_frame,
     extract_frame_complex, extract_frame_filtered, ffmpeg_path, ffprobe_path,
     generate_black_frames, generate_motion_signal, generate_silences, generate_thumbnails,
     generate_waveform, probe_duration_s, probe_media, reframe_to_target, transcode_proxy,

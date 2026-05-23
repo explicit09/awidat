@@ -510,13 +510,15 @@ fn media_token(path: &Path) -> String {
 /// for each clip's segment. Both paths must agree byte-for-byte —
 /// hence one shared helper rather than parallel implementations.
 ///
-/// The proxy filename is `<asset-stem>-1080p-<hash>.mp4`. The hash is
-/// FNV-1a over the asset's absolute path string and disambiguates two
-/// raw/ files that share the same stem in nested subdirectories. The
-/// quality marker intentionally invalidates older 720p proxies without
-/// probing every cache entry. Callers must pass the absolute path (not
-/// project-relative) — feeding in a relative path produces a different
-/// hash and the resulting proxy path won't match the one the transcoder
+/// The proxy filename is `<asset-stem>-<schema>-<hash>.mp4`. The hash
+/// is FNV-1a over the asset's absolute path string and disambiguates
+/// two raw/ files that share the same stem in nested subdirectories.
+/// The schema tag (e.g. `1440q20` = 1440p at CRF 20) intentionally
+/// invalidates older proxies whenever we change quality targets —
+/// older `*-1080p-*` files become orphans on the next orphan scan and
+/// get cleaned up. Callers must pass the absolute path (not project-
+/// relative) — feeding in a relative path produces a different hash
+/// and the resulting proxy path won't match the one the transcoder
 /// wrote.
 pub fn proxy_path_for(proxies_dir: &Path, asset_abs_path: &Path) -> PathBuf {
     let stem = asset_abs_path
@@ -524,7 +526,8 @@ pub fn proxy_path_for(proxies_dir: &Path, asset_abs_path: &Path) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("asset");
     proxies_dir.join(format!(
-        "{stem}-1080p-{:08x}.mp4",
+        "{stem}-{}-{:08x}.mp4",
+        awidat_render::PROXY_SCHEMA_TAG,
         stable_path_hash(asset_abs_path)
     ))
 }
@@ -815,11 +818,14 @@ mod tests {
         let asset = PathBuf::from("/tmp/proj/raw/foo.mov");
         let p = proxy_path_for(&proxies, &asset);
         assert_eq!(p.extension().and_then(|e| e.to_str()), Some("mp4"));
+        let stem = p
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         assert!(
-            p.file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .starts_with("foo-1080p-")
+            stem.starts_with(&format!("foo-{}-", awidat_render::PROXY_SCHEMA_TAG)),
+            "expected proxy stem to start with foo-<schema>- ; got {stem}"
         );
     }
 

@@ -529,7 +529,30 @@ pub enum TranscodeProgress {
 pub type TranscodeProgressCallback =
     std::sync::Arc<dyn Fn(TranscodeProgress) + Send + Sync + 'static>;
 
-const PROXY_TARGET_HEIGHT: u32 = 1080;
+/// Proxy resolution + codec quality.
+///
+/// **Why 1440p, not 1080p?** Modern displays are 2x DPR (Retina,
+/// 4K, HDR monitors). A 1080p proxy rendered into a CSS-540 box on a
+/// 2x display only fills ~540 physical pixels — the browser then
+/// upscales for the actual screen, producing visible blur. 1440p
+/// gives us enough source pixels that even a half-width preview pane
+/// on a Retina screen shows crisp detail.
+///
+/// **Why CRF 20, not 26?** CRF 26 trades ~5 dB of PSNR for file size.
+/// On a still frame that's the visual difference between "looks good"
+/// and "looks soft". DaVinci's preview proxies are typically CRF
+/// 18-20. Bumped to 20 — file size grows ~50% but the all-keyframe
+/// path was already inflating size 5-10x over a normal GOP, so the
+/// absolute hit is modest.
+const PROXY_TARGET_HEIGHT: u32 = 1440;
+const PROXY_CRF: &str = "20";
+/// Schema tag embedded in proxy filenames. Bumping this string
+/// invalidates every existing proxy at the next project-load orphan
+/// scan, forcing a clean re-transcode under the new height/CRF
+/// targets. Older `*-1080p-*` files become orphans on the next scan
+/// and get cleaned up. Format: `<height>q<crf>` so a future bump
+/// (e.g. `2160q18`) is self-describing in the filename.
+pub const PROXY_SCHEMA_TAG: &str = "1440q20";
 
 fn proxy_scale_filter() -> String {
     format!("scale=-2:{PROXY_TARGET_HEIGHT}")
@@ -587,7 +610,7 @@ pub async fn transcode_proxy(
         .arg("-preset")
         .arg("veryfast")
         .arg("-crf")
-        .arg("26")
+        .arg(PROXY_CRF)
         .arg("-g")
         .arg("1")
         .arg("-keyint_min")
@@ -1583,8 +1606,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn proxy_scale_filter_targets_viewer_grade_1080p() {
-        assert_eq!(proxy_scale_filter(), "scale=-2:1080");
+    fn proxy_scale_filter_targets_current_viewer_grade() {
+        // Schema bumped from 1080p to 1440p so DPR-2 displays see
+        // crisp detail in the preview pane.
+        assert_eq!(
+            proxy_scale_filter(),
+            format!("scale=-2:{PROXY_TARGET_HEIGHT}")
+        );
+        assert_eq!(PROXY_TARGET_HEIGHT, 1440);
     }
 
     #[test]
