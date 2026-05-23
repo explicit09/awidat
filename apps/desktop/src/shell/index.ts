@@ -8,6 +8,8 @@ export {
   type ActivityEntry,
   type ChatSessionSummary,
   type SuggestedAction,
+  type ConversationTurn,
+  type TurnPart,
 } from "./CommandRail";
 export {
   PreviewSurface,

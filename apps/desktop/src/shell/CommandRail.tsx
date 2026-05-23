@@ -50,6 +50,30 @@ export type ActivityEntry = {
   kind?: "tool" | "user" | "assistant" | "result";
 };
 
+/** One agent-side output inside a conversation turn. */
+export type TurnPart =
+  | { kind: "text"; id: string; text: string }
+  | {
+      kind: "tool_call";
+      id: string;
+      /** Stable tool name (e.g. `view_timeline`). */
+      name: string;
+      status: "running" | "done" | "failed";
+      /** Short, human one-liner ("Read timeline", "Found 3 beats"). */
+      summary: string;
+      args: unknown;
+      /** `null` while running; `{ Ok: string } | { Err: string }` when done. */
+      result: { Ok: string } | { Err: string } | null;
+    };
+
+/** A single user turn + the agent's interleaved tool calls and text
+ *  replies. Conversation rail renders one block per turn. */
+export type ConversationTurn = {
+  id: string;
+  userText: string;
+  parts: TurnPart[];
+};
+
 export type SuggestedAction = {
   id: string;
   label: string;
@@ -74,10 +98,12 @@ export type CommandRailProps = {
   plan?: PlanItem[];
   /** Current task progress label, e.g. "Reading transcript… 67%". */
   taskProgress?: { label: string; progress?: number; eta?: string };
-  /** Activity log entries — collapsed by default. */
+  /** Activity log entries — collapsed by default. Retained for jobs
+   *  that have no place inside a turn (project-load background work). */
   activity?: ActivityEntry[];
-  /** Human conversation only. System jobs and tool calls do not belong here. */
-  conversation?: ActivityEntry[];
+  /** One block per user turn, with the agent's tool calls and text
+   *  interleaved inside it. Replaces the legacy `conversation` flat list. */
+  turns?: ConversationTurn[];
   /** Suggestions the agent surfaces for the user's next move. */
   suggestions?: SuggestedAction[];
   /** Optional prefilled command for static/demo review surfaces. */
@@ -114,7 +140,7 @@ export function CommandRail({
   plan = [],
   taskProgress,
   activity = [],
-  conversation = [],
+  turns = [],
   suggestions = [],
   initialDraft = "",
   chatSessions = [],
@@ -147,7 +173,7 @@ export function CommandRail({
   }
 
   const hasWork =
-    conversation.length > 0 ||
+    turns.length > 0 ||
     activity.length > 0 ||
     plan.length > 0 ||
     suggestions.length > 0 ||
@@ -515,52 +541,16 @@ export function CommandRail({
               their label; agent turns stay neutral. Borders gone
               so the rail reads as a continuous conversation, not
               a stack of widgets. */}
-          {conversation.length > 0 ? (
+          {turns.length > 0 ? (
             <Section label="Conversation">
               <div className="flex flex-col gap-4">
-                {conversation.map((message, i) => {
-                  const isUser = message.kind === "user";
-                  // ChatGPT-style separator: hairline rule between
-                  // user→agent turn pairs. We render the rule *before*
-                  // a user message that isn't the first item — that's
-                  // the visual "new exchange begins" cue.
-                  const showSeparator = i > 0 && isUser;
-                  return (
-                    <div key={message.id} className="flex flex-col gap-3">
-                      {showSeparator ? (
-                        <hr className="border-0 border-t border-[var(--color-border-subtle)] opacity-60" />
-                      ) : null}
-                      <div
-                        className={cn(
-                          "flex min-w-0",
-                          isUser ? "justify-end" : "justify-start",
-                        )}
-                      >
-                        {isUser ? (
-                          <p
-                            className={cn(
-                              "max-w-[85%] whitespace-pre-wrap break-words leading-relaxed",
-                              "rounded-[18px] px-3.5 py-2",
-                              "text-[var(--text-body-sm)] text-[var(--color-text-primary)]",
-                              // Muted indigo bubble in the spirit of
-                              // ChatGPT's right-side pill — distinct
-                              // from page background, not loud.
-                              "bg-[color-mix(in_oklab,#4c5b86_38%,var(--color-surface-card))]",
-                            )}
-                          >
-                            {message.text}
-                          </p>
-                        ) : (
-                          <div className="markdown w-full break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {message.text}
-                            </ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                {turns.map((turn, i) => (
+                  <ConversationTurnBlock
+                    key={turn.id}
+                    turn={turn}
+                    showSeparator={i > 0}
+                  />
+                ))}
               </div>
             </Section>
           ) : null}
@@ -639,6 +629,101 @@ export function CommandRail({
       </div>
       {focused && !hasWork ? null : composer}
     </div>
+  );
+}
+
+/** One user turn rendered ChatGPT-style: user pill on the right, then
+ *  the agent's interleaved tool calls (collapsed cards) and text
+ *  blocks stacked in the order they fired. */
+function ConversationTurnBlock({
+  turn,
+  showSeparator,
+}: {
+  turn: ConversationTurn;
+  showSeparator: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      {showSeparator ? (
+        <hr className="border-0 border-t border-[var(--color-border-subtle)] opacity-60" />
+      ) : null}
+      {turn.userText ? (
+        <div className="flex min-w-0 justify-end">
+          <p
+            className={cn(
+              "max-w-[85%] whitespace-pre-wrap break-words leading-relaxed",
+              "rounded-[18px] px-3.5 py-2",
+              "text-[var(--text-body-sm)] text-[var(--color-text-primary)]",
+              "bg-[color-mix(in_oklab,#4c5b86_38%,var(--color-surface-card))]",
+            )}
+          >
+            {turn.userText}
+          </p>
+        </div>
+      ) : null}
+      {turn.parts.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          {turn.parts.map((part) =>
+            part.kind === "text" ? (
+              <div
+                key={part.id}
+                className="markdown w-full break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]"
+              >
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {part.text}
+                </ReactMarkdown>
+              </div>
+            ) : (
+              <ToolCallRow key={part.id} part={part} />
+            ),
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Compact, collapsed-by-default representation of one tool call.
+ *  Status dot (running/done/failed) + tool name + one-line summary.
+ *  Click to expand args + result. */
+function ToolCallRow({
+  part,
+}: {
+  part: Extract<TurnPart, { kind: "tool_call" }>;
+}) {
+  const dotColor =
+    part.status === "running"
+      ? "bg-[var(--color-text-muted)] animate-pulse"
+      : part.status === "failed"
+        ? "bg-[#ef7168]"
+        : "bg-[var(--color-brand-secondary)]";
+  return (
+    <details className="group min-w-0">
+      <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 py-0.5 text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]">
+        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotColor)} aria-hidden />
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-muted)]">
+          {part.name.replace(/_/g, " ")}
+        </span>
+        <span className="min-w-0 truncate leading-snug">{part.summary}</span>
+      </summary>
+      <div className="mt-1 ml-3.5 border-l border-[var(--color-border-subtle)] pl-2.5 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+        {part.args !== null && part.args !== undefined ? (
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-[var(--color-text-muted)]">
+            {JSON.stringify(part.args, null, 2)}
+          </pre>
+        ) : null}
+        {part.result && "Ok" in part.result ? (
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-[var(--color-text-secondary)]">
+            {part.result.Ok}
+          </pre>
+        ) : null}
+        {part.result && "Err" in part.result ? (
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-[#ef7168]">
+            {part.result.Err}
+          </pre>
+        ) : null}
+      </div>
+    </details>
   );
 }
 

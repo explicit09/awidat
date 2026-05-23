@@ -36,6 +36,7 @@ import {
   type ActivityEntry,
   type ChatSessionSummary,
   type ContextChip,
+  type ConversationTurn,
   type DeliveryRenderSummary,
   type DeliveryTarget,
   type IndexingMediaItem,
@@ -769,56 +770,63 @@ function App() {
     }));
   }, [items]);
 
+  // Activity log now shows *background jobs only* (transcode,
+  // thumbnails, waveforms, indexing). Tool calls render inline under
+  // their turn — see `turns` below.
   const activity: ActivityEntry[] = useMemo(() => {
     return items
       .filter(
-        (it): it is ActivitySourceItem =>
-          it.kind === "tool_call" || it.kind === "job",
+        (it): it is ActivitySourceItem => it.kind === "job",
       )
       .slice(-12)
       .reverse()
       .map((it) => activityFor(it));
   }, [items]);
 
-  const conversation: ActivityEntry[] = useMemo(() => {
-    // Walk items in order. A turn that produced only tool_calls and
-    // no narrative text would otherwise render no agent reply at all —
-    // for the user, that reads as "agent didn't respond". To make the
-    // turn visible, synthesize a one-line placeholder when at least
-    // one tool call landed between a user_input and the next agent
-    // text (or the end of the stream).
-    const out: ActivityEntry[] = [];
-    let toolCountSinceLastUser = 0;
-    let textSinceLastUser = false;
-    let lastUserAt = -1;
-    const flushSilentTurn = () => {
-      if (toolCountSinceLastUser > 0 && !textSinceLastUser && lastUserAt >= 0) {
-        out.push({
-          id: `silent-${lastUserAt}`,
-          timestamp: shortTime(),
-          text: `Agent ran ${toolCountSinceLastUser} tool${
-            toolCountSinceLastUser === 1 ? "" : "s"
-          } without a written reply. Expand System activity for details.`,
-          kind: "assistant",
+  // Group items into turns (one per user_input). Inside a turn, the
+  // agent's outputs are kept in order: text blocks and tool_calls
+  // interleaved as they actually fired. The CommandRail renders the
+  // user bubble + the per-turn inline tool/text stream.
+  const turns: ConversationTurn[] = useMemo(() => {
+    const out: ConversationTurn[] = [];
+    let current: ConversationTurn | null = null;
+    for (const it of items) {
+      if (it.kind === "user_input") {
+        current = {
+          id: it.id.toString(),
+          userText: it.text,
+          parts: [],
+        };
+        out.push(current);
+        continue;
+      }
+      if (!current) {
+        // Stray pre-input items (rare; could be a resumed session
+        // with no prompt). Synthesize a turn so they have a home.
+        current = { id: `pre-${it.id}`, userText: "", parts: [] };
+        out.push(current);
+      }
+      if (it.kind === "text") {
+        const text = it.text.trim();
+        if (text.length === 0) continue;
+        current.parts.push({ kind: "text", id: it.id.toString(), text });
+      } else if (it.kind === "tool_call") {
+        const status = !it.result
+          ? "running"
+          : "Err" in it.result
+            ? "failed"
+            : "done";
+        current.parts.push({
+          kind: "tool_call",
+          id: it.id.toString(),
+          name: it.name,
+          status,
+          summary: summarizeToolForRail(it),
+          args: it.args ?? null,
+          result: it.result,
         });
       }
-    };
-    for (let i = 0; i < items.length; i += 1) {
-      const it = items[i];
-      if (it.kind === "user_input") {
-        flushSilentTurn();
-        toolCountSinceLastUser = 0;
-        textSinceLastUser = false;
-        lastUserAt = i;
-        out.push(conversationFor(it));
-      } else if (it.kind === "text") {
-        textSinceLastUser = true;
-        out.push(conversationFor(it));
-      } else if (it.kind === "tool_call") {
-        toolCountSinceLastUser += 1;
-      }
     }
-    flushSilentTurn();
     return out.slice(-12);
   }, [items]);
 
@@ -1200,7 +1208,7 @@ function App() {
           ? { label: "Building proposal...", progress: 62, eta: "00:01:48" }
           : realTaskProgress,
         activity: demoMode ? screen2Activity : activity,
-        conversation: demoMode ? [] : conversation,
+        turns: demoMode ? [] : turns,
         suggestions: demoMode ? screen2Suggestions : [],
         initialDraft: demoMode
           ? "Cut this into a tight 8-minute podcast episode.\nRemove dead air but preserve natural pacing."
@@ -2810,11 +2818,8 @@ function normalizePeak(value: number): number {
 
 type AnyAgentItem = ReturnType<typeof useAgentStore.getState>["items"][number];
 type ToolCallItem = Extract<AnyAgentItem, { kind: "tool_call" }>;
-type TextItem = Extract<AnyAgentItem, { kind: "text" }>;
-type UserInputItem = Extract<AnyAgentItem, { kind: "user_input" }>;
 type JobItem = Extract<AnyAgentItem, { kind: "job" }>;
-type ActivitySourceItem = ToolCallItem | JobItem;
-type ConversationSourceItem = UserInputItem | TextItem;
+type ActivitySourceItem = JobItem;
 
 type ChatHistory = {
   session: ChatSessionSummary | null;
@@ -2823,14 +2828,6 @@ type ChatHistory = {
 
 function activityFor(item: ActivitySourceItem): ActivityEntry {
   const id = item.id.toString();
-  if (item.kind === "tool_call") {
-    return {
-      id,
-      timestamp: shortTime(),
-      text: `${item.name} ${item.phase === "completed" ? "complete" : "running"}`,
-      kind: "tool",
-    };
-  }
   const status = summarizeJobStatus(item.status);
   return {
     id,
@@ -2841,14 +2838,54 @@ function activityFor(item: ActivitySourceItem): ActivityEntry {
   };
 }
 
-function conversationFor(item: ConversationSourceItem): ActivityEntry {
-  const text = item.text.trim();
-  return {
-    id: item.id.toString(),
-    timestamp: shortTime(),
-    text,
-    kind: item.kind === "user_input" ? "user" : "assistant",
-  };
+/** Short human one-liner for a tool call inside the conversation rail.
+ *  Mirrors the dispatch in ChatStream.tsx's `summarizeToolCall` so the
+ *  same vocabulary appears in both surfaces. */
+function summarizeToolForRail(item: ToolCallItem): string {
+  const args = item.args;
+  const record =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? (args as Record<string, unknown>)
+      : null;
+  switch (item.name) {
+    case "view_timeline":
+      return "Read timeline";
+    case "view_episode":
+      return "Read episode map";
+    case "view_frame":
+      return typeof record?.at_s === "number"
+        ? `Inspected frame at ${record.at_s.toFixed(2)}s`
+        : "Inspected frame";
+    case "apply_edl":
+      return typeof record?.reasoning === "string"
+        ? oneLine(record.reasoning as string, 96)
+        : "Proposed timeline edit";
+    case "find_episode_start":
+      return "Found publishable episode start";
+    case "find_beat":
+      return typeof record?.kind === "string"
+        ? `Found ${record.kind} beats`
+        : "Found editorial beats";
+    case "inspect_moment":
+      return typeof record?.moment_id === "string"
+        ? `Inspected ${record.moment_id}`
+        : "Inspected moment";
+    case "read_index":
+      return typeof record?.channel === "string"
+        ? `Read ${record.channel} index`
+        : "Read index";
+    case "start_indexing":
+      return "Started indexing";
+    case "start_render":
+      return "Started render";
+    default:
+      return item.name.replace(/_/g, " ");
+  }
+}
+
+function oneLine(text: string, max: number): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
 function summarizeJobStatus(status: string): { summary: string; detail?: string } {
