@@ -87,7 +87,7 @@ export function AppShell({
             <Panel
               id="command-rail"
               order={1}
-              defaultSize={18}
+              defaultSize={21}
               minSize={12}
               maxSize={40}
               className="panel min-h-0 overflow-hidden"
@@ -98,7 +98,11 @@ export function AppShell({
             <Panel
               id="center"
               order={2}
-              defaultSize={inspectorCollapsed ? 80 : 66}
+              // Default split mirrors what the design settled at in
+              // dogfood: ~21 / 58 / 21 (rail / center / inspector).
+              // When the inspector is collapsed to its 44px stub the
+              // center swells to fill the freed space.
+              defaultSize={inspectorCollapsed ? 77 : 58}
               minSize={30}
               className="min-h-0 min-w-0"
             >
@@ -114,7 +118,11 @@ export function AppShell({
                 <Panel
                   id="preview"
                   order={1}
-                  defaultSize={timelineCollapsed ? 92 : 65}
+                  // ~79/21 preview/timeline mirrors the settled
+                  // dogfood layout — preview-heavy, timeline as a
+                  // strip the user opens up only when they're
+                  // actively trimming.
+                  defaultSize={timelineCollapsed ? 92 : 79}
                   minSize={20}
                   className="panel min-h-0 min-w-0 overflow-hidden"
                 >
@@ -124,7 +132,7 @@ export function AppShell({
                 <Panel
                   id="timeline"
                   order={2}
-                  defaultSize={timelineCollapsed ? 8 : 35}
+                  defaultSize={timelineCollapsed ? 8 : 21}
                   minSize={timelineCollapsed ? 4 : 15}
                   className="panel min-h-0 min-w-0 overflow-hidden"
                 >
@@ -136,7 +144,7 @@ export function AppShell({
             <Panel
               id="inspector"
               order={3}
-              defaultSize={inspectorCollapsed ? 2 : 16}
+              defaultSize={inspectorCollapsed ? 2 : 21}
               minSize={inspectorCollapsed ? 2 : 10}
               maxSize={40}
               className={cn("panel min-h-0 overflow-hidden")}
