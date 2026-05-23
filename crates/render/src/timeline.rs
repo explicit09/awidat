@@ -8340,9 +8340,9 @@ fn highlight_plateau_expr(start: f64, end: f64, duration: f64) -> String {
     //   MIN + (1 - MIN) * (t - mid_actual) / half  if t < dip_end
     //   1                                       otherwise
     let depth = 1.0 - HIGHLIGHT_MIN_ALPHA;
+    let min_alpha = HIGHLIGHT_MIN_ALPHA;
     format!(
         "if(lt(t\\,{dip_start})\\,1\\,if(lt(t\\,{mid_actual})\\,1-{depth}*(t-{dip_start})/{half_actual}\\,if(lt(t\\,{dip_end})\\,{min_alpha}+{depth}*(t-{mid_actual})/{half_actual}\\,1)))",
-        min_alpha = HIGHLIGHT_MIN_ALPHA,
     )
 }
 
@@ -14885,6 +14885,198 @@ animations: Vec::new(),
                     .filter_complex
                     .contains("(h-({y_rest}))".replace("{y_rest}", "h*0.85").as_str())
                 || plan.filter_complex.matches("h*0.85").count() >= 2
+        );
+    }
+
+    /// Helper: build a title with explicit phases (overrides the legacy
+    /// `animation` field at render time).
+    fn title_with_phases(phases: TitlePhases, position: TitlePosition) -> TitlePlan {
+        let mut t = title(TitleAnimation::None, position);
+        t.phases = Some(phases);
+        t
+    }
+
+    /// Extract just the `:alpha='...'` segment from a generated filter
+    /// graph so tests can compare alpha expressions directly.
+    fn alpha_segment(filter: &str) -> Option<String> {
+        let start = filter.find(":alpha='")?;
+        let after = &filter[start..];
+        let close = after[8..].find('\'')?;
+        Some(after[..8 + close + 1].to_string())
+    }
+
+    #[test]
+    fn empty_phases_matches_legacy_none_no_alpha() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let legacy = FilterPlanner::with_titles(
+            std::slice::from_ref(&s0),
+            &[],
+            &[title(TitleAnimation::None, TitlePosition::Center)],
+        )
+        .plan();
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases::default(),
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        // Neither emits an `:alpha=` segment.
+        assert!(!legacy.filter_complex.contains(":alpha='"));
+        assert!(!phased.filter_complex.contains(":alpha='"));
+    }
+
+    #[test]
+    fn entrance_fade_phase_matches_legacy_fade_in() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let legacy = FilterPlanner::with_titles(
+            std::slice::from_ref(&s0),
+            &[],
+            &[title(TitleAnimation::FadeIn, TitlePosition::Center)],
+        )
+        .plan();
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases {
+                    entrance: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: None,
+                        stagger_s: None,
+                    }),
+                    ..TitlePhases::default()
+                },
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        assert_eq!(
+            alpha_segment(&phased.filter_complex),
+            alpha_segment(&legacy.filter_complex),
+            "phase-driven fade-in must produce the same alpha expression as legacy FadeIn",
+        );
+    }
+
+    #[test]
+    fn exit_fade_phase_matches_legacy_fade_out() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let legacy = FilterPlanner::with_titles(
+            std::slice::from_ref(&s0),
+            &[],
+            &[title(TitleAnimation::FadeOut, TitlePosition::Center)],
+        )
+        .plan();
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases {
+                    exit: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: None,
+                        stagger_s: None,
+                    }),
+                    ..TitlePhases::default()
+                },
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        assert_eq!(
+            alpha_segment(&phased.filter_complex),
+            alpha_segment(&legacy.filter_complex),
+            "phase-driven fade-out must produce the same alpha expression as legacy FadeOut",
+        );
+    }
+
+    #[test]
+    fn entrance_plus_exit_fade_phases_match_legacy_fade_in_out() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let legacy = FilterPlanner::with_titles(
+            std::slice::from_ref(&s0),
+            &[],
+            &[title(TitleAnimation::FadeInOut, TitlePosition::Center)],
+        )
+        .plan();
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases {
+                    entrance: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: None,
+                        stagger_s: None,
+                    }),
+                    exit: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: None,
+                        stagger_s: None,
+                    }),
+                    highlight: None,
+                },
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        assert_eq!(
+            alpha_segment(&phased.filter_complex),
+            alpha_segment(&legacy.filter_complex),
+            "phase-driven entrance+exit fade must match legacy FadeInOut",
+        );
+    }
+
+    #[test]
+    fn custom_entrance_fade_duration_extends_ramp() {
+        // start_s = 1.0, custom duration 1.0 → ramp ends at t=2.0,
+        // not the default 1.5.
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases {
+                    entrance: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: Some(1.0),
+                        stagger_s: None,
+                    }),
+                    ..TitlePhases::default()
+                },
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        assert!(
+            phased.filter_complex.contains("alpha='if(lt(t\\,2)"),
+            "expected custom-duration ramp ending at start+1.0=2, got: {}",
+            phased.filter_complex,
+        );
+        // And explicitly NOT the legacy 0.5-second ramp.
+        assert!(
+            !phased.filter_complex.contains("alpha='if(lt(t\\,1.5)"),
+            "custom 1.0s ramp should not collapse back to the 0.5s default: {}",
+            phased.filter_complex,
+        );
+    }
+
+    #[test]
+    fn phases_override_legacy_animation_field() {
+        // When `phases` is Some, render must drive off phases and
+        // ignore the legacy `animation` field.
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut t = title(TitleAnimation::FadeIn, TitlePosition::Center);
+        t.phases = Some(TitlePhases::default());
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[t]).plan();
+        // No alpha at all, because the explicit empty phase set wins
+        // over the legacy FadeIn.
+        assert!(
+            !plan.filter_complex.contains(":alpha='"),
+            "explicit empty phases must suppress the legacy FadeIn alpha ramp: {}",
+            plan.filter_complex,
         );
     }
 
