@@ -358,7 +358,7 @@ export function IndexingDashboard({
             </Inline>
             <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
               <div
-                className="h-full rounded-full bg-[var(--color-brand-secondary)]"
+                className="h-full rounded-full bg-[var(--accent-audio)]"
                 style={{ width: `${overallProgress}%` }}
               />
             </div>
@@ -430,7 +430,7 @@ export function IndexingDashboard({
                   <Sparkles
                     className={cn(
                       "h-5 w-5 stroke-[1.5]",
-                      ready ? "text-[var(--color-brand)]" : "text-[var(--color-text-muted)]",
+                      ready ? "text-[var(--accent-audio)]" : "text-[var(--color-text-muted)]",
                     )}
                   />
                   <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
@@ -766,7 +766,7 @@ function SystemRow({
       {typeof bar === "number" ? (
         <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--color-surface-input)]">
           <div
-            className="h-full rounded-full bg-[var(--color-brand-secondary)]"
+            className="h-full rounded-full bg-[var(--accent-audio)]"
             style={{ width: `${Math.max(0, Math.min(100, bar * 100))}%` }}
           />
         </div>

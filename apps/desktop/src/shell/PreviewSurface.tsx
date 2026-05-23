@@ -498,7 +498,7 @@ function Scrubber({
         onClick={onTrackClick}
       >
         <div
-          className="absolute inset-y-0 left-0 rounded-full bg-[var(--color-brand-secondary)]/40"
+          className="absolute inset-y-0 left-0 rounded-full bg-[var(--accent-selection)]/40"
           style={{ width: `${pct(currentTimeS)}%` }}
         />
       </div>

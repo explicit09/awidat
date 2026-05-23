@@ -6097,3 +6097,22 @@ button {
   --radius-sm: 0.1875rem !important;          /* 3px (was 6px) */
   --radius-xs: 0.125rem !important;           /* 2px (was 4px) */
 }
+
+/* ─── D2 · Semantic accent tokens ─────────────────────────────────
+   Strict color discipline: each accent has one meaning. Use these
+   in any new code instead of picking a hex or reaching for the
+   --color-brand-* palette. Existing teal/cyan usages get
+   progressively remapped to these.
+
+   selection — UI focus, active tabs, selected clip ring
+   audio     — waveforms, audio readiness, success dots
+   warning   — pending, queued, in-flight
+   danger    — destructive, missing media, removed clips, playhead
+   neutral   — dim status, disabled, inactive */
+:root {
+  --accent-selection: rgb(96, 165, 250);   /* muted blue 400 */
+  --accent-audio:     rgb(74, 200, 130);   /* muted green */
+  --accent-warning:   rgb(217, 165, 75);   /* muted amber */
+  --accent-danger:    rgb(220, 100, 95);   /* muted red */
+  --accent-neutral:   rgba(255, 255, 255, 0.25);
+}

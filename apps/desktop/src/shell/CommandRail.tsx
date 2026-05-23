@@ -205,7 +205,7 @@ export function CommandRail({
               className={cn(
                 "h-1.5 w-1.5 shrink-0 rounded-full",
                 activeChatSession
-                  ? "bg-[var(--color-brand-secondary)]"
+                  ? "bg-[var(--accent-selection)]"
                   : "bg-[var(--color-text-muted)] opacity-50",
               )}
               aria-hidden
@@ -478,7 +478,7 @@ export function CommandRail({
           {/* Task progress */}
           {taskProgress ? (
             <Section
-              icon={<Sparkles className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand-secondary)]" />}
+              icon={<Sparkles className="h-3.5 w-3.5 stroke-[1.75] text-[var(--accent-selection)]" />}
               label="Agent plan"
             >
               <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2.5">
@@ -495,7 +495,7 @@ export function CommandRail({
                 {typeof taskProgress.progress === "number" ? (
                   <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--color-surface-input)]">
                     <div
-                      className="h-full rounded-full bg-[var(--color-brand-secondary)] transition-[width] duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
+                      className="h-full rounded-full bg-[var(--accent-selection)] transition-[width] duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
                       style={{ width: `${Math.max(0, Math.min(100, taskProgress.progress))}%` }}
                     />
                   </div>
@@ -696,7 +696,7 @@ function ToolCallRow({
       ? "bg-[var(--color-text-muted)] animate-pulse"
       : part.status === "failed"
         ? "bg-[#ef7168]"
-        : "bg-[var(--color-brand-secondary)]";
+        : "bg-[var(--accent-audio)]";
   return (
     <details className="group min-w-0">
       <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 py-0.5 text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]">
@@ -807,7 +807,7 @@ function EmptyState({
               onClick={() => onUseSuggestion(s)}
               className="group flex items-start gap-1.5 rounded-[var(--radius-xs)] px-1 py-0.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
             >
-              <span className="mt-0.5 text-[var(--color-text-muted)] group-hover:text-[var(--color-brand-secondary)]">
+              <span className="mt-0.5 text-[var(--color-text-muted)] group-hover:text-[var(--accent-selection)]">
                 ›
               </span>
               <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)] leading-snug group-hover:text-[var(--color-text-primary)]">
