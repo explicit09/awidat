@@ -56,8 +56,9 @@ pub use ass::{build_ass_document_for_test, default_caption_font_name, resolve_ca
 pub use ffmpeg::{
     BlackFrameRange, FfmpegError, ImageFormat, MediaProbe, MotionSignal, PROXY_SCHEMA_TAG,
     ReframeTarget, SilenceRange, TranscodeProgress, TranscodeProgressCallback, extract_frame,
-    extract_frame_complex, extract_frame_filtered, ffmpeg_path, ffprobe_path,
-    generate_black_frames, generate_motion_signal, generate_silences, generate_thumbnails,
+    extract_frame_complex, extract_frame_filtered, extract_frame_raw_gray, ffmpeg_path,
+    ffprobe_path, generate_black_frames, generate_motion_signal, generate_silences,
+    generate_thumbnails,
     generate_waveform, probe_duration_s, probe_media, reframe_to_target, transcode_proxy,
 };
 pub use frame_io::{FrameEncoder, FrameIoError, FrameProvider};
