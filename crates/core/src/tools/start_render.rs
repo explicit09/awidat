@@ -345,10 +345,14 @@ impl ToolHandler for StartRenderTool {
 
         let spec = RenderJobSpec {
             args: argv,
+            backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
             total_duration_s,
             cwd: Some(ctx.project_root.clone()),
             output_path: output_path.clone(),
+            input_paths: Vec::new(),
+            manifest_path: None,
             limitations: limitations.clone(),
+            metadata: Default::default(),
         };
         let job_id = ctx.job_manager.start(spec).await.map_err(|e| {
             FunctionCallError::RespondToModel(format!("start_render: failed to start ffmpeg: {e}"))
@@ -599,10 +603,14 @@ fn apply_preset_to_argv(
 ) -> Result<Vec<String>, FunctionCallError> {
     let spec = RenderJobSpec {
         args: base,
+        backend: awidat_render::RenderBackendKind::AssetFullReencode,
         total_duration_s: None,
         cwd: None,
         output_path: output_path.to_path_buf(),
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: Vec::new(),
+        metadata: Default::default(),
     };
     let lowered =
         awidat_render::professional::apply_export_preset_to_spec(spec, preset).map_err(|e| {

@@ -41,6 +41,7 @@ pub(crate) mod ass;
 pub mod ffmpeg;
 pub mod frame_io;
 pub mod job;
+pub mod manifest;
 pub mod master_loudnorm;
 pub mod output_safety;
 pub mod professional;
@@ -60,7 +61,18 @@ pub use ffmpeg::{
 };
 pub use frame_io::{FrameEncoder, FrameIoError, FrameProvider};
 pub use job::{
-    JobError, JobId, JobManager, JobState, JobStatus, RenderJobSpec, RenderPlanLimitation,
+    JobError, JobId, JobManager, JobState, JobStatus, MasterLoudnormManagedRenderSpec,
+    RenderJobSpec, RenderPlanLimitation,
+};
+pub use manifest::{
+    RENDER_MANIFEST_SCHEMA_VERSION, RenderBackendKind, RenderExecutionManifest,
+    RenderExecutionManifestInput, RenderInputFingerprint, RenderManifestError,
+    RenderManifestLimitation, RenderOutputArtifact, RenderReplayError, RenderReplayOutcome,
+    RenderReplayPlan, RenderSidecarFingerprint, RenderVerificationSummary,
+    ass_sidecar_layout_metadata, finalize_render_manifest_file, finalize_render_manifest_outputs,
+    fingerprint_ffmpeg_subtitle_sidecars, fingerprint_file, limitation, manifest_path_for_output,
+    output_artifact, planned_at_now, read_render_manifest, replay_render_manifest,
+    validate_replay_manifest, write_render_manifest,
 };
 pub use master_loudnorm::{
     JobManagerRunner, MasterLoudnormError, MasterLoudnormPlan, MeasuredLoudnorm, RenderJobRunner,

@@ -183,10 +183,14 @@ impl ToolHandler for ExportPackageTool {
             .job_manager
             .start(RenderJobSpec {
                 args: spec.args,
+                backend: awidat_render::RenderBackendKind::PackageExport,
                 total_duration_s: spec.total_duration_s,
                 cwd: Some(ctx.project_root.clone()),
                 output_path: mp4_path.clone(),
+                input_paths: Vec::new(),
+                manifest_path: None,
                 limitations: spec.limitations.clone(),
+                metadata: Default::default(),
             })
             .await
             .map_err(|e| {

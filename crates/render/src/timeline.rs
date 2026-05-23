@@ -9472,18 +9472,26 @@ fn build_timeline_render_spec_inner(
         trim_render_argv_to_section(&mut argv, section.start_s, section.duration_s);
         return Ok(RenderJobSpec {
             args: argv,
+            backend: crate::RenderBackendKind::TimelineFfmpegReencode,
             total_duration_s: Some(section.duration_s),
             cwd: Some(project_root.to_path_buf()),
             output_path,
+            input_paths: Vec::new(),
+            manifest_path: None,
             limitations: render_limitations,
+            metadata: std::collections::BTreeMap::new(),
         });
     }
     Ok(RenderJobSpec {
         args: argv,
+        backend: crate::RenderBackendKind::TimelineFfmpegReencode,
         total_duration_s: Some(total_duration_s),
         cwd: Some(project_root.to_path_buf()),
         output_path,
+        input_paths: Vec::new(),
+        manifest_path: None,
         limitations: render_limitations,
+        metadata: std::collections::BTreeMap::new(),
     })
 }
 

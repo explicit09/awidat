@@ -13,8 +13,8 @@
 //! and consume this crate's surface. Frame-strip extraction reuses
 //! [`crate::ffmpeg::extract_frame`].
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,6 +29,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 use crate::ffmpeg::{FfmpegError, ffmpeg_path};
+use crate::manifest::RenderBackendKind;
 use crate::progress::{ProgressSnapshot, parse_progress_line};
 
 /// Server-allocated job id. Lower-case hex of 8 bytes — short enough for
@@ -102,6 +103,8 @@ pub struct JobStatus {
     /// Full command argv used to launch ffmpeg, including the ffmpeg
     /// binary path as argv[0]. Exposed for reproducible render evidence.
     pub command_argv: Vec<String>,
+    /// Small planner metadata values for render diagnostics.
+    pub metadata: BTreeMap<String, String>,
     /// Path the output is being written to. Always set.
     pub output_path: PathBuf,
     /// Wall-clock at `start_render` (server-local).
@@ -143,6 +146,8 @@ pub struct RenderJobSpec {
     /// Example: `["-y", "-i", "raw/x.mp4", "-c:v", "libx264", "-crf",
     /// "23", "renders/preview.mp4"]`.
     pub args: Vec<String>,
+    /// Backend selected by the planner for manifests and routing decisions.
+    pub backend: RenderBackendKind,
     /// Total source duration in seconds, if known. Used to compute
     /// progress percentage and ETA.
     pub total_duration_s: Option<f64>,
@@ -152,10 +157,30 @@ pub struct RenderJobSpec {
     /// Output path the model can read after `Done`. Used to resolve frame-
     /// strip extraction at poll time.
     pub output_path: PathBuf,
+    /// Source and generated-input files used by the planned render.
+    pub input_paths: Vec<PathBuf>,
+    /// Optional render manifest to finalize after a successful render.
+    pub manifest_path: Option<PathBuf>,
     /// Non-fatal render planning limitations. These are explicit records of
     /// animation/effect metadata that was ignored so export callers can
     /// report partial parity instead of silently dropping it.
     pub limitations: Vec<RenderPlanLimitation>,
+    /// Small planner metadata values for render manifests and diagnostics.
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// User-facing managed render request for two-pass master loudnorm.
+#[derive(Debug, Clone)]
+pub struct MasterLoudnormManagedRenderSpec {
+    /// Awidat project root.
+    pub project_root: PathBuf,
+    /// Final encoded output path.
+    pub output_path: PathBuf,
+    /// Render manifest sidecar path for the final apply pass.
+    pub manifest_path: PathBuf,
+    /// Planned manifest to rewrite with the measured apply-pass replay
+    /// before pass 2 starts.
+    pub manifest: crate::RenderExecutionManifest,
 }
 
 /// Non-fatal render planning limitation.
@@ -242,6 +267,7 @@ impl JobManager {
             eta_s: None,
             log_excerpt: String::new(),
             command_argv,
+            metadata: spec.metadata.clone(),
             output_path: spec.output_path.clone(),
             started_at,
             exit_code: None,
@@ -277,11 +303,72 @@ impl JobManager {
         let manager = self.clone();
         let id_for_runner = id.clone();
         tokio::spawn(async move {
-            run_job(child, tx, runner_cancel, spec.total_duration_s).await;
+            run_job(
+                child,
+                tx,
+                runner_cancel,
+                spec.total_duration_s,
+                spec.manifest_path,
+            )
+            .await;
             // Grace window so one more poll after terminal state still works.
             tokio::time::sleep(POST_TERMINAL_RETENTION).await;
             manager.inner.jobs.write().await.remove(&id_for_runner);
             debug!(job = %id_for_runner, "render job retention expired; reaped");
+        });
+
+        jobs.insert(id.clone(), JobHandle { rx, cancel });
+        Ok(id)
+    }
+
+    /// Start a managed two-pass master-loudnorm timeline render.
+    ///
+    /// The returned job id tracks one outer job while the manager runs a
+    /// measure ffmpeg job, parses its loudnorm JSON, then runs the final
+    /// apply ffmpeg job. This preserves the `start_render`/`poll_render`
+    /// lifecycle while still using FFmpeg's required two-pass workflow.
+    pub async fn start_master_loudnorm(
+        &self,
+        request: MasterLoudnormManagedRenderSpec,
+    ) -> Result<JobId, JobError> {
+        let id = JobId::fresh();
+        let started_at = chrono::Utc::now();
+        let initial = JobStatus {
+            id: id.clone(),
+            state: JobState::Queued,
+            progress_pct: None,
+            frames_done: None,
+            total_duration_s: None,
+            time_done_s: None,
+            speed: None,
+            eta_s: None,
+            log_excerpt: "queued two-pass master loudnorm render".into(),
+            command_argv: vec!["awidat-master-loudnorm".into()],
+            metadata: request.manifest.metadata.clone(),
+            output_path: request.output_path.clone(),
+            started_at,
+            exit_code: None,
+        };
+        let (tx, rx) = watch::channel(initial);
+        let cancel = CancellationToken::new();
+
+        let mut jobs = self.inner.jobs.write().await;
+        let active_jobs = active_job_count(&jobs);
+        if active_jobs + 2 > self.inner.max_running {
+            return Err(JobError::AtCapacity {
+                max_running: self.inner.max_running,
+                active_jobs,
+            });
+        }
+
+        let manager = self.clone();
+        let id_for_runner = id.clone();
+        let runner_cancel = cancel.clone();
+        tokio::spawn(async move {
+            run_master_loudnorm_job(manager.clone(), request, tx, runner_cancel).await;
+            tokio::time::sleep(POST_TERMINAL_RETENTION).await;
+            manager.inner.jobs.write().await.remove(&id_for_runner);
+            debug!(job = %id_for_runner, "master loudnorm job retention expired; reaped");
         });
 
         jobs.insert(id.clone(), JobHandle { rx, cancel });
@@ -353,6 +440,7 @@ async fn run_job(
     tx: watch::Sender<JobStatus>,
     cancel: CancellationToken,
     total_duration_s: Option<f64>,
+    manifest_path: Option<PathBuf>,
 ) {
     let stderr = match child.stderr.take() {
         Some(s) => s,
@@ -454,6 +542,18 @@ async fn run_job(
     } else {
         JobState::Failed
     };
+    let finalize_error = if matches!(final_state, JobState::Done) {
+        manifest_path.as_ref().and_then(|path| {
+            crate::finalize_render_manifest_file(path)
+                .err()
+                .map(|error| format!("\n[awidat-render: manifest finalize failed: {error}]\n"))
+        })
+    } else {
+        None
+    };
+    if let Some(error) = finalize_error.as_deref() {
+        log_buf.push(error);
+    }
     tx.send_modify(|s| {
         s.state = final_state;
         s.exit_code = exit.code();
@@ -463,6 +563,241 @@ async fn run_job(
             s.eta_s = Some(0.0);
         }
     });
+}
+
+async fn run_master_loudnorm_job(
+    manager: JobManager,
+    request: MasterLoudnormManagedRenderSpec,
+    tx: watch::Sender<JobStatus>,
+    cancel: CancellationToken,
+) {
+    let measure_spec = match crate::build_master_loudnorm_measure_spec(&request.project_root) {
+        Ok(spec) => spec,
+        Err(error) => {
+            fail_managed_job(
+                &tx,
+                format!("master loudnorm measure planning failed: {error}"),
+            );
+            return;
+        }
+    };
+    tx.send_modify(|status| {
+        status.state = JobState::Running;
+        status.metadata = measure_spec.metadata.clone();
+        status.log_excerpt = "master loudnorm pass 1/2: measuring loudness".into();
+        status.command_argv = command_argv_for_spec(&measure_spec);
+    });
+    let measure_status = match run_child_and_mirror(
+        &manager,
+        measure_spec,
+        &tx,
+        &cancel,
+        "master loudnorm pass 1/2",
+        true,
+        &request.output_path,
+    )
+    .await
+    {
+        Ok(status) => status,
+        Err(message) => {
+            fail_managed_job(&tx, message);
+            return;
+        }
+    };
+    let measured = match crate::parse_loudnorm_measure_json(&measure_status.log_excerpt) {
+        Ok(measured) => measured,
+        Err(error) => {
+            fail_managed_job(
+                &tx,
+                format!("master loudnorm measurement parse failed: {error}"),
+            );
+            return;
+        }
+    };
+    let mut apply_spec =
+        match crate::build_master_loudnorm_apply_spec(&request.project_root, measured) {
+            Ok(spec) => spec,
+            Err(error) => {
+                fail_managed_job(
+                    &tx,
+                    format!("master loudnorm apply planning failed: {error}"),
+                );
+                return;
+            }
+        };
+    retarget_managed_apply_spec(
+        &mut apply_spec,
+        &request.output_path,
+        &request.manifest_path,
+    );
+    let mut manifest = request.manifest;
+    manifest.backend = apply_spec.backend.clone();
+    manifest.replay = crate::RenderReplayPlan::FfmpegArgv {
+        argv: command_argv_for_spec(&apply_spec),
+        cwd: apply_spec
+            .cwd
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+    };
+    manifest.metadata.extend(apply_spec.metadata.clone());
+    manifest.manifest_id =
+        crate::RenderExecutionManifest::planned(crate::RenderExecutionManifestInput {
+            created_at: manifest.created_at.clone(),
+            awidat_version: manifest.awidat_version.clone(),
+            project_root: manifest.project_root.clone(),
+            project_hash: manifest.project_hash.clone(),
+            timeline_hash: manifest.timeline_hash.clone(),
+            backend: manifest.backend.clone(),
+            replay: manifest.replay.clone(),
+            inputs: manifest.inputs.clone(),
+            outputs: manifest.outputs.clone(),
+            sidecars: manifest.sidecars.clone(),
+            limitations: manifest.limitations.clone(),
+            verification: manifest.verification.clone(),
+            metadata: manifest.metadata.clone(),
+        })
+        .manifest_id;
+    if let Err(error) = crate::write_render_manifest(&request.manifest_path, &manifest) {
+        fail_managed_job(
+            &tx,
+            format!(
+                "master loudnorm manifest write failed {}: {error}",
+                request.manifest_path.display()
+            ),
+        );
+        return;
+    }
+    tx.send_modify(|status| {
+        status.state = JobState::Running;
+        status.metadata = apply_spec.metadata.clone();
+        status.log_excerpt = "master loudnorm pass 2/2: applying measured loudness".into();
+        status.command_argv = command_argv_for_spec(&apply_spec);
+        status.output_path = request.output_path.clone();
+    });
+    let apply_status = match run_child_and_mirror(
+        &manager,
+        apply_spec,
+        &tx,
+        &cancel,
+        "master loudnorm pass 2/2",
+        false,
+        &request.output_path,
+    )
+    .await
+    {
+        Ok(status) => status,
+        Err(message) => {
+            fail_managed_job(&tx, message);
+            return;
+        }
+    };
+    tx.send_modify(|status| {
+        status.state = JobState::Done;
+        status.progress_pct = Some(100.0);
+        status.eta_s = Some(0.0);
+        status.exit_code = apply_status.exit_code;
+        status.log_excerpt = apply_status.log_excerpt;
+        status.command_argv = apply_status.command_argv;
+        status.metadata = apply_status.metadata;
+        status.output_path = request.output_path;
+    });
+}
+
+async fn run_child_and_mirror(
+    manager: &JobManager,
+    spec: RenderJobSpec,
+    tx: &watch::Sender<JobStatus>,
+    cancel: &CancellationToken,
+    phase: &str,
+    keep_outer_running_on_done: bool,
+    outer_output_path: &Path,
+) -> Result<JobStatus, String> {
+    let child_id = manager
+        .start(spec)
+        .await
+        .map_err(|error| format!("{phase}: failed to start ffmpeg: {error}"))?;
+    loop {
+        if cancel.is_cancelled() {
+            let _ = manager.cancel(&child_id).await;
+        }
+        let child_status = manager
+            .status(&child_id)
+            .await
+            .map_err(|error| format!("{phase}: failed to poll child render: {error}"))?;
+        mirror_child_status(
+            tx,
+            &child_status,
+            phase,
+            keep_outer_running_on_done,
+            outer_output_path,
+        );
+        match child_status.state {
+            JobState::Done => return Ok(child_status),
+            JobState::Failed | JobState::Cancelled => {
+                return Err(format!(
+                    "{phase}: child render ended {:?} (exit={:?}): {}",
+                    child_status.state, child_status.exit_code, child_status.log_excerpt
+                ));
+            }
+            JobState::Queued | JobState::Running => {}
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+fn mirror_child_status(
+    tx: &watch::Sender<JobStatus>,
+    child_status: &JobStatus,
+    phase: &str,
+    keep_outer_running_on_done: bool,
+    outer_output_path: &Path,
+) {
+    tx.send_modify(|status| {
+        status.state = if keep_outer_running_on_done && child_status.state == JobState::Done {
+            JobState::Running
+        } else {
+            child_status.state
+        };
+        status.progress_pct = child_status.progress_pct;
+        status.frames_done = child_status.frames_done;
+        status.total_duration_s = child_status.total_duration_s;
+        status.time_done_s = child_status.time_done_s;
+        status.speed = child_status.speed;
+        status.eta_s = child_status.eta_s;
+        status.exit_code = child_status.exit_code;
+        status.command_argv = child_status.command_argv.clone();
+        status.metadata = child_status.metadata.clone();
+        status.output_path = outer_output_path.to_path_buf();
+        status.log_excerpt = format!("{phase}\n{}", child_status.log_excerpt);
+    });
+}
+
+fn fail_managed_job(tx: &watch::Sender<JobStatus>, message: String) {
+    tx.send_modify(|status| {
+        status.state = JobState::Failed;
+        status.exit_code = None;
+        status.log_excerpt = message;
+    });
+}
+
+fn retarget_managed_apply_spec(spec: &mut RenderJobSpec, output_path: &Path, manifest_path: &Path) {
+    spec.output_path = output_path.to_path_buf();
+    spec.manifest_path = Some(manifest_path.to_path_buf());
+    if let Some(last) = spec.args.last_mut()
+        && last != "-"
+    {
+        *last = output_path.to_string_lossy().into_owned();
+    }
+}
+
+fn command_argv_for_spec(spec: &RenderJobSpec) -> Vec<String> {
+    let mut argv = Vec::new();
+    match ffmpeg_path() {
+        Ok(path) => argv.push(path.to_string_lossy().into_owned()),
+        Err(_) => argv.push("ffmpeg".into()),
+    }
+    argv.extend(spec.args.iter().cloned());
+    argv
 }
 
 async fn drain_remaining(
@@ -565,10 +900,14 @@ mod tests {
         let m = JobManager::with_max_running(0);
         let spec = RenderJobSpec {
             args: vec!["-version".into()],
+            backend: crate::RenderBackendKind::AssetPreview,
             total_duration_s: None,
             cwd: None,
             output_path: PathBuf::from("renders/out.mp4"),
+            input_paths: Vec::new(),
+            manifest_path: None,
             limitations: Vec::new(),
+            metadata: Default::default(),
         };
 
         let err = m.start(spec).await.unwrap_err();
@@ -590,6 +929,27 @@ mod tests {
         }
         let dir = tempfile::tempdir().unwrap();
         let out_path = dir.path().join("test.mp4");
+        let manifest_path = dir.path().join("test.render-manifest.json");
+        let manifest =
+            crate::RenderExecutionManifest::planned(crate::RenderExecutionManifestInput {
+                created_at: "2026-05-22T10:00:00Z".into(),
+                awidat_version: "test".into(),
+                project_root: dir.path().to_string_lossy().into_owned(),
+                project_hash: None,
+                timeline_hash: None,
+                backend: crate::RenderBackendKind::TimelineFfmpegReencode,
+                replay: crate::RenderReplayPlan::FfmpegArgv {
+                    argv: vec!["ffmpeg".into()],
+                    cwd: Some(dir.path().to_string_lossy().into_owned()),
+                },
+                inputs: Vec::new(),
+                outputs: vec![crate::output_artifact(&out_path, true)],
+                sidecars: Vec::new(),
+                limitations: Vec::new(),
+                verification: None,
+                metadata: std::collections::BTreeMap::new(),
+            });
+        crate::write_render_manifest(&manifest_path, &manifest).unwrap();
         let m = JobManager::new();
         let spec = RenderJobSpec {
             args: vec![
@@ -604,10 +964,14 @@ mod tests {
                 "yuv420p".into(),
                 out_path.to_string_lossy().into_owned(),
             ],
+            backend: crate::RenderBackendKind::TimelineFfmpegReencode,
             total_duration_s: Some(1.0),
             cwd: Some(dir.path().to_path_buf()),
             output_path: out_path.clone(),
+            input_paths: Vec::new(),
+            manifest_path: Some(manifest_path.clone()),
             limitations: Vec::new(),
+            metadata: Default::default(),
         };
         let id = m.start(spec).await.unwrap();
         // Poll up to 15s for terminal state.
@@ -630,5 +994,8 @@ mod tests {
             m.status(&id).await.unwrap()
         );
         assert!(out_path.exists(), "output file must exist");
+        let finalized_manifest = crate::read_render_manifest(&manifest_path).unwrap();
+        assert!(finalized_manifest.outputs[0].sha256.is_some());
+        assert!(finalized_manifest.outputs[0].size_bytes.is_some());
     }
 }
