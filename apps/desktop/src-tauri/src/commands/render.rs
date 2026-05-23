@@ -15,11 +15,12 @@
 //! `Item::Job` events into the agent store so JobCard renders the
 //! same UI as imports / indexing without a code path fork.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use awidat_desktop_protocol::{Id, JobKind};
 use awidat_render::{
-    JobStatus, ReframeTarget, RenderPlanLimitation, build_timeline_render_spec, reframe_to_target,
+    JobStatus, ReframeTarget, RenderJobSpec, RenderPlanLimitation, build_timeline_render_spec,
+    reframe_to_target,
 };
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -67,6 +68,12 @@ pub async fn start_timeline_render(state: State<'_, AwidatState>) -> Result<Rend
     })
     .await
     .map_err(|e| format!("plan join: {e}"))??;
+    let project_root_for_manifest = project_root.clone();
+    let spec = tokio::task::spawn_blocking(move || {
+        prepare_desktop_timeline_render_spec(&project_root_for_manifest, spec)
+    })
+    .await
+    .map_err(|e| format!("manifest join: {e}"))??;
 
     // Make sure renders/ exists before ffmpeg tries to write into it.
     if let Some(parent) = spec.output_path.parent() {
@@ -90,6 +97,81 @@ pub async fn start_timeline_render(state: State<'_, AwidatState>) -> Result<Rend
         total_duration_s,
         render_limitations,
     })
+}
+
+fn prepare_desktop_timeline_render_spec(
+    project_root: &Path,
+    mut spec: RenderJobSpec,
+) -> Result<RenderJobSpec, String> {
+    let project_path = project_root.join("project.otio.json");
+    let project_hash = if project_path.is_file() {
+        Some(
+            awidat_render::fingerprint_file(&project_path, true)
+                .map_err(|e| format!("fingerprint {}: {e}", project_path.display()))?
+                .sha256,
+        )
+    } else {
+        None
+    };
+    let inputs = spec
+        .input_paths
+        .iter()
+        .map(|path| {
+            let resolved = if path.is_absolute() {
+                path.clone()
+            } else {
+                project_root.join(path)
+            };
+            awidat_render::fingerprint_file(&resolved, true)
+                .map_err(|e| format!("fingerprint input {}: {e}", resolved.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let ffmpeg = awidat_render::ffmpeg_path()
+        .map_err(|e| format!("failed to locate ffmpeg for manifest: {e}"))?;
+    let mut replay_argv = vec![ffmpeg.to_string_lossy().into_owned()];
+    replay_argv.extend(spec.args.iter().cloned());
+    let mut metadata = spec.metadata.clone();
+    metadata.insert("render_driver".into(), "desktop_timeline_render".into());
+    metadata.extend(awidat_core::capabilities::render_feature_metadata_for_backend(&spec.backend));
+    let project = awidat_proto::project::Project::read(project_root)
+        .map_err(|e| format!("read project for caption metadata: {e}"))?;
+    let caption_summary = awidat_core::captions::summarize_captions(&project);
+    metadata.extend(awidat_core::captions::caption_summary_metadata(
+        &caption_summary,
+    ));
+    let replay_cwd = spec.cwd.as_deref().unwrap_or(project_root);
+    let sidecars = awidat_render::fingerprint_ffmpeg_subtitle_sidecars(&spec.args)
+        .map_err(|e| format!("fingerprint render sidecars: {e}"))?;
+    let manifest = awidat_render::planned_at_now(awidat_render::RenderExecutionManifestInput {
+        created_at: String::new(),
+        awidat_version: env!("CARGO_PKG_VERSION").into(),
+        project_root: project_root.to_string_lossy().into_owned(),
+        project_hash: project_hash.clone(),
+        timeline_hash: project_hash,
+        backend: spec.backend.clone(),
+        replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+            argv: replay_argv,
+            cwd: Some(replay_cwd.to_string_lossy().into_owned()),
+        },
+        inputs,
+        outputs: vec![awidat_render::output_artifact(&spec.output_path, true)],
+        sidecars,
+        limitations: spec
+            .limitations
+            .iter()
+            .map(|limitation| {
+                awidat_render::limitation(limitation.kind.clone(), limitation.message.clone())
+            })
+            .collect(),
+        verification: None,
+        metadata: metadata.clone(),
+    });
+    let manifest_path = awidat_render::manifest_path_for_output(&spec.output_path);
+    awidat_render::write_render_manifest(&manifest_path, &manifest)
+        .map_err(|e| format!("write render manifest {}: {e}", manifest_path.display()))?;
+    spec.manifest_path = Some(manifest_path);
+    spec.metadata = metadata;
+    Ok(spec)
 }
 
 /// Read the latest status snapshot for a render. Frontend polls this
@@ -281,4 +363,106 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
         },
     );
     token
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use awidat_proto::otio::{Clip, Effect, StackChild, Track, TrackChild, TrackKind};
+    use awidat_proto::project::Project;
+    use awidat_render::RenderBackendKind;
+    use std::collections::BTreeMap;
+
+    fn caption_clip(name: &str) -> Clip {
+        let mut clip = Clip::empty(name);
+        let mut effect = Effect::new("awidat.title");
+        effect
+            .metadata
+            .insert("role".into(), serde_json::json!("caption"));
+        effect
+            .metadata
+            .insert("safe_area".into(), serde_json::json!("mobile"));
+        effect.metadata.insert(
+            "word_timings".into(),
+            serde_json::json!([
+                {"text": "Hello", "start_s": 0.0, "end_s": 0.2},
+                {"text": "world", "start_s": 0.2, "end_s": 0.5}
+            ]),
+        );
+        clip.effects.push(effect);
+        clip
+    }
+
+    #[test]
+    fn prepare_desktop_render_spec_writes_manifest_and_feature_metadata()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let mut project = Project::init(dir.path())?;
+        let mut titles = Track::empty("Titles", TrackKind::Video);
+        titles
+            .children
+            .push(TrackChild::Clip(caption_clip("caption-a")));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(StackChild::Track(titles));
+        project.write(dir.path())?;
+
+        let input_path = dir.path().join("raw").join("clip.mp4");
+        let input_parent = input_path.parent().ok_or("input path has no parent")?;
+        std::fs::create_dir_all(input_parent)?;
+        std::fs::write(&input_path, b"fake-media")?;
+
+        let spec = RenderJobSpec {
+            args: vec![
+                "-y".into(),
+                "-i".into(),
+                input_path.to_string_lossy().into_owned(),
+                dir.path()
+                    .join("renders")
+                    .join("timeline.mp4")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+            backend: RenderBackendKind::TimelineFfmpegReencode,
+            total_duration_s: Some(2.0),
+            cwd: Some(dir.path().to_path_buf()),
+            output_path: dir.path().join("renders").join("timeline.mp4"),
+            input_paths: vec![input_path],
+            manifest_path: None,
+            limitations: Vec::new(),
+            metadata: BTreeMap::from([("render_backend_selected".into(), "ffmpeg_graph".into())]),
+        };
+
+        let prepared = prepare_desktop_timeline_render_spec(dir.path(), spec)?;
+        let manifest_path = prepared
+            .manifest_path
+            .as_ref()
+            .ok_or("prepared spec did not include a manifest path")?;
+        let manifest = awidat_render::read_render_manifest(manifest_path)?;
+
+        assert_eq!(
+            manifest_path,
+            &awidat_render::manifest_path_for_output(&prepared.output_path)
+        );
+        assert_eq!(manifest.backend, RenderBackendKind::TimelineFfmpegReencode);
+        assert_eq!(
+            manifest.metadata["render_driver"],
+            "desktop_timeline_render"
+        );
+        assert_eq!(
+            manifest.metadata["render_feature_id"],
+            "ffmpeg_timeline_export"
+        );
+        assert_eq!(
+            prepared.metadata["render_feature_id"],
+            "ffmpeg_timeline_export"
+        );
+        assert_eq!(manifest.metadata["caption_authority"], "caption_overlays");
+        assert_eq!(manifest.metadata["caption_overlay_count"], "1");
+        assert_eq!(manifest.metadata["word_timed_caption_overlay_count"], "1");
+        assert_eq!(prepared.metadata["caption_authority"], "caption_overlays");
+        Ok(())
+    }
 }
