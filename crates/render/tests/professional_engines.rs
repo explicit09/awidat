@@ -1824,12 +1824,14 @@ fn delivery_profile_updates_render_spec_and_queue_manifest() {
     let profile = DeliveryProfile::youtube_1080p();
     let spec = RenderJobSpec {
         args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
         input_paths: Vec::new(),
         manifest_path: None,
         limitations: Vec::new(),
+        metadata: Default::default(),
     };
     let profiled = apply_delivery_profile_to_spec(spec, &profile);
 
@@ -1867,12 +1869,14 @@ fn export_preset_lowers_codecs_container_and_audio_settings() {
     let preset = ExportPreset::vertical_short_form();
     let spec = RenderJobSpec {
         args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
         input_paths: Vec::new(),
         manifest_path: None,
         limitations: Vec::new(),
+        metadata: Default::default(),
     };
 
     let profiled = match apply_export_preset_to_spec(spec, &preset) {
@@ -1895,12 +1899,14 @@ fn export_preset_sets_faststart_for_mp4_delivery() {
     let preset = ExportPreset::vertical_short_form();
     let spec = RenderJobSpec {
         args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
         input_paths: Vec::new(),
         manifest_path: None,
         limitations: Vec::new(),
+        metadata: Default::default(),
     };
 
     let profiled = match apply_export_preset_to_spec(spec, &preset) {
@@ -1923,12 +1929,14 @@ fn export_preset_auto_hardware_uses_videotoolbox_for_h264_on_macos() {
     preset.output.hardware_acceleration = HardwareAccelerationPolicy::Auto;
     let spec = RenderJobSpec {
         args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
         input_paths: Vec::new(),
         manifest_path: None,
         limitations: Vec::new(),
+        metadata: Default::default(),
     };
 
     let profiled = match apply_export_preset_to_spec(spec, &preset) {
@@ -1951,12 +1959,14 @@ fn export_preset_auto_hardware_keeps_software_codec_when_no_native_mapping_exist
     preset.output.hardware_acceleration = HardwareAccelerationPolicy::Auto;
     let spec = RenderJobSpec {
         args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
         input_paths: Vec::new(),
         manifest_path: None,
         limitations: Vec::new(),
+        metadata: Default::default(),
     };
 
     let profiled = match apply_export_preset_to_spec(spec, &preset) {
@@ -1980,12 +1990,14 @@ fn export_preset_require_hardware_errors_when_codec_has_no_mapping() {
     };
     let spec = RenderJobSpec {
         args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
         total_duration_s: Some(10.0),
         cwd: None,
         output_path: PathBuf::from("renders/timeline.mp4"),
         input_paths: Vec::new(),
         manifest_path: None,
         limitations: Vec::new(),
+        metadata: Default::default(),
     };
 
     let err = match apply_export_preset_to_spec(spec, &preset) {

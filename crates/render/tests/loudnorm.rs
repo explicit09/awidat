@@ -21,6 +21,7 @@ use awidat_proto::otio::{
 use awidat_proto::project::files;
 use awidat_render::{
     MeasuredLoudnorm, build_master_loudnorm_apply_spec, build_master_loudnorm_measure_spec,
+    build_timeline_render_spec,
 };
 use std::fs;
 use std::path::Path;
@@ -70,6 +71,20 @@ fn master_loudnorm_emits_two_pass_specs() {
 
     // ---- Pass 1: measure ----
     let measure = build_master_loudnorm_measure_spec(dir.path()).unwrap();
+    assert_eq!(
+        measure
+            .metadata
+            .get("master_loudnorm_pass")
+            .map(String::as_str),
+        Some("measure")
+    );
+    assert_eq!(
+        measure
+            .metadata
+            .get("master_loudnorm_output_mode")
+            .map(String::as_str),
+        Some("null_muxer")
+    );
     let measure_cmd = measure.args.join(" ");
     assert!(
         measure_cmd.contains("print_format=json"),
@@ -107,6 +122,20 @@ fn master_loudnorm_emits_two_pass_specs() {
         target_offset: 0.4,
     };
     let apply = build_master_loudnorm_apply_spec(dir.path(), measured).unwrap();
+    assert_eq!(
+        apply
+            .metadata
+            .get("master_loudnorm_pass")
+            .map(String::as_str),
+        Some("apply")
+    );
+    assert_eq!(
+        apply
+            .metadata
+            .get("master_loudnorm_output_mode")
+            .map(String::as_str),
+        Some("encoded_output")
+    );
     let apply_cmd = apply.args.join(" ");
     assert!(
         apply_cmd.contains("measured_I=-19.7"),
@@ -140,6 +169,33 @@ fn master_loudnorm_emits_two_pass_specs() {
     assert!(
         apply_cmd.contains("libx264"),
         "apply pass keeps the normal video encoder: {apply_cmd}"
+    );
+}
+
+#[test]
+fn normal_timeline_spec_marks_master_loudnorm_unapplied() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_with_master_loudnorm(dir.path());
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+    assert_eq!(
+        spec.metadata
+            .get("master_loudnorm_enabled")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        spec.metadata
+            .get("master_loudnorm_pass")
+            .map(String::as_str),
+        Some("unapplied")
+    );
+    assert_eq!(
+        spec.metadata
+            .get("master_loudnorm_output_mode")
+            .map(String::as_str),
+        Some("timeline_single_pass")
     );
 }
 

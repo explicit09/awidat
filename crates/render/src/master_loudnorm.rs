@@ -207,6 +207,7 @@ pub fn build_master_loudnorm_measure_spec(
     let target_filter = loudnorm_filter_measure(&settings);
     inject_master_loudnorm_filter(&mut base.args, &target_filter);
     retarget_argv_to_null_muxer(&mut base);
+    tag_master_loudnorm_pass(&mut base, "measure", "null_muxer");
     Ok(base)
 }
 
@@ -221,7 +222,17 @@ pub fn build_master_loudnorm_apply_spec(
     let mut base = build_timeline_render_spec(project_root)?;
     let target_filter = loudnorm_filter_apply(&settings, &measured);
     inject_master_loudnorm_filter(&mut base.args, &target_filter);
+    tag_master_loudnorm_pass(&mut base, "apply", "encoded_output");
     Ok(base)
+}
+
+fn tag_master_loudnorm_pass(spec: &mut RenderJobSpec, pass: &str, output_mode: &str) {
+    spec.metadata
+        .insert("master_loudnorm_enabled".into(), "true".into());
+    spec.metadata
+        .insert("master_loudnorm_pass".into(), pass.into());
+    spec.metadata
+        .insert("master_loudnorm_output_mode".into(), output_mode.into());
 }
 
 /// Emit the master loudnorm filter args for pass 1 (measure).
@@ -626,12 +637,14 @@ mod tests {
                 "veryfast".into(),
                 "/tmp/out.mp4".into(),
             ],
+            backend: crate::RenderBackendKind::TimelineFfmpegReencode,
             total_duration_s: None,
             cwd: None,
             output_path: std::path::PathBuf::from("/tmp/out.mp4"),
             input_paths: Vec::new(),
             manifest_path: None,
             limitations: Vec::new(),
+            metadata: Default::default(),
         };
         retarget_argv_to_null_muxer(&mut spec);
         assert!(!spec.args.iter().any(|a| a == "libx264"));

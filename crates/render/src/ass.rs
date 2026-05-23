@@ -21,6 +21,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use awidat_proto::subtitle::SubtitleTrack;
+
 use crate::timeline::{TitlePlan, TitlePosition, TitleWeight};
 
 /// 1080p reference frame that title font sizes are authored against.
@@ -28,6 +30,36 @@ use crate::timeline::{TitlePlan, TitlePosition, TitleWeight};
 /// `timeline.rs` so libass renders at the same scale as drawtext.
 pub(crate) const ASS_REFERENCE_WIDTH: u32 = 1920;
 pub(crate) const ASS_REFERENCE_HEIGHT: u32 = 1080;
+
+#[derive(Debug, Clone, Copy)]
+struct CaptionLayoutProfile {
+    margin_l: u32,
+    margin_r: u32,
+    margin_v_bottom: u32,
+    margin_v_top: u32,
+    max_chars_per_line: usize,
+}
+
+impl CaptionLayoutProfile {
+    fn for_title(title: &TitlePlan) -> Self {
+        match title.safe_area.as_deref() {
+            Some("mobile" | "9:16" | "vertical") => Self {
+                margin_l: 160,
+                margin_r: 160,
+                margin_v_bottom: 216,
+                margin_v_top: 80,
+                max_chars_per_line: 18,
+            },
+            _ => Self {
+                margin_l: 80,
+                margin_r: 80,
+                margin_v_bottom: 162,
+                margin_v_top: 54,
+                max_chars_per_line: 32,
+            },
+        }
+    }
+}
 
 /// Auto-detect: a [`TitlePlan`] is rendered via libass when
 /// (a) it has at least one transcript word timing, and
@@ -65,6 +97,19 @@ pub(crate) fn render_ass_file(
     Ok(path)
 }
 
+/// Render one editable subtitle track to a single ASS sidecar.
+pub(crate) fn render_subtitle_track_ass_file(
+    track: &SubtitleTrack,
+    workdir: &Path,
+    sequence: usize,
+) -> io::Result<PathBuf> {
+    fs::create_dir_all(workdir)?;
+    let path = workdir.join(format!("subtitle-track-{sequence:04}.ass"));
+    let body = build_subtitle_track_ass_document(track);
+    fs::write(&path, body)?;
+    Ok(path)
+}
+
 /// Build the ASS subtitle document for a captioned title.
 ///
 /// Layout:
@@ -80,6 +125,14 @@ pub(crate) fn build_ass_document(title: &TitlePlan) -> String {
     push_script_info(&mut out);
     push_styles(&mut out, title);
     push_events(&mut out, title);
+    out
+}
+
+fn build_subtitle_track_ass_document(track: &SubtitleTrack) -> String {
+    let mut out = String::new();
+    push_script_info(&mut out);
+    push_default_subtitle_styles(&mut out);
+    push_subtitle_track_events(&mut out, track);
     out
 }
 
@@ -120,14 +173,15 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
         TitlePosition::Center => 5,
         TitlePosition::Bottom => 2,
     };
+    let layout = CaptionLayoutProfile::for_title(title);
     let margin_v = match title.position {
-        TitlePosition::Top => 54, // ~5% of 1080
+        TitlePosition::Top => layout.margin_v_top,
         TitlePosition::Center => 0,
-        TitlePosition::Bottom => 162, // ~15% of 1080 (above the safe edge)
+        TitlePosition::Bottom => layout.margin_v_bottom,
     };
     out.push_str(&format!(
         "Style: Caption,{font},{size},{primary},{secondary},{outline},{back},\
-         {bold},0,0,0,100,100,0,0,1,3,2,{alignment},80,80,{margin_v},1\n",
+         {bold},0,0,0,100,100,0,0,1,3,2,{alignment},{margin_l},{margin_r},{margin_v},1\n",
         font = default_caption_font_name(),
         size = title.font_size,
         primary = primary,
@@ -136,7 +190,24 @@ fn push_styles(out: &mut String, title: &TitlePlan) {
         back = back,
         bold = bold_flag,
         alignment = alignment,
+        margin_l = layout.margin_l,
+        margin_r = layout.margin_r,
         margin_v = margin_v,
+    ));
+    out.push('\n');
+}
+
+fn push_default_subtitle_styles(out: &mut String) {
+    out.push_str("[V4+ Styles]\n");
+    out.push_str(
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, \
+         BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, \
+         BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n",
+    );
+    out.push_str(&format!(
+        "Style: Caption,{font},56,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,\
+         -1,0,0,0,100,100,0,0,1,3,2,2,80,80,162,1\n",
+        font = default_caption_font_name(),
     ));
     out.push('\n');
 }
@@ -150,6 +221,48 @@ fn push_events(out: &mut String, title: &TitlePlan) {
     for dialogue in dialogues {
         out.push_str(&dialogue);
         out.push('\n');
+    }
+}
+
+fn push_subtitle_track_events(out: &mut String, track: &SubtitleTrack) {
+    out.push_str("[Events]\n");
+    out.push_str(
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+    );
+    for cue in track.cues.iter().filter(|cue| {
+        cue.start_s.is_finite()
+            && cue.end_s.is_finite()
+            && cue.end_s > cue.start_s
+            && !cue.text.trim().is_empty()
+    }) {
+        out.push_str(&format!(
+            "Dialogue: 0,{start},{end},Caption,,0,0,0,,{text}\n",
+            start = format_ass_time(cue.start_s),
+            end = format_ass_time(cue.end_s),
+            text = wrap_plain_subtitle_text(&cue.text),
+        ));
+    }
+}
+
+fn wrap_plain_subtitle_text(input: &str) -> String {
+    let mut out = String::new();
+    let mut visible_line_chars = 0usize;
+    for raw_word in input.split_whitespace() {
+        let next_chars = raw_word.chars().count();
+        if visible_line_chars > 0 && visible_line_chars + 1 + next_chars > 32 {
+            out.push_str("\\N");
+            visible_line_chars = 0;
+        } else if visible_line_chars > 0 {
+            out.push(' ');
+            visible_line_chars += 1;
+        }
+        out.push_str(&escape_ass_text(raw_word));
+        visible_line_chars += next_chars;
+    }
+    if out.is_empty() {
+        escape_ass_text(input)
+    } else {
+        out
     }
 }
 
@@ -181,6 +294,8 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
     // between title.start_s and the first word) is encoded as a
     // leading `\k` on an empty group so libass holds the line idle.
     let mut text = String::new();
+    let layout = CaptionLayoutProfile::for_title(title);
+    let mut visible_line_chars = 0usize;
     let first_word_start = words.first().map(|w| w.start_s).unwrap_or(title.start_s);
     let lead_in_cs = seconds_to_centiseconds((first_word_start - title.start_s).max(0.0));
     if lead_in_cs > 0 {
@@ -188,11 +303,22 @@ fn build_dialogue_lines(title: &TitlePlan) -> Vec<String> {
     }
     for (idx, word) in words.iter().enumerate() {
         let dur_cs = seconds_to_centiseconds((word.end_s - word.start_s).max(0.0));
-        let glyphs = escape_ass_text(word.text.trim());
+        let raw_glyphs = word.text.trim();
+        let glyphs = escape_ass_text(raw_glyphs);
         if idx > 0 {
-            text.push(' ');
+            let next_chars = raw_glyphs.chars().count();
+            if visible_line_chars > 0
+                && visible_line_chars + 1 + next_chars > layout.max_chars_per_line
+            {
+                text.push_str("\\N");
+                visible_line_chars = 0;
+            } else {
+                text.push(' ');
+                visible_line_chars += 1;
+            }
         }
         text.push_str(&format!("{{\\k{dur_cs}}}{glyphs}"));
+        visible_line_chars += raw_glyphs.chars().count();
     }
 
     vec![format!("Dialogue: 0,{start},{end},Caption,,0,0,0,,{text}",)]
@@ -431,6 +557,85 @@ mod tests {
         assert!(
             doc.contains("\\k80"),
             "expected world duration 80cs in: {doc}"
+        );
+    }
+
+    #[test]
+    fn mobile_safe_area_caption_uses_tighter_layout_profile() {
+        let mut title = caption_with_words();
+        title.safe_area = Some("mobile".into());
+        title.word_timings = vec![
+            CaptionWordTiming {
+                text: "This".into(),
+                start_s: 1.0,
+                end_s: 1.1,
+            },
+            CaptionWordTiming {
+                text: "mobile".into(),
+                start_s: 1.1,
+                end_s: 1.2,
+            },
+            CaptionWordTiming {
+                text: "caption".into(),
+                start_s: 1.2,
+                end_s: 1.3,
+            },
+            CaptionWordTiming {
+                text: "wraps".into(),
+                start_s: 1.3,
+                end_s: 1.4,
+            },
+            CaptionWordTiming {
+                text: "cleanly".into(),
+                start_s: 1.4,
+                end_s: 1.5,
+            },
+        ];
+
+        let doc = build_ass_document(&title);
+
+        assert!(
+            doc.contains(",2,160,160,216,1"),
+            "mobile safe-area profile should increase side and bottom margins: {doc}"
+        );
+        assert!(
+            doc.contains("\\N"),
+            "mobile caption profile should wrap long karaoke text with ASS line breaks: {doc}"
+        );
+    }
+
+    #[test]
+    fn default_caption_layout_allows_wider_lines_than_mobile() {
+        let mut title = caption_with_words();
+        title.word_timings = vec![
+            CaptionWordTiming {
+                text: "This".into(),
+                start_s: 1.0,
+                end_s: 1.1,
+            },
+            CaptionWordTiming {
+                text: "desktop".into(),
+                start_s: 1.1,
+                end_s: 1.2,
+            },
+            CaptionWordTiming {
+                text: "caption".into(),
+                start_s: 1.2,
+                end_s: 1.3,
+            },
+            CaptionWordTiming {
+                text: "wraps".into(),
+                start_s: 1.3,
+                end_s: 1.4,
+            },
+        ];
+
+        let doc = build_ass_document(&title);
+
+        assert!(doc.contains(",2,80,80,162,1"));
+        assert!(
+            !doc.contains("\\N"),
+            "default layout should keep this caption on one line: {doc}"
         );
     }
 

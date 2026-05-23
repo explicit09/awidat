@@ -112,7 +112,7 @@ fn project_with_title_emits_drawtext_filter() {
 fn project_with_no_titles_keeps_outv_label() {
     // Sanity: when there's no Titles track, the video map stays [outv].
     let dir = tempfile::tempdir().unwrap();
-    let asset_a = "raw/a.mp4";
+    let asset_a = "raw/a.mov";
     fs::create_dir_all(dir.path().join("raw")).unwrap();
     fs::write(dir.path().join(asset_a), b"stub").unwrap();
     let mut clip_a = Clip::empty("clip-a".to_string());

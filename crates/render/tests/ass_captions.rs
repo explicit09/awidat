@@ -13,7 +13,8 @@ use awidat_proto::otio::{
     Timeline, Track, TrackChild, TrackKind,
 };
 use awidat_proto::project::files;
-use awidat_render::build_timeline_render_spec;
+use awidat_proto::subtitle::{SubtitleCue, SubtitleTrack};
+use awidat_render::{RenderBackendKind, build_timeline_render_spec};
 use std::fs;
 use std::path::Path;
 
@@ -138,5 +139,82 @@ fn word_timed_caption_emits_libass_subtitles_filter() {
     assert!(
         ass.contains("hello") && ass.contains("world"),
         "ASS file should contain both transcript words, got: {ass}",
+    );
+}
+
+fn write_project_with_editable_subtitle_track(dir: &Path) {
+    let asset_a = "raw/a.mp4";
+    fs::create_dir_all(dir.join("raw")).unwrap();
+    fs::write(dir.join(asset_a), b"stub").unwrap();
+
+    let mut clip_a = Clip::empty("clip-a".to_string());
+    clip_a.media_reference = MediaReference::External(ExternalReference::new(asset_a));
+    clip_a.source_range = Some(TimeRange::new(
+        RationalTime::new(0.0, 24.0),
+        RationalTime::new(5.0 * 24.0, 24.0),
+    ));
+
+    let mut v1 = Track::empty("V1", TrackKind::Video);
+    v1.children.push(TrackChild::Clip(clip_a));
+
+    let mut tl = Timeline::empty("p");
+    let mut stack = Stack::empty("root");
+    stack.children.push(StackChild::Track(v1));
+    tl.tracks = stack;
+    tl.metadata
+        .awidat
+        .as_mut()
+        .unwrap()
+        .subtitle_tracks
+        .push(SubtitleTrack {
+            id: "sub-main".to_string(),
+            label: "English".to_string(),
+            language: Some("en".to_string()),
+            source_format: None,
+            cues: vec![
+                SubtitleCue::new(0.75, 1.75, "editable subtitles").unwrap(),
+                SubtitleCue::new(2.0, 3.0, "burn in through libass").unwrap(),
+            ],
+        });
+
+    fs::write(
+        dir.join(files::OTIO),
+        serde_json::to_string_pretty(&tl).unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn editable_subtitle_track_emits_libass_subtitles_filter() {
+    let dir = tempfile::tempdir().unwrap();
+    write_project_with_editable_subtitle_track(dir.path());
+
+    let spec = build_timeline_render_spec(dir.path()).unwrap();
+    let cmd = spec.args.join(" ");
+
+    assert_ne!(
+        spec.backend,
+        RenderBackendKind::StreamExportRemux,
+        "editable subtitles require a video render path, not stream-copy"
+    );
+    assert!(
+        cmd.contains("subtitles="),
+        "expected subtitles= filter for editable subtitle track, got: {cmd}",
+    );
+
+    let ass_path = cmd
+        .split("subtitles=")
+        .nth(1)
+        .map(|s| {
+            let end = s.find([':', ',', '[', ';', ' ']).unwrap_or(s.len());
+            s[..end].to_string()
+        })
+        .expect("subtitles= argument should carry a path");
+    let ass_path = ass_path.trim_matches('\'');
+
+    let ass = fs::read_to_string(ass_path).unwrap();
+    assert!(
+        ass.contains("editable subtitles") && ass.contains("burn in through libass"),
+        "ASS file should contain editable subtitle cue text, got: {ass}",
     );
 }

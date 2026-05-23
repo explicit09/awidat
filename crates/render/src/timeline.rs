@@ -33,6 +33,7 @@ use awidat_proto::professional::{
     MaskOperation, ReframePath, TrackingPackage, canonical_runtime_clip_parameter,
 };
 use awidat_proto::project::{files, read_otio_timeline};
+use awidat_proto::subtitle::SubtitleTrack;
 use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
 use serde::Deserialize;
@@ -1417,12 +1418,40 @@ type TimelineFullPlan = (
     Vec<TransitionPlan>,
     Vec<VideoOverlayPlan>,
     Vec<TitlePlan>,
+    Vec<SubtitleTrack>,
     Vec<AnnotationPlan>,
     Option<BroadcastOverlayPlan>,
     Vec<AudioTrackPlan>,
     Option<LoudnessTargetPlan>,
     Vec<RenderPlanLimitation>,
 );
+
+/// Read-only timeline render preflight result.
+#[derive(Debug, Clone)]
+pub struct TimelineRenderPreflight {
+    /// Selected backend if this timeline were rendered now.
+    pub backend: crate::RenderBackendKind,
+    /// Total planned timeline duration in seconds.
+    pub total_duration_s: Option<f64>,
+    /// Renderable video segment count.
+    pub segment_count: usize,
+    /// Transition count.
+    pub transition_count: usize,
+    /// Media overlay count.
+    pub video_overlay_count: usize,
+    /// Title/caption overlay count.
+    pub title_count: usize,
+    /// Editable subtitle track count.
+    pub editable_subtitle_track_count: usize,
+    /// Annotation count.
+    pub annotation_count: usize,
+    /// Audio track count.
+    pub audio_track_count: usize,
+    /// Planned render limitations.
+    pub limitations: Vec<RenderPlanLimitation>,
+    /// Backend-selection metadata that render manifests would carry.
+    pub metadata: BTreeMap<String, String>,
+}
 
 /// Walk `<project_root>/project.otio.json` and collect every
 /// video-track clip's `(asset, source_range)` in playback order.
@@ -1434,7 +1463,7 @@ type TimelineFullPlan = (
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -1450,8 +1479,92 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
+}
+
+/// Analyze timeline render selection without writing render artifacts.
+pub fn analyze_timeline_render_preflight(
+    project_root: &Path,
+) -> Result<TimelineRenderPreflight, RenderTimelineError> {
+    let (
+        segs,
+        transitions,
+        video_overlays,
+        titles,
+        editable_subtitle_tracks,
+        annotations,
+        broadcast_overlay,
+        audio_tracks,
+        loudness_target,
+        render_limitations,
+    ) = collect_timeline_full_plan(project_root)?;
+    if segs.is_empty() && audio_tracks.is_empty() {
+        return Err(RenderTimelineError::EmptyTimeline);
+    }
+    let total_duration_s = if segs.is_empty() {
+        audio_tracks
+            .iter()
+            .map(audio_track_duration)
+            .fold(0.0_f64, f64::max)
+    } else {
+        segs.iter().map(visible_effective_duration).sum()
+    };
+    let master_loudnorm_enabled =
+        matches!(crate::read_master_loudnorm_plan(project_root), Ok(Some(_)));
+    let stream_copy_input = TimelineStreamCopyFastPathInput {
+        section: None,
+        segments: &segs,
+        transitions: &transitions,
+        video_overlays: &video_overlays,
+        titles: &titles,
+        editable_subtitle_tracks: &editable_subtitle_tracks,
+        annotations: &annotations,
+        broadcast_overlay: broadcast_overlay.as_ref(),
+        audio_tracks: &audio_tracks,
+        loudness_target,
+        render_limitations: &render_limitations,
+        master_loudnorm_enabled,
+    };
+    let stream_copy_eligibility = analyze_timeline_stream_copy_eligibility(stream_copy_input);
+    let (backend, metadata) = if stream_copy_eligibility.blockers.is_empty()
+        && stream_copy_eligibility.segment.is_some()
+    {
+        (
+            crate::RenderBackendKind::StreamExportRemux,
+            timeline_stream_copy_metadata(),
+        )
+    } else {
+        let libass_caption_count = titles
+            .iter()
+            .filter(|title| crate::ass::is_libass_eligible(title))
+            .count()
+            + editable_subtitle_tracks.len();
+        let evidence =
+            crate::select_timeline_render_backend_evidence(&transitions, libass_caption_count);
+        let backend = evidence.backend.clone();
+        let mut metadata = evidence.metadata_pairs();
+        insert_timeline_stream_copy_blocker_metadata(
+            &mut metadata,
+            &stream_copy_eligibility.blockers,
+        );
+        tag_unapplied_master_loudnorm(project_root, &mut metadata);
+        (backend, metadata)
+    };
+
+    Ok(TimelineRenderPreflight {
+        backend,
+        total_duration_s: Some(total_duration_s),
+        segment_count: segs.len(),
+        transition_count: transitions.len(),
+        video_overlay_count: video_overlays.len(),
+        title_count: titles.len(),
+        editable_subtitle_track_count: editable_subtitle_tracks.len(),
+        annotation_count: annotations.len(),
+        audio_track_count: audio_tracks.len(),
+        limitations: render_limitations,
+        metadata,
+    })
 }
 
 /// Walk `<project_root>/project.otio.json` and collect segments +
@@ -1497,6 +1610,19 @@ pub fn collect_timeline_full_plan(
     let mut transitions = Vec::new();
     let mut video_overlays = Vec::new();
     let mut titles = Vec::new();
+    let editable_subtitle_tracks = timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .map(|metadata| {
+            metadata
+                .subtitle_tracks
+                .iter()
+                .filter(|track| track.cues.iter().any(|cue| !cue.text.trim().is_empty()))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let mut annotations = Vec::new();
     let mut audio_tracks = Vec::new();
     let mut render_limitations = graph_binding_limitations;
@@ -1755,6 +1881,7 @@ pub fn collect_timeline_full_plan(
         transitions,
         video_overlays,
         titles,
+        editable_subtitle_tracks,
         annotations,
         broadcast_overlay,
         audio_tracks,
@@ -3778,6 +3905,7 @@ pub struct FilterPlanner<'a> {
     segments: &'a [TimelineSegment],
     transitions: &'a [TransitionPlan],
     titles: &'a [TitlePlan],
+    editable_subtitle_tracks: &'a [SubtitleTrack],
     broadcast_overlay: Option<&'a BroadcastOverlayPlan>,
     /// When set, eligible captions (role=="caption" with non-empty
     /// `word_timings`) are written as `.ass` files into this dir
@@ -3848,6 +3976,7 @@ impl<'a> FilterPlanner<'a> {
             segments,
             transitions,
             titles,
+            editable_subtitle_tracks: &[],
             broadcast_overlay: None,
             ass_workdir: None,
         }
@@ -3865,9 +3994,18 @@ impl<'a> FilterPlanner<'a> {
             segments,
             transitions,
             titles,
+            editable_subtitle_tracks: &[],
             broadcast_overlay,
             ass_workdir: None,
         }
+    }
+
+    /// Add editable timeline subtitle tracks to the burn-in chain.
+    /// These tracks always render through ASS/libass because they are
+    /// already subtitle-native and should not be lowered through drawtext.
+    pub(crate) fn with_editable_subtitle_tracks(mut self, tracks: &'a [SubtitleTrack]) -> Self {
+        self.editable_subtitle_tracks = tracks;
+        self
     }
 
     /// Opt eligible captions into the ASS / libass burn-in path.
@@ -3901,7 +4039,9 @@ impl<'a> FilterPlanner<'a> {
         } else {
             base
         };
-        if self.titles.is_empty() || broadcast_overlay_owns_program_titles(self.broadcast_overlay) {
+        let has_program_titles = !self.titles.is_empty()
+            && !broadcast_overlay_owns_program_titles(self.broadcast_overlay);
+        if !has_program_titles && self.editable_subtitle_tracks.is_empty() {
             base
         } else {
             self.append_titles(base)
@@ -3923,8 +4063,9 @@ impl<'a> FilterPlanner<'a> {
         if let Some(overlay) = self.broadcast_overlay {
             base = self.append_broadcast_overlay(base, overlay);
         }
-        if !self.titles.is_empty() && !broadcast_overlay_owns_program_titles(self.broadcast_overlay)
-        {
+        let has_program_titles = !self.titles.is_empty()
+            && !broadcast_overlay_owns_program_titles(self.broadcast_overlay);
+        if has_program_titles || !self.editable_subtitle_tracks.is_empty() {
             base = self.append_titles(base);
         }
         base
@@ -3952,16 +4093,22 @@ impl<'a> FilterPlanner<'a> {
         let mut filter = base.filter_complex.clone();
         filter.push(';');
         filter.push_str(&in_label);
-        // Comma-separate the title filters so they all run on the
+        // Comma-separate the text filters so they all run on the
         // same input → single output. drawtext's `enable=` keeps each
         // bounded to its window without cross-contamination, and
         // libass `subtitles=` carries its own per-event start/end.
-        let parts: Vec<String> = self
+        let mut parts: Vec<String> = self
             .titles
             .iter()
             .enumerate()
             .map(|(index, title)| self.format_title_filter(title, index))
             .collect();
+        parts.extend(
+            self.editable_subtitle_tracks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, track)| self.format_subtitle_track_filter(track, index)),
+        );
         filter.push_str(&parts.join(","));
         filter.push_str(&out_label);
 
@@ -3995,6 +4142,22 @@ impl<'a> FilterPlanner<'a> {
             }
         }
         format_drawtext_filter(title, self.broadcast_overlay)
+    }
+
+    fn format_subtitle_track_filter(&self, track: &SubtitleTrack, index: usize) -> Option<String> {
+        let workdir = self.ass_workdir.as_ref()?;
+        match crate::ass::render_subtitle_track_ass_file(track, workdir, index) {
+            Ok(path) => Some(crate::ass::ffmpeg_subtitles_filter_arg(&path)),
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    track_id = %track.id,
+                    workdir = %workdir.display(),
+                    "FilterPlanner: editable subtitle ASS write failed; dropping subtitle track",
+                );
+                None
+            }
+        }
     }
 
     fn append_broadcast_overlay(
@@ -8597,6 +8760,7 @@ pub fn build_timeline_argv_full_with_annotations(
         video_overlays,
         annotations,
         titles,
+        &[],
         broadcast_overlay,
         browser_broadcast_overlay,
         loudness_target,
@@ -8618,6 +8782,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     video_overlays: &[VideoOverlayPlan],
     annotations: &[AnnotationPlan],
     titles: &[TitlePlan],
+    editable_subtitle_tracks: &[SubtitleTrack],
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
     browser_broadcast_overlay: Option<&Path>,
     loudness_target: Option<LoudnessTargetPlan>,
@@ -8673,7 +8838,8 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         &[],
         titles,
         ffmpeg_broadcast_overlay,
-    );
+    )
+    .with_editable_subtitle_tracks(editable_subtitle_tracks);
     if let Some(dir) = ass_workdir {
         planner = planner.with_ass_workdir(dir.to_path_buf());
     }
@@ -8808,6 +8974,7 @@ pub fn build_timeline_argv_with_audio_tracks_and_annotations(
         video_overlays,
         annotations,
         titles,
+        &[],
         broadcast_overlay,
         browser_broadcast_overlay,
         loudness_target,
@@ -8829,6 +8996,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     video_overlays: &[VideoOverlayPlan],
     annotations: &[AnnotationPlan],
     titles: &[TitlePlan],
+    editable_subtitle_tracks: &[SubtitleTrack],
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
     browser_broadcast_overlay: Option<&Path>,
     loudness_target: Option<LoudnessTargetPlan>,
@@ -8917,7 +9085,8 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
             &[],
             titles,
             ffmpeg_broadcast_overlay,
-        );
+        )
+        .with_editable_subtitle_tracks(editable_subtitle_tracks);
         if let Some(dir) = ass_workdir {
             planner = planner.with_ass_workdir(dir.to_path_buf());
         }
@@ -9365,6 +9534,7 @@ fn build_timeline_render_spec_inner(
         transitions,
         video_overlays,
         titles,
+        editable_subtitle_tracks,
         annotations,
         broadcast_overlay,
         audio_tracks,
@@ -9408,6 +9578,39 @@ fn build_timeline_render_spec_inner(
     .map_err(|e| {
         RenderTimelineError::BroadcastOverlayRender(format!("output path preflight failed: {e}"))
     })?;
+    let master_loudnorm_enabled =
+        matches!(crate::read_master_loudnorm_plan(project_root), Ok(Some(_)));
+    let stream_copy_eligibility =
+        analyze_timeline_stream_copy_eligibility(TimelineStreamCopyFastPathInput {
+            section: section.as_ref(),
+            segments: &segs,
+            transitions: &transitions,
+            video_overlays: &video_overlays,
+            titles: &titles,
+            editable_subtitle_tracks: &editable_subtitle_tracks,
+            annotations: &annotations,
+            broadcast_overlay: broadcast_overlay.as_ref(),
+            audio_tracks: &audio_tracks,
+            loudness_target,
+            render_limitations: &render_limitations,
+            master_loudnorm_enabled,
+        });
+    if stream_copy_eligibility.blockers.is_empty()
+        && let Some(segment) = stream_copy_eligibility.segment
+    {
+        let metadata = timeline_stream_copy_metadata();
+        return Ok(RenderJobSpec {
+            args: build_single_segment_stream_copy_argv(segment, &output_path),
+            backend: crate::RenderBackendKind::StreamExportRemux,
+            total_duration_s: Some(segment.duration_s),
+            cwd: Some(project_root.to_path_buf()),
+            output_path,
+            input_paths,
+            manifest_path: None,
+            limitations: render_limitations,
+            metadata,
+        });
+    }
     let browser_broadcast_overlay = if let Some(overlay) = broadcast_overlay.as_ref()
         && overlay.config.enabled
         && !overlay.config.short_form_mode
@@ -9425,7 +9628,12 @@ fn build_timeline_render_spec_inner(
     // materialize `.ass` files under <renders>/.ass/<timestamp>/ so
     // the ffmpeg `subtitles=` filter can find them. Drawtext stays
     // the default for everything else.
-    let ass_workdir = if titles.iter().any(crate::ass::is_libass_eligible) {
+    let libass_caption_count = titles
+        .iter()
+        .filter(|title| crate::ass::is_libass_eligible(title))
+        .count();
+    let editable_subtitle_track_count = editable_subtitle_tracks.len();
+    let ass_workdir = if libass_caption_count > 0 || editable_subtitle_track_count > 0 {
         let dir = renders_dir.join(".ass").join(timestamp.to_string());
         if let Err(err) = fs::create_dir_all(&dir) {
             tracing::warn!(
@@ -9447,6 +9655,7 @@ fn build_timeline_render_spec_inner(
             &video_overlays,
             &annotations,
             &titles,
+            &editable_subtitle_tracks,
             broadcast_overlay.as_ref(),
             browser_broadcast_overlay.as_deref(),
             loudness_target,
@@ -9460,6 +9669,7 @@ fn build_timeline_render_spec_inner(
             &video_overlays,
             &annotations,
             &titles,
+            &editable_subtitle_tracks,
             broadcast_overlay.as_ref(),
             browser_broadcast_overlay.as_deref(),
             loudness_target,
@@ -9468,27 +9678,227 @@ fn build_timeline_render_spec_inner(
             ass_workdir.as_deref(),
         )
     };
+    let backend_evidence = crate::select_timeline_render_backend_evidence(
+        &transitions,
+        libass_caption_count + editable_subtitle_track_count,
+    );
+    let backend = backend_evidence.backend.clone();
+    let mut metadata = backend_evidence.metadata_pairs();
+    insert_timeline_stream_copy_blocker_metadata(&mut metadata, &stream_copy_eligibility.blockers);
+    tag_unapplied_master_loudnorm(project_root, &mut metadata);
     if let Some(section) = section {
         trim_render_argv_to_section(&mut argv, section.start_s, section.duration_s);
         return Ok(RenderJobSpec {
             args: argv,
+            backend,
             total_duration_s: Some(section.duration_s),
             cwd: Some(project_root.to_path_buf()),
             output_path,
             input_paths,
             manifest_path: None,
             limitations: render_limitations,
+            metadata,
         });
     }
     Ok(RenderJobSpec {
         args: argv,
+        backend,
         total_duration_s: Some(total_duration_s),
         cwd: Some(project_root.to_path_buf()),
         output_path,
         input_paths,
         manifest_path: None,
         limitations: render_limitations,
+        metadata,
     })
+}
+
+fn tag_unapplied_master_loudnorm(
+    project_root: &Path,
+    metadata: &mut std::collections::BTreeMap<String, String>,
+) {
+    if !matches!(crate::read_master_loudnorm_plan(project_root), Ok(Some(_))) {
+        return;
+    }
+    metadata.insert("master_loudnorm_enabled".into(), "true".into());
+    metadata.insert("master_loudnorm_pass".into(), "unapplied".into());
+    metadata.insert(
+        "master_loudnorm_output_mode".into(),
+        "timeline_single_pass".into(),
+    );
+}
+
+struct TimelineStreamCopyFastPathInput<'a> {
+    section: Option<&'a TimelineSectionRange>,
+    segments: &'a [TimelineSegment],
+    transitions: &'a [TransitionPlan],
+    video_overlays: &'a [VideoOverlayPlan],
+    titles: &'a [TitlePlan],
+    editable_subtitle_tracks: &'a [SubtitleTrack],
+    annotations: &'a [AnnotationPlan],
+    broadcast_overlay: Option<&'a BroadcastOverlayPlan>,
+    audio_tracks: &'a [AudioTrackPlan],
+    loudness_target: Option<LoudnessTargetPlan>,
+    render_limitations: &'a [RenderPlanLimitation],
+    master_loudnorm_enabled: bool,
+}
+
+struct TimelineStreamCopyEligibility<'a> {
+    segment: Option<&'a TimelineSegment>,
+    blockers: Vec<&'static str>,
+}
+
+fn analyze_timeline_stream_copy_eligibility(
+    input: TimelineStreamCopyFastPathInput<'_>,
+) -> TimelineStreamCopyEligibility<'_> {
+    let mut blockers = Vec::new();
+    if input.section.is_some() {
+        blockers.push("section_render");
+    }
+    if input.segments.len() != 1 {
+        blockers.push("segment_count");
+    }
+    if !input.transitions.is_empty() {
+        blockers.push("transitions");
+    }
+    if !input.video_overlays.is_empty() {
+        blockers.push("video_overlays");
+    }
+    if !input.titles.is_empty() {
+        blockers.push("title_overlays");
+    }
+    if !input.editable_subtitle_tracks.is_empty() {
+        blockers.push("editable_subtitle_tracks");
+    }
+    if !input.annotations.is_empty() {
+        blockers.push("annotations");
+    }
+    if input.broadcast_overlay.is_some() {
+        blockers.push("broadcast_overlay");
+    }
+    if !input.audio_tracks.is_empty() {
+        blockers.push("audio_tracks");
+    }
+    if input.loudness_target.is_some() {
+        blockers.push("loudness_target");
+    }
+    if !input.render_limitations.is_empty() {
+        blockers.push("render_limitations");
+    }
+    if input.master_loudnorm_enabled {
+        blockers.push("master_loudnorm");
+    }
+    let segment = input.segments.first();
+    if let Some(segment) = segment {
+        if segment_has_render_transform(segment) {
+            blockers.push("segment_render_transform");
+        }
+        if !segment_container_can_copy_to_mp4(segment) {
+            blockers.push("container_requires_reencode");
+        }
+    }
+    TimelineStreamCopyEligibility { segment, blockers }
+}
+
+fn segment_container_can_copy_to_mp4(segment: &TimelineSegment) -> bool {
+    segment
+        .asset_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("m4v")
+        })
+}
+
+fn segment_has_render_transform(segment: &TimelineSegment) -> bool {
+    segment.pre_handle_s != 0.0
+        || segment.post_handle_s != 0.0
+        || segment.mask_input_index.is_some()
+        || segment.volume.is_some()
+        || segment.volume_automation.is_some()
+        || segment.speed.is_some()
+        || segment.time_remap.is_some()
+        || segment.freeze.is_some()
+        || segment.color_correction.is_some()
+        || segment.blur.is_some()
+        || segment.chroma_key.is_some()
+        || segment.luma_key.is_some()
+        || segment.region_blur.is_some()
+        || segment.blur_radius_animation.is_some()
+        || segment.hdr_transfer.is_some()
+        || segment.reframe.is_some()
+        || segment.reframe_path.is_some()
+        || segment.warp.is_some()
+        || segment.warp_animation.is_some()
+        || segment.shake.is_some()
+        || segment.shake_intensity_animation.is_some()
+        || segment.shake_frequency_animation.is_some()
+        || segment.lut_path.is_some()
+        || segment.lut_interpolation.is_some()
+        || segment.lut_strength.is_some()
+        || segment.color_pipeline.is_some()
+        || segment.audio_fx.is_some()
+        || segment.overlay_blend_mode.is_some()
+        || segment.audio_lead_s.is_some()
+        || segment.audio_trail_s.is_some()
+}
+
+fn build_single_segment_stream_copy_argv(
+    segment: &TimelineSegment,
+    output_path: &Path,
+) -> Vec<String> {
+    vec![
+        "-y".into(),
+        "-loglevel".into(),
+        "info".into(),
+        "-ss".into(),
+        format!("{}", segment.start_s),
+        "-t".into(),
+        format!("{}", segment.duration_s),
+        "-i".into(),
+        segment.asset_path.to_string_lossy().into_owned(),
+        "-map".into(),
+        "0".into(),
+        "-c".into(),
+        "copy".into(),
+        "-avoid_negative_ts".into(),
+        "make_zero".into(),
+        output_path.to_string_lossy().into_owned(),
+    ]
+}
+
+fn timeline_stream_copy_metadata() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::from([
+        ("timeline_stream_copy_eligible".into(), "true".into()),
+        ("timeline_stream_copy_blocker_count".into(), "0".into()),
+        ("timeline_stream_copy_blockers".into(), String::new()),
+        ("timeline_backend".into(), "stream_export_remux".into()),
+        (
+            "timeline_backend_reason".into(),
+            "single_plain_timeline_segment".into(),
+        ),
+        ("remux_backend".into(), "stream_export_remux".into()),
+        (
+            "remux_eligibility_reason".into(),
+            "single_plain_timeline_segment".into(),
+        ),
+        ("stream_count".into(), "all_mapped".into()),
+        ("copy_stream_count".into(), "all_mapped".into()),
+        ("transcode_stream_count".into(), "0".into()),
+        ("all_streams_copy".into(), "true".into()),
+    ])
+}
+
+fn insert_timeline_stream_copy_blocker_metadata(
+    metadata: &mut std::collections::BTreeMap<String, String>,
+    blockers: &[&'static str],
+) {
+    metadata.insert("timeline_stream_copy_eligible".into(), "false".into());
+    metadata.insert(
+        "timeline_stream_copy_blocker_count".into(),
+        blockers.len().to_string(),
+    );
+    metadata.insert("timeline_stream_copy_blockers".into(), blockers.join(","));
 }
 
 fn resolve_timeline_section(
@@ -10341,9 +10751,23 @@ mod tests {
     }
 
     #[test]
-    fn fixture_project_produces_concat_argv() {
+    fn effect_project_produces_concat_argv() {
         let dir = tempfile::tempdir().unwrap();
-        write_fixture_project(dir.path());
+        let otio_path = write_fixture_project(dir.path());
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+            panic!("expected video track");
+        };
+        let TrackChild::Clip(clip) = &mut track.children[0] else {
+            panic!("expected fixture clip");
+        };
+        let mut effect = Effect::new("awidat.volume");
+        effect
+            .metadata
+            .insert("value".into(), serde_json::json!(0.8));
+        clip.effects.push(effect);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
         let spec = build_timeline_render_spec(dir.path()).unwrap();
         assert!(spec.total_duration_s.unwrap() > 1.9);
         // Concat filter present, libx264 (re-encode, not stream-copy).
@@ -10360,6 +10784,114 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
                 .starts_with("timeline-")
+        );
+    }
+
+    #[test]
+    fn simple_single_clip_timeline_uses_stream_copy_fast_path() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        assert_eq!(spec.backend, crate::RenderBackendKind::StreamExportRemux);
+        assert!(
+            cmd.contains("-c copy"),
+            "simple timeline should copy packets: {cmd}"
+        );
+        assert!(
+            !cmd.contains("-filter_complex"),
+            "stream-copy timeline should not build a filter graph: {cmd}"
+        );
+        assert_eq!(
+            spec.metadata
+                .get("remux_eligibility_reason")
+                .map(String::as_str),
+            Some("single_plain_timeline_segment")
+        );
+        assert_eq!(
+            spec.metadata.get("all_streams_copy").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_stream_copy_eligible")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_stream_copy_blocker_count")
+                .map(String::as_str),
+            Some("0")
+        );
+    }
+
+    #[test]
+    fn timeline_render_preflight_reports_backend_without_creating_render_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project(dir.path());
+
+        let preflight = analyze_timeline_render_preflight(dir.path()).unwrap();
+
+        assert_eq!(
+            preflight.backend,
+            crate::RenderBackendKind::StreamExportRemux
+        );
+        assert_eq!(
+            preflight
+                .metadata
+                .get("remux_eligibility_reason")
+                .map(String::as_str),
+            Some("single_plain_timeline_segment")
+        );
+        assert_eq!(preflight.segment_count, 1);
+        assert_eq!(preflight.transition_count, 0);
+        assert!(!dir.path().join("renders").exists());
+    }
+
+    #[test]
+    fn non_mp4_single_clip_timeline_stays_on_reencode_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset_rel = "raw/x.mov";
+        fs::create_dir_all(dir.path().join("raw")).unwrap();
+        fs::write(dir.path().join(asset_rel), b"stub").unwrap();
+        let mut clip = Clip::empty("c1".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip));
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        fs::write(
+            dir.path().join(files::OTIO),
+            serde_json::to_string_pretty(&tl).unwrap(),
+        )
+        .unwrap();
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+        assert_eq!(
+            spec.backend,
+            crate::RenderBackendKind::TimelineFfmpegReencode
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_stream_copy_eligible")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_stream_copy_blockers")
+                .map(String::as_str),
+            Some("container_requires_reencode")
         );
     }
 
@@ -10743,7 +11275,7 @@ mod tests {
             },
         );
 
-        let (_, _, video_overlays, _, _, _, _, _, limitations) =
+        let (_, _, video_overlays, _, _, _, _, _, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert_eq!(video_overlays.len(), 1);
@@ -10985,7 +11517,7 @@ mod tests {
             },
         );
 
-        let (_, _, _, _, _, _, audio_tracks, _, limitations) =
+        let (_, _, _, _, _, _, _, audio_tracks, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -11019,7 +11551,7 @@ mod tests {
             },
         );
 
-        let (segments, _, _, _, _, _, _, _, limitations) =
+        let (segments, _, _, _, _, _, _, _, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());

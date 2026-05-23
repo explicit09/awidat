@@ -428,6 +428,169 @@ pub fn fingerprint_file(
     })
 }
 
+/// Fingerprint ASS/subtitle sidecars referenced by FFmpeg `subtitles=` filters.
+pub fn fingerprint_ffmpeg_subtitle_sidecars(
+    argv: &[String],
+) -> Result<Vec<RenderSidecarFingerprint>, RenderManifestError> {
+    let mut sidecars = Vec::new();
+    for path in ffmpeg_subtitle_filter_paths(argv) {
+        let fingerprint = fingerprint_file(&path, true)?;
+        sidecars.push(RenderSidecarFingerprint {
+            path: fingerprint.path,
+            sha256: fingerprint.sha256,
+            size_bytes: fingerprint.size_bytes,
+            required: fingerprint.required,
+        });
+    }
+    Ok(sidecars)
+}
+
+/// Extract stable layout/readability metadata from ASS sidecars referenced by
+/// FFmpeg `subtitles=` filters.
+pub fn ass_sidecar_layout_metadata(
+    argv: &[String],
+) -> Result<std::collections::BTreeMap<String, String>, RenderManifestError> {
+    let mut summary = AssSidecarLayoutSummary::default();
+    for path in ffmpeg_subtitle_filter_paths(argv) {
+        let contents =
+            std::fs::read_to_string(&path).map_err(|source| RenderManifestError::Io {
+                path: path.to_string_lossy().into_owned(),
+                source,
+            })?;
+        summary.add_document(&contents);
+    }
+    Ok(summary.into_metadata())
+}
+
+#[derive(Debug, Default)]
+struct AssSidecarLayoutSummary {
+    sidecar_count: usize,
+    playres_values: std::collections::BTreeSet<String>,
+    wrapped_sidecar_count: usize,
+    safe_area_sidecar_count: usize,
+    karaoke_sidecar_count: usize,
+}
+
+impl AssSidecarLayoutSummary {
+    fn add_document(&mut self, contents: &str) {
+        self.sidecar_count += 1;
+        let playres_x = ass_header_value(contents, "PlayResX");
+        let playres_y = ass_header_value(contents, "PlayResY");
+        if let (Some(x), Some(y)) = (playres_x, playres_y) {
+            self.playres_values.insert(format!("{x}x{y}"));
+        }
+        if contents.contains("\\N") {
+            self.wrapped_sidecar_count += 1;
+        }
+        if contents.contains("\\k") {
+            self.karaoke_sidecar_count += 1;
+        }
+        if contents.lines().any(style_line_has_safe_area_margins) {
+            self.safe_area_sidecar_count += 1;
+        }
+    }
+
+    fn into_metadata(self) -> std::collections::BTreeMap<String, String> {
+        let mut metadata = std::collections::BTreeMap::new();
+        if self.sidecar_count == 0 {
+            return metadata;
+        }
+        metadata.insert(
+            "libass_layout_sidecar_count".into(),
+            self.sidecar_count.to_string(),
+        );
+        metadata.insert(
+            "libass_layout_playres".into(),
+            self.playres_values
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        metadata.insert(
+            "libass_layout_wrapped_sidecar_count".into(),
+            self.wrapped_sidecar_count.to_string(),
+        );
+        metadata.insert(
+            "libass_layout_safe_area_sidecar_count".into(),
+            self.safe_area_sidecar_count.to_string(),
+        );
+        metadata.insert(
+            "libass_layout_karaoke_sidecar_count".into(),
+            self.karaoke_sidecar_count.to_string(),
+        );
+        metadata
+    }
+}
+
+fn ass_header_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
+    contents.lines().find_map(|line| {
+        let (line_key, value) = line.split_once(':')?;
+        line_key
+            .trim()
+            .eq_ignore_ascii_case(key)
+            .then_some(value.trim())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn style_line_has_safe_area_margins(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("Style:") else {
+        return false;
+    };
+    let fields = rest.split(',').map(str::trim).collect::<Vec<_>>();
+    if fields.len() < 23 {
+        return false;
+    }
+    let margin_l = fields.get(19).and_then(|value| value.parse::<u32>().ok());
+    let margin_r = fields.get(20).and_then(|value| value.parse::<u32>().ok());
+    let margin_v = fields.get(21).and_then(|value| value.parse::<u32>().ok());
+    matches!(
+        (margin_l, margin_r, margin_v),
+        (Some(left), Some(right), Some(vertical)) if left >= 80 && right >= 80 && vertical >= 54
+    )
+}
+
+fn ffmpeg_subtitle_filter_paths(argv: &[String]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for arg in argv {
+        let mut remaining = arg.as_str();
+        while let Some(start) = remaining.find("subtitles=") {
+            let value_start = start + "subtitles=".len();
+            let value = &remaining[value_start..];
+            let (path, consumed) = parse_ffmpeg_subtitles_value(value);
+            if !path.as_os_str().is_empty() {
+                paths.push(path);
+            }
+            let next_start = value_start.saturating_add(consumed).min(remaining.len());
+            remaining = &remaining[next_start..];
+        }
+    }
+    paths
+}
+
+fn parse_ffmpeg_subtitles_value(value: &str) -> (PathBuf, usize) {
+    if let Some(stripped) = value.strip_prefix('\'') {
+        let mut out = String::new();
+        let mut escaped = false;
+        for (offset, ch) in stripped.char_indices() {
+            if escaped {
+                out.push(ch);
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '\'' => return (PathBuf::from(out), offset + 2),
+                _ => out.push(ch),
+            }
+        }
+        return (PathBuf::from(out), value.len());
+    }
+    let end = value.find([':', ',', '[', ';', ' ']).unwrap_or(value.len());
+    (PathBuf::from(&value[..end]), end)
+}
+
 /// Build a planned output artifact entry.
 pub fn output_artifact(path: &Path, required: bool) -> RenderOutputArtifact {
     RenderOutputArtifact {
@@ -772,6 +935,24 @@ mod tests {
             path,
             std::path::Path::new("/project/renders/final-youtube.render-manifest.json")
         );
+    }
+
+    #[test]
+    fn fingerprints_subtitle_sidecars_referenced_by_ffmpeg_args() {
+        let dir = tempdir().unwrap();
+        let ass_path = dir.path().join("caption.ass");
+        std::fs::write(&ass_path, b"[Script Info]\n").unwrap();
+        let argv = vec![
+            "-filter_complex".to_string(),
+            format!("[outv]subtitles='{}'[titled_v]", ass_path.to_string_lossy()),
+        ];
+
+        let sidecars = fingerprint_ffmpeg_subtitle_sidecars(&argv).unwrap();
+
+        assert_eq!(sidecars.len(), 1);
+        assert_eq!(sidecars[0].path, ass_path.to_string_lossy());
+        assert!(sidecars[0].required);
+        assert_eq!(sidecars[0].size_bytes, 14);
     }
 
     #[test]

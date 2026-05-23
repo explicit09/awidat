@@ -143,6 +143,20 @@ fn orchestrator_runs_measure_then_apply_and_returns_pass2_output() {
     assert_eq!(submitted.len(), 2, "expected two render submissions");
 
     // Pass 1: measure
+    assert_eq!(
+        submitted[0]
+            .metadata
+            .get("master_loudnorm_pass")
+            .map(String::as_str),
+        Some("measure")
+    );
+    assert_eq!(
+        submitted[0]
+            .metadata
+            .get("master_loudnorm_output_mode")
+            .map(String::as_str),
+        Some("null_muxer")
+    );
     let pass1_cmd = submitted[0].args.join(" ");
     assert!(
         pass1_cmd.contains("print_format=json"),
@@ -167,6 +181,20 @@ fn orchestrator_runs_measure_then_apply_and_returns_pass2_output() {
     );
 
     // Pass 2: apply, with parsed measurements substituted in.
+    assert_eq!(
+        submitted[1]
+            .metadata
+            .get("master_loudnorm_pass")
+            .map(String::as_str),
+        Some("apply")
+    );
+    assert_eq!(
+        submitted[1]
+            .metadata
+            .get("master_loudnorm_output_mode")
+            .map(String::as_str),
+        Some("encoded_output")
+    );
     let pass2_cmd = submitted[1].args.join(" ");
     assert!(
         pass2_cmd.contains("measured_I=-19.74"),
