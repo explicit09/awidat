@@ -18,13 +18,14 @@ export function drawMoveGhost(
   currentTime: number,
   drag: UserMoveDrag,
   pps: number,
+  laneHeight: number = LANE_HEIGHT,
 ) {
   const dx = snapMoveDeltaS(snapshot, currentTime, drag, pps) * pps;
   const drawClip = (trackIndex: number, item: Extract<TimelineItem, { kind: "clip" }>) => {
     const x = Math.round(item.track_start_s * pps + dx);
-    const y = RULER_HEIGHT + trackIndex * LANE_HEIGHT + 4;
+    const y = RULER_HEIGHT + trackIndex * laneHeight + 4;
     const w = Math.max(2, Math.round(item.duration_s * pps));
-    const h = LANE_HEIGHT - 8;
+    const h = laneHeight - 8;
     ctx.save();
     ctx.setLineDash([5, 4]);
     ctx.strokeStyle = "#78b8ff";
@@ -100,10 +101,11 @@ export function drawTracks(
     highlightKeys?: Set<string>;
     selectedKey?: string;
   },
+  laneHeight: number = LANE_HEIGHT,
 ) {
   for (let row = 0; row < tracks.length; row++) {
     const track = tracks[row];
-    const y = RULER_HEIGHT + row * LANE_HEIGHT;
+    const y = RULER_HEIGHT + row * laneHeight;
     const isTitlesRow = track.role === "titles";
 
     if (isTitlesRow) {
@@ -113,11 +115,11 @@ export function drawTracks(
     } else {
       ctx.fillStyle = "#0d0f0d";
     }
-    ctx.fillRect(0, y, width, LANE_HEIGHT);
+    ctx.fillRect(0, y, width, laneHeight);
     ctx.strokeStyle = "#30352d";
     ctx.beginPath();
-    ctx.moveTo(0, y + LANE_HEIGHT - 0.5);
-    ctx.lineTo(width, y + LANE_HEIGHT - 0.5);
+    ctx.moveTo(0, y + laneHeight - 0.5);
+    ctx.lineTo(width, y + laneHeight - 0.5);
     ctx.stroke();
 
     for (const item of track.items) {
@@ -137,7 +139,7 @@ export function drawTracks(
         x,
         y + 4,
         w,
-        LANE_HEIGHT - 8,
+        laneHeight - 8,
         track.kind,
         flag,
         selected,

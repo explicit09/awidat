@@ -16,7 +16,7 @@ import { drawMoveGhost, drawPlayhead, drawRuler, drawTracks } from "./renderer.t
 import { computeCanvasLayout } from "./canvasLayout.ts";
 import { TimelineEditorialOverlay } from "./TimelineEditorialOverlay.tsx";
 import { UserMoveTooltip, UserTrimTooltip } from "./TimelineDragTooltips.tsx";
-import type { TimelineSnapshot } from "./store";
+import { useTimelineStore, type TimelineSnapshot } from "./store";
 
 /** Wrapper that owns layout state (pps, width) so the canvas can
  *  publish it on each paint and the handles can subscribe. Avoids
@@ -30,24 +30,37 @@ export function TimelineSurface({
   currentTime: number;
   zoom: number;
 }) {
-  const [layout, setLayout] = useState<{ pps: number; width: number }>({
+  // Vertical zoom multiplier on the per-track lane height. trackZoom = 1
+  // gives the base LANE_HEIGHT; users grow/shrink via ZoomControls (P4.4)
+  // or pinch (P4.4). Each downstream consumer reads the resolved
+  // laneHeight off of layout so renderer / hit-detect / handles agree.
+  const trackZoom = useTimelineStore((s) => s.trackZoom);
+  const laneHeight = LANE_HEIGHT * trackZoom;
+  const [layout, setLayout] = useState<{ pps: number; width: number; laneHeight: number }>({
     pps: PX_PER_SECOND_BASE,
     width: 0,
+    laneHeight,
   });
-  const handleLayout = useCallback((pps: number, width: number) => {
-    // Only update if it actually changed — paint() runs on
-    // every frame React re-renders, but layout changes only
-    // on resize / snapshot swap.
-    setLayout((prev) =>
-      prev.pps === pps && prev.width === width ? prev : { pps, width },
-    );
-  }, []);
+  const handleLayout = useCallback(
+    (pps: number, width: number, lane: number) => {
+      // Only update if it actually changed — paint() runs on
+      // every frame React re-renders, but layout changes only
+      // on resize / snapshot swap.
+      setLayout((prev) =>
+        prev.pps === pps && prev.width === width && prev.laneHeight === lane
+          ? prev
+          : { pps, width, laneHeight: lane },
+      );
+    },
+    [],
+  );
   return (
     <>
       <TimelineCanvas
         snapshot={snapshot}
         currentTime={currentTime}
         zoom={zoom}
+        laneHeight={laneHeight}
         onLayout={handleLayout}
       />
       <TimelineEditorialOverlay
@@ -55,7 +68,11 @@ export function TimelineSurface({
         containerWidth={layout.width}
         pps={layout.pps}
       />
-      <ProposalHandles containerWidth={layout.width} pps={layout.pps} laneHeight={LANE_HEIGHT} />
+      <ProposalHandles
+        containerWidth={layout.width}
+        pps={layout.pps}
+        laneHeight={layout.laneHeight}
+      />
     </>
   );
 }
@@ -64,12 +81,14 @@ function TimelineCanvas({
   snapshot,
   currentTime,
   zoom,
+  laneHeight,
   onLayout,
 }: {
   snapshot: TimelineSnapshot;
   currentTime: number;
   zoom: number;
-  onLayout: (pps: number, widthPx: number) => void;
+  laneHeight: number;
+  onLayout: (pps: number, widthPx: number, laneHeight: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -119,6 +138,7 @@ function TimelineCanvas({
         proposalSnapshot: proposal?.snapshot ?? null,
         viewportWidth,
         zoom,
+        laneHeight,
       });
 
       canvas.width = Math.floor(cssWidth * dpr);
@@ -132,7 +152,7 @@ function TimelineCanvas({
       ctx.clearRect(0, 0, cssWidth, cssHeight);
 
       ppsRef.current = pps;
-      onLayout(pps, cssWidth);
+      onLayout(pps, cssWidth, laneHeight);
 
       drawRuler(ctx, cssWidth, totalDuration, pps);
 
@@ -143,21 +163,37 @@ function TimelineCanvas({
         // Pass A — current state under, dimmed, with delete strike.
         const deletedKeys = collectDeletedKeys(proposal.diffHints);
         ctx.globalAlpha = 0.45;
-        drawTracks(ctx, cssWidth, snapshot.tracks, pps, {
-          deletedKeys,
-        });
+        drawTracks(
+          ctx,
+          cssWidth,
+          snapshot.tracks,
+          pps,
+          { deletedKeys },
+          laneHeight,
+        );
         ctx.globalAlpha = 1.0;
         // Pass B — proposed state on top, full opacity, with
         // diff-hint highlights for trimmed/inserted/split items.
         // Selection ring rides on the post-state pass so the user
         // sees which clip in the *new* timeline they're inspecting.
         const highlightKeys = collectHighlightKeys(proposal.diffHints);
-        drawTracks(ctx, cssWidth, proposal.snapshot.tracks, pps, {
-          highlightKeys,
-          selectedKey,
-        });
+        drawTracks(
+          ctx,
+          cssWidth,
+          proposal.snapshot.tracks,
+          pps,
+          { highlightKeys, selectedKey },
+          laneHeight,
+        );
       } else {
-        drawTracks(ctx, cssWidth, snapshot.tracks, pps, { selectedKey });
+        drawTracks(
+          ctx,
+          cssWidth,
+          snapshot.tracks,
+          pps,
+          { selectedKey },
+          laneHeight,
+        );
       }
 
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
@@ -174,9 +210,9 @@ function TimelineCanvas({
             edgeHover.side === "start"
               ? item.track_start_s * pps
               : (item.track_start_s + item.duration_s) * pps;
-          const yTop = RULER_HEIGHT + edgeHover.trackIndex * LANE_HEIGHT + 4;
+          const yTop = RULER_HEIGHT + edgeHover.trackIndex * laneHeight + 4;
           ctx.fillStyle = "rgba(120, 184, 255, 0.62)";
-          ctx.fillRect(edgeX - 1, yTop, 2, LANE_HEIGHT - 8);
+          ctx.fillRect(edgeX - 1, yTop, 2, laneHeight - 8);
         }
       }
 
@@ -185,13 +221,13 @@ function TimelineCanvas({
       if (userTrim) {
         const x = userTrim.currentX;
         const yTop = RULER_HEIGHT;
-        const yBot = RULER_HEIGHT + LANE_HEIGHT * snapshot.tracks.length;
+        const yBot = RULER_HEIGHT + laneHeight * snapshot.tracks.length;
         ctx.fillStyle = "#78b8ff";
         ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
       }
 
       if (userMove) {
-        drawMoveGhost(ctx, snapshot, currentTime, userMove, pps);
+        drawMoveGhost(ctx, snapshot, currentTime, userMove, pps, laneHeight);
       }
     }
 
@@ -215,6 +251,7 @@ function TimelineCanvas({
     currentTime,
     proposal,
     zoom,
+    laneHeight,
     onLayout,
     userTrim,
     userMove,

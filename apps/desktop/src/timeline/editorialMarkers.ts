@@ -12,6 +12,7 @@ export type EditorialMarker = {
 export function buildCutBadges(
   snapshot: TimelineSnapshot,
   pps: number,
+  laneHeight: number = LANE_HEIGHT,
 ): EditorialMarker[] {
   const out: EditorialMarker[] = [];
   for (const boundary of snapshot.cut_boundaries) {
@@ -20,7 +21,7 @@ export function buildCutBadges(
     out.push({
       key: `cut-${boundary.key}`,
       x: Math.max(2, located.item.track_start_s * pps - 10),
-      y: RULER_HEIGHT + located.trackIndex * LANE_HEIGHT + 2,
+      y: RULER_HEIGHT + located.trackIndex * laneHeight + 2,
       label: shortCutLabel(boundary.cut_type),
       title: [
         formatEditorialLabel(boundary.cut_type),
@@ -38,13 +39,14 @@ export function buildCutBadges(
 export function buildSplitOffsets(
   snapshot: TimelineSnapshot,
   pps: number,
+  laneHeight: number = LANE_HEIGHT,
 ): EditorialMarker[] {
   const out: EditorialMarker[] = [];
   for (let trackIndex = 0; trackIndex < snapshot.tracks.length; trackIndex += 1) {
     const track = snapshot.tracks[trackIndex];
     for (const item of track.items) {
       if (item.kind !== "clip") continue;
-      const y = RULER_HEIGHT + trackIndex * LANE_HEIGHT + LANE_HEIGHT - 18;
+      const y = RULER_HEIGHT + trackIndex * laneHeight + laneHeight - 18;
       if (item.audio_lead_s !== null && item.audio_lead_s > 0) {
         out.push({
           key: `lead-${item.clip_uuid}`,

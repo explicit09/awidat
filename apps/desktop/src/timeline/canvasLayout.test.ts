@@ -32,6 +32,7 @@ assert.deepEqual(
     lanesCount: 2,
     pps: 19.2,
     totalDuration: 10,
+    laneHeight: 38,
   },
 );
 console.log("  ok  sizes the canvas from current timeline duration and track count");
@@ -49,6 +50,7 @@ assert.deepEqual(
     lanesCount: 3,
     pps: 9.6,
     totalDuration: 20,
+    laneHeight: 38,
   },
 );
 console.log("  ok  uses proposed duration and track count when proposal is larger");
@@ -66,6 +68,28 @@ assert.deepEqual(
     lanesCount: 1,
     pps: 12,
     totalDuration: 0,
+    laneHeight: 38,
   },
 );
 console.log("  ok  keeps an empty timeline at one visible lane");
+
+// Track-zoom path: laneHeight propagates through height + back out
+console.log("# computeCanvasLayout with explicit laneHeight");
+assert.deepEqual(
+  computeCanvasLayout({
+    snapshot: snapshot(0, 0),
+    proposalSnapshot: null,
+    viewportWidth: 320,
+    zoom: 1,
+    laneHeight: 62,
+  }),
+  {
+    cssHeight: 22 + 62, // RULER_HEIGHT + 1 lane @ 62
+    cssWidth: 320,
+    lanesCount: 1,
+    pps: 12,
+    totalDuration: 0,
+    laneHeight: 62,
+  },
+);
+console.log("  ok  honors caller-provided laneHeight and exports it");
