@@ -1968,7 +1968,7 @@ fn build_professional_source_clip(
 ) -> Clip {
     let name = name_prefix
         .map(|prefix| format!("{prefix}-{}", track.children.len()))
-        .unwrap_or_else(|| next_clip_name_in_track(track));
+        .unwrap_or_else(|| default_clip_name_for_asset(track, asset));
     let mut clip = Clip::empty(name);
     clip.media_reference = awidat_proto::otio::MediaReference::External(
         awidat_proto::otio::ExternalReference::new(asset.to_string()),
@@ -3185,7 +3185,7 @@ fn apply_insert_clip(
         .min(track.children.len());
     let chosen_name = name_override
         .map(str::to_string)
-        .unwrap_or_else(|| next_clip_name_in_track(track));
+        .unwrap_or_else(|| default_clip_name_for_asset(track, asset));
     let mut clip = Clip::empty(chosen_name.clone());
     clip.media_reference = MediaReference::External(ExternalReference::new(asset.to_string()));
     clip.source_range = Some(source_range);
@@ -3348,6 +3348,41 @@ fn next_clip_name_in_track(track: &awidat_proto::otio::Track) -> String {
         .collect::<HashSet<_>>();
     for i in 0usize.. {
         let candidate = format!("clip-{i}");
+        if !used.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    unreachable!("usize iterator is unbounded")
+}
+
+/// Default name for a newly-inserted clip. Prefer the source asset's
+/// file stem (e.g. `raw/copy_F65206FA-....MOV` → `copy_F65206FA-...`),
+/// disambiguating with a `-2`, `-3`, ... suffix when the track already
+/// has clips referencing the same asset. Falls back to the legacy
+/// `clip-{i}` naming when no usable stem can be derived (e.g. a URL
+/// scheme with no path, or an empty asset string).
+fn default_clip_name_for_asset(track: &awidat_proto::otio::Track, asset: &str) -> String {
+    let stem = std::path::Path::new(asset)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let Some(stem) = stem else {
+        return next_clip_name_in_track(track);
+    };
+    let used = track
+        .children
+        .iter()
+        .filter_map(|tc| match tc {
+            TrackChild::Clip(clip) => Some(clip.name.as_str()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    if !used.contains(stem) {
+        return stem.to_string();
+    }
+    for i in 2usize.. {
+        let candidate = format!("{stem}-{i}");
         if !used.contains(candidate.as_str()) {
             return candidate;
         }
@@ -8286,7 +8321,8 @@ mod tests {
 
         assert!(outcome.applied[0].description.contains("appended clip"));
         assert_eq!(track.children.len(), 4);
-        assert_eq!(appended.name, "clip-3");
+        // Default name now derives from the asset file stem.
+        assert_eq!(appended.name, "tail");
         assert!(matches!(
             &appended.media_reference,
             MediaReference::External(reference) if reference.target_url == "raw/tail.mov"
@@ -9106,7 +9142,8 @@ mod tests {
         let TrackChild::Clip(c) = &t.children[0] else {
             panic!()
         };
-        assert_eq!(c.name, "clip-0");
+        // Default clip name derives from the asset's file stem.
+        assert_eq!(c.name, "clip-1");
         let r = c.source_range.as_ref().unwrap();
         assert!((r.duration.to_seconds() - 56.47).abs() < 1e-6);
     }
@@ -9170,6 +9207,12 @@ mod tests {
 
     #[test]
     fn apply_insert_clip_default_name_avoids_duplicate_when_inserted_in_middle() {
+        // The fixture's existing clips are named `clip-0/1/2`. Reuse asset
+        // `raw/0.mp4` so its file-stem (`0`) collides — verifies that the
+        // default-name picker falls back through the dedup suffix when
+        // the stem itself is taken. (Here `0` and `1` are not in the
+        // existing names, so the inserted clip should get `0` and the
+        // ordering should be preserved.)
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
             ops: vec![EdlOp::InsertClip {
@@ -9197,7 +9240,55 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["clip-0", "clip-3", "clip-1", "clip-2"]);
+        // Asset stem `middle` doesn't collide with the existing names →
+        // the new clip lands as `middle` between `clip-0` and `clip-1`.
+        assert_eq!(names, vec!["clip-0", "middle", "clip-1", "clip-2"]);
+    }
+
+    #[test]
+    fn apply_insert_clip_default_name_dedupes_when_stem_already_taken() {
+        // Build a track whose existing clip is already named "foo" — then
+        // insert asset `raw/foo.mp4`. The new clip should land as `foo-2`
+        // to keep the track's clip names unique.
+        let mut tl = Timeline::empty("test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut existing = Clip::empty("foo");
+        existing.media_reference =
+            MediaReference::External(ExternalReference::new("raw/foo.mp4"));
+        existing.source_range = Some(TimeRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(existing));
+        tl.tracks.children.push(StackChild::Track(track));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertClip {
+                asset: "raw/foo.mp4".into(),
+                track: "V1".into(),
+                track_kind: None,
+                at_position: None,
+                at_s: None,
+                start: Some(0.0),
+                end: Some(1.0),
+                name: None,
+                link_group_id: None,
+                snap: None,
+            }],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(t) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let names = t
+            .children
+            .iter()
+            .filter_map(|tc| match tc {
+                TrackChild::Clip(c) => Some(c.name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["foo", "foo-2"]);
     }
 
     #[test]
