@@ -6,6 +6,7 @@
 //! expensive preview or editorial operations.
 
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::proxy::{proxy_is_fresh, proxy_path_for};
 
 /// Preview-cache artifact state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreviewArtifactStatus {
     /// Proxy exists and is at least as new as the source asset.
@@ -44,7 +45,7 @@ pub struct PreviewArtifactCounts {
 }
 
 /// One concrete artifact generation/refresh task.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreviewCacheRefreshTask {
     /// Stable task id.
     pub task_id: String,
@@ -63,7 +64,7 @@ pub struct PreviewCacheRefreshTask {
 }
 
 /// Aggregate preview-cache refresh work.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreviewCacheRefreshWork {
     /// Assets requiring any artifact refresh.
     pub asset_count: usize,
@@ -141,12 +142,54 @@ pub struct PreviewCacheRefreshExecutionContract {
     pub selected_task_ids: Vec<String>,
 }
 
+// ---------------------------------------------------------------------------
+// Per-task lifecycle state
+// ---------------------------------------------------------------------------
+
+/// Per-task lifecycle status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewCacheRefreshTaskStatus {
+    /// Task has not yet started.
+    #[default]
+    Pending,
+    /// Task is currently executing.
+    InProgress,
+    /// Task finished successfully.
+    Completed,
+    /// Task finished with an error.
+    Failed,
+    /// Task was intentionally skipped.
+    Skipped,
+}
+
+/// Per-task lifecycle state, persisted alongside the plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewCacheRefreshTaskState {
+    /// Stable task identifier.
+    pub task_id: String,
+    /// Artifact family: proxy, thumbnails, or waveform.
+    pub artifact_kind: String,
+    /// Project-relative source asset id.
+    pub asset_id: String,
+    /// Absolute artifact path.
+    pub artifact_path: String,
+    /// Current execution status of this task.
+    pub status: PreviewCacheRefreshTaskStatus,
+    /// When this task started executing (ms since epoch).
+    pub started_at_ms: Option<u64>,
+    /// When this task finished executing (ms since epoch).
+    pub finished_at_ms: Option<u64>,
+    /// Error message if the task failed.
+    pub error_message: Option<String>,
+}
+
 /// Durable preview-cache refresh lifecycle record.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreviewCacheRefreshLifecycle {
     /// Absolute lifecycle artifact path.
     pub path: String,
-    /// Current lifecycle status.
+    /// Current lifecycle status (aggregate).
     pub status: String,
     /// Artifact policy for the persisted plan.
     pub artifact_policy: String,
@@ -156,7 +199,61 @@ pub struct PreviewCacheRefreshLifecycle {
     pub selected_refresh_work: PreviewCacheRefreshWork,
     /// Stable selected task ids in execution order.
     pub selected_task_ids: Vec<String>,
+    /// Per-task states.
+    #[serde(default)]
+    pub tasks: Vec<PreviewCacheRefreshTaskState>,
+    /// When this lifecycle run started (ms since epoch).
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
+    /// When this lifecycle run finished (ms since epoch).
+    #[serde(default)]
+    pub finished_at_ms: Option<u64>,
 }
+
+// ---------------------------------------------------------------------------
+// Error type
+// ---------------------------------------------------------------------------
+
+/// Errors from the preview-cache refresh driver.
+#[derive(Debug, thiserror::Error)]
+pub enum PreviewRefreshError {
+    /// The executor returned an error for the given task.
+    #[error("executor failed for task {task_id}: {message}")]
+    Executor {
+        /// The task that failed.
+        task_id: String,
+        /// Human-readable failure message.
+        message: String,
+    },
+    /// An I/O error occurred while reading or persisting the lifecycle.
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    /// The lifecycle artifact exists but cannot be deserialized.
+    #[error("lifecycle artifact corrupt: {0}")]
+    Corrupt(String),
+    /// A lifecycle run is already in progress and was started recently.
+    #[error("lifecycle already running; started_at_ms={started_at_ms}")]
+    Busy {
+        /// The timestamp (ms since epoch) when the running lifecycle started.
+        started_at_ms: u64,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Executor trait
+// ---------------------------------------------------------------------------
+
+/// Drives the execution of a single preview-cache refresh task.
+#[async_trait::async_trait]
+pub trait PreviewRefreshExecutor: Send + Sync {
+    /// Execute the given refresh task, returning `Ok(())` on success or a
+    /// `PreviewRefreshError` on failure.
+    async fn execute(&self, task: &PreviewCacheRefreshTask) -> Result<(), PreviewRefreshError>;
+}
+
+// ---------------------------------------------------------------------------
+// Per-asset preview-cache state
+// ---------------------------------------------------------------------------
 
 /// Per-asset preview-cache state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -203,6 +300,10 @@ pub struct PreviewCacheSummary {
     /// Aggregate refresh work.
     pub refresh_work: PreviewCacheRefreshWork,
 }
+
+// ---------------------------------------------------------------------------
+// Public functions
+// ---------------------------------------------------------------------------
 
 /// Build a project-level preview-cache summary.
 pub fn build_preview_cache_summary(project_root: &Path) -> std::io::Result<PreviewCacheSummary> {
@@ -337,17 +438,18 @@ pub fn preview_cache_refresh_execution_contract(
 }
 
 /// Persist selected preview-cache refresh work as a project-local lifecycle artifact.
+///
+/// Existing artifacts at the same path are overwritten. For resume semantics,
+/// use `run_preview_cache_refresh` instead.
 pub fn write_preview_cache_refresh_lifecycle(
     project_root: &Path,
     selection: &PreviewCacheRefreshSelection,
 ) -> std::io::Result<PreviewCacheRefreshLifecycle> {
     let path = preview_cache_refresh_lifecycle_path(project_root);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let tasks = tasks_from_selection(selection);
     let lifecycle = PreviewCacheRefreshLifecycle {
         path: path.to_string_lossy().into_owned(),
-        status: "planned".into(),
+        status: derive_aggregate_status(&tasks),
         artifact_policy: "no_render_job_started".into(),
         selected_task_count: selection.selected_task_count,
         selected_refresh_work: selection.selected_refresh_work.clone(),
@@ -356,9 +458,155 @@ pub fn write_preview_cache_refresh_lifecycle(
             .iter()
             .map(|task| task.task_id.clone())
             .collect(),
+        tasks,
+        started_at_ms: None,
+        finished_at_ms: None,
     };
-    let body = serde_json::to_vec_pretty(&lifecycle)?;
-    std::fs::write(&path, body)?;
+    persist_lifecycle_io(&lifecycle)?;
+    Ok(lifecycle)
+}
+
+/// Load an existing lifecycle artifact if present.
+///
+/// Returns `Ok(None)` if the file does not exist.
+/// Returns `Err(PreviewRefreshError::Corrupt)` if the file exists but cannot be parsed.
+pub fn read_preview_cache_refresh_lifecycle(
+    project_root: &Path,
+) -> Result<Option<PreviewCacheRefreshLifecycle>, PreviewRefreshError> {
+    let path = preview_cache_refresh_lifecycle_path(project_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path)?;
+    serde_json::from_slice::<PreviewCacheRefreshLifecycle>(&bytes)
+        .map(Some)
+        .map_err(|err| PreviewRefreshError::Corrupt(err.to_string()))
+}
+
+/// Run the refresh against an executor with resume semantics.
+///
+/// 1. Load existing lifecycle if present; otherwise build one from `selection`.
+/// 2. If the loaded lifecycle status is "in_progress" and started_at_ms is within
+///    the last 5 minutes, return `PreviewRefreshError::Busy`.
+/// 3. Iterate tasks in order. For each Pending or InProgress task:
+///    - Mark InProgress, persist, call `executor.execute`.
+///    - On Ok: mark Completed, persist.
+///    - On Err: mark Failed with error_message, persist. Continue iterating.
+/// 4. After the loop, set finished_at_ms if all tasks are terminal, recompute
+///    aggregate status, persist atomically. Return the final lifecycle.
+pub async fn run_preview_cache_refresh(
+    project_root: &Path,
+    selection: &PreviewCacheRefreshSelection,
+    executor: &dyn PreviewRefreshExecutor,
+) -> Result<PreviewCacheRefreshLifecycle, PreviewRefreshError> {
+    // --- 1. Load or build lifecycle ---
+    let mut lifecycle = match read_preview_cache_refresh_lifecycle(project_root)? {
+        Some(existing) => merge_lifecycle_with_selection(existing, selection, project_root),
+        None => {
+            let tasks = tasks_from_selection(selection);
+            let path = preview_cache_refresh_lifecycle_path(project_root);
+            PreviewCacheRefreshLifecycle {
+                path: path.to_string_lossy().into_owned(),
+                status: derive_aggregate_status(&tasks),
+                artifact_policy: "no_render_job_started".into(),
+                selected_task_count: selection.selected_task_count,
+                selected_refresh_work: selection.selected_refresh_work.clone(),
+                selected_task_ids: selection
+                    .selected_refresh_tasks
+                    .iter()
+                    .map(|task| task.task_id.clone())
+                    .collect(),
+                tasks,
+                started_at_ms: None,
+                finished_at_ms: None,
+            }
+        }
+    };
+
+    // --- 2. Busy guard ---
+    if lifecycle.status == "in_progress" {
+        if let Some(started_at_ms) = lifecycle.started_at_ms {
+            let now_ms = now_ms();
+            let five_min_ms: u64 = 5 * 60 * 1_000;
+            if now_ms.saturating_sub(started_at_ms) < five_min_ms {
+                return Err(PreviewRefreshError::Busy { started_at_ms });
+            }
+        }
+    }
+
+    // Build a lookup map from task_id -> PreviewCacheRefreshTask for the executor.
+    let task_lookup: std::collections::HashMap<String, &PreviewCacheRefreshTask> = selection
+        .selected_refresh_tasks
+        .iter()
+        .map(|t| (t.task_id.clone(), t))
+        .collect();
+
+    // --- 3. Iterate tasks ---
+    for i in 0..lifecycle.tasks.len() {
+        let status = lifecycle.tasks[i].status.clone();
+        if !matches!(
+            status,
+            PreviewCacheRefreshTaskStatus::Pending | PreviewCacheRefreshTaskStatus::InProgress
+        ) {
+            continue;
+        }
+
+        let task_id = lifecycle.tasks[i].task_id.clone();
+
+        // Mark InProgress.
+        let run_start_ms = now_ms();
+        lifecycle.tasks[i].status = PreviewCacheRefreshTaskStatus::InProgress;
+        lifecycle.tasks[i].started_at_ms = Some(run_start_ms);
+        if lifecycle.started_at_ms.is_none() {
+            lifecycle.started_at_ms = Some(run_start_ms);
+        }
+        lifecycle.status = derive_aggregate_status(&lifecycle.tasks);
+        persist_lifecycle_io(&lifecycle)?;
+
+        // Resolve the work definition from the selection.
+        let result = match task_lookup.get(&task_id) {
+            Some(work_task) => executor.execute(work_task).await,
+            None => {
+                // Task not in current selection — skip it gracefully.
+                Err(PreviewRefreshError::Executor {
+                    task_id: task_id.clone(),
+                    message: "task not found in current selection".into(),
+                })
+            }
+        };
+
+        let finish_ms = now_ms();
+        match result {
+            Ok(()) => {
+                lifecycle.tasks[i].status = PreviewCacheRefreshTaskStatus::Completed;
+                lifecycle.tasks[i].finished_at_ms = Some(finish_ms);
+                lifecycle.tasks[i].error_message = None;
+            }
+            Err(err) => {
+                lifecycle.tasks[i].status = PreviewCacheRefreshTaskStatus::Failed;
+                lifecycle.tasks[i].finished_at_ms = Some(finish_ms);
+                lifecycle.tasks[i].error_message = Some(err.to_string());
+            }
+        }
+        lifecycle.status = derive_aggregate_status(&lifecycle.tasks);
+        persist_lifecycle_io(&lifecycle)?;
+    }
+
+    // --- 4. Finalize ---
+    let all_terminal = lifecycle.tasks.iter().all(|t| {
+        matches!(
+            t.status,
+            PreviewCacheRefreshTaskStatus::Completed
+                | PreviewCacheRefreshTaskStatus::Failed
+                | PreviewCacheRefreshTaskStatus::Skipped
+        )
+    });
+    if all_terminal {
+        lifecycle.finished_at_ms = Some(now_ms());
+    }
+    lifecycle.status = derive_aggregate_status(&lifecycle.tasks);
+    persist_lifecycle_io(&lifecycle)?;
+
     Ok(lifecycle)
 }
 
@@ -394,6 +642,155 @@ pub fn waveform_path_for(project_root: &Path, asset_path: &Path) -> PathBuf {
         .join(".awidat")
         .join("waveforms")
         .join(format!("{stem}-{:08x}.json", stable_path_hash(asset_path)))
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Return current time as milliseconds since the Unix epoch.
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Derive the aggregate lifecycle status string from the current task states.
+///
+/// Rules (in priority order):
+/// - `"planned"`     — all tasks are Pending (nothing started)
+/// - `"in_progress"` — at least one task is InProgress
+/// - `"completed"`   — no Pending/InProgress/Failed tasks remain
+/// - `"failed"`      — no Pending or InProgress tasks, at least one Failed
+/// - `"partial"`     — no InProgress tasks, some Pending remain alongside other statuses
+fn derive_aggregate_status(tasks: &[PreviewCacheRefreshTaskState]) -> String {
+    if tasks.is_empty() {
+        return "planned".into();
+    }
+
+    let has_in_progress = tasks
+        .iter()
+        .any(|t| t.status == PreviewCacheRefreshTaskStatus::InProgress);
+    if has_in_progress {
+        return "in_progress".into();
+    }
+
+    let has_pending = tasks
+        .iter()
+        .any(|t| t.status == PreviewCacheRefreshTaskStatus::Pending);
+    let has_failed = tasks
+        .iter()
+        .any(|t| t.status == PreviewCacheRefreshTaskStatus::Failed);
+
+    // All pending and nothing started yet.
+    if has_pending && !has_failed {
+        let has_completed_or_skipped = tasks.iter().any(|t| {
+            matches!(
+                t.status,
+                PreviewCacheRefreshTaskStatus::Completed | PreviewCacheRefreshTaskStatus::Skipped
+            )
+        });
+        if !has_completed_or_skipped {
+            return "planned".into();
+        }
+        // Some pending + some completed/skipped = partial.
+        return "partial".into();
+    }
+
+    // Pending tasks remain alongside failures — resumable.
+    if has_pending && has_failed {
+        return "partial".into();
+    }
+
+    // No pending, no in_progress.
+    if !has_failed {
+        return "completed".into();
+    }
+
+    // No pending, no in_progress, at least one failed.
+    "failed".into()
+}
+
+/// Build per-task states from a selection (all Pending).
+fn tasks_from_selection(
+    selection: &PreviewCacheRefreshSelection,
+) -> Vec<PreviewCacheRefreshTaskState> {
+    selection
+        .selected_refresh_tasks
+        .iter()
+        .map(|task| PreviewCacheRefreshTaskState {
+            task_id: task.task_id.clone(),
+            artifact_kind: task.artifact_kind.clone(),
+            asset_id: task.asset_id.clone(),
+            artifact_path: task.artifact_path.clone(),
+            status: PreviewCacheRefreshTaskStatus::Pending,
+            started_at_ms: None,
+            finished_at_ms: None,
+            error_message: None,
+        })
+        .collect()
+}
+
+/// Merge an existing lifecycle with the current selection, preserving completed
+/// task states and appending any new tasks as Pending.
+fn merge_lifecycle_with_selection(
+    mut existing: PreviewCacheRefreshLifecycle,
+    selection: &PreviewCacheRefreshSelection,
+    project_root: &Path,
+) -> PreviewCacheRefreshLifecycle {
+    // Index existing task states by task_id.
+    let existing_ids: std::collections::HashSet<String> =
+        existing.tasks.iter().map(|t| t.task_id.clone()).collect();
+
+    // Append tasks from the selection that are not already in the lifecycle.
+    for task in &selection.selected_refresh_tasks {
+        if !existing_ids.contains(&task.task_id) {
+            existing.tasks.push(PreviewCacheRefreshTaskState {
+                task_id: task.task_id.clone(),
+                artifact_kind: task.artifact_kind.clone(),
+                asset_id: task.asset_id.clone(),
+                artifact_path: task.artifact_path.clone(),
+                status: PreviewCacheRefreshTaskStatus::Pending,
+                started_at_ms: None,
+                finished_at_ms: None,
+                error_message: None,
+            });
+        }
+    }
+
+    // Refresh aggregate fields to reflect the current selection.
+    existing.selected_task_count = selection.selected_task_count;
+    existing.selected_refresh_work = selection.selected_refresh_work.clone();
+    existing.selected_task_ids = selection
+        .selected_refresh_tasks
+        .iter()
+        .map(|t| t.task_id.clone())
+        .collect();
+    existing.path = preview_cache_refresh_lifecycle_path(project_root)
+        .to_string_lossy()
+        .into_owned();
+    existing.status = derive_aggregate_status(&existing.tasks);
+    existing
+}
+
+/// Atomically persist a lifecycle artifact: write to `.tmp`, then rename.
+fn persist_lifecycle_io(lifecycle: &PreviewCacheRefreshLifecycle) -> std::io::Result<()> {
+    let path = PathBuf::from(&lifecycle.path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp_path = path.with_extension("json.tmp");
+    let body = serde_json::to_vec_pretty(lifecycle)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp_path)?;
+        f.write_all(&body)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp_path, &path)?;
+    Ok(())
 }
 
 fn proxy_status(asset_path: &Path, proxy_path: &Path) -> PreviewArtifactStatus {
@@ -612,9 +1009,339 @@ fn stable_path_hash(path: &Path) -> u32 {
     hash
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    // -----------------------------------------------------------------------
+    // Test executor
+    // -----------------------------------------------------------------------
+
+    struct RecordingExecutor {
+        outcomes: Mutex<HashMap<String, Result<(), &'static str>>>,
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl RecordingExecutor {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                outcomes: Mutex::new(HashMap::new()),
+                calls: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn set_outcome(&self, task_id: &str, outcome: Result<(), &'static str>) {
+            self.outcomes
+                .lock()
+                .unwrap()
+                .insert(task_id.to_owned(), outcome);
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PreviewRefreshExecutor for RecordingExecutor {
+        async fn execute(&self, task: &PreviewCacheRefreshTask) -> Result<(), PreviewRefreshError> {
+            self.calls.lock().unwrap().push(task.task_id.clone());
+            match self
+                .outcomes
+                .lock()
+                .unwrap()
+                .get(&task.task_id)
+                .copied()
+                .unwrap_or(Ok(()))
+            {
+                Ok(()) => Ok(()),
+                Err(msg) => Err(PreviewRefreshError::Executor {
+                    task_id: task.task_id.clone(),
+                    message: msg.into(),
+                }),
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    /// Build a synthetic `PreviewCacheRefreshSelection` with N tasks.
+    fn make_selection_with_tasks(task_ids: &[&str]) -> PreviewCacheRefreshSelection {
+        let tasks: Vec<PreviewCacheRefreshTask> = task_ids
+            .iter()
+            .map(|id| PreviewCacheRefreshTask {
+                task_id: id.to_string(),
+                asset_id: format!("asset_{id}"),
+                artifact_path: format!("/tmp/artifact_{id}"),
+                artifact_kind: "proxy".into(),
+                status: PreviewArtifactStatus::Missing,
+                estimated_weight: 3,
+                reason: "proxy_missing".into(),
+            })
+            .collect();
+        let work = refresh_work_from_tasks(&tasks);
+        let count = tasks.len();
+        PreviewCacheRefreshSelection {
+            selected_refresh_work: work,
+            selected_task_count: count,
+            skipped_task_count: 0,
+            selected_refresh_tasks: tasks,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 1: all tasks succeed → all Completed, aggregate "completed"
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_refresh_completes_when_all_tasks_succeed() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = RecordingExecutor::new();
+        let selection = make_selection_with_tasks(&["t1", "t2"]);
+
+        let lifecycle = run_preview_cache_refresh(dir.path(), &selection, executor.as_ref())
+            .await
+            .unwrap();
+
+        assert_eq!(lifecycle.status, "completed");
+        assert_eq!(lifecycle.tasks.len(), 2);
+        for task in &lifecycle.tasks {
+            assert_eq!(task.status, PreviewCacheRefreshTaskStatus::Completed);
+            assert!(task.started_at_ms.is_some());
+            assert!(task.finished_at_ms.is_some());
+            assert!(task.error_message.is_none());
+        }
+        assert!(lifecycle.finished_at_ms.is_some());
+
+        // Verify artifact was persisted.
+        let persisted = read_preview_cache_refresh_lifecycle(dir.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(persisted.status, "completed");
+        assert_eq!(executor.calls(), vec!["t1", "t2"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 2: second task fails → continues, aggregate "failed"
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_refresh_isolates_failures_and_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let executor = RecordingExecutor::new();
+        executor.set_outcome("t2", Err("boom"));
+        let selection = make_selection_with_tasks(&["t1", "t2"]);
+
+        let lifecycle = run_preview_cache_refresh(dir.path(), &selection, executor.as_ref())
+            .await
+            .unwrap();
+
+        assert_eq!(lifecycle.status, "failed");
+
+        let t1 = lifecycle.tasks.iter().find(|t| t.task_id == "t1").unwrap();
+        assert_eq!(t1.status, PreviewCacheRefreshTaskStatus::Completed);
+        assert!(t1.error_message.is_none());
+
+        let t2 = lifecycle.tasks.iter().find(|t| t.task_id == "t2").unwrap();
+        assert_eq!(t2.status, PreviewCacheRefreshTaskStatus::Failed);
+        assert!(t2.error_message.as_deref().unwrap().contains("boom"));
+        assert!(lifecycle.finished_at_ms.is_some());
+
+        // Both were called.
+        assert_eq!(executor.calls(), vec!["t1", "t2"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 3: resume skips already-Completed tasks
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_refresh_resumes_skipping_completed_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let selection = make_selection_with_tasks(&["t1", "t2"]);
+
+        // Pre-write a lifecycle where t1 is already Completed.
+        let path = preview_cache_refresh_lifecycle_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original_started: u64 = 1_000_000;
+        let original_finished: u64 = 1_000_500;
+        let pre_lifecycle = PreviewCacheRefreshLifecycle {
+            path: path.to_string_lossy().into_owned(),
+            status: "partial".into(),
+            artifact_policy: "no_render_job_started".into(),
+            selected_task_count: 2,
+            selected_refresh_work: selection.selected_refresh_work.clone(),
+            selected_task_ids: vec!["t1".into(), "t2".into()],
+            tasks: vec![
+                PreviewCacheRefreshTaskState {
+                    task_id: "t1".into(),
+                    artifact_kind: "proxy".into(),
+                    asset_id: "asset_t1".into(),
+                    artifact_path: "/tmp/artifact_t1".into(),
+                    status: PreviewCacheRefreshTaskStatus::Completed,
+                    started_at_ms: Some(original_started),
+                    finished_at_ms: Some(original_finished),
+                    error_message: None,
+                },
+                PreviewCacheRefreshTaskState {
+                    task_id: "t2".into(),
+                    artifact_kind: "proxy".into(),
+                    asset_id: "asset_t2".into(),
+                    artifact_path: "/tmp/artifact_t2".into(),
+                    status: PreviewCacheRefreshTaskStatus::Pending,
+                    started_at_ms: None,
+                    finished_at_ms: None,
+                    error_message: None,
+                },
+            ],
+            started_at_ms: None,
+            finished_at_ms: None,
+        };
+        std::fs::write(&path, serde_json::to_vec_pretty(&pre_lifecycle).unwrap()).unwrap();
+
+        let executor = RecordingExecutor::new();
+        let lifecycle = run_preview_cache_refresh(dir.path(), &selection, executor.as_ref())
+            .await
+            .unwrap();
+
+        // Only t2 should have been dispatched.
+        assert_eq!(executor.calls(), vec!["t2"]);
+        assert_eq!(lifecycle.status, "completed");
+
+        // t1 timestamps must be the originals.
+        let t1 = lifecycle.tasks.iter().find(|t| t.task_id == "t1").unwrap();
+        assert_eq!(t1.status, PreviewCacheRefreshTaskStatus::Completed);
+        assert_eq!(t1.started_at_ms, Some(original_started));
+        assert_eq!(t1.finished_at_ms, Some(original_finished));
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 4: new tasks in selection are appended
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_refresh_appends_new_tasks_from_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let selection = make_selection_with_tasks(&["task_A", "task_B"]);
+
+        // Pre-write a lifecycle with only task_A Completed.
+        let path = preview_cache_refresh_lifecycle_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let original_started: u64 = 2_000_000;
+        let original_finished: u64 = 2_000_900;
+        let pre_lifecycle = PreviewCacheRefreshLifecycle {
+            path: path.to_string_lossy().into_owned(),
+            status: "completed".into(),
+            artifact_policy: "no_render_job_started".into(),
+            selected_task_count: 1,
+            selected_refresh_work: PreviewCacheRefreshWork {
+                asset_count: 1,
+                proxy_count: 1,
+                thumbnails_count: 0,
+                waveform_count: 0,
+            },
+            selected_task_ids: vec!["task_A".into()],
+            tasks: vec![PreviewCacheRefreshTaskState {
+                task_id: "task_A".into(),
+                artifact_kind: "proxy".into(),
+                asset_id: "asset_task_A".into(),
+                artifact_path: "/tmp/artifact_task_A".into(),
+                status: PreviewCacheRefreshTaskStatus::Completed,
+                started_at_ms: Some(original_started),
+                finished_at_ms: Some(original_finished),
+                error_message: None,
+            }],
+            started_at_ms: Some(original_started),
+            finished_at_ms: Some(original_finished),
+        };
+        std::fs::write(&path, serde_json::to_vec_pretty(&pre_lifecycle).unwrap()).unwrap();
+
+        let executor = RecordingExecutor::new();
+        let lifecycle = run_preview_cache_refresh(dir.path(), &selection, executor.as_ref())
+            .await
+            .unwrap();
+
+        // Both tasks in the final lifecycle.
+        assert_eq!(lifecycle.tasks.len(), 2);
+        assert_eq!(lifecycle.status, "completed");
+
+        // task_A preserved with original timestamps.
+        let a = lifecycle
+            .tasks
+            .iter()
+            .find(|t| t.task_id == "task_A")
+            .unwrap();
+        assert_eq!(a.status, PreviewCacheRefreshTaskStatus::Completed);
+        assert_eq!(a.started_at_ms, Some(original_started));
+        assert_eq!(a.finished_at_ms, Some(original_finished));
+
+        // task_B was dispatched and completed with new timestamps.
+        let b = lifecycle
+            .tasks
+            .iter()
+            .find(|t| t.task_id == "task_B")
+            .unwrap();
+        assert_eq!(b.status, PreviewCacheRefreshTaskStatus::Completed);
+        assert!(b.started_at_ms.unwrap() > original_finished);
+
+        // Only task_B was called.
+        assert_eq!(executor.calls(), vec!["task_B"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 5: Busy guard fires when in_progress within 5 minutes
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_refresh_rejects_busy_lifecycle() {
+        let dir = tempfile::tempdir().unwrap();
+        let selection = make_selection_with_tasks(&["t1"]);
+
+        // Pre-write a lifecycle that is "in_progress" with started_at_ms = now - 60s.
+        let path = preview_cache_refresh_lifecycle_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let recent_start_ms = now_ms() - 60_000; // 60 seconds ago
+        let pre_lifecycle = PreviewCacheRefreshLifecycle {
+            path: path.to_string_lossy().into_owned(),
+            status: "in_progress".into(),
+            artifact_policy: "no_render_job_started".into(),
+            selected_task_count: 1,
+            selected_refresh_work: selection.selected_refresh_work.clone(),
+            selected_task_ids: vec!["t1".into()],
+            tasks: vec![PreviewCacheRefreshTaskState {
+                task_id: "t1".into(),
+                artifact_kind: "proxy".into(),
+                asset_id: "asset_t1".into(),
+                artifact_path: "/tmp/artifact_t1".into(),
+                status: PreviewCacheRefreshTaskStatus::InProgress,
+                started_at_ms: Some(recent_start_ms),
+                finished_at_ms: None,
+                error_message: None,
+            }],
+            started_at_ms: Some(recent_start_ms),
+            finished_at_ms: None,
+        };
+        std::fs::write(&path, serde_json::to_vec_pretty(&pre_lifecycle).unwrap()).unwrap();
+
+        let executor = RecordingExecutor::new();
+        let result = run_preview_cache_refresh(dir.path(), &selection, executor.as_ref()).await;
+
+        assert!(matches!(result, Err(PreviewRefreshError::Busy { .. })));
+        // Executor was never called.
+        assert!(executor.calls().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Existing test (preserved)
+    // -----------------------------------------------------------------------
 
     #[test]
     fn preview_cache_summary_reports_proxy_thumbnail_and_waveform_work() {
