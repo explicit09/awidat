@@ -333,34 +333,109 @@ fn fallback_session_title(meta: &SessionMeta) -> String {
     format!("Chat from {}", meta.started_at.format("%b %-d, %-I:%M %p"))
 }
 
+/// Derive a short ChatGPT-style chat title from the first user
+/// message. Strategy mirrors what ChatGPT does without paying for a
+/// summarization model call:
+///
+///   1. Take the first non-empty line of the prompt.
+///   2. Drop common leading filler ("can you", "please", "i want to",
+///      "could you", "would you", "let's", "lets").
+///   3. Capitalize the first character.
+///   4. Cap at ~40 characters / 5 words, ending on a word boundary.
+///   5. Add an ellipsis when truncated.
+///
+/// Examples:
+///   "delete empty track"            → "Delete empty track"
+///   "can you trim the gap?"         → "Trim the gap"
+///   "please cut the first 30s"      → "Cut the first 30s"
+///   "make a vertical version for tiktok with captions burned in"
+///                                   → "Make a vertical version for…"
 fn title_from_prompt(prompt: &str) -> String {
-    let normalized = prompt
+    let first_line = prompt
         .lines()
         .find(|line| !line.trim().is_empty())
         .unwrap_or(prompt)
         .trim()
-        .trim_matches(|c: char| c == '"' || c == '\'' || c.is_ascii_punctuation());
+        .trim_matches(|c: char| c == '"' || c == '\'');
 
-    let mut words = Vec::new();
-    for word in normalized.split_whitespace() {
-        let cleaned = word
-            .trim_matches(|c: char| c == '"' || c == '\'' || c == '`')
-            .trim_matches(|c: char| c == ',' || c == '.' || c == ':' || c == ';');
-        if cleaned.is_empty() {
-            continue;
-        }
-        words.push(cleaned);
-        if words.len() == 7 {
+    // Drop trailing punctuation but keep internal punctuation so
+    // numbers ("30s", "16:9") stay intact.
+    let stripped = first_line.trim_end_matches(|c: char| c == '.' || c == '!' || c == '?');
+
+    // Filler prefixes to drop. Match longest-first.
+    const FILLER_PREFIXES: &[&str] = &[
+        "can you please ",
+        "could you please ",
+        "would you please ",
+        "i want you to ",
+        "i'd like you to ",
+        "i would like you to ",
+        "can you ",
+        "could you ",
+        "would you ",
+        "please ",
+        "i want to ",
+        "i'd like to ",
+        "let's ",
+        "lets ",
+    ];
+    let lowered = stripped.to_lowercase();
+    let mut start = 0usize;
+    for prefix in FILLER_PREFIXES {
+        if lowered.starts_with(prefix) {
+            start = prefix.len();
             break;
         }
     }
-
-    let title = words.join(" ");
-    if title.len() <= 64 {
-        title
-    } else {
-        format!("{}...", title.chars().take(61).collect::<String>())
+    let body = stripped[start..].trim();
+    if body.is_empty() {
+        return String::new();
     }
+
+    // Take up to 5 words, ~40 chars max.
+    const MAX_WORDS: usize = 5;
+    const MAX_CHARS: usize = 40;
+    let mut taken_words = 0usize;
+    let mut taken_chars = 0usize;
+    let mut truncated = false;
+    let mut out = String::new();
+    for word in body.split_whitespace() {
+        if taken_words >= MAX_WORDS {
+            truncated = true;
+            break;
+        }
+        // +1 for the space we'd insert before this word.
+        let need = if out.is_empty() {
+            word.chars().count()
+        } else {
+            word.chars().count() + 1
+        };
+        if taken_chars + need > MAX_CHARS {
+            truncated = true;
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+        taken_chars += need;
+        taken_words += 1;
+    }
+    if out.is_empty() {
+        return String::new();
+    }
+    // Capitalize first char.
+    let mut chars = out.chars();
+    let first = chars.next().unwrap();
+    let mut titled = String::with_capacity(out.len());
+    for c in first.to_uppercase() {
+        titled.push(c);
+    }
+    titled.extend(chars);
+    if truncated {
+        titled.push('…');
+    }
+    titled
 }
 
 fn same_project_root(a: &Path, b: &Path) -> bool {
@@ -480,5 +555,73 @@ fn strip_view_context(text: &str) -> String {
     match text.split_once("]\n\n") {
         Some((_, rest)) => rest.to_string(),
         None => text.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_capitalizes_first_word() {
+        assert_eq!(title_from_prompt("delete empty track"), "Delete empty track");
+    }
+
+    #[test]
+    fn title_drops_can_you_prefix() {
+        assert_eq!(title_from_prompt("can you trim the gap?"), "Trim the gap");
+    }
+
+    #[test]
+    fn title_drops_please_prefix() {
+        assert_eq!(title_from_prompt("please cut the first 30s"), "Cut the first 30s");
+    }
+
+    #[test]
+    fn title_drops_i_want_to_prefix() {
+        assert_eq!(title_from_prompt("i want to make a vertical clip"), "Make a vertical clip");
+    }
+
+    #[test]
+    fn title_caps_at_max_words_and_appends_ellipsis() {
+        let t = title_from_prompt(
+            "make a vertical version for tiktok with captions burned in please",
+        );
+        // 5 words max → "Make a vertical version for"; ellipsis added.
+        assert!(t.ends_with('…'), "expected ellipsis on truncation; got {t:?}");
+        assert!(t.chars().count() <= 42, "title too long: {t:?}");
+    }
+
+    #[test]
+    fn title_handles_view_context_stripped_prompt() {
+        // strip_view_context runs first; title sees just the user text.
+        let prompt = strip_view_context(
+            "[user is viewing copy_F65206FA-9AEC-4CA8-BD2F-ACD63775F7FA at 0:00]\n\ndelete empty track",
+        );
+        assert_eq!(title_from_prompt(&prompt), "Delete empty track");
+    }
+
+    #[test]
+    fn title_empty_input_returns_empty() {
+        assert_eq!(title_from_prompt(""), "");
+        assert_eq!(title_from_prompt("   "), "");
+    }
+
+    #[test]
+    fn title_preserves_internal_punctuation() {
+        // Times, colons, ratios should survive — we only strip end punct.
+        assert_eq!(title_from_prompt("cut 0:30 to 1:00"), "Cut 0:30 to 1:00");
+    }
+
+    #[test]
+    fn title_strips_trailing_punctuation() {
+        assert_eq!(title_from_prompt("trim it!"), "Trim it");
+        assert_eq!(title_from_prompt("done?"), "Done");
+    }
+
+    #[test]
+    fn title_lets_prefix_dropped() {
+        assert_eq!(title_from_prompt("let's add some titles"), "Add some titles");
+        assert_eq!(title_from_prompt("lets add some titles"), "Add some titles");
     }
 }
