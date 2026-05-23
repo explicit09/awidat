@@ -15,15 +15,17 @@
 //! The detection function [`should_route_through_raw_stream`] is what
 //! callers use to decide between this orchestrator and the existing
 //! `build_timeline_argv_with_transitions` filter-graph path. The
-//! contract: when at least one `TransitionPlan.gpu_shader` is `Some`,
-//! the whole render goes through here. Otherwise the legacy path runs
-//! unchanged — no regression risk on projects that don't use GPU
-//! transitions.
+//! contract: only timelines where every transition has
+//! `TransitionPlan.gpu_shader: Some(_)` go through raw-stream GPU.
+//! Mixed GPU/FFmpeg timelines fall back to the legacy path with
+//! explicit backend evidence.
 
 use std::path::Path;
 
+use serde::Serialize;
 use thiserror::Error;
 
+use crate::RenderBackendKind;
 use crate::raw_stream::{ComposeError, RawStreamComposer, RawStreamSegment, RawStreamTransition};
 use crate::raw_stream_audio::{AudioError, compose_audio, mux_video_and_audio};
 use crate::timeline::{TimelineSegment, TransitionPlan};
@@ -69,12 +71,100 @@ pub enum RawStreamRenderError {
     },
 }
 
-/// True when at least one transition is GPU-routed.
+/// True when every transition is GPU-routed.
 ///
 /// Callers use this to dispatch between the raw-stream render path
 /// and the legacy filter-graph path.
 pub fn should_route_through_raw_stream(transitions: &[TransitionPlan]) -> bool {
-    transitions.iter().any(|t| t.gpu_shader.is_some())
+    !transitions.is_empty() && transitions.iter().all(|t| t.gpu_shader.is_some())
+}
+
+/// Select the timeline render backend from content-level transition evidence.
+pub fn select_timeline_render_backend(transitions: &[TransitionPlan]) -> RenderBackendKind {
+    select_timeline_render_backend_evidence(transitions, 0).backend
+}
+
+/// Content evidence used to choose a timeline render backend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TimelineBackendEvidence {
+    /// Selected backend.
+    pub backend: RenderBackendKind,
+    /// Stable short reason for the selection.
+    pub reason: String,
+    /// Number of transitions routed through GPU shaders.
+    pub gpu_transition_count: usize,
+    /// Number of transitions routed through FFmpeg/filtergraph logic.
+    pub ffmpeg_transition_count: usize,
+    /// Number of caption overlays eligible for libass burn-in.
+    pub libass_caption_count: usize,
+}
+
+impl TimelineBackendEvidence {
+    /// Flatten evidence into manifest metadata fields.
+    pub fn metadata_pairs(&self) -> std::collections::BTreeMap<String, String> {
+        let backend = serde_json::to_value(&self.backend)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| format!("{:?}", self.backend));
+        std::collections::BTreeMap::from([
+            ("timeline_backend".into(), backend),
+            ("timeline_backend_reason".into(), self.reason.clone()),
+            (
+                "gpu_transition_count".into(),
+                self.gpu_transition_count.to_string(),
+            ),
+            (
+                "ffmpeg_transition_count".into(),
+                self.ffmpeg_transition_count.to_string(),
+            ),
+            (
+                "libass_caption_count".into(),
+                self.libass_caption_count.to_string(),
+            ),
+        ])
+    }
+}
+
+/// Select the timeline render backend and preserve content evidence.
+pub fn select_timeline_render_backend_evidence(
+    transitions: &[TransitionPlan],
+    libass_caption_count: usize,
+) -> TimelineBackendEvidence {
+    let gpu_transition_count = transitions
+        .iter()
+        .filter(|transition| transition.gpu_shader.is_some())
+        .count();
+    let ffmpeg_transition_count = transitions.len().saturating_sub(gpu_transition_count);
+    if gpu_transition_count > 0 && ffmpeg_transition_count == 0 {
+        TimelineBackendEvidence {
+            backend: RenderBackendKind::TimelineRawStreamGpu,
+            reason: "gpu_transition_present".into(),
+            gpu_transition_count,
+            ffmpeg_transition_count,
+            libass_caption_count,
+        }
+    } else if gpu_transition_count > 0 {
+        TimelineBackendEvidence {
+            backend: RenderBackendKind::TimelineFfmpegReencode,
+            reason: "mixed_gpu_ffmpeg_transitions".into(),
+            gpu_transition_count,
+            ffmpeg_transition_count,
+            libass_caption_count,
+        }
+    } else {
+        let reason = if libass_caption_count > 0 {
+            "ffmpeg_with_libass_captions"
+        } else {
+            "ffmpeg_filtergraph"
+        };
+        TimelineBackendEvidence {
+            backend: RenderBackendKind::TimelineFfmpegReencode,
+            reason: reason.into(),
+            gpu_transition_count,
+            ffmpeg_transition_count,
+            libass_caption_count,
+        }
+    }
 }
 
 /// Render a full timeline through the raw-stream path.
@@ -345,8 +435,87 @@ mod tests {
         let without_gpu = vec![tp_no_gpu(0, "awidat.cross_dissolve", 0.3)];
         assert!(!should_route_through_raw_stream(&without_gpu));
 
+        let mixed = vec![
+            tp_gpu(
+                0,
+                "awidat.cross_dissolve",
+                0.3,
+                awidat_render_gpu::TransitionShader::CrossDissolve,
+            ),
+            tp_no_gpu(1, "awidat.cross_dissolve", 0.3),
+        ];
+        assert!(!should_route_through_raw_stream(&mixed));
+
         let empty: Vec<TransitionPlan> = Vec::new();
         assert!(!should_route_through_raw_stream(&empty));
+    }
+
+    #[test]
+    fn selected_timeline_backend_reflects_gpu_transition_content() {
+        let with_gpu = vec![tp_gpu(
+            0,
+            "awidat.match_dissolve",
+            0.3,
+            awidat_render_gpu::TransitionShader::CrossDissolve,
+        )];
+        let without_gpu = vec![tp_no_gpu(0, "awidat.cross_dissolve", 0.3)];
+
+        assert_eq!(
+            select_timeline_render_backend(&with_gpu),
+            crate::RenderBackendKind::TimelineRawStreamGpu
+        );
+        assert_eq!(
+            select_timeline_render_backend(&without_gpu),
+            crate::RenderBackendKind::TimelineFfmpegReencode
+        );
+    }
+
+    #[test]
+    fn selected_timeline_backend_falls_back_for_mixed_gpu_and_ffmpeg_transitions() {
+        let mixed = vec![
+            tp_gpu(
+                0,
+                "awidat.match_dissolve",
+                0.3,
+                awidat_render_gpu::TransitionShader::CrossDissolve,
+            ),
+            tp_no_gpu(1, "awidat.cross_dissolve", 0.3),
+        ];
+
+        let evidence = select_timeline_render_backend_evidence(&mixed, 0);
+
+        assert_eq!(
+            evidence.backend,
+            crate::RenderBackendKind::TimelineFfmpegReencode
+        );
+        assert_eq!(evidence.reason, "mixed_gpu_ffmpeg_transitions");
+        assert_eq!(evidence.gpu_transition_count, 1);
+        assert_eq!(evidence.ffmpeg_transition_count, 1);
+    }
+
+    #[test]
+    fn timeline_backend_evidence_records_libass_caption_reason() {
+        let without_gpu = vec![tp_no_gpu(0, "awidat.cross_dissolve", 0.3)];
+
+        let evidence = select_timeline_render_backend_evidence(&without_gpu, 2);
+
+        assert_eq!(
+            evidence.backend,
+            crate::RenderBackendKind::TimelineFfmpegReencode
+        );
+        assert_eq!(evidence.reason, "ffmpeg_with_libass_captions");
+        assert_eq!(evidence.ffmpeg_transition_count, 1);
+        assert_eq!(evidence.gpu_transition_count, 0);
+        assert_eq!(evidence.libass_caption_count, 2);
+        let metadata = evidence.metadata_pairs();
+        assert_eq!(
+            metadata.get("timeline_backend").map(String::as_str),
+            Some("timeline_ffmpeg_reencode")
+        );
+        assert_eq!(
+            metadata.get("libass_caption_count").map(String::as_str),
+            Some("2")
+        );
     }
 
     #[tokio::test]

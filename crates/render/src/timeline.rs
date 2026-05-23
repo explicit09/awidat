@@ -33,6 +33,7 @@ use awidat_proto::professional::{
     MaskOperation, ReframePath, TrackingPackage, canonical_runtime_clip_parameter,
 };
 use awidat_proto::project::{files, read_otio_timeline};
+use awidat_proto::subtitle::SubtitleTrack;
 use awidat_proto::transitions::{self, TransitionComposition};
 use chrono::Utc;
 use serde::Deserialize;
@@ -1420,12 +1421,40 @@ type TimelineFullPlan = (
     Vec<TransitionPlan>,
     Vec<VideoOverlayPlan>,
     Vec<TitlePlan>,
+    Vec<SubtitleTrack>,
     Vec<AnnotationPlan>,
     Option<BroadcastOverlayPlan>,
     Vec<AudioTrackPlan>,
     Option<LoudnessTargetPlan>,
     Vec<RenderPlanLimitation>,
 );
+
+/// Read-only timeline render preflight result.
+#[derive(Debug, Clone)]
+pub struct TimelineRenderPreflight {
+    /// Selected backend if this timeline were rendered now.
+    pub backend: crate::RenderBackendKind,
+    /// Total planned timeline duration in seconds.
+    pub total_duration_s: Option<f64>,
+    /// Renderable video segment count.
+    pub segment_count: usize,
+    /// Transition count.
+    pub transition_count: usize,
+    /// Media overlay count.
+    pub video_overlay_count: usize,
+    /// Title/caption overlay count.
+    pub title_count: usize,
+    /// Editable subtitle track count.
+    pub editable_subtitle_track_count: usize,
+    /// Annotation count.
+    pub annotation_count: usize,
+    /// Audio track count.
+    pub audio_track_count: usize,
+    /// Planned render limitations.
+    pub limitations: Vec<RenderPlanLimitation>,
+    /// Backend-selection metadata that render manifests would carry.
+    pub metadata: BTreeMap<String, String>,
+}
 
 /// Walk `<project_root>/project.otio.json` and collect every
 /// video-track clip's `(asset, source_range)` in playback order.
@@ -1437,7 +1466,7 @@ type TimelineFullPlan = (
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -1453,8 +1482,92 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
+}
+
+/// Analyze timeline render selection without writing render artifacts.
+pub fn analyze_timeline_render_preflight(
+    project_root: &Path,
+) -> Result<TimelineRenderPreflight, RenderTimelineError> {
+    let (
+        segs,
+        transitions,
+        video_overlays,
+        titles,
+        editable_subtitle_tracks,
+        annotations,
+        broadcast_overlay,
+        audio_tracks,
+        loudness_target,
+        render_limitations,
+    ) = collect_timeline_full_plan(project_root)?;
+    if segs.is_empty() && audio_tracks.is_empty() {
+        return Err(RenderTimelineError::EmptyTimeline);
+    }
+    let total_duration_s = if segs.is_empty() {
+        audio_tracks
+            .iter()
+            .map(audio_track_duration)
+            .fold(0.0_f64, f64::max)
+    } else {
+        segs.iter().map(visible_effective_duration).sum()
+    };
+    let master_loudnorm_enabled =
+        matches!(crate::read_master_loudnorm_plan(project_root), Ok(Some(_)));
+    let stream_copy_input = TimelineStreamCopyFastPathInput {
+        section: None,
+        segments: &segs,
+        transitions: &transitions,
+        video_overlays: &video_overlays,
+        titles: &titles,
+        editable_subtitle_tracks: &editable_subtitle_tracks,
+        annotations: &annotations,
+        broadcast_overlay: broadcast_overlay.as_ref(),
+        audio_tracks: &audio_tracks,
+        loudness_target,
+        render_limitations: &render_limitations,
+        master_loudnorm_enabled,
+    };
+    let stream_copy_eligibility = analyze_timeline_stream_copy_eligibility(stream_copy_input);
+    let (backend, metadata) = if stream_copy_eligibility.blockers.is_empty()
+        && stream_copy_eligibility.segment.is_some()
+    {
+        (
+            crate::RenderBackendKind::StreamExportRemux,
+            timeline_stream_copy_metadata(),
+        )
+    } else {
+        let libass_caption_count = titles
+            .iter()
+            .filter(|title| crate::ass::is_libass_eligible(title))
+            .count()
+            + editable_subtitle_tracks.len();
+        let evidence =
+            crate::select_timeline_render_backend_evidence(&transitions, libass_caption_count);
+        let backend = evidence.backend.clone();
+        let mut metadata = evidence.metadata_pairs();
+        insert_timeline_stream_copy_blocker_metadata(
+            &mut metadata,
+            &stream_copy_eligibility.blockers,
+        );
+        tag_unapplied_master_loudnorm(project_root, &mut metadata);
+        (backend, metadata)
+    };
+
+    Ok(TimelineRenderPreflight {
+        backend,
+        total_duration_s: Some(total_duration_s),
+        segment_count: segs.len(),
+        transition_count: transitions.len(),
+        video_overlay_count: video_overlays.len(),
+        title_count: titles.len(),
+        editable_subtitle_track_count: editable_subtitle_tracks.len(),
+        annotation_count: annotations.len(),
+        audio_track_count: audio_tracks.len(),
+        limitations: render_limitations,
+        metadata,
+    })
 }
 
 /// Walk `<project_root>/project.otio.json` and collect segments +
@@ -1500,6 +1613,19 @@ pub fn collect_timeline_full_plan(
     let mut transitions = Vec::new();
     let mut video_overlays = Vec::new();
     let mut titles = Vec::new();
+    let editable_subtitle_tracks = timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .map(|metadata| {
+            metadata
+                .subtitle_tracks
+                .iter()
+                .filter(|track| track.cues.iter().any(|cue| !cue.text.trim().is_empty()))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let mut annotations = Vec::new();
     let mut audio_tracks = Vec::new();
     let mut render_limitations = graph_binding_limitations;
@@ -1758,6 +1884,7 @@ pub fn collect_timeline_full_plan(
         transitions,
         video_overlays,
         titles,
+        editable_subtitle_tracks,
         annotations,
         broadcast_overlay,
         audio_tracks,
@@ -2958,6 +3085,12 @@ fn parse_title_plan(
         "slide_out" => TitleAnimation::SlideOut,
         _ => TitleAnimation::None,
     };
+    // Phases override the legacy flat enum when present. Bad
+    // payloads degrade to `None` — render walks skip malformed
+    // pieces of metadata rather than aborting the whole title.
+    let phases = m
+        .get("phases")
+        .and_then(|value| serde_json::from_value::<TitlePhases>(value.clone()).ok());
     let reveal = match m.get("reveal").and_then(|v| v.as_str()).unwrap_or("none") {
         "typewriter" => TextReveal::Typewriter,
         "word" => TextReveal::Word,
@@ -2994,6 +3127,7 @@ fn parse_title_plan(
         color,
         font_weight,
         animation,
+        phases,
         reveal,
         role,
         safe_area,
@@ -3645,8 +3779,14 @@ pub struct TitlePlan {
     pub color: String,
     /// Bold vs normal weight.
     pub font_weight: TitleWeight,
-    /// Entry / exit animation.
+    /// Entry / exit animation (legacy flat form).
     pub animation: TitleAnimation,
+    /// Optional three-phase animation (Entrance / Highlight / Exit).
+    /// When `Some`, the render layer drives expressions from these
+    /// phases. When `None`, the renderer lowers `animation` via
+    /// [`TitlePhases::from_legacy`] so there is only one rendering
+    /// code path.
+    pub phases: Option<TitlePhases>,
     /// Text reveal/write-on behavior.
     pub reveal: TextReveal,
     /// Overlay role, usually `"title"` or `"caption"`.
@@ -3738,6 +3878,90 @@ pub enum TitleAnimation {
     SlideOut,
 }
 
+/// Mirrors `awidat_core::edl::op::TitlePhaseKind`. Render-side enum
+/// keeps the render crate independent of the core crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitlePhaseKind {
+    /// Alpha ramp 0→1 (entrance) or 1→0 (exit) over the phase duration.
+    Fade,
+    /// Translate from off-screen to resting (entrance) or vice versa.
+    Slide,
+    /// Instantaneous show/hide.
+    Pop,
+}
+
+/// Mirrors `awidat_core::edl::op::TitlePhase`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+pub struct TitlePhase {
+    /// Kind of animation this phase plays.
+    pub kind: TitlePhaseKind,
+    /// Phase duration in seconds. `None` means use the renderer
+    /// default (500 ms today).
+    #[serde(default)]
+    pub duration_s: Option<f64>,
+    /// Per-character/word stagger in seconds. v1 preserves the field
+    /// for round-trip but does not render it.
+    #[serde(default)]
+    pub stagger_s: Option<f64>,
+}
+
+/// Mirrors `awidat_core::edl::op::TitlePhases`. Three-phase title
+/// animation: entrance, highlight, exit. Any phase may be absent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
+pub struct TitlePhases {
+    /// Lead-in phase played at `start_s`.
+    #[serde(default)]
+    pub entrance: Option<TitlePhase>,
+    /// Mid-title accent (brief alpha dip).
+    #[serde(default)]
+    pub highlight: Option<TitlePhase>,
+    /// Lead-out phase ending at `end_s`.
+    #[serde(default)]
+    pub exit: Option<TitlePhase>,
+}
+
+impl TitlePhases {
+    /// Lower a legacy flat [`TitleAnimation`] into phase form so the
+    /// render path has exactly one driver.
+    pub fn from_legacy(animation: TitleAnimation) -> Self {
+        let fade = || TitlePhase {
+            kind: TitlePhaseKind::Fade,
+            duration_s: None,
+            stagger_s: None,
+        };
+        let slide = || TitlePhase {
+            kind: TitlePhaseKind::Slide,
+            duration_s: None,
+            stagger_s: None,
+        };
+        match animation {
+            TitleAnimation::None => Self::default(),
+            TitleAnimation::FadeIn => Self {
+                entrance: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::FadeOut => Self {
+                exit: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::FadeInOut => Self {
+                entrance: Some(fade()),
+                exit: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::SlideIn => Self {
+                entrance: Some(slide()),
+                ..Self::default()
+            },
+            TitleAnimation::SlideOut => Self {
+                exit: Some(slide()),
+                ..Self::default()
+            },
+        }
+    }
+}
+
 /// One transition between two segments in the timeline. Callers may
 /// pass an empty `transitions` slice; the planner then emits the
 /// monolithic concat filter without xfade splicing.
@@ -3781,6 +4005,7 @@ pub struct FilterPlanner<'a> {
     segments: &'a [TimelineSegment],
     transitions: &'a [TransitionPlan],
     titles: &'a [TitlePlan],
+    editable_subtitle_tracks: &'a [SubtitleTrack],
     broadcast_overlay: Option<&'a BroadcastOverlayPlan>,
     /// When set, eligible captions (role=="caption" with non-empty
     /// `word_timings`) are written as `.ass` files into this dir
@@ -3851,6 +4076,7 @@ impl<'a> FilterPlanner<'a> {
             segments,
             transitions,
             titles,
+            editable_subtitle_tracks: &[],
             broadcast_overlay: None,
             ass_workdir: None,
         }
@@ -3868,9 +4094,18 @@ impl<'a> FilterPlanner<'a> {
             segments,
             transitions,
             titles,
+            editable_subtitle_tracks: &[],
             broadcast_overlay,
             ass_workdir: None,
         }
+    }
+
+    /// Add editable timeline subtitle tracks to the burn-in chain.
+    /// These tracks always render through ASS/libass because they are
+    /// already subtitle-native and should not be lowered through drawtext.
+    pub(crate) fn with_editable_subtitle_tracks(mut self, tracks: &'a [SubtitleTrack]) -> Self {
+        self.editable_subtitle_tracks = tracks;
+        self
     }
 
     /// Opt eligible captions into the ASS / libass burn-in path.
@@ -3904,7 +4139,9 @@ impl<'a> FilterPlanner<'a> {
         } else {
             base
         };
-        if self.titles.is_empty() || broadcast_overlay_owns_program_titles(self.broadcast_overlay) {
+        let has_program_titles = !self.titles.is_empty()
+            && !broadcast_overlay_owns_program_titles(self.broadcast_overlay);
+        if !has_program_titles && self.editable_subtitle_tracks.is_empty() {
             base
         } else {
             self.append_titles(base)
@@ -3926,8 +4163,9 @@ impl<'a> FilterPlanner<'a> {
         if let Some(overlay) = self.broadcast_overlay {
             base = self.append_broadcast_overlay(base, overlay);
         }
-        if !self.titles.is_empty() && !broadcast_overlay_owns_program_titles(self.broadcast_overlay)
-        {
+        let has_program_titles = !self.titles.is_empty()
+            && !broadcast_overlay_owns_program_titles(self.broadcast_overlay);
+        if has_program_titles || !self.editable_subtitle_tracks.is_empty() {
             base = self.append_titles(base);
         }
         base
@@ -3955,16 +4193,22 @@ impl<'a> FilterPlanner<'a> {
         let mut filter = base.filter_complex.clone();
         filter.push(';');
         filter.push_str(&in_label);
-        // Comma-separate the title filters so they all run on the
+        // Comma-separate the text filters so they all run on the
         // same input → single output. drawtext's `enable=` keeps each
         // bounded to its window without cross-contamination, and
         // libass `subtitles=` carries its own per-event start/end.
-        let parts: Vec<String> = self
+        let mut parts: Vec<String> = self
             .titles
             .iter()
             .enumerate()
             .map(|(index, title)| self.format_title_filter(title, index))
             .collect();
+        parts.extend(
+            self.editable_subtitle_tracks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, track)| self.format_subtitle_track_filter(track, index)),
+        );
         filter.push_str(&parts.join(","));
         filter.push_str(&out_label);
 
@@ -3998,6 +4242,22 @@ impl<'a> FilterPlanner<'a> {
             }
         }
         format_drawtext_filter(title, self.broadcast_overlay)
+    }
+
+    fn format_subtitle_track_filter(&self, track: &SubtitleTrack, index: usize) -> Option<String> {
+        let workdir = self.ass_workdir.as_ref()?;
+        match crate::ass::render_subtitle_track_ass_file(track, workdir, index) {
+            Ok(path) => Some(crate::ass::ffmpeg_subtitles_filter_arg(&path)),
+            Err(err) => {
+                tracing::warn!(
+                    ?err,
+                    track_id = %track.id,
+                    workdir = %workdir.display(),
+                    "FilterPlanner: editable subtitle ASS write failed; dropping subtitle track",
+                );
+                None
+            }
+        }
     }
 
     fn append_broadcast_overlay(
@@ -8092,59 +8352,164 @@ struct AnimatedExpressions {
 
 /// Build the animation expressions for a title. Pure function so it
 /// can be unit-tested without spinning up ffmpeg.
+///
+/// Drives off [`TitlePlan::phases`] when present; falls back to
+/// [`TitlePhases::from_legacy`] otherwise so the flat
+/// [`TitleAnimation`] enum is rendered through the same code path.
 fn apply_title_animation(t: &TitlePlan, resting_x: &str, resting_y: &str) -> AnimatedExpressions {
+    let phases = t
+        .phases
+        .unwrap_or_else(|| TitlePhases::from_legacy(t.animation));
     let start = t.start_s;
     let end = t.end_s;
-    let ramp = ANIMATION_RAMP_S;
-    let fade_in_end = start + ramp;
-    let fade_out_start = (end - ramp).max(start);
 
-    match t.animation {
-        TitleAnimation::None => AnimatedExpressions {
-            x: resting_x.to_string(),
-            y: resting_y.to_string(),
-            alpha: String::new(),
-        },
-        TitleAnimation::FadeIn => AnimatedExpressions {
-            x: resting_x.to_string(),
-            y: resting_y.to_string(),
-            // Linear ramp 0→1 over [start, start+ramp]; 1 thereafter.
-            // `if(lt(t,A), B, C)` evaluates B when t<A, else C.
-            alpha: format!(":alpha='if(lt(t\\,{fade_in_end})\\,(t-{start})/{ramp}\\,1)'"),
-        },
-        TitleAnimation::FadeOut => AnimatedExpressions {
-            x: resting_x.to_string(),
-            y: resting_y.to_string(),
-            // 1 until [end-ramp, end], then ramp 1→0.
-            alpha: format!(":alpha='if(lt(t\\,{fade_out_start})\\,1\\,({end}-t)/{ramp})'"),
-        },
-        TitleAnimation::FadeInOut => AnimatedExpressions {
-            x: resting_x.to_string(),
-            y: resting_y.to_string(),
-            // Three pieces: ramp in, plateau, ramp out.
-            alpha: format!(
-                ":alpha='if(lt(t\\,{fade_in_end})\\,(t-{start})/{ramp}\\,if(lt(t\\,{fade_out_start})\\,1\\,({end}-t)/{ramp}))'"
-            ),
-        },
-        TitleAnimation::SlideIn => slide_expressions(
-            t.position,
+    // x/y come from any active slide phase; fade affects alpha.
+    // v1 doesn't combine slide-in and slide-out on the same title;
+    // entrance wins, then exit.
+    let (x_expr, y_expr) =
+        slide_xy_for_phases(t.position, resting_x, resting_y, start, end, phases);
+
+    let alpha = fade_alpha_for_phases(start, end, phases);
+
+    AnimatedExpressions {
+        x: x_expr,
+        y: y_expr,
+        alpha,
+    }
+}
+
+/// Build x/y expressions honoring any slide phase. Returns
+/// `(resting_x, resting_y)` when no slide phase is active.
+fn slide_xy_for_phases(
+    position: TitlePosition,
+    resting_x: &str,
+    resting_y: &str,
+    start: f64,
+    end: f64,
+    phases: TitlePhases,
+) -> (String, String) {
+    let entrance_is_slide = matches!(phases.entrance.map(|p| p.kind), Some(TitlePhaseKind::Slide));
+    let exit_is_slide = matches!(phases.exit.map(|p| p.kind), Some(TitlePhaseKind::Slide));
+
+    if entrance_is_slide {
+        let dur = phases
+            .entrance
+            .and_then(|p| p.duration_s)
+            .unwrap_or(ANIMATION_RAMP_S);
+        let expr = slide_expressions(
+            position,
             resting_x,
             resting_y,
             SlideDirection::In,
             start,
             end,
-            ramp,
-        ),
-        TitleAnimation::SlideOut => slide_expressions(
-            t.position,
+            dur,
+        );
+        return (expr.x, expr.y);
+    }
+    if exit_is_slide {
+        let dur = phases
+            .exit
+            .and_then(|p| p.duration_s)
+            .unwrap_or(ANIMATION_RAMP_S);
+        let expr = slide_expressions(
+            position,
             resting_x,
             resting_y,
             SlideDirection::Out,
             start,
             end,
-            ramp,
-        ),
+            dur,
+        );
+        return (expr.x, expr.y);
     }
+    (resting_x.to_string(), resting_y.to_string())
+}
+
+/// Build the `:alpha='...'` segment honoring entrance/exit fade and
+/// the optional highlight dip. Returns an empty string when no phase
+/// contributes to alpha.
+///
+/// The returned expression compounds three pieces in time order:
+///
+///   - Entrance fade: linear ramp 0 → 1 over `[start, start + dur_in]`.
+///   - Highlight dip: alpha 1 → 0.7 → 1 over a window centered on the
+///     title's midpoint, with total width `highlight.duration_s`.
+///   - Exit fade: linear ramp 1 → 0 over `[end - dur_out, end]`.
+fn fade_alpha_for_phases(start: f64, end: f64, phases: TitlePhases) -> String {
+    let entrance_fade = phases
+        .entrance
+        .filter(|p| matches!(p.kind, TitlePhaseKind::Fade))
+        .map(|p| p.duration_s.unwrap_or(ANIMATION_RAMP_S));
+    let exit_fade = phases
+        .exit
+        .filter(|p| matches!(p.kind, TitlePhaseKind::Fade))
+        .map(|p| p.duration_s.unwrap_or(ANIMATION_RAMP_S));
+    let highlight = phases
+        .highlight
+        .map(|p| p.duration_s.unwrap_or(HIGHLIGHT_DEFAULT_DURATION_S));
+
+    if entrance_fade.is_none() && exit_fade.is_none() && highlight.is_none() {
+        return String::new();
+    }
+
+    // The "plateau" expression is what alpha resolves to between the
+    // entrance ramp end and the exit ramp start. Without a highlight
+    // it's just `1`; with a highlight it dips to 0.7 over a centered
+    // window.
+    let plateau = if let Some(hl_dur) = highlight {
+        highlight_plateau_expr(start, end, hl_dur)
+    } else {
+        "1".to_string()
+    };
+
+    // Compose from outer (latest in time) inward to keep the format
+    // identical to the legacy emitter on the canonical paths.
+    let mut expr = plateau;
+    if let Some(dur_out) = exit_fade {
+        let fade_out_start = (end - dur_out).max(start);
+        // 1 / plateau until fade_out_start, then ramp 1 → 0.
+        expr = format!("if(lt(t\\,{fade_out_start})\\,{expr}\\,({end}-t)/{dur_out})");
+    }
+    if let Some(dur_in) = entrance_fade {
+        let fade_in_end = start + dur_in;
+        // Ramp 0 → 1 over [start, fade_in_end]; then continue with the
+        // existing expression.
+        expr = format!("if(lt(t\\,{fade_in_end})\\,(t-{start})/{dur_in}\\,{expr})");
+    }
+    format!(":alpha='{expr}'")
+}
+
+/// Default highlight duration when the phase omits `duration_s`.
+const HIGHLIGHT_DEFAULT_DURATION_S: f64 = 0.3;
+
+/// Build the highlight-dip expression for the plateau slot of the
+/// alpha pipeline. Centered on `(start + end) / 2`, the alpha drops
+/// linearly from 1 to `HIGHLIGHT_MIN_ALPHA` over the first half of the
+/// window and recovers to 1 over the second half.
+fn highlight_plateau_expr(start: f64, end: f64, duration: f64) -> String {
+    const HIGHLIGHT_MIN_ALPHA: f64 = 0.7;
+    // Clamp the window inside [start, end] so a long highlight on a
+    // short title still produces a valid expression.
+    let half = (duration / 2.0).max(0.0);
+    let mid = (start + end) / 2.0;
+    let dip_start = (mid - half).max(start);
+    let dip_end = (mid + half).min(end);
+    let half_actual = (dip_end - dip_start) / 2.0;
+    if half_actual <= f64::EPSILON {
+        return "1".to_string();
+    }
+    let mid_actual = (dip_start + dip_end) / 2.0;
+    // alpha(t) =
+    //   1                                       if t < dip_start
+    //   1 - (1 - MIN) * (t - dip_start) / half  if t < mid_actual
+    //   MIN + (1 - MIN) * (t - mid_actual) / half  if t < dip_end
+    //   1                                       otherwise
+    let depth = 1.0 - HIGHLIGHT_MIN_ALPHA;
+    let min_alpha = HIGHLIGHT_MIN_ALPHA;
+    format!(
+        "if(lt(t\\,{dip_start})\\,1\\,if(lt(t\\,{mid_actual})\\,1-{depth}*(t-{dip_start})/{half_actual}\\,if(lt(t\\,{dip_end})\\,{min_alpha}+{depth}*(t-{mid_actual})/{half_actual}\\,1)))",
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -8600,6 +8965,7 @@ pub fn build_timeline_argv_full_with_annotations(
         video_overlays,
         annotations,
         titles,
+        &[],
         broadcast_overlay,
         browser_broadcast_overlay,
         loudness_target,
@@ -8621,6 +8987,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     video_overlays: &[VideoOverlayPlan],
     annotations: &[AnnotationPlan],
     titles: &[TitlePlan],
+    editable_subtitle_tracks: &[SubtitleTrack],
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
     browser_broadcast_overlay: Option<&Path>,
     loudness_target: Option<LoudnessTargetPlan>,
@@ -8676,7 +9043,8 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
         &[],
         titles,
         ffmpeg_broadcast_overlay,
-    );
+    )
+    .with_editable_subtitle_tracks(editable_subtitle_tracks);
     if let Some(dir) = ass_workdir {
         planner = planner.with_ass_workdir(dir.to_path_buf());
     }
@@ -8811,6 +9179,7 @@ pub fn build_timeline_argv_with_audio_tracks_and_annotations(
         video_overlays,
         annotations,
         titles,
+        &[],
         broadcast_overlay,
         browser_broadcast_overlay,
         loudness_target,
@@ -8832,6 +9201,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     video_overlays: &[VideoOverlayPlan],
     annotations: &[AnnotationPlan],
     titles: &[TitlePlan],
+    editable_subtitle_tracks: &[SubtitleTrack],
     broadcast_overlay: Option<&BroadcastOverlayPlan>,
     browser_broadcast_overlay: Option<&Path>,
     loudness_target: Option<LoudnessTargetPlan>,
@@ -8920,7 +9290,8 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
             &[],
             titles,
             ffmpeg_broadcast_overlay,
-        );
+        )
+        .with_editable_subtitle_tracks(editable_subtitle_tracks);
         if let Some(dir) = ass_workdir {
             planner = planner.with_ass_workdir(dir.to_path_buf());
         }
@@ -9368,6 +9739,7 @@ fn build_timeline_render_spec_inner(
         transitions,
         video_overlays,
         titles,
+        editable_subtitle_tracks,
         annotations,
         broadcast_overlay,
         audio_tracks,
@@ -9411,6 +9783,39 @@ fn build_timeline_render_spec_inner(
     .map_err(|e| {
         RenderTimelineError::BroadcastOverlayRender(format!("output path preflight failed: {e}"))
     })?;
+    let master_loudnorm_enabled =
+        matches!(crate::read_master_loudnorm_plan(project_root), Ok(Some(_)));
+    let stream_copy_eligibility =
+        analyze_timeline_stream_copy_eligibility(TimelineStreamCopyFastPathInput {
+            section: section.as_ref(),
+            segments: &segs,
+            transitions: &transitions,
+            video_overlays: &video_overlays,
+            titles: &titles,
+            editable_subtitle_tracks: &editable_subtitle_tracks,
+            annotations: &annotations,
+            broadcast_overlay: broadcast_overlay.as_ref(),
+            audio_tracks: &audio_tracks,
+            loudness_target,
+            render_limitations: &render_limitations,
+            master_loudnorm_enabled,
+        });
+    if stream_copy_eligibility.blockers.is_empty()
+        && let Some(segment) = stream_copy_eligibility.segment
+    {
+        let metadata = timeline_stream_copy_metadata();
+        return Ok(RenderJobSpec {
+            args: build_single_segment_stream_copy_argv(segment, &output_path),
+            backend: crate::RenderBackendKind::StreamExportRemux,
+            total_duration_s: Some(segment.duration_s),
+            cwd: Some(project_root.to_path_buf()),
+            output_path,
+            input_paths,
+            manifest_path: None,
+            limitations: render_limitations,
+            metadata,
+        });
+    }
     let browser_broadcast_overlay = if let Some(overlay) = broadcast_overlay.as_ref()
         && overlay.config.enabled
         && !overlay.config.short_form_mode
@@ -9428,7 +9833,12 @@ fn build_timeline_render_spec_inner(
     // materialize `.ass` files under <renders>/.ass/<timestamp>/ so
     // the ffmpeg `subtitles=` filter can find them. Drawtext stays
     // the default for everything else.
-    let ass_workdir = if titles.iter().any(crate::ass::is_libass_eligible) {
+    let libass_caption_count = titles
+        .iter()
+        .filter(|title| crate::ass::is_libass_eligible(title))
+        .count();
+    let editable_subtitle_track_count = editable_subtitle_tracks.len();
+    let ass_workdir = if libass_caption_count > 0 || editable_subtitle_track_count > 0 {
         let dir = renders_dir.join(".ass").join(timestamp.to_string());
         if let Err(err) = fs::create_dir_all(&dir) {
             tracing::warn!(
@@ -9450,6 +9860,7 @@ fn build_timeline_render_spec_inner(
             &video_overlays,
             &annotations,
             &titles,
+            &editable_subtitle_tracks,
             broadcast_overlay.as_ref(),
             browser_broadcast_overlay.as_deref(),
             loudness_target,
@@ -9463,6 +9874,7 @@ fn build_timeline_render_spec_inner(
             &video_overlays,
             &annotations,
             &titles,
+            &editable_subtitle_tracks,
             broadcast_overlay.as_ref(),
             browser_broadcast_overlay.as_deref(),
             loudness_target,
@@ -9471,31 +9883,227 @@ fn build_timeline_render_spec_inner(
             ass_workdir.as_deref(),
         )
     };
+    let backend_evidence = crate::select_timeline_render_backend_evidence(
+        &transitions,
+        libass_caption_count + editable_subtitle_track_count,
+    );
+    let backend = backend_evidence.backend.clone();
+    let mut metadata = backend_evidence.metadata_pairs();
+    insert_timeline_stream_copy_blocker_metadata(&mut metadata, &stream_copy_eligibility.blockers);
+    tag_unapplied_master_loudnorm(project_root, &mut metadata);
     if let Some(section) = section {
         trim_render_argv_to_section(&mut argv, section.start_s, section.duration_s);
         return Ok(RenderJobSpec {
             args: argv,
-            backend: crate::RenderBackendKind::TimelineFfmpegReencode,
+            backend,
             total_duration_s: Some(section.duration_s),
             cwd: Some(project_root.to_path_buf()),
             output_path,
-            input_paths: Vec::new(),
+            input_paths,
             manifest_path: None,
             limitations: render_limitations,
-            metadata: std::collections::BTreeMap::new(),
+            metadata,
         });
     }
     Ok(RenderJobSpec {
         args: argv,
-        backend: crate::RenderBackendKind::TimelineFfmpegReencode,
+        backend,
         total_duration_s: Some(total_duration_s),
         cwd: Some(project_root.to_path_buf()),
         output_path,
-        input_paths: Vec::new(),
+        input_paths,
         manifest_path: None,
         limitations: render_limitations,
-        metadata: std::collections::BTreeMap::new(),
+        metadata,
     })
+}
+
+fn tag_unapplied_master_loudnorm(
+    project_root: &Path,
+    metadata: &mut std::collections::BTreeMap<String, String>,
+) {
+    if !matches!(crate::read_master_loudnorm_plan(project_root), Ok(Some(_))) {
+        return;
+    }
+    metadata.insert("master_loudnorm_enabled".into(), "true".into());
+    metadata.insert("master_loudnorm_pass".into(), "unapplied".into());
+    metadata.insert(
+        "master_loudnorm_output_mode".into(),
+        "timeline_single_pass".into(),
+    );
+}
+
+struct TimelineStreamCopyFastPathInput<'a> {
+    section: Option<&'a TimelineSectionRange>,
+    segments: &'a [TimelineSegment],
+    transitions: &'a [TransitionPlan],
+    video_overlays: &'a [VideoOverlayPlan],
+    titles: &'a [TitlePlan],
+    editable_subtitle_tracks: &'a [SubtitleTrack],
+    annotations: &'a [AnnotationPlan],
+    broadcast_overlay: Option<&'a BroadcastOverlayPlan>,
+    audio_tracks: &'a [AudioTrackPlan],
+    loudness_target: Option<LoudnessTargetPlan>,
+    render_limitations: &'a [RenderPlanLimitation],
+    master_loudnorm_enabled: bool,
+}
+
+struct TimelineStreamCopyEligibility<'a> {
+    segment: Option<&'a TimelineSegment>,
+    blockers: Vec<&'static str>,
+}
+
+fn analyze_timeline_stream_copy_eligibility(
+    input: TimelineStreamCopyFastPathInput<'_>,
+) -> TimelineStreamCopyEligibility<'_> {
+    let mut blockers = Vec::new();
+    if input.section.is_some() {
+        blockers.push("section_render");
+    }
+    if input.segments.len() != 1 {
+        blockers.push("segment_count");
+    }
+    if !input.transitions.is_empty() {
+        blockers.push("transitions");
+    }
+    if !input.video_overlays.is_empty() {
+        blockers.push("video_overlays");
+    }
+    if !input.titles.is_empty() {
+        blockers.push("title_overlays");
+    }
+    if !input.editable_subtitle_tracks.is_empty() {
+        blockers.push("editable_subtitle_tracks");
+    }
+    if !input.annotations.is_empty() {
+        blockers.push("annotations");
+    }
+    if input.broadcast_overlay.is_some() {
+        blockers.push("broadcast_overlay");
+    }
+    if !input.audio_tracks.is_empty() {
+        blockers.push("audio_tracks");
+    }
+    if input.loudness_target.is_some() {
+        blockers.push("loudness_target");
+    }
+    if !input.render_limitations.is_empty() {
+        blockers.push("render_limitations");
+    }
+    if input.master_loudnorm_enabled {
+        blockers.push("master_loudnorm");
+    }
+    let segment = input.segments.first();
+    if let Some(segment) = segment {
+        if segment_has_render_transform(segment) {
+            blockers.push("segment_render_transform");
+        }
+        if !segment_container_can_copy_to_mp4(segment) {
+            blockers.push("container_requires_reencode");
+        }
+    }
+    TimelineStreamCopyEligibility { segment, blockers }
+}
+
+fn segment_container_can_copy_to_mp4(segment: &TimelineSegment) -> bool {
+    segment
+        .asset_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("mp4") || extension.eq_ignore_ascii_case("m4v")
+        })
+}
+
+fn segment_has_render_transform(segment: &TimelineSegment) -> bool {
+    segment.pre_handle_s != 0.0
+        || segment.post_handle_s != 0.0
+        || segment.mask_input_index.is_some()
+        || segment.volume.is_some()
+        || segment.volume_automation.is_some()
+        || segment.speed.is_some()
+        || segment.time_remap.is_some()
+        || segment.freeze.is_some()
+        || segment.color_correction.is_some()
+        || segment.blur.is_some()
+        || segment.chroma_key.is_some()
+        || segment.luma_key.is_some()
+        || segment.region_blur.is_some()
+        || segment.blur_radius_animation.is_some()
+        || segment.hdr_transfer.is_some()
+        || segment.reframe.is_some()
+        || segment.reframe_path.is_some()
+        || segment.warp.is_some()
+        || segment.warp_animation.is_some()
+        || segment.shake.is_some()
+        || segment.shake_intensity_animation.is_some()
+        || segment.shake_frequency_animation.is_some()
+        || segment.lut_path.is_some()
+        || segment.lut_interpolation.is_some()
+        || segment.lut_strength.is_some()
+        || segment.color_pipeline.is_some()
+        || segment.audio_fx.is_some()
+        || segment.overlay_blend_mode.is_some()
+        || segment.audio_lead_s.is_some()
+        || segment.audio_trail_s.is_some()
+}
+
+fn build_single_segment_stream_copy_argv(
+    segment: &TimelineSegment,
+    output_path: &Path,
+) -> Vec<String> {
+    vec![
+        "-y".into(),
+        "-loglevel".into(),
+        "info".into(),
+        "-ss".into(),
+        format!("{}", segment.start_s),
+        "-t".into(),
+        format!("{}", segment.duration_s),
+        "-i".into(),
+        segment.asset_path.to_string_lossy().into_owned(),
+        "-map".into(),
+        "0".into(),
+        "-c".into(),
+        "copy".into(),
+        "-avoid_negative_ts".into(),
+        "make_zero".into(),
+        output_path.to_string_lossy().into_owned(),
+    ]
+}
+
+fn timeline_stream_copy_metadata() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::from([
+        ("timeline_stream_copy_eligible".into(), "true".into()),
+        ("timeline_stream_copy_blocker_count".into(), "0".into()),
+        ("timeline_stream_copy_blockers".into(), String::new()),
+        ("timeline_backend".into(), "stream_export_remux".into()),
+        (
+            "timeline_backend_reason".into(),
+            "single_plain_timeline_segment".into(),
+        ),
+        ("remux_backend".into(), "stream_export_remux".into()),
+        (
+            "remux_eligibility_reason".into(),
+            "single_plain_timeline_segment".into(),
+        ),
+        ("stream_count".into(), "all_mapped".into()),
+        ("copy_stream_count".into(), "all_mapped".into()),
+        ("transcode_stream_count".into(), "0".into()),
+        ("all_streams_copy".into(), "true".into()),
+    ])
+}
+
+fn insert_timeline_stream_copy_blocker_metadata(
+    metadata: &mut std::collections::BTreeMap<String, String>,
+    blockers: &[&'static str],
+) {
+    metadata.insert("timeline_stream_copy_eligible".into(), "false".into());
+    metadata.insert(
+        "timeline_stream_copy_blocker_count".into(),
+        blockers.len().to_string(),
+    );
+    metadata.insert("timeline_stream_copy_blockers".into(), blockers.join(","));
 }
 
 fn resolve_timeline_section(
@@ -9766,7 +10374,7 @@ mod tests {
                         confidence: Some(0.89),
                     },
                 ],
-                smoothing: ReframeSmoothing::Moderate,
+                smoothing: ReframeSmoothing::None,
                 evidence_track_id: Some("speaker-face".into()),
                 safe_area: Some("mobile".into()),
             }],
@@ -10348,9 +10956,23 @@ mod tests {
     }
 
     #[test]
-    fn fixture_project_produces_concat_argv() {
+    fn effect_project_produces_concat_argv() {
         let dir = tempfile::tempdir().unwrap();
-        write_fixture_project(dir.path());
+        let otio_path = write_fixture_project(dir.path());
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        let StackChild::Track(track) = &mut tl.tracks.children[0] else {
+            panic!("expected video track");
+        };
+        let TrackChild::Clip(clip) = &mut track.children[0] else {
+            panic!("expected fixture clip");
+        };
+        let mut effect = Effect::new("awidat.volume");
+        effect
+            .metadata
+            .insert("value".into(), serde_json::json!(0.8));
+        clip.effects.push(effect);
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+
         let spec = build_timeline_render_spec(dir.path()).unwrap();
         assert!(spec.total_duration_s.unwrap() > 1.9);
         // Concat filter present, libx264 (re-encode, not stream-copy).
@@ -10358,6 +10980,7 @@ mod tests {
         assert!(cmd.contains("concat=n=1:v=1:a=1"));
         assert!(cmd.contains("libx264"));
         assert!(!cmd.contains(" copy "));
+        assert_eq!(spec.input_paths, vec![dir.path().join("raw/x.mp4")]);
         // Output under renders/ with timeline-<HHMMSS>.mp4 naming.
         assert!(spec.output_path.starts_with(dir.path().join("renders")));
         assert!(
@@ -10366,6 +10989,114 @@ mod tests {
                 .unwrap()
                 .to_string_lossy()
                 .starts_with("timeline-")
+        );
+    }
+
+    #[test]
+    fn simple_single_clip_timeline_uses_stream_copy_fast_path() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project(dir.path());
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        assert_eq!(spec.backend, crate::RenderBackendKind::StreamExportRemux);
+        assert!(
+            cmd.contains("-c copy"),
+            "simple timeline should copy packets: {cmd}"
+        );
+        assert!(
+            !cmd.contains("-filter_complex"),
+            "stream-copy timeline should not build a filter graph: {cmd}"
+        );
+        assert_eq!(
+            spec.metadata
+                .get("remux_eligibility_reason")
+                .map(String::as_str),
+            Some("single_plain_timeline_segment")
+        );
+        assert_eq!(
+            spec.metadata.get("all_streams_copy").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_stream_copy_eligible")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_stream_copy_blocker_count")
+                .map(String::as_str),
+            Some("0")
+        );
+    }
+
+    #[test]
+    fn timeline_render_preflight_reports_backend_without_creating_render_artifacts() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project(dir.path());
+
+        let preflight = analyze_timeline_render_preflight(dir.path()).unwrap();
+
+        assert_eq!(
+            preflight.backend,
+            crate::RenderBackendKind::StreamExportRemux
+        );
+        assert_eq!(
+            preflight
+                .metadata
+                .get("remux_eligibility_reason")
+                .map(String::as_str),
+            Some("single_plain_timeline_segment")
+        );
+        assert_eq!(preflight.segment_count, 1);
+        assert_eq!(preflight.transition_count, 0);
+        assert!(!dir.path().join("renders").exists());
+    }
+
+    #[test]
+    fn non_mp4_single_clip_timeline_stays_on_reencode_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset_rel = "raw/x.mov";
+        fs::create_dir_all(dir.path().join("raw")).unwrap();
+        fs::write(dir.path().join(asset_rel), b"stub").unwrap();
+        let mut clip = Clip::empty("c1".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new(asset_rel));
+        clip.source_range = Some(OtioRange::new(
+            RationalTime::new(0.0, 24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        let mut track = Track::empty("V1", TrackKind::Video);
+        track.children.push(TrackChild::Clip(clip));
+        let mut tl = Timeline::empty("p");
+        let mut stack = Stack::empty("root");
+        stack.children.push(StackChild::Track(track));
+        tl.tracks = stack;
+        fs::write(
+            dir.path().join(files::OTIO),
+            serde_json::to_string_pretty(&tl).unwrap(),
+        )
+        .unwrap();
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+        assert_eq!(
+            spec.backend,
+            crate::RenderBackendKind::TimelineFfmpegReencode
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_stream_copy_eligible")
+                .map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            spec.metadata
+                .get("timeline_stream_copy_blockers")
+                .map(String::as_str),
+            Some("container_requires_reencode")
         );
     }
 
@@ -10486,6 +11217,53 @@ mod tests {
         assert!(
             filter.contains("0.35+(0.45-0.35)*"),
             "missing y keyframe interpolation: {filter}"
+        );
+    }
+
+    #[test]
+    fn reframe_path_plan_with_strong_smoothing_pulls_endpoints_toward_mean() {
+        let raw_centers: Vec<f64> = (0..16)
+            .map(|i| if i % 2 == 0 { 0.30 } else { 0.70 })
+            .collect();
+        let path = ReframePath {
+            id: "reframe-strong".into(),
+            clip_id: "c1".into(),
+            aspect_ratio: "9:16".into(),
+            source_width: 1920,
+            source_height: 1080,
+            target_width: 1080,
+            target_height: 1920,
+            keyframes: raw_centers
+                .iter()
+                .enumerate()
+                .map(|(i, &cx)| ReframeKeyframe {
+                    time_s: i as f64 / 30.0,
+                    center: [cx, 0.5],
+                    scale: 2.0,
+                    confidence: Some(1.0),
+                })
+                .collect(),
+            smoothing: ReframeSmoothing::Strong,
+            evidence_track_id: None,
+            safe_area: None,
+        };
+
+        let plan = reframe_path_plan(&path).expect("strong-smoothed path lowers to a plan");
+        assert_eq!(plan.keyframes.len(), raw_centers.len());
+        let mean = raw_centers.iter().sum::<f64>() / raw_centers.len() as f64;
+        let first_raw = raw_centers[0];
+        let last_raw = raw_centers[raw_centers.len() - 1];
+        let first_smoothed = plan.keyframes[0].center_x;
+        let last_smoothed = plan.keyframes[plan.keyframes.len() - 1].center_x;
+        assert!(
+            (first_smoothed - mean).abs() < (first_raw - mean).abs(),
+            "strong smoothing should pull the first keyframe toward the mean: \
+             raw={first_raw} smoothed={first_smoothed} mean={mean}"
+        );
+        assert!(
+            (last_smoothed - mean).abs() < (last_raw - mean).abs(),
+            "strong smoothing should pull the last keyframe toward the mean: \
+             raw={last_raw} smoothed={last_smoothed} mean={mean}"
         );
     }
 
@@ -10749,7 +11527,7 @@ mod tests {
             },
         );
 
-        let (_, _, video_overlays, _, _, _, _, _, limitations) =
+        let (_, _, video_overlays, _, _, _, _, _, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert_eq!(video_overlays.len(), 1);
@@ -10991,7 +11769,7 @@ mod tests {
             },
         );
 
-        let (_, _, _, _, _, _, audio_tracks, _, limitations) =
+        let (_, _, _, _, _, _, _, audio_tracks, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -11025,7 +11803,7 @@ mod tests {
             },
         );
 
-        let (segments, _, _, _, _, _, _, _, limitations) =
+        let (segments, _, _, _, _, _, _, _, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -12767,6 +13545,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -12817,6 +13596,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -12865,6 +13645,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: TitleWeight::Normal,
                 animation: TitleAnimation::None,
+                phases: None,
                 reveal: TextReveal::None,
                 role: "title".into(),
                 safe_area: None,
@@ -12881,6 +13662,7 @@ mod tests {
                 color: "#FFAA00".into(),
                 font_weight: TitleWeight::Bold,
                 animation: TitleAnimation::None,
+                phases: None,
                 reveal: TextReveal::None,
                 role: "caption".into(),
                 safe_area: Some("mobile".into()),
@@ -12911,6 +13693,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::FadeIn,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -13013,6 +13796,7 @@ animations: Vec::new(),
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "caption".into(),
             safe_area: Some("mobile".into()),
@@ -13123,6 +13907,7 @@ animations: Vec::new(),
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -13403,6 +14188,7 @@ animations: Vec::new(),
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -14571,6 +15357,7 @@ animations: Vec::new(),
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -14685,6 +15472,198 @@ animations: Vec::new(),
                     .filter_complex
                     .contains("(h-({y_rest}))".replace("{y_rest}", "h*0.85").as_str())
                 || plan.filter_complex.matches("h*0.85").count() >= 2
+        );
+    }
+
+    /// Helper: build a title with explicit phases (overrides the legacy
+    /// `animation` field at render time).
+    fn title_with_phases(phases: TitlePhases, position: TitlePosition) -> TitlePlan {
+        let mut t = title(TitleAnimation::None, position);
+        t.phases = Some(phases);
+        t
+    }
+
+    /// Extract just the `:alpha='...'` segment from a generated filter
+    /// graph so tests can compare alpha expressions directly.
+    fn alpha_segment(filter: &str) -> Option<String> {
+        let start = filter.find(":alpha='")?;
+        let after = &filter[start..];
+        let close = after[8..].find('\'')?;
+        Some(after[..8 + close + 1].to_string())
+    }
+
+    #[test]
+    fn empty_phases_matches_legacy_none_no_alpha() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let legacy = FilterPlanner::with_titles(
+            std::slice::from_ref(&s0),
+            &[],
+            &[title(TitleAnimation::None, TitlePosition::Center)],
+        )
+        .plan();
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases::default(),
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        // Neither emits an `:alpha=` segment.
+        assert!(!legacy.filter_complex.contains(":alpha='"));
+        assert!(!phased.filter_complex.contains(":alpha='"));
+    }
+
+    #[test]
+    fn entrance_fade_phase_matches_legacy_fade_in() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let legacy = FilterPlanner::with_titles(
+            std::slice::from_ref(&s0),
+            &[],
+            &[title(TitleAnimation::FadeIn, TitlePosition::Center)],
+        )
+        .plan();
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases {
+                    entrance: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: None,
+                        stagger_s: None,
+                    }),
+                    ..TitlePhases::default()
+                },
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        assert_eq!(
+            alpha_segment(&phased.filter_complex),
+            alpha_segment(&legacy.filter_complex),
+            "phase-driven fade-in must produce the same alpha expression as legacy FadeIn",
+        );
+    }
+
+    #[test]
+    fn exit_fade_phase_matches_legacy_fade_out() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let legacy = FilterPlanner::with_titles(
+            std::slice::from_ref(&s0),
+            &[],
+            &[title(TitleAnimation::FadeOut, TitlePosition::Center)],
+        )
+        .plan();
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases {
+                    exit: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: None,
+                        stagger_s: None,
+                    }),
+                    ..TitlePhases::default()
+                },
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        assert_eq!(
+            alpha_segment(&phased.filter_complex),
+            alpha_segment(&legacy.filter_complex),
+            "phase-driven fade-out must produce the same alpha expression as legacy FadeOut",
+        );
+    }
+
+    #[test]
+    fn entrance_plus_exit_fade_phases_match_legacy_fade_in_out() {
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let legacy = FilterPlanner::with_titles(
+            std::slice::from_ref(&s0),
+            &[],
+            &[title(TitleAnimation::FadeInOut, TitlePosition::Center)],
+        )
+        .plan();
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases {
+                    entrance: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: None,
+                        stagger_s: None,
+                    }),
+                    exit: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: None,
+                        stagger_s: None,
+                    }),
+                    highlight: None,
+                },
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        assert_eq!(
+            alpha_segment(&phased.filter_complex),
+            alpha_segment(&legacy.filter_complex),
+            "phase-driven entrance+exit fade must match legacy FadeInOut",
+        );
+    }
+
+    #[test]
+    fn custom_entrance_fade_duration_extends_ramp() {
+        // start_s = 1.0, custom duration 1.0 → ramp ends at t=2.0,
+        // not the default 1.5.
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let phased = FilterPlanner::with_titles(
+            &[s0],
+            &[],
+            &[title_with_phases(
+                TitlePhases {
+                    entrance: Some(TitlePhase {
+                        kind: TitlePhaseKind::Fade,
+                        duration_s: Some(1.0),
+                        stagger_s: None,
+                    }),
+                    ..TitlePhases::default()
+                },
+                TitlePosition::Center,
+            )],
+        )
+        .plan();
+        assert!(
+            phased.filter_complex.contains("alpha='if(lt(t\\,2)"),
+            "expected custom-duration ramp ending at start+1.0=2, got: {}",
+            phased.filter_complex,
+        );
+        // And explicitly NOT the legacy 0.5-second ramp.
+        assert!(
+            !phased.filter_complex.contains("alpha='if(lt(t\\,1.5)"),
+            "custom 1.0s ramp should not collapse back to the 0.5s default: {}",
+            phased.filter_complex,
+        );
+    }
+
+    #[test]
+    fn phases_override_legacy_animation_field() {
+        // When `phases` is Some, render must drive off phases and
+        // ignore the legacy `animation` field.
+        let s0 = seg("/tmp/a.mp4", 0.0, 5.0);
+        let mut t = title(TitleAnimation::FadeIn, TitlePosition::Center);
+        t.phases = Some(TitlePhases::default());
+        let plan = FilterPlanner::with_titles(&[s0], &[], &[t]).plan();
+        // No alpha at all, because the explicit empty phase set wins
+        // over the legacy FadeIn.
+        assert!(
+            !plan.filter_complex.contains(":alpha='"),
+            "explicit empty phases must suppress the legacy FadeIn alpha ramp: {}",
+            plan.filter_complex,
         );
     }
 

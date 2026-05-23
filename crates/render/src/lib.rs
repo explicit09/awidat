@@ -87,19 +87,22 @@ pub use progress::ProgressSnapshot;
 pub use raw_stream::{ComposeError, RawStreamComposer, RawStreamSegment, RawStreamTransition};
 pub use raw_stream_audio::{AudioError, compose_audio, mux_video_and_audio};
 pub use raw_stream_render::{
-    RawStreamRenderError, build_timeline_raw_stream_render, should_route_through_raw_stream,
+    RawStreamRenderError, TimelineBackendEvidence, build_timeline_raw_stream_render,
+    select_timeline_render_backend, select_timeline_render_backend_evidence,
+    should_route_through_raw_stream,
 };
 pub use timeline::{
     AnnotationKind, AnnotationPlan, AudioAutomationPlan, AudioClipPlan, AudioFxPlan,
     AudioTrackItemPlan, AudioTrackPlan, BroadcastOverlayPlan, ClipGradeChain, ClipGradePreview,
     ColorPipelinePlan, DuckingPlan, EqBandPlan, FilterPlan, FilterPlanner, LoudnessTargetPlan,
-    RenderTimelineError, TimelineSegment, TitleAnimation, TitlePlan, TitlePosition, TitleWeight,
-    TransitionPlan, VideoOverlayMode, VideoOverlayPlan, build_clip_grade_chain,
-    build_clip_preview_filtergraph, build_timeline_argv, build_timeline_argv_full,
-    build_timeline_argv_full_with_annotations, build_timeline_argv_with_audio_tracks,
-    build_timeline_argv_with_audio_tracks_and_annotations, build_timeline_argv_with_transitions,
-    build_timeline_render_spec, build_timeline_section_render_spec, collect_timeline_full_plan,
-    collect_timeline_plan, collect_timeline_segments,
+    RenderTimelineError, TimelineRenderPreflight, TimelineSegment, TitleAnimation, TitlePlan,
+    TitlePosition, TitleWeight, TransitionPlan, VideoOverlayMode, VideoOverlayPlan,
+    analyze_timeline_render_preflight, build_clip_grade_chain, build_clip_preview_filtergraph,
+    build_timeline_argv, build_timeline_argv_full, build_timeline_argv_full_with_annotations,
+    build_timeline_argv_with_audio_tracks, build_timeline_argv_with_audio_tracks_and_annotations,
+    build_timeline_argv_with_transitions, build_timeline_render_spec,
+    build_timeline_section_render_spec, collect_timeline_full_plan, collect_timeline_plan,
+    collect_timeline_segments,
 };
 
 #[cfg(test)]

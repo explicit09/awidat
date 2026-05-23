@@ -51,6 +51,7 @@ pub mod preview_cache;
 pub mod proxy_media;
 pub mod read_index;
 pub mod relink_media;
+pub mod render_preflight;
 pub mod request_user_input;
 pub mod run_preview_cache_refresh;
 pub mod search_broll;

@@ -38,7 +38,8 @@ use awidat_core::tools::{
     plan_transition::PlanTransitionTool, poll_render::PollRenderTool,
     preview_cache::PreviewCacheStatusTool, proxy_media::GenerateProxyTool,
     proxy_media::ProxyStatusTool, read_index::ReadIndexTool,
-    relink_media::RelinkMediaTool, request_user_input::RequestUserInputTool,
+    relink_media::RelinkMediaTool, render_preflight::RenderPreflightTool,
+    request_user_input::RequestUserInputTool,
     search_broll::SearchBrollTool, shot_summary::ShotSummaryTool,
     start_indexing::StartIndexingTool, start_render::StartRenderTool,
     transcript_search::TranscriptSearchTool, transition_context::TransitionContextTool,
@@ -218,6 +219,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(ColorScopesTool));
     registry.register(Arc::new(PollRenderTool));
     registry.register(Arc::new(PreviewCacheStatusTool));
+    registry.register(Arc::new(RenderPreflightTool));
     registry.register(Arc::new(ProxyStatusTool));
     registry.register(Arc::new(GenerateProxyTool));
     registry.register(Arc::new(ReadIndexTool));

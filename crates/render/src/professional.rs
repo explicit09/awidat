@@ -2733,6 +2733,7 @@ fn title_plan(
         color: "#FFFFFF".into(),
         font_weight: TitleWeight::Bold,
         animation,
+        phases: None,
         reveal: TextReveal::None,
         role: "motion_template".into(),
         safe_area: Some("title_safe".into()),
