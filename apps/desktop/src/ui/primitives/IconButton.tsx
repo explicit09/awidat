@@ -6,12 +6,12 @@ const iconBtn = cva(
   [
     "inline-flex items-center justify-center",
     "rounded-[var(--radius-sm)] border border-transparent",
-    "text-[var(--color-text-secondary)]",
-    "transition-[background-color,border-color,color] duration-[120ms]",
+    "text-[var(--color-text-muted)]",
+    "transition-[background-color,color] duration-[120ms]",
     "ease-[cubic-bezier(0.2,0,0,1)]",
     "hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
     "active:bg-[var(--color-surface-card-active)]",
-    "focus-visible:outline-2 focus-visible:outline-[var(--color-border-focus)] focus-visible:outline-offset-1",
+    "focus-visible:outline-none",
     "disabled:opacity-40 disabled:cursor-not-allowed",
   ],
   {

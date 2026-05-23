@@ -5,23 +5,29 @@ import { cn } from "../cn";
 const card = cva(
   [
     "rounded-[var(--radius-md)] border bg-[var(--color-surface-card)]",
-    "border-[var(--color-border)]",
-    "transition-[background-color,border-color,box-shadow] duration-[120ms]",
+    "border-[var(--color-border-subtle)]",
+    "transition-[background-color,color] duration-[120ms]",
     "ease-[cubic-bezier(0.2,0,0,1)]",
   ],
   {
     variants: {
       interactive: {
-        true: "hover:bg-[var(--color-surface-card-hover)] hover:border-[var(--color-border-strong)] cursor-pointer",
+        // Hover changes only background, not the border color. Border
+        // stays subtle so neighboring cards don't visually "pop" on
+        // each hover.
+        true: "hover:bg-[var(--color-surface-card-hover)] cursor-pointer",
         false: "",
       },
       tone: {
         default: "",
-        elevated: "bg-[var(--color-surface-modal)] elev-1",
-        flat: "bg-transparent border-[var(--color-border-subtle)]",
-        accent: "border-[var(--color-border-active)] glow-active",
-        warning: "border-[var(--color-warning)] glow-warning",
-        danger: "border-[var(--color-danger)] glow-danger",
+        // Elevated reads through stronger background tint, not a
+        // colored shadow. Same for tone variants — color through fill,
+        // not border or glow.
+        elevated: "bg-[var(--color-surface-modal)]",
+        flat: "bg-transparent",
+        accent: "bg-[rgba(56,189,248,0.05)]",
+        warning: "bg-[rgba(245,158,11,0.05)]",
+        danger: "bg-[rgba(239,68,68,0.05)]",
       },
       padding: {
         none: "p-0",

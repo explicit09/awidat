@@ -37,54 +37,29 @@ export function StageIndicator({ className }: StageIndicatorProps) {
 
   return (
     <div role="tablist" aria-label="Stage" className={cn("flex items-center gap-0.5", className)}>
-      {STAGES.map((stage, i) => {
+      {STAGES.map((stage) => {
         const progress = stageProgress(stage, current, visited);
         const Icon = STAGE_ICON[stage];
         const isCurrent = progress === "current";
-        const isComplete = progress === "complete";
         return (
-          <div key={stage} className="flex items-center">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={isCurrent}
-              onClick={() => set(stage)}
-              className={cn(
-                "group inline-flex items-center gap-1 h-7 px-2 rounded-[var(--radius-sm)]",
-                "border text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)]",
-                "transition-[background-color,border-color,color] duration-[120ms] ease-[cubic-bezier(0.2,0,0,1)]",
-                "focus-visible:outline-2 focus-visible:outline-[var(--color-border-focus)] focus-visible:outline-offset-1",
-                isCurrent &&
-                  "bg-[var(--color-surface-selected)] border-[var(--color-border-active)] text-[var(--color-text-primary)] glow-active",
-                isComplete && !isCurrent &&
-                  "bg-transparent border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]",
-                !isCurrent && !isComplete &&
-                  "bg-transparent border-[var(--color-border-subtle)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
-              )}
-            >
-              <Icon
-                className="h-3.5 w-3.5"
-                strokeWidth={1.75}
-                style={{
-                  color: isCurrent
-                    ? "var(--color-brand)"
-                    : isComplete
-                      ? "var(--color-success)"
-                      : "currentColor",
-                }}
-              />
-              <span>{STAGE_LABEL[stage]}</span>
-            </button>
-            {i < STAGES.length - 1 ? (
-              <span
-                aria-hidden
-                className={cn(
-                  "h-px w-1.5 mx-px",
-                  isComplete ? "bg-[var(--color-success)] opacity-60" : "bg-[var(--color-border-subtle)]",
-                )}
-              />
-            ) : null}
-          </div>
+          <button
+            key={stage}
+            type="button"
+            role="tab"
+            aria-selected={isCurrent}
+            onClick={() => set(stage)}
+            className={cn(
+              "inline-flex items-center gap-1.5 h-7 px-2.5 rounded-[var(--radius-sm)]",
+              "text-[var(--text-caption)] font-medium",
+              "transition-[background-color,color] duration-[120ms] ease-[cubic-bezier(0.2,0,0,1)]",
+              isCurrent
+                ? "bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
+                : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
+            <span>{STAGE_LABEL[stage]}</span>
+          </button>
         );
       })}
     </div>

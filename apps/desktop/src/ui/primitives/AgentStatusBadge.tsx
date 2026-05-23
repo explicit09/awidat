@@ -32,8 +32,7 @@ export function AgentStatusBadge({ status, detail, className, pulse = true }: Ag
       className={cn(
         "inline-flex items-center gap-2",
         "max-w-full shrink-0 overflow-hidden whitespace-nowrap",
-        "h-7 px-2.5 rounded-[var(--radius-sm)]",
-        "border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)]",
+        "h-7 px-2",
         className,
       )}
     >

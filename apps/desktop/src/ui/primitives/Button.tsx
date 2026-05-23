@@ -6,47 +6,49 @@ const button = cva(
   [
     "inline-flex items-center justify-center gap-2",
     "font-medium select-none whitespace-nowrap",
-    "rounded-[var(--radius-md)] border",
-    "transition-[background-color,border-color,box-shadow,color] duration-[120ms]",
+    "rounded-[var(--radius-md)] border border-transparent",
+    "transition-[background-color,color] duration-[120ms]",
     "ease-[cubic-bezier(0.2,0,0,1)]",
-    "focus-visible:outline-2 focus-visible:outline-[var(--color-border-focus)] focus-visible:outline-offset-1",
-    "disabled:opacity-50 disabled:cursor-not-allowed",
+    "focus-visible:outline-none",
+    "disabled:opacity-40 disabled:cursor-not-allowed",
   ],
   {
     variants: {
+      // Cursor-style: ghost by default, semantic fills only for
+      // primary actions, no colored borders anywhere.
       variant: {
         primary: [
-          "bg-[var(--color-brand)] border-[var(--color-brand)] text-[var(--color-text-inverse)]",
-          "hover:bg-[var(--color-brand-hover)] hover:border-[var(--color-brand-hover)]",
-          "active:bg-[var(--color-brand-active)] active:border-[var(--color-brand-active)]",
+          "bg-[var(--color-brand)] text-[var(--color-text-inverse)]",
+          "hover:bg-[var(--color-brand-hover)]",
+          "active:bg-[var(--color-brand-active)]",
         ],
         secondary: [
-          "bg-[var(--color-surface-card)] border-[var(--color-border)] text-[var(--color-text-primary)]",
-          "hover:bg-[var(--color-surface-card-hover)] hover:border-[var(--color-border-strong)]",
+          "bg-[var(--color-surface-card)] text-[var(--color-text-primary)]",
+          "hover:bg-[var(--color-surface-card-hover)]",
           "active:bg-[var(--color-surface-card-active)]",
         ],
         ghost: [
-          "bg-transparent border-transparent text-[var(--color-text-primary)]",
-          "hover:bg-[var(--color-surface-hover)]",
+          "bg-transparent text-[var(--color-text-secondary)]",
+          "hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
         ],
         accept: [
-          "bg-[rgba(34,197,94,0.14)] border-[rgba(34,197,94,0.46)] text-[var(--color-pill-accepted-text)]",
-          "hover:bg-[rgba(34,197,94,0.2)] hover:border-[rgba(74,222,128,0.58)]",
+          "bg-[rgba(34,197,94,0.12)] text-[var(--color-pill-accepted-text)]",
+          "hover:bg-[rgba(34,197,94,0.18)]",
         ],
         reject: [
-          "bg-[rgba(239,68,68,0.13)] border-[rgba(239,68,68,0.46)] text-[var(--color-pill-rejected-text)]",
-          "hover:bg-[rgba(239,68,68,0.2)] hover:border-[rgba(248,113,113,0.58)]",
+          "bg-[rgba(239,68,68,0.11)] text-[var(--color-pill-rejected-text)]",
+          "hover:bg-[rgba(239,68,68,0.17)]",
         ],
         revise: [
-          "bg-[rgba(59,130,246,0.12)] border-[rgba(59,130,246,0.55)] text-[var(--color-pill-proposed-text)]",
-          "hover:bg-[rgba(59,130,246,0.2)] hover:border-[var(--color-border-strong)] hover:text-[#DBEAFE]",
+          "bg-[rgba(59,130,246,0.1)] text-[var(--color-pill-proposed-text)]",
+          "hover:bg-[rgba(59,130,246,0.16)] hover:text-[#DBEAFE]",
         ],
         repair: [
-          "bg-[rgba(168,85,247,0.14)] border-[rgba(168,85,247,0.55)] text-[var(--color-pill-reviewing-text)]",
-          "hover:bg-[rgba(168,85,247,0.22)]",
+          "bg-[rgba(168,85,247,0.12)] text-[var(--color-pill-reviewing-text)]",
+          "hover:bg-[rgba(168,85,247,0.18)]",
         ],
         danger: [
-          "bg-[var(--color-failure)] border-[var(--color-failure)] text-[var(--color-text-on-danger)]",
+          "bg-[var(--color-failure)] text-[var(--color-text-on-danger)]",
           "hover:bg-[#B91C1C]",
         ],
       },
