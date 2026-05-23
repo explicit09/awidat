@@ -40,7 +40,8 @@ use super::op::{
     Anchor, AnnotationKind, AudioFxConfig, BRollPosition, CaptionWordTiming, EdlEnvelope, EdlOp,
     EqBand, InsertTrackKind, MotionTemplateAnimation, MulticamApplyPlan, PiPCorner,
     ProfessionalTimelineEdit, RichTextSegment, SnapOptions, SnapTargetKind, TitleAnimation,
-    TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween, valid_graphic_color,
+    TitlePhases, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
+    valid_graphic_color,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -944,6 +945,7 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or(TitleAnimation::None);
+                let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
                 Ok(EdlOp::InsertTitle {
                     start_s,
                     end_s,
@@ -953,6 +955,7 @@ impl OpBuilder {
                     color,
                     font_weight,
                     animation,
+                    phases,
                 })
             }
             OpKind::InsertRichTitle => {
@@ -983,6 +986,7 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or(TitleAnimation::None);
+                let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
                 Ok(EdlOp::InsertRichTitle {
                     start_s,
                     end_s,
@@ -990,6 +994,7 @@ impl OpBuilder {
                     position,
                     font_size,
                     animation,
+                    phases,
                 })
             }
             OpKind::InstantiateMotionTemplate => {
@@ -1047,6 +1052,7 @@ impl OpBuilder {
                     take_field_string(&mut fields, "animation").as_deref(),
                     head,
                 )?;
+                let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
                 Ok(EdlOp::SetTitle {
                     anchor,
                     start_s,
@@ -1057,6 +1063,7 @@ impl OpBuilder {
                     color,
                     font_weight,
                     animation,
+                    phases,
                 })
             }
             OpKind::InsertCaption => {
@@ -2872,6 +2879,7 @@ mod tests {
                 color,
                 font_weight,
                 animation,
+                phases,
             } => {
                 assert!((start_s - 0.0).abs() < 1e-9);
                 assert!((end_s - 3.0).abs() < 1e-9);
@@ -2881,6 +2889,7 @@ mod tests {
                 assert_eq!(color, "#FFAA00");
                 assert_eq!(*font_weight, TitleWeight::Bold);
                 assert_eq!(*animation, TitleAnimation::FadeInOut);
+                assert!(phases.is_none());
             }
             other => panic!("want InsertTitle, got {other:?}"),
         }
@@ -2940,6 +2949,7 @@ mod tests {
                 font_size,
                 color,
                 font_weight,
+                phases,
             } => {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "title-uuid"));
                 assert_eq!(text.as_deref(), Some("Updated"));
@@ -2951,6 +2961,7 @@ mod tests {
                 assert!(font_size.is_none());
                 assert!(color.is_none());
                 assert!(font_weight.is_none());
+                assert!(phases.is_none());
             }
             other => panic!("want SetTitle, got {other:?}"),
         }
