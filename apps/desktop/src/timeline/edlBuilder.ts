@@ -68,6 +68,14 @@ export type EdlOp =
       valueS: number;
     }
   | {
+      /** Catch-all for ops the backend exposes via the
+       *  `*** Professional Timeline Edit` heading + an `edit_json`
+       *  field whose value is the serde-serialized ProfessionalTimelineEdit
+       *  enum. Used for roll / slip / slide. */
+      kind: "professional_timeline_edit";
+      edit: Record<string, unknown>;
+    }
+  | {
       kind: "insert_transition";
       from: EdlAnchor;
       to: EdlAnchor;
@@ -257,6 +265,10 @@ function appendOp(lines: string[], op: EdlOp): void {
       lines.push(`@@ anchor: ${formatAnchor(op.anchor)}`);
       lines.push(`+ edge: ${op.edge}`);
       lines.push(`+ value_s: ${formatTime(op.valueS)}`);
+      break;
+    case "professional_timeline_edit":
+      lines.push("*** Professional Timeline Edit");
+      lines.push(`+ edit_json: ${JSON.stringify(op.edit)}`);
       break;
     case "insert_transition":
       lines.push("*** Insert Transition");

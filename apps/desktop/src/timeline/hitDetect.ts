@@ -107,6 +107,72 @@ export function pxDeltaToSourceDelta(deltaPx: number, pps: number): number {
   return deltaPx / Math.max(0.001, pps);
 }
 
+/** Result of hit-testing a *shared edit point* between two adjacent
+ *  clips on the same track. The pointer is within `EDGE_HIT_PX` of
+ *  both the outgoing clip's `end` and the incoming clip's `start`,
+ *  AND those two times match within ~1 frame. Drives roll-edit
+ *  gestures. */
+export type BoundaryHit = {
+  trackIndex: number;
+  from: {
+    clipIndex: number;
+    clipUuid: string;
+    sourceStart: number;
+    sourceEnd: number;
+  };
+  to: {
+    clipIndex: number;
+    clipUuid: string;
+    sourceStart: number;
+    sourceEnd: number;
+  };
+};
+
+/** Detect when the pointer is on the shared edit point between two
+ *  adjacent clips on the same track. Returns null when the pointer
+ *  is on an outer edge (no neighbor on that side) or not near any
+ *  edge at all. */
+export function hitTestBoundary(
+  canvasX: number,
+  canvasY: number,
+  snapshot: TimelineSnapshot,
+  pps: number,
+  laneHeight: number = LANE_HEIGHT_BASE,
+): BoundaryHit | null {
+  if (canvasY < RULER_HEIGHT) return null;
+  const trackIndex = Math.floor((canvasY - RULER_HEIGHT) / laneHeight);
+  if (trackIndex < 0 || trackIndex >= snapshot.tracks.length) return null;
+  const track = snapshot.tracks[trackIndex];
+  const clips = track.items.filter((it) => it.kind === "clip");
+  for (let i = 0; i < clips.length - 1; i += 1) {
+    const a = clips[i];
+    const b = clips[i + 1];
+    if (a.kind !== "clip" || b.kind !== "clip") continue;
+    const aEndS = a.track_start_s + a.duration_s;
+    const bStartS = b.track_start_s;
+    if (Math.abs(aEndS - bStartS) > 0.04) continue;
+    const boundaryX = aEndS * pps;
+    if (Math.abs(canvasX - boundaryX) <= EDGE_HIT_PX) {
+      return {
+        trackIndex,
+        from: {
+          clipIndex: a.index,
+          clipUuid: a.clip_uuid,
+          sourceStart: a.source_start_s ?? 0,
+          sourceEnd: (a.source_start_s ?? 0) + a.duration_s,
+        },
+        to: {
+          clipIndex: b.index,
+          clipUuid: b.clip_uuid,
+          sourceStart: b.source_start_s ?? 0,
+          sourceEnd: (b.source_start_s ?? 0) + b.duration_s,
+        },
+      };
+    }
+  }
+  return null;
+}
+
 /**
  * Find the clip item by track + clip index — the user-trim drag
  * looks up the clip on every move to recompute the proposed

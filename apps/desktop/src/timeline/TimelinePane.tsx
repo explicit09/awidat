@@ -18,9 +18,11 @@ import { TIMELINE_CHANGED_EVENT, type AppliedDiff } from "../protocol";
 import { serializeEdl } from "./edlBuilder";
 import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 import {
+  hitTestBoundary,
   hitTestEdge,
   hitTestSelectableBody,
   pxDeltaToSourceDelta,
+  type BoundaryHit,
   type EdgeHit,
 } from "./hitDetect";
 import { getStrip, onThumbnailDecoded } from "./thumbnailCache";
@@ -330,6 +332,15 @@ type UserTrimDrag = {
   ripple: boolean;
 };
 
+/** Active roll-edit drag — pointer grabbed the shared boundary
+ *  between two adjacent clips. The drag's dx becomes the delta passed
+ *  to backend `roll_edit`. */
+type UserRollDrag = {
+  hit: BoundaryHit;
+  startX: number;
+  currentX: number;
+};
+
 type UserMoveDrag = {
   trackIndex: number;
   clipIndex: number;
@@ -376,6 +387,7 @@ function TimelineCanvas({
   // Active drag, set on pointerdown-near-edge, cleared on pointerup.
   const [userTrim, setUserTrim] = useState<UserTrimDrag | null>(null);
   const [userMove, setUserMove] = useState<UserMoveDrag | null>(null);
+  const [userRoll, setUserRoll] = useState<UserRollDrag | null>(null);
   // Properties-pane selection: which clip is currently inspected.
   // The canvas paints a subtle amber outline on the selected clip
   // so the link between timeline selection and right-rail content
@@ -697,6 +709,22 @@ function TimelineCanvas({
       return;
     }
     const { x, y, clientX } = canvasPos(e);
+    // Roll edit: shared boundary between two adjacent clips. Tested
+    // first because a single pointer x can be near both clip edges
+    // simultaneously, and roll is the more specific gesture. No
+    // modifier required — the position itself disambiguates.
+    const boundary = hitTestBoundary(
+      x,
+      y,
+      snapshot,
+      ppsRef.current,
+      laneHeightRef.current,
+    );
+    if (boundary) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setUserRoll({ hit: boundary, startX: x, currentX: x });
+      return;
+    }
     const hit = hitTestEdge(x, y, snapshot, ppsRef.current, laneHeightRef.current);
     if (hit) {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -743,6 +771,10 @@ function TimelineCanvas({
       setUserTrim({ ...userTrim, currentX: x });
       return;
     }
+    if (userRoll) {
+      setUserRoll({ ...userRoll, currentX: x });
+      return;
+    }
     if (userMove) {
       setUserMove({ ...userMove, currentX: x, currentY: y });
       return;
@@ -786,9 +818,59 @@ function TimelineCanvas({
       void commitUserTrim(userTrim);
       setUserTrim(null);
     }
+    if (userRoll) {
+      void commitUserRoll(userRoll);
+      setUserRoll(null);
+    }
     if (userMove) {
       void commitUserMove(userMove);
       setUserMove(null);
+    }
+  }
+
+  // Roll-edit commit: send one ProfessionalTimelineEdit { RollEdit }
+  // op with the dragged pixel delta converted to seconds.
+  async function commitUserRoll(drag: UserRollDrag): Promise<void> {
+    const dxPx = drag.currentX - drag.startX;
+    if (Math.abs(dxPx) < 2) return;
+    const rawDxS = pxDeltaToSourceDelta(dxPx, ppsRef.current);
+    // Snap the boundary's new track-time to neighbor edges / playhead.
+    const boundaryBefore = drag.hit.from.sourceEnd; // source-time of the boundary
+    // Track-time of the boundary equals from.endS (== to.startS within
+    // 1 frame). Recover it from the snapshot.
+    const trackEnd = trackTimeForSourceEdge(snapshot, drag.hit.from.clipUuid, "end");
+    const targets = collectSnapTargets(snapshot, {
+      playheadS: currentTime,
+      excludeClipUuids: new Set([drag.hit.from.clipUuid, drag.hit.to.clipUuid]),
+    });
+    const snappedTrackEnd =
+      trackEnd !== null
+        ? snapTime(trackEnd + rawDxS, targets, SNAP_TOLERANCE_S)
+        : null;
+    const dxS =
+      snappedTrackEnd !== null && trackEnd !== null
+        ? snappedTrackEnd - trackEnd
+        : rawDxS;
+    if (Math.abs(dxS) < 0.01) return;
+    void boundaryBefore;
+    const op = {
+      kind: "professional_timeline_edit" as const,
+      edit: {
+        edit: "roll_edit",
+        between: {
+          from: { kind: "clip_uuid", uuid: drag.hit.from.clipUuid },
+          to: { kind: "clip_uuid", uuid: drag.hit.to.clipUuid },
+        },
+        delta_s: dxS,
+      },
+    };
+    try {
+      await invoke<string>("propose_user_edit", {
+        edlText: serializeEdl([op]),
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (roll) failed", err);
     }
   }
 
@@ -933,6 +1015,8 @@ function TimelineCanvas({
   // via React style on the element is enough.
   const cursor = userTrim
     ? "ew-resize"
+    : userRoll
+    ? "col-resize"
     : userMove
     ? "grabbing"
     : edgeHover
