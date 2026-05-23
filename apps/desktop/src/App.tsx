@@ -1333,7 +1333,9 @@ function App() {
     />
   );
   const workspaceOverride = agentFocusMode ? (
-    <div className="mx-auto h-full min-h-0 w-full max-w-[780px] overflow-hidden">
+    // Full-window chat. The rail itself draws the sidebar + centered
+    // conversation column; we just give it the whole workspace.
+    <div className="h-full min-h-0 w-full overflow-hidden">
       {agentRail}
     </div>
   ) : demoMode && demoScreen.workspace ? (

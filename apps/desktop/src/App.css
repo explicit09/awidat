@@ -6401,3 +6401,114 @@ button {
   border: none;
   color: transparent;
 }
+
+/* ─── Focused / full-chat mode sidebar ─────────────────────────────
+   240px column with always-visible chat list. Matches Cursor's
+   left-sidebar treatment when the chat takes over the whole window. */
+.awidat-focused-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  shrink: 0;
+  height: 100%;
+  background: var(--color-surface-panel);
+  border-right: 1px solid var(--color-border-subtle);
+  padding: 12px 8px;
+  gap: 8px;
+}
+.awidat-focused-sidebar-header {
+  shrink: 0;
+}
+.awidat-focused-sidebar-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--color-surface-input);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.awidat-focused-sidebar-new:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.awidat-focused-sidebar-new:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.awidat-focused-sidebar-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  scrollbar-gutter: stable;
+}
+.awidat-focused-sidebar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.awidat-focused-sidebar-item:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.awidat-focused-sidebar-item.is-active {
+  background: var(--color-surface-selected);
+  color: var(--color-text-primary);
+}
+.awidat-focused-sidebar-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.awidat-focused-sidebar-meta {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--color-text-muted);
+  shrink: 0;
+}
+.awidat-focused-sidebar-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.awidat-focused-sidebar-footer {
+  shrink: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: 8px;
+}
+.awidat-focused-sidebar-footer-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.awidat-focused-sidebar-footer-button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}

@@ -445,26 +445,68 @@ export function CommandRail({
     </div>
   );
 
+  // Focused mode = full-window chat. We split into a 240px left sidebar
+  // (chat list, always visible) + a centered conversation column capped
+  // at ~760px so long messages don't sprawl. Matches Cursor's full-chat
+  // surface: chats on the left, conversation centered, composer below.
+  if (focused) {
+    return (
+      <div className="awidat-chat-rail flex h-full min-h-0 w-full bg-[var(--color-surface-page)]">
+        <FocusedSidebar
+          chatSessions={chatSessions}
+          activeChatSession={activeChatSession}
+          chatLoading={chatLoading}
+          running={running}
+          onNewChat={onNewChat}
+          onSelectChatSession={onSelectChatSession}
+          onToggleFocus={onToggleFocus}
+        />
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="mx-auto flex w-full min-h-0 max-w-[760px] flex-1 flex-col">
+            <div
+              className={cn(
+                "min-h-0 flex-1 overflow-y-auto p-3",
+                !hasWork ? "flex items-center justify-center" : "",
+              )}
+            >
+              {!hasWork ? (
+                <div className="w-full max-w-[720px]">{composer}</div>
+              ) : (
+                <Stack gap="5">
+                  {turns.length > 0 ? (
+                    <Section label="Conversation">
+                      <div className="flex flex-col gap-5">
+                        {turns.map((turn) => (
+                          <ConversationTurnBlock
+                            key={turn.id}
+                            turn={turn}
+                            showSeparator={false}
+                          />
+                        ))}
+                      </div>
+                    </Section>
+                  ) : null}
+                </Stack>
+              )}
+            </div>
+            {hasWork ? <div className="shrink-0">{composer}</div> : null}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
-      className={cn(
-        "awidat-chat-rail flex h-full min-h-0 flex-col",
-        focused ? "bg-transparent" : "",
-      )}
-    >
+    <div className="awidat-chat-rail flex h-full min-h-0 flex-col">
       {sessionChrome}
 
       <div
         className={cn(
           "min-h-0 flex-1 overflow-y-auto p-3",
-          (focused && !hasWork) || isOnlyEmptyState
-            ? "flex items-center justify-center"
-            : "",
+          isOnlyEmptyState ? "flex items-center justify-center" : "",
         )}
       >
-        {focused && !hasWork ? (
-          <div className="w-full max-w-[720px]">{composer}</div>
-        ) : isOnlyEmptyState ? (
+        {isOnlyEmptyState ? (
           // Nothing to do yet — vertically + horizontally centered hint
           // card so the empty rail doesn't read as a pinned-to-top
           // half-rendered panel.
@@ -625,8 +667,93 @@ export function CommandRail({
         </Stack>
         )}
       </div>
-      {focused && !hasWork ? null : composer}
+      {composer}
     </div>
+  );
+}
+
+/** Left sidebar shown in focused/full-chat mode. Always-visible chat
+ *  list with new-chat at the top + a back-out icon at the bottom to
+ *  collapse back to the cockpit layout. */
+function FocusedSidebar({
+  chatSessions,
+  activeChatSession,
+  chatLoading,
+  running,
+  onNewChat,
+  onSelectChatSession,
+  onToggleFocus,
+}: {
+  chatSessions: ChatSessionSummary[];
+  activeChatSession: ChatSessionSummary | null;
+  chatLoading: boolean;
+  running: boolean;
+  onNewChat?: () => void;
+  onSelectChatSession?: (session: ChatSessionSummary) => void;
+  onToggleFocus?: () => void;
+}) {
+  return (
+    <aside className="awidat-focused-sidebar">
+      <div className="awidat-focused-sidebar-header">
+        <button
+          type="button"
+          onClick={onNewChat}
+          disabled={running || chatLoading}
+          className="awidat-focused-sidebar-new"
+          title="New chat"
+        >
+          <Plus className="h-3.5 w-3.5 stroke-[1.75]" />
+          <span>New chat</span>
+        </button>
+      </div>
+      <div className="awidat-focused-sidebar-list">
+        <button
+          type="button"
+          className={cn(
+            "awidat-focused-sidebar-item",
+            activeChatSession === null ? "is-active" : "",
+          )}
+          disabled={running || chatLoading}
+          onClick={() => onNewChat?.()}
+        >
+          <span className="truncate">New chat</span>
+          <span className="awidat-focused-sidebar-meta">fresh</span>
+        </button>
+        {chatSessions.map((session) => (
+          <button
+            key={session.logPath}
+            type="button"
+            className={cn(
+              "awidat-focused-sidebar-item",
+              activeChatSession?.logPath === session.logPath ? "is-active" : "",
+            )}
+            disabled={running || chatLoading}
+            onClick={() => onSelectChatSession?.(session)}
+          >
+            <span className="truncate">{session.title}</span>
+            <span className="awidat-focused-sidebar-meta">
+              {formatChatDate(session.startedAt)}
+            </span>
+          </button>
+        ))}
+        {!chatLoading && chatSessions.length === 0 ? (
+          <p className="awidat-focused-sidebar-empty">No saved chats yet.</p>
+        ) : null}
+      </div>
+      {onToggleFocus ? (
+        <div className="awidat-focused-sidebar-footer">
+          <button
+            type="button"
+            onClick={onToggleFocus}
+            className="awidat-focused-sidebar-footer-button"
+            title="Restore workspace"
+          >
+            <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+            <span>Exit focus</span>
+          </button>
+        </div>
+      ) : null}
+    </aside>
   );
 }
 
