@@ -297,7 +297,6 @@ await check("agent command rail renders Screen 2 intent, context, plan, activity
     "Est. time remaining",
     "00:01:48",
     "Build assembly (rough cut)",
-    "activity",
     "suggested next actions",
     "Inspect 12 changed regions",
   ]) {

@@ -6285,10 +6285,12 @@ button {
    border without changing color (keeps the rail calm). */
 .awidat-chat-rail .awidat-composer-card {
   background: var(--color-surface-card);
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid transparent;
   border-radius: 12px;
-  /* No focus ring — the cursor blinking inside the textarea is signal
-     enough that the input is active. Cursor IDE does the same. */
+  /* No outline. No focus ring. The blinking cursor + the card's own
+     surface tint vs. the panel background are enough signal. Both
+     calmer and lets the user keep typing without a colored frame
+     pulling the eye. */
 }
 .awidat-chat-rail .awidat-composer-card textarea {
   font-size: 14px;
