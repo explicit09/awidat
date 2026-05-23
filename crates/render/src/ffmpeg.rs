@@ -31,6 +31,10 @@ pub struct MediaProbe {
     pub has_audio: bool,
     /// Codec type strings reported by ffprobe, e.g. video/audio.
     pub stream_types: Vec<String>,
+    /// Width of the first video stream in pixels, when available.
+    pub video_width: Option<u32>,
+    /// Height of the first video stream in pixels, when available.
+    pub video_height: Option<u32>,
 }
 
 /// Errors talking to ffmpeg.
@@ -528,7 +532,7 @@ pub async fn probe_media(asset_path: &Path) -> Result<MediaProbe, FfmpegError> {
     cmd.arg("-v")
         .arg("error")
         .arg("-show_entries")
-        .arg("format=duration:stream=codec_type")
+        .arg("format=duration:stream=codec_type,width,height")
         .arg("-of")
         .arg("json")
         .arg(asset_path)
@@ -587,6 +591,8 @@ pub async fn probe_media(asset_path: &Path) -> Result<MediaProbe, FfmpegError> {
     #[derive(serde::Deserialize)]
     struct StreamJson {
         codec_type: Option<String>,
+        width: Option<u32>,
+        height: Option<u32>,
     }
     #[derive(serde::Deserialize)]
     struct FormatJson {
@@ -600,6 +606,18 @@ pub async fn probe_media(asset_path: &Path) -> Result<MediaProbe, FfmpegError> {
         .and_then(|f| f.duration)
         .and_then(|d| d.parse::<f64>().ok())
         .filter(|d| d.is_finite() && *d > 0.0);
+    let video_width = parsed
+        .streams
+        .iter()
+        .find(|s| s.codec_type.as_deref() == Some("video"))
+        .and_then(|s| s.width)
+        .filter(|w| *w > 0);
+    let video_height = parsed
+        .streams
+        .iter()
+        .find(|s| s.codec_type.as_deref() == Some("video"))
+        .and_then(|s| s.height)
+        .filter(|h| *h > 0);
     let stream_types: Vec<String> = parsed
         .streams
         .into_iter()
@@ -612,6 +630,8 @@ pub async fn probe_media(asset_path: &Path) -> Result<MediaProbe, FfmpegError> {
         has_video,
         has_audio,
         stream_types,
+        video_width,
+        video_height,
     })
 }
 
