@@ -458,6 +458,9 @@ pub fn ass_sidecar_layout_metadata(
                 source,
             })?;
         summary.add_document(&contents);
+        summary
+            .sidecar_paths
+            .push(path.to_string_lossy().into_owned());
     }
     Ok(summary.into_metadata())
 }
@@ -469,6 +472,7 @@ struct AssSidecarLayoutSummary {
     wrapped_sidecar_count: usize,
     safe_area_sidecar_count: usize,
     karaoke_sidecar_count: usize,
+    sidecar_paths: Vec<String>,
 }
 
 impl AssSidecarLayoutSummary {
@@ -518,6 +522,10 @@ impl AssSidecarLayoutSummary {
         metadata.insert(
             "libass_layout_karaoke_sidecar_count".into(),
             self.karaoke_sidecar_count.to_string(),
+        );
+        metadata.insert(
+            "libass_layout_sidecar_paths".into(),
+            self.sidecar_paths.join(","),
         );
         metadata
     }

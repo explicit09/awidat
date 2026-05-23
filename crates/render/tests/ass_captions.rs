@@ -218,3 +218,34 @@ fn editable_subtitle_track_emits_libass_subtitles_filter() {
         "ASS file should contain editable subtitle cue text, got: {ass}",
     );
 }
+
+#[test]
+fn ass_sidecar_layout_metadata_records_paths_in_argv_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("captions_a.ass");
+    let b = dir.path().join("captions_b.ass");
+    let body = "[Script Info]\n\
+PlayResX: 1920\n\
+PlayResY: 1080\n\
+\n\
+[V4+ Styles]\n\
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\
+Style: Default,Arial,40,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,80,80,40,1\n\
+\n\
+[Events]\n\
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,hello world\n";
+    fs::write(&a, body).unwrap();
+    fs::write(&b, body).unwrap();
+    let argv = vec![
+        "-vf".to_string(),
+        format!("subtitles={}", a.display()),
+        "-vf".to_string(),
+        format!("subtitles={}", b.display()),
+    ];
+    let metadata = awidat_render::ass_sidecar_layout_metadata(&argv).unwrap();
+    let joined = metadata
+        .get("libass_layout_sidecar_paths")
+        .expect("paths key present");
+    assert_eq!(joined, &format!("{},{}", a.display(), b.display()));
+}
