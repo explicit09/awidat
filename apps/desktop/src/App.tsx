@@ -11,7 +11,7 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, Maximize2, Minimize2, PanelBottomClose, PanelBottomOpen, PanelRightOpen, Play, Redo2, Settings as SettingsIcon, Share2, Undo2, X } from "lucide-react";
+import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, Redo2, Settings as SettingsIcon, Share2, Undo2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import wordmark from "./brand/awidat-wordmark.svg";
 import { useAgentStore } from "./agent/store";
@@ -2825,11 +2825,5 @@ function estimateTimeForHint(_hint: unknown, durationS: number, i: number, total
   if (!durationS || total === 0) return 0;
   return ((i + 1) / (total + 1)) * durationS;
 }
-
-// Components defined but not yet wired into the live layout — a
-// parallel refactor in progress. Keep the no-op reference so tsc
-// doesn't flag them as unused while their integration lands.
-void EditLowerDock;
-void EditDockPopout;
 
 export default App;

@@ -351,43 +351,32 @@ await check("timeline and inspector expose review evidence", async () => {
   await page.close();
 });
 
-await check("timeline dock avoids duplicate transcript and video lanes", async () => {
+await check("bottom dock is timeline-only — no transcript or vedit tabs", async () => {
   const { page } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
-  const dock = page.locator(".edit-lower-dock");
-  const dockText = (await dock.textContent()).toLowerCase();
-  for (const expected of ["timeline", "changes", "evidence", "audio"]) {
-    assert.ok(dockText.includes(expected), `missing simplified timeline text: ${expected}`);
-  }
-  for (const removed of ["selects", "channel lanes", "agent edits", "diff"]) {
-    assert.ok(!dockText.includes(removed), `duplicate lower timeline text should be gone: ${removed}`);
-  }
-  const dockButtons = await dock.getByRole("button").allTextContents();
-  assert.ok(dockButtons.some((label) => label.trim() === "Transcript"), "Transcript should remain a dock-level panel");
-  assert.ok(!dockButtons.some((label) => label.trim() === "Selects"), "Selects should not remain as a lower timeline tab");
+  const body = (await page.textContent("body")).toLowerCase();
+  assert.ok(body.includes("timeline"), "timeline label should be present");
+  // Transcript + Vedit moved to the right rail; the old dock header is gone.
+  assert.equal(await page.locator(".edit-dock-header").count(), 0, "edit dock header should be removed");
+  assert.equal(await page.locator(".edit-lower-dock").count(), 0, "edit-lower-dock wrapper should be removed");
   await page.close();
 });
 
-await check("edit dock exposes transcript and Vedit without leaving Edit", async () => {
+await check("right rail exposes transcript and Vedit alongside Inspector and Index", async () => {
   const { page, errors } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
-  await page.locator(".edit-dock-header").getByRole("button", { name: "Transcript" }).click();
+  await page.getByRole("button", { name: "Transcript", exact: true }).click();
   let body = (await page.textContent("body")).toLowerCase();
   assert.ok(
     body.includes("no transcript") || body.includes("loading transcript") || body.includes("segments"),
-    "transcript panel should be reachable",
+    "transcript panel should be reachable from the right rail",
   );
-  await page.locator(".edit-dock-header").getByRole("button", { name: "Vedit" }).click();
+  await page.getByRole("button", { name: "Vedit", exact: true }).click();
   body = (await page.textContent("body")).toLowerCase();
-  assert.ok(body.includes("timeline history") || body.includes("no vedit commits yet"), "Vedit panel should be reachable");
-  await page.getByTitle("Collapse panel").click();
-  body = (await page.textContent("body")).toLowerCase();
-  assert.ok(body.includes("vedit panel collapsed"), "collapsed dock state should be visible");
-  await page.getByRole("button", { name: "Pop out" }).click();
-  const dialog = page.getByRole("dialog", { name: "Vedit popout" });
-  await dialog.waitFor({ state: "visible" });
-  const box = await dialog.boundingBox();
-  assert.ok(box && box.y < 120 && box.height > 400, "Vedit popout should be visible in the viewport");
+  assert.ok(
+    body.includes("timeline history") || body.includes("no vedit commits yet"),
+    "Vedit panel should be reachable from the right rail",
+  );
   assert.deepEqual(errors, []);
   await page.close();
 });
