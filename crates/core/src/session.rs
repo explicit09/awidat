@@ -549,6 +549,15 @@ impl Session {
         let max_inner_iterations = max_iterations;
         let compact_at_iteration = (max_inner_iterations * 4) / 5; // 80%
         let mut compacted = false;
+        // Cross-iteration trackers used to detect "silent turns" — the
+        // model called tools but never wrote narrative text. Set when
+        // any iteration emits text; set when any iteration runs a
+        // tool. At natural end-of-turn we inspect both: tools-without-
+        // text triggers one forced "summarize what you did" iteration
+        // so the user always gets a reply.
+        let mut any_text_in_turn = false;
+        let mut any_tools_in_turn = false;
+        let mut forced_summary = false;
         for iter in 0..max_inner_iterations {
             if cancel.is_cancelled() {
                 let _ = self.events_tx.send(SessionEvent::Error("cancelled".into()));
@@ -660,6 +669,12 @@ impl Session {
             }
 
             let outcome = self.run_sampling(req, &cancel).await?;
+            if outcome.emitted_text {
+                any_text_in_turn = true;
+            }
+            if matches!(outcome.stop_reason, Some(StopReason::ToolUse)) {
+                any_tools_in_turn = true;
+            }
 
             match outcome.stop_reason {
                 Some(StopReason::ToolUse) => {
@@ -669,6 +684,36 @@ impl Session {
                     continue;
                 }
                 _ => {
+                    // The model thinks it's done. If the entire turn
+                    // produced only tool calls and no narrative text,
+                    // the chat reads as silence — the user can see
+                    // tool calls fire in the activity log but never
+                    // gets an "ok, here's what I did" reply. Run one
+                    // forced iteration that asks the model to
+                    // summarize, then close the turn for real. Guarded
+                    // by `forced_summary` so we never loop on this.
+                    if !forced_summary
+                        && any_tools_in_turn
+                        && !any_text_in_turn
+                        && !cancel.is_cancelled()
+                    {
+                        forced_summary = true;
+                        debug!(
+                            "turn ended without narrative text; forcing one summary iteration"
+                        );
+                        let nudge = Message {
+                            role: Role::User,
+                            content: vec![ContentBlock::text(
+                                "Briefly summarize what you just did and what the user should look at next. \
+                                 Do not call any more tools; reply with a short text message only.",
+                            )],
+                        };
+                        {
+                            let mut h = self.history.lock().await;
+                            h.push(nudge);
+                        }
+                        continue;
+                    }
                     // end_turn / max_tokens / stop_sequence / refusal /
                     // pause_turn — outer loop ends.
                     let _ = self.events_tx.send(SessionEvent::TurnEnd);
@@ -705,6 +750,10 @@ impl Session {
         let mut current_text = String::new();
         let mut stop_reason = None;
         let mut usage = Usage::default();
+        // Tracks whether this iteration produced any non-whitespace
+        // narrative output. The outer loop uses it to detect silent
+        // turns (tool calls only) and force one final summary pass.
+        let mut emitted_text = false;
 
         loop {
             tokio::select! {
@@ -723,6 +772,9 @@ impl Session {
                             });
                         }
                         StreamEvent::TextDelta(t) => {
+                            if !t.trim().is_empty() {
+                                emitted_text = true;
+                            }
                             current_text.push_str(&t);
                             let _ = self.events_tx.send(SessionEvent::TextDelta(t));
                         }
@@ -835,7 +887,11 @@ impl Session {
             stop_reason,
             usage: usage.clone(),
         });
-        Ok(SamplingOutcome { stop_reason, usage })
+        Ok(SamplingOutcome {
+            stop_reason,
+            usage,
+            emitted_text,
+        })
     }
 
     /// Dispatch one tool call. Returns the `ToolResult` content block to
@@ -1066,6 +1122,12 @@ struct SamplingOutcome {
     /// Currently unused but threaded through for future telemetry.
     #[allow(dead_code)]
     usage: Usage,
+    /// True when this iteration emitted at least one non-empty
+    /// `TextDelta` to the user. Outer loop uses this to detect
+    /// silent turns (only tool calls, no narrative reply) and to
+    /// inject a one-shot "summarize what you just did" follow-up
+    /// so chats never end in silence.
+    emitted_text: bool,
 }
 
 #[cfg(test)]
