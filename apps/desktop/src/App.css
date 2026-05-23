@@ -1896,10 +1896,46 @@ button {
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
+.timeline-zoom-controls {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.timeline-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev2, var(--bg-elev));
+  overflow: hidden;
+}
+
+.timeline-zoom-group button {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  padding: 2px 8px;
+  cursor: pointer;
+  line-height: 1.4;
+  min-width: 22px;
+}
+
+.timeline-zoom-group button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.timeline-zoom-group button + button {
+  border-left: 1px solid var(--border);
+}
+
 .timeline-stage {
-  flex: 0 0 auto;
-  overflow-x: auto;
-  overflow-y: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   position: relative;
 }
 
@@ -5958,3 +5994,28 @@ button {
   color: #ffb4ae;
   font-size: 11px;
 }
+
+/* ─── Calm pass · Tier 1 · Title-case section labels ──────────────
+   Pro NLEs use sentence case for panel/section headers (Resolve
+   does the whole interface in sentence case). The mockup spec
+   shipped ~84 uppercase-tracking labels which reads as constant
+   shouting and forces the eye to re-scan each section header. We
+   neutralize the offending styles at the cascade tail so component
+   code can stay declarative — no need to touch 84 call sites.
+
+   Targeted shape: `<span class="text-[var(--text-label)] uppercase
+   tracking-[var(--text-label--letter-spacing)] font-semibold ...">`
+   or its `--text-caption` variant. Both forms render labels at
+   ~10–11px, uppercase, with extra tracking. We undo the casing,
+   drop the tracking, and bump weight one notch so they remain
+   distinct from body text but quiet. */
+[class*="uppercase"][class*="tracking-[var(--text-label--letter-spacing)]"] {
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  font-weight: 500 !important;
+}
+
+/* The `font-mono` numbers that ride alongside these labels (e.g.
+   "12 active", "67%") are already sentence-case-friendly — we
+   intentionally do NOT lowercase them. Tailwind's mono utility
+   doesn't carry uppercase, so no extra rule needed. */
