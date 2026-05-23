@@ -59,6 +59,7 @@ pub mod notes;
 pub mod orchestrator;
 pub mod pexels;
 pub mod preview_cache;
+pub mod transcript_pack;
 pub mod preview_refresh_executor;
 pub mod professional;
 pub mod proxy;

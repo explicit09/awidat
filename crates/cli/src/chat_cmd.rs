@@ -38,7 +38,7 @@ use awidat_core::tools::{
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
     shot_summary::ShotSummaryTool, start_indexing::StartIndexingTool,
     start_render::StartRenderTool, stream_remux::StreamRemuxTool,
-    transcript_search::TranscriptSearchTool,
+    transcript_pack::TranscriptPackTool, transcript_search::TranscriptSearchTool,
     transition_context::TransitionContextTool, update_plan::UpdatePlanTool,
     use_broll::UseBrollTool, validate_transition_choice::ValidateTransitionChoiceTool,
     vedit_blame::VeditBlameTool, vedit_branch::VeditBranchTool,
@@ -174,6 +174,7 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(TranscriptSearchTool));
     registry.register(Arc::new(StartRenderTool));
     registry.register(Arc::new(StreamRemuxTool));
+    registry.register(Arc::new(TranscriptPackTool));
     registry.register(Arc::new(VerifyRenderTool));
     registry.register(Arc::new(ExportPackageTool));
     registry.register(Arc::new(StartLookRegionPassTool));
