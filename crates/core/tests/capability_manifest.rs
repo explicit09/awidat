@@ -144,6 +144,179 @@ impl ToolHandler for StartRenderLikeTool {
     }
 }
 
+struct RenderPreflightLikeTool;
+
+#[async_trait]
+impl ToolHandler for RenderPreflightLikeTool {
+    fn name(&self) -> &'static str {
+        "render_preflight"
+    }
+
+    fn schema(&self) -> awidat_core::anthropic::Tool {
+        awidat_core::anthropic::Tool {
+            name: self.name().into(),
+            description: "Inspect render backend selection.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "scope": {"type": "string"}
+                }
+            }),
+            cache_control: None,
+        }
+    }
+
+    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        _invocation: ToolInvocation,
+        _ctx: ToolContext,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        Ok(ToolOutput::text("ok"))
+    }
+}
+
+struct StreamRemuxLikeTool;
+
+#[async_trait]
+impl ToolHandler for StreamRemuxLikeTool {
+    fn name(&self) -> &'static str {
+        "stream_remux"
+    }
+
+    fn schema(&self) -> awidat_core::anthropic::Tool {
+        awidat_core::anthropic::Tool {
+            name: self.name().into(),
+            description: "Start a stream-copy remux job.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "sources": {"type": "array"}
+                },
+                "required": ["sources"]
+            }),
+            cache_control: None,
+        }
+    }
+
+    async fn handle(
+        &self,
+        _invocation: ToolInvocation,
+        _ctx: awidat_core::ToolContext,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        Ok(ToolOutput::text("ok"))
+    }
+}
+
+struct ProxyStatusLikeTool;
+
+#[async_trait]
+impl ToolHandler for ProxyStatusLikeTool {
+    fn name(&self) -> &'static str {
+        "proxy_status"
+    }
+
+    fn schema(&self) -> awidat_core::anthropic::Tool {
+        awidat_core::anthropic::Tool {
+            name: self.name().into(),
+            description: "Report proxy cache status.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "asset_id": {"type": "string"}
+                }
+            }),
+            cache_control: None,
+        }
+    }
+
+    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        _invocation: ToolInvocation,
+        _ctx: awidat_core::ToolContext,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        Ok(ToolOutput::text("ok"))
+    }
+}
+
+struct PreviewCacheStatusLikeTool;
+
+#[async_trait]
+impl ToolHandler for PreviewCacheStatusLikeTool {
+    fn name(&self) -> &'static str {
+        "preview_cache_status"
+    }
+
+    fn schema(&self) -> awidat_core::anthropic::Tool {
+        awidat_core::anthropic::Tool {
+            name: self.name().into(),
+            description: "Report preview cache status.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "asset_id": {"type": "string"},
+                    "max_tasks": {"type": "integer"}
+                }
+            }),
+            cache_control: None,
+        }
+    }
+
+    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        _invocation: ToolInvocation,
+        _ctx: awidat_core::ToolContext,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        Ok(ToolOutput::text("ok"))
+    }
+}
+
+struct VerifyRenderLikeTool;
+
+#[async_trait]
+impl ToolHandler for VerifyRenderLikeTool {
+    fn name(&self) -> &'static str {
+        "verify_render"
+    }
+
+    fn schema(&self) -> awidat_core::anthropic::Tool {
+        awidat_core::anthropic::Tool {
+            name: self.name().into(),
+            description: "Verify a rendered output.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "output_path": {"type": "string"}
+                }
+            }),
+            cache_control: None,
+        }
+    }
+
+    fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
+        false
+    }
+
+    async fn handle(
+        &self,
+        _invocation: ToolInvocation,
+        _ctx: awidat_core::ToolContext,
+    ) -> Result<ToolOutput, FunctionCallError> {
+        Ok(ToolOutput::text("ok"))
+    }
+}
+
 #[test]
 fn capability_manifest_lists_tools_with_stable_order_and_approval_defaults() {
     let mut registry = ToolRegistry::new();
@@ -196,7 +369,12 @@ fn capability_manifest_lists_tools_with_stable_order_and_approval_defaults() {
 fn capability_manifest_adds_explicit_known_tool_metadata() {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(FindMomentLikeTool));
+    registry.register(Arc::new(PreviewCacheStatusLikeTool));
+    registry.register(Arc::new(ProxyStatusLikeTool));
+    registry.register(Arc::new(RenderPreflightLikeTool));
     registry.register(Arc::new(StartRenderLikeTool));
+    registry.register(Arc::new(StreamRemuxLikeTool));
+    registry.register(Arc::new(VerifyRenderLikeTool));
 
     let manifest = build_capability_manifest(&registry, None);
 
@@ -232,6 +410,132 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
     assert_eq!(
         start_render.metadata.side_effects,
         vec!["starts an ffmpeg render job", "writes render output files"]
+    );
+
+    let Some(render_preflight) = manifest
+        .tools
+        .iter()
+        .find(|tool| tool.name == "render_preflight")
+    else {
+        panic!("render_preflight capability");
+    };
+    assert!(!render_preflight.metadata.graph_mutates);
+    assert!(!render_preflight.metadata.approval_required);
+    assert_eq!(
+        render_preflight.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        render_preflight
+            .metadata
+            .side_effects
+            .iter()
+            .any(|effect| effect.contains("no render job"))
+    );
+    assert!(
+        render_preflight
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("preview-cache planning"))
+    );
+
+    let Some(verify_render) = manifest
+        .tools
+        .iter()
+        .find(|tool| tool.name == "verify_render")
+    else {
+        panic!("verify_render capability");
+    };
+    assert!(verify_render.metadata.approval_required);
+    assert!(
+        verify_render
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("caption rendered-output evidence"))
+    );
+
+    let Some(stream_remux) = manifest
+        .tools
+        .iter()
+        .find(|tool| tool.name == "stream_remux")
+    else {
+        panic!("stream_remux capability");
+    };
+    assert!(stream_remux.metadata.approval_required);
+    assert!(!stream_remux.metadata.graph_mutates);
+    assert_eq!(
+        stream_remux.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        stream_remux
+            .metadata
+            .side_effects
+            .iter()
+            .any(|effect| effect.contains("render manifest"))
+    );
+    assert!(
+        stream_remux
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("frame-domain effects"))
+    );
+
+    let Some(proxy_status) = manifest
+        .tools
+        .iter()
+        .find(|tool| tool.name == "proxy_status")
+    else {
+        panic!("proxy_status capability");
+    };
+    assert_eq!(
+        proxy_status.metadata.preview_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert_eq!(
+        proxy_status.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::NotSupported
+    );
+    assert!(!proxy_status.metadata.graph_mutates);
+    assert!(!proxy_status.metadata.approval_required);
+    assert_eq!(
+        proxy_status.metadata.side_effects,
+        vec!["reads proxy cache artifact metadata"]
+    );
+
+    let Some(preview_cache_status) = manifest
+        .tools
+        .iter()
+        .find(|tool| tool.name == "preview_cache_status")
+    else {
+        panic!("preview_cache_status capability");
+    };
+    assert_eq!(
+        preview_cache_status.metadata.preview_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert_eq!(
+        preview_cache_status.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::NotSupported
+    );
+    assert!(!preview_cache_status.metadata.graph_mutates);
+    assert!(!preview_cache_status.metadata.approval_required);
+    assert!(
+        preview_cache_status
+            .metadata
+            .side_effects
+            .iter()
+            .any(|effect| effect.contains("reads proxy, thumbnail, and waveform"))
+    );
+    assert!(
+        preview_cache_status
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("PreviewRefreshExecutor"))
     );
 }
 
@@ -286,11 +590,37 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     assert_eq!(
         render_features,
         vec![
+            "render_execution_manifest",
+            "asset_preview_render",
+            "stream_copy_remux",
+            "asset_full_reencode",
             "ffmpeg_timeline_export",
+            "ass_caption_burn_in",
             "section_render_export",
             "gpu_transition_raw_stream",
-            "desktop_proxy_preview"
+            "delivery_package_export",
+            "render_manifest_verification",
+            "render_backend_evidence_verification",
+            "master_loudnorm_final_pass_verification",
+            "libass_sidecar_evidence_verification",
+            "caption_safe_area_verification",
+            "cut_boundary_self_eval",
+            "desktop_proxy_preview",
+            "desktop_preview_cache_summary",
+            "agent_preview_cache_status",
+            "desktop_preview_cache_refresh"
         ]
+    );
+
+    let Some(timeline_feature) = awidat_core::capabilities::render_feature_for_backend(
+        &awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+    ) else {
+        panic!("timeline backend should map to a render feature");
+    };
+    assert_eq!(timeline_feature.id, "ffmpeg_timeline_export");
+    assert_eq!(
+        timeline_feature.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
     );
 
     let Some(gpu) = manifest
@@ -303,6 +633,280 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
     assert_eq!(
         gpu.metadata.known_limitations,
         vec!["mixed xfade/GPU transition renders are not supported"]
+    );
+
+    let Some(remux) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "stream_copy_remux")
+    else {
+        panic!("stream copy remux feature");
+    };
+    assert_eq!(
+        remux.metadata.preview_supported,
+        awidat_core::capabilities::SupportLevel::NotSupported
+    );
+    assert_eq!(
+        remux.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        remux
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("falls back"))
+    );
+
+    let Some(preview_cache) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "desktop_preview_cache_summary")
+    else {
+        panic!("desktop preview cache summary feature");
+    };
+    assert_eq!(
+        preview_cache.metadata.preview_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert_eq!(
+        preview_cache.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::NotSupported
+    );
+    assert!(
+        preview_cache
+            .metadata
+            .side_effects
+            .iter()
+            .any(|effect| effect.contains("reads preview cache"))
+    );
+    assert!(
+        preview_cache
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("aggregate refresh_work counts"))
+    );
+    assert!(
+        preview_cache
+            .metadata
+            .known_limitations
+            .iter()
+            .any(
+                |limitation| limitation.contains("per-artifact refresh_tasks")
+                    && limitation.contains("task_id")
+                    && limitation.contains("estimated_weight")
+            )
+    );
+
+    let Some(agent_preview_cache) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "agent_preview_cache_status")
+    else {
+        panic!("agent preview cache status feature");
+    };
+    assert_eq!(
+        agent_preview_cache.metadata.preview_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        agent_preview_cache
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("PreviewRefreshExecutor"))
+    );
+
+    let Some(preview_cache_refresh) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "desktop_preview_cache_refresh")
+    else {
+        panic!("desktop preview cache refresh feature");
+    };
+    assert_eq!(
+        preview_cache_refresh.metadata.preview_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert_eq!(
+        preview_cache_refresh.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::NotSupported
+    );
+    assert!(preview_cache_refresh.metadata.approval_required);
+    assert!(
+        preview_cache_refresh
+            .metadata
+            .side_effects
+            .iter()
+            .any(|effect| effect.contains("writes preview cache artifacts"))
+    );
+    assert!(
+        preview_cache_refresh
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("runs proxy, thumbnail, and waveform"))
+    );
+
+    let Some(backend_evidence) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "render_backend_evidence_verification")
+    else {
+        panic!("render backend evidence verification feature");
+    };
+    assert_eq!(
+        backend_evidence.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        backend_evidence
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("timeline render manifests"))
+    );
+
+    let Some(master_loudnorm) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "master_loudnorm_final_pass_verification")
+    else {
+        panic!("master loudnorm final-pass verification feature");
+    };
+    assert_eq!(
+        master_loudnorm.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        master_loudnorm
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("apply pass"))
+    );
+
+    let Some(libass_sidecar_evidence) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "libass_sidecar_evidence_verification")
+    else {
+        panic!("libass sidecar evidence verification feature");
+    };
+    assert_eq!(
+        libass_sidecar_evidence.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        libass_sidecar_evidence
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("required ASS sidecar fingerprints"))
+    );
+    assert!(
+        libass_sidecar_evidence
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("layout/readability evidence"))
+    );
+
+    let Some(caption_safe_area) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "caption_safe_area_verification")
+    else {
+        panic!("caption safe-area verification feature");
+    };
+    assert_eq!(
+        caption_safe_area.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        caption_safe_area
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("frame-pixel scorer"))
+    );
+
+    let Some(cut_boundary_self_eval) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "cut_boundary_self_eval")
+    else {
+        panic!("cut-boundary self-eval feature");
+    };
+    assert_eq!(
+        cut_boundary_self_eval.metadata.export_supported,
+        awidat_core::capabilities::SupportLevel::Supported
+    );
+    assert!(
+        cut_boundary_self_eval
+            .metadata
+            .side_effects
+            .iter()
+            .any(|effect| effect.contains("render verification reports"))
+    );
+
+    let Some(ass_captions) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "ass_caption_burn_in")
+    else {
+        panic!("ass caption feature");
+    };
+    assert!(
+        ass_captions
+            .metadata
+            .side_effects
+            .iter()
+            .any(|effect| effect.contains("ASS subtitle sidecars"))
+    );
+    assert!(
+        ass_captions
+            .metadata
+            .side_effects
+            .iter()
+            .any(|effect| effect.contains("editable subtitle tracks"))
+    );
+    assert!(
+        ass_captions
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("caption overlays"))
+    );
+    assert!(
+        ass_captions
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("editable subtitle tracks"))
+    );
+    assert!(
+        ass_captions
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("mobile/default safe-area layout profiles"))
+    );
+
+    let Some(manifest_verification) = manifest
+        .render_features
+        .iter()
+        .find(|feature| feature.id == "render_manifest_verification")
+    else {
+        panic!("render manifest verification feature");
+    };
+    assert!(
+        manifest_verification
+            .metadata
+            .known_limitations
+            .iter()
+            .any(|limitation| limitation.contains("required inputs and sidecars"))
     );
 }
 
