@@ -125,6 +125,8 @@ pub fn run() {
             commands::index::index_readiness,
             commands::transcode::transcode_project_proxies,
             commands::transcode::proxy_cache_lifecycle_report,
+            commands::preview_cache::preview_cache_summary,
+            commands::preview_cache::preview_cache_refresh,
             commands::media::list_source_media,
             commands::media::list_proxies,
             commands::media::media_url_for_path,

@@ -585,7 +585,7 @@ async fn transcode_one(
 
 /// True iff `proxy` exists and its mtime is at-or-after `asset`'s.
 /// Inversely: false on missing-proxy OR stale-proxy.
-fn proxy_is_fresh(asset: &Path, proxy: &Path) -> bool {
+pub(crate) fn proxy_is_fresh(asset: &Path, proxy: &Path) -> bool {
     let proxy_meta = match std::fs::metadata(proxy) {
         Ok(m) => m,
         Err(_) => return false,
@@ -725,7 +725,7 @@ fn is_proxy_artifact(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
 }
 
-fn collect_media(raw_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+pub(crate) fn collect_media(raw_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     walk(raw_dir, &mut out)?;
     Ok(out)
