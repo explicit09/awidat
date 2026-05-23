@@ -2,7 +2,6 @@ import { Filter, MoreHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 import {
   Inline,
-  Pill,
   Stack,
   cn,
 } from "../ui";
@@ -54,63 +53,72 @@ export function TimelineHybrid({
   changeCount = 0,
   contentForTab,
 }: TimelineHybridProps) {
+  // The Changes / Evidence sub-tabs and the Proposed/Current mode
+  // toggle + Legend are agent-review chrome — only meaningful when
+  // the agent has produced a proposal. Hiding them otherwise lets
+  // the timeline read as an editor surface, not a diagnostic panel.
+  const reviewActive = changeCount > 0;
   return (
     <Stack gap="0" className="h-full w-full bg-[var(--color-surface-panel)]">
-      {/* Header: tabs + view toggle + actions */}
-      <div className="px-3 h-10 border-b border-[var(--color-border-subtle)] grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 shrink-0">
-        <Inline gap="0" align="center" className="h-full min-w-0 overflow-hidden">
-          {TIMELINE_TABS.map((t) => (
+      {reviewActive ? (
+        // Header only renders during agent review. Full tab strip
+        // + mode toggle + filter/more actions stay available so the
+        // user can drill into Changes / Evidence / pick Proposed vs
+        // Current.
+        <div className="px-3 h-10 border-b border-[var(--color-border-subtle)] grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 shrink-0">
+          <Inline gap="0" align="center" className="h-full min-w-0 overflow-hidden">
+            {TIMELINE_TABS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={t === tab}
+                onClick={() => onChangeTab?.(t)}
+                className={cn(
+                  "relative inline-flex min-w-0 items-center gap-1.5 h-full px-3",
+                  "text-[var(--text-body-sm)]",
+                  "transition-[color,background-color] duration-[120ms]",
+                  t === tab
+                    ? "text-[var(--color-text-primary)]"
+                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
+                )}
+              >
+                <span className="truncate">{TIMELINE_TAB_LABEL[t]}</span>
+                {t === "changes" && changeCount > 0 ? (
+                  <span className="ml-0.5 text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                    {changeCount}
+                  </span>
+                ) : null}
+                {t === tab ? (
+                  <span
+                    aria-hidden
+                    className="absolute inset-x-3 bottom-0 h-px bg-[rgba(255,255,255,0.6)]"
+                  />
+                ) : null}
+              </button>
+            ))}
+          </Inline>
+          <Inline gap="0" align="center" className="shrink-0">
+            <ViewToggle value={viewMode} onChange={onChangeViewMode} />
+          </Inline>
+          <Inline gap="0" align="center">
             <button
-              key={t}
               type="button"
-              role="tab"
-              aria-selected={t === tab}
-              onClick={() => onChangeTab?.(t)}
-              className={cn(
-                "relative inline-flex min-w-0 items-center gap-1.5 h-full px-3",
-                "text-[var(--text-body-sm)] font-medium",
-                "transition-[color,background-color] duration-[120ms]",
-                t === tab
-                  ? "text-[var(--color-text-primary)]"
-                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]",
-              )}
+              className="h-7 w-7 inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
+              aria-label="Filter"
             >
-              <span className="truncate">{TIMELINE_TAB_LABEL[t]}</span>
-              {t === "changes" && changeCount > 0 ? (
-                <Pill status="warning" dot={false}>{changeCount}</Pill>
-              ) : null}
-              {t === tab ? (
-                <span
-                  aria-hidden
-                  className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-[var(--color-brand-secondary)]"
-                />
-              ) : null}
+              <Filter className="h-3.5 w-3.5 stroke-[1.75]" />
             </button>
-          ))}
-        </Inline>
-        <Inline gap="2" align="center" className="shrink-0">
-          <span className="text-[var(--text-caption)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-            Mode
-          </span>
-          <ViewToggle value={viewMode} onChange={onChangeViewMode} />
-        </Inline>
-        <Inline gap="0" align="center">
-          <button
-            type="button"
-            className="h-7 w-7 inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
-            aria-label="Filter"
-          >
-            <Filter className="h-3.5 w-3.5 stroke-[1.75]" />
-          </button>
-          <button
-            type="button"
-            className="h-7 w-7 inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
-            aria-label="More"
-          >
-            <MoreHorizontal className="h-3.5 w-3.5 stroke-[1.75]" />
-          </button>
-        </Inline>
-      </div>
+            <button
+              type="button"
+              className="h-7 w-7 inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
+              aria-label="More"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5 stroke-[1.75]" />
+            </button>
+          </Inline>
+        </div>
+      ) : null}
 
       {/* Tab body */}
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
@@ -125,15 +133,17 @@ export function TimelineHybrid({
         )}
       </div>
 
-      {/* Legend */}
-      <div className="px-3 h-8 border-t border-[var(--color-border-subtle)] flex items-center justify-between gap-3 shrink-0">
-        <Inline gap="2" align="center" className="min-w-0 overflow-hidden">
-          <Legend />
-        </Inline>
-        <span className="shrink-0 font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-          {viewMode === "proposed" ? "Proposed Timeline" : "Current Timeline"}
-        </span>
-      </div>
+      {/* Legend — only during agent review. */}
+      {reviewActive ? (
+        <div className="px-3 h-7 border-t border-[var(--color-border-subtle)] flex items-center justify-between gap-3 shrink-0">
+          <Inline gap="2" align="center" className="min-w-0 overflow-hidden">
+            <Legend />
+          </Inline>
+          <span className="shrink-0 font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            {viewMode === "proposed" ? "Proposed" : "Current"}
+          </span>
+        </div>
+      ) : null}
     </Stack>
   );
 }
