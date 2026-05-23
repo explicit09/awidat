@@ -10,7 +10,7 @@ import {
   SendHorizontal,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
@@ -144,6 +144,25 @@ export type CommandRailProps = {
   onRenameChat?: (session: ChatSessionSummary, newTitle: string) => Promise<void> | void;
   /** Called when the user deletes a chat from the context menu. */
   onDeleteChat?: (session: ChatSessionSummary) => Promise<void> | void;
+  /** Pool of clips the @ mention picker can choose from. Each entry
+   *  is one selectable asset/clip. */
+  mediaSuggestions?: MediaSuggestion[];
+  /** Called when the user picks a clip from the @ picker. Host
+   *  registers it as a context chip so the agent receives the
+   *  underlying asset id. */
+  onPickMedia?: (suggestion: MediaSuggestion) => void;
+};
+
+/** One entry in the @-mention picker. `label` is what the user sees
+ *  (short, human); `token` is what gets inserted in the textarea
+ *  (`@<token>` — keep it stem-shaped, no spaces). `chip.label` is
+ *  what becomes the attached context-chip text. */
+export type MediaSuggestion = {
+  id: string;
+  label: string;
+  detail?: string;
+  token: string;
+  chipLabel: string;
 };
 
 export function CommandRail({
@@ -172,6 +191,8 @@ export function CommandRail({
   onSetPermissionMode,
   onRenameChat,
   onDeleteChat,
+  mediaSuggestions = [],
+  onPickMedia,
 }: CommandRailProps) {
   const [draft, setDraft] = useState(initialDraft);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -184,6 +205,84 @@ export function CommandRail({
   // is controlled.
   const [renameFor, setRenameFor] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  // @-mention picker state. `mention === null` = picker closed.
+  // `start` is the index of the `@` in the draft, so on selection we
+  // can replace `@<query>` with the chosen token in one splice.
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(
+    null,
+  );
+  const [mentionIdx, setMentionIdx] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Compute the visible mention suggestions on every keystroke. Cheap
+  // (small lists), no debounce needed.
+  const filteredMedia = useMemo(() => {
+    if (mention === null) return [];
+    const q = mention.query.trim().toLowerCase();
+    const matches = mediaSuggestions.filter((m) => {
+      if (q.length === 0) return true;
+      return (
+        m.label.toLowerCase().includes(q) || m.token.toLowerCase().includes(q)
+      );
+    });
+    return matches.slice(0, 8);
+  }, [mention, mediaSuggestions]);
+
+  // Reset selected suggestion index whenever the picker re-opens or
+  // the filter changes — otherwise stale indexes point past the end
+  // of the filtered list.
+  useEffect(() => {
+    setMentionIdx(0);
+  }, [mention?.query, mention?.start]);
+
+  // Inspect the draft + caret to decide whether a mention picker is
+  // active. Triggered from the textarea's onSelect/onChange. Rules:
+  //   - The most-recent `@` before the caret opens the picker.
+  //   - It must be at start-of-text or after a whitespace char (so
+  //     "email@foo" doesn't trigger).
+  //   - The query is the text between `@` and the caret. A whitespace
+  //     in there closes the picker.
+  function syncMentionFromCaret() {
+    const el = textareaRef.current;
+    if (!el) return;
+    const caret = el.selectionStart;
+    const text = el.value;
+    const at = text.lastIndexOf("@", Math.max(0, caret - 1));
+    if (at < 0) {
+      setMention(null);
+      return;
+    }
+    const prev = at === 0 ? " " : text[at - 1];
+    if (!/\s/.test(prev) && prev !== undefined) {
+      setMention(null);
+      return;
+    }
+    const query = text.slice(at + 1, caret);
+    if (/\s/.test(query)) {
+      setMention(null);
+      return;
+    }
+    setMention({ start: at, query });
+  }
+
+  function commitMention(suggestion: MediaSuggestion) {
+    const el = textareaRef.current;
+    if (!el || mention === null) return;
+    const caret = el.selectionStart;
+    const before = draft.slice(0, mention.start);
+    const after = draft.slice(caret);
+    const insert = `@${suggestion.token} `;
+    const next = before + insert + after;
+    setDraft(next);
+    setMention(null);
+    onPickMedia?.(suggestion);
+    // Restore caret position after React re-renders the textarea.
+    requestAnimationFrame(() => {
+      const pos = (before + insert).length;
+      el.setSelectionRange(pos, pos);
+      el.focus();
+    });
+  }
 
   // Close the chat-row menu when the user clicks anywhere outside it.
   // The menu items stopPropagation, so this only fires for true
@@ -418,14 +517,49 @@ export function CommandRail({
             copy above the composer is redundant chrome. */}
         <div
           className={cn(
-            "awidat-composer-card rounded-[var(--radius-md)] transition-colors",
+            "awidat-composer-card relative rounded-[var(--radius-md)] transition-colors",
             focused ? "shadow-[0_18px_70px_rgba(0,0,0,0.3)]" : "",
           )}
         >
           <textarea
+            ref={textareaRef}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              // The picker logic reads .selectionStart from the same
+              // textarea, but React batches the state update — defer
+              // to the next tick so the value is committed first.
+              requestAnimationFrame(syncMentionFromCaret);
+            }}
+            onSelect={syncMentionFromCaret}
             onKeyDown={(e) => {
+              // Mention picker keys take priority over the global
+              // Enter-sends rule when the picker is open and has
+              // results to navigate.
+              if (mention !== null && filteredMedia.length > 0) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionIdx((i) => (i + 1) % filteredMedia.length);
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionIdx((i) =>
+                    (i - 1 + filteredMedia.length) % filteredMedia.length,
+                  );
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  commitMention(filteredMedia[mentionIdx]);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMention(null);
+                  return;
+                }
+              }
               // Enter sends. Shift/Option/Cmd/Ctrl+Enter inserts a
               // newline (Cmd+Enter still sends for muscle-memory
               // power users). IME composition guards prevent
@@ -461,6 +595,34 @@ export function CommandRail({
               "outline-none disabled:cursor-not-allowed disabled:opacity-50",
             )}
           />
+          {mention !== null && filteredMedia.length > 0 ? (
+            <div className="awidat-mention-picker" role="listbox" aria-label="Attach a clip">
+              {filteredMedia.map((s, i) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  role="option"
+                  aria-selected={i === mentionIdx}
+                  className={cn(
+                    "awidat-mention-item",
+                    i === mentionIdx ? "is-active" : "",
+                  )}
+                  onMouseDown={(e) => {
+                    // Prevent the textarea from blurring before the
+                    // click handler fires (blur would close the picker).
+                    e.preventDefault();
+                  }}
+                  onClick={() => commitMention(s)}
+                  onMouseEnter={() => setMentionIdx(i)}
+                >
+                  <span className="awidat-mention-item-label">{s.label}</span>
+                  {s.detail ? (
+                    <span className="awidat-mention-item-detail">{s.detail}</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <Inline justify="between" align="center" gap="2" className="px-2 py-1.5">
             <Inline gap="2" align="center" className="min-w-0">
               {permissionMode && onSetPermissionMode ? (

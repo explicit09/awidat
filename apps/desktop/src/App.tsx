@@ -37,6 +37,7 @@ import {
   type ChatSessionSummary,
   type ContextChip,
   type ConversationTurn,
+  type MediaSuggestion,
   type DeliveryRenderSummary,
   type DeliveryTarget,
   type IndexingMediaItem,
@@ -332,6 +333,9 @@ function App() {
     setDismissedContextChips((previous) =>
       previous.includes(key) ? previous : [...previous, key],
     );
+    // Also drop any matching @-attached clip so it doesn't immediately
+    // come back the next time effectiveContextChips is recomputed.
+    setPickedMediaChips((previous) => previous.filter((c) => c.label !== chip.label));
   }
 
   async function runEngineCommand(command: string) {
@@ -967,6 +971,54 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode, completedJobKinds.size, activeJobs.length]);
 
+  // User-attached clips from the composer's @-mention picker. Keyed
+  // by the asset id so the same clip can't get attached twice.
+  const [pickedMediaChips, setPickedMediaChips] = useState<ContextChip[]>([]);
+
+  // Build the @-mention suggestion pool from the media store. Prefer
+  // sources (the canonical asset entries) and fall back to proxies
+  // for stems that don't have a matching source — covers imports that
+  // haven't finished the post-transcode metadata refresh yet.
+  const mediaSuggestions: MediaSuggestion[] = useMemo(() => {
+    const stripExt = (name: string) => {
+      const i = name.lastIndexOf(".");
+      return i > 0 ? name.slice(0, i) : name;
+    };
+    const seen = new Set<string>();
+    const out: MediaSuggestion[] = [];
+    for (const src of sources) {
+      const stem = stripExt(src.name);
+      const short = stem.length > 32 ? `…${stem.slice(-30)}` : stem;
+      out.push({
+        id: src.id,
+        label: short,
+        detail: formatBytes(src.size_bytes),
+        token: stem,
+        chipLabel: `Clip: ${stem}`,
+      });
+      seen.add(stem);
+    }
+    for (const proxy of proxies) {
+      if (seen.has(proxy.stem)) continue;
+      const short = proxy.stem.length > 32 ? `…${proxy.stem.slice(-30)}` : proxy.stem;
+      out.push({
+        id: proxy.proxy_path,
+        label: short,
+        detail: formatBytes(proxy.size_bytes),
+        token: proxy.stem,
+        chipLabel: `Clip: ${proxy.stem}`,
+      });
+    }
+    return out;
+  }, [sources, proxies]);
+
+  function attachMediaPick(suggestion: MediaSuggestion) {
+    setPickedMediaChips((prev) => {
+      if (prev.some((c) => c.label === suggestion.chipLabel)) return prev;
+      return [...prev, { label: suggestion.chipLabel, kind: "media" as const }];
+    });
+  }
+
   const realContextChips: ContextChip[] = useMemo(() => {
     const chips: ContextChip[] = [];
     if (current) {
@@ -986,8 +1038,13 @@ function App() {
     if (activeProposal) {
       chips.push({ label: `Proposal: ${activeProposal.summary}`, kind: "lens" });
     }
+    // User-picked @ mentions land at the end so they read as the most
+    // recent attachments. De-dup against existing chips first.
+    for (const picked of pickedMediaChips) {
+      if (!chips.some((c) => c.label === picked.label)) chips.push(picked);
+    }
     return chips;
-  }, [activeProposal, current, selectedStem, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
+  }, [activeProposal, current, pickedMediaChips, selectedStem, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
 
   const effectiveContextChips: ContextChip[] = useMemo(() => {
     return realContextChips.filter(
@@ -1363,6 +1420,8 @@ function App() {
       onSetPermissionMode={(mode) => void changePermissionMode(mode)}
       onRenameChat={(session, newTitle) => renameChat(session, newTitle)}
       onDeleteChat={(session) => deleteChat(session)}
+      mediaSuggestions={mediaSuggestions}
+      onPickMedia={attachMediaPick}
     />
   );
   const workspaceOverride = agentFocusMode ? (

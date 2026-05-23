@@ -10,6 +10,7 @@ export {
   type SuggestedAction,
   type ConversationTurn,
   type TurnPart,
+  type MediaSuggestion,
 } from "./CommandRail";
 export {
   PreviewSurface,
