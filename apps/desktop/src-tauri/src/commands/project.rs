@@ -80,7 +80,14 @@ pub async fn set_project_root(
     // opens a project that was previously proxied under an older
     // filename schema (the auto-transcode otherwise only runs on
     // fresh imports).
-    crate::commands::transcode::spawn_proxy_backfill_on_load(app.clone(), buf);
+    crate::commands::transcode::spawn_proxy_backfill_on_load(app.clone(), buf.clone());
+
+    // Backfill thumbnail + waveform sidecars for any asset whose
+    // post-import chain never completed (e.g. project was opened
+    // from a previous schema, or import was interrupted). Without
+    // this, the timeline canvas falls back to plain rects with no
+    // filmstrip or amplitude line on otherwise-valid clips.
+    crate::commands::transcode::spawn_sidecar_backfill_on_load(app.clone(), buf);
 
     Ok(())
 }

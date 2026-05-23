@@ -281,6 +281,106 @@ pub fn spawn_proxy_backfill_on_load(app: AppHandle, project_root: PathBuf) {
     });
 }
 
+/// Spawn a project-load backfill for thumbnails and waveform sidecars.
+///
+/// The post-import chain in [`crate::commands::import`] generates a
+/// proxy + thumbnails + waveform for each new asset, but a project
+/// opened from a previous schema (or whose import chain partially
+/// failed) can land with `raw/` populated and the corresponding
+/// `.awidat/thumbnails/` or `.awidat/waveforms/` sidecars missing. The
+/// timeline canvas then falls back to its plain-rect rendering for
+/// those clips even though the source media is on disk.
+///
+/// Both generators are mtime-idempotent, so this is a fast no-op for
+/// assets that already have fresh sidecars. We re-flatten the
+/// timeline once at the end if at least one sidecar landed, which
+/// gives the canvas a chance to pick up the new artifacts.
+pub fn spawn_sidecar_backfill_on_load(app: AppHandle, project_root: PathBuf) {
+    tokio::spawn(async move {
+        let raw_dir = project_root.join("raw");
+        if !raw_dir.is_dir() {
+            return;
+        }
+        let assets = match collect_media(&raw_dir) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, "sidecar backfill scan raw/ failed");
+                return;
+            }
+        };
+        if assets.is_empty() {
+            return;
+        }
+
+        let state = app.state::<AwidatState>();
+        let mut touched = false;
+        for asset in assets {
+            // Probe first so we only run the video-only thumbnail
+            // generator on video-bearing assets, and so we skip
+            // waveform extraction on assets we already know are
+            // unreadable.
+            let probe = match awidat_render::probe_media(&asset).await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        asset = %asset.display(),
+                        "sidecar backfill probe failed; skipping asset",
+                    );
+                    continue;
+                }
+            };
+
+            if probe.has_video {
+                match crate::commands::thumbnail::generate_thumbnails_for_asset_in_project(
+                    &app,
+                    &state,
+                    &project_root,
+                    &asset,
+                )
+                .await
+                {
+                    // The generator returns the dir whether or not it
+                    // actually re-ran; we can't tell from the return
+                    // value alone if anything new landed. Flag touched
+                    // optimistically — `emit_timeline_changed` is
+                    // cheap, and the canvas already debounces.
+                    Ok(_) => touched = true,
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            asset = %asset.display(),
+                            "project-load thumbnail backfill failed; continuing",
+                        );
+                    }
+                }
+            }
+
+            match crate::commands::waveform::generate_waveform_for_asset_in_project(
+                &app,
+                &state,
+                &project_root,
+                &asset,
+            )
+            .await
+            {
+                Ok(Some(_)) => touched = true,
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        asset = %asset.display(),
+                        "project-load waveform backfill failed; continuing",
+                    );
+                }
+            }
+        }
+        if touched {
+            crate::events::emit_timeline_changed(&app, &project_root);
+        }
+    });
+}
+
 /// Walk the project's OTIO and return one entry per video clip:
 /// `(asset_id, track_start_s, track_end_s)`. Audio-only clips are
 /// excluded — they're not what blocks the timeline preview. Returns
