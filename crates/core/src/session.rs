@@ -371,6 +371,8 @@ impl Session {
     /// losing the rollout.
     #[must_use]
     pub fn with_recorder(mut self, state_root: &std::path::Path) -> Self {
+        // Recorder::create handles registry insertion internally;
+        // here we just plug in the recorder and log the path.
         match crate::rollout::Recorder::create(
             state_root,
             self.project_root.clone(),
@@ -408,14 +410,30 @@ impl Session {
             meta.project_root.clone(),
         );
         *session.history.lock().await = history;
-        // Open a fresh recorder with lineage stamped in.
+        // Open a fresh recorder with lineage stamped in. The recorder
+        // takes care of inserting its own registry row; we follow up
+        // by tagging the *previous* session row Completed so the
+        // chat-history UI stops showing it as "active".
+        let resumed_from_id = meta.id.clone();
         match crate::rollout::Recorder::create_resumed(
             state_root,
             meta.project_root,
             meta.model,
             meta.id,
         ) {
-            Ok(rec) => session.recorder = Some(rec),
+            Ok(rec) => {
+                if let Ok(registry) =
+                    crate::session_registry::SessionRegistry::open(state_root)
+                {
+                    if let Err(e) = registry.set_status(
+                        &resumed_from_id,
+                        crate::session_registry::SessionStatus::Completed,
+                    ) {
+                        warn!(error = %e, "session_registry: marking resumed-from session completed failed");
+                    }
+                }
+                session.recorder = Some(rec);
+            }
             Err(e) => {
                 warn!(error = %e, "rollout: failed to open recorder for resume; continuing un-recorded");
             }
@@ -486,6 +504,21 @@ impl Session {
         // consistent for the next resume.
         if let Err(err) = recorder.flush().await {
             tracing::warn!(error = %err, "session: recorder flush failed during shutdown");
+        }
+        // Mark the session Completed in the registry before tearing
+        // down the writer task. Best-effort; we don't have the
+        // state_root path on Session directly, so we infer it from
+        // the rollout's `<state>/sessions/<Y>/<M>/<D>/<file>` layout
+        // by walking up four parents.
+        if let Some(state_root) = state_root_from_log_path(recorder.path()) {
+            if let Ok(registry) =
+                crate::session_registry::SessionRegistry::open(&state_root)
+            {
+                let _ = registry.set_status(
+                    &recorder.meta().id,
+                    crate::session_registry::SessionStatus::Completed,
+                );
+            }
         }
         recorder.shutdown().await;
     }
@@ -1081,16 +1114,22 @@ impl Session {
     }
 }
 
-/// Build a short human-readable args summary for the approval modal.
-///
-/// Heuristic: 200 chars of compact JSON, with newlines and runs of
-/// whitespace squashed. Tools with rich args (like `apply_edl` with a
-/// multi-line EDL) get truncated; the modal can show full args on demand
-/// later if we need it. Keeping this in core means every front-end
-/// (REPL, TUI, future GUI) gets the same default summary.
-///
-/// Truncation is done by Unicode chars (not bytes) so multi-byte input
-/// (emoji, accents) doesn't trigger a panic at a sub-char boundary.
+/// Recover the rollout's `<state_root>` from a session log path,
+/// assuming the standard `<state_root>/sessions/<YYYY>/<MM>/<DD>/<file>.jsonl`
+/// layout used by `Recorder::create`. Returns None if the path
+/// doesn't conform (e.g. tests with custom roots can have shallower
+/// layouts; this is best-effort).
+fn state_root_from_log_path(log_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    // Layout: <state_root>/sessions/<YYYY>/<MM>/<DD>/<file>.jsonl
+    //   parent(file)            -> <DD>
+    //   then walk up 4 more     -> <state_root>
+    let dd = log_path.parent()?;
+    let mm = dd.parent()?;
+    let yyyy = mm.parent()?;
+    let sessions = yyyy.parent()?;
+    sessions.parent().map(|p| p.to_path_buf())
+}
+
 #[cfg(test)]
 fn summarize_args(args: &serde_json::Value) -> String {
     crate::tool::summarize_args(args)

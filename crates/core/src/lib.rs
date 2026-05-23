@@ -61,6 +61,7 @@ pub mod proxy;
 pub mod review;
 pub mod rollout;
 pub mod session;
+pub mod session_registry;
 pub mod skills;
 pub mod structured_plan;
 pub mod subagent;

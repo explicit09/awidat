@@ -115,19 +115,89 @@ fn list_project_sessions(project_root: &Path) -> Result<Vec<ChatSessionSummary>,
     let Some(state_root) = awidat_config::defaults::state_root() else {
         return Ok(Vec::new());
     };
-    let entries = Recorder::list(&state_root).map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for (path, meta) in entries {
-        if !same_project_root(&meta.project_root, project_root) {
-            continue;
+    let registry = awidat_core::session_registry::SessionRegistry::open(&state_root)
+        .map_err(|e| format!("open session registry: {e}"))?;
+
+    // Backfill: on first boot after the registry landed, the JSONL
+    // files exist but the DB has no rows. Walk the filesystem once
+    // and INSERT. Subsequent calls find rows already there and skip
+    // the walk.
+    if registry
+        .list(Some(project_root))
+        .map_err(|e| format!("list registry: {e}"))?
+        .is_empty()
+    {
+        let entries = Recorder::list(&state_root).map_err(|e| e.to_string())?;
+        for (path, meta) in &entries {
+            if !same_project_root(&meta.project_root, project_root) {
+                continue;
+            }
+            // INSERT OR REPLACE — idempotent if we end up here again.
+            if let Err(e) = registry.create_session(
+                &meta.id,
+                &meta.project_root,
+                path,
+                &meta.model,
+                meta.started_at,
+            ) {
+                tracing::warn!(error = %e, path = %path.display(), "registry backfill failed");
+            }
+            // Mark Completed (backfilled rows are not the active
+            // session — by definition the active one didn't exist
+            // yet when this scan started).
+            let _ = registry.set_status(
+                &meta.id,
+                awidat_core::session_registry::SessionStatus::Completed,
+            );
+            // Bump message_count by reading the JSONL once. Cheap
+            // and one-shot; subsequent activity comes from the live
+            // recorder's per-message updates.
+            if let Ok((_, messages)) = Recorder::resume(path) {
+                let _ = registry.record_activity(
+                    &meta.id,
+                    messages.len() as i64,
+                    chrono::Utc::now(),
+                );
+            }
         }
-        let (message_count, title) = match Recorder::resume(&path) {
-            Ok((_, messages)) => (messages.len(), generated_session_title(&meta, &messages)),
-            Err(_) => (0, fallback_session_title(&meta)),
+    }
+
+    let rows = registry
+        .list(Some(project_root))
+        .map_err(|e| format!("list registry: {e}"))?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        // The registry doesn't store the session title (it's derived
+        // from message content). Resume the log just for the title;
+        // tolerated cost since chat history listings are interactive.
+        let title = match Recorder::resume(&row.log_path) {
+            Ok((meta, messages)) => generated_session_title(&meta, &messages),
+            Err(_) => fallback_session_title(&fallback_meta_for_row(&row)),
         };
-        out.push(summarize_session(&path, &meta, message_count, title));
+        out.push(ChatSessionSummary {
+            id: row.id,
+            title,
+            project_root: row.project_root.to_string_lossy().into_owned(),
+            log_path: row.log_path.to_string_lossy().into_owned(),
+            started_at: row.started_at.to_rfc3339(),
+            message_count: row.message_count,
+        });
     }
     Ok(out)
+}
+
+/// Synthesize a minimal SessionMeta for fallback title generation
+/// when the JSONL can't be parsed. We only need it so the existing
+/// `fallback_session_title` helper compiles.
+fn fallback_meta_for_row(row: &awidat_core::session_registry::SessionRow) -> SessionMeta {
+    SessionMeta {
+        id: row.id.clone(),
+        project_root: row.project_root.clone(),
+        model: row.model.clone(),
+        started_at: row.started_at,
+        awidat_version: String::new(),
+        resumed_from: None,
+    }
 }
 
 fn latest_project_session(project_root: &Path) -> Result<Option<(PathBuf, SessionMeta)>, String> {

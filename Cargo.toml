@@ -112,6 +112,7 @@ rmcp = { version = "1", default-features = false, features = ["client", "transpo
 anyhow = "1"
 thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 eventsource-stream = "0.2"

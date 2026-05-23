@@ -168,6 +168,12 @@ pub struct Recorder {
     /// Held so the writer task lives at least as long as any clone. The
     /// task exits cleanly on `Shutdown` or when the channel closes.
     _task: Arc<JoinHandle<()>>,
+    /// Optional registry handle for activity tracking. The writer
+    /// task fires `record_activity` on each Message line so the
+    /// desktop's chat-history listing has accurate message counts
+    /// without re-parsing the JSONL.
+    #[allow(dead_code)]
+    registry: Option<crate::session_registry::SessionRegistry>,
 }
 
 impl Recorder {
@@ -195,8 +201,8 @@ impl Recorder {
             .open(&path)?;
         let meta = SessionMeta {
             id,
-            project_root,
-            model,
+            project_root: project_root.clone(),
+            model: model.clone(),
             started_at,
             awidat_version: env!("CARGO_PKG_VERSION").to_string(),
             resumed_from: None,
@@ -205,14 +211,45 @@ impl Recorder {
         // before we return a Recorder the caller will trust.
         write_line(&mut file, &RolloutItem::SessionMeta(meta.clone()))?;
 
+        // Open the registry up front so the writer task can bump
+        // message_count without re-opening on every line. Failures
+        // here are non-fatal — the JSONL is the source of truth.
+        let registry = match crate::session_registry::SessionRegistry::open(state_root) {
+            Ok(reg) => {
+                if let Err(e) = reg.create_session(
+                    &meta.id,
+                    &meta.project_root,
+                    &path,
+                    &meta.model,
+                    meta.started_at,
+                ) {
+                    warn!(error = %e, "session_registry: create_session failed");
+                }
+                Some(reg)
+            }
+            Err(e) => {
+                warn!(error = %e, "session_registry: open failed");
+                None
+            }
+        };
+
         let (tx, rx) = mpsc::unbounded_channel::<WriterCmd>();
-        let task = tokio::spawn(writer_loop(rx, file, path.clone()));
+        let session_id_for_writer = meta.id.clone();
+        let registry_for_writer = registry.clone();
+        let task = tokio::spawn(writer_loop(
+            rx,
+            file,
+            path.clone(),
+            session_id_for_writer,
+            registry_for_writer,
+        ));
 
         Ok(Self {
             tx,
             path: Arc::new(path),
             meta: Arc::new(meta),
             _task: Arc::new(task),
+            registry,
         })
     }
 
@@ -503,12 +540,29 @@ async fn writer_loop(
     mut rx: mpsc::UnboundedReceiver<WriterCmd>,
     mut file: std::fs::File,
     path: PathBuf,
+    session_id: String,
+    registry: Option<crate::session_registry::SessionRegistry>,
 ) {
     while let Some(cmd) = rx.recv().await {
         match cmd {
             WriterCmd::Append(item) => {
+                let is_message = matches!(item, RolloutItem::Message(_));
                 if let Err(e) = write_line(&mut file, &item) {
                     warn!(path = %path.display(), error = %e, "rollout: write failed");
+                }
+                // Best-effort: bump registry stats after each
+                // Message line. Errors are logged once and ignored;
+                // a failed registry update isn't worth tearing down
+                // the writer task.
+                if is_message {
+                    if let Some(reg) = registry.as_ref() {
+                        if let Err(e) = reg.record_activity(&session_id, 1, Utc::now()) {
+                            warn!(
+                                error = %e,
+                                "session_registry: record_activity failed; continuing",
+                            );
+                        }
+                    }
                 }
             }
             WriterCmd::Flush(ack) => {
