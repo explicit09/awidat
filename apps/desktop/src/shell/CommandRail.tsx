@@ -517,60 +517,51 @@ export function CommandRail({
               a stack of widgets. */}
           {conversation.length > 0 ? (
             <Section label="Conversation">
-              <Stack gap="3">
-                {conversation.map((message) => {
+              <div className="flex flex-col gap-4">
+                {conversation.map((message, i) => {
                   const isUser = message.kind === "user";
+                  // ChatGPT-style separator: hairline rule between
+                  // user→agent turn pairs. We render the rule *before*
+                  // a user message that isn't the first item — that's
+                  // the visual "new exchange begins" cue.
+                  const showSeparator = i > 0 && isUser;
                   return (
-                    <div
-                      key={message.id}
-                      className={cn(
-                        "flex min-w-0 flex-col",
-                        isUser ? "items-end" : "items-start",
-                      )}
-                    >
+                    <div key={message.id} className="flex flex-col gap-3">
+                      {showSeparator ? (
+                        <hr className="border-0 border-t border-[var(--color-border-subtle)] opacity-60" />
+                      ) : null}
                       <div
                         className={cn(
-                          "flex min-w-0 items-baseline gap-2 mb-1",
-                          isUser ? "flex-row-reverse" : "",
+                          "flex min-w-0",
+                          isUser ? "justify-end" : "justify-start",
                         )}
                       >
-                        <span
-                          className={cn(
-                            "shrink-0 text-[var(--text-caption)] font-medium",
-                            isUser
-                              ? "text-[var(--color-brand-secondary)]"
-                              : "text-[var(--color-text-primary)]",
-                          )}
-                        >
-                          {isUser ? "You" : "Agent"}
-                        </span>
-                        <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)] opacity-60">
-                          {message.timestamp}
-                        </span>
-                      </div>
-                      {isUser ? (
-                        <p
-                          className={cn(
-                            "max-w-[85%] whitespace-pre-wrap break-words leading-relaxed",
-                            "rounded-[var(--radius-md)] px-2.5 py-1.5",
-                            "text-[var(--text-body-sm)] text-[var(--color-text-primary)]",
-                            "bg-[color-mix(in_oklab,var(--color-brand-secondary)_14%,transparent)]",
-                            "border border-[color-mix(in_oklab,var(--color-brand-secondary)_24%,transparent)]",
-                          )}
-                        >
-                          {message.text}
-                        </p>
-                      ) : (
-                        <div className="markdown break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {isUser ? (
+                          <p
+                            className={cn(
+                              "max-w-[85%] whitespace-pre-wrap break-words leading-relaxed",
+                              "rounded-[18px] px-3.5 py-2",
+                              "text-[var(--text-body-sm)] text-[var(--color-text-primary)]",
+                              // Muted indigo bubble in the spirit of
+                              // ChatGPT's right-side pill — distinct
+                              // from page background, not loud.
+                              "bg-[color-mix(in_oklab,#4c5b86_38%,var(--color-surface-card))]",
+                            )}
+                          >
                             {message.text}
-                          </ReactMarkdown>
-                        </div>
-                      )}
+                          </p>
+                        ) : (
+                          <div className="markdown w-full break-words leading-relaxed text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {message.text}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
-              </Stack>
+              </div>
             </Section>
           ) : null}
 
