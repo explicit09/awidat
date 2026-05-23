@@ -11,6 +11,7 @@
 
 import { useEffect } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { editorDispatch } from "../editor/tauriDispatch";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -152,11 +153,11 @@ export function useAppGlue() {
             .catch((e) => console.warn("propose_user_edit (delete selection) failed", e));
         }
       } else if (id === MENU_COMMANDS.ACCEPT_PROPOSAL && activeProposal) {
-        invoke("accept_proposal", { callId: activeProposal.callId }).catch((e) =>
+        editorDispatch.acceptProposal(activeProposal.callId).catch((e) =>
           console.warn("accept_proposal failed", e),
         );
       } else if (id === MENU_COMMANDS.REJECT_PROPOSAL && activeProposal) {
-        invoke("reject_proposal", { callId: activeProposal.callId }).catch((e) =>
+        editorDispatch.rejectProposal(activeProposal.callId).catch((e) =>
           console.warn("reject_proposal failed", e),
         );
       } else if (id === MENU_COMMANDS.TIMELINE_ZOOM_IN) {
