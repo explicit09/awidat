@@ -2955,6 +2955,12 @@ fn parse_title_plan(
         "slide_out" => TitleAnimation::SlideOut,
         _ => TitleAnimation::None,
     };
+    // Phases override the legacy flat enum when present. Bad
+    // payloads degrade to `None` — render walks skip malformed
+    // pieces of metadata rather than aborting the whole title.
+    let phases = m
+        .get("phases")
+        .and_then(|value| serde_json::from_value::<TitlePhases>(value.clone()).ok());
     let reveal = match m.get("reveal").and_then(|v| v.as_str()).unwrap_or("none") {
         "typewriter" => TextReveal::Typewriter,
         "word" => TextReveal::Word,
@@ -2991,6 +2997,7 @@ fn parse_title_plan(
         color,
         font_weight,
         animation,
+        phases,
         reveal,
         role,
         safe_area,
@@ -3642,8 +3649,14 @@ pub struct TitlePlan {
     pub color: String,
     /// Bold vs normal weight.
     pub font_weight: TitleWeight,
-    /// Entry / exit animation.
+    /// Entry / exit animation (legacy flat form).
     pub animation: TitleAnimation,
+    /// Optional three-phase animation (Entrance / Highlight / Exit).
+    /// When `Some`, the render layer drives expressions from these
+    /// phases. When `None`, the renderer lowers `animation` via
+    /// [`TitlePhases::from_legacy`] so there is only one rendering
+    /// code path.
+    pub phases: Option<TitlePhases>,
     /// Text reveal/write-on behavior.
     pub reveal: TextReveal,
     /// Overlay role, usually `"title"` or `"caption"`.
@@ -3733,6 +3746,90 @@ pub enum TitleAnimation {
     SlideIn,
     /// Slide out off-screen.
     SlideOut,
+}
+
+/// Mirrors `awidat_core::edl::op::TitlePhaseKind`. Render-side enum
+/// keeps the render crate independent of the core crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitlePhaseKind {
+    /// Alpha ramp 0→1 (entrance) or 1→0 (exit) over the phase duration.
+    Fade,
+    /// Translate from off-screen to resting (entrance) or vice versa.
+    Slide,
+    /// Instantaneous show/hide.
+    Pop,
+}
+
+/// Mirrors `awidat_core::edl::op::TitlePhase`.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+pub struct TitlePhase {
+    /// Kind of animation this phase plays.
+    pub kind: TitlePhaseKind,
+    /// Phase duration in seconds. `None` means use the renderer
+    /// default (500 ms today).
+    #[serde(default)]
+    pub duration_s: Option<f64>,
+    /// Per-character/word stagger in seconds. v1 preserves the field
+    /// for round-trip but does not render it.
+    #[serde(default)]
+    pub stagger_s: Option<f64>,
+}
+
+/// Mirrors `awidat_core::edl::op::TitlePhases`. Three-phase title
+/// animation: entrance, highlight, exit. Any phase may be absent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize)]
+pub struct TitlePhases {
+    /// Lead-in phase played at `start_s`.
+    #[serde(default)]
+    pub entrance: Option<TitlePhase>,
+    /// Mid-title accent (brief alpha dip).
+    #[serde(default)]
+    pub highlight: Option<TitlePhase>,
+    /// Lead-out phase ending at `end_s`.
+    #[serde(default)]
+    pub exit: Option<TitlePhase>,
+}
+
+impl TitlePhases {
+    /// Lower a legacy flat [`TitleAnimation`] into phase form so the
+    /// render path has exactly one driver.
+    pub fn from_legacy(animation: TitleAnimation) -> Self {
+        let fade = || TitlePhase {
+            kind: TitlePhaseKind::Fade,
+            duration_s: None,
+            stagger_s: None,
+        };
+        let slide = || TitlePhase {
+            kind: TitlePhaseKind::Slide,
+            duration_s: None,
+            stagger_s: None,
+        };
+        match animation {
+            TitleAnimation::None => Self::default(),
+            TitleAnimation::FadeIn => Self {
+                entrance: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::FadeOut => Self {
+                exit: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::FadeInOut => Self {
+                entrance: Some(fade()),
+                exit: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::SlideIn => Self {
+                entrance: Some(slide()),
+                ..Self::default()
+            },
+            TitleAnimation::SlideOut => Self {
+                exit: Some(slide()),
+                ..Self::default()
+            },
+        }
+    }
 }
 
 /// One transition between two segments in the timeline. Callers may
@@ -8089,59 +8186,164 @@ struct AnimatedExpressions {
 
 /// Build the animation expressions for a title. Pure function so it
 /// can be unit-tested without spinning up ffmpeg.
+///
+/// Drives off [`TitlePlan::phases`] when present; falls back to
+/// [`TitlePhases::from_legacy`] otherwise so the flat
+/// [`TitleAnimation`] enum is rendered through the same code path.
 fn apply_title_animation(t: &TitlePlan, resting_x: &str, resting_y: &str) -> AnimatedExpressions {
+    let phases = t
+        .phases
+        .unwrap_or_else(|| TitlePhases::from_legacy(t.animation));
     let start = t.start_s;
     let end = t.end_s;
-    let ramp = ANIMATION_RAMP_S;
-    let fade_in_end = start + ramp;
-    let fade_out_start = (end - ramp).max(start);
 
-    match t.animation {
-        TitleAnimation::None => AnimatedExpressions {
-            x: resting_x.to_string(),
-            y: resting_y.to_string(),
-            alpha: String::new(),
-        },
-        TitleAnimation::FadeIn => AnimatedExpressions {
-            x: resting_x.to_string(),
-            y: resting_y.to_string(),
-            // Linear ramp 0→1 over [start, start+ramp]; 1 thereafter.
-            // `if(lt(t,A), B, C)` evaluates B when t<A, else C.
-            alpha: format!(":alpha='if(lt(t\\,{fade_in_end})\\,(t-{start})/{ramp}\\,1)'"),
-        },
-        TitleAnimation::FadeOut => AnimatedExpressions {
-            x: resting_x.to_string(),
-            y: resting_y.to_string(),
-            // 1 until [end-ramp, end], then ramp 1→0.
-            alpha: format!(":alpha='if(lt(t\\,{fade_out_start})\\,1\\,({end}-t)/{ramp})'"),
-        },
-        TitleAnimation::FadeInOut => AnimatedExpressions {
-            x: resting_x.to_string(),
-            y: resting_y.to_string(),
-            // Three pieces: ramp in, plateau, ramp out.
-            alpha: format!(
-                ":alpha='if(lt(t\\,{fade_in_end})\\,(t-{start})/{ramp}\\,if(lt(t\\,{fade_out_start})\\,1\\,({end}-t)/{ramp}))'"
-            ),
-        },
-        TitleAnimation::SlideIn => slide_expressions(
-            t.position,
+    // x/y come from any active slide phase; fade affects alpha.
+    // v1 doesn't combine slide-in and slide-out on the same title;
+    // entrance wins, then exit.
+    let (x_expr, y_expr) =
+        slide_xy_for_phases(t.position, resting_x, resting_y, start, end, phases);
+
+    let alpha = fade_alpha_for_phases(start, end, phases);
+
+    AnimatedExpressions {
+        x: x_expr,
+        y: y_expr,
+        alpha,
+    }
+}
+
+/// Build x/y expressions honoring any slide phase. Returns
+/// `(resting_x, resting_y)` when no slide phase is active.
+fn slide_xy_for_phases(
+    position: TitlePosition,
+    resting_x: &str,
+    resting_y: &str,
+    start: f64,
+    end: f64,
+    phases: TitlePhases,
+) -> (String, String) {
+    let entrance_is_slide = matches!(phases.entrance.map(|p| p.kind), Some(TitlePhaseKind::Slide));
+    let exit_is_slide = matches!(phases.exit.map(|p| p.kind), Some(TitlePhaseKind::Slide));
+
+    if entrance_is_slide {
+        let dur = phases
+            .entrance
+            .and_then(|p| p.duration_s)
+            .unwrap_or(ANIMATION_RAMP_S);
+        let expr = slide_expressions(
+            position,
             resting_x,
             resting_y,
             SlideDirection::In,
             start,
             end,
-            ramp,
-        ),
-        TitleAnimation::SlideOut => slide_expressions(
-            t.position,
+            dur,
+        );
+        return (expr.x, expr.y);
+    }
+    if exit_is_slide {
+        let dur = phases
+            .exit
+            .and_then(|p| p.duration_s)
+            .unwrap_or(ANIMATION_RAMP_S);
+        let expr = slide_expressions(
+            position,
             resting_x,
             resting_y,
             SlideDirection::Out,
             start,
             end,
-            ramp,
-        ),
+            dur,
+        );
+        return (expr.x, expr.y);
     }
+    (resting_x.to_string(), resting_y.to_string())
+}
+
+/// Build the `:alpha='...'` segment honoring entrance/exit fade and
+/// the optional highlight dip. Returns an empty string when no phase
+/// contributes to alpha.
+///
+/// The returned expression compounds three pieces in time order:
+///
+///   - Entrance fade: linear ramp 0 → 1 over `[start, start + dur_in]`.
+///   - Highlight dip: alpha 1 → 0.7 → 1 over a window centered on the
+///     title's midpoint, with total width `highlight.duration_s`.
+///   - Exit fade: linear ramp 1 → 0 over `[end - dur_out, end]`.
+fn fade_alpha_for_phases(start: f64, end: f64, phases: TitlePhases) -> String {
+    let entrance_fade = phases
+        .entrance
+        .filter(|p| matches!(p.kind, TitlePhaseKind::Fade))
+        .map(|p| p.duration_s.unwrap_or(ANIMATION_RAMP_S));
+    let exit_fade = phases
+        .exit
+        .filter(|p| matches!(p.kind, TitlePhaseKind::Fade))
+        .map(|p| p.duration_s.unwrap_or(ANIMATION_RAMP_S));
+    let highlight = phases
+        .highlight
+        .map(|p| p.duration_s.unwrap_or(HIGHLIGHT_DEFAULT_DURATION_S));
+
+    if entrance_fade.is_none() && exit_fade.is_none() && highlight.is_none() {
+        return String::new();
+    }
+
+    // The "plateau" expression is what alpha resolves to between the
+    // entrance ramp end and the exit ramp start. Without a highlight
+    // it's just `1`; with a highlight it dips to 0.7 over a centered
+    // window.
+    let plateau = if let Some(hl_dur) = highlight {
+        highlight_plateau_expr(start, end, hl_dur)
+    } else {
+        "1".to_string()
+    };
+
+    // Compose from outer (latest in time) inward to keep the format
+    // identical to the legacy emitter on the canonical paths.
+    let mut expr = plateau;
+    if let Some(dur_out) = exit_fade {
+        let fade_out_start = (end - dur_out).max(start);
+        // 1 / plateau until fade_out_start, then ramp 1 → 0.
+        expr = format!("if(lt(t\\,{fade_out_start})\\,{expr}\\,({end}-t)/{dur_out})");
+    }
+    if let Some(dur_in) = entrance_fade {
+        let fade_in_end = start + dur_in;
+        // Ramp 0 → 1 over [start, fade_in_end]; then continue with the
+        // existing expression.
+        expr = format!("if(lt(t\\,{fade_in_end})\\,(t-{start})/{dur_in}\\,{expr})");
+    }
+    format!(":alpha='{expr}'")
+}
+
+/// Default highlight duration when the phase omits `duration_s`.
+const HIGHLIGHT_DEFAULT_DURATION_S: f64 = 0.3;
+
+/// Build the highlight-dip expression for the plateau slot of the
+/// alpha pipeline. Centered on `(start + end) / 2`, the alpha drops
+/// linearly from 1 to `HIGHLIGHT_MIN_ALPHA` over the first half of the
+/// window and recovers to 1 over the second half.
+fn highlight_plateau_expr(start: f64, end: f64, duration: f64) -> String {
+    const HIGHLIGHT_MIN_ALPHA: f64 = 0.7;
+    // Clamp the window inside [start, end] so a long highlight on a
+    // short title still produces a valid expression.
+    let half = (duration / 2.0).max(0.0);
+    let mid = (start + end) / 2.0;
+    let dip_start = (mid - half).max(start);
+    let dip_end = (mid + half).min(end);
+    let half_actual = (dip_end - dip_start) / 2.0;
+    if half_actual <= f64::EPSILON {
+        return "1".to_string();
+    }
+    let mid_actual = (dip_start + dip_end) / 2.0;
+    // alpha(t) =
+    //   1                                       if t < dip_start
+    //   1 - (1 - MIN) * (t - dip_start) / half  if t < mid_actual
+    //   MIN + (1 - MIN) * (t - mid_actual) / half  if t < dip_end
+    //   1                                       otherwise
+    let depth = 1.0 - HIGHLIGHT_MIN_ALPHA;
+    format!(
+        "if(lt(t\\,{dip_start})\\,1\\,if(lt(t\\,{mid_actual})\\,1-{depth}*(t-{dip_start})/{half_actual}\\,if(lt(t\\,{dip_end})\\,{min_alpha}+{depth}*(t-{mid_actual})/{half_actual}\\,1)))",
+        min_alpha = HIGHLIGHT_MIN_ALPHA,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -12756,6 +12958,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -12806,6 +13009,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -12854,6 +13058,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: TitleWeight::Normal,
                 animation: TitleAnimation::None,
+                phases: None,
                 reveal: TextReveal::None,
                 role: "title".into(),
                 safe_area: None,
@@ -12870,6 +13075,7 @@ mod tests {
                 color: "#FFAA00".into(),
                 font_weight: TitleWeight::Bold,
                 animation: TitleAnimation::None,
+                phases: None,
                 reveal: TextReveal::None,
                 role: "caption".into(),
                 safe_area: Some("mobile".into()),
@@ -12900,6 +13106,7 @@ mod tests {
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::FadeIn,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -13002,6 +13209,7 @@ animations: Vec::new(),
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "caption".into(),
             safe_area: Some("mobile".into()),
@@ -13112,6 +13320,7 @@ animations: Vec::new(),
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -13392,6 +13601,7 @@ animations: Vec::new(),
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Bold,
             animation: TitleAnimation::None,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
@@ -14560,6 +14770,7 @@ animations: Vec::new(),
             color: "#FFFFFF".into(),
             font_weight: TitleWeight::Normal,
             animation,
+            phases: None,
             reveal: TextReveal::None,
             role: "title".into(),
             safe_area: None,
