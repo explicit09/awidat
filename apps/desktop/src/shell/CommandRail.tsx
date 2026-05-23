@@ -2,10 +2,12 @@ import {
   ChevronDown,
   ChevronRight,
   CircleStop,
+  History,
   ListChecks,
   Maximize2,
   Minimize2,
   Paperclip,
+  Plus,
   SendHorizontal,
   Sparkles,
 } from "lucide-react";
@@ -13,6 +15,7 @@ import { useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
+import type { PermissionMode } from "../protocol";
 
 /**
  * Command Rail — the left rail of the cockpit.
@@ -129,6 +132,10 @@ export type CommandRailProps = {
   onNewChat?: () => void;
   /** Called when the user enters/leaves focus mode. */
   onToggleFocus?: () => void;
+  /** Current agent permission mode. Drives the composer-footer chip. */
+  permissionMode?: PermissionMode;
+  /** Called when the user picks a new permission mode from the chip. */
+  onSetPermissionMode?: (mode: PermissionMode) => void;
 };
 
 export function CommandRail({
@@ -152,6 +159,8 @@ export function CommandRail({
   onSelectChatSession,
   onNewChat,
   onToggleFocus,
+  permissionMode,
+  onSetPermissionMode,
 }: CommandRailProps) {
   const [draft, setDraft] = useState(initialDraft);
   const [activityOpen, setActivityOpen] = useState(false);
@@ -213,21 +222,44 @@ export function CommandRail({
             />
           </Inline>
         </button>
-        {onToggleFocus ? (
+        <Inline gap="0" align="center" className="shrink-0">
           <button
             type="button"
-            onClick={onToggleFocus}
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-card)] hover:text-[var(--color-text-primary)] transition-colors"
-            title={focused ? "Restore workspace" : "Focus mode"}
-            aria-label={focused ? "Restore workspace" : "Focus mode"}
+            onClick={onNewChat}
+            disabled={running || chatLoading}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-card)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+            title="New chat"
+            aria-label="New chat"
           >
-            {focused ? (
-              <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
-            ) : (
-              <Maximize2 className="h-3.5 w-3.5 stroke-[1.75]" />
-            )}
+            <Plus className="h-3.5 w-3.5 stroke-[1.75]" />
           </button>
-        ) : null}
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((open) => !open)}
+            disabled={chatLoading}
+            aria-expanded={historyOpen}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-card)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
+            title="Chat history"
+            aria-label="Chat history"
+          >
+            <History className="h-3.5 w-3.5 stroke-[1.75]" />
+          </button>
+          {onToggleFocus ? (
+            <button
+              type="button"
+              onClick={onToggleFocus}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-card)] hover:text-[var(--color-text-primary)] transition-colors"
+              title={focused ? "Restore workspace" : "Focus mode"}
+              aria-label={focused ? "Restore workspace" : "Focus mode"}
+            >
+              {focused ? (
+                <Minimize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+              ) : (
+                <Maximize2 className="h-3.5 w-3.5 stroke-[1.75]" />
+              )}
+            </button>
+          ) : null}
+        </Inline>
       </Inline>
       {historyOpen ? (
         <div className="mt-2 max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-md)]">
@@ -314,10 +346,14 @@ export function CommandRail({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                submit();
-              }
+              // Enter sends. Shift/Option/Cmd/Ctrl+Enter inserts a
+              // newline (Cmd+Enter still sends for muscle-memory
+              // power users). IME composition guards prevent
+              // accidental sends mid-input on Asian keyboards.
+              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+              if (e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              submit();
             }}
             placeholder={
               hasProject
@@ -334,15 +370,12 @@ export function CommandRail({
           />
           <Inline justify="between" align="center" gap="2" className="px-2 py-1.5">
             <Inline gap="2" align="center" className="min-w-0">
-              <span
-                className={cn(
-                  "min-w-0 truncate text-[var(--text-micro)]",
-                  sendDisabledReason ? "text-[var(--color-text-muted)]" : "text-[var(--color-text-muted)] opacity-70",
-                )}
-                title={sendDisabledReason ?? "Command-Enter sends the command."}
-              >
-                {sendDisabledReason ?? "⌘↩ to send"}
-              </span>
+              {permissionMode && onSetPermissionMode ? (
+                <PermissionModeChip
+                  mode={permissionMode}
+                  onChange={onSetPermissionMode}
+                />
+              ) : null}
             </Inline>
             {running ? (
               <Button
@@ -805,6 +838,44 @@ function EmptyState({
  * the agent attaches today, and the goal is human-readable shorthand
  * the user can scan in 100ms instead of decoding a UUID.
  */
+/** Composer-footer pill that exposes the agent's permission mode.
+ *  Labels chosen for compactness — the tooltip carries the full
+ *  meaning so the user gets a one-glance read of the chip and a
+ *  full sentence on hover. */
+function PermissionModeChip({
+  mode,
+  onChange,
+}: {
+  mode: PermissionMode;
+  onChange: (next: PermissionMode) => void;
+}) {
+  const labels: Record<PermissionMode, string> = {
+    manual: "Manual",
+    copilot: "Copilot",
+    autopilot: "Auto",
+  };
+  const titles: Record<PermissionMode, string> = {
+    manual: "Manual — every proposal needs explicit Accept.",
+    copilot: "Copilot — agent surfaces notes; you ask it to act.",
+    autopilot: "Auto — agent applies edits without approval cards.",
+  };
+  return (
+    <label className="awidat-mode-chip" title={titles[mode]}>
+      <span className="awidat-mode-chip-dot" data-mode={mode} aria-hidden />
+      <span className="awidat-mode-chip-label">{labels[mode]}</span>
+      <select
+        value={mode}
+        onChange={(e) => onChange(e.target.value as PermissionMode)}
+        aria-label="Agent permission mode"
+      >
+        <option value="manual">Manual</option>
+        <option value="copilot">Copilot</option>
+        <option value="autopilot">Auto</option>
+      </select>
+    </label>
+  );
+}
+
 function shortenChip(raw: string): string {
   const trimmed = raw.trim();
   const tlMatch = trimmed.match(/^Timeline:\s*(.+)$/i);

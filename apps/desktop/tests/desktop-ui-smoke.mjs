@@ -76,7 +76,7 @@ const SPEC_SCREENS = [
     url: BASE_URL,
     text: [
       "Main Desktop Workspace",
-      "⌘↩ to send",
+      "Manual",
       "Podcast Tightening v1",
       "Proposal Inspector",
       "Timeline",
@@ -286,7 +286,7 @@ await check("agent command rail renders Screen 2 intent, context, plan, activity
   await page.goto(BASE_URL, { waitUntil: "networkidle" });
   const body = (await page.textContent("body")).toLowerCase();
   for (const expected of [
-    "⌘↩ to send",
+    "Manual",
     "Cut this into a tight 8-minute podcast episode.",
     "Remove dead air but preserve natural pacing.",
     "Clip Interview_A",

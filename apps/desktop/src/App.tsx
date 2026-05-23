@@ -73,7 +73,7 @@ import { useTimelineStore } from "./timeline/store";
 import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
-import type { Item, JobKind, TimelineSnapshot } from "./protocol";
+import type { Item, JobKind, PermissionMode, TimelineSnapshot } from "./protocol";
 import {
   screen2Activity,
   SCREEN2_CURRENT_TIME_S,
@@ -159,6 +159,7 @@ function App() {
   const [activeChatSession, setActiveChatSession] = useState<ChatSessionSummary | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
   const [agentFocusMode, setAgentFocusMode] = useState(false);
+  const [permissionMode, setPermissionModeState] = useState<PermissionMode>("manual");
   // Default-collapsed: the right rail is empty 95% of the time when no
   // proposal exists. We auto-expand it when an active proposal arrives
   // (see effect below) and let the user pin it open via the existing
@@ -815,6 +816,25 @@ function App() {
     };
   }, [current, demoMode]);
 
+  // Load persisted agent permission mode so the composer chip shows
+  // the right initial value. Falls back to "manual" on error.
+  useEffect(() => {
+    if (!isTauri()) return;
+    invoke<PermissionMode>("get_permission_mode")
+      .then((mode) => setPermissionModeState(mode))
+      .catch(() => setPermissionModeState("manual"));
+  }, []);
+
+  async function changePermissionMode(next: PermissionMode) {
+    setPermissionModeState(next);
+    if (!isTauri()) return;
+    try {
+      await invoke("set_permission_mode", { mode: next });
+    } catch (e) {
+      console.warn("set_permission_mode failed", e);
+    }
+  }
+
   // Distill agent items into the CommandRail's plan + activity lists.
   // Real agent producers populate `Plan` items, `ToolCall` items, etc.
   // We translate them into shell-friendly shapes here.
@@ -1308,6 +1328,8 @@ function App() {
       }}
       onSuggestion={(action) => void runEngineCommand(action.prompt)}
       onRemoveChip={(chip) => dismissContextChip(chip)}
+      permissionMode={permissionMode}
+      onSetPermissionMode={(mode) => void changePermissionMode(mode)}
     />
   );
   const workspaceOverride = agentFocusMode ? (

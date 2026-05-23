@@ -6287,10 +6287,8 @@ button {
   background: var(--color-surface-card);
   border: 1px solid var(--color-border-subtle);
   border-radius: 12px;
-  transition: border-color 120ms ease;
-}
-.awidat-chat-rail .awidat-composer-card:focus-within {
-  border-color: var(--color-border-focus);
+  /* No focus ring — the cursor blinking inside the textarea is signal
+     enough that the input is active. Cursor IDE does the same. */
 }
 .awidat-chat-rail .awidat-composer-card textarea {
   font-size: 14px;
@@ -6350,4 +6348,56 @@ button {
 .awidat-chat-rail .awidat-context-strip .awidat-context-clear:hover {
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
+}
+
+/* Permission-mode chip — sits where the "⌘↩ to send" hint used to.
+   A native <select> wrapped in a label so the OS-native dropdown
+   menu opens on click, but the label provides the calm visual chrome
+   so the chip blends with the composer footer instead of looking
+   like a form field. Mode dot color encodes intent: blue=manual
+   (you drive), amber=copilot (it nudges), green=autopilot (it
+   drives). */
+.awidat-chat-rail .awidat-mode-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.awidat-chat-rail .awidat-mode-chip:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+.awidat-chat-rail .awidat-mode-chip .awidat-mode-chip-dot {
+  height: 6px;
+  width: 6px;
+  border-radius: 999px;
+  background: var(--color-text-muted);
+}
+.awidat-chat-rail .awidat-mode-chip .awidat-mode-chip-dot[data-mode="manual"] {
+  background: #5fa8ff;
+}
+.awidat-chat-rail .awidat-mode-chip .awidat-mode-chip-dot[data-mode="copilot"] {
+  background: #fbbf24;
+}
+.awidat-chat-rail .awidat-mode-chip .awidat-mode-chip-dot[data-mode="autopilot"] {
+  background: #5bd3d9;
+}
+.awidat-chat-rail .awidat-mode-chip select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: transparent;
 }
