@@ -32,12 +32,6 @@ export {
   type Alternative,
 } from "./ProposalInspector";
 export {
-  BatchReviewSurface,
-  type BatchReviewSurfaceProps,
-  type AgentCommand,
-  type BatchProposal,
-} from "./BatchReviewSurface";
-export {
   IndexingDashboard,
   type IndexingDashboardProps,
   type IndexingMediaItem,

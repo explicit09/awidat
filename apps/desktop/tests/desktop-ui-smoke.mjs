@@ -85,10 +85,6 @@ const SPEC_SCREENS = [
     ],
   },
   {
-    id: "screen3",
-    text: ["Agent Proposal Review", "Agent command history", "Proposed changes", "Batch insights", "Revise with prompt"],
-  },
-  {
     id: "screen4",
     text: ["Timeline / Transcript Hybrid", "Selected sentence", "Review · Transcript", "What this cut does", "Keep this pause"],
   },

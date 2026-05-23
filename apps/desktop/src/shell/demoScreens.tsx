@@ -49,20 +49,15 @@ import {
   type PillStatus,
 } from "../ui";
 import type { CommandRailProps } from "./CommandRail";
-import { BatchReviewSurface, type AgentCommand, type BatchProposal } from "./BatchReviewSurface";
 import { DeliverySurface, type DeliveryRenderSummary, type DeliveryTarget, type PreflightFinding } from "./DeliverySurface";
 import { IndexingDashboard, type IndexingMediaItem, type IndexingTask } from "./IndexingDashboard";
 import { ProposalInspector, type ProposalInspectorData } from "./ProposalInspector";
-import podcastAfter from "./assets/podcast-after.jpg";
-import podcastBefore from "./assets/podcast-before.jpg";
 import podcastThumb01 from "./assets/podcast-thumb-01.jpg";
 import podcastThumb02 from "./assets/podcast-thumb-02.jpg";
-import podcastThumb03 from "./assets/podcast-thumb-03.jpg";
 import podcastThumb04 from "./assets/podcast-thumb-04.jpg";
-import podcastThumb05 from "./assets/podcast-thumb-05.jpg";
 import podcastWide from "./assets/podcast-wide.jpg";
 
-export const DEMO_SCREEN_IDS = ["screen1", "screen2", "screen3", "screen4", "screen5", "screen6", "screen7", "screen8", "screen9"] as const;
+export const DEMO_SCREEN_IDS = ["screen1", "screen2", "screen4", "screen5", "screen6", "screen7", "screen8", "screen9"] as const;
 export type DemoScreenId = (typeof DEMO_SCREEN_IDS)[number];
 
 export type DemoScreenDefinition = {
@@ -99,87 +94,6 @@ export function resolveDemoScreenId(search: string): DemoScreenId {
     : "screen2";
 }
 
-const batchCommands: AgentCommand[] = [
-  {
-    id: "cmd-1",
-    text: "Generate 5 short clips from the strongest moments.",
-    status: "complete",
-    proposalCount: 5,
-    startedAt: "12:31",
-  },
-  {
-    id: "cmd-2",
-    text: "Tighten hooks and package for YouTube Shorts.",
-    status: "running",
-    proposalCount: 3,
-    startedAt: "12:38",
-  },
-  {
-    id: "cmd-3",
-    text: "Review captions and safe-area framing.",
-    status: "queued",
-    proposalCount: 2,
-    startedAt: "12:41",
-  },
-];
-
-const batchProposals: BatchProposal[] = [
-  {
-    id: "short-1",
-    title: "The #1 thing that kills startups",
-    status: "pending",
-    timeRange: "00:06:35:21 – 00:07:04:18",
-    cutType: "Hook + punchline",
-    explanation: "Strong branded phrase, clean handoff, and a natural title-card moment.",
-    confidence: 0.92,
-    risk: "low",
-    thumbnail: podcastThumb01,
-  },
-  {
-    id: "short-2",
-    title: "Biggest mistake most founders make",
-    status: "pending",
-    timeRange: "00:08:12:03 – 00:08:39:20",
-    cutType: "Jump-cut sequence",
-    explanation: "Removes filler while keeping the guest's thought intact.",
-    confidence: 0.89,
-    risk: "medium",
-    thumbnail: podcastThumb02,
-  },
-  {
-    id: "short-3",
-    title: "Product vs. Market: The truth",
-    status: "pending",
-    timeRange: "00:14:02:10 – 00:14:37:02",
-    cutType: "Story clip",
-    explanation: "Best standalone moment for vertical distribution.",
-    confidence: 0.85,
-    risk: "low",
-    thumbnail: podcastThumb03,
-  },
-  {
-    id: "short-4",
-    title: "How to get your first 100 users",
-    status: "accepted",
-    timeRange: "00:18:40:04 – 00:19:22:10",
-    cutType: "Founder lesson",
-    explanation: "Clear tactical advice with a crisp end beat and caption-safe framing.",
-    confidence: 0.78,
-    risk: "low",
-    thumbnail: podcastThumb04,
-  },
-  {
-    id: "short-5",
-    title: "Why growth does not fix broken product",
-    status: "rejected",
-    timeRange: "00:23:02:11 – 00:24:21:08",
-    cutType: "Long-form extract",
-    explanation: "Useful idea, but the proposed cut runs long for TikTok and needs a sharper hook.",
-    confidence: 0.72,
-    risk: "medium",
-    thumbnail: podcastThumb05,
-  },
-];
 
 const reviewSegments: ReviewTranscriptSegment[] = [
   {
@@ -489,32 +403,6 @@ const deliverySummary: DeliveryRenderSummary = {
   confidence: 0.82,
 };
 
-const screen3CommandRail: CommandRailProps = {
-  hasProject: true,
-  running: true,
-  initialDraft: "Create a short clips pack from the best podcast moments.\nKeep each clip self-contained and safe for vertical delivery.",
-  contextChips: [
-    { label: "Clip pack: Shorts v2", kind: "project" },
-    { label: "Range: full episode", kind: "media" },
-    { label: "Target: Shorts 9:16", kind: "lens" },
-  ],
-  taskProgress: { label: "Packaging proposal set...", progress: 76, eta: "00:00:52" },
-  plan: [
-    { id: "p1", text: "Rank candidate hooks", status: "complete" },
-    { id: "p2", text: "Build clip boundaries", status: "complete" },
-    { id: "p3", text: "Review captions and safe areas", status: "in_progress" },
-    { id: "p4", text: "Prepare delivery package", status: "pending" },
-  ],
-  activity: [
-    { id: "a1", timestamp: "12:37", text: "Found 14 candidate short-form moments" },
-    { id: "a2", timestamp: "12:39", text: "Generated 5 clip proposals" },
-  ],
-  suggestions: [
-    { id: "s1", label: "Revise hooks", prompt: "Make the opening lines sharper" },
-    { id: "s2", label: "Package clips", prompt: "Send accepted clips to preflight" },
-  ],
-};
-
 export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
   screen1: {
     id: "screen1",
@@ -550,33 +438,6 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
       "Timeline",
       "Transcript",
       "Evidence",
-    ],
-  },
-  screen3: {
-    id: "screen3",
-    specLabel: "Screen 3",
-    title: "Agent Proposal Review",
-    stage: "edit",
-    statusLabel: "Reviewing clip pack",
-    pendingLabel: "5 proposals",
-    commandRail: screen3CommandRail,
-    workspace: (
-      <BatchReviewSurface
-        commands={batchCommands}
-        proposals={batchProposals}
-        selectedProposalId="short-1"
-        beforeFrame={<DemoImage src={podcastBefore} label="Source episode" />}
-        afterFrame={<DemoImage src={podcastAfter} label="Proposed short clip" />}
-        insights={{ pending: 4, accepted: 1, rejected: 0, avgConfidence: 0.87, riskLow: 3, riskMedium: 2, riskHigh: 0 }}
-      />
-    ),
-    smokeText: [
-      "Agent command history",
-      "Proposed changes",
-      "Short 01",
-      "Before / After",
-      "Batch insights",
-      "Revise with prompt",
     ],
   },
   screen4: {
