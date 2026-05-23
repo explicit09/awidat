@@ -5,15 +5,15 @@ import type { TrackAudioControls } from "./TrackAudioControls";
 /**
  * One row in [`TimelineSnapshot::tracks`].
  */
-export type TimelineTrack = { 
+export type TimelineTrack = {
 /**
  * Track name from the OTIO file.
  */
-name: string, 
+name: string,
 /**
  * Track kind: `"video"` or `"audio"`.
  */
-kind: string, 
+kind: string,
 /**
  * Optional awidat-specific role tag from `track.metadata`.
  * Today's only value is `"titles"` (set by InsertTitle's
@@ -21,11 +21,11 @@ kind: string,
  * special amber-on-black band rather than a regular video lane.
  * `None` for ordinary V1 / V2 / audio tracks.
  */
-role: string | null, 
+role: string | null,
 /**
  * Audio controls for audio tracks. `None` for video/title tracks.
  */
-audio: TrackAudioControls | null, 
+audio: TrackAudioControls | null,
 /**
  * Items in this track in playback order.
  */

@@ -8,15 +8,15 @@ import type { VideoOverlayStyling } from "./VideoOverlayStyling";
  * One drawable item on a track. Variant-tagged so the frontend can
  * render each kind differently.
  */
-export type TimelineItem = { "kind": "clip", 
+export type TimelineItem = { "kind": "clip",
 /**
  * Index of this item within its track. Stable across reads.
  */
-index: number, 
+index: number,
 /**
  * Display name (clip's OTIO `name` field).
  */
-name: string, 
+name: string,
 /**
  * Anchor uuid for `Anchor::ClipUuid` in EDL ops. Pulled from
  * `clip.metadata.awidat.extra["clip_uuid"]` if present;
@@ -25,25 +25,25 @@ name: string,
  * Drag-to-trim wires this directly into
  * `TrimClip { anchor: ClipUuid { uuid } }`.
  */
-clip_uuid: string, 
+clip_uuid: string,
 /**
  * Start of this clip on the track timeline, in seconds.
  */
-track_start_s: number, 
+track_start_s: number,
 /**
  * Duration on the track, in seconds.
  */
-duration_s: number, 
+duration_s: number,
 /**
  * Asset id (project-relative path), if the clip references
  * one. `None` for clips with missing or non-external refs.
  */
-asset_id: string | null, 
+asset_id: string | null,
 /**
  * Source-asset start offset, in seconds. Useful when the
  * frontend wants to map "this clip plays source[12.5s..]".
  */
-source_start_s: number | null, 
+source_start_s: number | null,
 /**
  * Absolute path to the asset's 720p proxy mp4 on disk, if
  * the proxy has finished generating. The frontend feeds this
@@ -52,7 +52,7 @@ source_start_s: number | null,
  * when the asset is missing, the proxy hasn't finished
  * transcoding, or the proxies dir doesn't exist yet.
  */
-proxy_path: string | null, 
+proxy_path: string | null,
 /**
  * Absolute path to the directory holding this asset's
  * extracted filmstrip JPEGs (e.g.
@@ -63,7 +63,7 @@ proxy_path: string | null,
  * [`JobKind::Thumbnails`] job hasn't completed) or the asset
  * doesn't resolve to a known thumbnails dir.
  */
-thumbnail_dir: string | null, 
+thumbnail_dir: string | null,
 /**
  * Absolute path to this asset's waveform-peaks JSON sidecar
  * (e.g. `<project>/.awidat/waveforms/<stem>-<hash>.json`).
@@ -73,7 +73,7 @@ thumbnail_dir: string | null,
  * hasn't completed (the [`JobKind::Waveform`] job hasn't
  * landed) or the asset has no audio stream.
  */
-waveform_path: string | null, 
+waveform_path: string | null,
 /**
  * Per-clip linear gain multiplier (`awidat.volume` Effect).
  * `None` when the clip has no volume effect; `1.0` is unity
@@ -81,7 +81,7 @@ waveform_path: string | null,
  * PropertiesPane volume slider and to paint a `🔉 0.5×` badge
  * on clips with non-default values.
  */
-volume: number | null, 
+volume: number | null,
 /**
  * Per-clip playback rate multiplier (`awidat.speed` Effect).
  * `None` when the clip has no speed effect; `1.0` is unity.
@@ -90,53 +90,53 @@ volume: number | null,
  * input and to paint a `⚡ 2×` badge on clips with non-default
  * values.
  */
-speed: number | null, 
+speed: number | null,
 /**
  * Per-clip audio fade in seconds from clip start.
  */
-fade_in_s: number | null, 
+fade_in_s: number | null,
 /**
  * Per-clip audio fade out seconds into clip end.
  */
-fade_out_s: number | null, 
+fade_out_s: number | null,
 /**
  * Incoming audio lead for a J-cut, in seconds.
  */
-audio_lead_s: number | null, 
+audio_lead_s: number | null,
 /**
  * Outgoing audio trail for an L-cut, in seconds.
  */
-audio_trail_s: number | null, 
+audio_trail_s: number | null,
 /**
  * Human-readable split-edit reason.
  */
-split_edit_reason: string | null, 
+split_edit_reason: string | null,
 /**
  * Optional split-edit planner confidence.
  */
-split_edit_confidence: number | null, 
+split_edit_confidence: number | null,
 /**
  * Link group shared by related video/audio clips imported
  * from the same source.
  */
-link_group_id: string | null, 
+link_group_id: string | null,
 /**
  * Whether the referenced asset has a video stream.
  */
-has_video: boolean | null, 
+has_video: boolean | null,
 /**
  * Whether the referenced asset has an audio stream.
  */
-has_audio: boolean | null, 
+has_audio: boolean | null,
 /**
  * Clip-level color controls (`awidat.color_correction` Effect).
  * `None` when no correction is stamped on this clip.
  */
-color_correction: ColorCorrectionStyling | null, 
+color_correction: ColorCorrectionStyling | null,
 /**
  * Project-relative LUT path (`awidat.lut` Effect), if present.
  */
-lut_path: string | null, 
+lut_path: string | null,
 /**
  * Title-overlay styling, populated when the clip carries an
  * `awidat.title` Effect (i.e. it's on the Titles track).
@@ -144,76 +144,76 @@ lut_path: string | null,
  * title editor in PropertiesPane when this is `Some` and
  * paints the title text inline on the timeline band.
  */
-title: TitleStyling | null, 
+title: TitleStyling | null,
 /**
  * Video overlay styling for upper-track media clips. `None`
  * means a regular full-frame overlay/cutaway when the clip
  * is on an upper video track.
  */
-video_overlay: VideoOverlayStyling | null, 
+video_overlay: VideoOverlayStyling | null,
 /**
  * Supported parameter animations attached to this clip.
  */
-animations: Array<TimelineParameterAnimation>, } | { "kind": "gap", 
+animations: Array<TimelineParameterAnimation>, } | { "kind": "gap",
 /**
  * Index of this item within its track.
  */
-index: number, 
+index: number,
 /**
  * Start position on the track, in seconds.
  */
-track_start_s: number, 
+track_start_s: number,
 /**
  * Gap duration, in seconds.
  */
-duration_s: number, } | { "kind": "transition", 
+duration_s: number, } | { "kind": "transition",
 /**
  * Index of this item within its track.
  */
-index: number, 
+index: number,
 /**
  * Anchor position on the track, in seconds.
  */
-track_start_s: number, 
+track_start_s: number,
 /**
  * Cumulative effect duration (in_offset + out_offset).
  */
-duration_s: number, 
+duration_s: number,
 /**
  * Seconds before the cut occupied by the transition.
  */
-in_offset_s: number, 
+in_offset_s: number,
 /**
  * Seconds after the cut occupied by the transition.
  */
-out_offset_s: number, 
+out_offset_s: number,
 /**
  * Effect name from the OTIO transition (e.g.
  * `"SMPTE_Dissolve"`).
  */
-effect_name: string, 
+effect_name: string,
 /**
  * Stable semantic Awidat transition id, when the transition
  * carries `metadata.awidat_transition`.
  */
-transition_id: string | null, 
+transition_id: string | null,
 /**
  * Semantic transition family, for example `dissolve` or
  * `motion_blur`.
  */
-transition_family: string | null, 
+transition_family: string | null,
 /**
  * Why this visible transition belongs at the cut.
  */
-transition_intent: string | null, 
+transition_intent: string | null,
 /**
  * Optional transition intensity in `[0, 1]`.
  */
-transition_energy: number | null, 
+transition_energy: number | null,
 /**
  * Optional spatial direction such as `left`, `right`, or `in`.
  */
-transition_direction: string | null, 
+transition_direction: string | null,
 /**
  * Resolved transition audio behavior: `crossfade` or `cut`.
  */

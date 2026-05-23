@@ -4,23 +4,23 @@ import type { TimelineMotionPathControlPoint } from "./TimelineMotionPathControl
 /**
  * One point on a 2D motion path.
  */
-export type TimelineMotionPathPoint = { 
+export type TimelineMotionPathPoint = {
 /**
  * Time in seconds relative to the clip start.
  */
-time_s: number, 
+time_s: number,
 /**
  * Horizontal viewport-width offset.
  */
-x: number, 
+x: number,
 /**
  * Vertical viewport-height offset.
  */
-y: number, 
+y: number,
 /**
  * Optional outgoing spatial control point for the segment after this point.
  */
-outgoing_control?: TimelineMotionPathControlPoint, 
+outgoing_control?: TimelineMotionPathControlPoint,
 /**
  * Optional incoming spatial control point for the segment before this point.
  */

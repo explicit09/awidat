@@ -3,19 +3,19 @@
 /**
  * One row in a professional review package.
  */
-export type ProfessionalReviewFinding = { 
+export type ProfessionalReviewFinding = {
 /**
  * Stable kind, for example `missing_proxy` or `loudness_out_of_range`.
  */
-kind: string, 
+kind: string,
 /**
  * Severity: info, warning, or error.
  */
-severity: string, 
+severity: string,
 /**
  * User-facing message.
  */
-message: string, 
+message: string,
 /**
  * Optional fix proposal reference.
  */

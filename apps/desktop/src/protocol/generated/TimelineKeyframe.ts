@@ -5,31 +5,31 @@ import type { TimelineSpringParameters } from "./TimelineSpringParameters";
 /**
  * One keyframe exposed to desktop preview.
  */
-export type TimelineKeyframe = { 
+export type TimelineKeyframe = {
 /**
  * Time in seconds relative to the clip start.
  */
-time_s: number, 
+time_s: number,
 /**
  * Numeric value.
  */
-value: number, 
+value: number,
 /**
  * Interpolation name from proto.
  */
-interpolation: string, 
+interpolation: string,
 /**
  * Easing name from proto.
  */
-easing: string, 
+easing: string,
 /**
  * Optional normalized cubic Bezier handles.
  */
-bezier: TimelineBezierHandles | null, 
+bezier: TimelineBezierHandles | null,
 /**
  * Tangent constraint mode from proto.
  */
-tangent_mode: string, 
+tangent_mode: string,
 /**
  * Optional spring parameters.
  */

@@ -5,31 +5,31 @@
  * Fields are optional because an EDL op can set only the controls
  * it needs; omitted fields use render defaults.
  */
-export type ColorCorrectionStyling = { 
+export type ColorCorrectionStyling = {
 /**
  * Exposure offset in stops.
  */
-exposure_ev: number | null, 
+exposure_ev: number | null,
 /**
  * Contrast multiplier.
  */
-contrast: number | null, 
+contrast: number | null,
 /**
  * Saturation multiplier.
  */
-saturation: number | null, 
+saturation: number | null,
 /**
  * Normalized warm/cool control.
  */
-temperature: number | null, 
+temperature: number | null,
 /**
  * Normalized green/magenta control.
  */
-tint: number | null, 
+tint: number | null,
 /**
  * Normalized shadow control.
  */
-shadows: number | null, 
+shadows: number | null,
 /**
  * Normalized highlight control.
  */
