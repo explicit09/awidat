@@ -494,12 +494,19 @@ fn format_parse_error(e: &EdlParseError) -> String {
     };
     let mut msg = format!(
         "apply_edl: parse failed — {e}. The envelope must begin with \
-         `*** Begin EDL` and end with `*** End EDL`; ops are `*** Trim \
-         Clip | Untrim Clip | Delete Clip | Split Clip | Insert Clip | \
-         Insert BRoll | Insert PiP | Move Clip | Insert Transition`. Anchors look \
-         like `@@ anchor: transcript_snippet=\"...\"` or `@@ anchor: \
-         clip_uuid=clip-0`. Insert Clip skips the `@@ anchor:` line — \
-         it doesn't anchor against an existing clip."
+         `*** Begin EDL` and end with `*** End EDL`. Clip ops: \
+         `*** Trim Clip | Untrim Clip | Delete Clip | Split Clip | \
+         Insert Clip | Insert BRoll | Insert PiP | Move Clip | \
+         Ripple Move | Ripple Delete | Ripple Trim`. Gap ops: \
+         `*** Delete Gap` (with `+ side: before|after` against a real \
+         clip's anchor) and `*** Trim Track Tail` (with `+ track: V1`). \
+         Track ops: `*** Insert Track` and `*** Delete Track` (both \
+         use `+ name: <track>`; Delete Track refuses populated tracks \
+         unless `+ force: true`). Transition ops: `*** Insert \
+         Transition | Delete Transition`. Anchors look like `@@ \
+         anchor: transcript_snippet=\"...\"` or `@@ anchor: \
+         clip_uuid=clip-0`. Insert Clip and the Track ops skip the \
+         `@@ anchor:` line — they don't anchor against an existing clip."
     );
     if let Some(extra) = hint {
         msg.push_str("\n\nHint: ");

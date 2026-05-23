@@ -674,12 +674,15 @@ impl OpBuilder {
                 })
             }
             OpKind::DeleteTrack => {
-                let name = take_field_string(&mut fields, "name").ok_or_else(|| {
-                    EdlParseError::MissingField {
+                // Accept either `+ name:` or `+ track:` for symmetry
+                // with TrimTrackTail (which uses `track`). Both work;
+                // the agent has been observed using either.
+                let name = take_field_string(&mut fields, "name")
+                    .or_else(|| take_field_string(&mut fields, "track"))
+                    .ok_or_else(|| EdlParseError::MissingField {
                         line: head,
-                        field: "name".into(),
-                    }
-                })?;
+                        field: "name (or track)".into(),
+                    })?;
                 // `force` defaults to false — protects against typos
                 // that would silently nuke a populated track.
                 let force = match take_field_string(&mut fields, "force").as_deref() {
