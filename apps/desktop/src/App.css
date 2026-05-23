@@ -1894,21 +1894,20 @@ button {
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-elev);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: transparent;
   flex-shrink: 0;
 }
 
 .timeline-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
 }
 
 .timeline-meta {
   font-size: 11px;
-  color: var(--text-muted);
+  color: var(--color-text-muted);
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
 
@@ -4524,10 +4523,11 @@ button {
 .timeline-header,
 .vedit-header,
 .notes-header {
-  background:
-    linear-gradient(180deg, rgba(238, 232, 205, 0.035), transparent),
-    var(--surface-toolbar);
-  border-color: var(--border-strong);
+  /* Flat header — transparent so the underlying panel surface shows
+     through, and a hairline-subtle bottom border instead of the
+     spec's louder strong-border. */
+  background: transparent;
+  border-color: var(--color-border-subtle);
 }
 
 .session-bar {
@@ -4546,16 +4546,14 @@ button {
 .chat-items {
   gap: 8px;
   padding: 10px 10px 12px;
-  background:
-    linear-gradient(180deg, rgba(95, 168, 255, 0.035), transparent 160px),
-    var(--rail);
+  background: transparent;
 }
 
 .item {
   border-radius: var(--radius-md);
-  border-color: var(--border-soft);
-  background: rgba(20, 23, 19, 0.88);
-  box-shadow: inset 0 1px 0 rgba(238, 232, 205, 0.035);
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface-card);
+  box-shadow: none;
 }
 
 .item-text {

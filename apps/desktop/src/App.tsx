@@ -1961,7 +1961,7 @@ function PanelSwitch<T extends string>({
   onChange: (value: T) => void;
 }) {
   return (
-    <div className="flex shrink-0 items-center gap-1 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] p-2">
+    <div className="flex shrink-0 items-center gap-0 border-b border-[var(--color-border-subtle)] px-2 py-1">
       {options.map((option) => {
         const selected = value === option.value;
         return (
@@ -1970,10 +1970,10 @@ function PanelSwitch<T extends string>({
             type="button"
             onClick={() => onChange(option.value)}
             className={[
-              "h-7 flex-1 rounded-[var(--radius-sm)] border px-2 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] transition-colors",
+              "h-7 flex-1 rounded-[var(--radius-sm)] px-2 text-[var(--text-caption)] font-medium transition-colors",
               selected
-                ? "border-[var(--color-border)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_rgba(56,189,248,0.18)]"
-                : "border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-secondary)]",
+                ? "bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
+                : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]",
             ].join(" ")}
             aria-pressed={selected}
           >
