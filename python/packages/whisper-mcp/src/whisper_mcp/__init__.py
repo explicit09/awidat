@@ -60,7 +60,18 @@ def _silence_stdout():
         os.close(devnull)
         os.close(saved)
 
-DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "large-v3-turbo")
+# Default to distil-large-v3 — drop-in replacement for large-v3 with
+# ~1% WER loss and ~6× speedup on CPU. The previous default
+# (large-v3-turbo) was the most accurate option but ran ~0.5×
+# realtime on Apple Silicon (CTranslate2 has no MPS path), which
+# meant a 1h podcast took ~2h to transcribe. distil-large-v3 runs
+# ~3× realtime on the same hardware and keeps full WhisperX
+# alignment compatibility — same wav2vec2 forced-alignment, same
+# pyannote diarization, same JSON shape on the wire.
+#
+# Users on a GPU host or who specifically want the last 1% of WER
+# can opt back in with `WHISPER_MODEL=large-v3-turbo`.
+DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "distil-large-v3")
 WHISPER_LANGUAGE = os.environ.get("WHISPER_LANGUAGE")  # None = auto-detect
 DIARIZE = os.environ.get("WHISPER_DIARIZE", "true").lower() not in ("false", "0", "no")
 HF_TOKEN = os.environ.get("HF_TOKEN")
