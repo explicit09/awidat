@@ -1,10 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { TimelineParameterAnimation } from "../protocol";
 import type { TimelineItem } from "../timeline/store";
 import {
-  serializeEdl,
   type EdlParameterAnimation,
 } from "../timeline/edlBuilder";
+import { editorDispatch } from "../editor/tauriDispatch";
 
 const MOTION_CURVE_PRESETS = [
   "Linear",
@@ -25,12 +24,12 @@ export function MotionAnimationControl({
   const canAuthorTitlePath = clip.title !== null;
 
   function proposeAnimation(animation: EdlParameterAnimation) {
-    invoke<string>("propose_user_edit", {
-      edlText: serializeEdl([{ kind: "set_parameter_animation", animation }]),
-    }).catch((err) => {
-      // eslint-disable-next-line no-console
-      console.warn("propose_user_edit (parameter animation) failed", err);
-    });
+    editorDispatch
+      .proposeUserEdit([{ kind: "set_parameter_animation", animation }])
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("propose_user_edit (parameter animation) failed", err);
+      });
   }
 
   function addDriftPath() {

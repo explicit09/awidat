@@ -4,7 +4,6 @@
 // remounts during project changes.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Item } from "../protocol";
@@ -16,6 +15,7 @@ import { useProjectStore } from "../app/state";
 import { EmptyState } from "../app/EmptyState";
 import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "../timeline/store";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
+import { editorDispatch } from "../editor/tauriDispatch";
 
 export function ChatStream() {
   const items = useAgentStore((s) => s.items);
@@ -213,7 +213,7 @@ function ToolCallItem({
     setProposalBusy(true);
     setProposalError(null);
     try {
-      await invoke<string>("propose_user_edit", { edlText: assessmentEdl });
+      await editorDispatch.proposeUserEditText(assessmentEdl);
     } catch (e) {
       setProposalError(e instanceof Error ? e.message : String(e));
     } finally {
