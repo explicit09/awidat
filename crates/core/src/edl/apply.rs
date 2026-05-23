@@ -649,6 +649,7 @@ fn apply_one(
             color,
             font_weight,
             animation,
+            phases,
         } => apply_insert_title(
             working,
             index,
@@ -660,6 +661,7 @@ fn apply_one(
             color,
             *font_weight,
             *animation,
+            *phases,
         ),
         EdlOp::InsertRichTitle {
             start_s,
@@ -668,8 +670,9 @@ fn apply_one(
             position,
             font_size,
             animation,
+            phases,
         } => apply_insert_rich_title(
-            working, index, *start_s, *end_s, segments, *position, *font_size, *animation,
+            working, index, *start_s, *end_s, segments, *position, *font_size, *animation, *phases,
         ),
         EdlOp::InstantiateMotionTemplate {
             template_id,
@@ -696,6 +699,7 @@ fn apply_one(
             color,
             font_weight,
             animation,
+            phases,
         } => apply_set_title(
             working,
             index,
@@ -708,6 +712,7 @@ fn apply_one(
             color.as_deref(),
             *font_weight,
             *animation,
+            *phases,
             ctx,
             locator,
         ),
@@ -1164,6 +1169,7 @@ fn apply_instantiate_motion_template(
             &title.color,
             core_title_weight(title.font_weight),
             core_title_animation(title.animation),
+            None,
         )?;
     }
 
@@ -6656,6 +6662,7 @@ fn apply_insert_title(
     color: &str,
     font_weight: super::op::TitleWeight,
     animation: super::op::TitleAnimation,
+    phases: Option<super::op::TitlePhases>,
 ) -> Result<String, ApplyError> {
     apply_insert_text_overlay(
         working,
@@ -6672,6 +6679,7 @@ fn apply_insert_title(
         color,
         font_weight,
         animation,
+        phases,
     )
 }
 
@@ -6685,6 +6693,7 @@ fn apply_insert_rich_title(
     position: super::op::TitlePosition,
     font_size: u32,
     animation: super::op::TitleAnimation,
+    phases: Option<super::op::TitlePhases>,
 ) -> Result<String, ApplyError> {
     if segments.is_empty() || segments.iter().all(|segment| segment.text.is_empty()) {
         return Err(ApplyError::Invalid {
@@ -6719,6 +6728,7 @@ fn apply_insert_rich_title(
         "#FFFFFF",
         super::op::TitleWeight::Normal,
         animation,
+        phases,
     )
 }
 
@@ -6787,6 +6797,7 @@ fn apply_insert_caption(
         color,
         super::op::TitleWeight::Bold,
         super::op::TitleAnimation::None,
+        None,
     )
 }
 
@@ -6934,6 +6945,7 @@ fn apply_insert_text_overlay(
     color: &str,
     font_weight: super::op::TitleWeight,
     animation: super::op::TitleAnimation,
+    phases: Option<super::op::TitlePhases>,
 ) -> Result<String, ApplyError> {
     use awidat_proto::otio::{Clip, RationalTime, TimeRange};
 
@@ -7013,6 +7025,13 @@ fn apply_insert_text_overlay(
         "animation".to_string(),
         serde_json::json!(title_animation_str(animation)),
     );
+    if let Some(phases) = phases {
+        let serialized = serde_json::to_value(phases).map_err(|error| ApplyError::Invalid {
+            index,
+            message: format!("insert_{role}: phases could not serialize: {error}"),
+        })?;
+        effect.metadata.insert("phases".to_string(), serialized);
+    }
     if let Some(profile) = safe_area {
         effect
             .metadata
@@ -7307,6 +7326,7 @@ fn apply_set_title(
     color: Option<&str>,
     font_weight: Option<super::op::TitleWeight>,
     animation: Option<super::op::TitleAnimation>,
+    phases: Option<super::op::TitlePhases>,
     ctx: &AnchorContext,
     locator: Option<ClipLocator>,
 ) -> Result<String, ApplyError> {
@@ -7375,6 +7395,13 @@ fn apply_set_title(
             "animation".to_string(),
             serde_json::json!(title_animation_str(a)),
         );
+    }
+    if let Some(p) = phases {
+        let serialized = serde_json::to_value(p).map_err(|error| ApplyError::Invalid {
+            index,
+            message: format!("set_title: phases could not serialize: {error}"),
+        })?;
+        effect.metadata.insert("phases".to_string(), serialized);
     }
 
     // start_s / end_s require both the effect metadata AND the
@@ -12387,6 +12414,7 @@ mod tests {
                 color: "#FFAA00".into(),
                 font_weight: super::super::op::TitleWeight::Bold,
                 animation: super::super::op::TitleAnimation::FadeInOut,
+                phases: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -12582,6 +12610,7 @@ mod tests {
                     color: "#FFFFFF".into(),
                     font_weight: super::super::op::TitleWeight::Normal,
                     animation: super::super::op::TitleAnimation::None,
+                    phases: None,
                 },
                 EdlOp::InsertTitle {
                     start_s: 5.0,
@@ -12592,6 +12621,7 @@ mod tests {
                     color: "#FFFFFF".into(),
                     font_weight: super::super::op::TitleWeight::Normal,
                     animation: super::super::op::TitleAnimation::None,
+                    phases: None,
                 },
             ],
         };
@@ -12639,6 +12669,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
+                phases: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -12660,6 +12691,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
+                phases: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -12682,6 +12714,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
+                phases: None,
             }],
         };
         let (after_insert, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
@@ -12713,6 +12746,7 @@ mod tests {
                 color: None,
                 font_weight: Some(super::super::op::TitleWeight::Bold),
                 animation: None,
+                phases: None,
             }],
         };
         let (after_set, _) = apply(&after_insert, &set_env, &AnchorContext::empty()).unwrap();
@@ -12760,6 +12794,7 @@ mod tests {
                 color: None,
                 font_weight: None,
                 animation: None,
+                phases: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
