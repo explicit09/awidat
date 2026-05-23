@@ -6019,3 +6019,29 @@ button {
    "12 active", "67%") are already sentence-case-friendly — we
    intentionally do NOT lowercase them. Tailwind's mono utility
    doesn't carry uppercase, so no extra rule needed. */
+
+/* Holdouts that escape the variable-token selector: cluster headers
+   in the Index panel use a literal tracking utility (the SIGNAL_
+   GROUPS labels — "Speech & captions" etc.) and the Metric label
+   row uses a smaller tracking value. Same treatment for both.
+   Specificity matches the first rule so cascade order is stable. */
+[class*="uppercase"][class*="tracking-[0.08em]"],
+[class*="uppercase"][class*="tracking-[0.04em]"],
+[class*="uppercase"][class*="tracking-[0.06em]"] {
+  text-transform: none !important;
+  letter-spacing: normal !important;
+  font-weight: 500 !important;
+}
+
+/* Legacy CSS classes from pre-Tailwind days carry their own
+   `text-transform: uppercase` + tracking inline. Catch the well-
+   known chrome offenders by name. Broadcast-overlay classes are
+   intentionally excluded — those are the on-air graphics in the
+   rendered video and ARE supposed to look like chyrons. */
+.timeline-label,
+.media-empty-title,
+.empty-step-title,
+.popover-divider {
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
