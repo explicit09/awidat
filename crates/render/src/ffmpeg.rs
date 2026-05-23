@@ -342,6 +342,121 @@ pub async fn extract_frame_filtered(
     Ok(stdout_bytes)
 }
 
+/// Extract a single grayscale frame at time `t_s` from `asset_path`, returning
+/// `(width, height, luma)` where `luma.len() == width * height` and pixels are
+/// row-major 8-bit luma. Designed for downstream caption rendered-output
+/// scoring where the consumer only needs the luma plane and a PNG encode +
+/// decode roundtrip is wasted work.
+///
+/// Implementation:
+/// 1. `ffmpeg -hide_banner -loglevel error -i <asset> -frames:v 1 -vf showinfo
+///    -f null -` is used to discover the post-decode frame dimensions from
+///    `showinfo`'s `s:WxH` field.
+/// 2. `ffmpeg -ss <t_s> -i <asset> -frames:v 1 -f rawvideo -pix_fmt gray -`
+///    emits the raw luma bytes for the seek position.
+pub async fn extract_frame_raw_gray(
+    asset_path: &Path,
+    t_s: f64,
+) -> Result<(u32, u32, Vec<u8>), FfmpegError> {
+    if !t_s.is_finite() || t_s < 0.0 {
+        return Err(FfmpegError::BadTimestamp(t_s));
+    }
+    let bin = ffmpeg_path()?;
+
+    let mut probe = Command::new(&bin);
+    probe
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(asset_path)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-vf")
+        .arg("showinfo")
+        .arg("-f")
+        .arg("null")
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let probe_output = probe.output().await.map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+    let stderr_text = String::from_utf8_lossy(&probe_output.stderr);
+    let (width, height) = parse_showinfo_dimensions(&stderr_text).ok_or_else(|| {
+        FfmpegError::Io(std::io::Error::other(
+            "ffmpeg showinfo did not report stream dimensions",
+        ))
+    })?;
+
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-ss")
+        .arg(format!("{t_s}"))
+        .arg("-i")
+        .arg(asset_path)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("rawvideo")
+        .arg("-pix_fmt")
+        .arg("gray")
+        .arg("-")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let output = cmd.output().await.map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+    if !output.status.success() {
+        let stderr_tail = tail_string(&output.stderr, STDERR_TAIL_BYTES);
+        return Err(FfmpegError::NonZero {
+            code: output.status.code().unwrap_or(-1),
+            stderr_tail,
+        });
+    }
+    let expected = (width as usize).saturating_mul(height as usize);
+    if output.stdout.len() < expected {
+        return Err(FfmpegError::Io(std::io::Error::other(format!(
+            "ffmpeg rawvideo returned {} bytes, expected at least {}",
+            output.stdout.len(),
+            expected
+        ))));
+    }
+    let mut luma = output.stdout;
+    luma.truncate(expected);
+    Ok((width, height, luma))
+}
+
+fn parse_showinfo_dimensions(stderr_text: &str) -> Option<(u32, u32)> {
+    for line in stderr_text.lines() {
+        let Some(idx) = line.find(" s:") else {
+            continue;
+        };
+        let rest = &line[idx + 3..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == 'x'))
+            .unwrap_or(rest.len());
+        let spec = &rest[..end];
+        let (w, h) = spec.split_once('x')?;
+        if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>())
+            && w > 0
+            && h > 0
+        {
+            return Some((w, h));
+        }
+    }
+    None
+}
+
 /// Probe the source duration (in seconds) of a media asset. Used by
 /// [`transcode_proxy`] to compute progress percent. Returns `None`
 /// if ffprobe couldn't determine the duration (some formats don't
