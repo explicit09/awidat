@@ -400,7 +400,7 @@ fn render_feature_capabilities() -> Vec<RenderFeatureCapability> {
                 true,
                 vec!["writes render verification reports".into()],
                 vec![
-                    "currently validates safe-area metadata for caption overlays; editable subtitle tracks and sidecar captions are summarized separately"
+                    "safe-area and occlusion are now measured per caption event from rendered output via the frame-pixel scorer when ffmpeg and a render output are available; libass-layout sidecar derivation remains a named fallback path"
                         .into(),
                 ],
             ),

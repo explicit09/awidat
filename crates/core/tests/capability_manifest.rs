@@ -829,7 +829,7 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
             .metadata
             .known_limitations
             .iter()
-            .any(|limitation| limitation.contains("caption overlays"))
+            .any(|limitation| limitation.contains("frame-pixel scorer"))
     );
 
     let Some(cut_boundary_self_eval) = manifest

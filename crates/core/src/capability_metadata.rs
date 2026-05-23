@@ -125,7 +125,7 @@ impl CapabilityMetadata {
                     "updates render manifest verification summaries".into(),
                 ];
                 metadata.known_limitations = vec![
-                    "caption rendered-output evidence must be supplied by render manifests until a frame-level scorer writes it automatically"
+                    "caption rendered-output evidence is now produced by the frame-pixel scorer when ffmpeg and a render output are available; libass-layout sidecar derivation remains a named fallback when the scorer is unavailable"
                         .into(),
                 ];
             }
