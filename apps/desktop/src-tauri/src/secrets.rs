@@ -22,12 +22,20 @@
 //!
 //! macOS gates keychain access by codesigning identity. A
 //! `cargo run` / `tauri dev` debug binary has an ad-hoc signature
-//! that changes across rebuilds, so macOS prompts on every launch.
-//! Release builds still prefetch keychain secrets, but debug builds
-//! skip the startup prefetch unless `AWIDAT_PREFETCH_KEYCHAIN=1`.
-//! Set `ANTHROPIC_API_KEY` / `HF_TOKEN` in your shell env during
-//! development to avoid the prompt entirely while keeping subprocesses
-//! wired.
+//! that changes across rebuilds, so macOS prompts on every launch
+//! once the user clicks "Always Allow" for a given codesign.
+//!
+//! We default to prefetching in both release AND debug builds. The
+//! previous opt-in default left dev users running with keychain
+//! secrets that never reached subprocesses, so features that
+//! depended on them (e.g. whisper-mcp's pyannote diarization gated
+//! on HF_TOKEN) silently skipped — and the symptom was a "Speaker
+//! diarization: Missing" row in the UI with no clue why.
+//!
+//! Opt out via `AWIDAT_PREFETCH_KEYCHAIN=0` if the prompt-per-launch
+//! is genuinely worse than losing the secrets. Setting the key in
+//! shell env (e.g. `export HF_TOKEN=...`) also avoids both the
+//! prompt and the keychain hit entirely.
 
 use std::sync::OnceLock;
 
@@ -96,11 +104,13 @@ pub fn resolve_at_startup() {
 }
 
 fn prefetch_enabled() -> bool {
-    if cfg!(debug_assertions) {
-        return matches!(
-            std::env::var("AWIDAT_PREFETCH_KEYCHAIN").as_deref(),
-            Ok("1" | "true" | "TRUE" | "yes" | "YES")
-        );
-    }
-    true
+    // Opt out via env var. Empty string is treated as "not set" so
+    // shell defaults that pass through empty values don't disable.
+    matches!(
+        std::env::var("AWIDAT_PREFETCH_KEYCHAIN")
+            .ok()
+            .as_deref()
+            .filter(|s| !s.is_empty()),
+        None | Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
 }
