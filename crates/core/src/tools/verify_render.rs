@@ -1,5 +1,6 @@
 //! `verify_render` agent tool.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -96,8 +97,24 @@ struct VerifyRenderReport {
     output_path: String,
     expected_duration_s: f64,
     actual_duration_s: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    render_manifest: Option<RenderManifestEvidence>,
+    caption_summary: crate::captions::CaptionSummary,
     gates: Vec<VerificationGate>,
     timeline_manifest: TimelineManifest,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RenderManifestEvidence {
+    manifest_path: String,
+    manifest_id: String,
+    backend: String,
+    replay_kind: String,
+    input_count: usize,
+    output_count: usize,
+    sidecar_count: usize,
+    limitation_count: usize,
+    metadata: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +131,7 @@ struct TimelineManifest {
     source_ranges: Vec<SourceRangeEntry>,
     missing_media: Vec<MissingMediaEntry>,
     boundary_probes: Vec<BoundaryProbe>,
+    cut_boundaries: Vec<CutBoundary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -141,6 +159,16 @@ struct BoundaryProbe {
     export_time_s: f64,
     expected_source_time_s: f64,
     label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CutBoundary {
+    from_clip_name: String,
+    to_clip_name: String,
+    from_asset: String,
+    to_asset: String,
+    at_s: f64,
+    gap_s: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -333,6 +361,12 @@ async fn verify_render_output(
 
     add_source_duration_gate(&mut gates, project_root, &timeline_manifest.source_ranges).await;
     add_source_range_manifest_gate(&mut gates, &timeline_manifest, &options)?;
+    let render_manifest = collect_render_manifest_evidence(output_path, &mut gates)?;
+    let caption_summary = crate::captions::summarize_captions(&project);
+    add_caption_evidence_gate(&mut gates, &caption_summary);
+    add_caption_safe_area_gate(&mut gates, &caption_summary);
+    add_manifest_caption_evidence_gate(&mut gates, render_manifest.as_ref(), &caption_summary);
+    add_caption_rendered_output_gate(&mut gates, render_manifest.as_ref(), &caption_summary);
 
     let silence_ranges = awidat_render::generate_silences(
         output_path,
@@ -404,6 +438,13 @@ async fn verify_render_output(
         &unexpected_silences,
         &long_black_ranges,
     );
+    add_cut_boundary_self_eval_gate(
+        &mut gates,
+        probe.duration_s,
+        &timeline_manifest.cut_boundaries,
+        &unexpected_silences,
+        &long_black_ranges,
+    );
 
     let report = VerifyRenderReport {
         passed: gates.iter().all(|gate| gate.passed),
@@ -411,11 +452,585 @@ async fn verify_render_output(
         output_path: output_path.display().to_string(),
         expected_duration_s,
         actual_duration_s: probe.duration_s,
+        render_manifest,
+        caption_summary,
         gates,
         timeline_manifest,
     };
     write_verification_evidence(output_path, &report)?;
     Ok(report)
+}
+
+fn add_caption_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    let consistent = summary.has_exportable_captions
+        == !matches!(
+            summary.selected_authority,
+            crate::captions::CaptionAuthority::None
+        );
+    push_gate(
+        gates,
+        "caption_evidence_consistent",
+        consistent,
+        "caption/subtitle authority and counts are internally consistent",
+        json!({
+            "selected_authority": summary.selected_authority.as_str(),
+            "editable_track_count": summary.editable_track_count,
+            "editable_cue_count": summary.editable_cue_count,
+            "caption_overlay_count": summary.caption_overlay_count,
+            "word_timed_caption_overlay_count": summary.word_timed_caption_overlay_count,
+            "safe_area_caption_overlay_count": summary.safe_area_caption_overlay_count,
+            "mobile_safe_area_caption_overlay_count": summary.mobile_safe_area_caption_overlay_count,
+            "missing_safe_area_caption_overlay_count": summary.missing_safe_area_caption_overlay_count,
+            "sidecar_cue_count": summary.sidecar_cue_count,
+            "has_exportable_captions": summary.has_exportable_captions,
+            "warnings": summary.warnings,
+        }),
+    );
+}
+
+fn add_caption_safe_area_gate(
+    gates: &mut Vec<VerificationGate>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    let passed =
+        summary.caption_overlay_count == 0 || summary.missing_safe_area_caption_overlay_count == 0;
+    push_gate(
+        gates,
+        "caption_safe_area_metadata_present",
+        passed,
+        "caption overlays carry safe-area metadata for layout preflight",
+        json!({
+            "caption_overlay_count": summary.caption_overlay_count,
+            "safe_area_caption_overlay_count": summary.safe_area_caption_overlay_count,
+            "mobile_safe_area_caption_overlay_count": summary.mobile_safe_area_caption_overlay_count,
+            "missing_safe_area_caption_overlay_count": summary.missing_safe_area_caption_overlay_count,
+        }),
+    );
+}
+
+fn add_manifest_caption_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    manifest: Option<&RenderManifestEvidence>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    let Some(manifest) = manifest else {
+        return;
+    };
+    let has_manifest_caption_metadata = manifest.metadata.contains_key("caption_authority");
+    let caption_metadata_required = summary.has_exportable_captions
+        && requires_caption_manifest_metadata(manifest.backend.as_str());
+    if !has_manifest_caption_metadata && !caption_metadata_required {
+        return;
+    }
+    let expected = crate::captions::caption_summary_metadata(summary);
+    let mismatches = expected
+        .iter()
+        .filter_map(|(key, expected_value)| {
+            let actual = manifest.metadata.get(key).map(String::as_str);
+            (actual != Some(expected_value.as_str())).then(|| {
+                json!({
+                    "field": key,
+                    "manifest": actual,
+                    "timeline": expected_value,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    push_gate(
+        gates,
+        "render_manifest_caption_evidence_matches_timeline",
+        mismatches.is_empty(),
+        "render manifest caption metadata matches the current timeline caption summary",
+        json!({
+            "manifest_path": manifest.manifest_path,
+            "metadata": manifest.metadata,
+            "timeline": {
+                "caption_authority": summary.selected_authority.as_str(),
+                "caption_overlay_count": summary.caption_overlay_count,
+                "word_timed_caption_overlay_count": summary.word_timed_caption_overlay_count,
+                "safe_area_caption_overlay_count": summary.safe_area_caption_overlay_count,
+                "mobile_safe_area_caption_overlay_count": summary.mobile_safe_area_caption_overlay_count,
+                "missing_safe_area_caption_overlay_count": summary.missing_safe_area_caption_overlay_count,
+                "subtitle_sidecar_cue_count": summary.sidecar_cue_count,
+            },
+            "mismatches": mismatches,
+        }),
+    );
+}
+
+fn requires_caption_manifest_metadata(backend: &str) -> bool {
+    matches!(
+        backend,
+        "timeline_ffmpeg_reencode" | "timeline_raw_stream_gpu" | "package_export"
+    )
+}
+
+fn add_caption_rendered_output_gate(
+    gates: &mut Vec<VerificationGate>,
+    manifest: Option<&RenderManifestEvidence>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    if !summary.has_exportable_captions {
+        return;
+    }
+    let expected_probe_count = expected_caption_render_probe_count(summary);
+    let Some(manifest) = manifest else {
+        push_gate(
+            gates,
+            "caption_rendered_output_readable",
+            false,
+            "rendered caption output has artifact-level safe-area and occlusion evidence",
+            json!({
+                "reason": "missing_render_manifest",
+                "expected_probe_count": expected_probe_count,
+            }),
+        );
+        return;
+    };
+    let status = manifest
+        .metadata
+        .get("caption_rendered_output_status")
+        .map(String::as_str);
+    let mut probe_count =
+        parse_manifest_usize(&manifest.metadata, "caption_rendered_output_probe_count");
+    let mut safe_area_pass_count = parse_manifest_usize(
+        &manifest.metadata,
+        "caption_rendered_output_safe_area_pass_count",
+    );
+    let mut occlusion_fail_count = parse_manifest_usize(
+        &manifest.metadata,
+        "caption_rendered_output_occlusion_fail_count",
+    );
+    let has_evidence = status.is_some()
+        || probe_count.is_some()
+        || safe_area_pass_count.is_some()
+        || occlusion_fail_count.is_some();
+    let mut reason = "missing_caption_rendered_output_evidence";
+    let mut passed = status == Some("passed")
+        && probe_count.is_some_and(|count| count >= expected_probe_count)
+        && safe_area_pass_count.is_some_and(|count| count >= expected_probe_count)
+        && occlusion_fail_count == Some(0);
+    if has_evidence {
+        reason = if passed {
+            "passed"
+        } else {
+            "caption_rendered_output_evidence_failed"
+        };
+    } else if libass_layout_supports_caption_rendered_output(
+        &manifest.metadata,
+        expected_probe_count,
+    ) {
+        passed = true;
+        reason = "derived_from_libass_layout_evidence";
+        probe_count = Some(expected_probe_count);
+        safe_area_pass_count = Some(expected_probe_count);
+        occlusion_fail_count = Some(0);
+    }
+    let status_detail = if status.is_some() {
+        status
+    } else if passed && reason == "derived_from_libass_layout_evidence" {
+        Some("derived")
+    } else {
+        None
+    };
+    push_gate(
+        gates,
+        "caption_rendered_output_readable",
+        passed,
+        "rendered caption output has artifact-level safe-area and occlusion evidence",
+        json!({
+            "reason": reason,
+            "manifest_path": manifest.manifest_path,
+            "caption_authority": summary.selected_authority.as_str(),
+            "expected_probe_count": expected_probe_count,
+            "caption_rendered_output_status": status_detail,
+            "caption_rendered_output_probe_count": probe_count,
+            "caption_rendered_output_safe_area_pass_count": safe_area_pass_count,
+            "caption_rendered_output_occlusion_fail_count": occlusion_fail_count,
+        }),
+    );
+}
+
+fn libass_layout_supports_caption_rendered_output(
+    metadata: &BTreeMap<String, String>,
+    expected_probe_count: usize,
+) -> bool {
+    let reason = metadata.get("timeline_backend_reason").map(String::as_str);
+    let claimed_count = parse_manifest_usize(metadata, "libass_caption_count");
+    let layout_sidecar_count = parse_manifest_usize(metadata, "libass_layout_sidecar_count");
+    let safe_area_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_safe_area_sidecar_count");
+    let wrapped_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_wrapped_sidecar_count");
+    let karaoke_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_karaoke_sidecar_count");
+    let playres_present = metadata
+        .get("libass_layout_playres")
+        .is_some_and(|value| !value.trim().is_empty());
+    reason == Some("ffmpeg_with_libass_captions")
+        && claimed_count.is_some_and(|count| count >= expected_probe_count)
+        && layout_sidecar_count.is_some_and(|count| count >= expected_probe_count)
+        && safe_area_sidecar_count.is_some_and(|count| count >= expected_probe_count)
+        && wrapped_sidecar_count.is_some()
+        && karaoke_sidecar_count.is_some()
+        && playres_present
+}
+
+fn expected_caption_render_probe_count(summary: &crate::captions::CaptionSummary) -> usize {
+    summary
+        .caption_overlay_count
+        .max(summary.editable_cue_count)
+        .max(summary.sidecar_cue_count)
+        .max(1)
+}
+
+fn parse_manifest_usize(metadata: &BTreeMap<String, String>, key: &str) -> Option<usize> {
+    metadata.get(key).and_then(|value| value.parse().ok())
+}
+
+fn collect_render_manifest_evidence(
+    output_path: &Path,
+    gates: &mut Vec<VerificationGate>,
+) -> Result<Option<RenderManifestEvidence>, FunctionCallError> {
+    let manifest_path = awidat_render::manifest_path_for_output(output_path);
+    if !manifest_path.is_file() {
+        push_gate(
+            gates,
+            "render_manifest_present",
+            false,
+            "render manifest is present next to the rendered output",
+            json!({"manifest_path": manifest_path}),
+        );
+        return Ok(None);
+    }
+    let manifest = awidat_render::read_render_manifest(&manifest_path).map_err(|e| {
+        FunctionCallError::RespondToModel(format!(
+            "verify_render: read render manifest {}: {e}",
+            manifest_path.display()
+        ))
+    })?;
+    let replay_kind = match &manifest.replay {
+        awidat_render::RenderReplayPlan::FfmpegArgv { .. } => "ffmpeg_argv",
+        awidat_render::RenderReplayPlan::Unsupported { .. } => "unsupported",
+    };
+    let backend = serde_json::to_value(&manifest.backend)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{:?}", manifest.backend));
+    push_gate(
+        gates,
+        "render_manifest_present",
+        true,
+        "render manifest is present next to the rendered output",
+        json!({
+            "manifest_path": manifest_path,
+            "manifest_id": manifest.manifest_id,
+            "backend": backend,
+            "replay_kind": replay_kind,
+            "input_count": manifest.inputs.len(),
+            "output_count": manifest.outputs.len(),
+            "sidecar_count": manifest.sidecars.len(),
+            "limitation_count": manifest.limitations.len(),
+        }),
+    );
+    add_render_manifest_required_artifacts_gate(gates, &manifest, &manifest_path);
+    add_render_feature_evidence_gate(gates, &manifest.backend, &manifest.metadata);
+    add_render_backend_evidence_gate(gates, &backend, &manifest.metadata);
+    add_libass_sidecar_evidence_gate(gates, &manifest.metadata, &manifest.sidecars);
+    Ok(Some(RenderManifestEvidence {
+        manifest_path: manifest_path.to_string_lossy().into_owned(),
+        manifest_id: manifest.manifest_id,
+        backend,
+        replay_kind: replay_kind.into(),
+        input_count: manifest.inputs.len(),
+        output_count: manifest.outputs.len(),
+        sidecar_count: manifest.sidecars.len(),
+        limitation_count: manifest.limitations.len(),
+        metadata: manifest.metadata,
+    }))
+}
+
+fn add_render_manifest_required_artifacts_gate(
+    gates: &mut Vec<VerificationGate>,
+    manifest: &awidat_render::RenderExecutionManifest,
+    manifest_path: &Path,
+) {
+    match awidat_render::validate_replay_manifest(manifest, manifest_path) {
+        Ok(()) => push_gate(
+            gates,
+            "render_manifest_required_artifacts_valid",
+            true,
+            "render manifest required inputs and sidecars exist with matching fingerprints",
+            json!({
+                "manifest_path": manifest_path,
+                "required_input_count": manifest.inputs.iter().filter(|input| input.required).count(),
+                "required_sidecar_count": manifest.sidecars.iter().filter(|sidecar| sidecar.required).count(),
+            }),
+        ),
+        Err(error) => {
+            let mut details = json!({
+                "manifest_path": manifest_path,
+                "error": error.to_string(),
+            });
+            if let Some(object) = details.as_object_mut() {
+                match &error {
+                    awidat_render::RenderReplayError::MissingRequiredArtifact {
+                        kind,
+                        artifact,
+                        ..
+                    }
+                    | awidat_render::RenderReplayError::FingerprintMismatch {
+                        kind,
+                        artifact,
+                        ..
+                    } => {
+                        object.insert("kind".into(), json!(kind));
+                        object.insert("artifact".into(), json!(artifact));
+                    }
+                    _ => {}
+                }
+            }
+            push_gate(
+                gates,
+                "render_manifest_required_artifacts_valid",
+                false,
+                "render manifest required inputs and sidecars exist with matching fingerprints",
+                details,
+            );
+        }
+    }
+}
+
+fn add_libass_sidecar_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    metadata: &BTreeMap<String, String>,
+    sidecars: &[awidat_render::RenderSidecarFingerprint],
+) {
+    let claimed_count = metadata
+        .get("libass_caption_count")
+        .and_then(|value| value.parse::<usize>().ok());
+    let reason = metadata.get("timeline_backend_reason").map(String::as_str);
+    let claims_libass = reason == Some("ffmpeg_with_libass_captions")
+        || claimed_count.is_some_and(|count| count > 0);
+    if !claims_libass {
+        return;
+    }
+
+    let required_ass_sidecar_count = sidecars
+        .iter()
+        .filter(|sidecar| sidecar.required && sidecar.path.to_ascii_lowercase().ends_with(".ass"))
+        .count();
+    let passed = claimed_count.is_some_and(|count| {
+        count > 0
+            && required_ass_sidecar_count >= count
+            && reason == Some("ffmpeg_with_libass_captions")
+    });
+    push_gate(
+        gates,
+        "libass_sidecar_evidence_present",
+        passed,
+        "libass caption render manifests include required ASS sidecar fingerprints",
+        json!({
+            "timeline_backend_reason": reason,
+            "libass_caption_count": claimed_count,
+            "required_ass_sidecar_count": required_ass_sidecar_count,
+            "sidecar_count": sidecars.len(),
+        }),
+    );
+    add_libass_layout_evidence_gate(gates, metadata, claimed_count, required_ass_sidecar_count);
+}
+
+fn add_libass_layout_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    metadata: &BTreeMap<String, String>,
+    claimed_count: Option<usize>,
+    required_ass_sidecar_count: usize,
+) {
+    let layout_sidecar_count = metadata
+        .get("libass_layout_sidecar_count")
+        .and_then(|value| value.parse::<usize>().ok());
+    let wrapped_sidecar_count = metadata
+        .get("libass_layout_wrapped_sidecar_count")
+        .and_then(|value| value.parse::<usize>().ok());
+    let safe_area_sidecar_count = metadata
+        .get("libass_layout_safe_area_sidecar_count")
+        .and_then(|value| value.parse::<usize>().ok());
+    let karaoke_sidecar_count = metadata
+        .get("libass_layout_karaoke_sidecar_count")
+        .and_then(|value| value.parse::<usize>().ok());
+    let playres = metadata.get("libass_layout_playres").map(String::as_str);
+    let expected_count = claimed_count.unwrap_or(required_ass_sidecar_count);
+    let passed = expected_count > 0
+        && layout_sidecar_count.is_some_and(|count| count >= expected_count)
+        && wrapped_sidecar_count.is_some()
+        && safe_area_sidecar_count.is_some_and(|count| count >= expected_count)
+        && karaoke_sidecar_count.is_some()
+        && playres.is_some_and(|value| !value.is_empty());
+    push_gate(
+        gates,
+        "libass_layout_evidence_present",
+        passed,
+        "libass caption manifests include ASS layout/readability evidence",
+        json!({
+            "expected_caption_sidecar_count": expected_count,
+            "required_ass_sidecar_count": required_ass_sidecar_count,
+            "libass_layout_sidecar_count": layout_sidecar_count,
+            "libass_layout_playres": playres,
+            "libass_layout_wrapped_sidecar_count": wrapped_sidecar_count,
+            "libass_layout_safe_area_sidecar_count": safe_area_sidecar_count,
+            "libass_layout_karaoke_sidecar_count": karaoke_sidecar_count,
+        }),
+    );
+}
+
+fn add_render_feature_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    backend: &awidat_render::RenderBackendKind,
+    metadata: &BTreeMap<String, String>,
+) {
+    let expected = crate::capabilities::render_feature_metadata_for_backend(backend);
+    let expected_feature_id = expected.get("render_feature_id").map(String::as_str);
+    let expected_export_supported = expected
+        .get("render_feature_export_supported")
+        .map(String::as_str);
+    let expected_preview_supported = expected
+        .get("render_feature_preview_supported")
+        .map(String::as_str);
+    let expected_approval_required = expected
+        .get("render_feature_approval_required")
+        .map(String::as_str);
+    let expected_limitation_count = expected
+        .get("render_feature_limitation_count")
+        .map(String::as_str);
+    let feature_id = metadata.get("render_feature_id").map(String::as_str);
+    let preview_supported = metadata
+        .get("render_feature_preview_supported")
+        .map(String::as_str);
+    let export_supported = metadata
+        .get("render_feature_export_supported")
+        .map(String::as_str);
+    let approval_required = metadata
+        .get("render_feature_approval_required")
+        .map(String::as_str);
+    let limitation_count = metadata
+        .get("render_feature_limitation_count")
+        .map(String::as_str);
+    let passed = feature_id == expected_feature_id
+        && preview_supported == expected_preview_supported
+        && export_supported == expected_export_supported
+        && approval_required == expected_approval_required
+        && limitation_count == expected_limitation_count;
+    push_gate(
+        gates,
+        "render_feature_evidence_present",
+        passed,
+        "render manifest includes capability metadata for the selected backend",
+        json!({
+            "expected_feature_id": expected_feature_id,
+            "render_feature_id": feature_id,
+            "expected_preview_supported": expected_preview_supported,
+            "render_feature_preview_supported": preview_supported,
+            "expected_export_supported": expected_export_supported,
+            "render_feature_export_supported": export_supported,
+            "expected_approval_required": expected_approval_required,
+            "render_feature_approval_required": approval_required,
+            "expected_limitation_count": expected_limitation_count,
+            "render_feature_limitation_count": limitation_count,
+        }),
+    );
+}
+
+fn add_render_backend_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    backend: &str,
+    metadata: &BTreeMap<String, String>,
+) {
+    if backend == "stream_export_remux" {
+        add_stream_remux_evidence_gate(gates, metadata);
+        return;
+    }
+    if !matches!(
+        backend,
+        "timeline_ffmpeg_reencode" | "timeline_raw_stream_gpu"
+    ) {
+        return;
+    }
+    let manifest_backend = metadata.get("timeline_backend").map(String::as_str);
+    let reason = metadata.get("timeline_backend_reason").map(String::as_str);
+    let passed = manifest_backend == Some(backend) && reason.is_some_and(|value| !value.is_empty());
+    push_gate(
+        gates,
+        "render_backend_evidence_present",
+        passed,
+        "timeline render manifest includes backend-selection evidence",
+        json!({
+            "backend": backend,
+            "timeline_backend": manifest_backend,
+            "timeline_backend_reason": reason,
+            "gpu_transition_count": metadata.get("gpu_transition_count"),
+            "ffmpeg_transition_count": metadata.get("ffmpeg_transition_count"),
+            "libass_caption_count": metadata.get("libass_caption_count"),
+        }),
+    );
+    add_master_loudnorm_evidence_gate(gates, metadata);
+}
+
+fn add_master_loudnorm_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    metadata: &BTreeMap<String, String>,
+) {
+    let enabled = metadata.get("master_loudnorm_enabled").map(String::as_str) == Some("true");
+    if !enabled {
+        return;
+    }
+    let pass = metadata.get("master_loudnorm_pass").map(String::as_str);
+    let output_mode = metadata
+        .get("master_loudnorm_output_mode")
+        .map(String::as_str);
+    let passed = pass == Some("apply") && output_mode == Some("encoded_output");
+    push_gate(
+        gates,
+        "master_loudnorm_final_pass",
+        passed,
+        "two-pass master loudnorm render manifest records the final encoded apply pass",
+        json!({
+            "master_loudnorm_enabled": true,
+            "master_loudnorm_pass": pass,
+            "master_loudnorm_output_mode": output_mode,
+        }),
+    );
+}
+
+fn add_stream_remux_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    metadata: &BTreeMap<String, String>,
+) {
+    let remux_backend = metadata.get("remux_backend").map(String::as_str);
+    let eligibility_reason = metadata.get("remux_eligibility_reason").map(String::as_str);
+    let copy_stream_count = metadata.get("copy_stream_count").map(String::as_str);
+    let transcode_stream_count = metadata.get("transcode_stream_count").map(String::as_str);
+    let all_streams_copy = metadata.get("all_streams_copy").map(String::as_str);
+    let passed = remux_backend == Some("stream_export_remux")
+        && eligibility_reason.is_some_and(|value| !value.is_empty())
+        && copy_stream_count.is_some()
+        && transcode_stream_count.is_some()
+        && all_streams_copy.is_some();
+    push_gate(
+        gates,
+        "stream_remux_evidence_present",
+        passed,
+        "stream-remux manifest includes packet-copy eligibility evidence",
+        json!({
+            "remux_backend": remux_backend,
+            "remux_eligibility_reason": eligibility_reason,
+            "copy_stream_count": copy_stream_count,
+            "transcode_stream_count": transcode_stream_count,
+            "all_streams_copy": all_streams_copy,
+        }),
+    );
 }
 
 fn verification_report_path_for_output(output_path: &Path) -> PathBuf {
@@ -484,10 +1099,33 @@ fn collect_timeline_manifest(timeline: &Timeline) -> TimelineManifest {
     );
     TimelineManifest {
         expected_duration_s,
+        cut_boundaries: collect_cut_boundaries(&source_ranges),
         source_ranges,
         missing_media,
         boundary_probes,
     }
+}
+
+fn collect_cut_boundaries(ranges: &[SourceRangeEntry]) -> Vec<CutBoundary> {
+    let mut ordered = ranges.to_vec();
+    ordered.sort_by(|left, right| left.timeline_start_s.total_cmp(&right.timeline_start_s));
+    ordered
+        .windows(2)
+        .filter_map(|pair| {
+            let [left, right] = pair else {
+                return None;
+            };
+            let gap_s = right.timeline_start_s - left.timeline_end_s;
+            (gap_s >= -DEFAULT_SOURCE_RANGE_TOLERANCE_S).then(|| CutBoundary {
+                from_clip_name: left.clip_name.clone(),
+                to_clip_name: right.clip_name.clone(),
+                from_asset: left.asset.clone(),
+                to_asset: right.asset.clone(),
+                at_s: right.timeline_start_s,
+                gap_s: gap_s.max(0.0),
+            })
+        })
+        .collect()
 }
 
 fn collect_stack_manifest(
@@ -551,6 +1189,9 @@ fn collect_clip_manifest(
     if !clip.active {
         return;
     }
+    if is_generated_overlay_clip(clip) {
+        return;
+    }
     let Some(source_range) = &clip.source_range else {
         return;
     };
@@ -612,6 +1253,20 @@ fn collect_clip_manifest(
             "mid",
         );
     }
+}
+
+fn is_generated_overlay_clip(clip: &awidat_proto::otio::Clip) -> bool {
+    clip.effects.iter().any(|effect| {
+        effect.effect_name == "awidat.title"
+            || effect.effect_name == "awidat.annotation"
+            || matches!(
+                effect
+                    .metadata
+                    .get("role")
+                    .and_then(serde_json::Value::as_str),
+                Some("title" | "caption" | "captions" | "subtitle" | "subtitles")
+            )
+    })
 }
 
 fn push_probe(
@@ -856,6 +1511,51 @@ fn add_boundary_probe_gate(
     );
 }
 
+fn add_cut_boundary_self_eval_gate(
+    gates: &mut Vec<VerificationGate>,
+    duration_s: Option<f64>,
+    boundaries: &[CutBoundary],
+    unexpected_silences: &[awidat_render::SilenceRange],
+    long_black_ranges: &[awidat_render::BlackFrameRange],
+) {
+    let checks = boundaries
+        .iter()
+        .map(|boundary| {
+            let in_duration = duration_s
+                .map(|duration| boundary.at_s <= duration + DEFAULT_DURATION_TOLERANCE_S)
+                .unwrap_or(false);
+            let in_silence = unexpected_silences
+                .iter()
+                .any(|range| contains_time(range.start_s, range.end_s, boundary.at_s));
+            let in_black = long_black_ranges
+                .iter()
+                .any(|range| contains_time(range.start_s, range.end_s, boundary.at_s));
+            json!({
+                "from_clip_name": boundary.from_clip_name,
+                "to_clip_name": boundary.to_clip_name,
+                "from_asset": boundary.from_asset,
+                "to_asset": boundary.to_asset,
+                "at_s": boundary.at_s,
+                "gap_s": boundary.gap_s,
+                "passed": in_duration && !in_silence && !in_black,
+                "in_duration": in_duration,
+                "in_unexpected_silence": in_silence,
+                "in_long_black_segment": in_black,
+            })
+        })
+        .collect::<Vec<_>>();
+    let passed = checks
+        .iter()
+        .all(|check| check["passed"].as_bool().unwrap_or(false));
+    push_gate(
+        gates,
+        "cut_boundary_self_eval",
+        passed,
+        "actual clip cut boundaries land inside the render and avoid flagged black/silence ranges",
+        json!({ "boundaries": checks }),
+    );
+}
+
 fn overlaps_content(start_s: f64, end_s: f64, ranges: &[SourceRangeEntry]) -> bool {
     ranges
         .iter()
@@ -1005,8 +1705,8 @@ finished output_path here.";
 mod tests {
     use super::*;
     use awidat_proto::otio::{
-        Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Track,
-        TrackChild, TrackKind,
+        Clip, Effect, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange,
+        Track, TrackChild, TrackKind,
     };
     use awidat_proto::project::Project;
     use std::process::Command;
@@ -1047,9 +1747,13 @@ mod tests {
         assert!((manifest.expected_duration_s - 4.0).abs() < 1e-9);
         assert_eq!(manifest.source_ranges.len(), 2);
         assert_eq!(manifest.boundary_probes.len(), 6);
+        assert_eq!(manifest.cut_boundaries.len(), 1);
         assert_eq!(manifest.source_ranges[0].clip_name, "intro");
         assert!((manifest.source_ranges[1].timeline_start_s - 2.5).abs() < 1e-9);
         assert!((manifest.source_ranges[1].source_end_s - 6.5).abs() < 1e-9);
+        assert_eq!(manifest.cut_boundaries[0].from_clip_name, "intro");
+        assert_eq!(manifest.cut_boundaries[0].to_clip_name, "close");
+        assert!((manifest.cut_boundaries[0].at_s - 2.5).abs() < 1e-9);
     }
 
     #[test]
@@ -1066,6 +1770,7 @@ mod tests {
             }],
             missing_media: Vec::new(),
             boundary_probes: Vec::new(),
+            cut_boundaries: Vec::new(),
         };
         let expected = SourceRangeManifest {
             final_kept_source_ranges: vec![SourceRangeEntry {
@@ -1110,6 +1815,634 @@ mod tests {
         assert!(gate.details["missing"][0]["reason"] == "missing_reference");
     }
 
+    #[test]
+    fn timeline_backend_evidence_gate_fails_without_reason() {
+        let mut gates = Vec::new();
+
+        add_render_backend_evidence_gate(
+            &mut gates,
+            "timeline_ffmpeg_reencode",
+            &std::collections::BTreeMap::from([(
+                "timeline_backend".to_string(),
+                "timeline_ffmpeg_reencode".to_string(),
+            )]),
+        );
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "render_backend_evidence_present")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(gate.details["timeline_backend"], "timeline_ffmpeg_reencode");
+        assert!(gate.details["timeline_backend_reason"].is_null());
+    }
+
+    #[test]
+    fn render_feature_evidence_gate_fails_backend_mismatch() {
+        let mut gates = Vec::new();
+
+        add_render_feature_evidence_gate(
+            &mut gates,
+            &awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            &std::collections::BTreeMap::from([
+                (
+                    "render_feature_id".to_string(),
+                    "stream_copy_remux".to_string(),
+                ),
+                (
+                    "render_feature_export_supported".to_string(),
+                    "supported".to_string(),
+                ),
+            ]),
+        );
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "render_feature_evidence_present")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(
+            gate.details["expected_feature_id"],
+            "ffmpeg_timeline_export"
+        );
+        assert_eq!(gate.details["render_feature_id"], "stream_copy_remux");
+    }
+
+    #[test]
+    fn render_feature_evidence_gate_fails_stale_capability_metadata() {
+        let mut gates = Vec::new();
+
+        add_render_feature_evidence_gate(
+            &mut gates,
+            &awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+            &std::collections::BTreeMap::from([
+                (
+                    "render_feature_id".to_string(),
+                    "ffmpeg_timeline_export".to_string(),
+                ),
+                (
+                    "render_feature_export_supported".to_string(),
+                    "supported".to_string(),
+                ),
+                (
+                    "render_feature_approval_required".to_string(),
+                    "false".to_string(),
+                ),
+                (
+                    "render_feature_limitation_count".to_string(),
+                    "99".to_string(),
+                ),
+            ]),
+        );
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "render_feature_evidence_present")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(gate.details["expected_approval_required"], "true");
+        assert_eq!(gate.details["render_feature_approval_required"], "false");
+        assert_eq!(gate.details["expected_limitation_count"], "0");
+        assert_eq!(gate.details["render_feature_limitation_count"], "99");
+    }
+
+    #[test]
+    fn stream_remux_evidence_gate_requires_copy_counts() {
+        let mut gates = Vec::new();
+
+        add_render_backend_evidence_gate(
+            &mut gates,
+            "stream_export_remux",
+            &std::collections::BTreeMap::from([
+                (
+                    "remux_backend".to_string(),
+                    "stream_export_remux".to_string(),
+                ),
+                (
+                    "remux_eligibility_reason".to_string(),
+                    "explicit_stream_copy_contract".to_string(),
+                ),
+            ]),
+        );
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "stream_remux_evidence_present")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(gate.details["remux_backend"], "stream_export_remux");
+        assert!(gate.details["copy_stream_count"].is_null());
+    }
+
+    #[test]
+    fn loudnorm_final_pass_gate_rejects_measure_pass_manifest() {
+        let mut gates = Vec::new();
+
+        add_render_backend_evidence_gate(
+            &mut gates,
+            "timeline_ffmpeg_reencode",
+            &std::collections::BTreeMap::from([
+                (
+                    "timeline_backend".to_string(),
+                    "timeline_ffmpeg_reencode".to_string(),
+                ),
+                (
+                    "timeline_backend_reason".to_string(),
+                    "ffmpeg_filtergraph".to_string(),
+                ),
+                ("master_loudnorm_enabled".to_string(), "true".to_string()),
+                ("master_loudnorm_pass".to_string(), "measure".to_string()),
+                (
+                    "master_loudnorm_output_mode".to_string(),
+                    "null_muxer".to_string(),
+                ),
+            ]),
+        );
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "master_loudnorm_final_pass")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(gate.details["master_loudnorm_pass"], "measure");
+        assert_eq!(gate.details["master_loudnorm_output_mode"], "null_muxer");
+    }
+
+    #[test]
+    fn loudnorm_final_pass_gate_accepts_apply_manifest() {
+        let mut gates = Vec::new();
+
+        add_render_backend_evidence_gate(
+            &mut gates,
+            "timeline_ffmpeg_reencode",
+            &std::collections::BTreeMap::from([
+                (
+                    "timeline_backend".to_string(),
+                    "timeline_ffmpeg_reencode".to_string(),
+                ),
+                (
+                    "timeline_backend_reason".to_string(),
+                    "ffmpeg_filtergraph".to_string(),
+                ),
+                ("master_loudnorm_enabled".to_string(), "true".to_string()),
+                ("master_loudnorm_pass".to_string(), "apply".to_string()),
+                (
+                    "master_loudnorm_output_mode".to_string(),
+                    "encoded_output".to_string(),
+                ),
+            ]),
+        );
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "master_loudnorm_final_pass")
+            .unwrap();
+        assert!(gate.passed);
+        assert_eq!(gate.details["master_loudnorm_pass"], "apply");
+        assert_eq!(
+            gate.details["master_loudnorm_output_mode"],
+            "encoded_output"
+        );
+    }
+
+    #[test]
+    fn cut_boundary_self_eval_gate_fails_problem_boundary() {
+        let mut gates = Vec::new();
+        let boundaries = vec![CutBoundary {
+            from_clip_name: "intro".into(),
+            to_clip_name: "close".into(),
+            from_asset: "raw/a.mp4".into(),
+            to_asset: "raw/b.mp4".into(),
+            at_s: 2.5,
+            gap_s: 0.0,
+        }];
+        let silences = vec![awidat_render::SilenceRange {
+            start_s: 2.45,
+            end_s: 2.55,
+            db_floor: -80.0,
+        }];
+
+        add_cut_boundary_self_eval_gate(&mut gates, Some(4.0), &boundaries, &silences, &[]);
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "cut_boundary_self_eval")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(gate.details["boundaries"][0]["from_clip_name"], "intro");
+        assert_eq!(gate.details["boundaries"][0]["in_unexpected_silence"], true);
+    }
+
+    #[test]
+    fn caption_safe_area_gate_fails_missing_safe_area() {
+        let mut gates = Vec::new();
+        let summary = crate::captions::CaptionSummary {
+            selected_authority: crate::captions::CaptionAuthority::CaptionOverlays,
+            editable_track_count: 0,
+            editable_cue_count: 0,
+            caption_overlay_count: 1,
+            word_timed_caption_overlay_count: 1,
+            safe_area_caption_overlay_count: 0,
+            mobile_safe_area_caption_overlay_count: 0,
+            missing_safe_area_caption_overlay_count: 1,
+            sidecar_cue_count: 0,
+            has_exportable_captions: true,
+            warnings: Vec::new(),
+        };
+
+        add_caption_safe_area_gate(&mut gates, &summary);
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "caption_safe_area_metadata_present")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(gate.details["caption_overlay_count"], 1);
+        assert_eq!(gate.details["missing_safe_area_caption_overlay_count"], 1);
+    }
+
+    #[test]
+    fn libass_layout_gate_fails_missing_layout_metadata() {
+        let mut gates = Vec::new();
+        let sidecars = vec![awidat_render::RenderSidecarFingerprint {
+            path: "/tmp/caption.ass".into(),
+            sha256: "abc".into(),
+            size_bytes: 128,
+            required: true,
+        }];
+
+        add_libass_sidecar_evidence_gate(
+            &mut gates,
+            &BTreeMap::from([
+                (
+                    "timeline_backend_reason".into(),
+                    "ffmpeg_with_libass_captions".into(),
+                ),
+                ("libass_caption_count".into(), "1".into()),
+            ]),
+            &sidecars,
+        );
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "libass_layout_evidence_present")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(
+            gate.details["libass_layout_sidecar_count"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn libass_layout_gate_accepts_layout_metadata() {
+        let mut gates = Vec::new();
+        let sidecars = vec![awidat_render::RenderSidecarFingerprint {
+            path: "/tmp/caption.ass".into(),
+            sha256: "abc".into(),
+            size_bytes: 128,
+            required: true,
+        }];
+
+        add_libass_sidecar_evidence_gate(
+            &mut gates,
+            &BTreeMap::from([
+                (
+                    "timeline_backend_reason".into(),
+                    "ffmpeg_with_libass_captions".into(),
+                ),
+                ("libass_caption_count".into(), "1".into()),
+                ("libass_layout_sidecar_count".into(), "1".into()),
+                ("libass_layout_playres".into(), "1920x1080".into()),
+                ("libass_layout_wrapped_sidecar_count".into(), "1".into()),
+                ("libass_layout_safe_area_sidecar_count".into(), "1".into()),
+                ("libass_layout_karaoke_sidecar_count".into(), "1".into()),
+            ]),
+            &sidecars,
+        );
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "libass_layout_evidence_present")
+            .unwrap();
+        assert!(gate.passed);
+        assert_eq!(gate.details["libass_layout_playres"], "1920x1080");
+    }
+
+    #[test]
+    fn caption_rendered_output_gate_fails_missing_artifact_evidence() {
+        let mut gates = Vec::new();
+        let summary = crate::captions::CaptionSummary {
+            selected_authority: crate::captions::CaptionAuthority::CaptionOverlays,
+            editable_track_count: 0,
+            editable_cue_count: 0,
+            caption_overlay_count: 1,
+            word_timed_caption_overlay_count: 1,
+            safe_area_caption_overlay_count: 1,
+            mobile_safe_area_caption_overlay_count: 1,
+            missing_safe_area_caption_overlay_count: 0,
+            sidecar_cue_count: 0,
+            has_exportable_captions: true,
+            warnings: Vec::new(),
+        };
+        let manifest = RenderManifestEvidence {
+            manifest_path: "/tmp/out.render-manifest.json".into(),
+            manifest_id: "m1".into(),
+            backend: "timeline_ffmpeg_reencode".into(),
+            replay_kind: "ffmpeg_argv".into(),
+            input_count: 1,
+            output_count: 1,
+            sidecar_count: 1,
+            limitation_count: 0,
+            metadata: BTreeMap::new(),
+        };
+
+        add_caption_rendered_output_gate(&mut gates, Some(&manifest), &summary);
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "caption_rendered_output_readable")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(
+            gate.details["reason"],
+            "missing_caption_rendered_output_evidence"
+        );
+    }
+
+    #[test]
+    fn caption_rendered_output_gate_accepts_artifact_evidence() {
+        let mut gates = Vec::new();
+        let summary = crate::captions::CaptionSummary {
+            selected_authority: crate::captions::CaptionAuthority::CaptionOverlays,
+            editable_track_count: 0,
+            editable_cue_count: 0,
+            caption_overlay_count: 1,
+            word_timed_caption_overlay_count: 1,
+            safe_area_caption_overlay_count: 1,
+            mobile_safe_area_caption_overlay_count: 1,
+            missing_safe_area_caption_overlay_count: 0,
+            sidecar_cue_count: 0,
+            has_exportable_captions: true,
+            warnings: Vec::new(),
+        };
+        let manifest = RenderManifestEvidence {
+            manifest_path: "/tmp/out.render-manifest.json".into(),
+            manifest_id: "m1".into(),
+            backend: "timeline_ffmpeg_reencode".into(),
+            replay_kind: "ffmpeg_argv".into(),
+            input_count: 1,
+            output_count: 1,
+            sidecar_count: 1,
+            limitation_count: 0,
+            metadata: BTreeMap::from([
+                ("caption_rendered_output_status".into(), "passed".into()),
+                ("caption_rendered_output_probe_count".into(), "1".into()),
+                (
+                    "caption_rendered_output_safe_area_pass_count".into(),
+                    "1".into(),
+                ),
+                (
+                    "caption_rendered_output_occlusion_fail_count".into(),
+                    "0".into(),
+                ),
+            ]),
+        };
+
+        add_caption_rendered_output_gate(&mut gates, Some(&manifest), &summary);
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "caption_rendered_output_readable")
+            .unwrap();
+        assert!(gate.passed);
+        assert_eq!(gate.details["caption_rendered_output_probe_count"], 1);
+    }
+
+    #[test]
+    fn caption_rendered_output_gate_derives_from_libass_layout_evidence() {
+        let mut gates = Vec::new();
+        let summary = crate::captions::CaptionSummary {
+            selected_authority: crate::captions::CaptionAuthority::CaptionOverlays,
+            editable_track_count: 0,
+            editable_cue_count: 0,
+            caption_overlay_count: 1,
+            word_timed_caption_overlay_count: 1,
+            safe_area_caption_overlay_count: 1,
+            mobile_safe_area_caption_overlay_count: 1,
+            missing_safe_area_caption_overlay_count: 0,
+            sidecar_cue_count: 0,
+            has_exportable_captions: true,
+            warnings: Vec::new(),
+        };
+        let manifest = RenderManifestEvidence {
+            manifest_path: "/tmp/out.render-manifest.json".into(),
+            manifest_id: "m1".into(),
+            backend: "timeline_ffmpeg_reencode".into(),
+            replay_kind: "ffmpeg_argv".into(),
+            input_count: 1,
+            output_count: 1,
+            sidecar_count: 1,
+            limitation_count: 0,
+            metadata: BTreeMap::from([
+                (
+                    "timeline_backend_reason".into(),
+                    "ffmpeg_with_libass_captions".into(),
+                ),
+                ("libass_caption_count".into(), "1".into()),
+                ("libass_layout_sidecar_count".into(), "1".into()),
+                ("libass_layout_playres".into(), "1920x1080".into()),
+                ("libass_layout_safe_area_sidecar_count".into(), "1".into()),
+                ("libass_layout_wrapped_sidecar_count".into(), "1".into()),
+                ("libass_layout_karaoke_sidecar_count".into(), "1".into()),
+            ]),
+        };
+
+        add_caption_rendered_output_gate(&mut gates, Some(&manifest), &summary);
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "caption_rendered_output_readable")
+            .unwrap();
+        assert!(gate.passed);
+        assert_eq!(
+            gate.details["reason"],
+            "derived_from_libass_layout_evidence"
+        );
+        assert_eq!(gate.details["caption_rendered_output_probe_count"], 1);
+        assert_eq!(
+            gate.details["caption_rendered_output_safe_area_pass_count"],
+            1
+        );
+        assert_eq!(
+            gate.details["caption_rendered_output_occlusion_fail_count"],
+            0
+        );
+    }
+
+    #[test]
+    fn render_manifest_caption_gate_fails_metadata_drift() {
+        let mut gates = Vec::new();
+        let summary = crate::captions::CaptionSummary {
+            selected_authority: crate::captions::CaptionAuthority::CaptionOverlays,
+            editable_track_count: 0,
+            editable_cue_count: 0,
+            caption_overlay_count: 1,
+            word_timed_caption_overlay_count: 1,
+            safe_area_caption_overlay_count: 1,
+            mobile_safe_area_caption_overlay_count: 1,
+            missing_safe_area_caption_overlay_count: 0,
+            sidecar_cue_count: 0,
+            has_exportable_captions: true,
+            warnings: Vec::new(),
+        };
+        let manifest = RenderManifestEvidence {
+            manifest_path: "/tmp/out.render-manifest.json".into(),
+            manifest_id: "manifest-1".into(),
+            backend: "timeline_ffmpeg_reencode".into(),
+            replay_kind: "ffmpeg_argv".into(),
+            input_count: 1,
+            output_count: 1,
+            sidecar_count: 0,
+            limitation_count: 0,
+            metadata: BTreeMap::from([
+                ("caption_authority".into(), "caption_overlays".into()),
+                ("caption_overlay_count".into(), "2".into()),
+                ("safe_area_caption_overlay_count".into(), "1".into()),
+                ("missing_safe_area_caption_overlay_count".into(), "0".into()),
+            ]),
+        };
+
+        add_manifest_caption_evidence_gate(&mut gates, Some(&manifest), &summary);
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "render_manifest_caption_evidence_matches_timeline")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(gate.details["metadata"]["caption_overlay_count"], "2");
+        assert_eq!(gate.details["timeline"]["caption_overlay_count"], 1);
+    }
+
+    #[test]
+    fn render_manifest_caption_gate_fails_missing_caption_metadata() {
+        let mut gates = Vec::new();
+        let summary = crate::captions::CaptionSummary {
+            selected_authority: crate::captions::CaptionAuthority::CaptionOverlays,
+            editable_track_count: 0,
+            editable_cue_count: 0,
+            caption_overlay_count: 1,
+            word_timed_caption_overlay_count: 1,
+            safe_area_caption_overlay_count: 1,
+            mobile_safe_area_caption_overlay_count: 1,
+            missing_safe_area_caption_overlay_count: 0,
+            sidecar_cue_count: 0,
+            has_exportable_captions: true,
+            warnings: Vec::new(),
+        };
+        let manifest = RenderManifestEvidence {
+            manifest_path: "/tmp/out.render-manifest.json".into(),
+            manifest_id: "manifest-1".into(),
+            backend: "timeline_ffmpeg_reencode".into(),
+            replay_kind: "ffmpeg_argv".into(),
+            input_count: 1,
+            output_count: 1,
+            sidecar_count: 0,
+            limitation_count: 0,
+            metadata: BTreeMap::from([(
+                "timeline_backend".into(),
+                "timeline_ffmpeg_reencode".into(),
+            )]),
+        };
+
+        add_manifest_caption_evidence_gate(&mut gates, Some(&manifest), &summary);
+
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "render_manifest_caption_evidence_matches_timeline")
+            .unwrap();
+        assert!(!gate.passed);
+        assert_eq!(gate.details["mismatches"][0]["field"], "caption_authority");
+        assert!(gate.details["metadata"]["caption_authority"].is_null());
+    }
+
+    #[test]
+    fn render_manifest_evidence_gate_fails_missing_required_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let output_path = dir.path().join("renders/out.mp4");
+        std::fs::create_dir_all(output_path.parent().unwrap()).unwrap();
+        std::fs::write(&output_path, b"render").unwrap();
+        let missing_sidecar = dir.path().join("renders/.ass/missing.ass");
+        let manifest_path = awidat_render::manifest_path_for_output(&output_path);
+        let manifest = awidat_render::RenderExecutionManifest::planned(
+            awidat_render::RenderExecutionManifestInput {
+                created_at: "2026-05-22T10:00:00Z".into(),
+                awidat_version: "test".into(),
+                project_root: dir.path().to_string_lossy().into_owned(),
+                project_hash: None,
+                timeline_hash: None,
+                backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+                replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+                    argv: vec!["ffmpeg".into()],
+                    cwd: Some(dir.path().to_string_lossy().into_owned()),
+                },
+                inputs: Vec::new(),
+                outputs: vec![awidat_render::output_artifact(&output_path, true)],
+                sidecars: vec![awidat_render::RenderSidecarFingerprint {
+                    path: missing_sidecar.to_string_lossy().into_owned(),
+                    sha256: "missing".into(),
+                    size_bytes: 7,
+                    required: true,
+                }],
+                limitations: Vec::new(),
+                verification: None,
+                metadata: std::collections::BTreeMap::from([
+                    ("timeline_backend".into(), "timeline_ffmpeg_reencode".into()),
+                    (
+                        "timeline_backend_reason".into(),
+                        "ffmpeg_with_libass_captions".into(),
+                    ),
+                    ("render_feature_id".into(), "ffmpeg_timeline_export".into()),
+                    (
+                        "render_feature_preview_supported".into(),
+                        "not_supported".into(),
+                    ),
+                    ("render_feature_export_supported".into(), "supported".into()),
+                    ("render_feature_approval_required".into(), "true".into()),
+                    ("render_feature_limitation_count".into(), "0".into()),
+                ]),
+            },
+        );
+        awidat_render::write_render_manifest(&manifest_path, &manifest).unwrap();
+
+        let mut gates = Vec::new();
+        let evidence = collect_render_manifest_evidence(&output_path, &mut gates)
+            .unwrap()
+            .expect("manifest evidence");
+
+        assert_eq!(evidence.sidecar_count, 1);
+        let gate = gates
+            .iter()
+            .find(|gate| gate.name == "render_manifest_required_artifacts_valid")
+            .expect("required artifact gate");
+        assert!(!gate.passed);
+        assert_eq!(gate.details["kind"], "sidecar");
+        assert_eq!(
+            gate.details["artifact"].as_str(),
+            Some(missing_sidecar.to_string_lossy().as_ref())
+        );
+        let libass_gate = gates
+            .iter()
+            .find(|gate| gate.name == "libass_sidecar_evidence_present")
+            .expect("libass sidecar evidence gate");
+        assert!(!libass_gate.passed);
+        assert_eq!(
+            libass_gate.details["timeline_backend_reason"],
+            "ffmpeg_with_libass_captions"
+        );
+        assert_eq!(libass_gate.details["required_ass_sidecar_count"], 1);
+    }
+
     #[tokio::test]
     async fn verify_render_reports_synthetic_render_gates() {
         if awidat_render::ffmpeg_path().is_err() || awidat_render::ffprobe_path().is_err() {
@@ -1129,12 +2462,30 @@ mod tests {
             .children
             .push(TrackChild::Clip(clip("source", "raw/source.mp4", 0.0, 1.2)));
         timeline.tracks.children.push(StackChild::Track(track));
+        let mut titles = Track::empty("Titles", TrackKind::Video);
+        titles
+            .children
+            .push(TrackChild::Clip(caption_clip("caption", true)));
+        timeline.tracks.children.push(StackChild::Track(titles));
         project.timeline = timeline;
         project.write(dir.path()).unwrap();
 
         let output_path = dir.path().join("renders").join("out.mp4");
         std::fs::create_dir_all(output_path.parent().unwrap()).unwrap();
         synthesize_fixture(&output_path, 1.2, false).unwrap();
+        let ass_path = output_path
+            .parent()
+            .unwrap()
+            .join(".ass")
+            .join("caption.ass");
+        std::fs::create_dir_all(ass_path.parent().unwrap()).unwrap();
+        std::fs::write(&ass_path, "[Script Info]\nTitle: test\n").unwrap();
+        let sidecars = awidat_render::fingerprint_ffmpeg_subtitle_sidecars(&[
+            "ffmpeg".into(),
+            "-vf".into(),
+            format!("subtitles={}", ass_path.to_string_lossy()),
+        ])
+        .unwrap();
         let render_manifest_path = awidat_render::manifest_path_for_output(&output_path);
         let manifest = awidat_render::RenderExecutionManifest::planned(
             awidat_render::RenderExecutionManifestInput {
@@ -1150,10 +2501,48 @@ mod tests {
                 },
                 inputs: Vec::new(),
                 outputs: vec![awidat_render::output_artifact(&output_path, true)],
-                sidecars: Vec::new(),
+                sidecars,
                 limitations: Vec::new(),
                 verification: None,
-                metadata: std::collections::BTreeMap::new(),
+                metadata: std::collections::BTreeMap::from([
+                    ("timeline_backend".into(), "timeline_ffmpeg_reencode".into()),
+                    (
+                        "timeline_backend_reason".into(),
+                        "ffmpeg_with_libass_captions".into(),
+                    ),
+                    ("libass_caption_count".into(), "1".into()),
+                    ("libass_layout_sidecar_count".into(), "1".into()),
+                    ("libass_layout_playres".into(), "1920x1080".into()),
+                    ("libass_layout_wrapped_sidecar_count".into(), "1".into()),
+                    ("libass_layout_safe_area_sidecar_count".into(), "1".into()),
+                    ("libass_layout_karaoke_sidecar_count".into(), "1".into()),
+                    ("caption_authority".into(), "caption_overlays".into()),
+                    ("caption_overlay_count".into(), "1".into()),
+                    ("word_timed_caption_overlay_count".into(), "1".into()),
+                    ("safe_area_caption_overlay_count".into(), "1".into()),
+                    ("mobile_safe_area_caption_overlay_count".into(), "1".into()),
+                    ("missing_safe_area_caption_overlay_count".into(), "0".into()),
+                    ("subtitle_sidecar_cue_count".into(), "0".into()),
+                    ("caption_warning_count".into(), "1".into()),
+                    ("caption_rendered_output_status".into(), "passed".into()),
+                    ("caption_rendered_output_probe_count".into(), "1".into()),
+                    (
+                        "caption_rendered_output_safe_area_pass_count".into(),
+                        "1".into(),
+                    ),
+                    (
+                        "caption_rendered_output_occlusion_fail_count".into(),
+                        "0".into(),
+                    ),
+                    ("render_feature_id".into(), "ffmpeg_timeline_export".into()),
+                    (
+                        "render_feature_preview_supported".into(),
+                        "not_supported".into(),
+                    ),
+                    ("render_feature_export_supported".into(), "supported".into()),
+                    ("render_feature_approval_required".into(), "true".into()),
+                    ("render_feature_limitation_count".into(), "0".into()),
+                ]),
             },
         );
         awidat_render::write_render_manifest(&render_manifest_path, &manifest).unwrap();
@@ -1163,6 +2552,36 @@ mod tests {
             .unwrap();
 
         assert!(report.passed, "{report:#?}");
+        let manifest_evidence = report
+            .render_manifest
+            .as_ref()
+            .expect("verification report should include render manifest evidence");
+        assert_eq!(manifest_evidence.backend, "timeline_ffmpeg_reencode");
+        assert_eq!(manifest_evidence.replay_kind, "ffmpeg_argv");
+        assert_eq!(
+            manifest_evidence.metadata["timeline_backend_reason"],
+            "ffmpeg_with_libass_captions"
+        );
+        assert_eq!(
+            manifest_evidence.manifest_path,
+            render_manifest_path.to_string_lossy()
+        );
+        assert_eq!(report.caption_summary.caption_overlay_count, 1);
+        assert_eq!(report.caption_summary.word_timed_caption_overlay_count, 1);
+        assert_eq!(report.caption_summary.safe_area_caption_overlay_count, 1);
+        assert_eq!(
+            report
+                .caption_summary
+                .mobile_safe_area_caption_overlay_count,
+            1
+        );
+        assert_eq!(
+            report
+                .caption_summary
+                .missing_safe_area_caption_overlay_count,
+            0
+        );
+        assert!(report.timeline_manifest.missing_media.is_empty());
         assert!(
             report
                 .gates
@@ -1181,6 +2600,40 @@ mod tests {
                 .iter()
                 .any(|gate| gate.name == "edited_boundary_probes" && gate.passed)
         );
+        assert!(report.gates.iter().any(|gate| {
+            gate.name == "caption_evidence_consistent"
+                && gate.passed
+                && gate.details["caption_overlay_count"] == 1
+                && gate.details["word_timed_caption_overlay_count"] == 1
+                && gate.details["missing_safe_area_caption_overlay_count"] == 0
+        }));
+        assert!(report.gates.iter().any(|gate| {
+            gate.name == "caption_safe_area_metadata_present"
+                && gate.passed
+                && gate.details["caption_overlay_count"] == 1
+                && gate.details["safe_area_caption_overlay_count"] == 1
+                && gate.details["mobile_safe_area_caption_overlay_count"] == 1
+                && gate.details["missing_safe_area_caption_overlay_count"] == 0
+        }));
+        assert!(report.gates.iter().any(|gate| {
+            gate.name == "render_backend_evidence_present"
+                && gate.passed
+                && gate.details["timeline_backend_reason"] == "ffmpeg_with_libass_captions"
+        }));
+        assert!(report.gates.iter().any(|gate| {
+            gate.name == "libass_sidecar_evidence_present"
+                && gate.passed
+                && gate.details["libass_caption_count"] == 1
+                && gate.details["required_ass_sidecar_count"] == 1
+        }));
+        assert!(report.gates.iter().any(|gate| {
+            gate.name == "render_feature_evidence_present"
+                && gate.passed
+                && gate.details["render_feature_id"] == "ffmpeg_timeline_export"
+        }));
+        assert!(report.gates.iter().any(|gate| {
+            gate.name == "render_manifest_caption_evidence_matches_timeline" && gate.passed
+        }));
         let verification_report_path = verification_report_path_for_output(&output_path);
         assert!(verification_report_path.is_file());
         let updated_manifest = awidat_render::read_render_manifest(&render_manifest_path).unwrap();
@@ -1229,5 +2682,28 @@ mod tests {
             .status()?;
         assert!(status.success());
         Ok(())
+    }
+
+    fn caption_clip(name: &str, word_timed: bool) -> Clip {
+        let mut clip = Clip::empty(name);
+        clip.source_range = Some(range(0.0, 1.0));
+        let mut effect = Effect::new("awidat.title");
+        effect
+            .metadata
+            .insert("role".into(), serde_json::json!("caption"));
+        effect
+            .metadata
+            .insert("safe_area".into(), serde_json::json!("mobile"));
+        if word_timed {
+            effect.metadata.insert(
+                "word_timings".into(),
+                serde_json::json!([
+                    {"text": "hello", "start_s": 0.0, "end_s": 0.4},
+                    {"text": "world", "start_s": 0.4, "end_s": 1.0}
+                ]),
+            );
+        }
+        clip.effects.push(effect);
+        clip
     }
 }

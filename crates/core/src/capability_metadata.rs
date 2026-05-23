@@ -66,8 +66,8 @@ impl CapabilityMetadata {
                 metadata.export_supported = SupportLevel::NotSupported;
                 metadata.required_indexes = vec!["clip_embeddings".into()];
             }
-            "transcript_search" | "find_dead_air" | "find_filler_words" | "find_false_starts"
-            | "find_episode_start" => {
+            "transcript_pack" | "transcript_search" | "find_dead_air" | "find_filler_words"
+            | "find_false_starts" | "find_episode_start" => {
                 metadata.export_supported = SupportLevel::NotSupported;
                 metadata.required_indexes = vec!["transcript".into()];
             }
@@ -100,6 +100,21 @@ impl CapabilityMetadata {
                 metadata.approval_required = false;
                 metadata.side_effects = Vec::new();
             }
+            "render_preflight" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::NotSupported;
+                metadata.export_supported = SupportLevel::Supported;
+                metadata.approval_required = false;
+                metadata.side_effects = vec![
+                    "reports backend selection and capability metadata with no render job started"
+                        .into(),
+                ];
+                metadata.known_limitations = vec![
+                    "currently preflights edited timeline renders".into(),
+                    "optional preview-cache planning is read-only and does not generate artifacts"
+                        .into(),
+                ];
+            }
             "verify_render" => {
                 metadata.graph_mutates = false;
                 metadata.preview_supported = SupportLevel::NotSupported;
@@ -109,6 +124,10 @@ impl CapabilityMetadata {
                     "writes render verification reports".into(),
                     "updates render manifest verification summaries".into(),
                 ];
+                metadata.known_limitations = vec![
+                    "caption rendered-output evidence must be supplied by render manifests until a frame-level scorer writes it automatically"
+                        .into(),
+                ];
             }
             "export_package" => {
                 metadata.preview_supported = SupportLevel::NotSupported;
@@ -116,6 +135,20 @@ impl CapabilityMetadata {
                 metadata.side_effects = vec![
                     "starts a render job".into(),
                     "writes delivery package files".into(),
+                ];
+            }
+            "stream_remux" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::NotSupported;
+                metadata.export_supported = SupportLevel::Supported;
+                metadata.approval_required = true;
+                metadata.side_effects = vec![
+                    "starts an ffmpeg stream-copy/remux job".into(),
+                    "writes remuxed media output and a render manifest".into(),
+                ];
+                metadata.known_limitations = vec![
+                    "not suitable for frame-domain effects, styled overlays, transitions, retiming, or caption burn-in"
+                        .into(),
                 ];
             }
             "download_yt_clip" | "search_broll" => {
@@ -129,6 +162,25 @@ impl CapabilityMetadata {
                 metadata.export_supported = SupportLevel::Unknown;
                 metadata.approval_required = true;
                 metadata.side_effects = vec!["writes project timeline changes".into()];
+            }
+            "proxy_status" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::Supported;
+                metadata.export_supported = SupportLevel::NotSupported;
+                metadata.approval_required = false;
+                metadata.side_effects = vec!["reads proxy cache artifact metadata".into()];
+            }
+            "preview_cache_status" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::Supported;
+                metadata.export_supported = SupportLevel::NotSupported;
+                metadata.approval_required = false;
+                metadata.side_effects =
+                    vec!["reads proxy, thumbnail, and waveform cache metadata".into()];
+                metadata.known_limitations = vec![
+                    "returns a bounded read-only refresh plan; use desktop preview_cache_refresh or specific generation tools to refresh artifacts"
+                        .into(),
+                ];
             }
             "import_media" | "import_url" | "generate_proxy" | "proxy_media" => {
                 metadata.preview_supported = SupportLevel::Supported;
@@ -172,6 +224,25 @@ impl CapabilityMetadata {
             required_indexes: Vec::new(),
             approval_required: true,
             side_effects: vec!["writes OTIO effect metadata when applied".into()],
+            known_limitations,
+        }
+    }
+
+    /// Metadata for a render/preview pipeline feature.
+    pub fn render_feature(
+        preview_supported: SupportLevel,
+        export_supported: SupportLevel,
+        approval_required: bool,
+        side_effects: Vec<String>,
+        known_limitations: Vec<String>,
+    ) -> Self {
+        Self {
+            graph_mutates: false,
+            preview_supported,
+            export_supported,
+            required_indexes: Vec::new(),
+            approval_required,
+            side_effects,
             known_limitations,
         }
     }
