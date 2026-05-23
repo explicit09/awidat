@@ -56,7 +56,7 @@ struct VerifyRenderArgs {
     max_black_segment_s: Option<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct VerifyRenderOptions {
     expected_duration_s: Option<f64>,
     duration_tolerance_s: f64,
@@ -66,6 +66,36 @@ struct VerifyRenderOptions {
     max_unexpected_silence_s: f64,
     black_min_duration_s: f64,
     max_black_segment_s: f64,
+    /// Optional test hook that swaps in a deterministic frame sampler for the
+    /// caption frame-pixel scorer. Production callers leave this `None` so the
+    /// scorer falls back to its ffmpeg-backed sampler.
+    caption_frame_sampler_override:
+        Option<std::sync::Arc<dyn crate::caption_rendered_output_scorer::CaptionFrameSampler>>,
+}
+
+impl std::fmt::Debug for VerifyRenderOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerifyRenderOptions")
+            .field("expected_duration_s", &self.expected_duration_s)
+            .field("duration_tolerance_s", &self.duration_tolerance_s)
+            .field("mode", &self.mode)
+            .field(
+                "source_range_manifest_path",
+                &self.source_range_manifest_path,
+            )
+            .field("silence_threshold_db", &self.silence_threshold_db)
+            .field("max_unexpected_silence_s", &self.max_unexpected_silence_s)
+            .field("black_min_duration_s", &self.black_min_duration_s)
+            .field("max_black_segment_s", &self.max_black_segment_s)
+            .field(
+                "caption_frame_sampler_override",
+                &self
+                    .caption_frame_sampler_override
+                    .as_ref()
+                    .map(|_| "<sampler>"),
+            )
+            .finish()
+    }
 }
 
 impl Default for VerifyRenderOptions {
@@ -79,6 +109,7 @@ impl Default for VerifyRenderOptions {
             max_unexpected_silence_s: DEFAULT_MAX_UNEXPECTED_SILENCE_S,
             black_min_duration_s: DEFAULT_BLACK_MIN_DURATION_S,
             max_black_segment_s: DEFAULT_MAX_BLACK_SEGMENT_S,
+            caption_frame_sampler_override: None,
         }
     }
 }
@@ -294,6 +325,7 @@ impl ToolHandler for VerifyRenderTool {
             max_black_segment_s: args
                 .max_black_segment_s
                 .unwrap_or(DEFAULT_MAX_BLACK_SEGMENT_S),
+            caption_frame_sampler_override: None,
         };
         validate_options(&options)?;
 
@@ -361,8 +393,16 @@ async fn verify_render_output(
 
     add_source_duration_gate(&mut gates, project_root, &timeline_manifest.source_ranges).await;
     add_source_range_manifest_gate(&mut gates, &timeline_manifest, &options)?;
-    let render_manifest = collect_render_manifest_evidence(output_path, &mut gates)?;
+    let mut render_manifest = collect_render_manifest_evidence(output_path, &mut gates)?;
     let caption_summary = crate::captions::summarize_captions(&project);
+    maybe_run_caption_scorer(
+        output_path,
+        &probe,
+        render_manifest.as_mut(),
+        &caption_summary,
+        options.caption_frame_sampler_override.as_deref(),
+    )
+    .await;
     add_caption_evidence_gate(&mut gates, &caption_summary);
     add_caption_safe_area_gate(&mut gates, &caption_summary);
     add_manifest_caption_evidence_gate(&mut gates, render_manifest.as_ref(), &caption_summary);
@@ -568,6 +608,122 @@ fn requires_caption_manifest_metadata(backend: &str) -> bool {
     )
 }
 
+async fn maybe_run_caption_scorer(
+    output_path: &Path,
+    probe: &awidat_render::MediaProbe,
+    manifest: Option<&mut RenderManifestEvidence>,
+    caption_summary: &crate::captions::CaptionSummary,
+    sampler_override: Option<&dyn crate::caption_rendered_output_scorer::CaptionFrameSampler>,
+) {
+    if !caption_summary.has_exportable_captions {
+        return;
+    }
+    let Some(manifest) = manifest else {
+        return;
+    };
+    let Some(sidecar_csv) = manifest
+        .metadata
+        .get("libass_layout_sidecar_paths")
+        .cloned()
+    else {
+        return;
+    };
+    let sidecars: Vec<PathBuf> = sidecar_csv
+        .split(',')
+        .filter(|segment| !segment.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    if sidecars.is_empty() {
+        return;
+    }
+
+    let safe_area_profile = if caption_summary.mobile_safe_area_caption_overlay_count > 0 {
+        "mobile"
+    } else {
+        "default"
+    };
+    let video_dims = (
+        probe.video_width.unwrap_or(1920),
+        probe.video_height.unwrap_or(1080),
+    );
+
+    let owned_sampler;
+    let sampler: &dyn crate::caption_rendered_output_scorer::CaptionFrameSampler =
+        if let Some(s) = sampler_override {
+            s
+        } else {
+            owned_sampler = crate::caption_rendered_output_scorer::FfmpegFrameSampler::new(
+                output_path.to_path_buf(),
+            );
+            &owned_sampler
+        };
+
+    match crate::caption_rendered_output_scorer::score_caption_rendered_output(
+        output_path,
+        &sidecars,
+        video_dims,
+        safe_area_profile,
+        sampler,
+    )
+    .await
+    {
+        Ok(evidence) => {
+            manifest.metadata.insert(
+                "caption_rendered_output_source".into(),
+                "frame_pixel_scorer".into(),
+            );
+            let status = if evidence.probe_count == 0 {
+                "skipped"
+            } else if evidence.safe_area_pass_count == evidence.probe_count
+                && evidence.occlusion_fail_count == 0
+            {
+                "passed"
+            } else {
+                "failed"
+            };
+            manifest
+                .metadata
+                .insert("caption_rendered_output_status".into(), status.into());
+            manifest.metadata.insert(
+                "caption_rendered_output_probe_count".into(),
+                evidence.probe_count.to_string(),
+            );
+            manifest.metadata.insert(
+                "caption_rendered_output_safe_area_pass_count".into(),
+                evidence.safe_area_pass_count.to_string(),
+            );
+            manifest.metadata.insert(
+                "caption_rendered_output_occlusion_fail_count".into(),
+                evidence.occlusion_fail_count.to_string(),
+            );
+            if let Some(reason) = evidence.fallback_reason {
+                manifest.metadata.insert(
+                    "caption_rendered_output_fallback_reason".into(),
+                    reason.into(),
+                );
+            }
+        }
+        Err(err) => {
+            let reason = match err {
+                crate::caption_rendered_output_scorer::ScorerError::SamplerUnavailable(_) => {
+                    "ffmpeg_unavailable"
+                }
+                crate::caption_rendered_output_scorer::ScorerError::RenderOutputMissing => {
+                    "render_output_missing"
+                }
+                crate::caption_rendered_output_scorer::ScorerError::SidecarParseFailed => {
+                    "sidecar_parse_failed"
+                }
+                crate::caption_rendered_output_scorer::ScorerError::Io(_) => "io_error",
+            };
+            manifest.metadata.insert(
+                "caption_rendered_output_fallback_reason".into(),
+                reason.into(),
+            );
+        }
+    }
+}
+
 fn add_caption_rendered_output_gate(
     gates: &mut Vec<VerificationGate>,
     manifest: Option<&RenderManifestEvidence>,
@@ -604,6 +760,14 @@ fn add_caption_rendered_output_gate(
         &manifest.metadata,
         "caption_rendered_output_occlusion_fail_count",
     );
+    let source = manifest
+        .metadata
+        .get("caption_rendered_output_source")
+        .map(String::as_str);
+    let fallback_reason = manifest
+        .metadata
+        .get("caption_rendered_output_fallback_reason")
+        .map(String::as_str);
     let has_evidence = status.is_some()
         || probe_count.is_some()
         || safe_area_pass_count.is_some()
@@ -614,7 +778,13 @@ fn add_caption_rendered_output_gate(
         && safe_area_pass_count.is_some_and(|count| count >= expected_probe_count)
         && occlusion_fail_count == Some(0);
     if has_evidence {
-        reason = if passed {
+        reason = if source == Some("frame_pixel_scorer") {
+            if passed {
+                "frame_pixel_scorer_passed"
+            } else {
+                "frame_pixel_scorer_failed"
+            }
+        } else if passed {
             "passed"
         } else {
             "caption_rendered_output_evidence_failed"
@@ -624,7 +794,11 @@ fn add_caption_rendered_output_gate(
         expected_probe_count,
     ) {
         passed = true;
-        reason = "derived_from_libass_layout_evidence";
+        reason = if fallback_reason.is_some() {
+            "frame_pixel_scorer_unavailable_fell_back_to_libass_layout"
+        } else {
+            "derived_from_libass_layout_evidence"
+        };
         probe_count = Some(expected_probe_count);
         safe_area_pass_count = Some(expected_probe_count);
         occlusion_fail_count = Some(0);
@@ -2705,5 +2879,206 @@ mod tests {
         }
         clip.effects.push(effect);
         clip
+    }
+
+    /// Build a synthetic render fixture wired up so the caption frame-pixel
+    /// scorer can run during `verify_render_output`. Returns the project root
+    /// tempdir, the render output path, and the expected scorer bbox (for
+    /// tests that need to plant high-variance pixels there).
+    fn scorer_test_fixture() -> (tempfile::TempDir, std::path::PathBuf, (u32, u32, u32, u32)) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let source_path = raw_dir.join("source.mp4");
+        synthesize_fixture(&source_path, 1.2, false).unwrap();
+
+        let mut timeline = awidat_proto::otio::Timeline::empty("verify");
+        let mut track = Track::empty("v1", TrackKind::Video);
+        track
+            .children
+            .push(TrackChild::Clip(clip("source", "raw/source.mp4", 0.0, 1.2)));
+        timeline.tracks.children.push(StackChild::Track(track));
+        let mut titles = Track::empty("Titles", TrackKind::Video);
+        titles
+            .children
+            .push(TrackChild::Clip(caption_clip("caption", true)));
+        timeline.tracks.children.push(StackChild::Track(titles));
+        project.timeline = timeline;
+        project.write(dir.path()).unwrap();
+
+        let output_path = dir.path().join("renders").join("out.mp4");
+        std::fs::create_dir_all(output_path.parent().unwrap()).unwrap();
+        synthesize_fixture(&output_path, 1.2, false).unwrap();
+
+        let ass_dir = output_path.parent().unwrap().join(".ass");
+        std::fs::create_dir_all(&ass_dir).unwrap();
+        let ass_path = ass_dir.join("caption.ass");
+        let ass_body = "[Script Info]\n\
+PlayResX: 1920\n\
+PlayResY: 1080\n\
+\n\
+[V4+ Styles]\n\
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n\
+Style: Default,Arial,40,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,100,100,120,1\n\
+\n\
+[Events]\n\
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
+Dialogue: 0,0:00:00.20,0:00:01.00,Default,,0,0,0,,hello world\n";
+        std::fs::write(&ass_path, ass_body).unwrap();
+        let sidecars = awidat_render::fingerprint_ffmpeg_subtitle_sidecars(&[
+            "ffmpeg".into(),
+            "-vf".into(),
+            format!("subtitles={}", ass_path.to_string_lossy()),
+        ])
+        .unwrap();
+
+        // The synthesize_fixture render is 160x90. Bbox computed at that
+        // resolution from the Style+Dialogue above (alignment=2 bottom-center,
+        // PlayRes 1920x1080 with margin_l=margin_r=100, margin_v=120, fontsize=40):
+        //   sx = 160/1920 ≈ 0.0833, sy = 90/1080 ≈ 0.0833
+        //   line_height = round(40 * 1.2 * 0.0833) = 4
+        //   margin_l_px = margin_r_px = round(100*0.0833) = 8
+        //   margin_v_px = round(120*0.0833) = 10
+        //   width = 160 - 16 = 144, x = 8, height = 4, y = 90 - 4 - 10 = 76.
+        // Mobile safe-area inset (5% L/R, 10% T/B) → bbox 76..80 sits inside 9..81.
+        let bbox: (u32, u32, u32, u32) = (8, 76, 144, 4);
+
+        let render_manifest_path = awidat_render::manifest_path_for_output(&output_path);
+        let manifest = awidat_render::RenderExecutionManifest::planned(
+            awidat_render::RenderExecutionManifestInput {
+                created_at: "2026-05-22T10:00:00Z".into(),
+                awidat_version: "test".into(),
+                project_root: dir.path().to_string_lossy().into_owned(),
+                project_hash: None,
+                timeline_hash: None,
+                backend: awidat_render::RenderBackendKind::TimelineFfmpegReencode,
+                replay: awidat_render::RenderReplayPlan::FfmpegArgv {
+                    argv: vec!["ffmpeg".into()],
+                    cwd: Some(dir.path().to_string_lossy().into_owned()),
+                },
+                inputs: Vec::new(),
+                outputs: vec![awidat_render::output_artifact(&output_path, true)],
+                sidecars,
+                limitations: Vec::new(),
+                verification: None,
+                metadata: std::collections::BTreeMap::from([
+                    ("timeline_backend".into(), "timeline_ffmpeg_reencode".into()),
+                    (
+                        "timeline_backend_reason".into(),
+                        "ffmpeg_with_libass_captions".into(),
+                    ),
+                    ("libass_caption_count".into(), "1".into()),
+                    ("libass_layout_sidecar_count".into(), "1".into()),
+                    ("libass_layout_playres".into(), "1920x1080".into()),
+                    ("libass_layout_wrapped_sidecar_count".into(), "1".into()),
+                    ("libass_layout_safe_area_sidecar_count".into(), "1".into()),
+                    ("libass_layout_karaoke_sidecar_count".into(), "1".into()),
+                    (
+                        "libass_layout_sidecar_paths".into(),
+                        ass_path.to_string_lossy().into_owned(),
+                    ),
+                    ("caption_authority".into(), "caption_overlays".into()),
+                    ("caption_overlay_count".into(), "1".into()),
+                    ("word_timed_caption_overlay_count".into(), "1".into()),
+                    ("safe_area_caption_overlay_count".into(), "1".into()),
+                    ("mobile_safe_area_caption_overlay_count".into(), "1".into()),
+                    ("missing_safe_area_caption_overlay_count".into(), "0".into()),
+                    ("subtitle_sidecar_cue_count".into(), "0".into()),
+                    ("caption_warning_count".into(), "1".into()),
+                    ("render_feature_id".into(), "ffmpeg_timeline_export".into()),
+                    (
+                        "render_feature_preview_supported".into(),
+                        "not_supported".into(),
+                    ),
+                    ("render_feature_export_supported".into(), "supported".into()),
+                    ("render_feature_approval_required".into(), "true".into()),
+                    ("render_feature_limitation_count".into(), "0".into()),
+                ]),
+            },
+        );
+        awidat_render::write_render_manifest(&render_manifest_path, &manifest).unwrap();
+        (dir, output_path, bbox)
+    }
+
+    #[tokio::test]
+    async fn verify_render_uses_frame_pixel_scorer_when_render_output_present() {
+        if awidat_render::ffmpeg_path().is_err() || awidat_render::ffprobe_path().is_err() {
+            return;
+        }
+        use crate::caption_rendered_output_scorer::test_support::{
+            InMemoryFrameSampler, caption_on_flat_background_frame,
+        };
+        let (dir, output_path, bbox) = scorer_test_fixture();
+        let sampler = std::sync::Arc::new(InMemoryFrameSampler::new());
+        sampler.insert(0.6, caption_on_flat_background_frame(160, 90, bbox));
+        let options = VerifyRenderOptions {
+            caption_frame_sampler_override: Some(sampler),
+            ..VerifyRenderOptions::default()
+        };
+        let report = verify_render_output(dir.path(), &output_path, options)
+            .await
+            .unwrap();
+        let gate = report
+            .gates
+            .iter()
+            .find(|g| g.name == "caption_rendered_output_readable")
+            .expect("caption rendered output gate");
+        assert!(gate.passed, "gate details: {:?}", gate.details);
+        assert_eq!(gate.details["reason"], "frame_pixel_scorer_passed");
+    }
+
+    #[tokio::test]
+    async fn verify_render_falls_back_to_libass_layout_when_scorer_unavailable() {
+        if awidat_render::ffmpeg_path().is_err() || awidat_render::ffprobe_path().is_err() {
+            return;
+        }
+        use crate::caption_rendered_output_scorer::test_support::AlwaysUnavailableFrameSampler;
+        let (dir, output_path, _bbox) = scorer_test_fixture();
+        let sampler = std::sync::Arc::new(AlwaysUnavailableFrameSampler);
+        let options = VerifyRenderOptions {
+            caption_frame_sampler_override: Some(sampler),
+            ..VerifyRenderOptions::default()
+        };
+        let report = verify_render_output(dir.path(), &output_path, options)
+            .await
+            .unwrap();
+        let gate = report
+            .gates
+            .iter()
+            .find(|g| g.name == "caption_rendered_output_readable")
+            .expect("caption rendered output gate");
+        assert!(gate.passed, "gate details: {:?}", gate.details);
+        assert_eq!(
+            gate.details["reason"],
+            "frame_pixel_scorer_unavailable_fell_back_to_libass_layout"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_render_reports_frame_pixel_scorer_failed_on_failed_evidence() {
+        if awidat_render::ffmpeg_path().is_err() || awidat_render::ffprobe_path().is_err() {
+            return;
+        }
+        use crate::caption_rendered_output_scorer::test_support::{
+            InMemoryFrameSampler, flat_frame,
+        };
+        let (dir, output_path, _bbox) = scorer_test_fixture();
+        let sampler = std::sync::Arc::new(InMemoryFrameSampler::new());
+        sampler.insert(0.6, flat_frame(160, 90, 128));
+        let options = VerifyRenderOptions {
+            caption_frame_sampler_override: Some(sampler),
+            ..VerifyRenderOptions::default()
+        };
+        let report = verify_render_output(dir.path(), &output_path, options)
+            .await
+            .unwrap();
+        let gate = report
+            .gates
+            .iter()
+            .find(|g| g.name == "caption_rendered_output_readable")
+            .expect("caption rendered output gate");
+        assert!(!gate.passed, "gate details: {:?}", gate.details);
+        assert_eq!(gate.details["reason"], "frame_pixel_scorer_failed");
     }
 }

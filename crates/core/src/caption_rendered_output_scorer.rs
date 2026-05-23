@@ -186,6 +186,17 @@ pub async fn score_caption_rendered_output(
         });
     }
 
+    // If we had events but every single one failed to sample, the sampler is
+    // effectively unavailable from the gate's perspective. Surface this as
+    // SamplerUnavailable so the caller can fall back to libass-layout
+    // derivation instead of recording a misleading "scorer ran but produced
+    // nothing" evidence packet.
+    if probe_count == 0 && !findings.is_empty() {
+        return Err(ScorerError::SamplerUnavailable(
+            "all_events_failed_to_sample",
+        ));
+    }
+
     let fallback_reason = if had_parse_failures {
         Some("partial_scorer_evidence")
     } else {
@@ -472,10 +483,9 @@ impl FfmpegFrameSampler {
 #[async_trait::async_trait]
 impl CaptionFrameSampler for FfmpegFrameSampler {
     async fn sample(&self, t_s: f64) -> Result<DecodedFrame, ScorerError> {
-        let (width, height, luma) =
-            awidat_render::extract_frame_raw_gray(&self.render_output, t_s)
-                .await
-                .map_err(|_| ScorerError::SamplerUnavailable("ffmpeg_extract_failed"))?;
+        let (width, height, luma) = awidat_render::extract_frame_raw_gray(&self.render_output, t_s)
+            .await
+            .map_err(|_| ScorerError::SamplerUnavailable("ffmpeg_extract_failed"))?;
         Ok(DecodedFrame {
             width,
             height,
