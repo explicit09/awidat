@@ -50,6 +50,19 @@ pub async fn generate_motion_for_asset_in_project(
     project_root: &Path,
     asset_path: &Path,
 ) -> Result<PathBuf, String> {
+    generate_motion_for_asset_in_project_inner(app, state.inner(), project_root, asset_path).await
+}
+
+/// `&AwidatState` variant of [`generate_motion_for_asset_in_project`],
+/// so callers without a Tauri `State` handle (e.g. background tasks
+/// spawned with `tokio::join!` that need to outlive the `State`'s
+/// borrow lifetime) can invoke the same machinery.
+pub async fn generate_motion_for_asset_in_project_inner(
+    app: &AppHandle,
+    state: &AwidatState,
+    project_root: &Path,
+    asset_path: &Path,
+) -> Result<PathBuf, String> {
     let sidecar = motion_path_for(project_root, asset_path);
     if sidecar_is_fresh(asset_path, &sidecar) {
         return Ok(sidecar);
@@ -60,7 +73,7 @@ pub async fn generate_motion_for_asset_in_project(
 
 async fn run_one(
     app: &AppHandle,
-    state: &State<'_, AwidatState>,
+    state: &AwidatState,
     asset: &Path,
     sidecar: &Path,
 ) -> Result<(), String> {
@@ -164,7 +177,7 @@ pub async fn read_motion(path: String) -> Result<MotionSidecar, String> {
     Ok(parsed)
 }
 
-async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
+async fn register_job(state: &AwidatState, id: &Id) -> CancellationToken {
     let token = CancellationToken::new();
     state.jobs.lock().await.insert(
         id.0.clone(),
@@ -175,7 +188,7 @@ async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationTo
     token
 }
 
-async fn unregister_job(state: &State<'_, AwidatState>, id: &Id) {
+async fn unregister_job(state: &AwidatState, id: &Id) {
     state.jobs.lock().await.remove(&id.0);
 }
 

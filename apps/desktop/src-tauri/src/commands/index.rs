@@ -195,9 +195,29 @@ pub async fn index_project_at_root(
         Some(cb),
     );
 
-    let result = tokio::select! {
-        _ = cancel.cancelled() => Err("cancelled".into()),
-        r = dispatch => r.map_err(|e| format!("dispatcher: {e}")),
+    // Built-in passes (motion + silence) live outside the MCP
+    // dispatcher. By default they run *after* the dispatcher returns,
+    // serializing what could be parallel. On machines with headroom
+    // we spawn them concurrently with the MCP run instead — same
+    // total CPU work, but the long-pole motion sampler doesn't sit
+    // behind the python indexers anymore. The check is conservative
+    // (≥8 cores AND load-avg under half of cores) so weaker
+    // hardware doesn't get its other apps starved.
+    let parallel = has_headroom_for_parallel_passes();
+    let state_for_passes = state.inner();
+    let passes_fut = async {
+        if parallel {
+            run_builtin_passes(app, state_for_passes, &project_root, &assets, &cancel).await
+        } else {
+            BuiltinPassReport::default()
+        }
+    };
+
+    let (result, parallel_passes) = tokio::select! {
+        _ = cancel.cancelled() => (Err("cancelled".into()), BuiltinPassReport::default()),
+        r = async { tokio::join!(dispatch, passes_fut) } => {
+            (r.0.map_err(|e| format!("dispatcher: {e}")), r.1)
+        }
     };
 
     unregister_job(&state, &job_id).await;
@@ -213,58 +233,30 @@ pub async fn index_project_at_root(
             let summary = format!(
                 "{wrote} wrote, {skipped} skipped, {failed} failed, {dep_skipped} dep-skipped"
             );
-            // Built-in passes (motion + silence). These are FFmpeg
-            // helpers, not MCP indexers, so the dispatcher above
-            // doesn't touch them. Run them here so a user clicking
-            // "Run indexers" fills the sidecars for every asset —
-            // same coverage they'd get from re-importing. Per-asset
-            // calls are mtime-fresh-checked, so already-current
-            // sidecars are no-ops.
-            let mut motion_wrote = 0usize;
-            let mut motion_failed: Vec<(String, String)> = Vec::new();
-            let mut silence_wrote = 0usize;
-            let mut silence_failed: Vec<(String, String)> = Vec::new();
-            for asset in &assets {
-                if cancel.is_cancelled() {
-                    break;
-                }
-                match crate::commands::motion::generate_motion_for_asset_in_project(
-                    app,
-                    state,
-                    &project_root,
-                    &asset.path,
-                )
-                .await
-                {
-                    Ok(_) => motion_wrote += 1,
-                    Err(e) => motion_failed.push((asset.id.to_string(), e)),
-                }
-                if cancel.is_cancelled() {
-                    break;
-                }
-                match crate::commands::silence::generate_silences_for_asset_in_project(
-                    app,
-                    state,
-                    &project_root,
-                    &asset.path,
-                )
-                .await
-                {
-                    Ok(_) => silence_wrote += 1,
-                    Err(e) => silence_failed.push((asset.id.to_string(), e)),
-                }
-            }
+            // Built-in passes (motion + silence). Either ran in
+            // parallel with the dispatcher (high-headroom machines)
+            // or we run them now serially. Per-asset calls are
+            // mtime-fresh-checked, so the second-pass invocation
+            // skips any sidecar that landed during the parallel run.
+            let post_passes = if parallel {
+                BuiltinPassReport::default()
+            } else {
+                run_builtin_passes(app, state.inner(), &project_root, &assets, &cancel).await
+            };
+            let passes = BuiltinPassReport::merge(parallel_passes, post_passes);
             let mut summary = summary;
-            if motion_wrote > 0 || !motion_failed.is_empty() {
+            if passes.motion_wrote > 0 || !passes.motion_failed.is_empty() {
                 summary = format!(
-                    "{summary}; motion: {motion_wrote} ok, {} failed",
-                    motion_failed.len(),
+                    "{summary}; motion: {} ok, {} failed",
+                    passes.motion_wrote,
+                    passes.motion_failed.len(),
                 );
             }
-            if silence_wrote > 0 || !silence_failed.is_empty() {
+            if passes.silence_wrote > 0 || !passes.silence_failed.is_empty() {
                 summary = format!(
-                    "{summary}; silence: {silence_wrote} ok, {} failed",
-                    silence_failed.len(),
+                    "{summary}; silence: {} ok, {} failed",
+                    passes.silence_wrote,
+                    passes.silence_failed.len(),
                 );
             }
             // If a whisper sidecar was just written or refreshed,
@@ -278,7 +270,7 @@ pub async fn index_project_at_root(
             if whisper_wrote {
                 crate::commands::transcript::clear_transcript_cache(&state).await;
             }
-            if report.has_failures() || !motion_failed.is_empty() || !silence_failed.is_empty() {
+            if report.has_failures() || !passes.motion_failed.is_empty() || !passes.silence_failed.is_empty() {
                 // Pull each PairOutcome::Failed out so the user sees
                 // *which* indexer failed on *which* asset *why*. With
                 // 10+ indexers per asset, "1 failed" alone leaves the
@@ -305,7 +297,7 @@ pub async fn index_project_at_root(
                         detail.push_str(&format!("\n  ✗ {indexer} · {asset}: {truncated}"));
                     }
                 }
-                for (asset, message) in &motion_failed {
+                for (asset, message) in &passes.motion_failed {
                     let first = message.lines().next().unwrap_or(message);
                     let truncated = if first.len() > 200 {
                         format!("{}…", &first[..200])
@@ -314,7 +306,7 @@ pub async fn index_project_at_root(
                     };
                     detail.push_str(&format!("\n  ✗ motion · {asset}: {truncated}"));
                 }
-                for (asset, message) in &silence_failed {
+                for (asset, message) in &passes.silence_failed {
                     let first = message.lines().next().unwrap_or(message);
                     let truncated = if first.len() > 200 {
                         format!("{}…", &first[..200])
@@ -366,6 +358,131 @@ fn compact_duration(d: std::time::Duration) -> String {
     } else {
         format!("{}m {}s", secs / 60, secs % 60)
     }
+}
+
+/// Outcome of one built-in-pass run (motion + silence). Accumulates
+/// per-asset successes and failures so the caller can fold them into
+/// the dispatcher's summary string and failure-detail block.
+#[derive(Default)]
+struct BuiltinPassReport {
+    motion_wrote: usize,
+    motion_failed: Vec<(String, String)>,
+    silence_wrote: usize,
+    silence_failed: Vec<(String, String)>,
+}
+
+impl BuiltinPassReport {
+    /// Combine two reports (e.g. the parallel-during-dispatch result
+    /// and the post-dispatch sweep). Counts add; failure lists
+    /// concatenate.
+    fn merge(mut a: Self, b: Self) -> Self {
+        a.motion_wrote += b.motion_wrote;
+        a.silence_wrote += b.silence_wrote;
+        a.motion_failed.extend(b.motion_failed);
+        a.silence_failed.extend(b.silence_failed);
+        a
+    }
+}
+
+/// Run motion + silence FFmpeg samplers for every asset, sequentially.
+/// Each call is mtime-fresh-checked so re-invocation skips already-current
+/// sidecars. Honors cancellation between every step.
+async fn run_builtin_passes(
+    app: &AppHandle,
+    state: &AwidatState,
+    project_root: &Path,
+    assets: &[AssetInput],
+    cancel: &CancellationToken,
+) -> BuiltinPassReport {
+    let mut report = BuiltinPassReport::default();
+    for asset in assets {
+        if cancel.is_cancelled() {
+            break;
+        }
+        match crate::commands::motion::generate_motion_for_asset_in_project_inner(
+            app,
+            state,
+            project_root,
+            &asset.path,
+        )
+        .await
+        {
+            Ok(_) => report.motion_wrote += 1,
+            Err(e) => report.motion_failed.push((asset.id.to_string(), e)),
+        }
+        if cancel.is_cancelled() {
+            break;
+        }
+        match crate::commands::silence::generate_silences_for_asset_in_project_inner(
+            app,
+            state,
+            project_root,
+            &asset.path,
+        )
+        .await
+        {
+            Ok(_) => report.silence_wrote += 1,
+            Err(e) => report.silence_failed.push((asset.id.to_string(), e)),
+        }
+    }
+    report
+}
+
+/// Decide whether to run motion + silence in parallel with the MCP
+/// dispatcher. Conservative: requires ≥8 physical cores AND a 1-min
+/// load average under half the core count, so weak hardware (Intel
+/// MacBooks, low-end laptops) gets the safe sequential path that
+/// doesn't starve the user's other apps.
+fn has_headroom_for_parallel_passes() -> bool {
+    if std::env::var("AWIDAT_PARALLEL_PASSES").as_deref() == Ok("1") {
+        return true;
+    }
+    if std::env::var("AWIDAT_PARALLEL_PASSES").as_deref() == Ok("0") {
+        return false;
+    }
+    let cores = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    if cores < 8 {
+        return false;
+    }
+    match read_load_avg_1min() {
+        Some(load) => load < (cores as f64) * 0.5,
+        // No load-avg signal (unsupported platform). Conservative
+        // default: don't parallelize — saving a few minutes isn't
+        // worth pinning a user's laptop.
+        None => false,
+    }
+}
+
+/// Read the system 1-minute load average. macOS via sysctl,
+/// Linux/BSD via /proc/loadavg. Returns None on Windows or any
+/// failure — caller treats that as "no headroom signal".
+fn read_load_avg_1min() -> Option<f64> {
+    #[cfg(unix)]
+    {
+        if let Ok(contents) = std::fs::read_to_string("/proc/loadavg") {
+            return contents.split_whitespace().next().and_then(|s| s.parse().ok());
+        }
+        // macOS: shell out to sysctl. Avoids adding a libc dep just
+        // for getloadavg(3).
+        let output = std::process::Command::new("sysctl")
+            .arg("-n")
+            .arg("vm.loadavg")
+            .output()
+            .ok()?;
+        let s = String::from_utf8(output.stdout).ok()?;
+        // Output format: "{ 1.23 2.34 3.45 }"
+        return s
+            .trim()
+            .trim_start_matches('{')
+            .trim_end_matches('}')
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse().ok());
+    }
+    #[cfg(not(unix))]
+    None
 }
 
 fn collect_assets(project_root: &std::path::Path) -> std::io::Result<Vec<AssetInput>> {
