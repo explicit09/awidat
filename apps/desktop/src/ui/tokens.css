@@ -483,18 +483,21 @@
       0 0 0 1px rgba(239, 68, 68, 0.35),
       0 0 24px rgba(239, 68, 68, 0.10);
   }
-  .elev-1 { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24); }
-  .elev-2 { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); }
-  .elev-3 { box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38); }
+  /* Quieter elevation. The charcoal surfaces don't need much shadow
+     to read as floating — the surface-tint shift does most of the
+     work. elev-3 still throws a real shadow because it's reserved
+     for modals/popovers that need to clearly detach from the page. */
+  .elev-1 { box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); }
+  .elev-2 { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
+  .elev-3 { box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55); }
   .panel {
+    /* Flat panel — single hairline border, single solid surface,
+       no inset highlight, no drop shadow. The chrome lives in the
+       grid gaps between panels (the page color shows through), not
+       on the panel edges. */
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0) 34px),
-      var(--color-surface-panel);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.035),
-      0 10px 30px rgba(0, 0, 0, 0.18);
+    background: var(--color-surface-panel);
   }
   .aw-scrollbar {
     scrollbar-width: thin;

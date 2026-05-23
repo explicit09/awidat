@@ -21,40 +21,43 @@ export type PillStatus = (typeof PILL_STATUSES)[number];
 
 const pill = cva(
   [
-    "inline-flex items-center gap-1",
+    "inline-flex items-center gap-1.5",
     "h-[var(--layout-pill-h)] px-1.5",
-    "rounded-[var(--radius-sm)] border",
-    "font-semibold",
-    "text-[var(--text-label)] leading-[1] tracking-[var(--text-label--letter-spacing)]",
+    "rounded-[var(--radius-sm)] border border-transparent",
+    "font-medium",
+    "text-[var(--text-caption)] leading-[1]",
     "whitespace-nowrap",
   ],
   {
     variants: {
+      // Cursor-style: drop the colored border, keep a faint fill so
+      // the pill still reads as a chip. The dot carries the status
+      // color so the eye scans by hue without the second edge.
       status: {
         proposed:
-          "bg-[var(--color-pill-proposed-fill)] border-[var(--color-pill-proposed-border)] text-[var(--color-pill-proposed-text)]",
+          "bg-[var(--color-pill-proposed-fill)] text-[var(--color-pill-proposed-text)]",
         pending:
-          "bg-[var(--color-pill-pending-fill)] border-[var(--color-pill-pending-border)] text-[var(--color-pill-pending-text)]",
+          "bg-[var(--color-pill-pending-fill)] text-[var(--color-pill-pending-text)]",
         accepted:
-          "bg-[var(--color-pill-accepted-fill)] border-[var(--color-pill-accepted-border)] text-[var(--color-pill-accepted-text)]",
+          "bg-[var(--color-pill-accepted-fill)] text-[var(--color-pill-accepted-text)]",
         rejected:
-          "bg-[var(--color-pill-rejected-fill)] border-[var(--color-pill-rejected-border)] text-[var(--color-pill-rejected-text)]",
+          "bg-[var(--color-pill-rejected-fill)] text-[var(--color-pill-rejected-text)]",
         reviewing:
-          "bg-[var(--color-pill-reviewing-fill)] border-[var(--color-pill-reviewing-border)] text-[var(--color-pill-reviewing-text)]",
+          "bg-[var(--color-pill-reviewing-fill)] text-[var(--color-pill-reviewing-text)]",
         processing:
-          "bg-[var(--color-pill-processing-fill)] border-[var(--color-pill-processing-border)] text-[var(--color-pill-processing-text)]",
+          "bg-[var(--color-pill-processing-fill)] text-[var(--color-pill-processing-text)]",
         ready:
-          "bg-[var(--color-pill-ready-fill)] border-[var(--color-pill-ready-border)] text-[var(--color-pill-ready-text)]",
+          "bg-[var(--color-pill-ready-fill)] text-[var(--color-pill-ready-text)]",
         failed:
-          "bg-[var(--color-pill-failed-fill)] border-[var(--color-pill-failed-border)] text-[var(--color-pill-failed-text)]",
+          "bg-[var(--color-pill-failed-fill)] text-[var(--color-pill-failed-text)]",
         warning:
-          "bg-[var(--color-pill-warning-fill)] border-[var(--color-pill-warning-border)] text-[var(--color-pill-warning-text)]",
+          "bg-[var(--color-pill-warning-fill)] text-[var(--color-pill-warning-text)]",
         missing:
-          "bg-[var(--color-pill-missing-fill)] border-[var(--color-pill-missing-border)] text-[var(--color-pill-missing-text)]",
+          "bg-[var(--color-pill-missing-fill)] text-[var(--color-pill-missing-text)]",
         revised:
-          "bg-[var(--color-pill-revised-fill)] border-[var(--color-pill-revised-border)] text-[var(--color-pill-revised-text)]",
+          "bg-[var(--color-pill-revised-fill)] text-[var(--color-pill-revised-text)]",
         neutral:
-          "bg-[var(--color-surface-card)] border-[var(--color-border)] text-[var(--color-text-secondary)]",
+          "bg-transparent text-[var(--color-text-muted)]",
       },
       dot: {
         true: "",
