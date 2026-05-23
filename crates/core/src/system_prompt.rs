@@ -323,7 +323,12 @@ seconds, set `end` to source end - N. To remove a trailing or \
 leading gap (timeline duration driven by dead space), use \
 `*** Trim Track Tail` (drops every trailing gap on a track) or \
 `*** Delete Gap` with `+ side: before|after` anchored to a real \
-clip — gaps themselves aren't valid clip_uuid anchors.\
+clip — gaps themselves aren't valid clip_uuid anchors. Both ops \
+cascade by default via `link_group_id`: a delete gap or trim tail \
+on V1 also removes the matching gap on A1 when the anchor clip's \
+audio sibling shares the same link group. Paired V+A imports get \
+synced cleanup from a single op; the agent does NOT need to emit \
+parallel ops for each track.\
 \n- start_render (scope='timeline'): render the edited timeline to mp4.\
 \n- poll_render: continue tracking a render job. If a previous turn \
 was interrupted while waiting/polling, recover by using the last \

@@ -469,6 +469,11 @@ fn apply_one(
             apply_delete_gap(working, index, anchor, *side, ctx, locator)
         }
         EdlOp::TrimTrackTail { track } => apply_trim_track_tail(working, index, track),
+        EdlOp::InsertTrack {
+            name,
+            kind,
+            at_position,
+        } => apply_insert_track(working, index, name, *kind, *at_position),
         EdlOp::ApplyMulticamPlan { plan } => apply_multicam_plan(working, index, plan),
         EdlOp::InsertTransition {
             between,
@@ -1034,7 +1039,8 @@ fn resolve_locator_for_op(
         | EdlOp::AddPreflightReport { .. }
         | EdlOp::SetWorkflowLens { .. }
         | EdlOp::SetPipelineReadiness { .. }
-        | EdlOp::TrimTrackTail { .. } => return Ok(None),
+        | EdlOp::TrimTrackTail { .. }
+        | EdlOp::InsertTrack { .. } => return Ok(None),
     };
     resolve(working, anchor, ctx)
         .map(Some)
@@ -5259,55 +5265,135 @@ fn apply_delete_gap(
 ) -> Result<String, ApplyError> {
     let _ = (anchor, ctx);
     let locator = required_locator(index, locator)?;
-    let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+    // Snapshot the anchor clip's `link_group_id` before we mutate the
+    // track. Cascading the same delete to linked siblings on other
+    // tracks is the default — keeps paired V+A in sync after gap
+    // edits. The agent can deliberately break the pair by anchoring
+    // to a clip that has no link_group_id.
+    let link_group_id = match working.tracks.children.get(locator.track_index) {
+        Some(StackChild::Track(t)) => match t.children.get(locator.child_index) {
+            Some(TrackChild::Clip(c)) => c
+                .metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.extra.get("link_group_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            _ => None,
+        },
+        _ => None,
+    };
+
+    let (primary_removed_dur, primary_track_index) =
+        match remove_one_gap(working, index, locator.track_index, locator.child_index, side) {
+            Ok(v) => v,
+            Err(ApplyError::Invalid { message, .. }) => {
+                // No gap to remove on the primary track is a soft
+                // no-op, not an error — matches the pre-cascade
+                // behavior and lets the agent re-issue freely without
+                // crashing the envelope.
+                return Ok(format!(
+                    "delete_gap: {message}; left timeline unchanged",
+                ));
+            }
+            Err(other) => return Err(other),
+        };
+
+    let mut cascaded = Vec::<usize>::new();
+    if let Some(group_id) = link_group_id.as_deref() {
+        for ti in 0..working.tracks.children.len() {
+            if ti == primary_track_index {
+                continue;
+            }
+            let Some(child_index) =
+                first_clip_with_link_group(&working.tracks.children[ti], group_id)
+            else {
+                continue;
+            };
+            // Cascading miss = no-op for that track. We don't want a
+            // missing sibling gap to fail the whole op, since the
+            // user's intent was "remove this gap"; siblings without
+            // a matching gap simply weren't paired in the first
+            // place (e.g. audio track is shorter).
+            if let Ok((_, _)) = remove_one_gap(working, index, ti, child_index, side) {
+                cascaded.push(ti);
+            }
+        }
+    }
+
+    if cascaded.is_empty() {
+        Ok(format!(
+            "deleted {side:?} gap ({primary_removed_dur:.3}s) adjacent to anchor on track {primary_track_index}",
+        ))
+    } else {
+        Ok(format!(
+            "deleted {side:?} gap ({primary_removed_dur:.3}s) on track {primary_track_index} (cascaded to {} linked track{})",
+            cascaded.len(),
+            if cascaded.len() == 1 { "" } else { "s" },
+        ))
+    }
+}
+
+/// Inner helper for `apply_delete_gap`: remove the gap on one specific
+/// `(track_index, child_index)` pair, returning (removed_duration_s,
+/// track_index) on success. Returns the same no-op-style descriptive
+/// error when the anchor side has no gap, but as an `Err` so the
+/// cascade loop knows to skip silently.
+fn remove_one_gap(
+    working: &mut Timeline,
+    index: usize,
+    track_index: usize,
+    child_index: usize,
+    side: GapSide,
+) -> Result<(f64, usize), ApplyError> {
+    let StackChild::Track(track) = &mut working.tracks.children[track_index] else {
         return Err(ApplyError::Invalid {
             index,
-            message: "delete_gap: anchor resolved to a non-track stack child".into(),
+            message: "delete_gap: target slot is not a track".into(),
         });
     };
-    if locator.child_index >= track.children.len() {
+    if child_index >= track.children.len() {
         return Err(ApplyError::Invalid {
             index,
             message: format!(
-                "delete_gap: source index {} out of bounds for track of length {}",
-                locator.child_index,
-                track.children.len()
+                "delete_gap: source index {child_index} out of bounds for track of length {}",
+                track.children.len(),
             ),
         });
     }
     let gap_index = match side {
         GapSide::Before => {
-            if locator.child_index == 0 {
-                return Ok(format!(
-                    "delete_gap: anchor clip is at the start of track {}; no preceding gap to delete",
-                    locator.track_index,
-                ));
+            if child_index == 0 {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: "delete_gap: anchor at track start; no preceding gap".into(),
+                });
             }
-            locator.child_index - 1
+            child_index - 1
         }
         GapSide::After => {
-            if locator.child_index + 1 >= track.children.len() {
-                return Ok(format!(
-                    "delete_gap: anchor clip is the last child on track {}; no trailing gap to delete",
-                    locator.track_index,
-                ));
+            if child_index + 1 >= track.children.len() {
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: "delete_gap: anchor is last child; no trailing gap".into(),
+                });
             }
-            locator.child_index + 1
+            child_index + 1
         }
     };
     if !matches!(track.children[gap_index], TrackChild::Gap(_)) {
-        return Ok(format!(
-            "delete_gap: child at {gap_index} on track {} is not a gap; left timeline unchanged",
-            locator.track_index,
-        ));
+        return Err(ApplyError::Invalid {
+            index,
+            message: format!(
+                "delete_gap: child at {gap_index} on track {track_index} is not a gap",
+            ),
+        });
     }
     let removed_dur = child_duration(&track.children[gap_index]);
     track.children.remove(gap_index);
-    Ok(format!(
-        "deleted {side:?} gap ({removed_dur:.3}s) adjacent to anchor on track {}",
-        locator.track_index,
-    ))
+    Ok((removed_dur, track_index))
 }
+
 
 /// Strip every trailing `Gap` from a track so its last child is a
 /// real clip (or transition). Returns a no-op description when the
@@ -5324,17 +5410,13 @@ fn apply_trim_track_tail(
             message: "trim_track_tail: track must not be empty".into(),
         });
     }
-    // Compute the hint before the mutable iter so we don't need to
-    // re-borrow `working` inside the ok_or_else closure.
+
     let available_names = list_track_names(working);
-    let track = working
+    let primary_idx = working
         .tracks
         .children
-        .iter_mut()
-        .find_map(|child| match child {
-            StackChild::Track(t) if t.name == track_name => Some(t),
-            _ => None,
-        })
+        .iter()
+        .position(|c| matches!(c, StackChild::Track(t) if t.name == track_name))
         .ok_or_else(|| {
             let hint = if available_names.is_empty() {
                 "; no tracks on the timeline".to_string()
@@ -5346,24 +5428,216 @@ fn apply_trim_track_tail(
                 message: format!("trim_track_tail: no track named {track_name:?}{hint}"),
             }
         })?;
-    let mut removed_total_s = 0.0;
-    let mut removed_count = 0usize;
-    while let Some(last) = track.children.last()
-        && matches!(last, TrackChild::Gap(_))
-    {
-        removed_total_s += child_duration(last);
-        track.children.pop();
-        removed_count += 1;
+
+    // Snapshot the named track's last-clip link_group_id BEFORE
+    // mutation so the cascade can decide which sibling tracks share
+    // a paired endpoint. Once we pop trailing gaps the "last clip"
+    // doesn't change (gaps aren't clips), so reading from the
+    // pre-mutation state is fine.
+    let primary_last_link_group_id = last_clip_link_group_id(
+        &working.tracks.children[primary_idx],
+    );
+
+    let (primary_removed_count, primary_removed_total_s) =
+        pop_trailing_gaps(&mut working.tracks.children[primary_idx]);
+
+    // Cascade: for every OTHER track, if its last clip shares the
+    // primary's last-clip link_group_id, strip its trailing gaps too.
+    // Common case = paired V+A linked at ingest time; the audio
+    // track's tail comes off in step with the video track.
+    let mut cascaded: Vec<(String, usize, f64)> = Vec::new();
+    if let Some(group_id) = primary_last_link_group_id.as_deref() {
+        for ti in 0..working.tracks.children.len() {
+            if ti == primary_idx {
+                continue;
+            }
+            let last_group = last_clip_link_group_id(&working.tracks.children[ti]);
+            if last_group.as_deref() != Some(group_id) {
+                continue;
+            }
+            let name = match &working.tracks.children[ti] {
+                StackChild::Track(t) => t.name.clone(),
+                _ => continue,
+            };
+            let (count, total_s) =
+                pop_trailing_gaps(&mut working.tracks.children[ti]);
+            if count > 0 {
+                cascaded.push((name, count, total_s));
+            }
+        }
     }
-    if removed_count == 0 {
+
+    if primary_removed_count == 0 && cascaded.is_empty() {
         return Ok(format!(
             "trim_track_tail: track {track_name:?} already ends in a clip; left timeline unchanged",
         ));
     }
+    let mut summary = format!(
+        "trim_track_tail: removed {primary_removed_count} trailing gap{} ({primary_removed_total_s:.3}s) from track {track_name:?}",
+        if primary_removed_count == 1 { "" } else { "s" },
+    );
+    if !cascaded.is_empty() {
+        let parts: Vec<String> = cascaded
+            .iter()
+            .map(|(name, count, total_s)| {
+                format!(
+                    "{name:?} ({count} gap{}, {total_s:.3}s)",
+                    if *count == 1 { "" } else { "s" }
+                )
+            })
+            .collect();
+        summary.push_str(&format!("; cascaded to linked tracks: {}", parts.join(", ")));
+    }
+    Ok(summary)
+}
+
+/// Add an empty track to the timeline. Idempotent on `(name, kind)`:
+/// a same-name, same-kind track returns success without mutating.
+/// Same name, different kind errors so the V/A naming invariant the
+/// renderer assumes (track named `"V*"` is a video track, `"A*"` /
+/// `"Audio*"` is audio) is preserved.
+///
+/// `at_position` is an index among same-kind tracks. The new track is
+/// inserted right after the Nth same-kind track in the stack's child
+/// order. `None` (or an index past the end) appends after the last
+/// same-kind track; if no tracks of that kind exist, the new track
+/// goes to the end of the stack.
+fn apply_insert_track(
+    working: &mut Timeline,
+    index: usize,
+    name: &str,
+    kind: InsertTrackKind,
+    at_position: Option<usize>,
+) -> Result<String, ApplyError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(ApplyError::Invalid {
+            index,
+            message: "insert_track: name must not be empty".into(),
+        });
+    }
+    let resolved_kind = match kind {
+        InsertTrackKind::Video => TrackKind::Video,
+        InsertTrackKind::Audio => TrackKind::Audio,
+        InsertTrackKind::Auto => {
+            // Same convention apply_insert_clip uses: A* / Audio* → audio,
+            // everything else → video.
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with('a') || lower.starts_with("audio") {
+                TrackKind::Audio
+            } else {
+                TrackKind::Video
+            }
+        }
+    };
+
+    // Idempotency + kind-conflict check on existing tracks.
+    for child in working.tracks.children.iter() {
+        if let StackChild::Track(t) = child {
+            if t.name == trimmed {
+                if t.kind == resolved_kind {
+                    return Ok(format!(
+                        "insert_track: track {trimmed:?} already exists; left timeline unchanged",
+                    ));
+                }
+                return Err(ApplyError::Invalid {
+                    index,
+                    message: format!(
+                        "insert_track: track {trimmed:?} exists as {:?}, cannot recreate as {:?}",
+                        t.kind, resolved_kind
+                    ),
+                });
+            }
+        }
+    }
+
+    let new_track = StackChild::Track(awidat_proto::otio::Track::empty(
+        trimmed.to_string(),
+        resolved_kind,
+    ));
+
+    // Resolve insertion index. Walk same-kind tracks in stack order and
+    // insert after the Nth one (0-based). Out-of-range and None both
+    // append-after-last-same-kind.
+    let insert_at: usize = match at_position {
+        Some(target) => {
+            let mut last_match: Option<usize> = None;
+            let mut seen = 0usize;
+            for (i, c) in working.tracks.children.iter().enumerate() {
+                if matches!(c, StackChild::Track(t) if t.kind == resolved_kind) {
+                    if seen == target {
+                        last_match = Some(i);
+                        break;
+                    }
+                    last_match = Some(i);
+                    seen += 1;
+                }
+            }
+            match last_match {
+                Some(i) => i + 1,
+                None => working.tracks.children.len(),
+            }
+        }
+        None => {
+            let mut last_match: Option<usize> = None;
+            for (i, c) in working.tracks.children.iter().enumerate() {
+                if matches!(c, StackChild::Track(t) if t.kind == resolved_kind) {
+                    last_match = Some(i);
+                }
+            }
+            match last_match {
+                Some(i) => i + 1,
+                None => working.tracks.children.len(),
+            }
+        }
+    };
+    working.tracks.children.insert(insert_at, new_track);
+
     Ok(format!(
-        "trim_track_tail: removed {removed_count} trailing gap{} ({removed_total_s:.3}s) from track {track_name:?}",
-        if removed_count == 1 { "" } else { "s" },
+        "insert_track: added {trimmed:?} ({:?}) at stack index {insert_at}",
+        resolved_kind
     ))
+}
+
+/// Pop every trailing `Gap` from the given stack child (if it is a
+/// Track). Returns `(count_popped, total_seconds_removed)`. Non-track
+/// children return `(0, 0.0)`.
+fn pop_trailing_gaps(stack_child: &mut StackChild) -> (usize, f64) {
+    let StackChild::Track(track) = stack_child else {
+        return (0, 0.0);
+    };
+    let mut count = 0usize;
+    let mut total_s = 0.0;
+    while let Some(last) = track.children.last()
+        && matches!(last, TrackChild::Gap(_))
+    {
+        total_s += child_duration(last);
+        track.children.pop();
+        count += 1;
+    }
+    (count, total_s)
+}
+
+/// Return the `link_group_id` of the last `Clip` child on the track,
+/// skipping past trailing gaps and transitions. None when the track
+/// is empty, when there are no clips at all, or when the last clip
+/// has no `link_group_id`.
+fn last_clip_link_group_id(stack_child: &StackChild) -> Option<String> {
+    let StackChild::Track(track) = stack_child else {
+        return None;
+    };
+    for child in track.children.iter().rev() {
+        if let TrackChild::Clip(clip) = child {
+            return clip
+                .metadata
+                .awidat
+                .as_ref()
+                .and_then(|m| m.extra.get("link_group_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+        }
+    }
+    None
 }
 
 fn apply_move_clip_to_time(
@@ -11654,6 +11928,128 @@ mod tests {
     }
 
     #[test]
+    fn apply_delete_gap_cascades_to_link_group_siblings() {
+        // V1 + A1 each carry one clip whose link_group_id matches.
+        // Both tracks have a leading gap. DeleteGap(side=before) on
+        // V1's clip should remove the leading gap on A1 too.
+        use awidat_proto::awidat_meta::AwidatClipMetadata;
+        use awidat_proto::otio::{
+            Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
+            TimeRange, Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+        let mut tl = Tl::empty("test");
+        let mut awidat_meta = AwidatClipMetadata::default();
+        awidat_meta
+            .extra
+            .insert("link_group_id".into(), serde_json::json!("g0"));
+        let mut build = |name: &str, kind: TrackKind, clip_name: &str| {
+            let mut t = Track::empty(name, kind);
+            t.children
+                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(3.0, 24.0)));
+            let mut c = Clip::empty(clip_name.to_string());
+            c.media_reference = MediaReference::External(ExternalReference::new("raw/0.mp4"));
+            c.source_range = Some(TimeRange::new(
+                RationalTime::new(0.0, 24.0),
+                RationalTime::new(5.0 * 24.0, 24.0),
+            ));
+            c.metadata = ClipMetadata {
+                awidat: Some(awidat_meta.clone()),
+                ..ClipMetadata::default()
+            };
+            t.children.push(TrackChild::Clip(c));
+            t
+        };
+        tl.tracks
+            .children
+            .push(StackChild::Track(build("V1", TrackKind::Video, "v0")));
+        tl.tracks
+            .children
+            .push(StackChild::Track(build("A1", TrackKind::Audio, "a0")));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::DeleteGap {
+                anchor: Anchor::ClipUuid { uuid: "v0".into() },
+                side: crate::edl::op::GapSide::Before,
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0].description.contains("cascaded"),
+            "expected cascade message; got {:?}",
+            outcome.applied[0].description,
+        );
+        let StackChild::Track(v) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let StackChild::Track(a) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        assert!(matches!(&v.children[0], TrackChild::Clip(c) if c.name == "v0"));
+        assert!(matches!(&a.children[0], TrackChild::Clip(c) if c.name == "a0"));
+    }
+
+    #[test]
+    fn apply_trim_track_tail_cascades_to_link_group_siblings() {
+        // V1 + A1 each end with a clip sharing link_group_id, then a
+        // trailing gap. Trim Track Tail on V1 should also trim A1.
+        use awidat_proto::awidat_meta::AwidatClipMetadata;
+        use awidat_proto::otio::{
+            Clip, ClipMetadata, ExternalReference, MediaReference, RationalTime, StackChild,
+            TimeRange, Timeline as Tl, Track, TrackChild, TrackKind,
+        };
+        let mut tl = Tl::empty("test");
+        let mut awidat_meta = AwidatClipMetadata::default();
+        awidat_meta
+            .extra
+            .insert("link_group_id".into(), serde_json::json!("g0"));
+        let mut build = |name: &str, kind: TrackKind, clip_name: &str| {
+            let mut t = Track::empty(name, kind);
+            let mut c = Clip::empty(clip_name.to_string());
+            c.media_reference = MediaReference::External(ExternalReference::new("raw/0.mp4"));
+            c.source_range = Some(TimeRange::new(
+                RationalTime::new(0.0, 24.0),
+                RationalTime::new(5.0 * 24.0, 24.0),
+            ));
+            c.metadata = ClipMetadata {
+                awidat: Some(awidat_meta.clone()),
+                ..ClipMetadata::default()
+            };
+            t.children.push(TrackChild::Clip(c));
+            t.children
+                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(7.0, 24.0)));
+            t
+        };
+        tl.tracks
+            .children
+            .push(StackChild::Track(build("V1", TrackKind::Video, "v0")));
+        tl.tracks
+            .children
+            .push(StackChild::Track(build("A1", TrackKind::Audio, "a0")));
+
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::TrimTrackTail {
+                track: "V1".into(),
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("cascaded to linked tracks"),
+            "expected cascade in description, got {:?}",
+            outcome.applied[0].description,
+        );
+        let StackChild::Track(v) = &new_tl.tracks.children[0] else {
+            panic!()
+        };
+        let StackChild::Track(a) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        assert_eq!(v.children.len(), 1);
+        assert_eq!(a.children.len(), 1);
+    }
+
+    #[test]
     fn apply_trim_track_tail_unknown_track_lists_available_names() {
         // Agent guessed a single-letter track name; the error message
         // should include the real track names so the next attempt can
@@ -11691,6 +12087,75 @@ mod tests {
                 .contains("already ends in a clip"),
             "expected no-op description, got {:?}",
             outcome.applied[0].description,
+        );
+    }
+
+    #[test]
+    fn apply_insert_track_appends_video_track_after_existing_video_tracks() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTrack {
+                name: "V2".into(),
+                kind: InsertTrackKind::Video,
+                at_position: None,
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0].description.contains("V2"),
+            "got {:?}",
+            outcome.applied[0].description,
+        );
+        let names: Vec<String> = new_tl
+            .tracks
+            .children
+            .iter()
+            .filter_map(|c| match c {
+                StackChild::Track(t) => Some(t.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.contains(&"V2".to_string()), "names = {names:?}");
+    }
+
+    #[test]
+    fn apply_insert_track_is_idempotent_on_same_name_and_kind() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTrack {
+                name: "V1".into(),
+                kind: InsertTrackKind::Video,
+                at_position: None,
+            }],
+        };
+        let before = tl.tracks.children.len();
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert_eq!(
+            new_tl.tracks.children.len(),
+            before,
+            "no-op should not change track count",
+        );
+        assert!(
+            outcome.applied[0].description.contains("already exists"),
+            "got {:?}",
+            outcome.applied[0].description,
+        );
+    }
+
+    #[test]
+    fn apply_insert_track_errors_on_name_conflict_with_different_kind() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::InsertTrack {
+                name: "V1".into(),
+                kind: InsertTrackKind::Audio,
+                at_position: None,
+            }],
+        };
+        let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
+        assert!(
+            err.to_string().contains("exists as"),
+            "expected kind-conflict, got {err}",
         );
     }
 
