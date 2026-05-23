@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useMediaStore } from "../media/store";
 import { MENU_COMMANDS, onMenuCommand } from "../app/menuCommands";
 import { editorDispatch } from "../editor/tauriDispatch";
@@ -118,6 +119,7 @@ function TimelineCanvas({
   // a multi-clip timeline these two axes diverge; with a single-clip
   // timeline they coincide for now (until trim shifts source_start_s).
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+  const refreshTimeline = useTimelineStore((s) => s.refresh);
   const proposal = useProposalStore((s) => s.active);
   // Cursor hint when hovering near a clip edge (without dragging).
   const [edgeHover, setEdgeHover] = useState<EdgeHit | null>(null);
@@ -470,8 +472,46 @@ function TimelineCanvas({
     // Hover state — update edge cursor hint.
     const hover = hitTestEdge(x, y, snapshot, ppsRef.current, laneHeight);
     setEdgeHover(hover);
+    // Hover tooltip — set the canvas's `title` attribute to the full
+    // clip name so the user can see it even when the label is middle-
+    // truncated on a narrow clip. Native browser tooltip is enough;
+    // no need for a custom overlay component.
+    const body = hitTestSelectableBody(x, y, snapshot, ppsRef.current, laneHeight);
+    if (body) {
+      const item = snapshot.tracks[body.trackIndex]?.items.find(
+        (candidate) => candidate.index === body.clipIndex,
+      );
+      e.currentTarget.title = item?.kind === "clip" ? item.name : "";
+    } else {
+      e.currentTarget.title = "";
+    }
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       requestTimelineSeek(timeFromClientX(clientX));
+    }
+  }
+
+  function onDragOver(e: React.DragEvent<HTMLCanvasElement>) {
+    if (proposal) return;
+    if (e.dataTransfer.types.includes("application/x-awidat-media")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  async function onDrop(e: React.DragEvent<HTMLCanvasElement>) {
+    if (proposal) return;
+    const assetId = e.dataTransfer.getData("application/x-awidat-media");
+    if (!assetId) return;
+    e.preventDefault();
+    try {
+      await invoke<boolean>("insert_media_on_timeline", {
+        assetId,
+        atS: timeFromClientX(e.clientX),
+      });
+      await refreshTimeline();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("insert_media_on_timeline failed", err);
     }
   }
 
@@ -573,6 +613,8 @@ function TimelineCanvas({
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
         onPointerLeave={onPointerLeave}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
       />
       {userTrim && (
         <UserTrimTooltip drag={userTrim} pps={ppsRef.current} />

@@ -103,14 +103,14 @@ assert.deepEqual(buildSplitOffsets(splitSnapshot, 10), [
   {
     key: "lead-j",
     x: 34,
-    y: 42,
+    y: 66,
     label: "J +1.25s",
     title: "Audio lead: 1.25s - audio establishes next shot - confidence 82%",
   },
   {
     key: "trail-j",
     x: 30,
-    y: 42,
+    y: 66,
     label: "L +2s",
     title: "Audio trail: 2s - audio establishes next shot - confidence 82%",
   },

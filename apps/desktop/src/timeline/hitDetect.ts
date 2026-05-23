@@ -12,8 +12,8 @@ export const EDGE_HIT_PX = 6;
 
 /** Base lane height at trackZoom = 1. Hit-tests accept a `laneHeight`
  *  override so they stay in sync with the canvas when the user scales
- *  the vertical zoom. */
-export const LANE_HEIGHT_BASE = 38;
+ *  the vertical zoom. Kept in sync with layout.LANE_HEIGHT. */
+export const LANE_HEIGHT_BASE = 62;
 /** Ruler height — fixed, not affected by track zoom. */
 const RULER_HEIGHT = 22;
 

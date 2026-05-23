@@ -27,12 +27,12 @@ assert.deepEqual(
     zoom: 1,
   }),
   {
-    cssHeight: 98,
+    cssHeight: 146,
     cssWidth: 200,
     lanesCount: 2,
     pps: 19.2,
     totalDuration: 10,
-    laneHeight: 38,
+    laneHeight: 62,
   },
 );
 console.log("  ok  sizes the canvas from current timeline duration and track count");
@@ -45,12 +45,12 @@ assert.deepEqual(
     zoom: 1,
   }),
   {
-    cssHeight: 136,
+    cssHeight: 208,
     cssWidth: 200,
     lanesCount: 3,
     pps: 9.6,
     totalDuration: 20,
-    laneHeight: 38,
+    laneHeight: 62,
   },
 );
 console.log("  ok  uses proposed duration and track count when proposal is larger");
@@ -63,12 +63,12 @@ assert.deepEqual(
     zoom: 1,
   }),
   {
-    cssHeight: 60,
+    cssHeight: 84,
     cssWidth: 320,
     lanesCount: 1,
     pps: 12,
     totalDuration: 0,
-    laneHeight: 38,
+    laneHeight: 62,
   },
 );
 console.log("  ok  keeps an empty timeline at one visible lane");

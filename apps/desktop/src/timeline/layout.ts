@@ -1,8 +1,10 @@
 /** Pixels-per-second at zoom=1. Tuned so a 60s project fits the default pane width. */
 export const PX_PER_SECOND_BASE = 12;
 
-/** Height of one track lane in pixels. */
-export const LANE_HEIGHT = 38;
+/** Height of one track lane in pixels. Editor-grade density: 62 leaves
+ *  room for the filmstrip + edit handles + badges without crowding.
+ *  Multiplied by store.trackZoom at paint time (see TimelineSurface). */
+export const LANE_HEIGHT = 62;
 
 /** Height of the time ruler at the top of the canvas. */
 export const RULER_HEIGHT = 22;
