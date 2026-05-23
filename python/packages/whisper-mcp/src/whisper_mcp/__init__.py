@@ -91,6 +91,10 @@ def _device_and_compute_type() -> tuple[str, str]:
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     # Lazy imports — whisperx loads slow ML deps on first call.
     import whisperx  # type: ignore[import-not-found]
+    # whisperx's top-level __init__ does NOT import the diarize
+    # submodule, so `whisperx.diarize.DiarizationPipeline` fails with
+    # AttributeError unless we pull the submodule in explicitly.
+    import whisperx.diarize  # type: ignore[import-not-found]  # noqa: F401
 
     device, compute_type = _device_and_compute_type()
     model_name = DEFAULT_MODEL
