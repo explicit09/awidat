@@ -40,7 +40,8 @@ use super::op::{
     Anchor, AnnotationKind, AudioFxConfig, BRollPosition, CaptionWordTiming, EdlEnvelope, EdlOp,
     EqBand, InsertTrackKind, MotionTemplateAnimation, MulticamApplyPlan, PiPCorner,
     ProfessionalTimelineEdit, RichTextSegment, SnapOptions, SnapTargetKind, TitleAnimation,
-    TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween, valid_graphic_color,
+    TitlePhases, TitlePosition, TitleWeight, TransitionAlignment, TransitionBetween,
+    valid_graphic_color,
 };
 
 /// Parse errors. All are `RespondToModel`-shaped — the model gets the
@@ -1108,6 +1109,7 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or(TitleAnimation::None);
+                let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
                 Ok(EdlOp::InsertTitle {
                     start_s,
                     end_s,
@@ -1117,7 +1119,7 @@ impl OpBuilder {
                     color,
                     font_weight,
                     animation,
-                    phases: None,
+                    phases,
                 })
             }
             OpKind::InsertRichTitle => {
@@ -1148,6 +1150,7 @@ impl OpBuilder {
                     head,
                 )?
                 .unwrap_or(TitleAnimation::None);
+                let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
                 Ok(EdlOp::InsertRichTitle {
                     start_s,
                     end_s,
@@ -1155,7 +1158,7 @@ impl OpBuilder {
                     position,
                     font_size,
                     animation,
-                    phases: None,
+                    phases,
                 })
             }
             OpKind::InstantiateMotionTemplate => {
@@ -1213,6 +1216,7 @@ impl OpBuilder {
                     take_field_string(&mut fields, "animation").as_deref(),
                     head,
                 )?;
+                let phases = take_field_json::<TitlePhases>(&mut fields, "phases_json", head)?;
                 Ok(EdlOp::SetTitle {
                     anchor,
                     start_s,
@@ -1223,7 +1227,7 @@ impl OpBuilder {
                     color,
                     font_weight,
                     animation,
-                    phases: None,
+                    phases,
                 })
             }
             OpKind::InsertCaption => {
