@@ -155,26 +155,12 @@ pub async fn rename_speaker(
             .map_err(|_| format!("asset {} not under project root", asset_abs.display()))?
             .to_string_lossy()
             .replace('\\', "/");
-        let sidecar_path = project_root
-            .join("index")
-            .join("whisper")
-            .join(&asset_id_rel)
-            .with_extension("MOV.json");
-        // The `with_extension` above won't always match (asset may be
-        // .mov / .mp4 / .webm). Re-derive from raw path: replace the
-        // `raw/` prefix with `index/whisper/` and append `.json`.
-        let sidecar_path = project_root
-            .join("index")
-            .join("whisper")
-            .join(asset_id_rel.trim_start_matches("raw/"))
-            .with_extension({
-                let path = std::path::PathBuf::from(&asset_id_rel);
-                let ext = path
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("mov");
-                format!("{ext}.json")
-            });
+        let asset_id = AssetId::new(asset_id_rel);
+        // Reuse the canonical sidecar-path resolver from awidat-index so
+        // the path layout (including the `raw/` segment and the file's
+        // original extension) stays consistent with `read_transcript`.
+        let sidecar_path = awidat_index::sidecar_path(&project_root, "whisper", &asset_id)
+            .map_err(|e| format!("resolve whisper sidecar path: {e}"))?;
         let bytes = std::fs::read(&sidecar_path)
             .map_err(|e| format!("read whisper sidecar {}: {e}", sidecar_path.display()))?;
         let mut json: serde_json::Value = serde_json::from_slice(&bytes)

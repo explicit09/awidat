@@ -39,6 +39,11 @@ pub struct IndexReadinessSnapshot {
     pub speaker: bool,
     pub captions: bool,
     pub ready_count: usize,
+    /// Total `shots` across every scenedetect sidecar. Distinct from
+    /// `scenes` (the boolean "indexer has run"): a value of `0` means
+    /// the indexer ran but found no cuts (e.g. a single continuous
+    /// interview shot), while `scenes == false` means it hasn't run.
+    pub scene_count: usize,
 }
 
 #[tauri::command]
@@ -370,6 +375,11 @@ fn compute_index_readiness_at(project_root: &Path) -> IndexReadinessSnapshot {
     .into_iter()
     .filter(|ready| *ready)
     .count();
+    let scene_count = if scenes {
+        count_scenes_in(&project_root.join("index").join("scenedetect"))
+    } else {
+        0
+    };
     IndexReadinessSnapshot {
         transcripts,
         scenes,
@@ -381,7 +391,37 @@ fn compute_index_readiness_at(project_root: &Path) -> IndexReadinessSnapshot {
         speaker,
         captions,
         ready_count,
+        scene_count,
     }
+}
+
+/// Walk every scenedetect sidecar under `dir` and sum the `data.shots`
+/// array lengths. Returns 0 when nothing parses (worst case is an
+/// underreported count; never crashes).
+fn count_scenes_in(dir: &Path) -> usize {
+    let mut total = 0_usize;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            total += count_scenes_in(&path);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            if let Ok(bytes) = std::fs::read(&path) {
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    if let Some(shots) = value
+                        .get("data")
+                        .and_then(|d| d.get("shots"))
+                        .and_then(|s| s.as_array())
+                    {
+                        total += shots.len();
+                    }
+                }
+            }
+        }
+    }
+    total
 }
 
 fn any_json_file(dir: &Path) -> bool {

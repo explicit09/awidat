@@ -139,10 +139,7 @@ export function AppShell({
               defaultSize={inspectorCollapsed ? 2 : 16}
               minSize={inspectorCollapsed ? 2 : 10}
               maxSize={40}
-              className={cn(
-                "panel min-h-0",
-                inspectorCollapsed ? "overflow-hidden" : "overflow-y-auto",
-              )}
+              className={cn("panel min-h-0 overflow-hidden")}
             >
               {inspector ?? <RegionPlaceholder label="Proposal Inspector · Phase 2.7" />}
             </Panel>

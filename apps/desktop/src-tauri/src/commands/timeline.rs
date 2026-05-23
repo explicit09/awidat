@@ -94,6 +94,11 @@ pub fn flatten_timeline_public(
         let is_titles_track = role.as_deref() == Some("titles");
         let mut items = Vec::with_capacity(track.children.len());
         let mut track_cursor_s = 0.0_f64;
+        // Largest *clip* end on this track. We use this — not the raw
+        // cursor — to compute timeline duration so trailing gaps left
+        // over from earlier edits don't inflate the displayed length
+        // past the last real content.
+        let mut track_last_clip_end_s = 0.0_f64;
 
         for (i, child) in track.children.iter().enumerate() {
             match child {
@@ -326,6 +331,14 @@ pub fn flatten_timeline_public(
                     });
                     if !is_titles_track {
                         track_cursor_s += duration_s;
+                        if track_cursor_s > track_last_clip_end_s {
+                            track_last_clip_end_s = track_cursor_s;
+                        }
+                    } else {
+                        let title_end = item_track_start_s + duration_s;
+                        if title_end > track_last_clip_end_s {
+                            track_last_clip_end_s = title_end;
+                        }
                     }
                 }
                 TrackChild::Gap(gap) => {
@@ -373,8 +386,8 @@ pub fn flatten_timeline_public(
             }
         }
 
-        if track_cursor_s > max_end_s {
-            max_end_s = track_cursor_s;
+        if track_last_clip_end_s > max_end_s {
+            max_end_s = track_last_clip_end_s;
         }
         tracks.push(TimelineTrack {
             name: track.name.clone(),

@@ -1093,14 +1093,24 @@ function App() {
     const speakers = loadedTranscript
       ? loadedTranscript.speakers.length || new Set(loadedTranscript.segments.map((segment) => segment.speaker_id).filter(Boolean)).size
       : undefined;
+    // Scenes: prefer the editorial cut_boundaries (intent-tagged transitions)
+    // when present; otherwise fall back to the raw scenedetect shot count.
+    // When scenedetect has run but found zero cuts (a single uninterrupted
+    // shot), show 0 — distinct from "—" which means "indexer has not run".
+    const editorialScenes = timelineSnapshot.cut_boundaries.length;
+    const scenes = editorialScenes > 0
+      ? editorialScenes
+      : indexReadiness?.scenes
+        ? indexReadiness.scene_count
+        : undefined;
     return {
       duration: duration > 0 ? formatDuration(duration) : undefined,
-      scenes: timelineSnapshot.cut_boundaries.length || undefined,
+      scenes,
       segments: loadedTranscript?.segments.length,
       speakers,
       transcriptPercent: loadedTranscript || indexReadiness?.transcripts ? 100 : completedJobKinds.has("indexing") ? 100 : undefined,
     };
-  }, [completedJobKinds, indexReadiness?.transcripts, loadedTranscript, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
+  }, [completedJobKinds, indexReadiness?.scenes, indexReadiness?.scene_count, indexReadiness?.transcripts, loadedTranscript, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
 
   const realDeliveryTargets: DeliveryTarget[] = useMemo(
     () => [
@@ -1797,7 +1807,15 @@ function RightEditPanel({
         ]}
         onChange={onChange}
       />
-      <div className="min-h-0 flex-1 overflow-hidden">
+      {/* Transcript owns its own scroll (virtualized list); the other
+       *  tabs are short forms / commit logs that scroll the whole pane. */}
+      <div
+        className={
+          active === "transcript"
+            ? "min-h-0 flex-1 overflow-hidden"
+            : "min-h-0 flex-1 overflow-y-auto"
+        }
+      >
         {active === "inspector"
           ? inspector
           : active === "index"
@@ -2205,12 +2223,29 @@ function IndexReadinessPanel({
         </div>
       </Stack>
       {structurePreview ? (
-        <div className="grid grid-cols-2 gap-2">
-          <Metric label="Duration" value={structurePreview.duration ?? "—"} />
-          <Metric label="Scenes" value={structurePreview.scenes ?? "—"} />
-          <Metric label="Segments" value={structurePreview.segments ?? "—"} />
-          <Metric label="Transcript" value={typeof structurePreview.transcriptPercent === "number" ? `${structurePreview.transcriptPercent}%` : "—"} />
-        </div>
+        <Stack gap="2">
+          <div className="grid grid-cols-2 gap-2">
+            <Metric label="Duration" value={structurePreview.duration ?? "—"} />
+            <Metric label="Scenes" value={structurePreview.scenes ?? "—"} />
+            <Metric label="Segments" value={structurePreview.segments ?? "—"} />
+            <Metric label="Transcript" value={typeof structurePreview.transcriptPercent === "number" ? `${structurePreview.transcriptPercent}%` : "—"} />
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await invoke("trim_timeline_tail");
+              } catch (e) {
+                // eslint-disable-next-line no-console
+                console.warn("trim_timeline_tail failed", e);
+              }
+            }}
+            className="self-start h-7 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
+            title="Strip trailing empty space so the timeline ends on the last clip"
+          >
+            Trim empty tail
+          </button>
+        </Stack>
       ) : null}
       <Stack gap="3">
         {groupedTasks.map((group) => (
@@ -2651,6 +2686,7 @@ type IndexReadinessSnapshot = {
   speaker: boolean;
   captions: boolean;
   ready_count: number;
+  scene_count: number;
 };
 
 function indexTaskReady(

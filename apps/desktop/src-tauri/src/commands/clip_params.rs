@@ -221,6 +221,87 @@ pub async fn set_clip_fade(
     apply_single_op(&app, &state, op, &desc).await
 }
 
+/// Strip every trailing empty gap from every track so the timeline ends
+/// on real playable content. Used by the Inspector's "trim empty tail"
+/// action — when the user adds, then deletes, clips the residual gaps
+/// can stretch the displayed duration well past the last clip end.
+///
+/// Idempotent: when every track already ends in a clip the call is a
+/// no-op (one envelope per track is sent; the engine returns a clean
+/// outcome for each one whose last child is already a clip).
+#[tauri::command]
+pub async fn trim_timeline_tail(
+    app: AppHandle,
+    state: State<'_, AwidatState>,
+) -> Result<(), String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+
+    let project_root_buf = project_root.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut project = Project::read(&project_root_buf).map_err(|e| format!("project read: {e}"))?;
+        let track_names: Vec<String> = project
+            .timeline
+            .tracks
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                awidat_proto::otio::StackChild::Track(t) => Some(t.name.clone()),
+                _ => None,
+            })
+            .collect();
+        let ops: Vec<EdlOp> = track_names
+            .into_iter()
+            .map(|name| EdlOp::TrimTrackTail { track: name })
+            .collect();
+        if ops.is_empty() {
+            return Ok(());
+        }
+        let envelope = EdlEnvelope { ops };
+        let ctx = AnchorContext::with_project_root(&project_root_buf);
+        let (new_timeline, outcome) = apply(&project.timeline, &envelope, &ctx)
+            .map_err(|e| format!("apply: {e}"))?;
+        project.timeline = new_timeline;
+        project
+            .write(&project_root_buf)
+            .map_err(|e| format!("project write: {e}"))?;
+
+        let seat_author = crate::commands::vedit::desktop_commit_author();
+        let descriptions: Vec<String> = outcome
+            .applied
+            .iter()
+            .map(|a| a.description.clone())
+            .collect();
+        if !descriptions.is_empty() {
+            let action_metadata = awidat_core::vc::ActionMetadata {
+                source: Some("user".into()),
+                operations: outcome.applied.iter().map(|a| a.metadata.clone()).collect(),
+            };
+            if let Ok(repo) = awidat_core::vc::open_or_init(&project_root_buf) {
+                if let Err(e) = awidat_core::vc::auto_commit_apply_as_with_metadata(
+                    &repo,
+                    &descriptions,
+                    None,
+                    seat_author,
+                    Some(&action_metadata),
+                ) {
+                    tracing::warn!(error = %e, "vedit auto-commit failed (trim_timeline_tail)");
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("spawn_blocking join: {e}"))??;
+
+    crate::events::emit_timeline_changed(&app, &project_root);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Inner apply helpers — used directly by unit tests to avoid full Tauri
 // command surface plumbing.

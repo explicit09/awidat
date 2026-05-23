@@ -150,6 +150,7 @@ pub fn run() {
             commands::clip_params::set_clip_volume,
             commands::clip_params::set_clip_speed,
             commands::clip_params::set_clip_fade,
+            commands::clip_params::trim_timeline_tail,
             commands::transcript::read_transcript,
             commands::transcript::rename_speaker,
             commands::vedit::list_vedit_commits,
