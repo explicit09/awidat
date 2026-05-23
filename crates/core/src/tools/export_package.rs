@@ -1439,9 +1439,17 @@ fn output_format_metadata(project: &Project) -> Option<serde_json::Value> {
         .cloned()
 }
 
-type Cue = SubtitleCue;
+/// Local alias for `SubtitleCue` returned by [`collect_timeline_cues`].
+pub type Cue = SubtitleCue;
 
-fn collect_timeline_cues(
+/// Walk the project's timeline and emit subtitle cues remapped to
+/// timeline-time. Returns editable subtitle tracks when the user has
+/// authored them; otherwise reads each clip's whisper transcript and
+/// remaps the segments through the clip's source-range + speed.
+///
+/// Public so the desktop crate can write caption sidecars from the
+/// Deliver page without going through `export_package`.
+pub fn collect_timeline_cues(
     project_root: &Path,
     project: &Project,
 ) -> Result<Vec<Cue>, FunctionCallError> {

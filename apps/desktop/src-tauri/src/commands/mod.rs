@@ -2,6 +2,7 @@
 //! them all via `generate_handler!`.
 
 pub mod auto_insert;
+pub mod captions;
 pub mod clip_params;
 pub mod color_scopes;
 pub mod config;
@@ -21,6 +22,7 @@ pub mod proposal;
 pub mod render;
 pub mod review;
 pub mod silence;
+pub mod still_export;
 pub mod thumbnail;
 pub mod timeline;
 pub mod transcode;
