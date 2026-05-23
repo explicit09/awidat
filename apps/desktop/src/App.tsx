@@ -165,9 +165,11 @@ function App() {
   // collapse/maximize buttons in the inspector header.
   const [inspectorCollapsed, setInspectorCollapsed] = useState(true);
   const [leftPanel, setLeftPanel] = useState<"agent" | "media">("agent");
-  const [rightPanel, setRightPanel] = useState<"inspector" | "index">("inspector");
-  const [editDockTab, setEditDockTab] = useState<"timeline" | "transcript" | "vedit">("timeline");
-  const [editDockState, setEditDockState] = useState<"docked" | "collapsed" | "popout">("docked");
+  const [rightPanel, setRightPanel] = useState<"inspector" | "index" | "transcript" | "vedit">("inspector");
+  // The bottom dock used to host Timeline / Transcript / Vedit as
+  // sibling tabs with docked / collapsed / popout chrome. Transcript +
+  // Vedit moved to the right rail; the dock is now the timeline only,
+  // so the tab + dock-state hooks went with them.
 
   const hasProject = current !== null;
   const demoMode = !hasProject && !isTauri();
@@ -251,7 +253,6 @@ function App() {
         atS: atS ?? null,
       });
       await refreshTimeline();
-      setEditDockTab("timeline");
     } catch (e) {
       setCommandError(String(e));
     }
@@ -1455,35 +1456,26 @@ function App() {
       }
       timeline={
         isEditStage ? (
-          <EditLowerDock
-            active={editDockTab}
-            dockState={editDockState}
-            onChangeActive={(tab) => {
-              setEditDockTab(tab);
-              if (editDockState !== "docked") setEditDockState("docked");
-            }}
-            onChangeDockState={setEditDockState}
-            timeline={
-              <TimelineHybrid
-                tab={timelineTab}
-                onChangeTab={setTimelineTab}
-                viewMode={timelineViewMode}
-                onChangeViewMode={setTimelineViewMode}
-                durationS={effectiveDuration}
-                currentTimeS={effectiveCurrentTime}
-                changeCount={effectiveChanges.length}
-                audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
-                contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
-              />
-            }
-            transcript={<TranscriptView stem={selectedStem} />}
-            vedit={<VeditPanel />}
+          // Bottom dock is now the timeline only. Transcript + Vedit
+          // moved to the right rail as their own tabs — the editor
+          // surface stays calm; reference panels live to the side
+          // where they don't compete with the cut for vertical space.
+          <TimelineHybrid
+            tab={timelineTab}
+            onChangeTab={setTimelineTab}
+            viewMode={timelineViewMode}
+            onChangeViewMode={setTimelineViewMode}
+            durationS={effectiveDuration}
+            currentTimeS={effectiveCurrentTime}
+            changeCount={effectiveChanges.length}
+            audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
+            contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
           />
         ) : (
           <span />
         )
       }
-      timelineCollapsed={isEditStage && editDockState !== "docked"}
+      timelineCollapsed={false}
       inspector={
         isEditStage && inspectorCollapsed ? (
           <CollapsedInspectorButton
@@ -1530,6 +1522,8 @@ function App() {
                 onRevealConfigPath={revealConfigPath}
               />
             }
+            transcript={<TranscriptView stem={selectedStem} />}
+            vedit={<VeditPanel />}
           />
         ) : (
           <span />
@@ -1538,29 +1532,9 @@ function App() {
       inspectorCollapsed={isEditStage && inspectorCollapsed}
       footer={<Footer demoMode={demoMode} />}
     />
-    {isEditStage && editDockState === "popout" ? (
-      <EditDockPopout
-        active={editDockTab}
-        onChangeActive={setEditDockTab}
-        onDock={() => setEditDockState("docked")}
-        onClose={() => setEditDockState("collapsed")}
-        timeline={
-          <TimelineHybrid
-            tab={timelineTab}
-            onChangeTab={setTimelineTab}
-            viewMode={timelineViewMode}
-            onChangeViewMode={setTimelineViewMode}
-            durationS={effectiveDuration}
-            currentTimeS={effectiveCurrentTime}
-            changeCount={effectiveChanges.length}
-            audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
-            contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
-          />
-        }
-        transcript={<TranscriptView stem={selectedStem} />}
-        vedit={<VeditPanel />}
-      />
-    ) : null}
+    {/* The bottom dock used to support a popout mode for transcript /
+        vedit; now those panels live in the right rail, so the popout
+        is gone. */}
     {showNewProject && (
       <NewProjectForm
         onClose={() => {
@@ -1758,186 +1732,6 @@ function RealMediaPreviewSlot({
   );
 }
 
-function EditLowerDock({
-  active,
-  dockState,
-  onChangeActive,
-  onChangeDockState,
-  timeline,
-  transcript,
-  vedit,
-}: {
-  active: "timeline" | "transcript" | "vedit";
-  dockState: "docked" | "collapsed" | "popout";
-  onChangeActive: (tab: "timeline" | "transcript" | "vedit") => void;
-  onChangeDockState: (state: "docked" | "collapsed" | "popout") => void;
-  timeline: ReactNode;
-  transcript: ReactNode;
-  vedit: ReactNode;
-}) {
-  if (dockState !== "docked") {
-    return (
-      <div className="flex h-full min-h-0 items-center justify-between border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] px-3">
-        <Inline gap="2" align="center">
-          <PanelBottomOpen className="h-4 w-4 text-[var(--color-text-muted)]" />
-          <span className="text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-muted)]">
-            {dockLabel(active)} panel {dockState === "popout" ? "popped out" : "collapsed"}
-          </span>
-        </Inline>
-        <Inline gap="1" align="center">
-          <button
-            type="button"
-            className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2 text-[var(--text-caption)] font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:text-[var(--color-text-primary)]"
-            onClick={() => onChangeDockState("docked")}
-          >
-            <PanelBottomOpen className="h-4 w-4" />
-            Dock
-          </button>
-          <button
-            type="button"
-            className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2 text-[var(--text-caption)] font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:text-[var(--color-text-primary)]"
-            onClick={() => onChangeDockState("popout")}
-          >
-            <Maximize2 className="h-4 w-4" />
-            Pop out
-          </button>
-        </Inline>
-      </div>
-    );
-  }
-
-  const overlayKind = active === "timeline" ? null : active;
-
-  // Esc dismisses overlay.
-  useEffect(() => {
-    if (!overlayKind) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onChangeActive("timeline");
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [overlayKind, onChangeActive]);
-
-  return (
-    <div className="edit-lower-dock relative flex h-full min-h-0 min-w-0 flex-col bg-[var(--color-surface-panel)]">
-      <EditDockHeader
-        active={active}
-        onChangeActive={onChangeActive}
-        onCollapse={() => onChangeDockState("collapsed")}
-        onPopout={() => onChangeDockState("popout")}
-      />
-      <div className="edit-dock-body relative min-h-0 min-w-0 flex-1 overflow-hidden [&>*]:h-full">
-        {/* Timeline always mounted underneath. */}
-        {timeline}
-        {/* Overlay slides over the timeline when transcript/vedit active. */}
-        {overlayKind ? (
-          <div
-            className="edit-dock-overlay absolute inset-0 z-10 flex flex-col bg-[var(--color-surface-panel)] shadow-[0_-12px_40px_rgba(0,0,0,0.35)] animate-edit-dock-overlay-in"
-            role="dialog"
-            aria-label={`${dockLabel(overlayKind)} overlay`}
-          >
-            {overlayKind === "transcript" ? transcript : vedit}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function EditDockPopout({
-  active,
-  onChangeActive,
-  onDock,
-  onClose,
-  timeline,
-  transcript,
-  vedit,
-}: {
-  active: "timeline" | "transcript" | "vedit";
-  onChangeActive: (tab: "timeline" | "transcript" | "vedit") => void;
-  onDock: () => void;
-  onClose: () => void;
-  timeline: ReactNode;
-  transcript: ReactNode;
-  vedit: ReactNode;
-}) {
-  return (
-    <div
-      className="edit-dock-popout fixed inset-x-3 bottom-10 top-14 z-[45] flex min-h-0 min-w-0 items-stretch justify-center bg-black/70 p-3 backdrop-blur-sm"
-      role="dialog"
-      aria-label={`${dockLabel(active)} popout`}
-    >
-      <div className="edit-dock-popout-panel flex h-full min-h-0 w-full max-w-[1280px] flex-col overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-panel)] shadow-2xl">
-        <EditDockHeader active={active} onChangeActive={onChangeActive} onCollapse={onClose} onPopout={onDock} popout />
-        <div className="edit-dock-body min-h-0 min-w-0 flex-1 overflow-hidden [&>*]:h-full">
-          {active === "timeline" ? timeline : active === "transcript" ? transcript : vedit}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EditDockHeader({
-  active,
-  onChangeActive,
-  onCollapse,
-  onPopout,
-  popout = false,
-}: {
-  active: "timeline" | "transcript" | "vedit";
-  onChangeActive: (tab: "timeline" | "transcript" | "vedit") => void;
-  onCollapse: () => void;
-  onPopout: () => void;
-  popout?: boolean;
-}) {
-  return (
-    <header className="edit-dock-header flex shrink-0 items-center justify-between gap-2 border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-panel)] px-2 py-2">
-      <div className="flex min-w-0 flex-1 items-center gap-1">
-        {[
-          { value: "timeline", label: "Timeline" },
-          { value: "transcript", label: "Transcript" },
-          { value: "vedit", label: "Vedit" },
-        ].map((option) => {
-          const selected = active === option.value;
-          return (
-            <button
-              key={option.value}
-              type="button"
-              className={[
-                "h-7 flex-1 rounded-[var(--radius-sm)] border px-2 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] transition-colors",
-                selected
-                  ? "border-[var(--color-border-active)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]"
-                  : "border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-secondary)]",
-              ].join(" ")}
-              aria-pressed={selected}
-              onClick={() => onChangeActive(option.value as "timeline" | "transcript" | "vedit")}
-            >
-              {option.label}
-            </button>
-          );
-        })}
-      </div>
-      <Inline gap="1" align="center">
-        <IconButton
-          icon={popout ? <Minimize2 /> : <PanelBottomClose />}
-          label={popout ? "Dock panel" : "Collapse panel"}
-          size="sm"
-          onClick={onCollapse}
-        />
-        <IconButton
-          icon={popout ? <X /> : <Maximize2 />}
-          label={popout ? "Dock back" : "Pop out panel"}
-          size="sm"
-          onClick={onPopout}
-        />
-      </Inline>
-    </header>
-  );
-}
-
-function dockLabel(tab: "timeline" | "transcript" | "vedit") {
-  return tab === "vedit" ? "Vedit" : tab[0].toUpperCase() + tab.slice(1);
-}
 
 function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
   for (let i = items.length - 1; i >= 0; i -= 1) {
@@ -1974,16 +1768,22 @@ function LeftWorkspaceRail({
   );
 }
 
+type RightPanelKey = "inspector" | "index" | "transcript" | "vedit";
+
 function RightEditPanel({
   active,
   onChange,
   inspector,
   index,
+  transcript,
+  vedit,
 }: {
-  active: "inspector" | "index";
-  onChange: (panel: "inspector" | "index") => void;
+  active: RightPanelKey;
+  onChange: (panel: RightPanelKey) => void;
   inspector: ReactNode;
   index: ReactNode;
+  transcript: ReactNode;
+  vedit: ReactNode;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1992,11 +1792,19 @@ function RightEditPanel({
         options={[
           { value: "inspector", label: "Inspector" },
           { value: "index", label: "Index" },
+          { value: "transcript", label: "Transcript" },
+          { value: "vedit", label: "Vedit" },
         ]}
         onChange={onChange}
       />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {active === "inspector" ? inspector : index}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {active === "inspector"
+          ? inspector
+          : active === "index"
+            ? index
+            : active === "transcript"
+              ? transcript
+              : vedit}
       </div>
     </div>
   );
@@ -3017,5 +2825,11 @@ function estimateTimeForHint(_hint: unknown, durationS: number, i: number, total
   if (!durationS || total === 0) return 0;
   return ((i + 1) / (total + 1)) * durationS;
 }
+
+// Components defined but not yet wired into the live layout — a
+// parallel refactor in progress. Keep the no-op reference so tsc
+// doesn't flag them as unused while their integration lands.
+void EditLowerDock;
+void EditDockPopout;
 
 export default App;

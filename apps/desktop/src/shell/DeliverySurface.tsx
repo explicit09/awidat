@@ -251,44 +251,7 @@ export function DeliverySurface({
       </aside>
 
       {/* Preflight */}
-      <main className="grid min-h-0 grid-rows-[98px_minmax(0,1fr)_190px]">
-        <section className="border-b border-[var(--color-border-subtle)] p-1.5">
-          <div className="grid h-full grid-cols-6 gap-2">
-            {resolvedTargets.map((target) => {
-              const meta = TARGET_META[target.key];
-              const Icon = meta.icon;
-              return (
-                <button
-                  key={`preset-${target.key}`}
-                  type="button"
-                  onClick={() => onToggleTarget?.(target.key)}
-                  aria-pressed={target.active}
-                  className={cn(
-                    "rounded-[var(--radius-md)] border px-2 py-1.5 text-left transition-colors",
-                    target.active
-                      ? "border-[var(--color-border-active)] bg-[var(--color-surface-selected)] glow-active"
-                      : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] hover:border-[var(--color-border)]",
-                  )}
-                >
-                  <Stack gap="1">
-                    <Inline justify="between" align="center">
-                      <Icon className="h-4 w-4 stroke-[1.5] text-[var(--color-text-primary)]" />
-                      {target.active ? <CircleCheck className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-success)]" /> : null}
-                    </Inline>
-                    <Stack gap="0">
-                      <span className="truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
-                        {target.label ?? meta.label}
-                      </span>
-                      <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
-                        {target.spec ?? meta.spec}
-                      </span>
-                    </Stack>
-                  </Stack>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+      <main className="grid min-h-0 grid-rows-[minmax(0,1fr)_190px]">
         <section className="flex min-h-0 flex-col">
           <div className="h-8 px-3 flex items-center justify-between border-b border-[var(--color-border-subtle)] shrink-0">
             <Inline gap="2" align="center">
@@ -407,28 +370,43 @@ export function DeliverySurface({
                     <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
                       {selectedIssue.message}
                     </span>
-                    <span className="text-[var(--text-caption)] uppercase font-semibold text-[var(--color-warning)]">
+                    <span
+                      className={cn(
+                        "text-[var(--text-caption)] uppercase font-semibold",
+                        selectedIssue.severity === "pass"
+                          ? "text-[var(--color-success)]"
+                          : "text-[var(--color-warning)]",
+                      )}
+                    >
                       {selectedIssue.severity}
                     </span>
                   </Inline>
                   <KV label="Asset" value={selectedIssue.asset ?? "Timeline"} />
                   {selectedIssue.time ? <KV label="Time" value={selectedIssue.time} /> : null}
-                  <p className="text-[var(--text-body-sm)] leading-relaxed text-[var(--color-text-secondary)]">
-                    Captions or render constraints may affect platform quality. Use the agent repair flow to apply the safest automatic fix before export.
-                  </p>
+                  {selectedIssue.severity === "pass" ? (
+                    <p className="text-[var(--text-body-sm)] leading-relaxed text-[var(--color-text-secondary)]">
+                      All preflight checks passed. Ready to export.
+                    </p>
+                  ) : (
+                    <p className="text-[var(--text-body-sm)] leading-relaxed text-[var(--color-text-secondary)]">
+                      This may affect platform quality. Use the agent repair flow to apply the safest automatic fix before export.
+                    </p>
+                  )}
                   {selectedIssue.suggestedFix ? (
                     <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-3 py-2 text-[var(--text-caption)] text-[var(--color-text-secondary)]">
                       {selectedIssue.suggestedFix}
                     </div>
                   ) : null}
-                  <Button
-                    variant="repair"
-                    size="sm"
-                    onClick={() => onAgentRepair?.(selectedIssue)}
-                    leadingIcon={<SettingsIcon className="h-3.5 w-3.5 stroke-[1.75]" />}
-                  >
-                    Agent Repair
-                  </Button>
+                  {selectedIssue.severity !== "pass" ? (
+                    <Button
+                      variant="repair"
+                      size="sm"
+                      onClick={() => onAgentRepair?.(selectedIssue)}
+                      leadingIcon={<SettingsIcon className="h-3.5 w-3.5 stroke-[1.75]" />}
+                    >
+                      Agent Repair
+                    </Button>
+                  ) : null}
                 </Stack>
               </Card>
             ) : null}
