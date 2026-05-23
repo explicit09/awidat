@@ -169,10 +169,35 @@ pub fn run() {
             commands::review::author_local_review_package,
             commands::color_scopes::get_color_scopes,
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(err) = result {
-        error!(error = %err, "tauri bootstrap failed");
-        std::process::exit(1);
-    }
+    let app = match result {
+        Ok(app) => app,
+        Err(err) => {
+            error!(error = %err, "tauri bootstrap failed");
+            std::process::exit(1);
+        }
+    };
+
+    // Intercept ExitRequested so the current Session's rollout writer
+    // has a chance to flush before the process dies. Without this the
+    // last turn's messages can be stuck in the writer's mpsc queue
+    // when the user quits, producing an incomplete-turn marker on the
+    // next resume.
+    app.run(move |handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            let state = handle.state::<AwidatState>();
+            // Take the session out of the slot synchronously, then
+            // run its shutdown on a small blocking-task. We can't
+            // `.await` here because this callback is sync; we use
+            // tauri's async-runtime block-on to drive the shutdown
+            // to completion before the process exits.
+            tauri::async_runtime::block_on(async {
+                let mut active = state.active.lock().await;
+                if let Some(session) = active.session.take() {
+                    session.shutdown_recorder().await;
+                }
+            });
+        }
+    });
 }
