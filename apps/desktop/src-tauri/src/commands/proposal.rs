@@ -592,7 +592,7 @@ fn build_diff_hints(
                     });
                 }
             }
-            EdlOp::MoveClip { .. } => {
+            EdlOp::MoveClip { .. } | EdlOp::RippleMove { .. } => {
                 if let Some(loc) = locator
                     && let Some((to_track_index, to_item_index)) =
                         find_moved_clip_position(original, proposed, loc)
@@ -603,6 +603,35 @@ fn build_diff_hints(
                         from_item_index: loc.child_index,
                         to_track_index,
                         to_item_index,
+                    });
+                }
+            }
+            EdlOp::RippleDelete { .. } => {
+                if let Some(loc) = locator {
+                    hints.push(AppliedDiff::Delete {
+                        op_index,
+                        track_index: loc.track_index,
+                        item_index: loc.child_index,
+                    });
+                }
+            }
+            EdlOp::RippleTrim { edge, value_s, .. } => {
+                if let Some(loc) = locator {
+                    let (orig_start, orig_end) = clip_source_range(original, loc);
+                    let (side, delta_s) = match edge {
+                        awidat_core::edl::op::RippleTrimEdge::Start => {
+                            (Side::Left, value_s - orig_start)
+                        }
+                        awidat_core::edl::op::RippleTrimEdge::End => {
+                            (Side::Right, orig_end - value_s)
+                        }
+                    };
+                    hints.push(AppliedDiff::TrimEdge {
+                        op_index,
+                        track_index: loc.track_index,
+                        item_index: loc.child_index,
+                        side,
+                        delta_s,
                     });
                 }
             }
@@ -821,6 +850,9 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::InsertBRoll { .. } => "InsertBRoll",
         EdlOp::InsertPiP { .. } => "InsertPiP",
         EdlOp::MoveClip { .. } => "MoveClip",
+        EdlOp::RippleMove { .. } => "RippleMove",
+        EdlOp::RippleDelete { .. } => "RippleDelete",
+        EdlOp::RippleTrim { .. } => "RippleTrim",
         EdlOp::ApplyMulticamPlan { .. } => "ApplyMulticamPlan",
         EdlOp::InsertTransition { .. } => "InsertTransition",
         EdlOp::DeleteTransition { .. } => "DeleteTransition",
