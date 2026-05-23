@@ -213,15 +213,17 @@ pub async fn index_project_at_root(
             let summary = format!(
                 "{wrote} wrote, {skipped} skipped, {failed} failed, {dep_skipped} dep-skipped"
             );
-            // Motion phase. Motion isn't an MCP indexer (it's a
-            // built-in FFmpeg scene-filter pass), so the dispatcher
-            // above doesn't touch it. Run it here so a user clicking
-            // "Run indexers" fills the motion sidecars for every asset
-            // — same coverage they'd get from re-importing. Per-asset
+            // Built-in passes (motion + silence). These are FFmpeg
+            // helpers, not MCP indexers, so the dispatcher above
+            // doesn't touch them. Run them here so a user clicking
+            // "Run indexers" fills the sidecars for every asset —
+            // same coverage they'd get from re-importing. Per-asset
             // calls are mtime-fresh-checked, so already-current
             // sidecars are no-ops.
             let mut motion_wrote = 0usize;
             let mut motion_failed: Vec<(String, String)> = Vec::new();
+            let mut silence_wrote = 0usize;
+            let mut silence_failed: Vec<(String, String)> = Vec::new();
             for asset in &assets {
                 if cancel.is_cancelled() {
                     break;
@@ -235,19 +237,36 @@ pub async fn index_project_at_root(
                 .await
                 {
                     Ok(_) => motion_wrote += 1,
-                    Err(e) => {
-                        motion_failed.push((asset.id.to_string(), e));
-                    }
+                    Err(e) => motion_failed.push((asset.id.to_string(), e)),
+                }
+                if cancel.is_cancelled() {
+                    break;
+                }
+                match crate::commands::silence::generate_silences_for_asset_in_project(
+                    app,
+                    state,
+                    &project_root,
+                    &asset.path,
+                )
+                .await
+                {
+                    Ok(_) => silence_wrote += 1,
+                    Err(e) => silence_failed.push((asset.id.to_string(), e)),
                 }
             }
-            let summary = if motion_wrote > 0 || !motion_failed.is_empty() {
-                format!(
+            let mut summary = summary;
+            if motion_wrote > 0 || !motion_failed.is_empty() {
+                summary = format!(
                     "{summary}; motion: {motion_wrote} ok, {} failed",
                     motion_failed.len(),
-                )
-            } else {
-                summary
-            };
+                );
+            }
+            if silence_wrote > 0 || !silence_failed.is_empty() {
+                summary = format!(
+                    "{summary}; silence: {silence_wrote} ok, {} failed",
+                    silence_failed.len(),
+                );
+            }
             // If a whisper sidecar was just written or refreshed,
             // drop the transcript-pane's parsed-Transcript cache so
             // the next read picks up the new shape. Cheap full-clear
@@ -259,7 +278,7 @@ pub async fn index_project_at_root(
             if whisper_wrote {
                 crate::commands::transcript::clear_transcript_cache(&state).await;
             }
-            if report.has_failures() || !motion_failed.is_empty() {
+            if report.has_failures() || !motion_failed.is_empty() || !silence_failed.is_empty() {
                 // Pull each PairOutcome::Failed out so the user sees
                 // *which* indexer failed on *which* asset *why*. With
                 // 10+ indexers per asset, "1 failed" alone leaves the
@@ -294,6 +313,15 @@ pub async fn index_project_at_root(
                         first.to_string()
                     };
                     detail.push_str(&format!("\n  ✗ motion · {asset}: {truncated}"));
+                }
+                for (asset, message) in &silence_failed {
+                    let first = message.lines().next().unwrap_or(message);
+                    let truncated = if first.len() > 200 {
+                        format!("{}…", &first[..200])
+                    } else {
+                        first.to_string()
+                    };
+                    detail.push_str(&format!("\n  ✗ silence · {asset}: {truncated}"));
                 }
                 emitter.err(detail);
                 Err(summary)
@@ -397,8 +425,12 @@ fn compute_index_readiness_at(project_root: &Path) -> IndexReadinessSnapshot {
     let face = any_json_file(&project_root.join("index").join("face"));
     let motion = any_json_file(&project_root.join(".awidat").join("motion"));
     let color = any_json_file(&project_root.join("index").join("color-analysis"));
-    let silence = any_json_file(&project_root.join(".awidat").join("silences"))
-        || any_json_file(&project_root.join("index").join("audio-energy"));
+    // Silence readiness is "do we have silence segments to feed
+    // find_dead_air". audio-energy is RMS magnitude per frame, not
+    // boundary segments — falling back to it produced a false-positive
+    // "indexed" for silence. Only the real `.awidat/silences/` sidecar
+    // counts.
+    let silence = any_json_file(&project_root.join(".awidat").join("silences"));
     // Speaker labels live INSIDE the whisper sidecar's body when
     // diarization runs (`data.diarized: true` + `data.speakers: [...]`),
     // not in a separate `index/speaker/` directory. Check the whisper
