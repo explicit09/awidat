@@ -25,6 +25,10 @@ import {
   type PreflightSeverity,
 } from "../ui";
 import podcastWide from "./assets/podcast-wide.jpg";
+import {
+  useRenderQueueStore,
+  type RenderQueueEntry,
+} from "../app/renderQueue";
 
 /**
  * DeliverySurface — concept Screen 7.
@@ -432,9 +436,6 @@ export function DeliverySurface({
                   {summary.estimatedSize ? (
                     <KV label="Est. size" value={summary.estimatedSize} />
                   ) : null}
-                  <KV label="Preset" value="YouTube 16:9" />
-                  <KV label="Format" value="MP4 · H.264 High" />
-                  <KV label="Render time" value="00:38:42" />
                   <Stack gap="1">
                     <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
                       Delivery confidence
@@ -444,6 +445,7 @@ export function DeliverySurface({
                 </Stack>
               </Card>
             ) : null}
+            <RenderQueuePanel />
             <Stack gap="2">
               <Button
                 variant="primary"
@@ -612,4 +614,139 @@ function KV({ label, value }: { label: string; value: string | ReactNode }) {
       <span className="font-mono text-[var(--text-body-sm)] text-[var(--color-text-primary)]">{value}</span>
     </Inline>
   );
+}
+
+/** Live render queue — pending, running, and recent terminal entries
+ *  from `useRenderQueueStore`. Shows progress for the active render
+ *  and an "Open in Finder" action on completed entries. */
+function RenderQueuePanel() {
+  const entries = useRenderQueueStore((s) => s.entries);
+  const dismiss = useRenderQueueStore((s) => s.dismiss);
+  const clearTerminal = useRenderQueueStore((s) => s.clearTerminal);
+  const visible = entries.slice(-12);
+  if (visible.length === 0) {
+    return (
+      <Card padding="md">
+        <Stack gap="2">
+          <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+            Render queue
+          </span>
+          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+            No renders queued. Pick targets and hit Export.
+          </span>
+        </Stack>
+      </Card>
+    );
+  }
+  const hasTerminal = visible.some(
+    (e) =>
+      e.status === "done" || e.status === "failed" || e.status === "cancelled",
+  );
+  return (
+    <Card padding="md">
+      <Stack gap="3">
+        <Inline justify="between" align="baseline">
+          <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+            Render queue
+          </span>
+          {hasTerminal ? (
+            <button
+              type="button"
+              onClick={clearTerminal}
+              className="text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+            >
+              Clear done
+            </button>
+          ) : null}
+        </Inline>
+        <Stack gap="2">
+          {visible.map((entry) => (
+            <RenderQueueRow
+              key={entry.id}
+              entry={entry}
+              onDismiss={() => dismiss(entry.id)}
+            />
+          ))}
+        </Stack>
+      </Stack>
+    </Card>
+  );
+}
+
+function RenderQueueRow({
+  entry,
+  onDismiss,
+}: {
+  entry: RenderQueueEntry;
+  onDismiss: () => void;
+}) {
+  const dotClass =
+    entry.status === "running"
+      ? "bg-[var(--color-brand-secondary)] animate-pulse"
+      : entry.status === "done"
+        ? "bg-[var(--color-success)]"
+        : entry.status === "failed" || entry.status === "cancelled"
+          ? "bg-[#ef7168]"
+          : "bg-[var(--color-text-muted)]";
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2 text-[var(--text-caption)]">
+      <Inline justify="between" align="baseline" className="gap-2">
+        <Inline gap="2" align="center" className="min-w-0">
+          <span
+            className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotClass)}
+            aria-hidden
+          />
+          <span className="min-w-0 truncate font-medium text-[var(--color-text-primary)]">
+            {entry.label}
+          </span>
+          <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-muted)]">
+            {entry.status}
+          </span>
+        </Inline>
+        {entry.status === "done" || entry.status === "failed" || entry.status === "cancelled" ? (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+            title="Dismiss"
+          >
+            ×
+          </button>
+        ) : null}
+      </Inline>
+      {entry.status === "running" && typeof entry.progress === "number" ? (
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+          <div
+            className="h-full rounded-full bg-[var(--color-brand-secondary)]"
+            style={{ width: `${entry.progress}%` }}
+          />
+        </div>
+      ) : null}
+      {entry.status === "done" && entry.outputPath ? (
+        <button
+          type="button"
+          onClick={() => void invokeRevealInFinder(entry.outputPath!)}
+          className="mt-1 truncate text-[var(--color-brand-secondary)] hover:underline"
+          title={entry.outputPath}
+        >
+          Open in Finder
+        </button>
+      ) : null}
+      {entry.status === "failed" && entry.error ? (
+        <p className="mt-1 truncate text-[#ef7168]" title={entry.error}>
+          {entry.error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+async function invokeRevealInFinder(path: string): Promise<void> {
+  try {
+    const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+    await revealItemInDir(path);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn("revealItemInDir failed", err);
+  }
 }
