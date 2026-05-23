@@ -1188,8 +1188,11 @@ fn read_reframe_path(package: Option<&TrackingPackage>, clip_id: &str) -> Option
 }
 
 fn reframe_path_plan(path: &ReframePath) -> Option<ReframePathPlan> {
-    let mut keyframes = path
-        .keyframes
+    // Re-smooth the authored keyframes at lowering time so the stored
+    // path stays raw evidence; re-rendering with a different policy
+    // works by changing `smoothing` rather than re-authoring.
+    let smoothed = crate::reframe_smoothing::smooth_keyframes(&path.keyframes, path.smoothing);
+    let mut keyframes = smoothed
         .iter()
         .filter_map(|keyframe| {
             let center_x = keyframe.center[0];
@@ -10371,7 +10374,7 @@ mod tests {
                         confidence: Some(0.89),
                     },
                 ],
-                smoothing: ReframeSmoothing::Moderate,
+                smoothing: ReframeSmoothing::None,
                 evidence_track_id: Some("speaker-face".into()),
                 safe_area: Some("mobile".into()),
             }],
@@ -11214,6 +11217,53 @@ mod tests {
         assert!(
             filter.contains("0.35+(0.45-0.35)*"),
             "missing y keyframe interpolation: {filter}"
+        );
+    }
+
+    #[test]
+    fn reframe_path_plan_with_strong_smoothing_pulls_endpoints_toward_mean() {
+        let raw_centers: Vec<f64> = (0..16)
+            .map(|i| if i % 2 == 0 { 0.30 } else { 0.70 })
+            .collect();
+        let path = ReframePath {
+            id: "reframe-strong".into(),
+            clip_id: "c1".into(),
+            aspect_ratio: "9:16".into(),
+            source_width: 1920,
+            source_height: 1080,
+            target_width: 1080,
+            target_height: 1920,
+            keyframes: raw_centers
+                .iter()
+                .enumerate()
+                .map(|(i, &cx)| ReframeKeyframe {
+                    time_s: i as f64 / 30.0,
+                    center: [cx, 0.5],
+                    scale: 2.0,
+                    confidence: Some(1.0),
+                })
+                .collect(),
+            smoothing: ReframeSmoothing::Strong,
+            evidence_track_id: None,
+            safe_area: None,
+        };
+
+        let plan = reframe_path_plan(&path).expect("strong-smoothed path lowers to a plan");
+        assert_eq!(plan.keyframes.len(), raw_centers.len());
+        let mean = raw_centers.iter().sum::<f64>() / raw_centers.len() as f64;
+        let first_raw = raw_centers[0];
+        let last_raw = raw_centers[raw_centers.len() - 1];
+        let first_smoothed = plan.keyframes[0].center_x;
+        let last_smoothed = plan.keyframes[plan.keyframes.len() - 1].center_x;
+        assert!(
+            (first_smoothed - mean).abs() < (first_raw - mean).abs(),
+            "strong smoothing should pull the first keyframe toward the mean: \
+             raw={first_raw} smoothed={first_smoothed} mean={mean}"
+        );
+        assert!(
+            (last_smoothed - mean).abs() < (last_raw - mean).abs(),
+            "strong smoothing should pull the last keyframe toward the mean: \
+             raw={last_raw} smoothed={last_smoothed} mean={mean}"
         );
     }
 
