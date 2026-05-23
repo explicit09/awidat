@@ -1,9 +1,16 @@
 //! Shared proxy cache helpers for agent-callable media operations.
+//!
+//! Proxy filenames follow `{stem}-{PROXY_SCHEMA_TAG}-{8xhash}.mp4` so the
+//! agent-side helpers stay byte-compatible with the desktop transcoder's
+//! own `commands/media.rs::proxy_path_for` (both hash the absolute asset
+//! path via FNV-1a 32-bit and embed the same render-side schema tag).
+//! Bump `awidat_render::PROXY_SCHEMA_TAG` to invalidate old proxies.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use awidat_index::media_files::{MediaScanOptions, collect_project_media_files};
+use awidat_render::PROXY_SCHEMA_TAG;
 use serde::Serialize;
 
 /// Agent-visible proxy cache status.
@@ -36,7 +43,9 @@ pub struct ProxyStatusEntry {
     pub size_bytes: Option<u64>,
 }
 
-/// Return the stable proxy path for a source asset.
+/// Return the stable proxy path for a source asset. Matches the desktop
+/// transcoder's `commands/media.rs::proxy_path_for` byte-for-byte so the
+/// agent's reads land on the same files the desktop writes.
 pub fn proxy_path_for(project_root: &Path, asset_path: &Path) -> PathBuf {
     let proxies_dir = project_root.join(".awidat").join("proxies");
     let stem = asset_path
@@ -45,7 +54,8 @@ pub fn proxy_path_for(project_root: &Path, asset_path: &Path) -> PathBuf {
         .filter(|stem| !stem.trim().is_empty())
         .unwrap_or("asset");
     proxies_dir.join(format!(
-        "{stem}-1080p-{:016x}.mp4",
+        "{stem}-{}-{:08x}.mp4",
+        PROXY_SCHEMA_TAG,
         stable_path_hash(asset_path)
     ))
 }
@@ -121,11 +131,11 @@ fn modified(path: &Path) -> std::io::Result<SystemTime> {
     std::fs::metadata(path)?.modified()
 }
 
-fn stable_path_hash(path: &Path) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+fn stable_path_hash(path: &Path) -> u32 {
+    let mut hash = 0x811c_9dc5_u32;
     for byte in path.to_string_lossy().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        hash ^= u32::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0193);
     }
     hash
 }
@@ -148,10 +158,11 @@ mod tests {
         let second = proxy_path_for(root, asset);
 
         assert_eq!(first, second);
+        let needle = format!(".awidat/proxies/camera-{}-", PROXY_SCHEMA_TAG);
         assert!(
-            first
-                .to_string_lossy()
-                .contains(".awidat/proxies/camera-1080p-")
+            first.to_string_lossy().contains(&needle),
+            "expected proxy path to contain `{needle}`, got `{}`",
+            first.display()
         );
     }
 
