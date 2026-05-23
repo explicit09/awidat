@@ -2,9 +2,15 @@ import { strict as assert } from "node:assert";
 import {
   buildDeleteSelectionOps,
   buildMoveDragOps,
+  buildRippleDeleteOps,
+  buildRollDragOps,
   buildTrimDragOps,
 } from "./editOps.ts";
-import type { UserMoveDrag, UserTrimDrag } from "./editMath.ts";
+import type {
+  UserMoveDrag,
+  UserRollDrag,
+  UserTrimDrag,
+} from "./editMath.ts";
 import type { TimelineItem, TimelineSnapshot, TimelineTrack } from "./store.ts";
 
 function describe(name: string, fn: () => void) {
@@ -157,8 +163,9 @@ describe("buildTrimDragOps", () => {
 });
 
 describe("buildMoveDragOps", () => {
-  it("builds linked move ops and drops duplicate/no-op drafts", () => {
+  it("ripple mode emits a single ripple_move op (backend handles link siblings)", () => {
     const drag: UserMoveDrag = {
+      mode: "ripple",
       trackIndex: 0,
       clipIndex: 0,
       clipUuid: "shot",
@@ -179,17 +186,138 @@ describe("buildMoveDragOps", () => {
 
     assert.deepEqual(buildMoveDragOps(snap, 20, drag, 100), [
       {
-        kind: "move_clip",
+        kind: "ripple_move",
         anchor: { kind: "clip_uuid", uuid: "shot" },
-        toPosition: 1,
-        atS: 1,
-      },
-      {
-        kind: "move_clip",
-        anchor: { kind: "clip_uuid", uuid: "audio" },
-        toPosition: 3,
-        atS: 7,
+        deltaS: 1,
       },
     ]);
+  });
+
+  it("slip mode emits professional_timeline_edit::slip_clip", () => {
+    const drag: UserMoveDrag = {
+      mode: "slip",
+      trackIndex: 0,
+      clipIndex: 0,
+      clipUuid: "shot",
+      linkGroupId: null,
+      startX: 0,
+      currentX: 50,
+      startY: 0,
+      currentY: 0,
+    };
+    const snap = snapshot([track(0, [clip(0, "shot", 0, 2)])]);
+    assert.deepEqual(buildMoveDragOps(snap, 20, drag, 100), [
+      {
+        kind: "professional_timeline_edit",
+        edit: {
+          edit: "slip_clip",
+          anchor: { kind: "clip_uuid", uuid: "shot" },
+          delta_s: 0.5,
+        },
+      },
+    ]);
+  });
+
+  it("slide mode emits professional_timeline_edit::slide_clip", () => {
+    const drag: UserMoveDrag = {
+      mode: "slide",
+      trackIndex: 0,
+      clipIndex: 0,
+      clipUuid: "shot",
+      linkGroupId: null,
+      startX: 0,
+      currentX: 50,
+      startY: 0,
+      currentY: 0,
+    };
+    const snap = snapshot([track(0, [clip(0, "shot", 0, 2)])]);
+    assert.deepEqual(buildMoveDragOps(snap, 20, drag, 100), [
+      {
+        kind: "professional_timeline_edit",
+        edit: {
+          edit: "slide_clip",
+          anchor: { kind: "clip_uuid", uuid: "shot" },
+          delta_s: 0.5,
+        },
+      },
+    ]);
+  });
+});
+
+describe("buildTrimDragOps with ripple", () => {
+  it("ripple=true emits a ripple_trim op instead of trim_clip", () => {
+    const drag: UserTrimDrag = {
+      hit: { clipUuid: "clip-1", side: "end", sourceStart: 1, sourceEnd: 5 },
+      startX: 0,
+      currentX: 36,
+      ripple: true,
+    };
+
+    assert.deepEqual(buildTrimDragOps(drag, 12), [
+      {
+        kind: "ripple_trim",
+        anchor: { kind: "clip_uuid", uuid: "clip-1" },
+        edge: "end",
+        valueS: 8,
+      },
+    ]);
+  });
+});
+
+describe("buildRippleDeleteOps", () => {
+  it("emits one ripple_delete op for the selected clip", () => {
+    const snap = snapshot([track(0, [clip(0, "shot", 0, 2)])]);
+    assert.deepEqual(
+      buildRippleDeleteOps(snap, { trackIndex: 0, clipIndex: 0 }),
+      [
+        {
+          kind: "ripple_delete",
+          anchor: { kind: "clip_uuid", uuid: "shot" },
+        },
+      ],
+    );
+  });
+
+  it("returns no ops when nothing is selected", () => {
+    const snap = snapshot([track(0, [clip(0, "shot", 0, 2)])]);
+    assert.deepEqual(buildRippleDeleteOps(snap, null), []);
+  });
+});
+
+describe("buildRollDragOps", () => {
+  it("emits a professional_timeline_edit::roll_edit envelope", () => {
+    const drag: UserRollDrag = {
+      hit: {
+        from: { clipUuid: "left", sourceEnd: 3 },
+        to: { clipUuid: "right", sourceStart: 3 },
+      },
+      startX: 0,
+      currentX: 50,
+    };
+    assert.deepEqual(buildRollDragOps(drag, 100), [
+      {
+        kind: "professional_timeline_edit",
+        edit: {
+          edit: "roll_edit",
+          between: {
+            from: { kind: "clip_uuid", uuid: "left" },
+            to: { kind: "clip_uuid", uuid: "right" },
+          },
+          delta_s: 0.5,
+        },
+      },
+    ]);
+  });
+
+  it("ignores tiny drags below the 2px threshold", () => {
+    const drag: UserRollDrag = {
+      hit: {
+        from: { clipUuid: "left", sourceEnd: 3 },
+        to: { clipUuid: "right", sourceStart: 3 },
+      },
+      startX: 10,
+      currentX: 11,
+    };
+    assert.deepEqual(buildRollDragOps(drag, 100), []);
   });
 });

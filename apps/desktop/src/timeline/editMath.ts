@@ -12,9 +12,17 @@ export type UserTrimDrag = {
   };
   startX: number;
   currentX: number;
+  /** Cmd / Ctrl held at pointer-down → ripple-trim semantics on
+   *  commit (downstream clips shift by the trim delta). */
+  ripple: boolean;
 };
 
+/** Gesture intent for a body drag, captured at pointer-down based on
+ *  the modifier keys held. The backend op is selected at commit time. */
+export type BodyDragMode = "ripple" | "slip" | "slide";
+
 export type UserMoveDrag = {
+  mode: BodyDragMode;
   trackIndex: number;
   clipIndex: number;
   clipUuid: string;
@@ -23,6 +31,18 @@ export type UserMoveDrag = {
   currentX: number;
   startY: number;
   currentY: number;
+};
+
+/** Active roll-edit drag — pointer grabbed the shared boundary
+ *  between two adjacent clips. The drag's dx becomes the delta passed
+ *  to backend `roll_edit`. */
+export type UserRollDrag = {
+  hit: {
+    from: { clipUuid: string; sourceEnd: number };
+    to: { clipUuid: string; sourceStart: number };
+  };
+  startX: number;
+  currentX: number;
 };
 
 export function targetPositionForMove(

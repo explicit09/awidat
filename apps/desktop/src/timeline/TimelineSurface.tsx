@@ -5,11 +5,27 @@ import { editorDispatch } from "../editor/tauriDispatch";
 import { useTimelineSelectionStore } from "../properties/store";
 import { useProposalStore } from "./proposal";
 import { ProposalHandles } from "./ProposalHandles";
-import { hitTestEdge, hitTestSelectableBody, type EdgeHit } from "./hitDetect";
+import {
+  hitTestBoundary,
+  hitTestEdge,
+  hitTestSelectableBody,
+  type EdgeHit,
+} from "./hitDetect";
 import { onThumbnailDecoded } from "./thumbnailCache";
 import { onWaveformDecoded } from "./waveformCache";
-import { type UserMoveDrag, type UserTrimDrag } from "./editMath";
-import { buildDeleteSelectionOps, buildMoveDragOps, buildTrimDragOps } from "./editOps";
+import {
+  type BodyDragMode,
+  type UserMoveDrag,
+  type UserRollDrag,
+  type UserTrimDrag,
+} from "./editMath";
+import {
+  buildDeleteSelectionOps,
+  buildMoveDragOps,
+  buildRippleDeleteOps,
+  buildRollDragOps,
+  buildTrimDragOps,
+} from "./editOps";
 import { LANE_HEIGHT, PX_PER_SECOND_BASE, RULER_HEIGHT } from "./layout.ts";
 import { collectDeletedKeys, collectHighlightKeys } from "./proposalDiffKeys.ts";
 import { drawMoveGhost, drawPlayhead, drawRuler, drawTracks } from "./renderer.ts";
@@ -108,6 +124,7 @@ function TimelineCanvas({
   // Active drag, set on pointerdown-near-edge, cleared on pointerup.
   const [userTrim, setUserTrim] = useState<UserTrimDrag | null>(null);
   const [userMove, setUserMove] = useState<UserMoveDrag | null>(null);
+  const [userRoll, setUserRoll] = useState<UserRollDrag | null>(null);
   // Properties-pane selection: which clip is currently inspected.
   // The canvas paints a subtle amber outline on the selected clip
   // so the link between timeline selection and right-rail content
@@ -304,6 +321,20 @@ function TimelineCanvas({
     }
   }, [clearSelection, proposal, selectedClipKey, snapshot]);
 
+  // Ripple-delete: like delete, but closes the gap. Shift+Del/Backspace.
+  const commitRippleDeleteSelection = useCallback(async (): Promise<void> => {
+    if (proposal || !selectedClipKey) return;
+    const ops = buildRippleDeleteOps(snapshot, selectedClipKey);
+    if (ops.length === 0) return;
+    try {
+      await editorDispatch.proposeUserEdit(ops);
+      clearSelection();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (ripple delete) failed", err);
+    }
+  }, [clearSelection, proposal, selectedClipKey, snapshot]);
+
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const isDeleteKey =
@@ -316,7 +347,11 @@ function TimelineCanvas({
       if (isEditableTarget(e.target)) return;
       if (!selectedClipKey || proposal) return;
       e.preventDefault();
-      void commitDeleteSelection();
+      if (e.shiftKey) {
+        void commitRippleDeleteSelection();
+      } else {
+        void commitDeleteSelection();
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     const unlistenMenu = onMenuCommand((id) => {
@@ -328,7 +363,12 @@ function TimelineCanvas({
       window.removeEventListener("keydown", onKeyDown);
       unlistenMenu();
     };
-  }, [commitDeleteSelection, proposal, selectedClipKey]);
+  }, [
+    commitDeleteSelection,
+    commitRippleDeleteSelection,
+    proposal,
+    selectedClipKey,
+  ]);
 
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (snapshot.duration_s <= 0) return; // nothing to interact with
@@ -341,10 +381,34 @@ function TimelineCanvas({
       return;
     }
     const { x, y, clientX } = canvasPos(e);
-    const hit = hitTestEdge(x, y, snapshot, ppsRef.current);
+    // Roll edit: shared boundary between two adjacent clips. Tested
+    // first because a single pointer x can be near both clip edges
+    // simultaneously, and roll is the more specific gesture. No
+    // modifier required — the position itself disambiguates.
+    const boundary = hitTestBoundary(x, y, snapshot, ppsRef.current, laneHeight);
+    if (boundary) {
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setUserRoll({
+        hit: {
+          from: { clipUuid: boundary.from.clipUuid, sourceEnd: boundary.from.sourceEnd },
+          to: { clipUuid: boundary.to.clipUuid, sourceStart: boundary.to.sourceStart },
+        },
+        startX: x,
+        currentX: x,
+      });
+      return;
+    }
+    const hit = hitTestEdge(x, y, snapshot, ppsRef.current, laneHeight);
     if (hit) {
       e.currentTarget.setPointerCapture(e.pointerId);
-      setUserTrim({ hit, startX: x, currentX: x });
+      // Cmd / Ctrl at pointer-down → ripple-trim semantics on commit
+      // (downstream clips shift by the trim delta).
+      setUserTrim({
+        hit,
+        startX: x,
+        currentX: x,
+        ripple: e.metaKey || e.ctrlKey,
+      });
       // Don't seek on edge-down; the user is starting a trim, not
       // scrubbing.
       return;
@@ -353,7 +417,7 @@ function TimelineCanvas({
     // under the pointer = select; empty space = clear. Either way
     // the click also scrubs the playhead (preserving the existing
     // seek-on-click behaviour).
-    const body = hitTestSelectableBody(x, y, snapshot, ppsRef.current);
+    const body = hitTestSelectableBody(x, y, snapshot, ppsRef.current, laneHeight);
     if (body) {
       selectClip(body);
       const item = snapshot.tracks[body.trackIndex]?.items.find(
@@ -361,7 +425,15 @@ function TimelineCanvas({
       );
       if (item?.kind === "clip") {
         e.currentTarget.setPointerCapture(e.pointerId);
+        // Modifier semantics (Premiere/Resolve):
+        //   - Alt only        → slip (shift source range, hold position)
+        //   - Cmd/Ctrl + Alt  → slide (shift position, hold neighbors)
+        //   - no modifier     → ripple move (default body drag)
+        const altOnly = e.altKey && !(e.metaKey || e.ctrlKey);
+        const cmdAlt = e.altKey && (e.metaKey || e.ctrlKey);
+        const mode: BodyDragMode = altOnly ? "slip" : cmdAlt ? "slide" : "ripple";
         setUserMove({
+          mode,
           trackIndex: body.trackIndex,
           clipIndex: body.clipIndex,
           clipUuid: item.clip_uuid,
@@ -387,12 +459,16 @@ function TimelineCanvas({
       setUserTrim({ ...userTrim, currentX: x });
       return;
     }
+    if (userRoll) {
+      setUserRoll({ ...userRoll, currentX: x });
+      return;
+    }
     if (userMove) {
       setUserMove({ ...userMove, currentX: x, currentY: y });
       return;
     }
     // Hover state — update edge cursor hint.
-    const hover = hitTestEdge(x, y, snapshot, ppsRef.current);
+    const hover = hitTestEdge(x, y, snapshot, ppsRef.current, laneHeight);
     setEdgeHover(hover);
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       requestTimelineSeek(timeFromClientX(clientX));
@@ -407,9 +483,24 @@ function TimelineCanvas({
       void commitUserTrim(userTrim);
       setUserTrim(null);
     }
+    if (userRoll) {
+      void commitUserRoll(userRoll);
+      setUserRoll(null);
+    }
     if (userMove) {
       void commitUserMove(userMove);
       setUserMove(null);
+    }
+  }
+
+  async function commitUserRoll(drag: UserRollDrag): Promise<void> {
+    const ops = buildRollDragOps(drag, ppsRef.current);
+    if (ops.length === 0) return;
+    try {
+      await editorDispatch.proposeUserEdit(ops);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("propose_user_edit (roll) failed", err);
     }
   }
 
@@ -454,6 +545,8 @@ function TimelineCanvas({
   // the canvas. The cursor shows up on the canvas style; setting it
   // via React style on the element is enough.
   const cursor = userTrim
+    ? "ew-resize"
+    : userRoll
     ? "ew-resize"
     : userMove
     ? "grabbing"
