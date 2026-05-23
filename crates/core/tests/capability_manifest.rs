@@ -535,7 +535,7 @@ fn capability_manifest_adds_explicit_known_tool_metadata() {
             .metadata
             .known_limitations
             .iter()
-            .any(|limitation| limitation.contains("bounded read-only refresh plan"))
+            .any(|limitation| limitation.contains("PreviewRefreshExecutor"))
     );
 }
 
@@ -715,7 +715,7 @@ fn capability_manifest_lists_effect_and_render_feature_metadata() {
             .metadata
             .known_limitations
             .iter()
-            .any(|limitation| limitation.contains("selected_refresh_tasks"))
+            .any(|limitation| limitation.contains("PreviewRefreshExecutor"))
     );
 
     let Some(preview_cache_refresh) = manifest

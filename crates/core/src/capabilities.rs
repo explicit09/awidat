@@ -457,7 +457,7 @@ fn render_feature_capabilities() -> Vec<RenderFeatureCapability> {
                 vec![
                     "reports per-artifact refresh_tasks with task_id, estimated_weight, artifact paths, and missing/stale reasons"
                         .into(),
-                    "reports selected_refresh_tasks and selected_refresh_work for bounded read-only refresh planning"
+                    "refresh execution now runs against the `PreviewRefreshExecutor` trait via `run_preview_cache_refresh`, persists per-task lifecycle state to `.awidat/preview-cache/refresh-plan.json`, and resumes from prior pending tasks; cross-process file locking is not yet implemented"
                         .into(),
                     "does not generate artifacts; it is the agent-facing readiness/preflight view"
                         .into(),

@@ -178,7 +178,7 @@ impl CapabilityMetadata {
                 metadata.side_effects =
                     vec!["reads proxy, thumbnail, and waveform cache metadata".into()];
                 metadata.known_limitations = vec![
-                    "returns a bounded read-only refresh plan; use desktop preview_cache_refresh or specific generation tools to refresh artifacts"
+                    "preview-cache refresh now runs the persisted lifecycle through `PreviewRefreshExecutor` with resume semantics; cross-process file locking is not yet implemented"
                         .into(),
                 ];
             }
