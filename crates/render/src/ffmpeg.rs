@@ -702,6 +702,194 @@ pub async fn transcode_proxy(
     Ok(())
 }
 
+/// Target spec for a platform reframe: output dimensions and an
+/// optional video bitrate (kbps). Audio passes through unchanged.
+/// See [`reframe_to_target`].
+#[derive(Debug, Clone, Copy)]
+pub struct ReframeTarget {
+    /// Output width in pixels.
+    pub width: u32,
+    /// Output height in pixels.
+    pub height: u32,
+    /// Encoded with `-b:v <kbps>k` when set; otherwise ffmpeg picks
+    /// a default based on CRF.
+    pub video_bitrate_kbps: Option<u32>,
+}
+
+/// Reframe / re-encode `input_path` into `output_path` at the target
+/// dimensions. The video gets a center-crop to match the target's
+/// aspect ratio (so a 16:9 master becomes a 9:16 vertical by trimming
+/// the left/right edges, or a 1:1 square by trimming the same edges
+/// further), then a scale to the target's pixel size. Audio is copied
+/// unchanged so the reframe doesn't re-encode the (already-mastered)
+/// audio track.
+///
+/// Pipeline: `ffmpeg -i <src> -vf
+///   "crop=ih*<tw>/<th>*<sh>/<sw>:ih,scale=W:H,setsar=1" \
+///   -c:v libx264 -preset veryfast -crf 20 [-b:v <kbps>k] \
+///   -pix_fmt yuv420p -c:a copy -movflags +faststart -y <out>`
+///
+/// We always run the crop because guessing whether the source aspect
+/// equals the target aspect would require probing first; using
+/// `min(iw/sw, ih/sh)` style math in the filter ensures the crop is a
+/// no-op when source and target aspects already match.
+pub async fn reframe_to_target(
+    input_path: &Path,
+    output_path: &Path,
+    target: ReframeTarget,
+    progress: Option<TranscodeProgressCallback>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<(), FfmpegError> {
+    let bin = ffmpeg_path()?;
+
+    if let Some(parent) = output_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(FfmpegError::Io)?;
+    }
+
+    // Probe duration so percent progress is meaningful.
+    let total_duration_s = probe_duration_s(input_path).await.unwrap_or_default();
+    if let Some(cb) = progress.as_ref() {
+        cb(TranscodeProgress::Started { total_duration_s });
+    }
+
+    // Build a center-crop + scale filter.
+    //
+    // The crop expression picks the largest centered rectangle in the
+    // source that matches the target's aspect ratio. ffmpeg evaluates
+    // `iw`/`ih` at runtime so we don't need to know the source size
+    // here. `min(iw, ih*tw/th)` is the crop width that keeps target
+    // aspect when the source is wider than target; symmetric on the
+    // height side. With both as `min(...)`, ffmpeg picks the smaller
+    // dim that fits — effectively a center crop.
+    let crop = format!(
+        "crop='min(iw,ih*{tw}/{th})':'min(ih,iw*{th}/{tw})'",
+        tw = target.width,
+        th = target.height,
+    );
+    let scale = format!("scale={}:{}", target.width, target.height);
+    let vf = format!("{crop},{scale},setsar=1");
+
+    let mut cmd = Command::new(&bin);
+    cmd.arg("-loglevel")
+        .arg("error")
+        .arg("-progress")
+        .arg("pipe:2")
+        .arg("-nostats")
+        .arg("-y")
+        .arg("-i")
+        .arg(input_path)
+        .arg("-vf")
+        .arg(&vf)
+        .arg("-c:v")
+        .arg("libx264")
+        .arg("-preset")
+        .arg("veryfast")
+        .arg("-crf")
+        .arg("20");
+    if let Some(kbps) = target.video_bitrate_kbps {
+        cmd.arg("-b:v").arg(format!("{kbps}k"));
+        cmd.arg("-maxrate").arg(format!("{kbps}k"));
+        cmd.arg("-bufsize").arg(format!("{}k", kbps * 2));
+    }
+    cmd.arg("-pix_fmt")
+        .arg("yuv420p")
+        .arg("-c:a")
+        .arg("copy")
+        .arg("-movflags")
+        .arg("+faststart")
+        .arg(output_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let mut child = cmd.spawn().map_err(|e| FfmpegError::Spawn {
+        path: bin.clone(),
+        source: e,
+    })?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
+
+    let progress_task = {
+        let progress = progress.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let mut reader = tokio::io::BufReader::new(stderr).lines();
+            let mut snapshot = crate::progress::ProgressSnapshot::default();
+            let mut tail = Vec::<String>::new();
+            while let Ok(Some(line)) = reader.next_line().await {
+                if let Some(rest) = line.strip_prefix("out_time_ms=") {
+                    if let Ok(us) = rest.parse::<i64>() {
+                        snapshot.time_done_s = Some((us as f64) / 1_000_000.0);
+                    }
+                } else if let Some(rest) = line.strip_prefix("frame=") {
+                    if let Ok(n) = rest.parse::<u64>() {
+                        snapshot.frames_done = Some(n);
+                    }
+                } else if let Some(rest) = line.strip_prefix("speed=") {
+                    if let Some(num) = rest.trim().strip_suffix('x')
+                        && let Ok(s) = num.parse::<f64>()
+                    {
+                        snapshot.speed = Some(s);
+                    }
+                } else if line == "progress=end" {
+                    if let Some(cb) = progress.as_ref() {
+                        cb(TranscodeProgress::Tick {
+                            percent: Some(100),
+                            line: "progress=end".into(),
+                        });
+                    }
+                    continue;
+                } else {
+                    if !line.is_empty() {
+                        tail.push(line);
+                        if tail.len() > 100 {
+                            tail.remove(0);
+                        }
+                    }
+                    continue;
+                }
+                if let Some(cb) = progress.as_ref() {
+                    let pct = snapshot
+                        .percent(total_duration_s)
+                        .map(|f| f.round().clamp(0.0, 100.0) as u8);
+                    cb(TranscodeProgress::Tick {
+                        percent: pct,
+                        line: snapshot.last_line.clone().unwrap_or_default(),
+                    });
+                }
+            }
+            tail.join("\n")
+        })
+    };
+
+    let status = tokio::select! {
+        _ = cancel.cancelled() => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(FfmpegError::NonZero {
+                code: -1,
+                stderr_tail: "cancelled".into(),
+            });
+        }
+        st = child.wait() => st.map_err(FfmpegError::Io)?,
+    };
+
+    let stderr_tail = progress_task.await.unwrap_or_default();
+
+    if !status.success() {
+        return Err(FfmpegError::NonZero {
+            code: status.code().unwrap_or(-1),
+            stderr_tail,
+        });
+    }
+    Ok(())
+}
+
 /// Extract one filmstrip JPEG per second of source-time from
 /// `asset_path` into `output_dir` as `frame-0001.jpg`, `frame-0002.jpg`,
 /// … The frontend tiles these across the clip's pixel width on the
