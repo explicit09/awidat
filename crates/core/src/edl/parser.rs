@@ -1117,6 +1117,7 @@ impl OpBuilder {
                     color,
                     font_weight,
                     animation,
+                    phases: None,
                 })
             }
             OpKind::InsertRichTitle => {
@@ -1154,6 +1155,7 @@ impl OpBuilder {
                     position,
                     font_size,
                     animation,
+                    phases: None,
                 })
             }
             OpKind::InstantiateMotionTemplate => {
@@ -1221,6 +1223,7 @@ impl OpBuilder {
                     color,
                     font_weight,
                     animation,
+                    phases: None,
                 })
             }
             OpKind::InsertCaption => {
@@ -3036,6 +3039,7 @@ mod tests {
                 color,
                 font_weight,
                 animation,
+                phases: _,
             } => {
                 assert!((start_s - 0.0).abs() < 1e-9);
                 assert!((end_s - 3.0).abs() < 1e-9);
@@ -3104,6 +3108,7 @@ mod tests {
                 font_size,
                 color,
                 font_weight,
+                phases: _,
             } => {
                 assert!(matches!(anchor, Anchor::ClipUuid { uuid } if uuid == "title-uuid"));
                 assert_eq!(text.as_deref(), Some("Updated"));

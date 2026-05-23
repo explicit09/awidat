@@ -683,6 +683,7 @@ fn apply_one(
             color,
             font_weight,
             animation,
+            phases: _,
         } => apply_insert_title(
             working,
             index,
@@ -702,6 +703,7 @@ fn apply_one(
             position,
             font_size,
             animation,
+            phases: _,
         } => apply_insert_rich_title(
             working, index, *start_s, *end_s, segments, *position, *font_size, *animation,
         ),
@@ -730,6 +732,7 @@ fn apply_one(
             color,
             font_weight,
             animation,
+            phases: _,
         } => apply_set_title(
             working,
             index,
@@ -14105,6 +14108,7 @@ mod tests {
                 color: "#FFAA00".into(),
                 font_weight: super::super::op::TitleWeight::Bold,
                 animation: super::super::op::TitleAnimation::FadeInOut,
+                phases: None,
             }],
         };
         let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
@@ -14300,6 +14304,7 @@ mod tests {
                     color: "#FFFFFF".into(),
                     font_weight: super::super::op::TitleWeight::Normal,
                     animation: super::super::op::TitleAnimation::None,
+                    phases: None,
                 },
                 EdlOp::InsertTitle {
                     start_s: 5.0,
@@ -14310,6 +14315,7 @@ mod tests {
                     color: "#FFFFFF".into(),
                     font_weight: super::super::op::TitleWeight::Normal,
                     animation: super::super::op::TitleAnimation::None,
+                    phases: None,
                 },
             ],
         };
@@ -14357,6 +14363,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
+                phases: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -14378,6 +14385,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
+                phases: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
@@ -14400,6 +14408,7 @@ mod tests {
                 color: "#FFFFFF".into(),
                 font_weight: super::super::op::TitleWeight::Normal,
                 animation: super::super::op::TitleAnimation::None,
+                phases: None,
             }],
         };
         let (after_insert, _) = apply(&tl, &insert_env, &AnchorContext::empty()).unwrap();
@@ -14431,6 +14440,7 @@ mod tests {
                 color: None,
                 font_weight: Some(super::super::op::TitleWeight::Bold),
                 animation: None,
+                phases: None,
             }],
         };
         let (after_set, _) = apply(&after_insert, &set_env, &AnchorContext::empty()).unwrap();
@@ -14478,6 +14488,7 @@ mod tests {
                 color: None,
                 font_weight: None,
                 animation: None,
+                phases: None,
             }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();

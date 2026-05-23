@@ -564,8 +564,14 @@ pub enum EdlOp {
         color: String,
         /// Bold vs normal weight.
         font_weight: TitleWeight,
-        /// Entry / exit animation.
+        /// Entry / exit animation (legacy flat form).
         animation: TitleAnimation,
+        /// Optional three-phase animation. When `Some`, this is the
+        /// source of truth and `animation` is ignored at render time.
+        /// When `None`, the renderer falls back to
+        /// [`TitlePhases::from_legacy`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phases: Option<TitlePhases>,
     },
     /// Insert a title with multiple inline style runs. This keeps the
     /// common single-string title path simple while giving agents a
@@ -581,8 +587,12 @@ pub enum EdlOp {
         position: TitlePosition,
         /// Font size in pixels.
         font_size: u32,
-        /// Entry / exit animation.
+        /// Entry / exit animation (legacy flat form).
         animation: TitleAnimation,
+        /// Optional three-phase animation. When `Some`, supersedes
+        /// `animation` at render time.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phases: Option<TitlePhases>,
     },
     /// Instantiate a reusable motion graphics template into concrete title
     /// clips and runtime parameter animations. This is the agent-facing
@@ -622,8 +632,13 @@ pub enum EdlOp {
         color: Option<String>,
         /// New weight, if changing.
         font_weight: Option<TitleWeight>,
-        /// New animation, if changing.
+        /// New animation, if changing (legacy flat form).
         animation: Option<TitleAnimation>,
+        /// New three-phase animation, if changing. Setting this writes
+        /// to the title's `phases` metadata; the renderer prefers it
+        /// over `animation` when both are present.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phases: Option<TitlePhases>,
     },
     /// Insert a burned-in caption overlay on the project's Titles
     /// track. Captions are represented as graph nodes, not a render
@@ -1221,6 +1236,95 @@ pub enum TitleAnimation {
     SlideIn,
     /// Slide out off-screen on the side matching the position.
     SlideOut,
+}
+
+/// Per-phase animation kind. Add variants over time; keep snake_case serde.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TitlePhaseKind {
+    /// Fade alpha 0 → 1 (entrance) or 1 → 0 (exit) over the phase duration.
+    Fade,
+    /// Slide the title's x/y from off-screen to resting (entrance) or
+    /// resting to off-screen (exit) over the phase duration.
+    Slide,
+    /// Instantaneous show/hide at the phase boundary. v1 renders the
+    /// same as no phase at all; the variant exists so callers can mark
+    /// intent ("pop in") without falling back to legacy `None`.
+    Pop,
+}
+
+/// A single phase of a title animation.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TitlePhase {
+    /// Kind of animation this phase plays.
+    pub kind: TitlePhaseKind,
+    /// Phase duration in seconds. `None` means the renderer picks a
+    /// default (500 ms today).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_s: Option<f64>,
+    /// Per-character/word stagger in seconds. `0`/`None` is simultaneous.
+    /// v1 preserves the value through serialization but the render
+    /// layer does not yet honor it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stagger_s: Option<f64>,
+}
+
+/// Three-phase title animation: entrance, highlight, exit. Any phase
+/// may be absent. When all three are absent the title pops on/off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct TitlePhases {
+    /// Lead-in phase played at `start_s`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entrance: Option<TitlePhase>,
+    /// Mid-title accent (e.g. brief alpha dip + recover).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<TitlePhase>,
+    /// Lead-out phase ending at `end_s`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<TitlePhase>,
+}
+
+impl TitlePhases {
+    /// Lower a legacy flat [`TitleAnimation`] into phase form. This is
+    /// the bridge that lets the render layer treat the flat enum as
+    /// syntactic sugar over a phase set, so there is exactly one
+    /// rendering code path.
+    pub fn from_legacy(animation: TitleAnimation) -> Self {
+        let fade = || TitlePhase {
+            kind: TitlePhaseKind::Fade,
+            duration_s: None,
+            stagger_s: None,
+        };
+        let slide = || TitlePhase {
+            kind: TitlePhaseKind::Slide,
+            duration_s: None,
+            stagger_s: None,
+        };
+        match animation {
+            TitleAnimation::None => Self::default(),
+            TitleAnimation::FadeIn => Self {
+                entrance: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::FadeOut => Self {
+                exit: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::FadeInOut => Self {
+                entrance: Some(fade()),
+                exit: Some(fade()),
+                ..Self::default()
+            },
+            TitleAnimation::SlideIn => Self {
+                entrance: Some(slide()),
+                ..Self::default()
+            },
+            TitleAnimation::SlideOut => Self {
+                exit: Some(slide()),
+                ..Self::default()
+            },
+        }
+    }
 }
 
 /// One styled run inside a rich title.
