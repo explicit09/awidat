@@ -6078,3 +6078,22 @@ button {
   --border-soft: rgba(255, 255, 255, 0.04);
   --border-strong: rgba(255, 255, 255, 0.12);
 }
+
+/* ─── D1 · Density tokens ──────────────────────────────────────────
+   Pro NLE workstation density. Drops base font from ~12.5 to 12,
+   captions to 10, button height from 28 to 26, panel radii from
+   8 to 4. Single-spot override so every component absorbs the
+   tighter scale without per-file edits.
+   Only overrides vars that exist in src/ui/tokens.css. */
+:root {
+  --text-body: 0.75rem !important;            /* 12px (was 12.5) */
+  --text-body-sm: 0.6875rem !important;       /* 11px (was 11.5) */
+  --text-caption: 0.625rem !important;        /* 10px (unchanged) */
+  --text-micro: 0.5625rem !important;         /* 9px (was 10) */
+  --text-label: 0.625rem !important;          /* 10px (was 11) */
+  --text-timecode: 0.75rem !important;        /* 12px mono (unchanged) */
+  --layout-btn-h: 1.625rem !important;        /* 26px (was 26px px-unit → rem) */
+  --radius-md: 0.25rem !important;            /* 4px (was 8px) */
+  --radius-sm: 0.1875rem !important;          /* 3px (was 6px) */
+  --radius-xs: 0.125rem !important;           /* 2px (was 4px) */
+}
