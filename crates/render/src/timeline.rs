@@ -1187,8 +1187,11 @@ fn read_reframe_path(package: Option<&TrackingPackage>, clip_id: &str) -> Option
 }
 
 fn reframe_path_plan(path: &ReframePath) -> Option<ReframePathPlan> {
-    let mut keyframes = path
-        .keyframes
+    // Re-smooth the authored keyframes at lowering time so the stored
+    // path stays raw evidence; re-rendering with a different policy
+    // works by changing `smoothing` rather than re-authoring.
+    let smoothed = crate::reframe_smoothing::smooth_keyframes(&path.keyframes, path.smoothing);
+    let mut keyframes = smoothed
         .iter()
         .filter_map(|keyframe| {
             let center_x = keyframe.center[0];
@@ -9755,7 +9758,7 @@ mod tests {
                         confidence: Some(0.89),
                     },
                 ],
-                smoothing: ReframeSmoothing::Moderate,
+                smoothing: ReframeSmoothing::None,
                 evidence_track_id: Some("speaker-face".into()),
                 safe_area: Some("mobile".into()),
             }],
