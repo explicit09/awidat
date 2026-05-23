@@ -1,3 +1,4 @@
+export { BrandIcon, type BrandIconProps, type SimpleIconShape } from "./BrandIcon";
 export { Button, type ButtonProps } from "./primitives/Button";
 export { IconButton, type IconButtonProps } from "./primitives/IconButton";
 export { Pill, PILL_STATUSES, type PillStatus, type PillProps } from "./primitives/Pill";

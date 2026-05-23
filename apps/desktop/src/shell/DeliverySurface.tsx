@@ -14,7 +14,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { siInstagram, siTiktok, siYoutube } from "simple-icons";
 import {
+  BrandIcon,
   Button,
   Card,
   ConfidenceMeter,
@@ -23,6 +25,7 @@ import {
   Stack,
   cn,
   type PreflightSeverity,
+  type SimpleIconShape,
 } from "../ui";
 import podcastWide from "./assets/podcast-wide.jpg";
 import {
@@ -86,13 +89,40 @@ export type DeliverySurfaceProps = {
   onAgentRepair?: (finding: PreflightFinding) => void;
 };
 
-const TARGET_META: Record<
-  DeliveryTargetKey,
-  { icon: LucideIcon; label: string; spec: string; kind: "video" | "asset" }
-> = {
-  youtube: { icon: Play, label: "YouTube", spec: "1080p · 16:9 · h264", kind: "video" },
-  tiktok: { icon: FileVideo, label: "TikTok", spec: "1080p · 9:16 · h264", kind: "video" },
-  instagram: { icon: Square, label: "Instagram", spec: "1080p · 1:1 / 9:16", kind: "video" },
+type TargetMeta = {
+  /** Lucide fallback (used by asset rows: captions / cover / custom). */
+  icon: LucideIcon;
+  /** Official brand glyph for platform rows. When present, used in
+   *  place of the lucide icon and tinted with the brand color when
+   *  the row is selected. */
+  brand?: SimpleIconShape;
+  label: string;
+  spec: string;
+  kind: "video" | "asset";
+};
+
+const TARGET_META: Record<DeliveryTargetKey, TargetMeta> = {
+  youtube: {
+    icon: Play,
+    brand: siYoutube,
+    label: "YouTube",
+    spec: "1080p · 16:9 · h264",
+    kind: "video",
+  },
+  tiktok: {
+    icon: FileVideo,
+    brand: siTiktok,
+    label: "TikTok",
+    spec: "1080p · 9:16 · h264",
+    kind: "video",
+  },
+  instagram: {
+    icon: Square,
+    brand: siInstagram,
+    label: "Instagram",
+    spec: "1080p · 1:1 / 9:16",
+    kind: "video",
+  },
   captions: { icon: Captions, label: "Captions", spec: "SRT + VTT", kind: "asset" },
   cover: { icon: ImageIcon, label: "Cover", spec: "1280×720 PNG", kind: "asset" },
   custom: { icon: FileImage, label: "Custom frame", spec: "User-selected", kind: "asset" },
@@ -649,14 +679,30 @@ function TargetsRail({
                     : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] hover:border-[var(--color-text-muted)]",
                 )}
               >
-                <Icon
-                  className={cn(
-                    "h-3.5 w-3.5 shrink-0 stroke-[1.75]",
-                    target.active
-                      ? "text-[var(--color-brand-secondary)]"
-                      : "text-[var(--color-text-muted)]",
-                  )}
-                />
+                {meta.brand ? (
+                  <BrandIcon
+                    icon={meta.brand}
+                    tinted={target.active}
+                    className={cn(
+                      "h-4 w-4 shrink-0",
+                      target.active ? "" : "opacity-60",
+                    )}
+                    style={
+                      target.active
+                        ? undefined
+                        : { color: "var(--color-text-muted)" }
+                    }
+                  />
+                ) : (
+                  <Icon
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0 stroke-[1.75]",
+                      target.active
+                        ? "text-[var(--color-brand-secondary)]"
+                        : "text-[var(--color-text-muted)]",
+                    )}
+                  />
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="text-[var(--text-body-sm)] font-medium text-[var(--color-text-primary)]">
                     {target.label ?? meta.label}
