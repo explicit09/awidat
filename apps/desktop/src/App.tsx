@@ -781,13 +781,45 @@ function App() {
   }, [items]);
 
   const conversation: ActivityEntry[] = useMemo(() => {
-    return items
-      .filter(
-        (it): it is ConversationSourceItem =>
-          it.kind === "user_input" || it.kind === "text",
-      )
-      .slice(-8)
-      .map((it) => conversationFor(it));
+    // Walk items in order. A turn that produced only tool_calls and
+    // no narrative text would otherwise render no agent reply at all —
+    // for the user, that reads as "agent didn't respond". To make the
+    // turn visible, synthesize a one-line placeholder when at least
+    // one tool call landed between a user_input and the next agent
+    // text (or the end of the stream).
+    const out: ActivityEntry[] = [];
+    let toolCountSinceLastUser = 0;
+    let textSinceLastUser = false;
+    let lastUserAt = -1;
+    const flushSilentTurn = () => {
+      if (toolCountSinceLastUser > 0 && !textSinceLastUser && lastUserAt >= 0) {
+        out.push({
+          id: `silent-${lastUserAt}`,
+          timestamp: shortTime(),
+          text: `Agent ran ${toolCountSinceLastUser} tool${
+            toolCountSinceLastUser === 1 ? "" : "s"
+          } without a written reply. Expand System activity for details.`,
+          kind: "assistant",
+        });
+      }
+    };
+    for (let i = 0; i < items.length; i += 1) {
+      const it = items[i];
+      if (it.kind === "user_input") {
+        flushSilentTurn();
+        toolCountSinceLastUser = 0;
+        textSinceLastUser = false;
+        lastUserAt = i;
+        out.push(conversationFor(it));
+      } else if (it.kind === "text") {
+        textSinceLastUser = true;
+        out.push(conversationFor(it));
+      } else if (it.kind === "tool_call") {
+        toolCountSinceLastUser += 1;
+      }
+    }
+    flushSilentTurn();
+    return out.slice(-12);
   }, [items]);
 
   const activeJobs = useMemo(
