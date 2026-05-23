@@ -124,16 +124,25 @@ fn render(timeline: &Timeline, start_s: f64, end_s: f64, line_cap: usize) -> Str
     let mut total_visible = 0usize;
     let mut total_clips = 0usize;
     let mut total_duration_s = 0.0_f64;
+    // Track inventory — gathered up front so the header can enumerate
+    // *every* track (name, kind, clip count) even when a track has no
+    // clips. Without this the agent sees `tracks=3` but only clip
+    // lines from tracks that actually have content, so empty tracks
+    // are invisible. Fixes the recurring "what's the name of the
+    // empty 3rd track" follow-up.
+    let mut track_summaries: Vec<String> = Vec::new();
 
     for child in &timeline.tracks.children {
         if let StackChild::Track(track) = child {
             let mut t_cursor = 0.0_f64;
+            let mut track_clip_count = 0usize;
             for tchild in &track.children {
                 let dur = child_duration_s(tchild);
                 let clip_start = t_cursor;
                 let clip_end = t_cursor + dur;
                 t_cursor = clip_end;
                 total_clips += 1;
+                track_clip_count += 1;
                 total_duration_s = total_duration_s.max(t_cursor);
 
                 if clip_end <= start_s || clip_start >= end_s {
@@ -146,6 +155,19 @@ fn render(timeline: &Timeline, start_s: f64, end_s: f64, line_cap: usize) -> Str
                 lines.push(truncate(line, MAX_LINE_LENGTH));
                 total_visible += 1;
             }
+            let kind_label = match track.kind {
+                awidat_proto::otio::TrackKind::Video => "video",
+                awidat_proto::otio::TrackKind::Audio => "audio",
+            };
+            let suffix = if track_clip_count == 0 {
+                " EMPTY".to_string()
+            } else {
+                String::new()
+            };
+            track_summaries.push(format!(
+                "{:?}({} {}ch){}",
+                track.name, kind_label, track_clip_count, suffix
+            ));
         } else if let StackChild::Stack(_) | StackChild::Clip(_) | StackChild::Gap(_) = child {
             // Top-level non-track stack children: count but don't fold
             // into a track row (rare in v1).
@@ -154,13 +176,19 @@ fn render(timeline: &Timeline, start_s: f64, end_s: f64, line_cap: usize) -> Str
 
     append_visible_timeline_markers(timeline, start_s, end_s, &mut lines, line_cap);
 
+    let track_list = if track_summaries.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[{}]", track_summaries.join(", "))
+    };
     let header = format!(
-        "timeline name={:?} window=[{:.3}s..{:.3}s) total_duration={:.3}s tracks={}",
+        "timeline name={:?} window=[{:.3}s..{:.3}s) total_duration={:.3}s tracks={}={}",
         timeline.name,
         start_s,
         end_s,
         total_duration_s,
         timeline.tracks.children.len(),
+        track_list,
     );
     let footer = if total_visible == 0 {
         format!(
@@ -546,6 +574,55 @@ mod tests {
         assert!(out.content.contains("clip \"clip-1\""));
         assert!(!out.content.contains("clip \"clip-0\""));
         assert!(!out.content.contains("clip \"clip-2\""));
+    }
+
+    #[tokio::test]
+    async fn header_enumerates_every_track_including_empty_ones() {
+        // Three tracks: V1 (3 clips), A1 (0 clips), V2 (0 clips).
+        // The header must list every track by name + kind + clip
+        // count, including the empty ones, so the agent can address
+        // them by exact name without asking the user.
+        let dir = tempfile::tempdir().unwrap();
+        let mut project = Project::init(dir.path()).unwrap();
+        let mut v1 = Track::empty("V1", TrackKind::Video);
+        for i in 0..3 {
+            let mut c = Clip::empty(format!("clip-{i}"));
+            c.media_reference =
+                MediaReference::External(ExternalReference::new(format!("raw/clip-{i}.mp4")));
+            c.source_range = Some(TimeRange::new(
+                RationalTime::zero(24.0),
+                RationalTime::new(5.0 * 24.0, 24.0),
+            ));
+            v1.children.push(awidat_proto::otio::TrackChild::Clip(c));
+        }
+        let a1 = Track::empty("A1", TrackKind::Audio);
+        let v2 = Track::empty("V2", TrackKind::Video);
+        project
+            .timeline
+            .tracks
+            .children
+            .push(awidat_proto::otio::StackChild::Track(v1));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(awidat_proto::otio::StackChild::Track(a1));
+        project
+            .timeline
+            .tracks
+            .children
+            .push(awidat_proto::otio::StackChild::Track(v2));
+        project.write(dir.path()).unwrap();
+
+        let out = ViewTimelineTool
+            .handle(invoke(serde_json::json!({})), ctx_at(dir.path()))
+            .await
+            .unwrap();
+        let header = out.content.lines().next().unwrap();
+        assert!(header.contains("tracks=3="), "got header: {header}");
+        assert!(header.contains("\"V1\"(video 3ch)"), "got header: {header}");
+        assert!(header.contains("\"A1\"(audio 0ch) EMPTY"), "got header: {header}");
+        assert!(header.contains("\"V2\"(video 0ch) EMPTY"), "got header: {header}");
     }
 
     #[tokio::test]
