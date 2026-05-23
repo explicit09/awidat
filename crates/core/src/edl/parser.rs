@@ -233,6 +233,7 @@ enum OpKind {
     RippleTrim,
     DeleteGap,
     TrimTrackTail,
+    InsertTrack,
     ApplyMulticamPlan,
     InsertTransition,
     DeleteTransition,
@@ -296,6 +297,7 @@ impl OpBuilder {
             "Ripple Trim" => OpKind::RippleTrim,
             "Delete Gap" => OpKind::DeleteGap,
             "Trim Track Tail" => OpKind::TrimTrackTail,
+            "Insert Track" => OpKind::InsertTrack,
             "Apply Multicam Plan" => OpKind::ApplyMulticamPlan,
             "Insert Transition" => OpKind::InsertTransition,
             "Delete Transition" => OpKind::DeleteTransition,
@@ -639,6 +641,35 @@ impl OpBuilder {
                     }
                 })?;
                 Ok(EdlOp::TrimTrackTail { track })
+            }
+            OpKind::InsertTrack => {
+                let name = take_field_string(&mut fields, "name").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "name".into(),
+                    }
+                })?;
+                let kind_raw = take_field_string(&mut fields, "kind").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "kind".into(),
+                    }
+                })?;
+                let kind = parse_insert_track_kind(&kind_raw, head)?;
+                let at_position = take_field_string(&mut fields, "at_position")
+                    .map(|s| {
+                        s.parse::<usize>().map_err(|e| EdlParseError::BadField {
+                            line: head,
+                            raw: format!("+ at_position: {s}"),
+                            message: format!("at_position must be a non-negative integer: {e}"),
+                        })
+                    })
+                    .transpose()?;
+                Ok(EdlOp::InsertTrack {
+                    name,
+                    kind,
+                    at_position,
+                })
             }
             OpKind::ApplyMulticamPlan => Ok(EdlOp::ApplyMulticamPlan {
                 plan: take_required_json::<MulticamApplyPlan>(&mut fields, "plan_json", head)?,

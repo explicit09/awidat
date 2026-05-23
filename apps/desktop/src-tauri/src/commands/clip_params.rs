@@ -16,7 +16,7 @@
 //! - `set_clip_transform` — no `SetTransform` EDL op exists. Deferred.
 
 use awidat_core::edl::{AnchorContext, EdlEnvelope, EdlOp, apply};
-use awidat_core::edl::op::Anchor;
+use awidat_core::edl::op::{Anchor, InsertTrackKind};
 use awidat_proto::project::Project;
 use tauri::{AppHandle, State};
 
@@ -300,6 +300,40 @@ pub async fn trim_timeline_tail(
 
     crate::events::emit_timeline_changed(&app, &project_root);
     Ok(())
+}
+
+/// Insert a new empty track on the timeline. `kind` is `"video"`,
+/// `"audio"`, or `"auto"` (infer from `name`). Idempotent on
+/// `(name, kind)`; errors when the name exists with a different kind.
+#[tauri::command]
+pub async fn insert_timeline_track(
+    app: AppHandle,
+    state: State<'_, AwidatState>,
+    name: String,
+    kind: String,
+) -> Result<(), String> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("name must not be empty".into());
+    }
+    let parsed_kind = match kind.trim().to_ascii_lowercase().as_str() {
+        "video" => InsertTrackKind::Video,
+        "audio" => InsertTrackKind::Audio,
+        "auto" | "" => InsertTrackKind::Auto,
+        other => return Err(format!("kind must be 'video' | 'audio' | 'auto', got {other:?}")),
+    };
+    let op = EdlOp::InsertTrack {
+        name: trimmed.clone(),
+        kind: parsed_kind,
+        at_position: None,
+    };
+    apply_single_op(
+        &app,
+        &state,
+        op,
+        &format!("insert track {trimmed:?} (kind={kind})"),
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------

@@ -187,6 +187,7 @@ export function TimelinePane() {
             ? "no tracks yet"
             : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
         </span>
+        <AddTrackButton />
         <ZoomControls />
       </header>
       <div className="timeline-stage" ref={stageRef}>
@@ -226,6 +227,72 @@ function ZoomControls() {
         </button>
         <button type="button" onClick={trackZoomIn} aria-label="Grow tracks">▴</button>
       </div>
+    </div>
+  );
+}
+
+/** "+ Track" button. Single click opens a tiny menu with Video / Audio.
+ *  Names auto-pick the next free V or A slot to match the renderer's
+ *  V/A naming convention. */
+function AddTrackButton() {
+  const [open, setOpen] = useState(false);
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  const refresh = useTimelineStore((s) => s.refresh);
+
+  const nextName = (kind: "video" | "audio") => {
+    const prefix = kind === "video" ? "V" : "A";
+    const used = new Set(snapshot.tracks.map((t) => t.name));
+    for (let n = 1; n < 100; n++) {
+      const candidate = `${prefix}${n}`;
+      if (!used.has(candidate)) return candidate;
+    }
+    return `${prefix}${snapshot.tracks.length + 1}`;
+  };
+
+  async function add(kind: "video" | "audio") {
+    setOpen(false);
+    try {
+      await invoke("insert_timeline_track", {
+        name: nextName(kind),
+        kind,
+      });
+      // `timeline_changed` event triggers refresh elsewhere; nudge here
+      // too so the new lane appears immediately if the listener races.
+      await refresh();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("insert_timeline_track failed", e);
+    }
+  }
+
+  return (
+    <div className="timeline-add-track" style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Add a track"
+        className="timeline-add-track-button"
+      >
+        + Track
+      </button>
+      {open ? (
+        <div className="timeline-add-track-menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void add("video")}
+          >
+            Video
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void add("audio")}
+          >
+            Audio
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

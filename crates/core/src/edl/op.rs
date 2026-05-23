@@ -253,6 +253,23 @@ pub enum EdlOp {
         /// Display name of the track to clean (e.g. `"V1"`, `"A1"`).
         track: String,
     },
+    /// Create an empty track on the timeline. Idempotent on `(name, kind)`:
+    /// if a track of the same name and kind already exists the op is a
+    /// no-op. Errors when the name exists with a different kind to keep
+    /// the V/A naming invariant the renderer relies on.
+    ///
+    /// Tracks are otherwise auto-created by `InsertClip` — this op lets a
+    /// caller (the UI's "+ Track" button, or the agent reserving lanes
+    /// before staging clips) reserve a lane without dropping a clip first.
+    InsertTrack {
+        /// Display name (e.g. `"V3"`, `"Music"`).
+        name: String,
+        /// Kind of track to create.
+        kind: InsertTrackKind,
+        /// Optional 0-based index among same-kind tracks. `None` appends.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        at_position: Option<usize>,
+    },
     /// Atomically apply accepted multicam decisions to a flattened program track.
     ApplyMulticamPlan {
         /// Multicam plan to apply.
