@@ -57,6 +57,17 @@ import { AgentStatusBadge, Button, Card, cn, IconButton, Inline, Pill, Stack, ty
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
+import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
+import {
+  DELIVERY_TARGETS,
+  useDeliveryTargetsStore,
+  type DeliveryTargetKey,
+} from "./app/deliveryTargets";
+import {
+  newQueueId,
+  useRenderQueueStore,
+  type RenderQueueEntry,
+} from "./app/renderQueue";
 import { useProposalInspectorData } from "./state/proposalAdapter";
 import { useTimelineStore } from "./timeline/store";
 import { TimelinePane } from "./timeline/TimelinePane";
@@ -82,6 +93,11 @@ import "./App.css";
 function App() {
   // Side effects (Tauri channels, menu routing, project lifecycle).
   useAppGlue();
+  // Drive the Deliver-page render queue: drains pending entries one
+  // at a time through the appropriate Tauri command. Sits at the
+  // root so it survives Deliver-tab unmounts and continues exports
+  // when the user switches back to Edit.
+  useRenderQueueWorker();
 
   const current = useProjectStore((s) => s.current);
   const refreshProject = useProjectStore((s) => s.refresh);
@@ -137,7 +153,6 @@ function App() {
   const [urlInput, setUrlInput] = useState("");
   const [commandError, setCommandError] = useState<string | null>(null);
   const [dismissedContextChips, setDismissedContextChips] = useState<string[]>([]);
-  const [deliveryTargetOverrides, setDeliveryTargetOverrides] = useState<Record<string, boolean>>({});
   const [indexerConfig, setIndexerConfig] = useState<IndexerConfigSnapshot | undefined>(undefined);
   const [indexReadiness, setIndexReadiness] = useState<IndexReadinessSnapshot | undefined>(undefined);
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
@@ -307,7 +322,7 @@ function App() {
 
   function resetSurfaceControls() {
     setDismissedContextChips([]);
-    setDeliveryTargetOverrides({});
+    useDeliveryTargetsStore.getState().clear();
   }
 
   function dismissContextChip(chip: ContextChip) {
@@ -360,24 +375,69 @@ function App() {
     }
   }
 
-  async function runTimelineExport() {
+  function runTimelineExport() {
     if (!isTauri()) return;
     setCommandError(null);
-    try {
-      await invoke("start_timeline_render");
-    } catch (e) {
-      setCommandError(String(e));
+    // Translate the user's selected delivery targets into render
+    // queue entries, ordered so any video_master lands before its
+    // video_reframe siblings (the worker hands the master mp4's
+    // path to the reframe step).
+    const selected = useDeliveryTargetsStore.getState().selected;
+    if (selected.size === 0) {
+      setCommandError(
+        "Pick at least one delivery target before exporting.",
+      );
+      return;
     }
+    const ordered: DeliveryTargetKey[] = [];
+    const queueIncludesVideo = Array.from(selected).some(
+      (key) =>
+        DELIVERY_TARGETS[key].kind === "video_master" ||
+        DELIVERY_TARGETS[key].kind === "video_reframe",
+    );
+    // If any video targets are selected, force the master render to
+    // run first so the reframes can consume it. Users who picked
+    // only TikTok/Instagram get YouTube enqueued implicitly as the
+    // master.
+    if (queueIncludesVideo && !selected.has("youtube")) {
+      ordered.push("youtube");
+    }
+    for (const key of selected) {
+      if (key !== "youtube" && DELIVERY_TARGETS[key].kind === "video_reframe") {
+        // hold reframes until after the master
+        continue;
+      }
+      if (!ordered.includes(key)) ordered.push(key);
+    }
+    for (const key of selected) {
+      if (DELIVERY_TARGETS[key].kind === "video_reframe" && !ordered.includes(key)) {
+        ordered.push(key);
+      }
+    }
+    const entries: RenderQueueEntry[] = ordered.map((key) => {
+      const spec = DELIVERY_TARGETS[key];
+      return {
+        id: newQueueId(spec.kind),
+        targetId: key,
+        label: spec.label,
+        kind: spec.kind,
+        status: "pending" as const,
+        enqueuedAt: Date.now(),
+        reframeWidth: spec.width,
+        reframeHeight: spec.height,
+        reframeBitrateKbps: spec.videoBitrateKbps,
+        stillKind: spec.stillKind,
+      };
+    });
+    useRenderQueueStore.getState().enqueue(entries);
   }
 
   function toggleDeliveryTarget(key: string) {
-    const next = deliveryTargetOverrides[key] === undefined
-      ? !effectiveDeliveryTargets.some((target) => target.key === key && target.active)
-      : !deliveryTargetOverrides[key];
-    setDeliveryTargetOverrides((previous) => ({
-      ...previous,
-      [key]: next,
-    }));
+    if (key in DELIVERY_TARGETS) {
+      useDeliveryTargetsStore
+        .getState()
+        .toggle(key as DeliveryTargetKey);
+    }
   }
 
   function setDeliveryRepair() {
@@ -1053,13 +1113,14 @@ function App() {
     [completedJobKinds, timelineDuration],
   );
 
+  const selectedDeliveryTargets = useDeliveryTargetsStore((s) => s.selected);
   const effectiveDeliveryTargets: DeliveryTarget[] = useMemo(
     () =>
       realDeliveryTargets.map((target) => ({
         ...target,
-        active: deliveryTargetOverrides[target.key] ?? target.active,
+        active: selectedDeliveryTargets.has(target.key as DeliveryTargetKey),
       })),
-    [deliveryTargetOverrides, realDeliveryTargets],
+    [selectedDeliveryTargets, realDeliveryTargets],
   );
 
   const realPreflightFindings: PreflightFinding[] = useMemo(() => {
