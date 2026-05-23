@@ -1348,6 +1348,7 @@ function App() {
       focused={agentFocusMode}
       onToggleFocus={() => setAgentFocusMode((focused) => !focused)}
       onSelectChatSession={(session) => void selectChatSession(session)}
+      onOpenHistory={() => void refreshChatSessions()}
       onNewChat={() => void startNewChat()}
       onSubmit={(command) => void runEngineCommand(command)}
       onCancel={() => {

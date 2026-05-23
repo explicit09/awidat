@@ -1,6 +1,5 @@
 import {
   ChevronDown,
-  ChevronRight,
   CircleStop,
   History,
   ListChecks,
@@ -128,6 +127,11 @@ export type CommandRailProps = {
   onRemoveChip?: (chip: ContextChip, index: number) => void;
   /** Called when the user loads a saved chat. */
   onSelectChatSession?: (session: ChatSessionSummary) => void;
+  /** Fired when the user opens the chat-history dropdown. Host
+   *  refetches the chat list to pick up sessions that landed since
+   *  initial mount (running turns, sessions started in other windows,
+   *  the user's reopen-and-test workflow). */
+  onOpenHistory?: () => void;
   /** Called when the user starts a fresh chat. */
   onNewChat?: () => void;
   /** Called when the user enters/leaves focus mode. */
@@ -161,6 +165,7 @@ export function CommandRail({
   onSuggestion,
   onRemoveChip,
   onSelectChatSession,
+  onOpenHistory,
   onNewChat,
   onToggleFocus,
   permissionMode,
@@ -169,7 +174,6 @@ export function CommandRail({
   onDeleteChat,
 }: CommandRailProps) {
   const [draft, setDraft] = useState(initialDraft);
-  const [activityOpen, setActivityOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   // Log-path of the chat whose row-actions menu is open. Only one
   // menu is open at a time across both the history dropdown and the
@@ -295,7 +299,13 @@ export function CommandRail({
             "transition-[background-color,border-color] duration-[120ms]",
             "border border-transparent hover:bg-[var(--color-surface-card)]",
           )}
-          onClick={() => setHistoryOpen((open) => !open)}
+          onClick={() => {
+            setHistoryOpen((open) => {
+              const next = !open;
+              if (next) onOpenHistory?.();
+              return next;
+            });
+          }}
           disabled={chatLoading}
           aria-expanded={historyOpen}
           title="Chats"
@@ -326,7 +336,13 @@ export function CommandRail({
           </button>
           <button
             type="button"
-            onClick={() => setHistoryOpen((open) => !open)}
+            onClick={() => {
+            setHistoryOpen((open) => {
+              const next = !open;
+              if (next) onOpenHistory?.();
+              return next;
+            });
+          }}
             disabled={chatLoading}
             aria-expanded={historyOpen}
             className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-[var(--color-surface-card)] hover:text-[var(--color-text-primary)] transition-colors disabled:opacity-40 disabled:hover:bg-transparent"
@@ -396,19 +412,10 @@ export function CommandRail({
         focused ? "pb-6" : "",
       )}
     >
-      <Stack gap={focused ? "2" : "2"}>
-        {focused ? (
-          <Inline gap="2" align="center" className="px-1">
-            <span className="min-w-0 truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
-              {activeChatSession?.title ?? "New chat"}
-            </span>
-            <span className="font-mono text-[10px] text-[var(--color-text-muted)] opacity-60">Local</span>
-          </Inline>
-        ) : null}
-        {/* Borderless input with a focus-only hairline — reads as a
-            command bar, not a form. The submit cluster below sits
-            flush with the input edge so the whole thing feels like
-            one continuous control. */}
+      <Stack gap="2">
+        {/* No focus-mode chat-title label here — the active chat is
+            already highlighted in the focus-mode sidebar, so a second
+            copy above the composer is redundant chrome. */}
         <div
           className={cn(
             "awidat-composer-card rounded-[var(--radius-md)] transition-colors",
@@ -435,6 +442,19 @@ export function CommandRail({
             }
             rows={focused ? 4 : 3}
             disabled={!hasProject}
+            // Suppress WebView/macOS overlays: the password-manager
+            // key icon (autoComplete="off" + data-1p/lp/bw flags) and
+            // grammar/spell helpers that throw a colored badge into
+            // the textarea corner. None of those make sense for an
+            // agent command bar.
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore="true"
+            data-form-type="other"
             className={cn(
               "w-full resize-none bg-transparent px-3 py-2.5",
               "text-[var(--text-body)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]",
@@ -670,50 +690,11 @@ export function CommandRail({
             </Section>
           ) : null}
 
-          {/* Activity log */}
-          {activity.length > 0 ? (
-            <Section label="System activity">
-              <button
-                type="button"
-                onClick={() => setActivityOpen((x) => !x)}
-                className="flex w-full items-center gap-1 text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
-              >
-                {activityOpen ? (
-                  <ChevronDown className="h-3 w-3 stroke-[1.75]" />
-                ) : (
-                  <ChevronRight className="h-3 w-3 stroke-[1.75]" />
-                )}
-                <span className="font-mono">
-                  {activity.length} {activity.length === 1 ? "entry" : "entries"}
-                </span>
-              </button>
-              {activityOpen ? (
-                <Stack gap="1" className="mt-2 max-h-[360px] overflow-y-auto pr-1">
-                  {activity.map((a) => (
-                    <div
-                      key={a.id}
-                      className={cn(
-                        "rounded-[var(--radius-sm)] border px-2 py-1.5 text-[var(--text-caption)]",
-                        a.kind === "result"
-                          ? "border-[var(--color-border-subtle)] bg-[var(--color-surface-input)]"
-                          : "border-transparent bg-transparent",
-                      )}
-                    >
-                      <div className="flex min-w-0 items-baseline gap-2">
-                        <span className="shrink-0 font-mono text-[var(--color-text-muted)]">{a.timestamp}</span>
-                        <span className="min-w-0 truncate text-[var(--color-text-secondary)] leading-snug">{a.text}</span>
-                      </div>
-                      {a.detail ? (
-                        <p className="mt-1 line-clamp-3 pl-[3.25rem] leading-snug text-[var(--color-text-muted)]">
-                          {a.detail}
-                        </p>
-                      ) : null}
-                    </div>
-                  ))}
-                </Stack>
-              ) : null}
-            </Section>
-          ) : null}
+          {/* Activity log was here — removed per user feedback. Tool
+              calls are already surfaced inline inside each turn block
+              (see ConversationTurnBlock → ToolCallRow), so the
+              "System activity" section was just a duplicate of the
+              same information rendered as a card. */}
 
           {/* Suggested next actions */}
           {suggestions.length > 0 ? (
