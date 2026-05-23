@@ -1808,11 +1808,15 @@ function RightEditPanel({
         onChange={onChange}
       />
       {/* Transcript owns its own scroll (virtualized list); the other
-       *  tabs are short forms / commit logs that scroll the whole pane. */}
+       *  tabs are short forms / commit logs that scroll the whole pane.
+       *  Transcript variant needs `display: flex` so the .transcript-pane
+       *  child's `flex: 1` resolves to the available height — without it
+       *  the pane collapses to natural content height and the inner
+       *  .transcript-scroll has nothing to scroll within. */}
       <div
         className={
           active === "transcript"
-            ? "min-h-0 flex-1 overflow-hidden"
+            ? "min-h-0 flex-1 flex flex-col overflow-hidden"
             : "min-h-0 flex-1 overflow-y-auto"
         }
       >
