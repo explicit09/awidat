@@ -12,7 +12,7 @@ import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, Redo2, Settings as SettingsIcon, Share2, Undo2 } from "lucide-react";
+import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, Redo2, RefreshCw, Settings as SettingsIcon, Share2, Undo2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import wordmark from "./brand/awidat-wordmark.svg";
 import { useAgentStore } from "./agent/store";
@@ -975,6 +975,20 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode, completedJobKinds.size, activeJobs.length]);
 
+  // Re-poll readiness when the user comes back to the window. Covers
+  // the case where indexer subprocesses kept writing sidecars while
+  // the user was in another app, or where the dispatcher's live event
+  // stream was lost (orphaned subprocesses from a previous binary
+  // session — the disk state is the source of truth either way).
+  useEffect(() => {
+    function onFocus() {
+      void loadIndexReadiness();
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, demoMode]);
+
   // User-attached clips from the composer's @-mention picker. Keyed
   // by the asset id so the same clip can't get attached twice.
   const [pickedMediaChips, setPickedMediaChips] = useState<ContextChip[]>([]);
@@ -1647,6 +1661,7 @@ function App() {
                   void loadIndexerConfig();
                   void runIndexers();
                 }}
+                onRefresh={() => void loadIndexReadiness()}
                 onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
                 onOpenConfigPath={openConfigPath}
                 onRevealConfigPath={revealConfigPath}
@@ -2241,6 +2256,7 @@ function IndexReadinessPanel({
   indexerConfig,
   ready,
   onRunIndex,
+  onRefresh,
   onToggleIndexer,
   onOpenConfigPath,
   onRevealConfigPath,
@@ -2251,6 +2267,10 @@ function IndexReadinessPanel({
   indexerConfig?: IndexerConfigSnapshot;
   ready: boolean;
   onRunIndex: () => void;
+  /** Re-poll index readiness from disk. Needed when the dispatcher's
+   *  event stream is gone (e.g. orphaned indexer subprocesses from a
+   *  previous binary's session) so the user can manually sync. */
+  onRefresh: () => void;
   onToggleIndexer: (indexer: IndexerConfigEntry) => void;
   onOpenConfigPath: (path: string) => void;
   onRevealConfigPath: (path: string) => void;
@@ -2308,9 +2328,17 @@ function IndexReadinessPanel({
     <Stack gap="4" className="p-3">
       <Inline justify="between" align="start" gap="2">
         <Stack gap="1">
-          <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-            Index readiness
-          </span>
+          <Inline gap="1" align="center">
+            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+              Index readiness
+            </span>
+            <IconButton
+              icon={<RefreshCw />}
+              label="Refresh from disk"
+              size="sm"
+              onClick={onRefresh}
+            />
+          </Inline>
           <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
             {readyCount} of {enabledTasks.length} signals ready
             {disabledCount > 0 ? (
