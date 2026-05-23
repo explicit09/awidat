@@ -12,10 +12,12 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
+import { AgentRailCompact } from "./AgentRailCompact";
+import { STARTER_PROMPTS } from "./agentPrompts";
 
 /**
  * Command Rail — the left rail of the cockpit.
@@ -159,6 +161,34 @@ export function CommandRail({
   const [draft, setDraft] = useState(initialDraft);
   const [activityOpen, setActivityOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Rail-mode state: compact (default idle) vs expanded (active/recent).
+  const [manuallyExpanded, setManuallyExpanded] = useState(false);
+  const lastTurnAtMsRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (turns.length > 0) lastTurnAtMsRef.current = Date.now();
+  }, [turns.length]);
+  // Force re-evaluation every 5s while not running so the 30s decay fires.
+  const [tickN, setTickN] = useState(0);
+  useEffect(() => {
+    if (running) return;
+    const id = setInterval(() => setTickN((n) => n + 1), 5000);
+    return () => clearInterval(id);
+  }, [running]);
+  // When running starts, clear manual expansion so next idle goes compact.
+  useEffect(() => {
+    if (running) setManuallyExpanded(false);
+  }, [running]);
+
+  const railMode: "compact" | "expanded" = (() => {
+    if (running) return "expanded";
+    if (manuallyExpanded) return "expanded";
+    if (turns.length === 0) return "compact";
+    const ageMs = lastTurnAtMsRef.current ? Date.now() - lastTurnAtMsRef.current : Infinity;
+    return ageMs < 30_000 ? "expanded" : "compact";
+  })();
+  // Suppress unused-var warning — tickN exists to force re-renders.
+  void tickN;
   const trimmedDraft = draft.trim();
   const sendDisabledReason = !hasProject
     ? "Open a project before sending commands."
@@ -458,13 +488,23 @@ export function CommandRail({
 
       <div
         className={cn(
-          "min-h-0 flex-1 overflow-y-auto p-3",
-          (focused && !hasWork) || isOnlyEmptyState
-            ? "flex items-center justify-center"
-            : "",
+          "min-h-0 flex-1 overflow-y-auto",
+          railMode === "compact"
+            ? ""
+            : (focused && !hasWork) || isOnlyEmptyState
+              ? "flex items-center justify-center p-3"
+              : "p-3",
         )}
       >
-        {focused && !hasWork ? (
+        {railMode === "compact" ? (
+          /* ── Compact mode: summary + starters + composer + expand link ── */
+          <AgentRailCompact
+            composer={composer}
+            messageCount={turns.length}
+            onExpand={() => setManuallyExpanded(true)}
+            onUseSuggestion={(prompt) => setDraft(prompt)}
+          />
+        ) : focused && !hasWork ? (
           <div className="w-full max-w-[720px]">{composer}</div>
         ) : isOnlyEmptyState ? (
           // Nothing to do yet — vertically + horizontally centered hint
@@ -621,13 +661,30 @@ export function CommandRail({
             </Section>
           ) : null}
 
+          {/* Collapse to summary — only shown when idle and has turns */}
+          {!running && turns.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => {
+                setManuallyExpanded(false);
+                // Push timestamp into the past so decay logic keeps it compact.
+                lastTurnAtMsRef.current = 0;
+              }}
+              className="self-start text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+            >
+              Collapse to summary
+            </button>
+          ) : null}
+
           {/* The empty-state hint is rendered above the Stack (centered)
               when nothing else is present — no fallback render needed
               inside the Stack itself. */}
         </Stack>
         )}
       </div>
-      {focused && !hasWork ? null : composer}
+      {/* Composer is slotted into AgentRailCompact in compact mode;
+          render it here only in expanded mode. */}
+      {railMode === "compact" ? null : focused && !hasWork ? null : composer}
     </div>
   );
 }
@@ -786,12 +843,7 @@ function EmptyState({
   // replace the now-removed "Ask agent for first cut" button — moving
   // the agent-launch surface here lets the user pick *what kind* of
   // cut they want instead of getting a generic one.
-  const starters = [
-    "Cut this into a 60-second highlight reel.",
-    "Remove silences and filler words.",
-    "Find the strongest opening hook.",
-    "Show why each cut was made.",
-  ];
+  const starters = STARTER_PROMPTS;
   return (
     <Stack gap="2" className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-3 text-[var(--color-text-muted)]">
       <span className="text-[var(--text-caption)] leading-relaxed">
