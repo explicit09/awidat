@@ -1,7 +1,10 @@
-// Bottom-row timeline shell. Owns project refresh and delegates the editing surface.
+// Bottom-row timeline shell. Owns project refresh, the wheel-zoom
+// listener, the timeline header (zoom controls + add track), and
+// delegates the editing surface to <TimelineSurface>.
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { useTimelineStore } from "./store";
 import { useMediaStore } from "../media/store";
 import { useAgentStore } from "../agent/store";
@@ -42,22 +45,71 @@ export function TimelinePane() {
   }, [refresh]);
 
   // Refresh after every completed apply_edl OR every completed
-  // proposed_edit. Both paths can mutate the OTIO on disk:
-  //   - apply_edl Completed lands when the agent's tool handler
-  //     finishes (Allow path: agent wrote the file).
-  //   - proposed_edit Completed lands when a proposal accept /
-  //     reject finishes (Deny-with-adjustment path: desktop wrote
-  //     the file, no agent tool ran; user-initiated edits via
-  //     propose_user_edit also take this path).
-  // We watch a stable scalar (count of completions) rather than
-  // the full items array so React doesn't re-fire the effect on
-  // every text delta.
+  // proposed_edit. Both paths can mutate the OTIO on disk.
   const completedEdits = countCompletedTimelineEdits(items);
   useEffect(() => {
     if (projectReady && completedEdits > 0) {
       refresh();
     }
   }, [completedEdits, projectReady, refresh]);
+
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  // Mouse-wheel handlers — must be non-passive so cmd/ctrl+wheel can
+  // preventDefault before the browser's page-zoom kicks in. React's
+  // synthetic wheel handler is passive in modern React, so we attach
+  // manually to the underlying DOM node.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    function onWheel(event: WheelEvent) {
+      // Wheel modifier semantics on macOS:
+      //   - Real Cmd+wheel (mouse) sets `metaKey`.
+      //   - Trackpad pinch fires `wheel` with `ctrlKey: true` but
+      //     `metaKey: false` — the browser fakes ctrl for pinch.
+      // Map them to different zoom axes so users get both:
+      //   - Cmd+wheel  → horizontal time-zoom (anchored at cursor)
+      //   - pinch      → vertical track-zoom
+      // Linux/Windows users can hold real Ctrl for vertical zoom.
+      const horizontalZoom = event.metaKey;
+      const verticalZoom = event.ctrlKey && !event.metaKey;
+      if (horizontalZoom) {
+        event.preventDefault();
+        const { zoom: currentZoom, setZoom } = useTimelineStore.getState();
+        const factor = Math.exp(-event.deltaY / 240);
+        const nextZoom = currentZoom * factor;
+        const rect = el!.getBoundingClientRect();
+        const cursorContentX = (event.clientX - rect.left) + el!.scrollLeft;
+        setZoom(nextZoom);
+        // Preserve the content-x under the cursor across the zoom so
+        // the user's anchor point stays visually stable.
+        const ratio = useTimelineStore.getState().zoom / currentZoom;
+        const newContentX = cursorContentX * ratio;
+        const cursorViewportX = event.clientX - rect.left;
+        el!.scrollLeft = Math.max(0, newContentX - cursorViewportX);
+        return;
+      }
+      if (verticalZoom) {
+        event.preventDefault();
+        const { trackZoom: currentTrackZoom, setTrackZoom } =
+          useTimelineStore.getState();
+        const factor = Math.exp(-event.deltaY / 240);
+        setTrackZoom(currentTrackZoom * factor);
+        return;
+      }
+      // Shift + wheel = horizontal scroll (deltaY drives X), matching
+      // editor conventions. Without shift, deltaY is vertical scroll
+      // which the browser handles natively (.timeline-stage is
+      // overflow-y: auto).
+      if (event.shiftKey && event.deltaY !== 0 && event.deltaX === 0) {
+        event.preventDefault();
+        el!.scrollLeft += event.deltaY;
+      }
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, []);
 
   if (!projectReady) {
     return null;
@@ -72,11 +124,111 @@ export function TimelinePane() {
             ? "no tracks yet"
             : `${snapshot.duration_s.toFixed(1)}s · ${snapshot.tracks.length} track${snapshot.tracks.length === 1 ? "" : "s"}`}
         </span>
+        <AddTrackButton />
+        <ZoomControls />
       </header>
-      <div className="timeline-stage">
+      <div className="timeline-stage" ref={stageRef}>
         <TimelineSurface snapshot={snapshot} currentTime={currentTime} zoom={zoom} />
         <ProposalActions />
       </div>
     </section>
+  );
+}
+
+/** Compact +/−/fit controls for horizontal time-zoom and vertical
+ *  track-zoom. Sits in the timeline header. Keyboard shortcuts still
+ *  drive the same store actions for users who prefer the menu. */
+function ZoomControls() {
+  const zoom = useTimelineStore((s) => s.zoom);
+  const trackZoom = useTimelineStore((s) => s.trackZoom);
+  const zoomIn = useTimelineStore((s) => s.zoomIn);
+  const zoomOut = useTimelineStore((s) => s.zoomOut);
+  const fitZoom = useTimelineStore((s) => s.fitZoom);
+  const trackZoomIn = useTimelineStore((s) => s.trackZoomIn);
+  const trackZoomOut = useTimelineStore((s) => s.trackZoomOut);
+  const fitTrackZoom = useTimelineStore((s) => s.fitTrackZoom);
+  return (
+    <div className="timeline-zoom-controls">
+      <div className="timeline-zoom-group" title="Horizontal zoom (Cmd/Ctrl + wheel)">
+        <button type="button" onClick={zoomOut} aria-label="Zoom out">−</button>
+        <button type="button" onClick={fitZoom} aria-label="Reset zoom">
+          {zoom.toFixed(2)}×
+        </button>
+        <button type="button" onClick={zoomIn} aria-label="Zoom in">+</button>
+      </div>
+      <div className="timeline-zoom-group" title="Track height">
+        <button type="button" onClick={trackZoomOut} aria-label="Shrink tracks">▾</button>
+        <button type="button" onClick={fitTrackZoom} aria-label="Reset track height">
+          {trackZoom.toFixed(2)}×
+        </button>
+        <button type="button" onClick={trackZoomIn} aria-label="Grow tracks">▴</button>
+      </div>
+    </div>
+  );
+}
+
+/** "+ Track" button. Single click opens a tiny menu with Video / Audio.
+ *  Names auto-pick the next free V or A slot to match the renderer's
+ *  V/A naming convention. */
+function AddTrackButton() {
+  const [open, setOpen] = useState(false);
+  const snapshot = useTimelineStore((s) => s.snapshot);
+  const refresh = useTimelineStore((s) => s.refresh);
+
+  const nextName = (kind: "video" | "audio") => {
+    const prefix = kind === "video" ? "V" : "A";
+    const used = new Set(snapshot.tracks.map((t) => t.name));
+    for (let n = 1; n < 100; n++) {
+      const candidate = `${prefix}${n}`;
+      if (!used.has(candidate)) return candidate;
+    }
+    return `${prefix}${snapshot.tracks.length + 1}`;
+  };
+
+  async function add(kind: "video" | "audio") {
+    setOpen(false);
+    try {
+      await invoke("insert_timeline_track", {
+        name: nextName(kind),
+        kind,
+      });
+      // `timeline_changed` event triggers refresh elsewhere; nudge here
+      // too so the new lane appears immediately if the listener races.
+      await refresh();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("insert_timeline_track failed", e);
+    }
+  }
+
+  return (
+    <div className="timeline-add-track" style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Add a track"
+        className="timeline-add-track-button"
+      >
+        + Track
+      </button>
+      {open ? (
+        <div className="timeline-add-track-menu" role="menu">
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void add("video")}
+          >
+            Video
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void add("audio")}
+          >
+            Audio
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
