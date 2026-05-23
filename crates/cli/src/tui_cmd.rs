@@ -42,7 +42,8 @@ use awidat_core::tools::{
     request_user_input::RequestUserInputTool,
     search_broll::SearchBrollTool, shot_summary::ShotSummaryTool,
     start_indexing::StartIndexingTool, start_render::StartRenderTool,
-    transcript_search::TranscriptSearchTool, transition_context::TransitionContextTool,
+    stream_remux::StreamRemuxTool, transcript_search::TranscriptSearchTool,
+    transition_context::TransitionContextTool,
     update_plan::UpdatePlanTool, use_broll::UseBrollTool,
     validate_transition_choice::ValidateTransitionChoiceTool, vedit_blame::VeditBlameTool,
     vedit_branch::VeditBranchTool, vedit_changed_clip_ids::VeditChangedClipIdsTool,
@@ -227,6 +228,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(RequestUserInputTool));
     registry.register(Arc::new(TranscriptSearchTool));
     registry.register(Arc::new(StartRenderTool));
+    registry.register(Arc::new(StreamRemuxTool));
     registry.register(Arc::new(VerifyRenderTool));
     registry.register(Arc::new(ExportPackageTool));
     registry.register(Arc::new(StartLookRegionPassTool));

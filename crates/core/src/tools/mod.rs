@@ -58,6 +58,7 @@ pub mod search_broll;
 pub mod shot_summary;
 pub mod start_indexing;
 pub mod start_render;
+pub mod stream_remux;
 pub mod transcript_search;
 pub mod transition_context;
 pub mod update_plan;
