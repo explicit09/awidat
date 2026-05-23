@@ -468,6 +468,28 @@ impl Session {
         &self.project_root
     }
 
+    /// Flush the rollout recorder and tell its writer task to drain
+    /// and exit. Required when the host swaps to a different session
+    /// or shuts down — without this the writer task can still be
+    /// holding queued writes when a new session starts pointing at
+    /// the same log file, producing duplicate `SessionMeta` lines
+    /// and partial messages that break resume.
+    ///
+    /// Safe to call even when no recorder is attached (returns
+    /// immediately). Safe to call after shutdown (subsequent writes
+    /// are silent no-ops).
+    pub async fn shutdown_recorder(&self) {
+        let Some(recorder) = self.recorder.as_ref() else {
+            return;
+        };
+        // Best-effort flush before shutdown so the on-disk log is
+        // consistent for the next resume.
+        if let Err(err) = recorder.flush().await {
+            tracing::warn!(error = %err, "session: recorder flush failed during shutdown");
+        }
+        recorder.shutdown().await;
+    }
+
     /// Execute an already-approved structured plan through this session's
     /// tool registry and approval cache.
     pub async fn execute_structured_plan(

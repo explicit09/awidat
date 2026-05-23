@@ -41,21 +41,21 @@ pub async fn start_turn(
         .ok_or_else(|| "no project loaded — open or create one first".to_string())?;
 
     let session = {
-        let mut slot = state.session.lock().await;
-        match slot.as_ref() {
+        let mut slot = state.active.lock().await;
+        match slot.session.as_ref() {
             Some(s) => s.clone(),
             None => {
                 let (approval_tx, approval_rx) = mpsc::channel::<ApprovalRequest>(16);
                 let (input_tx, input_rx) = mpsc::channel::<UserInputRequest>(16);
 
-                let resume_log_path = state.resume_log_path.lock().await.clone();
+                let resume_log_path = slot.resume_log_path.clone();
                 let session = match resume_log_path {
                     Some(path) if path.is_file() => {
                         resume_session(path, approval_tx, input_tx).await?
                     }
                     _ => build_session(project_root, approval_tx, input_tx).await?,
                 };
-                *slot = Some(session.clone());
+                slot.session = Some(session.clone());
 
                 spawn_approval_bridge(app.clone(), approval_rx);
                 spawn_user_input_bridge(app.clone(), input_rx);

@@ -46,7 +46,7 @@ pub async fn list_chat_sessions(
 #[tauri::command]
 pub async fn load_chat_history(state: State<'_, AwidatState>) -> Result<ChatHistory, String> {
     let Some(project_root) = state.project_root.lock().await.clone() else {
-        *state.resume_log_path.lock().await = None;
+        state.active.lock().await.replace(None).await;
         return Ok(ChatHistory {
             session: None,
             items: Vec::new(),
@@ -54,7 +54,7 @@ pub async fn load_chat_history(state: State<'_, AwidatState>) -> Result<ChatHist
     };
 
     let Some((path, meta)) = latest_project_session(&project_root)? else {
-        *state.resume_log_path.lock().await = None;
+        state.active.lock().await.replace(None).await;
         return Ok(ChatHistory {
             session: None,
             items: Vec::new(),
@@ -77,14 +77,15 @@ pub async fn load_chat_session(
     if !same_project_root(&meta.project_root, &project_root) {
         return Err("that chat belongs to a different project".into());
     }
-    *state.session.lock().await = None;
+    // No explicit clear here — `load_history_from_path` calls
+    // `active.replace(Some(path))` which atomically shuts down the
+    // current session (if any) before swapping the resume path in.
     load_history_from_path(&state, path, meta).await
 }
 
 #[tauri::command]
 pub async fn start_new_chat_session(state: State<'_, AwidatState>) -> Result<ChatHistory, String> {
-    *state.session.lock().await = None;
-    *state.resume_log_path.lock().await = None;
+    state.active.lock().await.replace(None).await;
     Ok(ChatHistory {
         session: None,
         items: Vec::new(),
@@ -100,8 +101,10 @@ async fn load_history_from_path(
     let title = generated_session_title(&meta, &messages);
     let summary = summarize_session(&path, &meta, messages.len(), title);
     let items = messages_to_items(&meta.id, &messages);
-    *state.session.lock().await = None;
-    *state.resume_log_path.lock().await = Some(path);
+    // Atomic swap: shut down the current session (flushing its
+    // recorder) before pointing at the new resume log. Prevents two
+    // recorders from racing on the same JSONL file.
+    state.active.lock().await.replace(Some(path)).await;
     Ok(ChatHistory {
         session: Some(summary),
         items,

@@ -18,9 +18,18 @@ use tokio_util::sync::CancellationToken;
 /// All app-level state that has to outlive a single command call.
 #[derive(Default)]
 pub struct AwidatState {
-    /// Lazily-built `Session`. Reset to `None` when the project root
-    /// changes so the next turn rebuilds against the new root.
-    pub session: Mutex<Option<Arc<Session>>>,
+    /// Combined session slot — holds the lazily-built `Session` *and*
+    /// the resume log path the next session should attach to, under a
+    /// single mutex. Atomic swap is the load-bearing invariant: when
+    /// the user loads an old chat the prior session's recorder is
+    /// shutdown-and-flushed BEFORE the new resume path is set, so two
+    /// recorders can never share a log file.
+    ///
+    /// Older code reached into `session` and `resume_log_path` as two
+    /// independent mutexes; that produced the "ghost session" race
+    /// where a stale recorder kept writing to the previous chat after
+    /// the user picked a different one. See [`ActiveSession`].
+    pub active: Mutex<ActiveSession>,
     /// Active turn, if any. Set by `start_turn`, cleared on
     /// TurnEnd / Error / cancel.
     pub turn: Mutex<Option<TurnHandle>>,
@@ -29,10 +38,6 @@ pub struct AwidatState {
     /// Defaulted from `AWIDAT_DESKTOP_PROJECT` env var on startup so
     /// dev runs work without configuring.
     pub project_root: Mutex<Option<PathBuf>>,
-    /// Rollout log the next lazily-built `Session` should resume from.
-    /// Set by chat-history commands when the user opens a previous
-    /// conversation; cleared by "new chat" and project changes.
-    pub resume_log_path: Mutex<Option<PathBuf>>,
     /// Pending approval requests awaiting the user's decision, keyed
     /// by the `call_id` the frontend received in the matching
     /// `ApprovalRequest` Item.
@@ -160,6 +165,55 @@ pub struct ViewState {
     /// flavor — "user paused at 0:23" reads differently from "user
     /// is watching at 0:23."
     pub is_playing: bool,
+}
+
+/// Slot that owns the current `Session` and the rollout log it should
+/// resume from. Held under a single `Mutex` in [`AwidatState::active`]
+/// so swapping the two — clearing the old session, setting a new
+/// resume path, building a new session — is atomic and serializes
+/// against `start_turn` reads.
+///
+/// Why this matters: when the user picks a different chat from the
+/// history rail, we MUST be sure that no concurrent turn is mid-write
+/// to the old log file. The previous design used two independent
+/// mutexes (`session`, `resume_log_path`) and races were possible
+/// where the old session kept writing while the new resume path was
+/// already set. Symptom: a single rollout file with two
+/// `SessionMeta` lines, then partial messages, then resume fails
+/// silently and the next turn looks "stuck".
+#[derive(Default)]
+pub struct ActiveSession {
+    /// Lazily-built session — `None` until `start_turn` constructs
+    /// one (resuming from `resume_log_path` when present).
+    pub session: Option<Arc<Session>>,
+    /// Rollout log the next-built session should resume from. `None`
+    /// for a fresh chat; `Some(path)` when the user loaded a prior
+    /// session.
+    pub resume_log_path: Option<PathBuf>,
+}
+
+impl ActiveSession {
+    /// Atomically replace this slot's contents. Called by the
+    /// chat-history commands when the user switches chats; the
+    /// previous session (if any) is shut down and flushed before
+    /// the new resume path lands so a follow-up `start_turn` can
+    /// only see the new state.
+    pub async fn replace(&mut self, resume_log_path: Option<PathBuf>) {
+        if let Some(session) = self.session.take() {
+            session.shutdown_recorder().await;
+        }
+        self.resume_log_path = resume_log_path;
+    }
+
+    /// Clear the session pointer without touching the resume path.
+    /// Used by project-root changes — the next turn rebuilds against
+    /// the new project root, but if a resume_log_path was set it
+    /// stays the responsibility of the caller to clear/reset.
+    pub async fn clear_session(&mut self) {
+        if let Some(session) = self.session.take() {
+            session.shutdown_recorder().await;
+        }
+    }
 }
 
 /// Handle on a running turn. Owned by `AwidatState::turn`.

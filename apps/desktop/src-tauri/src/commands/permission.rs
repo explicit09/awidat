@@ -49,7 +49,9 @@ pub async fn set_permission_mode(
 
     // The system prompt includes the permission mode. Drop the cached
     // session so the next turn rebuilds with the newly selected mode.
-    *state.session.lock().await = None;
+    // Preserves any pending resume_log_path so the user's chat
+    // identity survives a permission flip.
+    state.active.lock().await.clear_session().await;
     Ok(())
 }
 
