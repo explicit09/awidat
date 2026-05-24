@@ -15,8 +15,8 @@
 //!   wired through the apply layer.
 //! - `set_clip_transform` — no `SetTransform` EDL op exists. Deferred.
 
-use awidat_core::edl::{AnchorContext, EdlEnvelope, EdlOp, apply};
 use awidat_core::edl::op::{Anchor, InsertTrackKind};
+use awidat_core::edl::{AnchorContext, EdlEnvelope, EdlOp, apply};
 use awidat_proto::project::Project;
 use tauri::{AppHandle, State};
 
@@ -44,9 +44,7 @@ async fn apply_single_op(
         .ok_or_else(|| "no project loaded".to_string())?;
 
     let project_root_buf = project_root.clone();
-    let envelope = EdlEnvelope {
-        ops: vec![op],
-    };
+    let envelope = EdlEnvelope { ops: vec![op] };
     let description_owned = description.to_string();
 
     tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -139,10 +137,18 @@ pub async fn set_clip_volume(
     }
 
     let op = EdlOp::SetVolume {
-        anchor: Anchor::ClipUuid { uuid: clip_uuid.clone() },
+        anchor: Anchor::ClipUuid {
+            uuid: clip_uuid.clone(),
+        },
         value: volume,
     };
-    apply_single_op(&app, &state, op, &format!("set volume={volume:.3} on {clip_uuid}")).await
+    apply_single_op(
+        &app,
+        &state,
+        op,
+        &format!("set volume={volume:.3} on {clip_uuid}"),
+    )
+    .await
 }
 
 /// Set the playback speed of a specific clip.
@@ -172,10 +178,18 @@ pub async fn set_clip_speed(
     }
 
     let op = EdlOp::SetSpeed {
-        anchor: Anchor::ClipUuid { uuid: clip_uuid.clone() },
+        anchor: Anchor::ClipUuid {
+            uuid: clip_uuid.clone(),
+        },
         factor: speed,
     };
-    apply_single_op(&app, &state, op, &format!("set speed={speed:.3}x on {clip_uuid}")).await
+    apply_single_op(
+        &app,
+        &state,
+        op,
+        &format!("set speed={speed:.3}x on {clip_uuid}"),
+    )
+    .await
 }
 
 /// Set audio fade in/out durations on a specific clip.
@@ -210,7 +224,9 @@ pub async fn set_clip_fade(
     }
 
     let op = EdlOp::SetAudioFade {
-        anchor: Anchor::ClipUuid { uuid: clip_uuid.clone() },
+        anchor: Anchor::ClipUuid {
+            uuid: clip_uuid.clone(),
+        },
         fade_in_s,
         fade_out_s,
     };
@@ -243,7 +259,8 @@ pub async fn trim_timeline_tail(
 
     let project_root_buf = project_root.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut project = Project::read(&project_root_buf).map_err(|e| format!("project read: {e}"))?;
+        let mut project =
+            Project::read(&project_root_buf).map_err(|e| format!("project read: {e}"))?;
         let track_names: Vec<String> = project
             .timeline
             .tracks
@@ -263,8 +280,8 @@ pub async fn trim_timeline_tail(
         }
         let envelope = EdlEnvelope { ops };
         let ctx = AnchorContext::with_project_root(&project_root_buf);
-        let (new_timeline, outcome) = apply(&project.timeline, &envelope, &ctx)
-            .map_err(|e| format!("apply: {e}"))?;
+        let (new_timeline, outcome) =
+            apply(&project.timeline, &envelope, &ctx).map_err(|e| format!("apply: {e}"))?;
         project.timeline = new_timeline;
         project
             .write(&project_root_buf)
@@ -320,7 +337,11 @@ pub async fn insert_timeline_track(
         "video" => InsertTrackKind::Video,
         "audio" => InsertTrackKind::Audio,
         "auto" | "" => InsertTrackKind::Auto,
-        other => return Err(format!("kind must be 'video' | 'audio' | 'auto', got {other:?}")),
+        other => {
+            return Err(format!(
+                "kind must be 'video' | 'audio' | 'auto', got {other:?}"
+            ));
+        }
     };
     let op = EdlOp::InsertTrack {
         name: trimmed.clone(),
@@ -343,6 +364,7 @@ pub async fn insert_timeline_track(
 
 /// Build and apply a `SetVolume` envelope to `timeline`, returning the
 /// mutated timeline. Exposed for unit tests.
+#[cfg(test)]
 pub(crate) fn apply_set_volume_inner(
     timeline: &awidat_proto::otio::Timeline,
     clip_uuid: &str,
@@ -364,6 +386,7 @@ pub(crate) fn apply_set_volume_inner(
 
 /// Build and apply a `SetSpeed` envelope to `timeline`, returning the
 /// mutated timeline. Exposed for unit tests.
+#[cfg(test)]
 pub(crate) fn apply_set_speed_inner(
     timeline: &awidat_proto::otio::Timeline,
     clip_uuid: &str,
@@ -385,6 +408,7 @@ pub(crate) fn apply_set_speed_inner(
 
 /// Build and apply a `SetAudioFade` envelope to `timeline`, returning
 /// the mutated timeline. Exposed for unit tests.
+#[cfg(test)]
 pub(crate) fn apply_set_fade_inner(
     timeline: &awidat_proto::otio::Timeline,
     clip_uuid: &str,
@@ -426,8 +450,7 @@ mod tests {
         let mut timeline = Timeline::empty("test");
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("shot-a".to_string());
-        clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/shot-a.mp4"));
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/shot-a.mp4"));
         clip.source_range = Some(TimeRange::new(
             RationalTime::zero(24.0),
             RationalTime::new(10.0 * 24.0, 24.0),
@@ -570,7 +593,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let result = apply_set_volume_inner(&timeline, "clip-001", 0.75, dir.path());
-        assert!(result.is_ok(), "apply_set_volume_inner failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "apply_set_volume_inner failed: {:?}",
+            result.err()
+        );
 
         let new_timeline = result.unwrap();
         let volume = clip_volume(&new_timeline);
@@ -578,16 +605,17 @@ mod tests {
             volume.is_some(),
             "expected awidat.volume effect on clip; got effects: {:#?}",
             {
-                let StackChild::Track(t) = new_timeline.tracks.children.first().unwrap() else { panic!() };
-                let TrackChild::Clip(c) = t.children.first().unwrap() else { panic!() };
+                let StackChild::Track(t) = new_timeline.tracks.children.first().unwrap() else {
+                    panic!()
+                };
+                let TrackChild::Clip(c) = t.children.first().unwrap() else {
+                    panic!()
+                };
                 &c.effects
             }
         );
         let v = volume.unwrap();
-        assert!(
-            (v - 0.75).abs() < 1e-9,
-            "expected volume 0.75, got {v}"
-        );
+        assert!((v - 0.75).abs() < 1e-9, "expected volume 0.75, got {v}");
     }
 
     #[test]
@@ -622,7 +650,9 @@ mod tests {
         assert!(result.is_err(), "wrong uuid should produce AnchorMiss");
         let err = result.unwrap_err();
         assert!(
-            err.contains("clip-does-not-exist") || err.contains("AnchorMiss") || err.contains("no clip"),
+            err.contains("clip-does-not-exist")
+                || err.contains("AnchorMiss")
+                || err.contains("no clip"),
             "error should mention the missing clip or anchor, got: {err}"
         );
     }
@@ -633,7 +663,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let result = apply_set_speed_inner(&timeline, "clip-005", 2.0, dir.path());
-        assert!(result.is_ok(), "apply_set_speed_inner failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "apply_set_speed_inner failed: {:?}",
+            result.err()
+        );
 
         // The apply layer may encode speed as an effect or clip metadata;
         // either is acceptable as long as the op succeeds.
@@ -670,9 +704,12 @@ mod tests {
         let timeline = minimal_timeline("clip-008");
         let dir = tempfile::tempdir().unwrap();
 
-        let result =
-            apply_set_fade_inner(&timeline, "clip-008", Some(0.5), Some(1.0), dir.path());
-        assert!(result.is_ok(), "apply_set_fade_inner failed: {:?}", result.err());
+        let result = apply_set_fade_inner(&timeline, "clip-008", Some(0.5), Some(1.0), dir.path());
+        assert!(
+            result.is_ok(),
+            "apply_set_fade_inner failed: {:?}",
+            result.err()
+        );
 
         let new_timeline = result.unwrap();
         let fade = clip_fade(&new_timeline);
@@ -680,8 +717,12 @@ mod tests {
             fade.is_some(),
             "expected awidat.audio_fade effect on clip; got effects: {:#?}",
             {
-                let StackChild::Track(t) = new_timeline.tracks.children.first().unwrap() else { panic!() };
-                let TrackChild::Clip(c) = t.children.first().unwrap() else { panic!() };
+                let StackChild::Track(t) = new_timeline.tracks.children.first().unwrap() else {
+                    panic!()
+                };
+                let TrackChild::Clip(c) = t.children.first().unwrap() else {
+                    panic!()
+                };
                 &c.effects
             }
         );
@@ -710,8 +751,7 @@ mod tests {
     fn set_fade_wrong_uuid_fails() {
         let timeline = minimal_timeline("clip-fade-real");
         let dir = tempfile::tempdir().unwrap();
-        let result =
-            apply_set_fade_inner(&timeline, "clip-fade-nope", Some(0.5), None, dir.path());
+        let result = apply_set_fade_inner(&timeline, "clip-fade-nope", Some(0.5), None, dir.path());
         assert!(result.is_err(), "wrong uuid should produce AnchorMiss");
     }
 
@@ -722,7 +762,9 @@ mod tests {
     #[test]
     fn set_volume_op_serde_roundtrip() {
         let op = EdlOp::SetVolume {
-            anchor: Anchor::ClipUuid { uuid: "c-001".into() },
+            anchor: Anchor::ClipUuid {
+                uuid: "c-001".into(),
+            },
             value: 0.8,
         };
         let json = serde_json::to_string(&op).unwrap();
@@ -733,7 +775,9 @@ mod tests {
     #[test]
     fn set_speed_op_serde_roundtrip() {
         let op = EdlOp::SetSpeed {
-            anchor: Anchor::ClipUuid { uuid: "c-002".into() },
+            anchor: Anchor::ClipUuid {
+                uuid: "c-002".into(),
+            },
             factor: 1.5,
         };
         let json = serde_json::to_string(&op).unwrap();
@@ -744,7 +788,9 @@ mod tests {
     #[test]
     fn set_audio_fade_op_serde_roundtrip() {
         let op = EdlOp::SetAudioFade {
-            anchor: Anchor::ClipUuid { uuid: "c-003".into() },
+            anchor: Anchor::ClipUuid {
+                uuid: "c-003".into(),
+            },
             fade_in_s: Some(0.5),
             fade_out_s: Some(1.0),
         };
