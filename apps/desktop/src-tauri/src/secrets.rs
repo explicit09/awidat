@@ -46,6 +46,7 @@ use tracing::{info, warn};
 const RESOLVE_AT_STARTUP: &[(&str, &str)] = &[
     (env_vars::ANTHROPIC_API_KEY, accounts::ANTHROPIC_API_KEY),
     (env_vars::HF_TOKEN, accounts::HF_TOKEN),
+    (env_vars::OPENROUTER_API_KEY, accounts::OPENROUTER_API_KEY),
 ];
 
 /// Marker that startup resolution has already run. We don't store

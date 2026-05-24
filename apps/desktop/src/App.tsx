@@ -19,6 +19,8 @@ import { useAgentStore } from "./agent/store";
 import { useProjectStore } from "./app/state";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { useMediaStore } from "./media/store";
+import { GeneratedMediaPanel } from "./media/GeneratedMediaPanel";
+import { useGeneratedMediaStore, type GeneratedMediaEntry } from "./media/generatedMediaStore";
 import { mediaStreamUrl } from "./media/mediaStreamUrl";
 import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
@@ -131,6 +133,11 @@ function App() {
   const sources = useMediaStore((s) => s.sources);
   const proxies = useMediaStore((s) => s.proxies);
   const selectedStem = useMediaStore((s) => s.selectedStem);
+  const generatedMedia = useGeneratedMediaStore((s) => s.entries);
+  const generatedMediaLoading = useGeneratedMediaStore((s) => s.loading);
+  const generatedMediaError = useGeneratedMediaStore((s) => s.error);
+  const refreshGeneratedMedia = useGeneratedMediaStore((s) => s.refresh);
+  const clearGeneratedMedia = useGeneratedMediaStore((s) => s.clear);
   const setActiveTranscriptStem = useTranscriptStore((s) => s.setActiveStem);
   const transcriptState = useTranscriptStore((s) =>
     selectedStem ? s.byStem[selectedStem] : undefined,
@@ -266,6 +273,11 @@ function App() {
     } catch (e) {
       setCommandError(String(e));
     }
+  }
+
+  async function placeGeneratedMediaOnTimeline(entry: GeneratedMediaEntry) {
+    if (!entry.video_path) return;
+    await placeMediaOnTimeline(entry.video_path);
   }
 
   async function chooseAndImportFiles() {
@@ -794,6 +806,14 @@ function App() {
       void refreshMedia();
     }
   }, [current, demoMode, refreshMedia]);
+
+  useEffect(() => {
+    if (demoMode || !isTauri() || !current) {
+      clearGeneratedMedia();
+      return;
+    }
+    void refreshGeneratedMedia();
+  }, [clearGeneratedMedia, current, demoMode, refreshGeneratedMedia]);
 
   useEffect(() => {
     void loadInitialChatHistory();
@@ -1651,6 +1671,11 @@ function App() {
               onOpenProject={() => void chooseAndOpenProject()}
               onSelectMedia={(stem) => useMediaStore.getState().select(stem)}
               onPlaceMedia={(assetId) => void placeMediaOnTimeline(assetId)}
+              generatedMedia={generatedMedia}
+              generatedMediaLoading={generatedMediaLoading}
+              generatedMediaError={generatedMediaError}
+              onRefreshGeneratedMedia={() => void refreshGeneratedMedia()}
+              onPlaceGeneratedMedia={(entry) => void placeGeneratedMediaOnTimeline(entry)}
             />
           }
         />
@@ -2129,6 +2154,11 @@ function ProjectMediaPanel({
   onOpenProject,
   onSelectMedia,
   onPlaceMedia,
+  generatedMedia,
+  generatedMediaLoading,
+  generatedMediaError,
+  onRefreshGeneratedMedia,
+  onPlaceGeneratedMedia,
 }: {
   projectName?: string;
   sourceCount: number;
@@ -2139,6 +2169,11 @@ function ProjectMediaPanel({
   onOpenProject: () => void;
   onSelectMedia: (stem: string) => void;
   onPlaceMedia: (assetId: string) => void;
+  generatedMedia: GeneratedMediaEntry[];
+  generatedMediaLoading: boolean;
+  generatedMediaError: string | null;
+  onRefreshGeneratedMedia: () => void;
+  onPlaceGeneratedMedia: (entry: GeneratedMediaEntry) => void;
 }) {
   const indexedCount = media.filter((item) => item.status === "indexed").length;
   const activeCount = media.filter((item) => item.status === "indexing" || item.status === "processing" || item.status === "partial").length;
@@ -2178,6 +2213,13 @@ function ProjectMediaPanel({
           Change project
         </Button>
       </Inline>
+      <GeneratedMediaPanel
+        entries={generatedMedia}
+        loading={generatedMediaLoading}
+        error={generatedMediaError}
+        onRefresh={onRefreshGeneratedMedia}
+        onUse={onPlaceGeneratedMedia}
+      />
       <Stack gap="2">
         {media.length > 0 ? media.map((item) => (
           <button
