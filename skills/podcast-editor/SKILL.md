@@ -21,9 +21,10 @@ tools_allowlist:
 
 # Podcast editor
 
-Use this for polishing an existing podcast/interview cut. It is not the
-episode extraction workflow; use `auto-cutter` or
-`podcast-episode-producer` first if raw pre-roll is still present.
+Use this for polishing an existing podcast/interview cut. If raw
+pre-roll is still present, first use the deterministic transcript
+trim/setup planner below to find the publishable start; do not manually
+work through pre-roll with split/delete loops.
 
 ## Workflow
 
@@ -55,14 +56,55 @@ python3 <skill-root>/scripts/audio_mix_plan.py \
   --target-lufs -16
 ```
 
-### 2. Cut only what fails the editorial test
+### 2. Build bounded cleanup EDLs
 
-Apply dead-air and filler cuts conservatively through `apply_edl`. Keep
-pauses that carry meaning: after disagreement, before a reveal, between
-speakers, or after a punchline. After each edit batch, call
-`view_timeline` to verify the graph still preserves speaker order and
-the intended source ranges. Before render/report, call `vedit_diff` and
-confirm the diff matches the polish plan.
+Prefer the CLI planners that emit one kept-range EDL, then apply that EDL
+once with `apply_edl`:
+
+```bash
+awidat plan-transcript-setup-edl <project> [--asset <asset-or-clip>]
+awidat plan-dead-air-edl <project> --min-duration-s 0.8 --silence-threshold-db -40 --keep-padding-s 0.3 [--asset <asset-or-clip>]
+awidat plan-false-start-edl <project> [--asset <asset-or-clip>]
+awidat plan-transcript-cleanup-edl <project> --min-filler-ratio 0.35 --min-filler-tokens 2 [--asset <asset-or-clip>]
+```
+
+Use `cargo run -p awidat-cli -- ...` instead of `awidat ...` when
+running from a development checkout that does not have the CLI on PATH.
+
+Apply only one planner output at a time, then call `view_timeline` and
+`vedit_diff`. Stop and report the current diff if a planner cannot
+produce an EDL or if the edit would require more than one manual
+split/delete batch.
+
+Keep pauses that carry meaning: after disagreement, before a reveal,
+between speakers, or after a punchline. Do not delete silence fragments
+by repeatedly `Split Clip` + `Delete Clip`; that is slow, hard to audit,
+and can leave the session log behind the actual timeline.
+
+### 2b. Remove in-episode production chatter
+
+Do not assume the interview is publishable just because the real episode
+has started. Podcast recordings often contain mid-interview production
+chatter: the host/guest stops to plan the next question, says "you can
+just say...", discusses how to introduce themselves, asks whether to
+restart, talks about setup, or otherwise directs the recording instead of
+answering the interview. Treat this as removable editorial content even
+when it appears inside the main interview body.
+
+Before dead-air-only cleanup, inspect semantic signals around candidate
+ranges:
+
+```bash
+read_index(channel="editorial-moments", asset_id=...)
+read_index(channel="topic", asset_id=...)
+```
+
+Cut low-score `tangent`, `dead_air`, `false_start`, and production/meta
+moments when the transcript is about recording structure rather than the
+episode topic. Preserve it only if it sets up a later high-value answer
+or the user explicitly wants behind-the-scenes material. For every such
+removal, cut linked audio and video together and verify the neighboring
+question/answer still makes sense.
 
 ### 3. Speed only slow substantive sections
 
@@ -80,9 +122,14 @@ for the delivery target before rendering when the user wants publishable
 output. Per-speaker mix imbalance still needs isolated tracks or careful
 clip-level/track-level gain decisions.
 
-Render and verify. If `ffprobe`/FFmpeg checks fail, fix the timeline or
-report the exact blocker. Do not claim completion without a render path
-or a clear reason verification could not run.
+Before final render/export, ask the user to confirm that the current
+timeline is ready to render unless they already gave explicit render
+approval in the same turn. Render and verify. If `ffprobe`/FFmpeg
+checks fail, fix the timeline or report the exact blocker. After the
+render completes, ask the user to watch/review the output and say
+whether it looks good or needs changes. Do not claim final delivery
+without a render path plus that review handoff, or a clear reason
+verification could not run.
 
 ## Rules
 

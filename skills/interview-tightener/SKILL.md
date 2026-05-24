@@ -27,7 +27,10 @@ of priority:
 
 1. **Dead air** > 1.0s (use the audio-energy index)
 2. **Filler clusters** (um/uh/repeated false-starts)
-3. **Low-score tangents** (`find_beat(kind="tangent", min_score < 0.5)`)
+3. **Production/meta-direction chatter** ("you can just say...",
+   restart/setup talk, planning the next question, instructions about
+   how to answer)
+4. **Low-score tangents** (`find_beat(kind="tangent", min_score < 0.5)`)
 
 Don't cut content for length alone. If the source is 60 minutes of
 gold, the tightened version is 60 minutes. The 20-30% target is a
@@ -67,6 +70,13 @@ Filter to score < 0.5. For each, call `inspect_moment` and check the
 high-score beat, **don't cut it** — it's setup. Otherwise add it to
 the cut list.
 
+Also scan editorial-moments/topic/transcript around the same ranges for
+in-interview production chatter. If someone stops the interview to plan
+the intro, coach an answer, discuss whether to restart, or talk about
+recording structure, add that range to the cut list even if it is spoken
+content rather than silence. Verify the surrounding question and answer
+still connect after the removal.
+
 ### 3. Apply the cuts
 
 Sort all cuts by start_s ascending. Apply them via `apply_edl` with
@@ -84,8 +94,11 @@ Running total: removed 4m 18s (8.2% of original).
 
 ### 4. Render + report
 
-Once the cut list is exhausted, render `scope="timeline"`. Final
-report:
+Once the cut list is exhausted, ask the user to confirm the timeline is
+ready for final render unless they already gave explicit render approval
+in the same turn. Then render `scope="timeline"`, poll until done, and
+ask the user to review the finished output before treating it as
+deliverable. Final report:
 
 ```
 Tightened from 47:30 to 36:18 (-23.6%).

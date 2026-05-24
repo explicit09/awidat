@@ -142,6 +142,11 @@ python3 <repo-root>/skills/auto-cutter/scripts/retake_plan.py \
 
 Cut dead air, egregious fillers, false starts, self-corrections,
 repeated content, technical glitches, and tangents that do not land.
+Also cut production/meta-direction chatter wherever it appears, even
+inside the apparent interview body: "you can just say...", "maybe we can
+ask...", restart/setup talk, off-camera planning, or instructions about
+how the interview should proceed. These are not episode content unless
+the user explicitly wants behind-the-scenes material.
 Preserve natural cadence. A perfectly de-fillered guest sounds robotic.
 For every meaningful removal, check continuity: question still matches
 answer, setup still exists for payoff, emotional tone does not jump, and
@@ -258,7 +263,8 @@ approved structure, metadata, thumbnail, and cleanup plan.
 
 Run `start_render(scope="timeline")`. Poll with `poll_render` until
 done. Tell the user the output path and approximate duration once
-it lands.
+it lands, then ask them to watch/review the output and confirm whether
+it looks good or needs changes before calling it final.
 
 After render, verify the file:
 
