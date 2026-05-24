@@ -368,17 +368,13 @@ async fn remove_from_recents(p: &std::path::Path) -> std::io::Result<()> {
 /// Internal helper for [`remove_from_recents`] that takes the recents
 /// file path explicitly. Split out so unit tests can target a tempdir
 /// instead of mutating the user's real config dir.
-async fn prune_recents_file(
-    file: &std::path::Path,
-    p: &std::path::Path,
-) -> std::io::Result<()> {
+async fn prune_recents_file(file: &std::path::Path, p: &std::path::Path) -> std::io::Result<()> {
     let existing_bytes = match fs::read(file).await {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),
     };
-    let mut existing: Vec<String> =
-        serde_json::from_slice(&existing_bytes).unwrap_or_default();
+    let mut existing: Vec<String> = serde_json::from_slice(&existing_bytes).unwrap_or_default();
     let p_str = p.to_string_lossy();
     let before = existing.len();
     existing.retain(|x| x.as_str() != p_str.as_ref());
@@ -478,18 +474,12 @@ pub async fn delete_project(
 /// matches what the UI thought it was deleting (catches rename races),
 /// and that the folder carries the Awidat sentinel so we cannot be
 /// tricked into `rm -rf`ing an unrelated directory.
-fn validate_delete_target(
-    path: &str,
-    expected_basename: &str,
-) -> Result<PathBuf, String> {
+fn validate_delete_target(path: &str, expected_basename: &str) -> Result<PathBuf, String> {
     let buf = PathBuf::from(path);
     if !buf.is_dir() {
         return Err(format!("not a directory: {path}"));
     }
-    let basename = buf
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default();
+    let basename = buf.file_name().and_then(|s| s.to_str()).unwrap_or_default();
     if basename != expected_basename {
         return Err(format!(
             "project folder was renamed (expected {expected_basename:?}, found {basename:?}); refresh and try again"
@@ -511,6 +501,12 @@ pub async fn cancel_job(state: State<'_, AwidatState>, job_id: String) -> Result
         handle.cancel.cancel();
     }
     Ok(())
+}
+
+/// Return job ids currently tracked by the live backend process.
+#[tauri::command]
+pub async fn running_job_ids(state: State<'_, AwidatState>) -> Result<Vec<String>, String> {
+    Ok(state.jobs.lock().await.keys().cloned().collect())
 }
 
 /// Path to the recents file.
@@ -576,15 +572,13 @@ mod tests {
     fn validate_delete_target_accepts_real_awidat_project() {
         let tmp = tempfile::tempdir().unwrap();
         let project = make_fake_project(tmp.path(), "demo");
-        let buf =
-            validate_delete_target(project.to_str().unwrap(), "demo").unwrap();
+        let buf = validate_delete_target(project.to_str().unwrap(), "demo").unwrap();
         assert_eq!(buf, project);
     }
 
     #[test]
     fn validate_delete_target_refuses_missing_path() {
-        let err = validate_delete_target("/no/such/awidat/project", "project")
-            .unwrap_err();
+        let err = validate_delete_target("/no/such/awidat/project", "project").unwrap_err();
         assert!(err.contains("not a directory"), "got: {err}");
     }
 
@@ -592,11 +586,8 @@ mod tests {
     fn validate_delete_target_refuses_basename_mismatch() {
         let tmp = tempfile::tempdir().unwrap();
         let project = make_fake_project(tmp.path(), "renamed-on-disk");
-        let err = validate_delete_target(
-            project.to_str().unwrap(),
-            "what-the-ui-thought",
-        )
-        .unwrap_err();
+        let err =
+            validate_delete_target(project.to_str().unwrap(), "what-the-ui-thought").unwrap_err();
         assert!(err.contains("renamed"), "got: {err}");
     }
 
@@ -606,15 +597,9 @@ mod tests {
         let bogus = tmp.path().join("definitely-not-awidat");
         std::fs::create_dir_all(&bogus).unwrap();
         std::fs::write(bogus.join("README.md"), b"not a project").unwrap();
-        let err = validate_delete_target(
-            bogus.to_str().unwrap(),
-            "definitely-not-awidat",
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("non-Awidat directory"),
-            "got: {err}"
-        );
+        let err =
+            validate_delete_target(bogus.to_str().unwrap(), "definitely-not-awidat").unwrap_err();
+        assert!(err.contains("non-Awidat directory"), "got: {err}");
     }
 
     #[tokio::test]
@@ -642,8 +627,7 @@ mod tests {
     async fn prune_recents_file_is_noop_when_entry_absent() {
         let tmp = tempfile::tempdir().unwrap();
         let recents = tmp.path().join("recents.json");
-        let initial =
-            serde_json::to_vec(&vec!["/a".to_string(), "/b".to_string()]).unwrap();
+        let initial = serde_json::to_vec(&vec!["/a".to_string(), "/b".to_string()]).unwrap();
         fs::write(&recents, &initial).await.unwrap();
 
         prune_recents_file(&recents, std::path::Path::new("/missing"))
@@ -680,7 +664,9 @@ mod tests {
 
     #[tokio::test]
     async fn project_size_bytes_errors_on_non_dir() {
-        let err = project_size_bytes("/no/such/place".into()).await.unwrap_err();
+        let err = project_size_bytes("/no/such/place".into())
+            .await
+            .unwrap_err();
         assert!(err.contains("not a directory"), "got: {err}");
     }
 }

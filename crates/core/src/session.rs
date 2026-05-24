@@ -35,6 +35,9 @@ use crate::tool::{
     ToolRegistry, UserInputRequest,
 };
 
+const DEFAULT_MAX_TURN_ITERATIONS: usize = 24;
+const ENABLE_ITERATION_COMPACTION: bool = false;
+
 /// One event emitted by the agent loop. The REPL prints these; the TUI
 /// will render them more richly later.
 #[derive(Debug, Clone)]
@@ -422,9 +425,7 @@ impl Session {
             meta.id,
         ) {
             Ok(rec) => {
-                if let Ok(registry) =
-                    crate::session_registry::SessionRegistry::open(state_root)
-                {
+                if let Ok(registry) = crate::session_registry::SessionRegistry::open(state_root) {
                     if let Err(e) = registry.set_status(
                         &resumed_from_id,
                         crate::session_registry::SessionStatus::Completed,
@@ -511,9 +512,7 @@ impl Session {
         // the rollout's `<state>/sessions/<Y>/<M>/<D>/<file>` layout
         // by walking up four parents.
         if let Some(state_root) = state_root_from_log_path(recorder.path()) {
-            if let Ok(registry) =
-                crate::session_registry::SessionRegistry::open(&state_root)
-            {
+            if let Ok(registry) = crate::session_registry::SessionRegistry::open(&state_root) {
                 let _ = registry.set_status(
                     &recorder.meta().id,
                     crate::session_registry::SessionStatus::Completed,
@@ -561,7 +560,8 @@ impl Session {
         user_input: impl Into<String>,
         cancel: CancellationToken,
     ) -> Result<(), SessionError> {
-        self.run_turn_capped(user_input, cancel, 64).await
+        self.run_turn_capped(user_input, cancel, DEFAULT_MAX_TURN_ITERATIONS)
+            .await
     }
 
     /// Like [`Session::run_turn`] but with a caller-supplied cap on
@@ -582,10 +582,7 @@ impl Session {
         // TurnStarted and drops every message captured under it,
         // so a crash/kill mid-turn doesn't poison the next session's
         // history.
-        let turn_id = self
-            .recorder
-            .as_ref()
-            .map(|rec| rec.record_turn_start());
+        let turn_id = self.recorder.as_ref().map(|rec| rec.record_turn_start());
 
         let user_msg = Message::user_text(user_input);
         if let Some(rec) = &self.recorder {
@@ -599,28 +596,22 @@ impl Session {
         // Outer loop: keep sampling until the model says end_turn (or
         // we're cancelled).
         //
-        // Cap raised to 64 after first-real-video runs surfaced the
-        // editorial-flow agent burning 8-12 iterations on legitimate
-        // bash exploration before settling into the cut.
+        // Legitimate editorial flows can burn 8-12 iterations on
+        // exploration before settling into the cut. Keep enough
+        // headroom for that, but stop well before a confused tool loop
+        // can keep mutating the timeline for dozens of cycles.
         //
-        // At 80% (52 iterations) we run a compaction pass: a separate
-        // Haiku call summarizes the conversation so far into a
-        // handoff text, and we replace history with [original user
-        // prompt + summary]. The tier-1 cache (system + tools)
-        // survives — only tier-2 (per-turn moving breakpoint)
-        // invalidates. Headroom restored without losing what was
-        // learned. Mirrors Codex/Claude Code: re-summarize what the
-        // agent already learned rather than re-retrieve.
+        // Iteration count is a poor proxy for context pressure in
+        // tool-heavy editing turns: a valid sequence of small tool
+        // calls can hit the loop threshold while the model still has
+        // plenty of context. Keep automatic in-turn compaction off
+        // unless it is driven by real token/context usage.
         let max_inner_iterations = max_iterations;
-        let compact_at_iteration = (max_inner_iterations * 4) / 5; // 80%
         let mut compacted = false;
-        // Cross-iteration trackers used to detect "silent turns" — the
-        // model called tools but never wrote narrative text. Set when
-        // any iteration emits text; set when any iteration runs a
-        // tool. At natural end-of-turn we inspect both: tools-without-
-        // text triggers one forced "summarize what you did" iteration
-        // so the user always gets a reply.
-        let mut any_text_in_turn = false;
+        // Cross-iteration tracker used to detect tool-driven turns
+        // that would otherwise end immediately after a tool result.
+        // The final model iteration must include narrative text; if it
+        // does not, we force one short text-only summary iteration.
         let mut any_tools_in_turn = false;
         let mut forced_summary = false;
         for iter in 0..max_inner_iterations {
@@ -667,15 +658,15 @@ impl Session {
                 req.cache_last_tool();
             }
 
-            // At 80% of the iteration cap, compact history once: a
-            // Haiku summarization replaces the conversation with a
-            // handoff text, restoring iteration headroom while
-            // preserving everything the agent learned.
+            // Historical note: this used to compact once at 80% of
+            // the iteration cap. That caused editorial sessions to
+            // restart from a lossy summary even when the context
+            // window was not close to full.
             //
             // Compaction failures are non-fatal — we log and continue
             // without compacting; the only cost is hitting the hard
             // stop sooner.
-            if !compacted && iter >= compact_at_iteration {
+            if should_compact_on_iteration(compacted, iter, max_inner_iterations) {
                 compacted = true;
                 let history_for_summary = self.history.lock().await.clone();
                 match crate::compact::compact_history(&self.client, &history_for_summary, &cancel)
@@ -734,9 +725,6 @@ impl Session {
             }
 
             let outcome = self.run_sampling(req, &cancel).await?;
-            if outcome.emitted_text {
-                any_text_in_turn = true;
-            }
             if matches!(outcome.stop_reason, Some(StopReason::ToolUse)) {
                 any_tools_in_turn = true;
             }
@@ -749,23 +737,16 @@ impl Session {
                     continue;
                 }
                 _ => {
-                    // The model thinks it's done. If the entire turn
-                    // produced only tool calls and no narrative text,
-                    // the chat reads as silence — the user can see
-                    // tool calls fire in the activity log but never
-                    // gets an "ok, here's what I did" reply. Run one
-                    // forced iteration that asks the model to
-                    // summarize, then close the turn for real. Guarded
-                    // by `forced_summary` so we never loop on this.
-                    if !forced_summary
-                        && any_tools_in_turn
-                        && !any_text_in_turn
+                    // The model thinks it's done. If this final
+                    // iteration produced no narrative text after prior
+                    // tool results, the chat appears to stop on a tool
+                    // row. Run one forced iteration that asks the model
+                    // to summarize, then close the turn for real.
+                    if should_force_summary(forced_summary, any_tools_in_turn, &outcome)
                         && !cancel.is_cancelled()
                     {
                         forced_summary = true;
-                        debug!(
-                            "turn ended without narrative text; forcing one summary iteration"
-                        );
+                        debug!("turn ended without narrative text; forcing one summary iteration");
                         let nudge = Message {
                             role: Role::User,
                             content: vec![ContentBlock::text(
@@ -1209,6 +1190,25 @@ struct SamplingOutcome {
     emitted_text: bool,
 }
 
+fn should_force_summary(
+    forced_summary: bool,
+    any_tools_in_turn: bool,
+    outcome: &SamplingOutcome,
+) -> bool {
+    !forced_summary
+        && any_tools_in_turn
+        && !outcome.emitted_text
+        && !matches!(outcome.stop_reason, Some(StopReason::ToolUse))
+}
+
+fn should_compact_on_iteration(compacted: bool, iter: usize, max_inner_iterations: usize) -> bool {
+    if !ENABLE_ITERATION_COMPACTION || compacted {
+        return false;
+    }
+    let compact_at_iteration = (max_inner_iterations * 4) / 5;
+    iter >= compact_at_iteration
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1289,6 +1289,34 @@ mod tests {
         let v = serde_json::json!({"edl": "line1\n\nline2\n   line3"});
         let s = summarize_args(&v);
         assert!(!s.contains('\n'), "newlines squashed: {s}");
+    }
+
+    #[test]
+    fn forces_summary_when_final_iteration_after_tools_has_no_text() {
+        let outcome = SamplingOutcome {
+            stop_reason: None,
+            usage: Usage::default(),
+            emitted_text: false,
+        };
+
+        assert!(should_force_summary(false, true, &outcome));
+    }
+
+    #[test]
+    fn does_not_force_summary_when_final_iteration_has_text() {
+        let outcome = SamplingOutcome {
+            stop_reason: None,
+            usage: Usage::default(),
+            emitted_text: true,
+        };
+
+        assert!(!should_force_summary(false, true, &outcome));
+    }
+
+    #[test]
+    fn does_not_compact_from_iteration_count_alone() {
+        assert!(!should_compact_on_iteration(false, 19, 24));
+        assert!(!should_compact_on_iteration(false, 24, 24));
     }
 
     #[test]

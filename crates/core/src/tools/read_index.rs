@@ -63,8 +63,12 @@ impl ToolHandler for ReadIndexTool {
                     },
                     "channel": {
                         "type": "string",
-                        "enum": ["transcript", "scenes", "audio_levels", "beats", "topics", "color", "summary"],
-                        "description": "Which signal to read. transcript=words+segments; scenes=shot boundaries; audio_levels=RMS+LUFS+silences; beats=tempo+BPM+beat times; topics=topic-segmentation; color=per-frame color/exposure analysis; summary=one-line overview of all channels."
+                        "enum": [
+                            "transcript", "scenes", "audio_levels", "beats", "topics",
+                            "editorial_moments", "color", "clip", "face", "gaze",
+                            "shot", "composition", "frame_quality", "summary"
+                        ],
+                        "description": "Which signal to read. transcript=words+segments; scenes=shot boundaries; audio_levels=RMS+LUFS+silences; beats=tempo+BPM+beat times; topics=topic-segmentation; editorial_moments=typed edit beats; color=per-frame color/exposure analysis; clip=CLIP frame embedding metadata; face/gaze/shot/composition/frame_quality=visual evidence channels; summary=one-line overview of all channels."
                     },
                     "offset": { "type": "integer", "minimum": 0, "description": "0-based first entry. Default 0." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 300, "description": "Max entries. Default 50, hard cap 300. For larger reads paginate via `offset`." }
@@ -87,7 +91,7 @@ impl ToolHandler for ReadIndexTool {
         let args: ReadIndexArgs = serde_json::from_value(invocation.args).map_err(|e| {
             FunctionCallError::RespondToModel(format!(
                 "read_index: invalid args ({e}). Required: {{ \"asset_id\": <str>, \
-                 \"channel\": \"transcript\"|\"scenes\"|\"audio_levels\"|\"beats\"|\"topics\"|\"color\"|\"summary\" }}."
+                 \"channel\": \"transcript\"|\"scenes\"|\"audio_levels\"|\"beats\"|\"topics\"|\"editorial_moments\"|\"color\"|\"clip\"|\"face\"|\"gaze\"|\"shot\"|\"composition\"|\"frame_quality\"|\"summary\" }}."
             ))
         })?;
 
@@ -97,12 +101,20 @@ impl ToolHandler for ReadIndexTool {
             "audio_levels" => "audio-energy",
             "beats" => "beats",
             "topics" => "topic",
+            "editorial_moments" => "editorial-moments",
             "color" => "color-analysis",
+            "clip" => "clip",
+            "face" => "face",
+            "gaze" => "gaze",
+            "shot" => "shot",
+            "composition" => "composition",
+            "frame_quality" => "frame-quality",
             "summary" => return summary(&ctx.project_root, &args.asset_id),
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "read_index: channel '{other}' not recognized. Use one of: \
-                     transcript, scenes, audio_levels, beats, topics, color, summary."
+                     transcript, scenes, audio_levels, beats, topics, editorial_moments, \
+                     color, clip, face, gaze, shot, composition, frame_quality, summary."
                 )));
             }
         };
@@ -224,6 +236,23 @@ fn project_channel(
                 "offset": offset, "limit": limit,
             })
         }
+        "editorial_moments" => {
+            let moments = data
+                .get("moments")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let total = moments.as_array().map(Vec::len).unwrap_or(0);
+            let windowed = window(&moments, offset, limit);
+            serde_json::json!({
+                "asset_id": sidecar.get("asset_id"),
+                "labeler_model": data.get("labeler_model"),
+                "topic_segments_processed": data.get("topic_segments_processed"),
+                "moments": windowed,
+                "total_moments": total,
+                "offset": offset,
+                "limit": limit,
+            })
+        }
         "color" => {
             let per_frame = data
                 .get("per_frame")
@@ -243,6 +272,117 @@ fn project_channel(
                 "per_frame": windowed,
                 "total_frames": total,
                 "offset": offset, "limit": limit,
+            })
+        }
+        "clip" => serde_json::json!({
+            "asset_id": sidecar.get("asset_id"),
+            "model": data.get("model"),
+            "embedding_dim": data.get("embedding_dim"),
+            "embedding_dtype": data.get("embedding_dtype"),
+            "frame_rate_sampled": data.get("frame_rate_sampled"),
+            "duration_s": data.get("duration_s"),
+            "frame_count": data.get("frame_count"),
+            "timestamps_s": window(
+                data.get("timestamps_s").unwrap_or(&serde_json::Value::Array(vec![])),
+                offset,
+                limit,
+            ),
+            "has_embeddings": data.get("embeddings_b64").and_then(|v| v.as_str()).is_some(),
+            "offset": offset,
+            "limit": limit,
+        }),
+        "face" => {
+            let per_frame = data
+                .get("per_frame")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let total = per_frame.as_array().map(Vec::len).unwrap_or(0);
+            serde_json::json!({
+                "asset_id": sidecar.get("asset_id"),
+                "frame_rate_sampled": data.get("frame_rate_sampled"),
+                "duration_s": data.get("duration_s"),
+                "detect_width": data.get("detect_width"),
+                "detect_height": data.get("detect_height"),
+                "frame_count": data.get("frame_count"),
+                "faces": data.get("faces"),
+                "speaker_to_face": data.get("speaker_to_face"),
+                "per_frame": window(&per_frame, offset, limit),
+                "total_frames": total,
+                "offset": offset,
+                "limit": limit,
+            })
+        }
+        "gaze" => {
+            let per_frame = data
+                .get("per_frame")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let total = per_frame.as_array().map(Vec::len).unwrap_or(0);
+            serde_json::json!({
+                "asset_id": sidecar.get("asset_id"),
+                "frame_rate_sampled": data.get("frame_rate_sampled"),
+                "detect_width": data.get("detect_width"),
+                "detect_height": data.get("detect_height"),
+                "frame_count": data.get("frame_count"),
+                "at_camera_threshold": data.get("at_camera_threshold"),
+                "source": data.get("source"),
+                "per_frame": window(&per_frame, offset, limit),
+                "total_frames": total,
+                "offset": offset,
+                "limit": limit,
+            })
+        }
+        "shot" => {
+            let shots = data
+                .get("shots")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let total = shots.as_array().map(Vec::len).unwrap_or(0);
+            serde_json::json!({
+                "asset_id": sidecar.get("asset_id"),
+                "shots": window(&shots, offset, limit),
+                "total_shots": total,
+                "thresholds": data.get("thresholds"),
+                "depends_on": data.get("depends_on"),
+                "offset": offset,
+                "limit": limit,
+            })
+        }
+        "composition" => {
+            let regions = data
+                .get("regions")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let total = regions.as_array().map(Vec::len).unwrap_or(0);
+            serde_json::json!({
+                "asset_id": sidecar.get("asset_id"),
+                "regions": window(&regions, offset, limit),
+                "total_regions": total,
+                "verification": data.get("verification"),
+                "depends_on": data.get("depends_on"),
+                "offset": offset,
+                "limit": limit,
+            })
+        }
+        "frame_quality" => {
+            let per_frame = data
+                .get("per_frame")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let total = per_frame.as_array().map(Vec::len).unwrap_or(0);
+            serde_json::json!({
+                "asset_id": sidecar.get("asset_id"),
+                "frame_rate_sampled": data.get("frame_rate_sampled"),
+                "detect_width": data.get("detect_width"),
+                "detect_height": data.get("detect_height"),
+                "frame_count": data.get("frame_count"),
+                "blur_sharp_threshold": data.get("blur_sharp_threshold"),
+                "summary": data.get("summary"),
+                "thumbnail_candidates": data.get("thumbnail_candidates"),
+                "per_frame": window(&per_frame, offset, limit),
+                "total_frames": total,
+                "offset": offset,
+                "limit": limit,
             })
         }
         _ => sidecar.clone(),
@@ -280,7 +420,14 @@ fn summary(
         ("audio_levels", "audio-energy"),
         ("beats", "beats"),
         ("topics", "topic"),
+        ("editorial_moments", "editorial-moments"),
         ("color", "color-analysis"),
+        ("clip", "clip"),
+        ("face", "face"),
+        ("gaze", "gaze"),
+        ("shot", "shot"),
+        ("composition", "composition"),
+        ("frame_quality", "frame-quality"),
     ] {
         match read_sidecar(project_root, indexer, &asset) {
             Ok(v) => {
@@ -316,6 +463,27 @@ fn summary(
                 if let Some(v) = projected.get("total_frames") {
                     entry.insert("total_frames".into(), v.clone());
                 }
+                if let Some(v) = projected.get("frame_count") {
+                    entry.insert("frame_count".into(), v.clone());
+                }
+                if let Some(v) = projected.get("total_moments") {
+                    entry.insert("total_moments".into(), v.clone());
+                }
+                if let Some(v) = projected.get("total_regions") {
+                    entry.insert("total_regions".into(), v.clone());
+                }
+                if let Some(v) = projected.get("faces") {
+                    entry.insert(
+                        "face_count".into(),
+                        serde_json::json!(v.as_array().map(Vec::len).unwrap_or(0)),
+                    );
+                }
+                if let Some(v) = projected.get("speaker_to_face") {
+                    entry.insert("speaker_to_face".into(), v.clone());
+                }
+                if let Some(v) = projected.get("has_embeddings") {
+                    entry.insert("has_embeddings".into(), v.clone());
+                }
                 summary.insert(channel.into(), serde_json::Value::Object(entry));
             }
             Err(SidecarError::NotFound { .. }) => {
@@ -338,8 +506,9 @@ const DESCRIPTION: &str = "\
 Read one channel of the footage index for an asset. Channels: \
 'transcript' (whisper words+segments), 'scenes' (shot boundaries), \
 'audio_levels' (LUFS + silences), 'beats' (tempo + beat times), 'topics' (topic segmentation), \
-'color' (per-frame color/exposure analysis), 'summary' (one-line overview \
-of all channels). Windowed channels accept \
+'editorial_moments' (typed edit beats), 'color' (per-frame color/exposure analysis), \
+'clip' (CLIP embedding metadata), 'face', 'gaze', 'shot', 'composition', \
+'frame_quality', 'summary' (one-line overview of all channels). Windowed channels accept \
 offset+limit (default 0+50). Result is capped at 8KB; page via offset \
 when truncated.\
 ";

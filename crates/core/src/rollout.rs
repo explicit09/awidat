@@ -411,6 +411,11 @@ impl Recorder {
     /// List rollout files under `state_root`, newest first. Each entry
     /// is `(path, parsed-meta)`. Files that fail to parse (no meta
     /// line) are silently skipped.
+    ///
+    /// Resumed sessions append a second `SessionMeta` line with
+    /// `resumed_from` populated after `Recorder::create` writes the
+    /// initial header. For listing, use the latest metadata line so
+    /// callers can reconstruct logical chat lineage.
     pub fn list(state_root: &Path) -> std::io::Result<Vec<(PathBuf, SessionMeta)>> {
         let sessions_dir = state_root.join("sessions");
         if !sessions_dir.exists() {
@@ -423,12 +428,7 @@ impl Recorder {
             .filter_map(|p| {
                 std::fs::read_to_string(&p)
                     .ok()
-                    .and_then(|body| body.lines().next().map(str::to_string))
-                    .and_then(|first| serde_json::from_str::<RolloutItem>(&first).ok())
-                    .and_then(|item| match item {
-                        RolloutItem::SessionMeta(m) => Some((p, m)),
-                        _ => None,
-                    })
+                    .and_then(|body| latest_meta_in_body(&body).map(|meta| (p, meta)))
             })
             .collect();
         out.sort_by(|a, b| b.1.started_at.cmp(&a.1.started_at));
@@ -581,6 +581,18 @@ fn write_line<W: std::io::Write>(w: &mut W, item: &RolloutItem) -> std::io::Resu
     serde_json::to_writer(&mut *w, item)?;
     w.write_all(b"\n")?;
     w.flush()
+}
+
+fn latest_meta_in_body(body: &str) -> Option<SessionMeta> {
+    body.lines()
+        .filter_map(|line| {
+            let Ok(RolloutItem::SessionMeta(meta)) = serde_json::from_str::<RolloutItem>(line)
+            else {
+                return None;
+            };
+            Some(meta)
+        })
+        .last()
 }
 
 fn session_path(state_root: &Path, ts: DateTime<Utc>, id: &str) -> PathBuf {
@@ -838,6 +850,33 @@ mod tests {
         let (meta, messages) = Recorder::resume(&path).unwrap();
         assert_eq!(meta.model, "m");
         assert_eq!(messages.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn list_uses_latest_session_meta_for_resumed_lineage() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
+        let parent_id = parent.meta().id.clone();
+        parent.flush().await.unwrap();
+        parent.shutdown().await;
+
+        let child = Recorder::create_resumed(
+            dir.path(),
+            PathBuf::from("/tmp/proj"),
+            "m".into(),
+            parent_id.clone(),
+        )
+        .unwrap();
+        let child_id = child.meta().id.clone();
+        child.flush().await.unwrap();
+        child.shutdown().await;
+
+        let entries = Recorder::list(dir.path()).unwrap();
+        let (_, child_meta) = entries
+            .iter()
+            .find(|(_, meta)| meta.id == child_id)
+            .expect("child session listed");
+        assert_eq!(child_meta.resumed_from.as_deref(), Some(parent_id.as_str()));
     }
 
     #[tokio::test]

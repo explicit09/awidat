@@ -123,20 +123,28 @@ pub fn flatten_timeline_public(
                     let proxy_path = asset_id.as_deref().and_then(|aid| {
                         crate::commands::media::proxy_path_for_asset_id(project_root, aid)
                     });
-                    // Resolve the path the player should actually feed
-                    // to <video src>. Falls back to the source asset
-                    // when no proxy is ready so playback never blocks
-                    // on a pending transcode.
-                    let playable = asset_id.as_deref().map(|aid| {
-                        crate::commands::playable::playable_for_asset_id(project_root, aid)
-                    });
-                    let playable_path = playable
-                        .as_ref()
-                        .and_then(|p| p.path.as_ref().map(|pb| pb.to_string_lossy().into_owned()));
-                    let playable_kind = playable
-                        .as_ref()
-                        .map(|p| p.kind)
-                        .unwrap_or(awidat_desktop_protocol::PlayableKind::Missing);
+                    // Prefer proxies when they exist, but keep original source
+                    // preview available while a proxy is still generating.
+                    // Pro editors do the same: high-quality/original playback
+                    // when decode is viable, proxies/cache as acceleration.
+                    let (playable_path, playable_kind) = match &proxy_path {
+                        Some(path) => (
+                            Some(path.clone()),
+                            awidat_desktop_protocol::PlayableKind::Proxy,
+                        ),
+                        None if asset_id
+                            .as_deref()
+                            .is_some_and(|aid| project_root.join(aid).is_file()) =>
+                        {
+                            (
+                                asset_id.as_deref().map(|aid| {
+                                    project_root.join(aid).to_string_lossy().into_owned()
+                                }),
+                                awidat_desktop_protocol::PlayableKind::Source,
+                            )
+                        }
+                        None => (None, awidat_desktop_protocol::PlayableKind::Missing),
+                    };
                     // Thumbnails dir: `None` while the post-import
                     // [`JobKind::Thumbnails`] job is still pending.
                     let thumbnail_dir = asset_id.as_deref().and_then(|aid| {
@@ -1074,11 +1082,10 @@ mod tests {
     }
 
     #[test]
-    fn flatten_assigns_playable_source_when_proxy_missing() {
+    fn flatten_marks_clip_source_when_proxy_missing_but_source_exists() {
         use awidat_desktop_protocol::PlayableKind;
 
         let tmp = tempfile::tempdir().unwrap();
-        // Write the source file so playable_for_asset_id finds it.
         let raw_dir = tmp.path().join("raw");
         std::fs::create_dir_all(&raw_dir).unwrap();
         std::fs::write(raw_dir.join("test.mov"), b"fake").unwrap();
@@ -1086,8 +1093,7 @@ mod tests {
         let mut timeline = Timeline::empty("playable-test");
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut clip = Clip::empty("test-clip".to_string());
-        clip.media_reference =
-            MediaReference::External(ExternalReference::new("raw/test.mov"));
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/test.mov"));
         clip.source_range = Some(TimeRange::new(
             RationalTime::zero(24.0),
             RationalTime::new(2.0 * 24.0, 24.0),
@@ -1107,6 +1113,41 @@ mod tests {
         };
 
         assert_eq!(*playable_kind, PlayableKind::Source);
-        assert!(playable_path.is_some());
+        assert!(
+            playable_path
+                .as_deref()
+                .is_some_and(|path| path.ends_with("raw/test.mov"))
+        );
+    }
+
+    #[test]
+    fn flatten_marks_clip_missing_when_source_missing() {
+        use awidat_desktop_protocol::PlayableKind;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut timeline = Timeline::empty("missing-source-test");
+        let mut track = Track::empty("V1", TrackKind::Video);
+        let mut clip = Clip::empty("test-clip".to_string());
+        clip.media_reference = MediaReference::External(ExternalReference::new("raw/test.mov"));
+        clip.source_range = Some(TimeRange::new(
+            RationalTime::zero(24.0),
+            RationalTime::new(2.0 * 24.0, 24.0),
+        ));
+        track.children.push(TrackChild::Clip(clip));
+        timeline.tracks.children.push(StackChild::Track(track));
+
+        let snapshot = flatten_timeline_public(&timeline, tmp.path());
+
+        let TimelineItem::Clip {
+            playable_path,
+            playable_kind,
+            ..
+        } = &snapshot.tracks[0].items[0]
+        else {
+            panic!("expected a Clip item");
+        };
+
+        assert_eq!(*playable_kind, PlayableKind::Missing);
+        assert!(playable_path.is_none());
     }
 }

@@ -621,8 +621,14 @@ mod tests {
         let header = out.content.lines().next().unwrap();
         assert!(header.contains("tracks=3="), "got header: {header}");
         assert!(header.contains("\"V1\"(video 3ch)"), "got header: {header}");
-        assert!(header.contains("\"A1\"(audio 0ch) EMPTY"), "got header: {header}");
-        assert!(header.contains("\"V2\"(video 0ch) EMPTY"), "got header: {header}");
+        assert!(
+            header.contains("\"A1\"(audio 0ch) EMPTY"),
+            "got header: {header}"
+        );
+        assert!(
+            header.contains("\"V2\"(video 0ch) EMPTY"),
+            "got header: {header}"
+        );
     }
 
     #[tokio::test]

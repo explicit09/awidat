@@ -4,6 +4,10 @@
 use std::collections::HashMap;
 
 use awidat_core::SessionEvent;
+use awidat_core::podcast_workflow::{
+    format_intake_report_for_agent, podcast_production_intake_plan,
+    should_run_podcast_production_intake,
+};
 use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
 use awidat_desktop_protocol::{Id, Item, ItemLifecycle, PlanStep};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -99,13 +103,35 @@ pub async fn start_turn(
 
     let mut events = session.subscribe();
 
+    let run_podcast_intake = should_run_podcast_production_intake(&input);
     let session_for_turn = session.clone();
     let cancel_for_turn = cancel.clone();
     let app_for_turn = app.clone();
     tokio::spawn(async move {
-        let result = session_for_turn
-            .run_turn(model_input, cancel_for_turn)
-            .await;
+        let result = if run_podcast_intake {
+            let mut plan = podcast_production_intake_plan();
+            match session_for_turn
+                .execute_structured_plan(&mut plan, cancel_for_turn.clone())
+                .await
+            {
+                Ok(report) => {
+                    let intake_context = format_intake_report_for_agent(&report);
+                    session_for_turn
+                        .run_turn(
+                            format!("{intake_context}\n\nUser request:\n{model_input}"),
+                            cancel_for_turn,
+                        )
+                        .await
+                }
+                Err(error) => Err(awidat_core::SessionError::Fatal(format!(
+                    "podcast production intake failed: {error}"
+                ))),
+            }
+        } else {
+            session_for_turn
+                .run_turn(model_input, cancel_for_turn)
+                .await
+        };
         let payload = TurnEndEvent {
             error: match result {
                 Ok(()) => None,
@@ -124,6 +150,14 @@ pub async fn start_turn(
         loop {
             tokio::select! {
                 _ = cancel_for_events.cancelled() => {
+                    for item in map_event(
+                        &SessionEvent::Error("cancelled".into()),
+                        &mut text_streamer,
+                    ) {
+                        if let Err(e) = app_for_events.emit(crate::events::ITEM_EVENT, ItemEvent { item }) {
+                            warn!(error = %e, "emit item failed");
+                        }
+                    }
                     break;
                 }
                 ev = events.recv() => {
@@ -218,6 +252,8 @@ struct TextStreamer {
     /// args, but the frontend's upsert replaces by id, so Completed
     /// must replay the latest args instead of `{}`.
     tool_args: HashMap<String, serde_json::Value>,
+    /// Tool calls that started but have not emitted a ToolResult yet.
+    pending_tools: HashMap<String, String>,
 }
 
 impl TextStreamer {
@@ -271,8 +307,9 @@ impl TextStreamer {
         }
     }
 
-    fn start_tool(&mut self, id: &str) {
+    fn start_tool(&mut self, id: &str, name: &str) {
         self.tool_args.insert(id.to_string(), serde_json::json!({}));
+        self.pending_tools.insert(id.to_string(), name.to_string());
     }
 
     fn update_tool_args(&mut self, id: &str, args: serde_json::Value) {
@@ -284,6 +321,24 @@ impl TextStreamer {
             .remove(id)
             .unwrap_or_else(|| serde_json::json!({}))
     }
+
+    fn complete_tool(&mut self, id: &str) {
+        self.pending_tools.remove(id);
+    }
+
+    fn close_pending_tools(&mut self, message: &str) -> Vec<Item> {
+        let pending = std::mem::take(&mut self.pending_tools);
+        pending
+            .into_iter()
+            .map(|(id, name)| Item::ToolCall {
+                args: self.take_tool_args(&id),
+                id: Id::new(id),
+                name,
+                phase: ItemLifecycle::Completed,
+                result: Some(Err(message.to_string())),
+            })
+            .collect()
+    }
 }
 
 /// Map one [`SessionEvent`] into zero or more protocol [`Item`]s.
@@ -293,7 +348,7 @@ fn map_event(ev: &SessionEvent, streamer: &mut TextStreamer) -> Vec<Item> {
         SessionEvent::TextDelta(t) => streamer.on_delta(t),
         SessionEvent::SamplingComplete { .. } => streamer.close(),
         SessionEvent::ToolCallStart { id, name } => {
-            streamer.start_tool(id);
+            streamer.start_tool(id, name);
             vec![Item::ToolCall {
                 id: Id::new(id),
                 phase: ItemLifecycle::Started,
@@ -314,6 +369,7 @@ fn map_event(ev: &SessionEvent, streamer: &mut TextStreamer) -> Vec<Item> {
         }
         SessionEvent::ToolResult { id, name, result } => {
             let args = streamer.take_tool_args(id);
+            streamer.complete_tool(id);
             vec![Item::ToolCall {
                 id: Id::new(id),
                 phase: ItemLifecycle::Completed,
@@ -347,9 +403,14 @@ fn map_event(ev: &SessionEvent, streamer: &mut TextStreamer) -> Vec<Item> {
             question: question.clone(),
             options: options.clone(),
         }],
-        SessionEvent::TurnEnd => streamer.close(),
+        SessionEvent::TurnEnd => {
+            let mut out = streamer.close();
+            out.extend(streamer.close_pending_tools("turn ended before tool completed"));
+            out
+        }
         SessionEvent::Error(msg) => {
             let mut out = streamer.close();
+            out.extend(streamer.close_pending_tools(msg));
             out.push(Item::Error {
                 id: Id::new(format!(
                     "err-{}",
@@ -392,5 +453,31 @@ mod tests {
             panic!("expected one completed tool call");
         };
         assert_eq!(args["edl"], "*** Begin EDL\n*** End EDL\n");
+    }
+
+    #[test]
+    fn error_completes_pending_tool_call() {
+        let mut streamer = TextStreamer::default();
+        let start = SessionEvent::ToolCallStart {
+            id: "call-1".into(),
+            name: "find_dead_air".into(),
+        };
+        let error = SessionEvent::Error("idle timeout after 90s".into());
+
+        let _ = map_event(&start, &mut streamer);
+        let completed = map_event(&error, &mut streamer);
+
+        assert!(
+            completed.iter().any(|item| matches!(
+                item,
+                Item::ToolCall {
+                    phase: ItemLifecycle::Completed,
+                    name,
+                    result: Some(Err(_)),
+                    ..
+                } if name == "find_dead_air"
+            )),
+            "expected pending tool call to complete on stream error, got {completed:?}"
+        );
     }
 }

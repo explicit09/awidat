@@ -57,28 +57,24 @@ pub async fn export_caption_sidecars(
     // the runtime worker so a multi-track timeline doesn't block the
     // event loop. The collected cues hold owned strings; safe to send.
     let project_root_for_task = project_root.clone();
-    let (cues, srt_path, vtt_path) =
-        tokio::task::spawn_blocking(move || -> Result<_, String> {
-            let project = Project::read(&project_root_for_task)
-                .map_err(|e| format!("read project: {e}"))?;
-            let cues = collect_timeline_cues(&project_root_for_task, &project)
-                .map_err(|e| format!("collect cues: {e}"))?;
-            let renders_dir = project_root_for_task.join("renders");
-            std::fs::create_dir_all(&renders_dir)
-                .map_err(|e| format!("create renders dir: {e}"))?;
-            let srt_path = renders_dir.join("captions.srt");
-            let vtt_path = renders_dir.join("captions.vtt");
-            Ok((cues, srt_path, vtt_path))
-        })
-        .await
-        .map_err(|e| format!("join: {e}"))??;
+    let (cues, srt_path, vtt_path) = tokio::task::spawn_blocking(move || -> Result<_, String> {
+        let project =
+            Project::read(&project_root_for_task).map_err(|e| format!("read project: {e}"))?;
+        let cues = collect_timeline_cues(&project_root_for_task, &project)
+            .map_err(|e| format!("collect cues: {e}"))?;
+        let renders_dir = project_root_for_task.join("renders");
+        std::fs::create_dir_all(&renders_dir).map_err(|e| format!("create renders dir: {e}"))?;
+        let srt_path = renders_dir.join("captions.srt");
+        let vtt_path = renders_dir.join("captions.vtt");
+        Ok((cues, srt_path, vtt_path))
+    })
+    .await
+    .map_err(|e| format!("join: {e}"))??;
 
     if cues.is_empty() {
-        return Err(
-            "no caption cues found — transcribe the source media first \
+        return Err("no caption cues found — transcribe the source media first \
              or author an editable subtitle track."
-                .into(),
-        );
+            .into());
     }
 
     let srt_text = format_srt(&cues);

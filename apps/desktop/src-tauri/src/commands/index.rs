@@ -5,12 +5,14 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use awidat_config::Config;
+use awidat_config::{Config, IndexerResourceClass, McpServer};
 use awidat_desktop_protocol::{Id, JobKind};
-use awidat_index::{AssetInput, IndexProgress, PairOutcome, ProgressCallback};
+use awidat_index::{
+    AssetInput, IndexProgress, PairOutcome, ProgressCallback, media_files::collect_raw_media_inputs,
+};
 use awidat_mcp::ClientInfo;
-use awidat_proto::index::AssetId;
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tokio::sync::mpsc;
@@ -89,7 +91,8 @@ pub async fn index_project_at_root(
     // indexers are configured the message mirrors the CLI's so a
     // user troubleshooting can match.
     let config = Config::load(Some(&project_root)).map_err(|e| format!("load config: {e}"))?;
-    let servers: Vec<_> = config.indexers().cloned().collect();
+    let mut servers: Vec<_> = config.indexers().cloned().collect();
+    prepare_desktop_indexers(&mut servers);
     if servers.is_empty() {
         return Err(
             "no indexers configured. Add `[[mcp.servers]]` entries with kind = \"indexer\" \
@@ -123,6 +126,13 @@ pub async fn index_project_at_root(
             servers.len()
         ),
     );
+    emitter.progress(
+        Some(0),
+        format!(
+            "preparing {} source media item(s) · hashing before indexers launch",
+            assets.len()
+        ),
+    );
 
     // Channel: `awidat_index::run`'s callback (sync, fires from the
     // dispatcher loop) → mpsc → a forwarder task that drives the
@@ -143,26 +153,62 @@ pub async fn index_project_at_root(
     tokio::spawn(async move {
         let mut total: usize = 0;
         let mut last_percent: u8 = 0;
-        while let Some(evt) = rx.recv().await {
-            match evt {
-                IndexProgress::Started { total: t } => {
-                    total = t;
-                    emitter_for_task.progress(Some(0), format!("0 / {t} pairs"));
+        let mut active: std::collections::HashMap<String, (String, Instant)> =
+            std::collections::HashMap::new();
+        let started_at = Instant::now();
+        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                maybe_evt = rx.recv() => {
+                    let Some(evt) = maybe_evt else { break };
+                    match evt {
+                        IndexProgress::Started { total: t } => {
+                            total = t;
+                            emitter_for_task.progress(Some(0), format!("0 / {t} pairs"));
+                        }
+                        IndexProgress::PairStarted {
+                            indexer,
+                            asset,
+                            completed,
+                            total: t,
+                        } => {
+                            total = t;
+                            let label = format!("{indexer} · {asset}");
+                            active.insert(
+                                pair_key(&indexer, &asset.to_string()),
+                                (label.clone(), Instant::now()),
+                            );
+                            emitter_for_task.progress(
+                                Some(last_percent),
+                                format!("running {label} · {completed} / {t} pairs complete"),
+                            );
+                        }
+                        IndexProgress::PairCompleted {
+                            outcome,
+                            completed,
+                            total: t,
+                        } => {
+                            total = t;
+                            active.remove(&outcome_pair_key(&outcome));
+                            let pct = if t == 0 {
+                                100
+                            } else {
+                                ((completed as f32 / t as f32) * 100.0).round() as u8
+                            };
+                            last_percent = pct;
+                            let label = pair_label(&outcome);
+                            emitter_for_task.progress(Some(pct), format!("{label} · {completed} / {t}"));
+                        }
+                    }
                 }
-                IndexProgress::PairCompleted {
-                    outcome,
-                    completed,
-                    total: t,
-                } => {
-                    total = t;
-                    let pct = if t == 0 {
-                        100
-                    } else {
-                        ((completed as f32 / t as f32) * 100.0).round() as u8
-                    };
-                    last_percent = pct;
-                    let label = pair_label(&outcome);
-                    emitter_for_task.progress(Some(pct), format!("{label} · {completed} / {t}"));
+                _ = tick.tick() => {
+                    if total > 0 {
+                        emitter_for_task.progress(
+                            Some(last_percent),
+                            heartbeat_status(&active, started_at),
+                        );
+                    }
                 }
             }
         }
@@ -270,7 +316,10 @@ pub async fn index_project_at_root(
             if whisper_wrote {
                 crate::commands::transcript::clear_transcript_cache(&state).await;
             }
-            if report.has_failures() || !passes.motion_failed.is_empty() || !passes.silence_failed.is_empty() {
+            if report.has_failures()
+                || !passes.motion_failed.is_empty()
+                || !passes.silence_failed.is_empty()
+            {
                 // Pull each PairOutcome::Failed out so the user sees
                 // *which* indexer failed on *which* asset *why*. With
                 // 10+ indexers per asset, "1 failed" alone leaves the
@@ -330,6 +379,46 @@ pub async fn index_project_at_root(
             emitter.err(e.clone());
             Err(e)
         }
+    }
+}
+
+fn pair_key(indexer: &str, asset: &str) -> String {
+    format!("{indexer}\0{asset}")
+}
+
+fn outcome_pair_key(outcome: &PairOutcome) -> String {
+    match outcome {
+        PairOutcome::Skipped { indexer, asset, .. }
+        | PairOutcome::Wrote { indexer, asset, .. }
+        | PairOutcome::Failed { indexer, asset, .. }
+        | PairOutcome::SkippedDep { indexer, asset, .. } => pair_key(indexer, &asset.to_string()),
+    }
+}
+
+fn heartbeat_status(
+    active: &std::collections::HashMap<String, (String, Instant)>,
+    started_at: Instant,
+) -> String {
+    if let Some((label, at)) = active.values().min_by_key(|(_, at)| *at) {
+        return format!(
+            "still running {label} · {} elapsed",
+            format_elapsed(at.elapsed())
+        );
+    }
+    format!(
+        "indexing still active · {} elapsed",
+        format_elapsed(started_at.elapsed())
+    )
+}
+
+fn format_elapsed(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    let mins = secs / 60;
+    let rem = secs % 60;
+    if mins == 0 {
+        format!("{rem}s")
+    } else {
+        format!("{mins}m {rem:02}s")
     }
 }
 
@@ -462,7 +551,10 @@ fn read_load_avg_1min() -> Option<f64> {
     #[cfg(unix)]
     {
         if let Ok(contents) = std::fs::read_to_string("/proc/loadavg") {
-            return contents.split_whitespace().next().and_then(|s| s.parse().ok());
+            return contents
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse().ok());
         }
         // macOS: shell out to sysctl. Avoids adding a libc dep just
         // for getloadavg(3).
@@ -486,38 +578,37 @@ fn read_load_avg_1min() -> Option<f64> {
 }
 
 fn collect_assets(project_root: &std::path::Path) -> std::io::Result<Vec<AssetInput>> {
-    let raw_dir = project_root.join("raw");
-    if !raw_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    walk(project_root, &raw_dir, &mut out)?;
-    Ok(out)
+    collect_raw_media_inputs(project_root)
 }
 
-fn walk(
-    project_root: &std::path::Path,
-    dir: &std::path::Path,
-    out: &mut Vec<AssetInput>,
-) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk(project_root, &path, out)?;
-        } else if path.is_file() {
-            let id = path
-                .strip_prefix(project_root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            out.push(AssetInput {
-                id: AssetId::new(id),
-                path,
-            });
+fn prepare_desktop_indexers(servers: &mut [McpServer]) {
+    for server in servers.iter_mut() {
+        if server.name == "whisper" && is_deepgram_whisper(server) {
+            server.resource_class = IndexerResourceClass::Network;
         }
     }
-    Ok(())
+    servers.sort_by_key(|server| desktop_indexer_priority(&server.name));
+}
+
+fn is_deepgram_whisper(server: &McpServer) -> bool {
+    server
+        .env
+        .get("WHISPER_BACKEND")
+        .is_some_and(|backend| backend.eq_ignore_ascii_case("deepgram"))
+        || server.env.contains_key("DEEPGRAM_API_KEY")
+}
+
+fn desktop_indexer_priority(name: &str) -> u8 {
+    match name {
+        "whisper" => 0,
+        "topic" => 1,
+        "editorial-moments" => 2,
+        "audio-energy" | "beats" => 3,
+        "scenedetect" => 4,
+        "frame-quality" | "color-analysis" => 5,
+        "face" | "gaze" | "shot" | "clip" => 6,
+        _ => 7,
+    }
 }
 
 async fn register_job(state: &State<'_, AwidatState>, id: &Id) -> CancellationToken {
@@ -552,7 +643,8 @@ fn compute_index_readiness_at(project_root: &Path) -> IndexReadinessSnapshot {
     // diarization runs (`data.diarized: true` + `data.speakers: [...]`),
     // not in a separate `index/speaker/` directory. Check the whisper
     // sidecars for a diarized=true marker.
-    let speaker = transcripts && any_whisper_sidecar_diarized(&project_root.join("index").join("whisper"));
+    let speaker =
+        transcripts && any_whisper_sidecar_diarized(&project_root.join("index").join("whisper"));
     let captions = transcripts;
     let ready_count = [
         transcripts,
@@ -687,6 +779,57 @@ fn sidecar_marks_diarized(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn test_server(name: &str) -> McpServer {
+        McpServer {
+            name: name.into(),
+            command: "noop".into(),
+            args: vec![],
+            env: HashMap::new(),
+            cwd: None,
+            kind: awidat_config::McpServerKind::Indexer,
+            enabled: true,
+            depends_on: vec![],
+            resource_class: IndexerResourceClass::Light,
+            indexer_group: None,
+        }
+    }
+
+    #[test]
+    fn desktop_indexers_start_deepgram_whisper_first_as_network_work() {
+        let mut whisper = test_server("whisper");
+        whisper.resource_class = IndexerResourceClass::Exclusive;
+        whisper
+            .env
+            .insert("WHISPER_BACKEND".into(), "deepgram".into());
+        let mut servers = vec![
+            test_server("audio-energy"),
+            test_server("beats"),
+            test_server("scenedetect"),
+            whisper,
+            test_server("frame-quality"),
+        ];
+
+        prepare_desktop_indexers(&mut servers);
+
+        assert_eq!(servers[0].name, "whisper");
+        assert_eq!(servers[0].resource_class, IndexerResourceClass::Network);
+        assert_eq!(servers[1].name, "audio-energy");
+        assert_eq!(servers[2].name, "beats");
+    }
+
+    #[test]
+    fn desktop_indexers_keep_local_whisper_exclusive_but_first() {
+        let mut whisper = test_server("whisper");
+        whisper.resource_class = IndexerResourceClass::Exclusive;
+        let mut servers = vec![test_server("scenedetect"), whisper, test_server("beats")];
+
+        prepare_desktop_indexers(&mut servers);
+
+        assert_eq!(servers[0].name, "whisper");
+        assert_eq!(servers[0].resource_class, IndexerResourceClass::Exclusive);
+    }
 
     #[test]
     fn index_readiness_detects_existing_sidecars() {
@@ -749,7 +892,10 @@ mod tests {
 
         let readiness = compute_index_readiness_at(dir.path());
         assert!(readiness.transcripts, "transcripts must be ready first");
-        assert!(readiness.speaker, "diarized=true in whisper sidecar marks speaker ready");
+        assert!(
+            readiness.speaker,
+            "diarized=true in whisper sidecar marks speaker ready"
+        );
     }
 
     #[test]

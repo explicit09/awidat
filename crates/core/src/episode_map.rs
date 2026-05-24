@@ -72,17 +72,22 @@ pub fn render(project: &Project, project_root: &Path) -> String {
         }
     }
 
-    // Vision-indexer presence: lets the agent know which vision tools
-    // (clip_search, find_speaker_oncam, broll_candidates, etc.) will
-    // actually return data instead of "no index found." We only check
-    // directory existence; presence ≠ coverage, but it's enough signal
-    // for the agent to choose the right tool to try first.
-    let vision_indexers: Vec<&str> = ["clip", "face", "shot", "gaze", "frame-quality"]
-        .into_iter()
-        .filter(|name| project_root.join("index").join(name).is_dir())
-        .collect();
-    if !vision_indexers.is_empty() {
-        out.push_str(&format!("Vision: {}\n", vision_indexers.join(", ")));
+    // Index coverage: lets the agent know which read_index channels
+    // and specialized search tools have data before it plans a cut.
+    // Directory existence is deliberately cheap; exact asset coverage
+    // is still checked by read_index/tool calls.
+    let coverage = index_coverage(project_root);
+    if !coverage.available.is_empty() {
+        out.push_str(&format!(
+            "Index coverage: {}\n",
+            coverage.available.join(", ")
+        ));
+    }
+    if !coverage.missing.is_empty() {
+        out.push_str(&format!(
+            "Missing indexes: {} (call start_indexing only when the task needs them)\n",
+            coverage.missing.join(", ")
+        ));
     }
 
     // Editorial state from the OTIO timeline itself: clip count,
@@ -98,6 +103,39 @@ pub fn render(project: &Project, project_root: &Path) -> String {
     ));
 
     out.trim_end().to_string()
+}
+
+struct IndexCoverage {
+    available: Vec<&'static str>,
+    missing: Vec<&'static str>,
+}
+
+fn index_coverage(project_root: &Path) -> IndexCoverage {
+    let all = [
+        "whisper",
+        "topic",
+        "editorial-moments",
+        "audio-energy",
+        "beats",
+        "scenedetect",
+        "clip",
+        "face",
+        "gaze",
+        "shot",
+        "composition",
+        "frame-quality",
+        "color-analysis",
+    ];
+    let mut available = Vec::new();
+    let mut missing = Vec::new();
+    for name in all {
+        if project_root.join("index").join(name).is_dir() {
+            available.push(name);
+        } else {
+            missing.push(name);
+        }
+    }
+    IndexCoverage { available, missing }
 }
 
 /// Walk index/whisper/* and collect speakers + segments. Returns
@@ -332,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn render_lists_vision_indexers_when_their_dirs_exist() {
+    fn render_lists_index_coverage_when_dirs_exist() {
         let dir = tempfile::tempdir().unwrap();
         let project = dummy_project(dir.path(), 60.0);
         // Just create the dirs; the indexer presence is what matters,
@@ -342,19 +380,21 @@ mod tests {
         }
         // gaze + frame-quality dirs deliberately absent.
         let map = render(&project, dir.path());
-        assert!(map.contains("Vision:"));
+        assert!(map.contains("Index coverage:"));
         assert!(map.contains("clip"));
         assert!(map.contains("face"));
         assert!(map.contains("shot"));
-        assert!(!map.contains("gaze"));
+        assert!(map.contains("Missing indexes:"));
+        assert!(map.contains("gaze"));
     }
 
     #[test]
-    fn render_omits_vision_line_when_no_vision_indexers_ran() {
+    fn render_omits_index_coverage_line_when_no_indexers_ran() {
         let dir = tempfile::tempdir().unwrap();
         let project = dummy_project(dir.path(), 60.0);
         let map = render(&project, dir.path());
-        assert!(!map.contains("Vision:"));
+        assert!(!map.contains("Index coverage:"));
+        assert!(map.contains("Missing indexes:"));
     }
 
     #[test]

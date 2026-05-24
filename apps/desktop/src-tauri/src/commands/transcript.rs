@@ -163,8 +163,8 @@ pub async fn rename_speaker(
             .map_err(|e| format!("resolve whisper sidecar path: {e}"))?;
         let bytes = std::fs::read(&sidecar_path)
             .map_err(|e| format!("read whisper sidecar {}: {e}", sidecar_path.display()))?;
-        let mut json: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("parse whisper sidecar: {e}"))?;
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("parse whisper sidecar: {e}"))?;
         let mut count = 0_usize;
         rewrite_speaker_id(&mut json, &old_id, &new_owned, &mut count);
         if count == 0 {
@@ -187,12 +187,7 @@ pub async fn rename_speaker(
 /// Recursively rewrite every `id` (on speaker entries) and every
 /// `speaker_id` (on segments + words) that equals `old`. Mutates in
 /// place; increments `count` for each rewrite.
-fn rewrite_speaker_id(
-    value: &mut serde_json::Value,
-    old: &str,
-    new: &str,
-    count: &mut usize,
-) {
+fn rewrite_speaker_id(value: &mut serde_json::Value, old: &str, new: &str, count: &mut usize) {
     match value {
         serde_json::Value::Object(map) => {
             // `speakers` array entries have `id`; segments and words
@@ -201,9 +196,7 @@ fn rewrite_speaker_id(
             // never has a non-speaker `id == "SPEAKER_00"` field in
             // practice, so the false-positive risk is negligible.
             for (key, child) in map.iter_mut() {
-                if (key == "id" || key == "speaker_id")
-                    && child.as_str() == Some(old)
-                {
+                if (key == "id" || key == "speaker_id") && child.as_str() == Some(old) {
                     *child = serde_json::Value::String(new.to_string());
                     *count += 1;
                 } else {

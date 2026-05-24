@@ -5,10 +5,11 @@
 //! pointed at the selected log so history replay and model resume stay
 //! in sync.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use awidat_core::anthropic::{ContentBlock, Message, Role};
-use awidat_core::rollout::{Recorder, SessionMeta};
+use awidat_core::rollout::{Recorder, RolloutItem, SessionMeta};
 use awidat_desktop_protocol::{Id, Item, ItemLifecycle};
 use serde::Serialize;
 use tauri::State;
@@ -121,7 +122,11 @@ pub async fn rename_chat_session(
         .map_err(|e| format!("lookup session: {e}"))?
         .ok_or_else(|| format!("no session registered for {}", path.display()))?;
     let trimmed = new_title.trim();
-    let next = if trimmed.is_empty() { None } else { Some(trimmed) };
+    let next = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    };
     registry
         .set_custom_title(&row.id, next)
         .map_err(|e| format!("set custom title: {e}"))?;
@@ -181,7 +186,11 @@ async fn load_history_from_path(
     path: PathBuf,
     meta: SessionMeta,
 ) -> Result<ChatHistory, String> {
-    let (_meta, messages) = Recorder::resume(&path).map_err(|e| e.to_string())?;
+    let Some(state_root) = awidat_config::defaults::state_root() else {
+        return Err("state root unavailable".into());
+    };
+    let entries = project_session_entries(&state_root, &meta.project_root)?;
+    let messages = load_lineage_messages(&path, &entries)?;
     let title = generated_session_title(&meta, &messages);
     let summary = summarize_session(&path, &meta, messages.len(), title);
     let items = messages_to_items(&meta.id, &messages);
@@ -237,66 +246,37 @@ fn list_project_sessions(project_root: &Path) -> Result<Vec<ChatSessionSummary>,
             // and one-shot; subsequent activity comes from the live
             // recorder's per-message updates.
             if let Ok((_, messages)) = Recorder::resume(path) {
-                let _ = registry.record_activity(
-                    &meta.id,
-                    messages.len() as i64,
-                    chrono::Utc::now(),
-                );
+                let _ =
+                    registry.record_activity(&meta.id, messages.len() as i64, chrono::Utc::now());
             }
         }
     }
 
-    let rows = registry
-        .list(Some(project_root))
-        .map_err(|e| format!("list registry: {e}"))?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
+    let entries = project_session_entries(&state_root, project_root)?;
+    let leaves = logical_leaf_entries(&entries);
+    let mut out = Vec::with_capacity(leaves.len());
+    for (path, meta) in leaves {
         // Title preference: user-supplied custom title wins. Otherwise
-        // derive from the first user message in the JSONL (paying the
-        // cost of a `Recorder::resume` is fine for an interactive
-        // listing). Falls back to the session timestamp if both miss.
-        let title = if let Some(custom) = row.custom_title.as_deref() {
-            custom.to_string()
-        } else {
-            match Recorder::resume(&row.log_path) {
-                Ok((meta, messages)) => generated_session_title(&meta, &messages),
-                Err(_) => fallback_session_title(&fallback_meta_for_row(&row)),
-            }
-        };
-        out.push(ChatSessionSummary {
-            id: row.id,
-            title,
-            project_root: row.project_root.to_string_lossy().into_owned(),
-            log_path: row.log_path.to_string_lossy().into_owned(),
-            started_at: row.started_at.to_rfc3339(),
-            message_count: row.message_count,
-        });
+        // derive from the first user message in the whole logical
+        // parent -> child chain. Falls back to the leaf timestamp.
+        let custom_title = registry
+            .get_by_log_path(&path)
+            .ok()
+            .flatten()
+            .and_then(|row| row.custom_title);
+        let messages = load_lineage_messages(&path, &entries).unwrap_or_default();
+        let title = custom_title.unwrap_or_else(|| generated_session_title(&meta, &messages));
+        out.push(summarize_session(&path, &meta, messages.len(), title));
     }
     Ok(out)
-}
-
-/// Synthesize a minimal SessionMeta for fallback title generation
-/// when the JSONL can't be parsed. We only need it so the existing
-/// `fallback_session_title` helper compiles.
-fn fallback_meta_for_row(row: &awidat_core::session_registry::SessionRow) -> SessionMeta {
-    SessionMeta {
-        id: row.id.clone(),
-        project_root: row.project_root.clone(),
-        model: row.model.clone(),
-        started_at: row.started_at,
-        awidat_version: String::new(),
-        resumed_from: None,
-    }
 }
 
 fn latest_project_session(project_root: &Path) -> Result<Option<(PathBuf, SessionMeta)>, String> {
     let Some(state_root) = awidat_config::defaults::state_root() else {
         return Ok(None);
     };
-    let entries = Recorder::list(&state_root).map_err(|e| e.to_string())?;
-    Ok(entries
-        .into_iter()
-        .find(|(_, meta)| same_project_root(&meta.project_root, project_root)))
+    let entries = project_session_entries(&state_root, project_root)?;
+    Ok(logical_leaf_entries(&entries).into_iter().next())
 }
 
 fn summarize_session(
@@ -313,6 +293,88 @@ fn summarize_session(
         started_at: meta.started_at.to_rfc3339(),
         message_count,
     }
+}
+
+fn project_session_entries(
+    state_root: &Path,
+    project_root: &Path,
+) -> Result<Vec<(PathBuf, SessionMeta)>, String> {
+    let entries = Recorder::list(state_root).map_err(|e| e.to_string())?;
+    Ok(entries
+        .into_iter()
+        .filter(|(_, meta)| same_project_root(&meta.project_root, project_root))
+        .collect())
+}
+
+fn logical_leaf_entries(entries: &[(PathBuf, SessionMeta)]) -> Vec<(PathBuf, SessionMeta)> {
+    let parent_ids = entries
+        .iter()
+        .filter_map(|(_, meta)| meta.resumed_from.as_deref())
+        .collect::<HashSet<_>>();
+    entries
+        .iter()
+        .filter(|(_, meta)| !parent_ids.contains(meta.id.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn load_lineage_messages(
+    leaf_path: &Path,
+    entries: &[(PathBuf, SessionMeta)],
+) -> Result<Vec<Message>, String> {
+    let mut by_id = HashMap::new();
+    for (path, meta) in entries {
+        by_id.insert(meta.id.clone(), (path.clone(), meta.clone()));
+    }
+
+    let mut chain = Vec::new();
+    let mut current = entries
+        .iter()
+        .find(|(path, _)| same_log_path(path, leaf_path))
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "session log not found in project list: {}",
+                leaf_path.display()
+            )
+        })?;
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(current.1.id.clone()) {
+            return Err(format!("cycle in chat session lineage at {}", current.1.id));
+        }
+        chain.push(current.clone());
+        let Some(parent_id) = current.1.resumed_from.as_deref() else {
+            break;
+        };
+        let Some(parent) = by_id.get(parent_id).cloned() else {
+            break;
+        };
+        current = parent;
+    }
+
+    chain.reverse();
+    let mut messages = Vec::new();
+    for (path, _) in chain {
+        let mut part = display_messages_from_log(&path)?;
+        messages.append(&mut part);
+    }
+    Ok(messages)
+}
+
+fn display_messages_from_log(path: &Path) -> Result<Vec<Message>, String> {
+    let body = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut messages = Vec::new();
+    for line in body.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(RolloutItem::Message(message)) = serde_json::from_str::<RolloutItem>(line) else {
+            continue;
+        };
+        messages.push(message);
+    }
+    Ok(messages)
 }
 
 fn generated_session_title(meta: &SessionMeta, messages: &[Message]) -> String {
@@ -445,6 +507,13 @@ fn same_project_root(a: &Path, b: &Path) -> bool {
     }
 }
 
+fn same_log_path(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 fn messages_to_items(session_id: &str, messages: &[Message]) -> Vec<Item> {
     let mut out = Vec::new();
     for (message_idx, message) in messages.iter().enumerate() {
@@ -564,7 +633,10 @@ mod tests {
 
     #[test]
     fn title_capitalizes_first_word() {
-        assert_eq!(title_from_prompt("delete empty track"), "Delete empty track");
+        assert_eq!(
+            title_from_prompt("delete empty track"),
+            "Delete empty track"
+        );
     }
 
     #[test]
@@ -574,21 +646,29 @@ mod tests {
 
     #[test]
     fn title_drops_please_prefix() {
-        assert_eq!(title_from_prompt("please cut the first 30s"), "Cut the first 30s");
+        assert_eq!(
+            title_from_prompt("please cut the first 30s"),
+            "Cut the first 30s"
+        );
     }
 
     #[test]
     fn title_drops_i_want_to_prefix() {
-        assert_eq!(title_from_prompt("i want to make a vertical clip"), "Make a vertical clip");
+        assert_eq!(
+            title_from_prompt("i want to make a vertical clip"),
+            "Make a vertical clip"
+        );
     }
 
     #[test]
     fn title_caps_at_max_words_and_appends_ellipsis() {
-        let t = title_from_prompt(
-            "make a vertical version for tiktok with captions burned in please",
-        );
+        let t =
+            title_from_prompt("make a vertical version for tiktok with captions burned in please");
         // 5 words max → "Make a vertical version for"; ellipsis added.
-        assert!(t.ends_with('…'), "expected ellipsis on truncation; got {t:?}");
+        assert!(
+            t.ends_with('…'),
+            "expected ellipsis on truncation; got {t:?}"
+        );
         assert!(t.chars().count() <= 42, "title too long: {t:?}");
     }
 
@@ -621,7 +701,69 @@ mod tests {
 
     #[test]
     fn title_lets_prefix_dropped() {
-        assert_eq!(title_from_prompt("let's add some titles"), "Add some titles");
+        assert_eq!(
+            title_from_prompt("let's add some titles"),
+            "Add some titles"
+        );
         assert_eq!(title_from_prompt("lets add some titles"), "Add some titles");
+    }
+
+    #[test]
+    fn logical_leaf_entries_hide_resumed_parent() {
+        let started_at = chrono::Utc::now();
+        let parent = SessionMeta {
+            id: "parent".into(),
+            project_root: PathBuf::from("/tmp/project"),
+            model: "m".into(),
+            started_at,
+            awidat_version: "test".into(),
+            resumed_from: None,
+        };
+        let child = SessionMeta {
+            id: "child".into(),
+            project_root: PathBuf::from("/tmp/project"),
+            model: "m".into(),
+            started_at,
+            awidat_version: "test".into(),
+            resumed_from: Some("parent".into()),
+        };
+        let entries = vec![
+            (PathBuf::from("/tmp/parent.jsonl"), parent),
+            (PathBuf::from("/tmp/child.jsonl"), child),
+        ];
+
+        let leaves = logical_leaf_entries(&entries);
+
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(leaves[0].1.id, "child");
+    }
+
+    #[test]
+    fn display_messages_include_unfinished_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        let meta = SessionMeta {
+            id: "s".into(),
+            project_root: PathBuf::from("/tmp/project"),
+            model: "m".into(),
+            started_at: chrono::Utc::now(),
+            awidat_version: "test".into(),
+            resumed_from: None,
+        };
+        let body = [
+            serde_json::to_string(&RolloutItem::SessionMeta(meta)).unwrap(),
+            serde_json::to_string(&RolloutItem::TurnStarted {
+                turn_id: "t".into(),
+                started_at: chrono::Utc::now(),
+            })
+            .unwrap(),
+            serde_json::to_string(&RolloutItem::Message(Message::user_text("partial"))).unwrap(),
+        ]
+        .join("\n");
+        std::fs::write(&path, body).unwrap();
+
+        let messages = display_messages_from_log(&path).unwrap();
+
+        assert_eq!(messages.len(), 1);
     }
 }
