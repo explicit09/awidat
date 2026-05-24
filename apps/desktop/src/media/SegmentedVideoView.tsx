@@ -79,6 +79,8 @@ export function SegmentedVideoView({
 }: SegmentedVideoViewProps = {}) {
   const segments = usePlaySegments();
   const previewDurationS = usePreviewDuration();
+  const timelineSnapshot = useTimelineStore((s) => s.snapshot);
+  const transcodingCount = countClipsAwaitingProxy(timelineSnapshot);
   const setTimelineDuration = useMediaStore((s) => s.setTimelineDuration);
   const timelineDurationS = useTimelineStore((s) => s.snapshot.duration_s);
   const timelineTime = useMediaStore((s) => s.timelineTime);
@@ -103,17 +105,18 @@ export function SegmentedVideoView({
   }, [timelineDurationS]);
 
   if (segments.length === 0) {
-    // Timeline genuinely has nothing playable: either no clips at all,
-    // or every clip's source is missing on disk. The Tier 5 offline
-    // overlay handles per-clip "missing" state once it lands; until
-    // then we keep this minimal placeholder for the no-clips case.
+    const awaitingProxy = transcodingCount > 0;
     return (
       <div className="video-wrap">
         <div className="video-stack">
           <div className="media-empty media-empty-stacked">
-            <p className="media-empty-title">No playable clips yet</p>
+            <p className="media-empty-title">
+              {awaitingProxy ? "Generating preview..." : "No playable clips yet"}
+            </p>
             <p className="media-empty-hint">
-              Add a clip from the Media bin to start your timeline preview.
+              {awaitingProxy
+                ? `${transcodingCount} clip${transcodingCount === 1 ? "" : "s"} waiting for proxy media.`
+                : "Add a clip from the Media bin to start your timeline preview."}
             </p>
           </div>
         </div>
@@ -224,6 +227,15 @@ function SegmentedPlayer({
     activeKeyRef.current = activeKey;
   }, [activeKey]);
 
+  // Reset both slots when the segments array identity changes (e.g.
+  // an apply_edl landed). This must run before the resync effect
+  // below; otherwise a freshly loaded active slot can be marked
+  // empty after it starts playing, leaving timeline-time frozen.
+  useEffect(() => {
+    slotsRef.current.a.segIdx = -1;
+    slotsRef.current.b.segIdx = -1;
+  }, [segments]);
+
   // Whenever timelineTime moves into a new segment, make sure the
   // active slot is loaded with that segment's proxy and aligned.
   // Triggers cover playback, external seeks (request-id), and
@@ -259,14 +271,6 @@ function SegmentedPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [segments, timelineTime, seekRequestId, seekTargetS]);
 
-  // Reset both slots when the segments array identity changes (e.g.
-  // an apply_edl landed). Forces the resync effect above to re-attach
-  // src on the new active segment.
-  useEffect(() => {
-    slotsRef.current.a.segIdx = -1;
-    slotsRef.current.b.segIdx = -1;
-  }, [segments]);
-
   // Set src + park at sourceStart for a slot. Idempotent — if the
   // slot already has the right src loaded, we skip the assignment
   // (re-setting src reloads the decoder, which is exactly what
@@ -283,6 +287,7 @@ function SegmentedPlayer({
           if (v.src !== url) v.src = url;
           setMediaError(null);
           alignSlotAfterLoad(slot === slotsRef.current.a ? "a" : "b");
+          playActiveSlotIfNeeded(slot);
         })
         .catch((e) => {
           const message = `Could not open preview media: ${String(e)}`;
@@ -296,6 +301,18 @@ function SegmentedPlayer({
       setMediaError(null);
     }
     tryAssignCurrentTime(v, seg.sourceStart);
+    playActiveSlotIfNeeded(slot);
+  }
+
+  function playActiveSlotIfNeeded(slot: Slot) {
+    if (slot !== slotsRef.current[activeKeyRef.current]) return;
+    if (!useMediaStore.getState().isPlaying) return;
+    const v = slot.ref.current;
+    if (!v || !v.paused) return;
+    v.play().catch((err) => {
+      setMediaError(`Playback failed: ${String(err)}`);
+      setPlaying(false);
+    });
   }
 
   // Prime the inactive slot with the segment AFTER `currentSegIdx`
@@ -439,6 +456,7 @@ function SegmentedPlayer({
     if (Math.abs(v.currentTime - desired) > 0.05) {
       tryAssignCurrentTime(v, desired);
     }
+    playActiveSlotIfNeeded(slot);
   }
 
   // Push view-state (~1Hz, integer-second granularity). Use the
@@ -1761,6 +1779,7 @@ function countClipsAwaitingProxy(snapshot: TimelineSnapshot): number {
         item.kind === "clip" &&
         item.asset_id !== null &&
         item.proxy_path === null &&
+        item.playable_kind === "source" &&
         item.duration_s > 0
       ) {
         n += 1;

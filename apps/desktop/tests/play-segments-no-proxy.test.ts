@@ -53,7 +53,7 @@ const snapshot: TimelineSnapshot = {
 } as unknown as TimelineSnapshot;
 
 const plan = derivePreviewPlan(snapshot);
-assert(plan.segments.length === 1, "clip with playable source must be in segments");
+assert(plan.segments.length === 1, "source fallback must enter timeline preview");
 assert(
   plan.segments[0].proxyPath === "/project/raw/clip.mov",
   "segment must carry the source-fallback path",

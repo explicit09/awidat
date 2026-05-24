@@ -250,7 +250,13 @@ pub async fn start_reframe_render(
         .unwrap_or("master");
     let safe_target = target_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     let output_path = project_root
         .join("renders")
@@ -290,23 +296,22 @@ pub async fn start_reframe_render(
     let app_for_progress = app.clone();
     let id_for_progress = job_id.clone();
     tokio::spawn(async move {
-        let progress_cb: awidat_render::TranscodeProgressCallback =
-            std::sync::Arc::new(move |p| {
-                if let awidat_render::TranscodeProgress::Tick { percent, line } = p {
-                    crate::events::emit_item(
-                        &app_for_progress,
-                        awidat_desktop_protocol::Item::Job {
-                            id: id_for_progress.clone(),
-                            phase: awidat_desktop_protocol::ItemLifecycle::Delta,
-                            job_kind: JobKind::Render,
-                            percent,
-                            status: line,
-                            result: None,
-                            output_path: None,
-                        },
-                    );
-                }
-            });
+        let progress_cb: awidat_render::TranscodeProgressCallback = std::sync::Arc::new(move |p| {
+            if let awidat_render::TranscodeProgress::Tick { percent, line } = p {
+                crate::events::emit_item(
+                    &app_for_progress,
+                    awidat_desktop_protocol::Item::Job {
+                        id: id_for_progress.clone(),
+                        phase: awidat_desktop_protocol::ItemLifecycle::Delta,
+                        job_kind: JobKind::Render,
+                        percent,
+                        status: line,
+                        result: None,
+                        output_path: None,
+                    },
+                );
+            }
+        });
         let result = reframe_to_target(
             &input_for_task,
             &output_for_task,

@@ -392,10 +392,8 @@ fn collect_timeline_asset_ranges(project_root: &Path) -> Vec<(String, f64, f64)>
         Ok(p) => p,
         Err(_) => return Vec::new(),
     };
-    let snapshot = crate::commands::timeline::flatten_timeline_public(
-        &project.timeline,
-        project_root,
-    );
+    let snapshot =
+        crate::commands::timeline::flatten_timeline_public(&project.timeline, project_root);
     let mut out: Vec<(String, f64, f64)> = Vec::new();
     for track in &snapshot.tracks {
         // Skip pure-audio tracks — proxy generation is for video
@@ -576,7 +574,11 @@ async fn transcode_one(
             Err("cancelled".into())
         }
         Err(e) => {
-            let msg = format!("transcode: {e}");
+            let _ = tokio::fs::remove_file(&pending_path).await;
+            let msg = format!(
+                "transcode {}: {e}",
+                asset.file_name().unwrap_or_default().to_string_lossy()
+            );
             emitter.err(msg.clone());
             Err(msg)
         }

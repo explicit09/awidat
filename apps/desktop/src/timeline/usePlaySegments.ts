@@ -104,9 +104,8 @@ type PreviewPlan = {
  *   - timeline has no video clips yet (pre-import / pre-auto-insert)
  *   - every clip's playable_path is null or missing
  *
- * The empty case signals to the MediaPane that it should fall back
- * to the source-asset preview (current behavior when there's nothing
- * to stitch).
+ * The empty case lets the preview pane show either "Generating
+ * preview..." for clips awaiting proxies or the no-clips empty state.
  */
 export function usePlaySegments(): PlaySegment[] {
   const snapshot = useTimelineStore((s) => s.snapshot);
@@ -142,7 +141,7 @@ export function useVideoOverlaySegments(): VideoOverlaySegment[] {
         if (
           playable === null ||
           playable === undefined ||
-          item.playable_kind === "missing" ||
+          (item.playable_kind !== "proxy" && item.playable_kind !== "source") ||
           item.duration_s <= 0
         ) {
           // Asset is gone or clip has zero length. Tier 5 surfaces
@@ -256,7 +255,7 @@ export function derivePreviewPlan(snapshot: TimelineSnapshot): PreviewPlan {
     if (
       playable === null ||
       playable === undefined ||
-      item.playable_kind === "missing" ||
+      (item.playable_kind !== "proxy" && item.playable_kind !== "source") ||
       item.duration_s <= 0
     ) {
       pendingTransition = null;

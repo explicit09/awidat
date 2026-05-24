@@ -729,6 +729,49 @@ pub async fn transcode_proxy(
         cb(TranscodeProgress::Started { total_duration_s });
     }
 
+    if should_try_lossless_mp4_remux(asset_path) {
+        let mut remux = Command::new(&bin);
+        remux
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-y")
+            .arg("-i")
+            .arg(asset_path)
+            .arg("-map")
+            .arg("0:v:0")
+            .arg("-map")
+            .arg("0:a?")
+            .arg("-c")
+            .arg("copy")
+            .arg("-movflags")
+            .arg("+faststart")
+            .arg(output_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        match run_short_ffmpeg(remux, cancel.clone()).await {
+            Ok(()) => {
+                if let Some(cb) = progress.as_ref() {
+                    cb(TranscodeProgress::Tick {
+                        percent: Some(100),
+                        line: "lossless mp4 remux complete".into(),
+                    });
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                let _ = tokio::fs::remove_file(output_path).await;
+                tracing::debug!(
+                    error = %e,
+                    asset = %asset_path.display(),
+                    "lossless mp4 remux failed; falling back to encoded proxy",
+                );
+            }
+        }
+    }
+
     let mut cmd = Command::new(&bin);
     cmd.arg("-loglevel")
         .arg("error")
@@ -858,6 +901,57 @@ pub async fn transcode_proxy(
         });
     }
     Ok(())
+}
+
+fn should_try_lossless_mp4_remux(asset_path: &Path) -> bool {
+    matches!(
+        asset_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("mov" | "m4v")
+    )
+}
+
+async fn run_short_ffmpeg(
+    mut cmd: Command,
+    cancel: tokio_util::sync::CancellationToken,
+) -> Result<(), FfmpegError> {
+    let mut child = cmd.spawn().map_err(|e| FfmpegError::Spawn {
+        path: PathBuf::from("ffmpeg"),
+        source: e,
+    })?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| FfmpegError::Io(std::io::Error::other("ffmpeg stderr missing")))?;
+    let stderr_task = tokio::spawn(async move {
+        let mut stderr = stderr;
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes).await;
+        tail_string(&bytes, STDERR_TAIL_BYTES)
+    });
+    let status = tokio::select! {
+        _ = cancel.cancelled() => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return Err(FfmpegError::NonZero {
+                code: -1,
+                stderr_tail: "cancelled".into(),
+            });
+        }
+        st = child.wait() => st.map_err(FfmpegError::Io)?,
+    };
+    let stderr_tail = stderr_task.await.unwrap_or_default();
+    if status.success() {
+        Ok(())
+    } else {
+        Err(FfmpegError::NonZero {
+            code: status.code().unwrap_or(-1),
+            stderr_tail,
+        })
+    }
 }
 
 /// Target spec for a platform reframe: output dimensions and an
