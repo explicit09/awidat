@@ -233,39 +233,39 @@ pub enum Item {
         /// The frontend renders each block only when its field is
         /// present, so older producers (User-source edits, simple
         /// trims, legacy agent paths) keep working unchanged.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         #[ts(optional)]
         intent: Option<String>,
         /// Optional long-form explanation rendered under "EXPLANATION"
         /// in the Inspector. May overlap with `summary` (which stays
         /// one-line) — when both are present, `summary` is the chip,
         /// `explanation` is the body.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         #[ts(optional)]
         explanation: Option<String>,
         /// Optional 0..=1 confidence the agent assigns to this proposal.
         /// The Inspector renders both a ConfidenceRing and a bar.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         #[ts(optional)]
         confidence: Option<f32>,
         /// Optional risk tier. The Inspector renders this as a 4-dot
         /// indicator next to a colored label. Tier mapping:
         /// Low → safe to accept, Medium → review first,
         /// High → likely needs revision, VeryHigh → block.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         #[ts(optional)]
         risk: Option<RiskLevel>,
         /// Optional list of evidence rows. The Inspector renders each
         /// with a kind-specific icon and a High/Med/Low tier label
         /// derived from `confidence` if `confidence_level` is absent.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         evidence: Vec<ProposalEvidence>,
         /// Optional alternative proposals the user can compare or
         /// switch to. Empty list means no alternatives — the Inspector
         /// hides the section. Each entry is a *summary* of a sibling
         /// proposal, not a full ProposedEdit (the agent re-emits the
         /// full thing if the user picks one).
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default)]
         alternatives: Vec<ProposalAlternative>,
     },
     /// Long-running background work (asset import, indexing,
@@ -1054,6 +1054,236 @@ pub enum PlayableKind {
     Missing,
 }
 
+/// Readiness summary for every media asset known to the project.
+///
+/// This is the shared contract the UI and agent should use when deciding
+/// whether an asset is playable, still processing, missing, or blocked by
+/// a decode/cache failure.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct MediaReadinessSnapshot {
+    /// Optional project identifier, when the caller has one.
+    pub project_id: Option<String>,
+    /// Unix timestamp in milliseconds for when this snapshot was built.
+    #[ts(type = "number")]
+    pub generated_at_ms: u64,
+    /// One entry per source asset.
+    pub entries: Vec<MediaReadinessEntry>,
+}
+
+/// Media-service state for one source asset.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct MediaReadinessEntry {
+    /// Project-relative asset id, usually the raw media path.
+    pub asset_id: String,
+    /// Display name shown in media and timeline panes.
+    pub display_name: String,
+    /// Absolute source path if the source still resolves on disk.
+    pub source_path: Option<String>,
+    /// Overall state for this asset.
+    pub state: MediaReadinessState,
+    /// Best artifact to use for playback now, if one exists.
+    pub playable: Option<PlayableArtifact>,
+    /// Cache/index sidecars available for this asset.
+    pub cache: MediaCacheReadiness,
+    /// Machine-readable reasons explaining blocked, failed, or offline states.
+    pub failures: Vec<MediaFailureReason>,
+    /// Estimated transcript/index progress while the local worker is active.
+    pub transcript_progress: Option<MediaProcessingProgress>,
+    /// Source duration in seconds, when probed.
+    pub duration_s: Option<f64>,
+    /// Source file size in bytes, when known.
+    #[ts(type = "number | null")]
+    pub source_size_bytes: Option<u64>,
+    /// Last status update time in Unix milliseconds.
+    #[ts(type = "number | null")]
+    pub updated_at_ms: Option<u64>,
+}
+
+/// Estimated progress for one media processing task.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct MediaProcessingProgress {
+    /// User-visible task label, e.g. `transcribing chunk 3 / 166`.
+    pub label: String,
+    /// Completed work units.
+    pub completed_units: u32,
+    /// Total estimated work units.
+    pub total_units: u32,
+    /// Current 1-based work unit, when known.
+    pub current_unit: Option<u32>,
+    /// Unit label, e.g. `chunks`.
+    pub unit: String,
+    /// Rounded 0..100 progress estimate.
+    pub percent: Option<u8>,
+}
+
+/// Coarse media state for UI badges, agent gating, and processing queues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum MediaReadinessState {
+    /// A playable artifact exists and required editor metadata is ready.
+    Ready,
+    /// Some artifacts are ready, but one or more requested sidecars are missing.
+    Partial,
+    /// A local or remote worker is actively building cache artifacts.
+    Processing,
+    /// The asset cannot advance until the user or environment fixes something.
+    Blocked,
+    /// Processing completed with an error.
+    Failed,
+    /// The source file cannot be found.
+    Offline,
+}
+
+/// One concrete media artifact that can be handed to a playback backend.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct PlayableArtifact {
+    /// Artifact class.
+    pub kind: PlayableArtifactKind,
+    /// Absolute path or URL. `None` means the state explains why unavailable.
+    pub path: Option<String>,
+    /// Decode path expected to consume this artifact.
+    pub backend: MediaDecodeBackend,
+    /// Container name such as `mov`, `mp4`, or `mkv`, when probed.
+    pub container: Option<String>,
+    /// Video codec such as `h264`, `hevc`, or `prores`, when probed.
+    pub video_codec: Option<String>,
+    /// Audio codec such as `aac` or `pcm_s16le`, when probed.
+    pub audio_codec: Option<String>,
+    /// Pixel width for video artifacts.
+    pub width: Option<u32>,
+    /// Pixel height for video artifacts.
+    pub height: Option<u32>,
+    /// Artifact duration in seconds.
+    pub duration_s: Option<f64>,
+}
+
+/// Artifact classes the media service can expose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum PlayableArtifactKind {
+    /// Original source media.
+    Source,
+    /// Full proxy optimized for timeline scrubbing.
+    Proxy,
+    /// Lightweight compatibility artifact for preview decode.
+    CompatibilityMedia,
+    /// Streamed artifact produced on demand by a media service.
+    Stream,
+}
+
+/// Decode backend expected to play or produce a media artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum MediaDecodeBackend {
+    /// Browser/WebKit media element.
+    Webkit,
+    /// FFmpeg remux without visual re-encode.
+    FfmpegRemux,
+    /// FFmpeg transcoded media.
+    FfmpegTranscode,
+    /// libmpv/MPV-backed playback.
+    Libmpv,
+    /// OS-native player backend.
+    Native,
+    /// Backend is not known yet.
+    Unknown,
+}
+
+/// Cache/index sidecar readiness for one asset.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct MediaCacheReadiness {
+    /// Timeline playback proxy.
+    pub proxy: MediaCacheArtifactStatus,
+    /// Browser-safe preview/cache media.
+    pub compatibility_media: MediaCacheArtifactStatus,
+    /// Filmstrip thumbnails.
+    pub thumbnails: MediaCacheArtifactStatus,
+    /// Waveform peaks sidecar.
+    pub waveform: MediaCacheArtifactStatus,
+    /// Word/segment transcript sidecar.
+    pub transcript: MediaCacheArtifactStatus,
+    /// Caption export/index sidecar.
+    pub captions: MediaCacheArtifactStatus,
+    /// Scene detection sidecar.
+    pub scenes: MediaCacheArtifactStatus,
+    /// Face detection sidecar.
+    pub face_detection: MediaCacheArtifactStatus,
+    /// Color analysis sidecar.
+    pub color_analysis: MediaCacheArtifactStatus,
+    /// Motion analysis sidecar.
+    pub motion_analysis: MediaCacheArtifactStatus,
+    /// Audio analysis sidecar.
+    pub audio_analysis: MediaCacheArtifactStatus,
+    /// Silence detection sidecar.
+    pub silence_detection: MediaCacheArtifactStatus,
+}
+
+/// Status for a single generated artifact or index sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum MediaCacheArtifactStatus {
+    /// No artifact exists yet.
+    Missing,
+    /// Work is queued or currently running.
+    Pending,
+    /// Artifact exists and is current.
+    Ready,
+    /// Artifact exists but should be refreshed.
+    Stale,
+    /// Last build failed.
+    Failed,
+    /// Artifact is intentionally not needed for this source.
+    Skipped,
+    /// This source cannot produce that artifact.
+    Unsupported,
+}
+
+/// Machine-readable cause for media being unavailable or degraded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+#[serde(rename_all = "snake_case")]
+pub enum MediaFailureReason {
+    /// Source path no longer exists.
+    SourceMissing,
+    /// Source is outside the currently allowed project roots.
+    SourceOutsideProject,
+    /// Container cannot be decoded by the selected backend.
+    UnsupportedContainer,
+    /// Codec cannot be decoded by the selected backend.
+    UnsupportedCodec,
+    /// Browser/WebKit failed to decode the artifact.
+    BrowserDecodeFailed,
+    /// Proxy was expected but is absent.
+    ProxyMissing,
+    /// Proxy generation failed.
+    ProxyFailed,
+    /// Compatibility media was expected but is absent.
+    CompatibilityMediaMissing,
+    /// Compatibility media generation failed.
+    CompatibilityMediaFailed,
+    /// Required cache/index sidecar is missing.
+    CacheMissing,
+    /// Required cache/index sidecar failed.
+    CacheFailed,
+    /// Not enough disk space to build the requested artifact.
+    DiskSpaceLow,
+    /// FFmpeg could not be found or started.
+    FfmpegUnavailable,
+    /// Media probing failed.
+    ProbeFailed,
+    /// Unknown fallback reason.
+    Unknown,
+}
+
 /// One drawable item on a track. Variant-tagged so the frontend can
 /// render each kind differently.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1427,12 +1657,12 @@ pub struct ProposalEvidence {
     /// Human-readable label ("Transcript boundary", "Audio energy drop").
     pub label: String,
     /// Optional confidence 0..=1 for this specific signal.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     #[ts(optional)]
     pub confidence: Option<f32>,
     /// Optional categorical tier. When present, overrides `confidence`
     /// for tier color rendering on the frontend.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     #[ts(optional)]
     pub confidence_level: Option<ConfidenceTier>,
 }
@@ -1466,7 +1696,7 @@ pub struct ProposalAlternative {
     pub label: String,
     /// Optional one-line detail ("+0.9s", "-1.2s", "—"). Rendered in
     /// the right column of the alternative chip in mono.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     #[ts(optional)]
     pub detail: Option<String>,
 }
@@ -1908,6 +2138,99 @@ mod tests {
                 "PROTOCOL_VERSION components must be numeric"
             );
         }
+    }
+
+    #[test]
+    fn media_readiness_enums_serialize_as_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&MediaReadinessState::Processing).unwrap(),
+            "\"processing\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PlayableArtifactKind::CompatibilityMedia).unwrap(),
+            "\"compatibility_media\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MediaDecodeBackend::FfmpegRemux).unwrap(),
+            "\"ffmpeg_remux\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MediaCacheArtifactStatus::Unsupported).unwrap(),
+            "\"unsupported\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MediaFailureReason::BrowserDecodeFailed).unwrap(),
+            "\"browser_decode_failed\""
+        );
+    }
+
+    #[test]
+    fn media_readiness_snapshot_roundtrips_json() {
+        let cache = MediaCacheReadiness {
+            proxy: MediaCacheArtifactStatus::Pending,
+            compatibility_media: MediaCacheArtifactStatus::Ready,
+            thumbnails: MediaCacheArtifactStatus::Ready,
+            waveform: MediaCacheArtifactStatus::Ready,
+            transcript: MediaCacheArtifactStatus::Missing,
+            captions: MediaCacheArtifactStatus::Missing,
+            scenes: MediaCacheArtifactStatus::Ready,
+            face_detection: MediaCacheArtifactStatus::Ready,
+            color_analysis: MediaCacheArtifactStatus::Ready,
+            motion_analysis: MediaCacheArtifactStatus::Ready,
+            audio_analysis: MediaCacheArtifactStatus::Ready,
+            silence_detection: MediaCacheArtifactStatus::Ready,
+        };
+        let snapshot = MediaReadinessSnapshot {
+            project_id: Some("project-1".into()),
+            generated_at_ms: 1_775_010_000_000,
+            entries: vec![MediaReadinessEntry {
+                asset_id: "raw/interview.mov".into(),
+                display_name: "interview.mov".into(),
+                source_path: Some("/abs/raw/interview.mov".into()),
+                state: MediaReadinessState::Partial,
+                playable: Some(PlayableArtifact {
+                    kind: PlayableArtifactKind::CompatibilityMedia,
+                    path: Some("/abs/.awidat/compat/interview.mp4".into()),
+                    backend: MediaDecodeBackend::Webkit,
+                    container: Some("mp4".into()),
+                    video_codec: Some("h264".into()),
+                    audio_codec: Some("aac".into()),
+                    width: Some(1920),
+                    height: Some(1080),
+                    duration_s: Some(4626.8),
+                }),
+                cache,
+                failures: vec![MediaFailureReason::ProxyMissing],
+                transcript_progress: Some(MediaProcessingProgress {
+                    label: "transcribing chunk 3 / 166".into(),
+                    completed_units: 2,
+                    total_units: 166,
+                    current_unit: Some(3),
+                    unit: "chunks".into(),
+                    percent: Some(1),
+                }),
+                duration_s: Some(4626.8),
+                source_size_bytes: Some(3_567_000_000),
+                updated_at_ms: Some(1_775_010_000_100),
+            }],
+        };
+
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["entries"][0]["state"], "partial");
+        assert_eq!(
+            json["entries"][0]["playable"]["kind"],
+            "compatibility_media"
+        );
+        assert_eq!(json["entries"][0]["playable"]["backend"], "webkit");
+        assert_eq!(json["entries"][0]["failures"][0], "proxy_missing");
+        assert_eq!(
+            json["entries"][0]["transcript_progress"]["total_units"],
+            166
+        );
+
+        let back: MediaReadinessSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(back.entries.len(), 1);
+        assert_eq!(back.entries[0].asset_id, "raw/interview.mov");
     }
 
     #[test]

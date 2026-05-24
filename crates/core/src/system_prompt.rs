@@ -222,6 +222,9 @@ shows the user red error cards. The single discovery call is cheap \
 and makes everything after it correct.\
 \n\nKey tools:\
 \n- view_episode: map of the project (assets + which indexers ran).\
+\n- read_media_readiness: verify source, playable artifact, proxy/cache, \
+and index-sidecar readiness before relying on transcript, scenes, speaker \
+labels, or visual evidence.\
 \n- find_beat / find_moment / inspect_moment: editorial moment lookup.\
 \n- find_audio_asset(kind, mood?, max_duration_s?): pull a candidate \
 SFX / music / ambience clip from the bundled audio library, ranked by \

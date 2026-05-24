@@ -17,6 +17,16 @@ export type { Thread } from "./generated/Thread";
 // responses and the `Item::ProposedEdit.snapshot` field.
 export type { TimelineItem } from "./generated/TimelineItem";
 export type { PlayableKind } from "./generated/PlayableKind";
+export type { MediaReadinessSnapshot } from "./generated/MediaReadinessSnapshot";
+export type { MediaReadinessEntry } from "./generated/MediaReadinessEntry";
+export type { MediaReadinessState } from "./generated/MediaReadinessState";
+export type { MediaProcessingProgress } from "./generated/MediaProcessingProgress";
+export type { PlayableArtifact } from "./generated/PlayableArtifact";
+export type { PlayableArtifactKind } from "./generated/PlayableArtifactKind";
+export type { MediaDecodeBackend } from "./generated/MediaDecodeBackend";
+export type { MediaCacheReadiness } from "./generated/MediaCacheReadiness";
+export type { MediaCacheArtifactStatus } from "./generated/MediaCacheArtifactStatus";
+export type { MediaFailureReason } from "./generated/MediaFailureReason";
 export type { TimelineParameterAnimation } from "./generated/TimelineParameterAnimation";
 export type { TimelineAnimationTarget } from "./generated/TimelineAnimationTarget";
 export type { TimelineBezierHandles } from "./generated/TimelineBezierHandles";

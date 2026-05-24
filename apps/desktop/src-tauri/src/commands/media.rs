@@ -5,9 +5,17 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use awidat_desktop_protocol::{
+    MediaCacheArtifactStatus, MediaCacheReadiness, MediaDecodeBackend, MediaFailureReason,
+    MediaProcessingProgress, MediaReadinessEntry, MediaReadinessSnapshot, MediaReadinessState,
+    PlayableArtifact, PlayableArtifactKind,
+};
+use awidat_proto::index::AssetId;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
@@ -212,6 +220,24 @@ pub async fn list_proxies(state: State<'_, AwidatState>) -> Result<Vec<ProxyEntr
     Ok(out)
 }
 
+/// Return the shared media-readiness truth for every source asset in
+/// the current project. This is read-only: it reports source/proxy/
+/// sidecar state from disk and never starts transcodes or indexers.
+#[tauri::command]
+pub async fn read_media_readiness(
+    state: State<'_, AwidatState>,
+) -> Result<MediaReadinessSnapshot, String> {
+    let project_root = state
+        .project_root
+        .lock()
+        .await
+        .clone()
+        .ok_or_else(|| "no project loaded".to_string())?;
+    tokio::task::spawn_blocking(move || build_media_readiness_snapshot_at(&project_root))
+        .await
+        .map_err(|e| format!("media readiness join: {e}"))?
+}
+
 fn is_proxy_file(path: &Path) -> bool {
     path.is_file()
         && path
@@ -219,6 +245,412 @@ fn is_proxy_file(path: &Path) -> bool {
             .and_then(|e| e.to_str())
             .map(|e| e.eq_ignore_ascii_case("mp4"))
             .unwrap_or(false)
+}
+
+fn build_media_readiness_snapshot_at(
+    project_root: &Path,
+) -> Result<MediaReadinessSnapshot, String> {
+    let raw_dir = project_root.join("raw");
+    let assets = if raw_dir.is_dir() {
+        crate::commands::transcode::collect_media(&raw_dir)
+            .map_err(|e| format!("scan raw/: {e}"))?
+    } else {
+        Vec::new()
+    };
+    let entries = assets
+        .iter()
+        .map(|asset| media_readiness_entry(project_root, asset))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(MediaReadinessSnapshot {
+        project_id: project_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned),
+        generated_at_ms: now_ms(),
+        entries,
+    })
+}
+
+fn media_readiness_entry(
+    project_root: &Path,
+    asset_path: &Path,
+) -> Result<MediaReadinessEntry, String> {
+    let asset_id = asset_path
+        .strip_prefix(project_root)
+        .unwrap_or(asset_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let display_name = asset_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("media")
+        .to_string();
+    let source_meta = std::fs::metadata(asset_path).ok();
+    let source_exists = source_meta.as_ref().is_some_and(|meta| meta.is_file());
+    let proxies_dir = project_root.join(".awidat").join("proxies");
+    let proxy_path = proxy_path_for(&proxies_dir, asset_path);
+    let proxy_pending = proxy_pending_path(&proxy_path);
+    let proxy_status = cache_file_status(asset_path, &proxy_path, Some(&proxy_pending));
+
+    let cache = MediaCacheReadiness {
+        proxy: proxy_status,
+        compatibility_media: proxy_status,
+        thumbnails: thumbnails_status(project_root, &asset_id),
+        waveform: waveform_status(project_root, &asset_id),
+        transcript: index_sidecar_status(project_root, "whisper", &asset_id),
+        captions: index_sidecar_status(project_root, "whisper", &asset_id),
+        scenes: index_sidecar_status(project_root, "scenedetect", &asset_id),
+        face_detection: index_sidecar_status(project_root, "face", &asset_id),
+        color_analysis: index_sidecar_status(project_root, "color-analysis", &asset_id),
+        motion_analysis: sidecar_file_status(
+            asset_path,
+            &motion_path_for(project_root, asset_path),
+        ),
+        audio_analysis: index_sidecar_status(project_root, "audio-energy", &asset_id),
+        silence_detection: sidecar_file_status(
+            asset_path,
+            &silences_path_for(project_root, asset_path),
+        ),
+    };
+    let duration_s = probe_duration_s_sync(asset_path);
+    let transcript_progress = if matches!(
+        cache.transcript,
+        MediaCacheArtifactStatus::Ready | MediaCacheArtifactStatus::Stale
+    ) {
+        None
+    } else {
+        duration_s.and_then(whispercpp_progress_from_active_work_dir)
+    };
+
+    let mut failures = Vec::new();
+    if !source_exists {
+        failures.push(MediaFailureReason::SourceMissing);
+    }
+    if matches!(proxy_status, MediaCacheArtifactStatus::Missing) {
+        failures.push(MediaFailureReason::ProxyMissing);
+    }
+
+    let playable = if matches!(proxy_status, MediaCacheArtifactStatus::Ready) {
+        Some(playable_artifact(
+            PlayableArtifactKind::Proxy,
+            Some(proxy_path.to_string_lossy().into_owned()),
+            Some("mp4".into()),
+            duration_s,
+        ))
+    } else if source_exists {
+        Some(playable_artifact(
+            PlayableArtifactKind::Source,
+            Some(asset_path.to_string_lossy().into_owned()),
+            asset_path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase()),
+            duration_s,
+        ))
+    } else {
+        None
+    };
+
+    let state = readiness_state(source_exists, proxy_status, playable.is_some(), &cache);
+    Ok(MediaReadinessEntry {
+        asset_id,
+        display_name,
+        source_path: source_exists.then(|| asset_path.to_string_lossy().into_owned()),
+        state,
+        playable,
+        cache,
+        failures,
+        transcript_progress,
+        duration_s,
+        source_size_bytes: source_meta.map(|meta| meta.len()),
+        updated_at_ms: source_updated_at_ms(asset_path),
+    })
+}
+
+const WHISPERCPP_CHUNK_S: f64 = 30.0;
+const WHISPERCPP_OVERLAP_S: f64 = 2.0;
+const WHISPERCPP_ACTIVE_WORK_DIR_MAX_AGE_S: u64 = 60;
+
+fn whispercpp_progress_from_active_work_dir(duration_s: f64) -> Option<MediaProcessingProgress> {
+    let work_dir = newest_whispercpp_work_dir()?;
+    whispercpp_progress_from_work_dir(&work_dir, duration_s)
+}
+
+fn newest_whispercpp_work_dir() -> Option<PathBuf> {
+    let temp_dir = std::env::temp_dir();
+    let entries = std::fs::read_dir(temp_dir).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let name = path.file_name()?.to_str()?;
+            if !name.starts_with("awidat-whispercpp-") {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            let age = SystemTime::now().duration_since(modified).ok()?;
+            if age.as_secs() > WHISPERCPP_ACTIVE_WORK_DIR_MAX_AGE_S {
+                return None;
+            }
+            Some((modified, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+fn whispercpp_progress_from_work_dir(
+    work_dir: &Path,
+    duration_s: f64,
+) -> Option<MediaProcessingProgress> {
+    if !duration_s.is_finite() || duration_s <= 0.0 {
+        return None;
+    }
+    let step_s = WHISPERCPP_CHUNK_S - WHISPERCPP_OVERLAP_S;
+    if step_s <= 0.0 {
+        return None;
+    }
+    let total_units = (duration_s / step_s).ceil() as u32;
+    if total_units == 0 {
+        return None;
+    }
+
+    let mut completed_units = 0u32;
+    let mut max_wav_index = None;
+    for entry in std::fs::read_dir(work_dir).ok()?.filter_map(Result::ok) {
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if let Some(index) = chunk_index(file_name, ".json") {
+            completed_units = completed_units.saturating_add(1);
+            max_wav_index = Some(max_wav_index.unwrap_or(index).max(index));
+        } else if let Some(index) = chunk_index(file_name, ".wav") {
+            max_wav_index = Some(max_wav_index.unwrap_or(index).max(index));
+        }
+    }
+    if completed_units == 0 && max_wav_index.is_none() {
+        return None;
+    }
+
+    let completed_units = completed_units.min(total_units);
+    let current_unit = max_wav_index
+        .map(|index| index.saturating_add(1).min(total_units))
+        .or_else(|| Some(completed_units.saturating_add(1).min(total_units)));
+    let finalizing = completed_units >= total_units;
+    let percent = if finalizing {
+        Some(99)
+    } else {
+        Some(((completed_units as f64 / total_units as f64) * 100.0).round() as u8)
+    };
+    let label = if finalizing {
+        "finalizing transcript".to_string()
+    } else {
+        format!(
+            "transcribing chunk {} / {}",
+            current_unit.unwrap_or(completed_units.saturating_add(1)),
+            total_units
+        )
+    };
+
+    Some(MediaProcessingProgress {
+        label,
+        completed_units,
+        total_units,
+        current_unit,
+        unit: "chunks".into(),
+        percent,
+    })
+}
+
+fn chunk_index(file_name: &str, suffix: &str) -> Option<u32> {
+    let number = file_name.strip_prefix("chunk-")?.strip_suffix(suffix)?;
+    number.parse().ok()
+}
+
+fn probe_duration_s_sync(asset_path: &Path) -> Option<f64> {
+    let bin = awidat_render::ffprobe_path().ok()?;
+    let output = Command::new(bin)
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("default=noprint_wrappers=1:nokey=1")
+        .arg(asset_path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout.trim().parse::<f64>().ok()
+}
+
+fn readiness_state(
+    source_exists: bool,
+    proxy_status: MediaCacheArtifactStatus,
+    has_playable: bool,
+    cache: &MediaCacheReadiness,
+) -> MediaReadinessState {
+    if !source_exists {
+        return MediaReadinessState::Offline;
+    }
+    if any_cache_status(cache, MediaCacheArtifactStatus::Failed) {
+        return MediaReadinessState::Failed;
+    }
+    if matches!(proxy_status, MediaCacheArtifactStatus::Pending) {
+        return MediaReadinessState::Processing;
+    }
+    if !has_playable {
+        return MediaReadinessState::Blocked;
+    }
+    if all_cache_ready_or_skipped(cache) {
+        MediaReadinessState::Ready
+    } else {
+        MediaReadinessState::Partial
+    }
+}
+
+fn playable_artifact(
+    kind: PlayableArtifactKind,
+    path: Option<String>,
+    container: Option<String>,
+    duration_s: Option<f64>,
+) -> PlayableArtifact {
+    PlayableArtifact {
+        kind,
+        path,
+        backend: MediaDecodeBackend::Webkit,
+        container,
+        video_codec: None,
+        audio_codec: None,
+        width: None,
+        height: None,
+        duration_s,
+    }
+}
+
+fn all_cache_ready_or_skipped(cache: &MediaCacheReadiness) -> bool {
+    cache_statuses(cache).into_iter().all(|status| {
+        matches!(
+            status,
+            MediaCacheArtifactStatus::Ready | MediaCacheArtifactStatus::Skipped
+        )
+    })
+}
+
+fn any_cache_status(cache: &MediaCacheReadiness, target: MediaCacheArtifactStatus) -> bool {
+    cache_statuses(cache)
+        .into_iter()
+        .any(|status| status == target)
+}
+
+fn cache_statuses(cache: &MediaCacheReadiness) -> [MediaCacheArtifactStatus; 12] {
+    [
+        cache.proxy,
+        cache.compatibility_media,
+        cache.thumbnails,
+        cache.waveform,
+        cache.transcript,
+        cache.captions,
+        cache.scenes,
+        cache.face_detection,
+        cache.color_analysis,
+        cache.motion_analysis,
+        cache.audio_analysis,
+        cache.silence_detection,
+    ]
+}
+
+fn thumbnails_status(project_root: &Path, asset_id: &str) -> MediaCacheArtifactStatus {
+    if thumbnails_dir_for_asset_id(project_root, asset_id).is_some() {
+        MediaCacheArtifactStatus::Ready
+    } else {
+        MediaCacheArtifactStatus::Missing
+    }
+}
+
+fn waveform_status(project_root: &Path, asset_id: &str) -> MediaCacheArtifactStatus {
+    if waveform_path_for_asset_id(project_root, asset_id).is_some() {
+        MediaCacheArtifactStatus::Ready
+    } else {
+        MediaCacheArtifactStatus::Missing
+    }
+}
+
+fn index_sidecar_status(
+    project_root: &Path,
+    indexer: &str,
+    asset_id: &str,
+) -> MediaCacheArtifactStatus {
+    let asset = AssetId::new(asset_id.to_string());
+    let Ok(path) = awidat_index::sidecar_io::sidecar_path(project_root, indexer, &asset) else {
+        return MediaCacheArtifactStatus::Missing;
+    };
+    sidecar_file_status(&project_root.join(asset_id), &path)
+}
+
+fn sidecar_file_status(asset_path: &Path, sidecar_path: &Path) -> MediaCacheArtifactStatus {
+    cache_file_status(asset_path, sidecar_path, None)
+}
+
+fn cache_file_status(
+    asset_path: &Path,
+    artifact_path: &Path,
+    pending_path: Option<&Path>,
+) -> MediaCacheArtifactStatus {
+    if pending_path.is_some_and(|path| path.is_file()) {
+        return MediaCacheArtifactStatus::Pending;
+    }
+    if !artifact_path.is_file() {
+        return MediaCacheArtifactStatus::Missing;
+    }
+    if artifact_is_fresh(asset_path, artifact_path) {
+        MediaCacheArtifactStatus::Ready
+    } else {
+        MediaCacheArtifactStatus::Stale
+    }
+}
+
+fn artifact_is_fresh(asset_path: &Path, artifact_path: &Path) -> bool {
+    let artifact_meta = match std::fs::metadata(artifact_path) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    let asset_meta = match std::fs::metadata(asset_path) {
+        Ok(meta) => meta,
+        Err(_) => return false,
+    };
+    let (Ok(artifact_mtime), Ok(asset_mtime)) = (artifact_meta.modified(), asset_meta.modified())
+    else {
+        return false;
+    };
+    artifact_mtime >= asset_mtime
+}
+
+fn proxy_pending_path(proxy_path: &Path) -> PathBuf {
+    let mut raw = proxy_path.as_os_str().to_os_string();
+    raw.push(".pending");
+    PathBuf::from(raw)
+}
+
+fn source_updated_at_ms(asset_path: &Path) -> Option<u64> {
+    std::fs::metadata(asset_path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(system_time_ms)
+}
+
+fn now_ms() -> u64 {
+    system_time_ms(SystemTime::now()).unwrap_or(0)
+}
+
+fn system_time_ms(time: SystemTime) -> Option<u64> {
+    let duration = time.duration_since(UNIX_EPOCH).ok()?;
+    Some(duration.as_millis().try_into().unwrap_or(u64::MAX))
 }
 
 /// Tauri command that resolves the absolute path on disk for a
@@ -727,25 +1159,15 @@ pub fn thumbnails_dir_for_asset_id(project_root: &Path, asset_id: &str) -> Optio
 /// Recursively walk a JSON value and rewrite every `ExternalReference`
 /// node whose `target_url` matches `old` to use `new`. `changed` is
 /// incremented for each rewrite so callers can refuse no-op writes.
-fn walk_external_refs(
-    value: &mut serde_json::Value,
-    old: &str,
-    new: &str,
-    changed: &mut usize,
-) {
+fn walk_external_refs(value: &mut serde_json::Value, old: &str, new: &str, changed: &mut usize) {
     match value {
         serde_json::Value::Object(map) => {
             let is_external = map
                 .get("OTIO_SCHEMA")
                 .and_then(|s| s.as_str())
                 .is_some_and(|s| s.starts_with("ExternalReference"));
-            if is_external
-                && map.get("target_url").and_then(|t| t.as_str()) == Some(old)
-            {
-                map.insert(
-                    "target_url".into(),
-                    serde_json::Value::String(new.into()),
-                );
+            if is_external && map.get("target_url").and_then(|t| t.as_str()) == Some(old) {
+                map.insert("target_url".into(), serde_json::Value::String(new.into()));
                 *changed += 1;
             }
             for child in map.values_mut() {
@@ -791,8 +1213,8 @@ pub async fn relink_missing_asset(
     if changed == 0 {
         return Err(format!("no ExternalReference matched {old_asset_id}"));
     }
-    let serialized = serde_json::to_vec_pretty(&json)
-        .map_err(|e| format!("serialize otio: {e}"))?;
+    let serialized =
+        serde_json::to_vec_pretty(&json).map_err(|e| format!("serialize otio: {e}"))?;
     tokio::fs::write(&otio_path, serialized)
         .await
         .map_err(|e| format!("write otio: {e}"))?;
@@ -854,6 +1276,142 @@ mod tests {
     fn proxy_path_for_asset_id_returns_none_when_asset_missing() {
         let dir = tempfile::tempdir().unwrap();
         assert!(proxy_path_for_asset_id(dir.path(), "raw/nonexistent.mp4").is_none());
+    }
+
+    #[test]
+    fn media_readiness_reports_source_fallback_when_proxy_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("clip.mov");
+        std::fs::write(&asset, b"source").unwrap();
+
+        let snapshot = build_media_readiness_snapshot_at(dir.path()).unwrap();
+
+        assert_eq!(snapshot.entries.len(), 1);
+        let entry = &snapshot.entries[0];
+        assert_eq!(entry.asset_id, "raw/clip.mov");
+        assert_eq!(entry.state, MediaReadinessState::Partial);
+        assert_eq!(entry.cache.proxy, MediaCacheArtifactStatus::Missing);
+        assert_eq!(
+            entry.playable.as_ref().map(|artifact| artifact.kind),
+            Some(PlayableArtifactKind::Source)
+        );
+        assert!(entry.failures.contains(&MediaFailureReason::ProxyMissing));
+    }
+
+    #[test]
+    fn media_readiness_prefers_fresh_proxy_and_reports_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("clip.mov");
+        std::fs::write(&asset, b"source").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let proxy = proxy_path_for(&proxies_dir, &asset);
+        std::fs::write(&proxy, b"proxy").unwrap();
+
+        let thumbnails = thumbnails_dir_for(dir.path(), &asset);
+        std::fs::create_dir_all(&thumbnails).unwrap();
+        std::fs::write(thumbnails.join("frame-0001.jpg"), b"jpg").unwrap();
+
+        let waveform = waveform_path_for(dir.path(), &asset);
+        std::fs::create_dir_all(waveform.parent().unwrap()).unwrap();
+        std::fs::write(&waveform, br#"{"buckets":[0.1]}"#).unwrap();
+
+        let motion = motion_path_for(dir.path(), &asset);
+        std::fs::create_dir_all(motion.parent().unwrap()).unwrap();
+        std::fs::write(&motion, b"{}").unwrap();
+
+        let silences = silences_path_for(dir.path(), &asset);
+        std::fs::create_dir_all(silences.parent().unwrap()).unwrap();
+        std::fs::write(&silences, b"{}").unwrap();
+
+        for indexer in [
+            "whisper",
+            "scenedetect",
+            "face",
+            "color-analysis",
+            "audio-energy",
+        ] {
+            let path = dir
+                .path()
+                .join("index")
+                .join(indexer)
+                .join("raw/clip.mov.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"{}").unwrap();
+        }
+
+        let snapshot = build_media_readiness_snapshot_at(dir.path()).unwrap();
+        let entry = &snapshot.entries[0];
+
+        assert_eq!(entry.state, MediaReadinessState::Ready);
+        assert_eq!(entry.cache.proxy, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.thumbnails, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.waveform, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.transcript, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.captions, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.scenes, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.face_detection, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.color_analysis, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.motion_analysis, MediaCacheArtifactStatus::Ready);
+        assert_eq!(entry.cache.audio_analysis, MediaCacheArtifactStatus::Ready);
+        assert_eq!(
+            entry.cache.silence_detection,
+            MediaCacheArtifactStatus::Ready
+        );
+        assert_eq!(
+            entry.playable.as_ref().map(|artifact| artifact.kind),
+            Some(PlayableArtifactKind::Proxy)
+        );
+        assert!(entry.failures.is_empty());
+    }
+
+    #[test]
+    fn media_readiness_reports_processing_for_pending_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw_dir = dir.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).unwrap();
+        let asset = raw_dir.join("clip.mov");
+        std::fs::write(&asset, b"source").unwrap();
+
+        let proxies_dir = dir.path().join(".awidat").join("proxies");
+        std::fs::create_dir_all(&proxies_dir).unwrap();
+        let proxy = proxy_path_for(&proxies_dir, &asset);
+        std::fs::write(proxy_pending_path(&proxy), b"partial").unwrap();
+
+        let snapshot = build_media_readiness_snapshot_at(dir.path()).unwrap();
+        let entry = &snapshot.entries[0];
+
+        assert_eq!(entry.state, MediaReadinessState::Processing);
+        assert_eq!(entry.cache.proxy, MediaCacheArtifactStatus::Pending);
+        assert_eq!(
+            entry.playable.as_ref().map(|artifact| artifact.kind),
+            Some(PlayableArtifactKind::Source)
+        );
+    }
+
+    #[test]
+    fn whispercpp_progress_estimates_completed_chunks() {
+        let work_dir = tempfile::tempdir().unwrap();
+        std::fs::write(work_dir.path().join("chunk-0000.wav"), b"wav").unwrap();
+        std::fs::write(work_dir.path().join("chunk-0000.json"), b"{}").unwrap();
+        std::fs::write(work_dir.path().join("chunk-0001.wav"), b"wav").unwrap();
+        std::fs::write(work_dir.path().join("chunk-0001.json"), b"{}").unwrap();
+        std::fs::write(work_dir.path().join("chunk-0002.wav"), b"wav").unwrap();
+
+        let progress = whispercpp_progress_from_work_dir(work_dir.path(), 4626.8222).unwrap();
+
+        assert_eq!(progress.completed_units, 2);
+        assert_eq!(progress.total_units, 166);
+        assert_eq!(progress.current_unit, Some(3));
+        assert_eq!(progress.unit, "chunks");
+        assert_eq!(progress.percent, Some(1));
+        assert_eq!(progress.label, "transcribing chunk 3 / 166");
     }
 
     #[test]
