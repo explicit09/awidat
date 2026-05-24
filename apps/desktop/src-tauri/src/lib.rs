@@ -78,6 +78,22 @@ pub fn run() {
                 .clone()
             {
                 commands::project::allow_project_asset_dirs(app.handle(), &project_root);
+                // Mirror what set_project_root does for explicit opens:
+                // kick the proxy + sidecar backfill so a project loaded
+                // from persistence (or AWIDAT_DESKTOP_PROJECT env) gets
+                // its preview chain repaired without waiting for the
+                // user to re-pick the project. Without this, projects
+                // whose proxy never completed (e.g. ran out of disk
+                // mid-transcode) stay in "Preview unavailable" until
+                // the user closes + reopens.
+                commands::transcode::spawn_proxy_backfill_on_load(
+                    app.handle().clone(),
+                    project_root.clone(),
+                );
+                commands::transcode::spawn_sidecar_backfill_on_load(
+                    app.handle().clone(),
+                    project_root,
+                );
             }
             Ok(())
         })
