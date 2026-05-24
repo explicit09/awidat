@@ -21,8 +21,10 @@ Schema version: "1".
 from __future__ import annotations
 
 import logging
+import json
 import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import face_recognition
@@ -50,6 +52,59 @@ server = IndexerServer(
     indexer_version=INDEXER_VERSION,
     schema_version=SCHEMA_VERSION,
 )
+
+
+def _read_face_sidecar(asset_path: str, asset_id: str) -> dict[str, Any] | None:
+    asset = Path(asset_path).absolute()
+    for ancestor in asset.parents:
+        candidate = ancestor / "index" / "face" / f"{asset_id}.json"
+        if candidate.exists():
+            try:
+                return json.loads(candidate.read_text()).get("data", {})
+            except (OSError, json.JSONDecodeError):
+                return None
+        if (ancestor / ".awidat").exists():
+            return None
+    return None
+
+
+def _gaze_from_face_sidecar(face_body: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not face_body:
+        return None
+    per_frame = face_body.get("per_frame")
+    if not isinstance(per_frame, list):
+        return None
+    out_frames = []
+    has_gaze = False
+    for entry in per_frame:
+        if not isinstance(entry, dict):
+            continue
+        faces_out = []
+        for face in entry.get("faces", []):
+            if not isinstance(face, dict):
+                continue
+            if "gaze_score" not in face or "at_camera" not in face:
+                continue
+            has_gaze = True
+            faces_out.append(
+                {
+                    "box": face.get("box", []),
+                    "gaze_score": float(face["gaze_score"]),
+                    "at_camera": bool(face["at_camera"]),
+                }
+            )
+        out_frames.append({"t_s": float(entry.get("t_s", 0.0)), "faces": faces_out})
+    if not has_gaze:
+        return None
+    return {
+        "frame_rate_sampled": face_body.get("frame_rate_sampled", SAMPLE_FPS),
+        "detect_width": face_body.get("detect_width", 0),
+        "detect_height": face_body.get("detect_height", 0),
+        "frame_count": face_body.get("frame_count", len(out_frames)),
+        "at_camera_threshold": AT_CAMERA_THRESHOLD,
+        "source": "face",
+        "per_frame": out_frames,
+    }
 
 
 def _probe_dims(asset_path: str) -> tuple[int, int]:
@@ -151,6 +206,10 @@ def _gaze_score(landmarks: dict[str, list[tuple[int, int]]]) -> float:
 
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
+    from_face = _gaze_from_face_sidecar(_read_face_sidecar(req.asset_path, req.asset_id))
+    if from_face is not None:
+        return from_face
+
     frames, w, h = _iter_frames(req.asset_path, SAMPLE_FPS)
     _log.info(
         "gaze-mcp: asset=%s streaming frames at %dx%d", req.asset_id, w, h

@@ -3,8 +3,9 @@
 Two-pass pipeline:
 
 1. **Detect + embed.** Sample 1 fps via ffmpeg, run dlib's HOG face
-   detector + 128-dim recognition encoder on each frame. Per-frame
-   output: `[{box: [top, right, bottom, left], embedding}]`.
+   detector, landmarks, gaze heuristic, and 128-dim recognition encoder
+   on each frame. Per-frame output includes box, face id, gaze score,
+   and at-camera flag.
 
 2. **Cluster + label.** All embeddings across the asset go through
    DBSCAN with cosine metric. Each cluster becomes a `face_id`.
@@ -26,6 +27,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import subprocess
 from collections.abc import Iterator
 from collections import Counter, defaultdict
@@ -43,10 +45,10 @@ INDEXER_NAME = "face"
 INDEXER_VERSION = "0.1.0"
 SCHEMA_VERSION = "1"
 
-# 1 fps mirrors clip-mcp — same time grid means a future joint query
-# (e.g. "find frames where speaker B is on screen AND clip says
-# 'pointing at phone'") aligns trivially.
-SAMPLE_FPS = 1.0
+# One frame every two seconds by default. Face detection is one of the most
+# expensive visual passes; this still gives speaker/face evidence without
+# making long-form indexing wait on thousands of dlib runs.
+SAMPLE_FPS = float(os.environ.get("FACE_SAMPLE_FPS", "0.5"))
 
 # DBSCAN cosine epsilon. dlib face embeddings cluster cleanly at
 # eps=0.4 in cosine distance per the face_recognition project README;
@@ -56,9 +58,11 @@ DBSCAN_EPS = 0.4
 DBSCAN_MIN_SAMPLES = 1  # singleton clusters are valid (a guest who appears once)
 
 # Frame size to detect on. dlib HOG works at native resolution but
-# downscaling to 640px wide keeps a 4K stream fast without losing
-# detection quality at typical interview-cam shot scales.
-DETECT_WIDTH = 640
+# downscaling keeps a 4K stream fast without losing detection quality
+# at typical interview-cam shot scales.
+DETECT_WIDTH = int(os.environ.get("FACE_DETECT_WIDTH", "480"))
+
+AT_CAMERA_THRESHOLD = 0.15
 
 _log = logging.getLogger(INDEXER_NAME)
 
@@ -173,14 +177,31 @@ def _iter_frames(
 
 def _detect_and_embed(
     frame: np.ndarray,
-) -> list[tuple[tuple[int, int, int, int], np.ndarray]]:
-    """Run face_recognition's HOG detector + 128-dim encoder on `frame`.
-    Returns a list of ((top, right, bottom, left), embedding)."""
+) -> list[tuple[tuple[int, int, int, int], np.ndarray, float, bool]]:
+    """Run HOG face detection, landmarks, gaze, and 128-dim embedding."""
     boxes = face_recognition.face_locations(frame, model="hog")
     if not boxes:
         return []
+    landmark_sets = face_recognition.face_landmarks(frame, face_locations=boxes)
     embs = face_recognition.face_encodings(frame, known_face_locations=boxes)
-    return list(zip(boxes, embs, strict=True))
+    out = []
+    for box, emb, landmarks in zip(boxes, embs, landmark_sets, strict=True):
+        score = _gaze_score(landmarks)
+        out.append((box, emb, score, abs(score) < AT_CAMERA_THRESHOLD))
+    return out
+
+
+def _gaze_score(landmarks: dict[str, list[tuple[int, int]]]) -> float:
+    if "nose_tip" not in landmarks or "left_eye" not in landmarks or "right_eye" not in landmarks:
+        return 0.0
+    nose = np.array(landmarks["nose_tip"]).mean(axis=0)
+    left_eye = np.array(landmarks["left_eye"]).mean(axis=0)
+    right_eye = np.array(landmarks["right_eye"]).mean(axis=0)
+    midpoint = (left_eye + right_eye) / 2.0
+    eye_distance = float(np.linalg.norm(right_eye - left_eye))
+    if eye_distance < 1.0:
+        return 0.0
+    return float(nose[0] - midpoint[0]) / eye_distance
 
 
 def _cluster_faces(
@@ -290,9 +311,16 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     for frame in frames:
         dets = _detect_and_embed(frame)
         per_frame_raw.append(
-            [{"box": list(map(int, box))} for box, _emb in dets]
+            [
+                {
+                    "box": list(map(int, box)),
+                    "gaze_score": score,
+                    "at_camera": at_camera,
+                }
+                for box, _emb, score, at_camera in dets
+            ]
         )
-        for _box, emb in dets:
+        for _box, emb, _score, _at_camera in dets:
             pool.append(emb)
         frame_count += 1
 
@@ -307,7 +335,14 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         out_faces: list[dict[str, Any]] = []
         for f in faces:
             face_id = f"f_{int(labels[cursor])}"
-            out_faces.append({"face_id": face_id, "box": f["box"]})
+            out_faces.append(
+                {
+                    "face_id": face_id,
+                    "box": f["box"],
+                    "gaze_score": f["gaze_score"],
+                    "at_camera": f["at_camera"],
+                }
+            )
             cursor += 1
         per_frame.append({"t_s": i / SAMPLE_FPS, "faces": out_faces})
 

@@ -76,6 +76,15 @@ PROBE_WIDTH = 320
 # short temporal neighborhood before applying the result limit.
 MATCH_CANDIDATE_DEDUP_WINDOW_S = 0.75
 
+# Built-in motion sidecars are normalized to roughly [0, 1]. Prefer them over
+# per-shot ffmpeg seeks; fall back to optical flow only when the sidecar is absent.
+MOTION_SIGNAL_BUCKETS = [
+    ("static", 0.0, 0.08),
+    ("slow-pan", 0.08, 0.35),
+    ("handheld", 0.35, 0.75),
+    ("fast-cut", 0.75, float("inf")),
+]
+
 _log = logging.getLogger(INDEXER_NAME)
 
 
@@ -142,6 +151,65 @@ def _bucket_motion(magnitude: float) -> str:
         if lo <= magnitude < hi:
             return label
     return "static"
+
+
+def _bucket_motion_signal(magnitude: float) -> str:
+    for label, lo, hi in MOTION_SIGNAL_BUCKETS:
+        if lo <= magnitude < hi:
+            return label
+    return "static"
+
+
+def _read_motion_signal(project_root: Path, asset_path: str) -> dict[str, Any] | None:
+    motion_dir = project_root / ".awidat" / "motion"
+    if not motion_dir.exists():
+        return None
+    stem = Path(asset_path).stem
+    candidates = list(motion_dir.glob(f"{stem}-*.json"))
+    if not candidates:
+        return None
+    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+    try:
+        body = json.loads(newest.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    magnitudes = body.get("magnitudes")
+    samples_per_second = body.get("samples_per_second", 1)
+    if not isinstance(magnitudes, list) or not magnitudes:
+        return None
+    try:
+        sps = float(samples_per_second)
+    except (TypeError, ValueError):
+        sps = 1.0
+    return {
+        "samples_per_second": max(sps, 0.001),
+        "magnitudes": [float(value) for value in magnitudes],
+    }
+
+
+def _motion_summary_from_signal(
+    motion_signal: dict[str, Any] | None,
+    start_s: float,
+    end_s: float,
+) -> dict[str, Any] | None:
+    if not motion_signal:
+        return None
+    sps = float(motion_signal["samples_per_second"])
+    magnitudes = motion_signal["magnitudes"]
+    start_i = max(0, int(start_s * sps))
+    end_i = min(len(magnitudes), max(start_i + 1, int(np.ceil(end_s * sps))))
+    window = magnitudes[start_i:end_i]
+    if not window:
+        return None
+    mag = float(np.mean(window))
+    return {
+        "motion": _bucket_motion_signal(mag),
+        "motion_magnitude": mag,
+        "dominant_direction": None,
+        "action_score": _score_between(mag, 0.08, 0.75),
+        "whip_pan_score": 0.0,
+        "occlusion_score": 0.0,
+    }
 
 
 def _grab_frame(asset_path: str, t_s: float, target_w: int) -> np.ndarray | None:
@@ -516,33 +584,29 @@ def _decode_clip_embeddings(body: dict[str, Any]) -> np.ndarray | None:
     return matrix / norms
 
 
-def _clip_match_candidates_for_shot(
+def _prepare_clip_index(
     clip_body: dict[str, Any] | None,
-    start_s: float,
-    end_s: float,
-    limit: int = 3,
-    asset_id: str | None = None,
-    candidate_clip_bodies: list[tuple[str | None, dict[str, Any]]] | None = None,
-) -> list[dict[str, Any]]:
+    candidate_clip_bodies: list[tuple[str | None, dict[str, Any]]],
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]]] | None:
     if not clip_body:
-        return []
-    embeddings = _decode_clip_embeddings(clip_body)
-    if embeddings is None:
-        return []
-    timestamps = clip_body.get("timestamps_s", [])
-    if not isinstance(timestamps, list) or len(timestamps) != embeddings.shape[0]:
-        timestamps = [float(i) for i in range(embeddings.shape[0])]
-    center_s = (start_s + end_s) / 2.0
-    query_index = min(
-        range(len(timestamps)),
-        key=lambda idx: abs(float(timestamps[idx]) - center_s),
-    )
-    query = embeddings[query_index]
-    candidates = candidate_clip_bodies or [(asset_id, clip_body)]
-    scored: list[dict[str, Any]] = []
-    for candidate_asset_id, candidate_body in candidates:
+        return None
+    query_embeddings = _decode_clip_embeddings(clip_body)
+    if query_embeddings is None:
+        return None
+    query_timestamps = clip_body.get("timestamps_s", [])
+    if (
+        not isinstance(query_timestamps, list)
+        or len(query_timestamps) != query_embeddings.shape[0]
+    ):
+        query_timestamps = [float(i) for i in range(query_embeddings.shape[0])]
+
+    candidates: list[dict[str, Any]] = []
+    for candidate_asset_id, candidate_body in candidate_clip_bodies:
         candidate_embeddings = _decode_clip_embeddings(candidate_body)
-        if candidate_embeddings is None or candidate_embeddings.shape[1] != query.shape[0]:
+        if (
+            candidate_embeddings is None
+            or candidate_embeddings.shape[1] != query_embeddings.shape[1]
+        ):
             continue
         candidate_timestamps = candidate_body.get("timestamps_s", [])
         if (
@@ -550,19 +614,78 @@ def _clip_match_candidates_for_shot(
             or len(candidate_timestamps) != candidate_embeddings.shape[0]
         ):
             candidate_timestamps = [float(i) for i in range(candidate_embeddings.shape[0])]
-        for idx, timestamp in enumerate(candidate_timestamps):
-            t_s = float(timestamp)
-            if candidate_asset_id == asset_id and start_s <= t_s < end_s:
-                continue
-            similarity = float(np.dot(query, candidate_embeddings[idx]))
-            candidate = {
-                "time_s": t_s,
-                "similarity": similarity,
-                "basis": "clip_embedding",
+        candidates.append(
+            {
+                "asset_id": candidate_asset_id,
+                "embeddings": candidate_embeddings,
+                "timestamps_s": np.asarray(
+                    [float(t) for t in candidate_timestamps],
+                    dtype=np.float32,
+                ),
             }
+        )
+    return (
+        query_embeddings,
+        np.asarray([float(t) for t in query_timestamps], dtype=np.float32),
+        candidates,
+    )
+
+
+def _clip_match_candidates_for_shot(
+    clip_index: tuple[np.ndarray, np.ndarray, list[dict[str, Any]]] | None,
+    start_s: float,
+    end_s: float,
+    limit: int = 3,
+    asset_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if not clip_index:
+        return []
+    embeddings, timestamps, candidates = clip_index
+    if embeddings.size == 0 or timestamps.size == 0 or not candidates:
+        return []
+    center_s = (start_s + end_s) / 2.0
+    insertion = int(np.searchsorted(timestamps, center_s))
+    query_index = min(max(insertion, 0), len(timestamps) - 1)
+    if query_index > 0 and abs(float(timestamps[query_index - 1]) - center_s) < abs(
+        float(timestamps[query_index]) - center_s
+    ):
+        query_index -= 1
+    query = embeddings[query_index]
+    scored: list[dict[str, Any]] = []
+    for candidate in candidates:
+        candidate_asset_id = candidate["asset_id"]
+        candidate_embeddings = candidate["embeddings"]
+        candidate_timestamps = candidate["timestamps_s"]
+        similarities = candidate_embeddings @ query
+        if candidate_asset_id == asset_id:
+            in_current_shot = (candidate_timestamps >= start_s) & (candidate_timestamps < end_s)
+            if bool(in_current_shot.all()):
+                continue
+            similarities = similarities.copy()
+            similarities[in_current_shot] = -np.inf
+        finite = np.isfinite(similarities)
+        if not bool(finite.any()):
+            continue
+        top_count = min(max(limit * 16, 64), int(finite.sum()))
+        finite_indices = np.flatnonzero(finite)
+        finite_scores = similarities[finite_indices]
+        if finite_scores.size > top_count:
+            local_top = np.argpartition(finite_scores, -top_count)[-top_count:]
+            top_indices = finite_indices[local_top]
+        else:
+            top_indices = finite_indices
+        top_indices = top_indices[np.argsort(similarities[top_indices])[::-1]]
+        for idx in top_indices:
+            t_s = float(candidate_timestamps[idx])
+            scored.append(
+                {
+                    "time_s": t_s,
+                    "similarity": float(similarities[idx]),
+                    "basis": "clip_embedding",
+                }
+            )
             if candidate_asset_id is not None:
-                candidate["asset_id"] = candidate_asset_id
-            scored.append(candidate)
+                scored[-1]["asset_id"] = candidate_asset_id
     scored.sort(key=lambda item: item["similarity"], reverse=True)
     diversified = _deduplicate_match_candidates(scored)
     for idx, item in enumerate(diversified):
@@ -626,6 +749,8 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
     candidate_clip_bodies = _read_clip_bodies(project_root)
     if not candidate_clip_bodies and clip_body:
         candidate_clip_bodies = [(req.asset_id, clip_body)]
+    clip_index = _prepare_clip_index(clip_body, candidate_clip_bodies)
+    motion_signal = _read_motion_signal(project_root, req.asset_path)
 
     out_shots: list[dict[str, Any]] = []
     for shot in shots:
@@ -643,51 +768,59 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
             composition_body, start_s, end_s
         )
         match_candidates = _clip_match_candidates_for_shot(
-            clip_body,
+            clip_index,
             start_s,
             end_s,
             asset_id=req.asset_id,
-            candidate_clip_bodies=candidate_clip_bodies,
         )
         match_cut_score = (
             match_candidates[0]["similarity"] if match_candidates else None
         )
         shot_type = _classify_shot_type(face_ratio)
-        # Sample optical flow at start, middle, end; pair adjacent samples.
-        probes = max(2, FLOW_PROBES_PER_SHOT)
-        summaries: list[dict[str, Any]] = []
-        if end_s - start_s < 0.2:
-            mag = 0.0
-        else:
-            ts = np.linspace(start_s + 0.05, end_s - 0.05, probes)
-            mags: list[float] = []
-            prev_frame: np.ndarray | None = None
-            for t in ts:
-                f = _grab_frame(req.asset_path, float(t), PROBE_WIDTH)
-                if f is None:
-                    continue
-                if prev_frame is not None and prev_frame.shape == f.shape:
-                    summary = _flow_direction_summary(prev_frame, f)
-                    summaries.append(summary)
-                    mags.append(float(summary["motion_magnitude"]))
-                prev_frame = f
-            mag = float(np.mean(mags)) if mags else 0.0
-        action_score = _score_between(mag, 0.5, 8.0)
-        whip_pan_score = 0.0
-        occlusion_score = 0.0
-        dominant_direction = None
-        if summaries:
-            action_score = float(np.mean([s["action_score"] for s in summaries]))
-            whip_pan_score = float(np.mean([s["whip_pan_score"] for s in summaries]))
-            occlusion_score = float(np.max([s["occlusion_score"] for s in summaries]))
-            directions = [
-                s["dominant_direction"]
-                for s in summaries
-                if s["dominant_direction"] is not None
-            ]
-            if directions:
-                dominant_direction = max(set(directions), key=directions.count)
-        motion = _bucket_motion(mag)
+        motion_summary = _motion_summary_from_signal(motion_signal, start_s, end_s)
+        if motion_summary is None:
+            # Fallback only: sample optical flow at start, middle, end; pair adjacent samples.
+            probes = max(2, FLOW_PROBES_PER_SHOT)
+            summaries: list[dict[str, Any]] = []
+            if end_s - start_s < 0.2:
+                mag = 0.0
+            else:
+                ts = np.linspace(start_s + 0.05, end_s - 0.05, probes)
+                mags: list[float] = []
+                prev_frame: np.ndarray | None = None
+                for t in ts:
+                    f = _grab_frame(req.asset_path, float(t), PROBE_WIDTH)
+                    if f is None:
+                        continue
+                    if prev_frame is not None and prev_frame.shape == f.shape:
+                        summary = _flow_direction_summary(prev_frame, f)
+                        summaries.append(summary)
+                        mags.append(float(summary["motion_magnitude"]))
+                    prev_frame = f
+                mag = float(np.mean(mags)) if mags else 0.0
+            action_score = _score_between(mag, 0.5, 8.0)
+            whip_pan_score = 0.0
+            occlusion_score = 0.0
+            dominant_direction = None
+            if summaries:
+                action_score = float(np.mean([s["action_score"] for s in summaries]))
+                whip_pan_score = float(np.mean([s["whip_pan_score"] for s in summaries]))
+                occlusion_score = float(np.max([s["occlusion_score"] for s in summaries]))
+                directions = [
+                    s["dominant_direction"]
+                    for s in summaries
+                    if s["dominant_direction"] is not None
+                ]
+                if directions:
+                    dominant_direction = max(set(directions), key=directions.count)
+            motion_summary = {
+                "motion": _bucket_motion(mag),
+                "motion_magnitude": mag,
+                "dominant_direction": dominant_direction,
+                "action_score": action_score,
+                "whip_pan_score": whip_pan_score,
+                "occlusion_score": occlusion_score,
+            }
 
         out_shots.append(
             {
@@ -713,23 +846,24 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
                 "gaze_samples": gaze_summary["samples"] if gaze_summary else 0,
                 "match_candidates": match_candidates,
                 "match_cut_score": match_cut_score,
-                "motion": motion,
-                "motion_magnitude": mag,
-                "dominant_direction": dominant_direction,
-                "action_score": action_score,
-                "whip_pan_score": whip_pan_score,
-                "occlusion_score": occlusion_score,
+                "motion": motion_summary["motion"],
+                "motion_magnitude": motion_summary["motion_magnitude"],
+                "dominant_direction": motion_summary["dominant_direction"],
+                "action_score": motion_summary["action_score"],
+                "whip_pan_score": motion_summary["whip_pan_score"],
+                "occlusion_score": motion_summary["occlusion_score"],
             }
         )
 
     _log.info(
-        "shot-mcp: asset=%s shots=%d (face_data=%s gaze_data=%s clip_data=%s composition_data=%s)",
+        "shot-mcp: asset=%s shots=%d (face_data=%s gaze_data=%s clip_data=%s composition_data=%s motion_signal=%s)",
         req.asset_id,
         len(out_shots),
         bool(face_doc),
         bool(gaze_doc),
         bool(clip_doc),
         bool(composition_doc),
+        bool(motion_signal),
     )
 
     return {

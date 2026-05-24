@@ -130,8 +130,8 @@ pub struct McpServer {
     /// (with a clean message) rather than run-and-error. Defaults
     /// to empty for user-added indexers (today's behavior); the
     /// bundled defaults populate this for `topic` (→ whisper),
-    /// `editorial-moments` (→ whisper, topic), and `shot` (→
-    /// scenedetect, face).
+    /// `editorial-moments` (→ whisper, topic), `gaze` (→ face),
+    /// and `shot` (→ scenedetect, face, gaze).
     #[serde(default)]
     pub depends_on: Vec<String>,
     /// Coarse resource class the index dispatcher uses to avoid

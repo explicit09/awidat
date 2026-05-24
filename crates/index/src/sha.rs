@@ -1,11 +1,36 @@
-//! Streaming SHA-256 of a file. Hashes a 1h video on M-series silicon in
-//! a few seconds; not a hot path, doesn't need to be parallel inside.
+//! Asset identity helpers.
+//!
+//! Large video files sit on the hot path for desktop re-indexing. The
+//! dispatcher uses a source metadata fingerprint for idempotency so a
+//! 3 GB clip can reach the indexer immediately instead of blocking on a
+//! full-file hash. The full SHA-256 helper remains available for callers
+//! that explicitly need byte-level content identity.
 
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
+
+/// Compute a fast, source-stable asset fingerprint from file metadata.
+///
+/// This mirrors the older Swift editor's transcription cache strategy:
+/// use stable source metadata instead of content-hashing large media on
+/// every run. The value is still SHA-256-shaped because existing sidecar
+/// schemas name the field `asset_sha256`.
+pub fn asset_fingerprint(path: &Path) -> std::io::Result<String> {
+    let meta = std::fs::metadata(path)?;
+    let modified = meta.modified().unwrap_or(UNIX_EPOCH);
+    let modified = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let identity = format!(
+        "awidat-asset-fingerprint-v1\0{}\0{}\0{}",
+        meta.len(),
+        modified.as_secs(),
+        modified.subsec_nanos()
+    );
+    Ok(format!("{:x}", Sha256::digest(identity.as_bytes())))
+}
 
 /// Compute the SHA-256 of an asset file as a lowercase hex string.
 pub fn asset_sha256(path: &Path) -> std::io::Result<String> {

@@ -46,6 +46,39 @@ The model-backed indexers have nontrivial install and warm-up costs
 (model downloads, GPU detection, HuggingFace gates). Run these manually
 before committing changes that touch their code.
 
+## Fast whisper.cpp transcript backend
+
+The whisper indexer defaults to `WHISPER_BACKEND=auto`. When `whisper-cli`,
+`ffmpeg`, `ffprobe`, and the configured ggml model are present, it uses the
+fast `whisper.cpp` chunked backend followed by WhisperX word alignment. If
+those prerequisites are missing, it falls back to the pure WhisperX path.
+
+Install the default ggml model with:
+
+```bash
+python3 python/scripts/download_whisper_cpp_model.py
+```
+
+The script writes:
+
+```text
+~/.cache/awidat/whisper.cpp/ggml-large-v3-turbo-q5_0.bin
+```
+
+Useful environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `WHISPER_BACKEND=auto` | Prefer `whisper.cpp` when available, otherwise fallback to WhisperX |
+| `WHISPER_BACKEND=whispercpp-aligned` | Require the fast backend and fail if prerequisites are missing |
+| `WHISPER_BACKEND=whisperx` | Force the original WhisperX path |
+| `WHISPER_CPP_MODEL` | Override the ggml model path |
+| `WHISPER_CPP_THREADS` | Pass `-t` to `whisper-cli` |
+| `WHISPER_CPP_PROCESSORS` | Pass `-p` to `whisper-cli` |
+| `WHISPER_CPP_DEVICE` | Pass `--device` to `whisper-cli` |
+| `WHISPER_CPP_NO_GPU=true` | Pass `-ng` to disable GPU |
+| `WHISPER_CPP_EXTRA_ARGS` | Additional shell-style args for `whisper-cli` |
+
 ## Setup once
 
 ```bash
@@ -57,6 +90,7 @@ transformers, opencv). On first model use, models also download:
 
 | Indexer | First-run download | Where it lands |
 |---|---|---|
+| whisper.cpp fast backend (`ggml-large-v3-turbo-q5_0`) | ~550MB | `~/.cache/awidat/whisper.cpp/` |
 | whisper (`large-v3-turbo`) | ~1.6GB | `~/.cache/huggingface/hub/` |
 | whisper (`small.en` fallback) | ~470MB | same |
 | whisper diarization (`pyannote/speaker-diarization-community-1`) | ~30MB | same; requires `HF_TOKEN` and accepting the model EULA at <https://huggingface.co/pyannote/speaker-diarization-community-1> |
@@ -121,19 +155,20 @@ args = ["run", "--package", "face-mcp", "face-mcp"]
 cwd = "$PWD/python"
 kind = "indexer"
 
+[[mcp.servers]]
+name = "gaze"
+command = "$HOME/.local/bin/uv"
+args = ["run", "--package", "gaze-mcp", "gaze-mcp"]
+cwd = "$PWD/python"
+kind = "indexer"
+
+# gaze reuses face's per-frame landmarks when index/face/<asset>.json exists.
 # shot reads scenedetect, face, gaze, clip, and composition sidecars when
 # present. For manual single-indexer checks, run those producers first.
 [[mcp.servers]]
 name = "shot"
 command = "$HOME/.local/bin/uv"
 args = ["run", "--package", "shot-mcp", "shot-mcp"]
-cwd = "$PWD/python"
-kind = "indexer"
-
-[[mcp.servers]]
-name = "gaze"
-command = "$HOME/.local/bin/uv"
-args = ["run", "--package", "gaze-mcp", "gaze-mcp"]
 cwd = "$PWD/python"
 kind = "indexer"
 

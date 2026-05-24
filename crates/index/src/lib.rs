@@ -1,5 +1,5 @@
 //! Indexer dispatcher: launches MCP servers, calls `index_asset(asset)` on
-//! each, writes sidecars + manifest. SHA-256 idempotency.
+//! each, writes sidecars + manifest. Asset-fingerprint idempotency.
 //!
 //! Per `PLAN.md` §5.4 + `INDEX_SCHEMA.md`:
 //! - One sidecar per `(indexer, asset)` at `index/<indexer>/<asset>.json`.
@@ -35,7 +35,7 @@ mod sha;
 pub mod sidecar_io;
 
 pub use manifest_io::{read_manifest, write_manifest};
-pub use sha::asset_sha256;
+pub use sha::{asset_fingerprint, asset_sha256};
 pub use sidecar_io::{SidecarError, read_sidecar, sidecar_path, walk_indexer};
 
 /// Errors from the indexer dispatcher. Per-asset / per-indexer errors land
@@ -178,6 +178,19 @@ pub enum IndexProgress {
         /// Number of `(indexer, asset)` pairs that will be attempted.
         total: usize,
     },
+    /// Emitted as soon as one `(indexer, asset)` pair launches. Long-running
+    /// model indexers may spend minutes inside one tool call, so callers use
+    /// this to show that work is active before the terminal outcome arrives.
+    PairStarted {
+        /// Indexer that just started.
+        indexer: String,
+        /// Asset id being indexed.
+        asset: AssetId,
+        /// Pairs completed so far before this launch.
+        completed: usize,
+        /// Total pairs in the run.
+        total: usize,
+    },
     /// Emitted as soon as a pair finishes (Wrote / Skipped / Failed /
     /// SkippedDep). `completed` is the running count of pairs that
     /// have reached any terminal state, including this one.
@@ -242,9 +255,9 @@ impl IndexReport {
     }
 }
 
-/// One asset to index. The dispatcher hashes `path` to derive
-/// `asset_sha256`; the `id` is the AssetId stored in the manifest and
-/// sidecar header.
+/// One asset to index. The dispatcher fingerprints `path` to derive the
+/// sidecar's `asset_sha256` value; the `id` is the AssetId stored in the
+/// manifest and sidecar header.
 #[derive(Debug, Clone)]
 pub struct AssetInput {
     /// Logical id (project-relative path; see `AssetId`).
@@ -264,6 +277,7 @@ pub struct AssetInput {
 ///
 /// `progress` is an optional sink that fires on
 /// [`IndexProgress::Started`] (once at the top of the run) and
+/// [`IndexProgress::PairStarted`] (one event per pair launch), and
 /// [`IndexProgress::PairCompleted`] (one event per pair as it reaches
 /// a terminal state). The CLI passes `None`; the desktop forwards
 /// events to a protocol channel.
@@ -288,14 +302,14 @@ pub async fn run(
             source: e,
         })?;
 
-    // Hash all assets up front, in parallel. SHA-256 of a 1h video on
-    // M-series silicon takes a few seconds; spawn_blocking parallelizes
-    // across assets.
+    // Fingerprint all assets up front. This is metadata-based so desktop
+    // re-index reaches long-running indexers immediately instead of spending
+    // minutes content-hashing multi-GB media.
     let mut hashes = Vec::with_capacity(assets.len());
     for asset in assets {
         let path = asset.path.clone();
         let id = asset.id.clone();
-        let h = tokio::task::spawn_blocking(move || sha::asset_sha256(&path))
+        let h = tokio::task::spawn_blocking(move || sha::asset_fingerprint(&path))
             .await
             .map_err(|e| IndexError::SidecarIo {
                 path: asset.path.display().to_string(),
@@ -337,6 +351,20 @@ pub async fn run(
                 cb(IndexProgress::PairCompleted {
                     outcome,
                     completed: n,
+                    total: total_pairs,
+                });
+            }
+        }
+    };
+    let emit_started = {
+        let progress = progress.clone();
+        let completed = completed.clone();
+        move |indexer: String, asset: AssetId| {
+            if let Some(cb) = progress.as_ref() {
+                cb(IndexProgress::PairStarted {
+                    indexer,
+                    asset,
+                    completed: completed.load(std::sync::atomic::Ordering::SeqCst),
                     total: total_pairs,
                 });
             }
@@ -526,6 +554,7 @@ pub async fn run(
             let report_clone = report.clone();
             let key_for_task = key.clone();
             let emit_completed = emit_completed.clone();
+            emit_started(key.0.clone(), key.1.clone());
             inflight.push(tokio::spawn(async move {
                 let outcome = run_pair(
                     &project_root_owned,
@@ -1107,6 +1136,7 @@ fn update_manifest(manifest: &mut Manifest, indexer: &str, asset: &AssetId, serv
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Mutex as StdMutex;
 
     fn server(
         name: &str,
@@ -1223,7 +1253,7 @@ mod tests {
         std::fs::create_dir_all(&raw).unwrap();
         let asset_path = raw.join("a.txt");
         std::fs::write(&asset_path, b"hello").unwrap();
-        let sha = asset_sha256(&asset_path).unwrap();
+        let sha = asset_fingerprint(&asset_path).unwrap();
         let sidecar = root.join("index/dummy/raw/a.txt.json");
         std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
         std::fs::write(
@@ -1266,6 +1296,83 @@ mod tests {
         assert!(!report.outcomes[0].telemetry().total.is_zero());
         // Unsupported RSS sampling should simply surface as None.
         let _ = report.outcomes[0].telemetry().peak_rss_bytes;
+    }
+
+    #[tokio::test]
+    async fn progress_emits_pair_started_before_terminal_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let raw = root.join("raw");
+        std::fs::create_dir_all(&raw).unwrap();
+        let asset_path = raw.join("a.txt");
+        std::fs::write(&asset_path, b"hello").unwrap();
+        let sha = asset_fingerprint(&asset_path).unwrap();
+        let sidecar = root.join("index/dummy/raw/a.txt.json");
+        std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
+        std::fs::write(
+            &sidecar,
+            serde_json::to_vec(&serde_json::json!({
+                "indexer": "dummy",
+                "indexer_version": "1",
+                "schema_version": "1",
+                "asset_id": "raw/a.txt",
+                "asset_sha256": sha,
+                "produced_at": "2026-05-02T12:00:00Z",
+                "data": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let events_for_cb = events.clone();
+        let cb: ProgressCallback = Arc::new(move |evt| {
+            let label = match evt {
+                IndexProgress::Started { .. } => "started".to_string(),
+                IndexProgress::PairStarted { indexer, asset, .. } => {
+                    format!("pair-started:{indexer}:{asset}")
+                }
+                IndexProgress::PairCompleted { outcome, .. } => match outcome {
+                    PairOutcome::Skipped { indexer, asset, .. } => {
+                        format!("pair-completed:{indexer}:{asset}")
+                    }
+                    _ => "pair-completed:other".to_string(),
+                },
+            };
+            events_for_cb.lock().unwrap().push(label);
+        });
+
+        let report = run(
+            root,
+            &[server(
+                "dummy",
+                IndexerResourceClass::Light,
+                vec![],
+                "/bin/false",
+            )],
+            &[AssetInput {
+                id: AssetId::new("raw/a.txt"),
+                path: asset_path,
+            }],
+            ClientInfo {
+                name: "test".into(),
+                version: "0".into(),
+            },
+            1,
+            Some(cb),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(report.outcomes[0], PairOutcome::Skipped { .. }));
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [
+                "started",
+                "pair-started:dummy:raw/a.txt",
+                "pair-completed:dummy:raw/a.txt"
+            ]
+        );
     }
 
     #[tokio::test]

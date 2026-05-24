@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 import subprocess
 from collections.abc import Iterator
 from typing import Any
@@ -48,8 +49,9 @@ SCHEMA_VERSION = "1"
 MODEL_ARCH = "ViT-B-32"
 MODEL_PRETRAINED = "openai"
 
-# One frame per second. See module docstring.
-SAMPLE_FPS = 1.0
+# One frame every two seconds by default. Enough for visual search and match
+# candidates while keeping first-pass indexing responsive on long 4K sources.
+SAMPLE_FPS = float(os.environ.get("CLIP_SAMPLE_FPS", "0.5"))
 
 # Output pixel buffer ffmpeg writes per frame. Square crop matches the
 # CLIP preprocess input — saves a resize round-trip on the Python side.

@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use awidat_config::{Config, McpServer};
-use awidat_index::{AssetInput, IndexReport, PairOutcome, run as dispatch};
+use awidat_index::{
+    AssetInput, IndexReport, PairOutcome, media_files::collect_raw_media_inputs, run as dispatch,
+};
 use awidat_mcp::ClientInfo;
 use awidat_proto::index::AssetId;
 
@@ -117,29 +119,7 @@ fn collect_assets(project_root: &Path, explicit: &[PathBuf]) -> Result<Vec<Asset
         return Ok(out);
     }
 
-    let raw_dir = project_root.join("raw");
-    if !raw_dir.is_dir() {
-        return Ok(out);
-    }
-    walk_assets(project_root, &raw_dir, &mut out)?;
-    Ok(out)
-}
-
-fn walk_assets(project_root: &Path, dir: &Path, out: &mut Vec<AssetInput>) -> Result<()> {
-    for entry in std::fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_assets(project_root, &path, out)?;
-        } else if path.is_file() {
-            let id = derive_asset_id(project_root, &path);
-            out.push(AssetInput {
-                id: AssetId::new(id),
-                path,
-            });
-        }
-    }
-    Ok(())
+    collect_raw_media_inputs(project_root).context("scan raw/ media")
 }
 
 fn derive_asset_id(project_root: &Path, abs: &Path) -> String {

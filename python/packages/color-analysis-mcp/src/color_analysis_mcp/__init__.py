@@ -10,6 +10,7 @@ Schema version: "1".
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from collections.abc import Iterator
 from typing import Any
@@ -23,8 +24,8 @@ INDEXER_NAME = "color-analysis"
 INDEXER_VERSION = "0.1.0"
 SCHEMA_VERSION = "1"
 
-SAMPLE_FPS = 1.0
-PROBE_W = 640
+SAMPLE_FPS = float(os.environ.get("COLOR_ANALYSIS_SAMPLE_FPS", "0.25"))
+PROBE_W = int(os.environ.get("COLOR_ANALYSIS_PROBE_W", "320"))
 SCENE_MAX_GAP_S = 12.0
 
 _log = logging.getLogger(INDEXER_NAME)

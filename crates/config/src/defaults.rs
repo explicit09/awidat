@@ -326,7 +326,7 @@ const RECIPES: &[IndexerRecipe] = &[
         name: "shot",
         package: "shot-mcp",
         env: &[],
-        depends_on: &["scenedetect", "face"],
+        depends_on: &["scenedetect", "face", "gaze"],
         resource_class: IndexerResourceClass::Vision,
         group: IndexerGroup::Vision,
     },
@@ -334,7 +334,7 @@ const RECIPES: &[IndexerRecipe] = &[
         name: "gaze",
         package: "gaze-mcp",
         env: &[],
-        depends_on: &[],
+        depends_on: &["face"],
         resource_class: IndexerResourceClass::Vision,
         group: IndexerGroup::Vision,
     },
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn dep_graph_matches_python_indexer_contract() {
-        // The three known producer→consumer relationships. Locking
+        // Known producer→consumer relationships. Locking
         // these in the registry means the dispatcher's topo
         // schedule matches what the python indexers expect to find
         // on disk; mismatch surfaces as the
@@ -497,7 +497,9 @@ mod tests {
         let em = cfg.find_server("editorial-moments").unwrap();
         assert_eq!(em.depends_on, vec!["whisper", "topic"]);
         let shot = cfg.find_server("shot").unwrap();
-        assert_eq!(shot.depends_on, vec!["scenedetect", "face"]);
+        assert_eq!(shot.depends_on, vec!["scenedetect", "face", "gaze"]);
+        let gaze = cfg.find_server("gaze").unwrap();
+        assert_eq!(gaze.depends_on, vec!["face"]);
         // No-dep indexers: spot-check.
         for name in [
             "audio-energy",
@@ -506,7 +508,6 @@ mod tests {
             "whisper",
             "clip",
             "face",
-            "gaze",
             "frame-quality",
             "color-analysis",
         ] {

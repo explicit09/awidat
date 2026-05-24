@@ -251,6 +251,60 @@ def _resolve_dependencies(moments: list[EditorialMoment]) -> None:
             p.dependencies.append(best.moment_id)
 
 
+def _normalize_moment_dict(moment: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(moment)
+    kind = str(normalized.get("kind", "")).strip().lower().replace("-", "_")
+    kind_aliases = {
+        "inspirational_cta": MomentKind.CTA.value,
+        "call_to_action": MomentKind.CTA.value,
+        "call_to_action_cta": MomentKind.CTA.value,
+        "emotional": MomentKind.EMOTIONAL_PEAK.value,
+        "emotional_moment": MomentKind.EMOTIONAL_PEAK.value,
+        "peak": MomentKind.EMOTIONAL_PEAK.value,
+        "joke": MomentKind.PUNCHLINE.value,
+        "payoff": MomentKind.PUNCHLINE.value,
+        "storytelling": MomentKind.STORY.value,
+        "background": MomentKind.EXPLANATION.value,
+    }
+    if kind in kind_aliases:
+        normalized["kind"] = kind_aliases[kind]
+    elif kind:
+        normalized["kind"] = kind
+
+    broll_need = str(normalized.get("broll_need", "")).strip().lower().replace("-", "_")
+    broll_aliases = {
+        "low": BRollNeed.NONE.value,
+        "no": BRollNeed.NONE.value,
+        "false": BRollNeed.NONE.value,
+        "minimal": BRollNeed.NONE.value,
+        "moderate": BRollNeed.MEDIUM.value,
+        "maybe": BRollNeed.MEDIUM.value,
+        "yes": BRollNeed.MEDIUM.value,
+        "strong": BRollNeed.HIGH.value,
+        "very_high": BRollNeed.HIGH.value,
+    }
+    if broll_need in broll_aliases:
+        normalized["broll_need"] = broll_aliases[broll_need]
+    elif broll_need:
+        normalized["broll_need"] = broll_need
+
+    energy = str(normalized.get("energy", "")).strip().lower().replace("-", "_")
+    energy_aliases = {
+        "quiet": EnergyLevel.LOW.value,
+        "calm": EnergyLevel.LOW.value,
+        "normal": EnergyLevel.MEDIUM.value,
+        "moderate": EnergyLevel.MEDIUM.value,
+        "excited": EnergyLevel.HIGH.value,
+        "intense": EnergyLevel.HIGH.value,
+    }
+    if energy in energy_aliases:
+        normalized["energy"] = energy_aliases[energy]
+    elif energy:
+        normalized["energy"] = energy
+
+    return normalized
+
+
 @server.index_asset
 def handle(req: IndexAssetRequest) -> dict[str, Any]:
     transcript_path = _find_sibling_sidecar(req.asset_path, req.asset_id, "whisper")
@@ -312,7 +366,7 @@ def handle(req: IndexAssetRequest) -> dict[str, Any]:
         for j, m in enumerate(raw_moments):
             m.setdefault("moment_id", f"m_{i:03d}_{j:02d}")
             try:
-                all_moments.append(EditorialMoment.model_validate(m))
+                all_moments.append(EditorialMoment.model_validate(_normalize_moment_dict(m)))
             except Exception as e:  # noqa: BLE001
                 print(
                     f"editorial-moments: schema-invalid moment in topic #{i}: {e}",
