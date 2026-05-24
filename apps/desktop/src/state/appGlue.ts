@@ -9,7 +9,7 @@
  * UI underneath swaps.
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { editorDispatch } from "../editor/tauriDispatch";
 import { listen } from "@tauri-apps/api/event";
@@ -69,6 +69,7 @@ export function useAppGlue() {
   const clearSelection = useTimelineSelectionStore((s) => s.clear);
   const clearNotes = useNotesStore((s) => s.clear);
   const ingestNote = useNotesStore((s) => s.ingest);
+  const proxyBackfillKeyRef = useRef<string | null>(null);
 
   // Initial project refresh + timeline load.
   useEffect(() => {
@@ -310,6 +311,56 @@ export function useAppGlue() {
         it.phase === "completed",
     ).length,
   ]);
+
+  // If the timeline has clips with no proxy yet, make
+  // proxy generation explicit from the UI side too. The backend command
+  // is idempotent; this covers projects opened before the backfill ran,
+  // dev hot-reloads, and stale UI states that would otherwise sit on
+  // "Generating preview..." with no active transcode job.
+  useEffect(() => {
+    if (!isTauri() || current === null) return;
+    const hasActiveTranscode = items.some(
+      (it) =>
+        it.kind === "job" &&
+        it.job_kind === "transcode" &&
+        it.phase !== "completed",
+    );
+    if (hasActiveTranscode) return;
+    const pendingAssetIds = pendingProxyAssetIds(timelineSnapshot);
+    if (pendingAssetIds.length === 0) return;
+    const key = `${current}:${pendingAssetIds.join("|")}`;
+    if (proxyBackfillKeyRef.current === key) return;
+    proxyBackfillKeyRef.current = key;
+    invoke<number>("transcode_project_proxies")
+      .then((generated) => {
+        if (generated > 0) {
+          return Promise.all([refreshMedia(), refreshTimeline()]);
+        }
+        return undefined;
+      })
+      .catch((e) => {
+        console.warn("proxy backfill failed", e);
+        // Keep the key latched after a failed attempt. Otherwise a
+        // persistent failure, such as a full disk, creates a tight
+        // start/fail/start loop and the UI flickers between
+        // processing and partial for the same asset set.
+      });
+  }, [current, items, refreshMedia, refreshTimeline, timelineSnapshot]);
+}
+
+function pendingProxyAssetIds(snapshot: TimelineSnapshot): string[] {
+  const ids = new Set<string>();
+  for (const track of snapshot.tracks ?? []) {
+    if (track.kind !== "video") continue;
+    for (const item of track.items ?? []) {
+      if (item.kind !== "clip") continue;
+      if (!item.asset_id || item.duration_s <= 0) continue;
+      if (item.proxy_path !== null) continue;
+      if (item.playable_kind === "proxy") continue;
+      ids.add(item.asset_id);
+    }
+  }
+  return Array.from(ids).sort();
 }
 
 function buildDeleteSelectionEdl(

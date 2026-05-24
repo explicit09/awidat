@@ -51,7 +51,7 @@ export function AppShell({
   footer,
 }: AppShellProps) {
   return (
-    <div className="grid h-screen w-screen min-w-0 overflow-hidden grid-rows-[var(--layout-chrome-h)_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
+    <div className="grid h-full w-full min-w-0 overflow-hidden grid-rows-[var(--layout-chrome-h)_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
       {/* Top chrome */}
       <header className="grid min-w-0 grid-cols-[auto_minmax(160px,1fr)_auto] items-center gap-3 overflow-hidden border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3">
         <div className="flex min-w-0 items-center justify-start">

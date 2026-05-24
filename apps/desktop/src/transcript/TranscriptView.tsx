@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useTranscriptStore } from "./store";
+import { mediaStreamUrl } from "../media/mediaStreamUrl";
 import { useMediaStore } from "../media/store";
 import { useTimelineStore, type TimelineSnapshot } from "../timeline/store";
 import {
@@ -80,6 +81,8 @@ type ComposedRow = {
    *  keys off `data-word-idx`) lines up with the global word table. */
   firstWordIdx: number;
 };
+
+type ComposedPlayback = { rowIdx: number; sourceTime: number | null };
 
 function TimelineComposedTranscript({
   playSegments,
@@ -163,34 +166,36 @@ function TimelineComposedTranscript({
     overscan: 6,
   });
 
-  // Active-row highlight + auto-scroll, driven by the timeline playhead.
-  // We don't manipulate per-word classes here — that pathway lives in
-  // SingleStemTranscript and assumes one sidecar's word index space.
-  // The composed view marks the active *row* instead.
-  const timelineTime = useMediaStore((s) => s.timelineTime);
-  const activeRowIdx = useMemo(() => {
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      if (timelineTime < r.playSegment.timelineStart) continue;
-      if (timelineTime >= r.playSegment.timelineEnd) continue;
-      const sourceTime =
-        r.playSegment.sourceStart +
-        (timelineTime - r.playSegment.timelineStart);
-      if (sourceTime >= r.segment.start_s && sourceTime < r.segment.end_s) {
-        return i;
-      }
-    }
-    return -1;
-  }, [rows, timelineTime]);
+  // Active-row + active-word follow is a hot playback path. Keep it
+  // out of React render so transcript scrubbing doesn't force the
+  // virtualized list to reconcile on every timeline-time tick.
+  const rowsRef = useRef(rows);
+  const virtualizerRef = useRef(virtualizer);
+  const lastActiveRef = useRef<{ rowIdx: number; wordKey: string | null }>({
+    rowIdx: -1,
+    wordKey: null,
+  });
+  rowsRef.current = rows;
+  virtualizerRef.current = virtualizer;
 
-  const lastScrolledRef = useRef<number>(-1);
   useEffect(() => {
-    if (activeRowIdx < 0 || activeRowIdx === lastScrolledRef.current) return;
-    lastScrolledRef.current = activeRowIdx;
-    requestAnimationFrame(() => {
-      virtualizer.scrollToIndex(activeRowIdx, { align: "center", behavior: "auto" });
+    const update = (timelineTime: number) => {
+      const active = findComposedPlayback(rowsRef.current, timelineTime);
+      updateComposedTranscriptActive(
+        scrollRef.current,
+        virtualizerRef.current,
+        rowsRef.current,
+        lastActiveRef.current,
+        active,
+      );
+    };
+
+    update(useMediaStore.getState().timelineTime);
+    return useMediaStore.subscribe((state, previous) => {
+      if (state.timelineTime === previous.timelineTime) return;
+      update(state.timelineTime);
     });
-  }, [activeRowIdx, virtualizer]);
+  }, [rows]);
 
   if (stems.length === 0) {
     return (
@@ -250,6 +255,7 @@ function TimelineComposedTranscript({
           const tlTime =
             row.playSegment.timelineStart +
             (sourceTime - row.playSegment.sourceStart);
+          void mediaStreamUrl(row.playSegment.proxyPath).catch(() => {});
           requestTimelineSeek(tlTime);
         }}
       >
@@ -262,7 +268,6 @@ function TimelineComposedTranscript({
         >
           {virtualizer.getVirtualItems().map((vi) => {
             const row = rows[vi.index];
-            const isActive = vi.index === activeRowIdx;
             const tlStart =
               row.playSegment.timelineStart +
               (row.segment.start_s - row.playSegment.sourceStart);
@@ -272,11 +277,7 @@ function TimelineComposedTranscript({
                 ref={virtualizer.measureElement}
                 data-index={vi.index}
                 data-row-idx={vi.index}
-                className={
-                  isActive
-                    ? "transcript-segment transcript-segment-active"
-                    : "transcript-segment"
-                }
+                className="transcript-segment"
                 style={{
                   position: "absolute",
                   top: 0,
@@ -291,7 +292,7 @@ function TimelineComposedTranscript({
                     speakerId={row.segment.speaker_id}
                   />
                 ) : null}
-                <ComposedSegmentBody row={row} />
+                <ComposedSegmentBody row={row} rowIdx={vi.index} />
                 <div className="transcript-time">{fmt(tlStart)}</div>
               </div>
             );
@@ -302,7 +303,13 @@ function TimelineComposedTranscript({
   );
 }
 
-function ComposedSegmentBody({ row }: { row: ComposedRow }) {
+function ComposedSegmentBody({
+  row,
+  rowIdx,
+}: {
+  row: ComposedRow;
+  rowIdx: number;
+}) {
   if (row.words.length === 0) {
     return (
       <div
@@ -318,6 +325,7 @@ function ComposedSegmentBody({ row }: { row: ComposedRow }) {
       {row.words.map((w, i) => (
         <span
           key={i}
+          data-composed-word-key={`${rowIdx}:${i}`}
           data-word-start={w.start_s}
           data-word-end={w.end_s}
           className="transcript-word"
@@ -328,6 +336,100 @@ function ComposedSegmentBody({ row }: { row: ComposedRow }) {
       ))}
     </div>
   );
+}
+
+function findComposedPlayback(
+  rows: ComposedRow[],
+  timelineTime: number,
+): ComposedPlayback {
+  if (rows.length === 0 || !Number.isFinite(timelineTime)) {
+    return { rowIdx: -1, sourceTime: null };
+  }
+  let lo = 0;
+  let hi = rows.length - 1;
+  let candidate = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const row = rows[mid];
+    const rowEnd =
+      row.playSegment.timelineStart +
+      (row.segment.end_s - row.playSegment.sourceStart);
+    if (timelineTime < rowEnd) {
+      candidate = mid;
+      hi = mid - 1;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  if (candidate < 0) return { rowIdx: -1, sourceTime: null };
+
+  const row = rows[candidate];
+  if (
+    timelineTime < row.playSegment.timelineStart ||
+    timelineTime >= row.playSegment.timelineEnd
+  ) {
+    return { rowIdx: -1, sourceTime: null };
+  }
+
+  const sourceTime =
+    row.playSegment.sourceStart +
+    (timelineTime - row.playSegment.timelineStart);
+  if (sourceTime < row.segment.start_s || sourceTime >= row.segment.end_s) {
+    return { rowIdx: -1, sourceTime: null };
+  }
+  return { rowIdx: candidate, sourceTime };
+}
+
+function updateComposedTranscriptActive(
+  scope: HTMLDivElement | null,
+  virtualizer: ReturnType<typeof useVirtualizer<HTMLDivElement, Element>>,
+  rows: ComposedRow[],
+  last: { rowIdx: number; wordKey: string | null },
+  active: ComposedPlayback,
+): void {
+  const previousRow = last.rowIdx;
+  const previousWordKey = last.wordKey;
+  const row = active.rowIdx >= 0 ? rows[active.rowIdx] : undefined;
+  let nextWordKey: string | null = null;
+  if (row && active.sourceTime !== null) {
+    const wordIdx = row.words.findIndex(
+      (w) => active.sourceTime! >= w.start_s && active.sourceTime! <= w.end_s + 0.05,
+    );
+    if (wordIdx >= 0) nextWordKey = `${active.rowIdx}:${wordIdx}`;
+  }
+
+  if (previousRow !== active.rowIdx) {
+    scope
+      ?.querySelector(`[data-row-idx="${previousRow}"]`)
+      ?.classList.remove("transcript-segment-active");
+  }
+  if (previousWordKey !== nextWordKey && previousWordKey !== null) {
+    scope
+      ?.querySelector(`[data-composed-word-key="${previousWordKey}"]`)
+      ?.classList.remove("transcript-word-active");
+  }
+
+  last.rowIdx = active.rowIdx;
+  last.wordKey = nextWordKey;
+
+  const apply = () => {
+    scope
+      ?.querySelector(`[data-row-idx="${active.rowIdx}"]`)
+      ?.classList.add("transcript-segment-active");
+    if (nextWordKey !== null) {
+      scope
+        ?.querySelector(`[data-composed-word-key="${nextWordKey}"]`)
+        ?.classList.add("transcript-word-active");
+    }
+  };
+
+  if (active.rowIdx < 0) return;
+  if (previousRow !== active.rowIdx) {
+    virtualizer.scrollToIndex(active.rowIdx, { align: "center", behavior: "auto" });
+    requestAnimationFrame(() => requestAnimationFrame(apply));
+    return;
+  }
+  apply();
 }
 
 function SingleStemTranscript({ stem }: { stem: string | null }) {

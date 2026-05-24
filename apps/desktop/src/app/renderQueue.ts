@@ -42,6 +42,8 @@ export type RenderQueueEntry = {
   outputPath?: string;
   /** Error message when status === "failed". */
   error?: string;
+  /** Human review state after an artifact finishes exporting. */
+  reviewStatus?: "pending" | "approved" | "changes_requested";
   /** When this entry was enqueued (epoch ms). */
   enqueuedAt: number;
   /** When this entry transitioned to a terminal state (epoch ms). */
@@ -79,6 +81,10 @@ type State = {
   markRunning: (id: string, jobId?: string) => void;
   markProgress: (id: string, percent: number) => void;
   markDone: (id: string, outputPath?: string) => void;
+  markReviewed: (
+    id: string,
+    reviewStatus: NonNullable<RenderQueueEntry["reviewStatus"]>,
+  ) => void;
   markFailed: (id: string, error: string) => void;
   markCancelled: (id: string) => void;
   /** Remove a terminal entry from the visible queue. */
@@ -158,9 +164,19 @@ export const useRenderQueueStore = create<State>((set) => ({
               status: "done" as const,
               progress: 100,
               outputPath: outputPath ?? e.outputPath,
+              reviewStatus: "pending" as const,
               completedAt: Date.now(),
             }
           : e,
+      );
+      persist(next);
+      return { entries: next };
+    });
+  },
+  markReviewed: (id, reviewStatus) => {
+    set((state) => {
+      const next = state.entries.map((e) =>
+        e.id === id ? { ...e, reviewStatus } : e,
       );
       persist(next);
       return { entries: next };

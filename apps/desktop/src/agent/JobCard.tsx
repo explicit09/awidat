@@ -26,6 +26,9 @@ type Props = {
 export function JobCard({ item }: Props) {
   const isRunning = item.phase !== "completed";
   const [copied, setCopied] = useState(false);
+  const [renderReview, setRenderReview] = useState<
+    "pending" | "approved" | "changes_requested"
+  >("pending");
   const labelMap: Record<JobKind, string> = {
     url_import: "url import",
     local_import: "local import",
@@ -125,6 +128,29 @@ export function JobCard({ item }: Props) {
             style={{ width: `${item.percent}%` }}
           />
           <span className="job-progress-label">{item.percent}%</span>
+        </div>
+      )}
+      {showFinderButton && (
+        <div className="approval-actions">
+          {renderReview === "pending" ? (
+            <>
+              <button onClick={() => setRenderReview("approved")}>
+                Looks good
+              </button>
+              <button
+                className="deny"
+                onClick={() => setRenderReview("changes_requested")}
+              >
+                Needs changes
+              </button>
+            </>
+          ) : (
+            <span className="approval-summary">
+              {renderReview === "approved"
+                ? "Render approved for delivery."
+                : "Changes requested before delivery."}
+            </span>
+          )}
         </div>
       )}
     </article>

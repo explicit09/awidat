@@ -1,5 +1,6 @@
 import {
   ChevronDown,
+  ChevronRight,
   CircleStop,
   History,
   ListChecks,
@@ -10,7 +11,7 @@ import {
   SendHorizontal,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
@@ -52,6 +53,12 @@ export type ActivityEntry = {
 /** One agent-side output inside a conversation turn. */
 export type TurnPart =
   | { kind: "text"; id: string; text: string }
+  | {
+      kind: "input_request";
+      id: string;
+      question: string;
+      options: string[] | null;
+    }
   | {
       kind: "tool_call";
       id: string;
@@ -123,6 +130,8 @@ export type CommandRailProps = {
   onCancel?: () => void;
   /** Called when the user picks a suggested action. */
   onSuggestion?: (action: SuggestedAction) => void;
+  /** Called when the user answers an agent `request_user_input`. */
+  onRespondUserInput?: (callId: string, reply: string) => Promise<void> | void;
   /** Called when a context chip is removed. */
   onRemoveChip?: (chip: ContextChip, index: number) => void;
   /** Called when the user loads a saved chat. */
@@ -182,6 +191,7 @@ export function CommandRail({
   onSubmit,
   onCancel,
   onSuggestion,
+  onRespondUserInput,
   onRemoveChip,
   onSelectChatSession,
   onOpenHistory,
@@ -196,6 +206,7 @@ export function CommandRail({
 }: CommandRailProps) {
   const [draft, setDraft] = useState(initialDraft);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [planExpanded, setPlanExpanded] = useState(false);
   // Log-path of the chat whose row-actions menu is open. Only one
   // menu is open at a time across both the history dropdown and the
   // focused sidebar.
@@ -213,6 +224,9 @@ export function CommandRail({
   );
   const [mentionIdx, setMentionIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const conversationScrollerRef = useRef<HTMLDivElement | null>(null);
+  const conversationBottomRef = useRef<HTMLDivElement | null>(null);
+  const shouldFollowConversationRef = useRef(true);
 
   // Compute the visible mention suggestions on every keystroke. Cheap
   // (small lists), no debounce needed.
@@ -234,6 +248,32 @@ export function CommandRail({
   useEffect(() => {
     setMentionIdx(0);
   }, [mention?.query, mention?.start]);
+
+  useLayoutEffect(() => {
+    if (!shouldFollowConversationRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      conversationBottomRef.current?.scrollIntoView({ block: "end" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [turns, running, taskProgress, plan, suggestions.length]);
+
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const minHeight = focused ? 44 : 36;
+    const maxHeight = focused ? 180 : 132;
+    el.style.height = "0px";
+    const nextHeight = Math.min(maxHeight, Math.max(minHeight, el.scrollHeight));
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, [draft, focused]);
+
+  function handleConversationScroll() {
+    const el = conversationScrollerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldFollowConversationRef.current = distanceFromBottom < 96;
+  }
 
   // Inspect the draft + caret to decide whether a mention picker is
   // active. Triggered from the textarea's onSelect/onChange. Rules:
@@ -331,6 +371,124 @@ export function CommandRail({
   // pinning it to the top — an empty rail with a top-aligned card
   // reads as "half-loaded UI" instead of "ready, waiting for input."
   const isOnlyEmptyState = !hasWork && !focused;
+  const activePlanStep =
+    plan.find((step) => step.status === "in_progress") ??
+    plan.find((step) => step.status === "pending") ??
+    plan[plan.length - 1];
+  const agentPlanPanel =
+    taskProgress || plan.length > 0 ? (
+      <div className="shrink-0 border-t border-[var(--color-border-subtle)] bg-[var(--color-surface-page)] p-3">
+        <div className="max-h-[38vh] overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2.5 shadow-[0_-8px_24px_rgba(0,0,0,0.18)]">
+          <Stack gap="2">
+            <Inline justify="between" align="center" className="min-w-0">
+              <button
+                type="button"
+                onClick={() => setPlanExpanded((open) => !open)}
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 py-1 text-left hover:bg-[var(--color-surface-hover)]"
+                aria-expanded={planExpanded}
+                aria-label={planExpanded ? "Collapse plan" : "Expand plan"}
+              >
+                {planExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 stroke-[1.75] text-[var(--color-text-muted)]" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 stroke-[1.75] text-[var(--color-text-muted)]" />
+                )}
+                <ListChecks className="h-3.5 w-3.5 shrink-0 stroke-[1.75] text-[var(--color-text-muted)]" />
+                <span className="shrink-0 text-[var(--text-caption)] font-medium text-[var(--color-text-muted)]">
+                  Plan
+                </span>
+                {activePlanStep ? (
+                  <span className="min-w-0 truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
+                    {activePlanStep.text}
+                  </span>
+                ) : taskProgress ? (
+                  <span className="min-w-0 truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
+                    {taskProgress.label}
+                  </span>
+                ) : null}
+              </button>
+              <Inline gap="2" align="center" className="shrink-0">
+                {activePlanStep?.status === "in_progress" ? (
+                  <Pill status="processing" dot={false}>
+                    Running
+                  </Pill>
+                ) : null}
+                {plan.length > 0 ? (
+                  <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                    {plan.length}
+                  </span>
+                ) : null}
+              </Inline>
+            </Inline>
+
+            {planExpanded && taskProgress ? (
+              <Section
+                icon={
+                  <Sparkles className="h-3.5 w-3.5 stroke-[1.75] text-[var(--accent-selection)]" />
+                }
+                label="Agent plan"
+              >
+                <div>
+                  <Inline justify="between" align="center" className="mb-1.5">
+                    <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
+                      {taskProgress.label}
+                    </span>
+                    {typeof taskProgress.progress === "number" ? (
+                      <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                        {Math.round(taskProgress.progress)}%
+                      </span>
+                    ) : null}
+                  </Inline>
+                  {typeof taskProgress.progress === "number" ? (
+                    <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+                      <div
+                        className="h-full rounded-full bg-[var(--accent-selection)] transition-[width] duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
+                        style={{
+                          width: `${Math.max(0, Math.min(100, taskProgress.progress))}%`,
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="mt-1 flex gap-1">
+                      {[0, 1, 2].map((i) => (
+                        <span
+                          key={i}
+                          className="h-1 w-1 rounded-full bg-[var(--color-processing)] animate-pulse"
+                          style={{ animationDelay: `${i * 200}ms` }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {taskProgress.eta ? (
+                    <Inline justify="between" align="center" className="mt-2">
+                      <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                        Est. time remaining
+                      </span>
+                      <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+                        {taskProgress.eta}
+                      </span>
+                    </Inline>
+                  ) : null}
+                </div>
+              </Section>
+            ) : null}
+
+            {planExpanded && plan.length > 0 ? (
+              <Section
+                icon={<ListChecks className="h-3.5 w-3.5 stroke-[1.75]" />}
+                label={taskProgress ? "Steps" : "Plan"}
+              >
+                <Stack gap="1" className="!gap-[6px]">
+                  {plan.map((step) => (
+                    <PlanRow key={step.id} step={step} />
+                  ))}
+                </Stack>
+              </Section>
+            ) : null}
+          </Stack>
+        </div>
+      </div>
+    ) : null;
 
   // Helper: render a chat row for a given session in either the
   // dropdown or the focused sidebar. Closes over the rename/menu
@@ -507,7 +665,7 @@ export function CommandRail({
   const composer = (
     <div
       className={cn(
-        "shrink-0 p-3",
+        "shrink-0 p-2",
         focused ? "pb-6" : "",
       )}
     >
@@ -574,7 +732,7 @@ export function CommandRail({
                 ? "Ask, edit, trim, propose. @ to attach a clip."
                 : "Open a project to begin."
             }
-            rows={focused ? 4 : 3}
+            rows={1}
             disabled={!hasProject}
             // Suppress WebView/macOS overlays: the password-manager
             // key icon (autoComplete="off" + data-1p/lp/bw flags) and
@@ -623,7 +781,7 @@ export function CommandRail({
               ))}
             </div>
           ) : null}
-          <Inline justify="between" align="center" gap="2" className="px-2 py-1.5">
+          <Inline justify="between" align="center" gap="2" className="px-2 py-1">
             <Inline gap="2" align="center" className="min-w-0">
               {permissionMode && onSetPermissionMode ? (
                 <PermissionModeChip
@@ -721,6 +879,8 @@ export function CommandRail({
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="mx-auto flex w-full min-h-0 max-w-[760px] flex-1 flex-col">
             <div
+              ref={conversationScrollerRef}
+              onScroll={handleConversationScroll}
               className={cn(
                 "min-h-0 flex-1 overflow-y-auto p-3",
                 !hasWork ? "flex items-center justify-center" : "",
@@ -743,9 +903,11 @@ export function CommandRail({
                       </div>
                     </Section>
                   ) : null}
+                  <div ref={conversationBottomRef} aria-hidden />
                 </Stack>
               )}
             </div>
+            {hasWork ? agentPlanPanel : null}
             {hasWork ? <div className="shrink-0">{composer}</div> : null}
           </div>
         </div>
@@ -758,6 +920,8 @@ export function CommandRail({
       {sessionChrome}
 
       <div
+        ref={conversationScrollerRef}
+        onScroll={handleConversationScroll}
         className={cn(
           "min-h-0 flex-1 overflow-y-auto p-3",
           isOnlyEmptyState ? "flex items-center justify-center" : "",
@@ -772,66 +936,6 @@ export function CommandRail({
           </div>
         ) : (
         <Stack gap="3">
-          {/* Task progress */}
-          {taskProgress ? (
-            <Section
-              icon={<Sparkles className="h-3.5 w-3.5 stroke-[1.75] text-[var(--accent-selection)]" />}
-              label="Agent plan"
-            >
-              <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] p-2.5">
-                <Inline justify="between" align="center" className="mb-1.5">
-                  <span className="text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
-                    {taskProgress.label}
-                  </span>
-                  {typeof taskProgress.progress === "number" ? (
-                    <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
-                      {Math.round(taskProgress.progress)}%
-                    </span>
-                  ) : null}
-                </Inline>
-                {typeof taskProgress.progress === "number" ? (
-                  <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--color-surface-input)]">
-                    <div
-                      className="h-full rounded-full bg-[var(--accent-selection)] transition-[width] duration-[400ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
-                      style={{ width: `${Math.max(0, Math.min(100, taskProgress.progress))}%` }}
-                    />
-                  </div>
-                ) : (
-                  <div className="flex gap-1 mt-1">
-                    {[0, 1, 2].map((i) => (
-                      <span
-                        key={i}
-                        className="h-1 w-1 rounded-full bg-[var(--color-processing)] animate-pulse"
-                        style={{ animationDelay: `${i * 200}ms` }}
-                      />
-                    ))}
-                  </div>
-                )}
-                {taskProgress.eta ? (
-                  <Inline justify="between" align="center" className="mt-2">
-                    <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-                      Est. time remaining
-                    </span>
-                    <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-                      {taskProgress.eta}
-                    </span>
-                  </Inline>
-                ) : null}
-              </div>
-            </Section>
-          ) : null}
-
-          {/* Agent plan */}
-          {plan.length > 0 ? (
-            <Section icon={<ListChecks className="h-3.5 w-3.5 stroke-[1.75]" />} label={taskProgress ? "Steps" : "Plan"}>
-              <Stack gap="1" className="!gap-[6px]">
-                {plan.map((step) => (
-                  <PlanRow key={step.id} step={step} />
-                ))}
-              </Stack>
-            </Section>
-          ) : null}
-
           {/* Conversation — Cursor-style flow: speaker + timestamp
               as quiet metadata, message body as the hero. No
               bordered cards. User turns get a subtle accent in
@@ -846,6 +950,7 @@ export function CommandRail({
                     key={turn.id}
                     turn={turn}
                     showSeparator={false}
+                    onRespondUserInput={onRespondUserInput}
                   />
                 ))}
               </div>
@@ -882,9 +987,11 @@ export function CommandRail({
           {/* The empty-state hint is rendered above the Stack (centered)
               when nothing else is present — no fallback render needed
               inside the Stack itself. */}
+          <div ref={conversationBottomRef} aria-hidden />
         </Stack>
         )}
       </div>
+      {agentPlanPanel}
       {composer}
     </div>
   );
@@ -965,9 +1072,11 @@ function FocusedSidebar({
 function ConversationTurnBlock({
   turn,
   showSeparator,
+  onRespondUserInput,
 }: {
   turn: ConversationTurn;
   showSeparator: boolean;
+  onRespondUserInput?: (callId: string, reply: string) => Promise<void> | void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -1001,11 +1110,96 @@ function ConversationTurnBlock({
                   {part.text}
                 </ReactMarkdown>
               </div>
+            ) : part.kind === "input_request" ? (
+              <InlineUserInputRequest
+                key={part.id}
+                part={part}
+                onRespond={onRespondUserInput}
+              />
             ) : (
               <ToolCallRow key={part.id} part={part} />
             ),
           )}
         </div>
+      ) : null}
+    </div>
+  );
+}
+
+function InlineUserInputRequest({
+  part,
+  onRespond,
+}: {
+  part: Extract<TurnPart, { kind: "input_request" }>;
+  onRespond?: (callId: string, reply: string) => Promise<void> | void;
+}) {
+  const [reply, setReply] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function send(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed || submitted || !onRespond) return;
+    setSubmitted(true);
+    setError(null);
+    try {
+      await onRespond(part.id, trimmed);
+    } catch (err) {
+      setError(String(err));
+      setSubmitted(false);
+    }
+  }
+
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-card)] p-2.5">
+      <div className="mb-2 flex items-center gap-2 text-[var(--text-caption)] font-medium text-[var(--color-text-muted)]">
+        <Sparkles className="h-3.5 w-3.5 stroke-[1.75] text-[var(--accent-selection)]" />
+        <span>Waiting for input</span>
+      </div>
+      <p className="mb-2 text-[var(--text-body-sm)] leading-snug text-[var(--color-text-primary)]">
+        {part.question}
+      </p>
+      {part.options && part.options.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          {part.options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              disabled={submitted || !onRespond}
+              onClick={() => void send(option)}
+              className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2.5 py-1.5 text-left text-[var(--text-body-sm)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <form
+          className="flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send(reply);
+          }}
+        >
+          <input
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            disabled={submitted || !onRespond}
+            autoFocus
+            className="min-w-0 flex-1 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 py-1.5 text-[var(--text-body-sm)] text-[var(--color-text-primary)] outline-none"
+          />
+          <Button
+            type="submit"
+            variant="secondary"
+            size="sm"
+            disabled={submitted || !reply.trim() || !onRespond}
+          >
+            Send
+          </Button>
+        </form>
+      )}
+      {error ? (
+        <p className="mt-2 text-[var(--text-caption)] text-[#ef7168]">{error}</p>
       ) : null}
     </div>
   );

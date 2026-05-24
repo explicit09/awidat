@@ -149,6 +149,8 @@ export function DeliverySurface({
   onAgentRepair,
 }: DeliverySurfaceProps) {
   const [severityFilter, setSeverityFilter] = useState<"all" | PreflightSeverity>("all");
+  const [confirmExportOpen, setConfirmExportOpen] = useState(false);
+  const queueEntries = useRenderQueueStore((s) => s.entries);
 
   // Resolve targets so all 6 are always rendered.
   const resolvedTargets: DeliveryTarget[] = ALL_TARGETS.map((key) => {
@@ -156,6 +158,12 @@ export function DeliverySurface({
     return provided ?? { key, active: false };
   });
   const activeTargetCount = resolvedTargets.filter((target) => target.active).length;
+  const runningRender = [...queueEntries]
+    .reverse()
+    .find((entry) => entry.status === "running" || entry.status === "pending");
+  const pendingReview = [...queueEntries]
+    .reverse()
+    .find((entry) => entry.status === "done" && entry.reviewStatus === "pending");
 
   const counts = countBySeverity(findings);
   const filtered = severityFilter === "all"
@@ -163,6 +171,11 @@ export function DeliverySurface({
     : findings.filter((f) => f.severity === severityFilter);
 
   const selectedIssue = findings.find((f) => f.severity === "warning" || f.severity === "error" || f.severity === "failure") ?? findings[0];
+
+  function confirmExport() {
+    setConfirmExportOpen(false);
+    onExportNow?.();
+  }
 
   return (
     <div className="grid h-full grid-cols-[292px_minmax(0,1fr)_334px] bg-[var(--color-surface-app)] min-h-0">
@@ -393,6 +406,10 @@ export function DeliverySurface({
         </div>
         <div className="flex-1 overflow-y-auto p-2.5">
           <Stack gap="3">
+            <RenderStatusBanner
+              running={runningRender}
+              pendingReview={pendingReview}
+            />
             {selectedIssue ? (
               <Card padding="md" tone={selectedIssue.severity === "pass" ? "default" : "warning"}>
                 <Stack gap="3">
@@ -468,7 +485,7 @@ export function DeliverySurface({
               <Button
                 variant="primary"
                 size="md"
-                onClick={onExportNow}
+                onClick={() => setConfirmExportOpen(true)}
                 trailingIcon={<Upload className="h-3.5 w-3.5 stroke-[1.75]" />}
               >
                 Export now
@@ -498,6 +515,125 @@ export function DeliverySurface({
           </Stack>
         </div>
       </aside>
+      {confirmExportOpen ? (
+        <ExportConfirmDialog
+          targetCount={activeTargetCount}
+          summary={summary}
+          onCancel={() => setConfirmExportOpen(false)}
+          onConfirm={confirmExport}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function RenderStatusBanner({
+  running,
+  pendingReview,
+}: {
+  running?: RenderQueueEntry;
+  pendingReview?: RenderQueueEntry;
+}) {
+  if (running) {
+    const progress =
+      typeof running.progress === "number"
+        ? Math.max(0, Math.min(100, running.progress))
+        : null;
+    return (
+      <div className="rounded-[var(--radius-md)] border border-[rgba(56,189,248,0.45)] bg-[rgba(56,189,248,0.12)] p-3 shadow-[0_12px_32px_rgba(0,0,0,0.24)]">
+        <Stack gap="3">
+          <Inline justify="between" align="center">
+            <Inline gap="2" align="center" className="min-w-0">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--color-brand-secondary)] animate-pulse" />
+              <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
+                Rendering final output
+              </span>
+            </Inline>
+            <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+              {progress === null ? "working" : `${Math.round(progress)}%`}
+            </span>
+          </Inline>
+          <p className="text-[var(--text-body-sm)] leading-snug text-[var(--color-text-secondary)]">
+            {running.label} is being exported. Keep this project open until the render finishes.
+          </p>
+          <div className="h-2 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+            <div
+              className="h-full rounded-full bg-[var(--color-brand-secondary)] transition-[width] duration-300"
+              style={{ width: `${progress ?? 12}%` }}
+            />
+          </div>
+        </Stack>
+      </div>
+    );
+  }
+  if (pendingReview) {
+    return (
+      <div className="rounded-[var(--radius-md)] border border-[rgba(245,158,11,0.5)] bg-[rgba(245,158,11,0.1)] p-3">
+        <Stack gap="2">
+          <Inline gap="2" align="center">
+            <Play className="h-4 w-4 stroke-[1.75] text-[var(--color-warning)]" />
+            <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
+              Review final render
+            </span>
+          </Inline>
+          <p className="text-[var(--text-body-sm)] leading-snug text-[var(--color-text-secondary)]">
+            {pendingReview.label} finished. Watch the output before treating it as ready to deliver.
+          </p>
+        </Stack>
+      </div>
+    );
+  }
+  return null;
+}
+
+function ExportConfirmDialog({
+  targetCount,
+  summary,
+  onCancel,
+  onConfirm,
+}: {
+  targetCount: number;
+  summary?: DeliveryRenderSummary;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <header className="modal-header">
+          <h2>Start export?</h2>
+          <button className="modal-close" onClick={onCancel} aria-label="Close">
+            ×
+          </button>
+        </header>
+        <div className="modal-body">
+          <Stack gap="3">
+            <p>
+              This will render and write delivery files for {targetCount} selected{" "}
+              {targetCount === 1 ? "target" : "targets"}.
+            </p>
+            {summary ? (
+              <div className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] p-3">
+                <KV label="Duration" value={summary.duration} />
+                {summary.estimatedSize ? (
+                  <KV label="Estimated size" value={summary.estimatedSize} />
+                ) : null}
+              </div>
+            ) : null}
+            <p className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+              After export finishes, Awidat will keep the output in review until you mark it good.
+            </p>
+          </Stack>
+        </div>
+        <footer className="modal-footer">
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="primary" onClick={onConfirm}>
+            Start render
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }
@@ -760,6 +896,7 @@ function RenderQueuePanel() {
   const entries = useRenderQueueStore((s) => s.entries);
   const dismiss = useRenderQueueStore((s) => s.dismiss);
   const clearTerminal = useRenderQueueStore((s) => s.clearTerminal);
+  const markReviewed = useRenderQueueStore((s) => s.markReviewed);
   const visible = entries.slice(-12);
   if (visible.length === 0) {
     return (
@@ -802,6 +939,7 @@ function RenderQueuePanel() {
               key={entry.id}
               entry={entry}
               onDismiss={() => dismiss(entry.id)}
+              onReview={(reviewStatus) => markReviewed(entry.id, reviewStatus)}
             />
           ))}
         </Stack>
@@ -813,9 +951,13 @@ function RenderQueuePanel() {
 function RenderQueueRow({
   entry,
   onDismiss,
+  onReview,
 }: {
   entry: RenderQueueEntry;
   onDismiss: () => void;
+  onReview: (
+    reviewStatus: NonNullable<RenderQueueEntry["reviewStatus"]>,
+  ) => void;
 }) {
   const dotClass =
     entry.status === "running"
@@ -837,7 +979,9 @@ function RenderQueueRow({
             {entry.label}
           </span>
           <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-muted)]">
-            {entry.status}
+            {entry.status === "done" && entry.reviewStatus === "pending"
+              ? "review"
+              : entry.status}
           </span>
         </Inline>
         {entry.status === "done" || entry.status === "failed" || entry.status === "cancelled" ? (
@@ -860,14 +1004,38 @@ function RenderQueueRow({
         </div>
       ) : null}
       {entry.status === "done" && entry.outputPath ? (
-        <button
-          type="button"
-          onClick={() => void invokeRevealInFinder(entry.outputPath!)}
-          className="mt-1 truncate text-[var(--color-brand-secondary)] hover:underline"
-          title={entry.outputPath}
-        >
-          Open in Finder
-        </button>
+        <div className="mt-2 space-y-2">
+          <button
+            type="button"
+            onClick={() => void invokeRevealInFinder(entry.outputPath!)}
+            className="truncate text-[var(--color-brand-secondary)] hover:underline"
+            title={entry.outputPath}
+          >
+            Open in Finder
+          </button>
+          {entry.reviewStatus === "pending" ? (
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                type="button"
+                onClick={() => onReview("approved")}
+                className="rounded-[var(--radius-sm)] border border-[rgba(32,201,151,0.45)] bg-[rgba(32,201,151,0.12)] px-2 py-1 text-[var(--color-success)] hover:bg-[rgba(32,201,151,0.18)]"
+              >
+                Looks good
+              </button>
+              <button
+                type="button"
+                onClick={() => onReview("changes_requested")}
+                className="rounded-[var(--radius-sm)] border border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.1)] px-2 py-1 text-[var(--color-warning)] hover:bg-[rgba(245,158,11,0.16)]"
+              >
+                Needs changes
+              </button>
+            </div>
+          ) : entry.reviewStatus === "approved" ? (
+            <p className="text-[var(--color-success)]">Approved for delivery.</p>
+          ) : entry.reviewStatus === "changes_requested" ? (
+            <p className="text-[var(--color-warning)]">Changes requested. Re-edit before delivery.</p>
+          ) : null}
+        </div>
       ) : null}
       {entry.status === "failed" && entry.error ? (
         <p className="mt-1 truncate text-[#ef7168]" title={entry.error}>

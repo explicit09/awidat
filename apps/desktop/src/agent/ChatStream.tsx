@@ -485,6 +485,22 @@ function summarizeToolCall(item: Extract<Item, { kind: "tool_call" }>): string {
       return "Read episode map";
     case "find_episode_start":
       return "Found publishable episode start";
+    case "podcast_episode_spans":
+      return "Planned candidate episode spans";
+    case "podcast_edit_proposal":
+      return "Built edit proposal";
+    case "podcast_apply_accepted_edits":
+      return "Prepared accepted edits";
+    case "podcast_audio_polish":
+      return "Checked audio polish";
+    case "podcast_visual_polish":
+      return "Checked visual polish";
+    case "podcast_qc_report":
+      return "Ran podcast QC";
+    case "podcast_smooth_cut_boundaries":
+      return "Checked cut smoothness";
+    case "podcast_post_draft_check":
+      return "Checked draft boundaries";
     case "find_beat":
       return typeof record.kind === "string"
         ? `Found ${record.kind} beats`

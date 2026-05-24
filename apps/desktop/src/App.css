@@ -47,8 +47,10 @@
 html,
 body,
 #root {
+  width: 100%;
   height: 100%;
   margin: 0;
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
@@ -6294,8 +6296,8 @@ button {
 }
 .awidat-chat-rail .awidat-composer-card textarea {
   font-size: 14px;
-  line-height: 1.55;
-  padding: 12px 14px 4px;
+  line-height: 1.45;
+  padding: 8px 12px 2px;
 }
 
 /* Send button override — strip the brand-green primary look and use

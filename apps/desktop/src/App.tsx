@@ -23,6 +23,7 @@ import { mediaStreamUrl } from "./media/mediaStreamUrl";
 import { resolvePreviewMedia, type PreviewQualityMode } from "./media/previewSource";
 import { SegmentedVideoView } from "./media/SegmentedVideoView";
 import { MediaOfflineBanner } from "./media/MediaOfflineBanner";
+import { findMediaReadinessEntry, mediaReadinessUi } from "./media/readiness";
 import { useTranscriptStore } from "./transcript/store";
 import { TranscriptView } from "./transcript/TranscriptView";
 import { VeditPanel } from "./vedit/VeditPanel";
@@ -75,7 +76,7 @@ import { useTimelineStore } from "./timeline/store";
 import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
-import type { Item, JobKind, PermissionMode, TimelineSnapshot } from "./protocol";
+import type { Item, JobKind, MediaCacheReadiness, MediaReadinessSnapshot, PermissionMode, TimelineSnapshot } from "./protocol";
 import {
   screen2Activity,
   SCREEN2_CURRENT_TIME_S,
@@ -148,6 +149,7 @@ function App() {
   const [, setRealVideoFrames] = useState<string[]>([]);
   const [realAudioPeaks, setRealAudioPeaks] = useState<number[]>([]);
   const [realPreviewSrc, setRealPreviewSrc] = useState<string | null>(null);
+  const mediaReadinessCommandUnavailableRef = useRef(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [pendingImportPaths, setPendingImportPaths] = useState<string[] | null>(null);
   const [showUrlImport, setShowUrlImport] = useState(false);
@@ -157,6 +159,8 @@ function App() {
   const [dismissedContextChips, setDismissedContextChips] = useState<string[]>([]);
   const [indexerConfig, setIndexerConfig] = useState<IndexerConfigSnapshot | undefined>(undefined);
   const [indexReadiness, setIndexReadiness] = useState<IndexReadinessSnapshot | undefined>(undefined);
+  const [mediaReadiness, setMediaReadiness] = useState<MediaReadinessSnapshot | undefined>(undefined);
+  const [runningJobIds, setRunningJobIds] = useState<Set<string> | undefined>(undefined);
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
   const [activeChatSession, setActiveChatSession] = useState<ChatSessionSummary | null>(null);
   const [chatLoading, setChatLoading] = useState(false);
@@ -378,10 +382,12 @@ function App() {
         refreshMedia(),
         useTimelineStore.getState().refresh(),
         loadIndexReadiness(),
+        loadMediaReadiness(),
       ]);
     } catch (e) {
       setCommandError(String(e));
       await loadIndexReadiness();
+      await loadMediaReadiness();
     }
   }
 
@@ -491,6 +497,43 @@ function App() {
     } catch (e) {
       console.warn("index_readiness failed", e);
       setIndexReadiness(undefined);
+    }
+  }
+
+  async function loadMediaReadiness() {
+    if (demoMode || !isTauri() || !current) {
+      setMediaReadiness(undefined);
+      return;
+    }
+    if (mediaReadinessCommandUnavailableRef.current) {
+      setMediaReadiness(undefined);
+      return;
+    }
+    try {
+      const snapshot = await invoke<MediaReadinessSnapshot>("read_media_readiness");
+      setMediaReadiness(snapshot);
+    } catch (e) {
+      const message = String(e);
+      if (message.includes("read_media_readiness") && message.includes("not found")) {
+        mediaReadinessCommandUnavailableRef.current = true;
+      }
+      // Backend media-service work may land after the UI. Keep the
+      // existing source/proxy-derived labels as the compatibility path.
+      setMediaReadiness(undefined);
+    }
+  }
+
+  async function loadRunningJobIds() {
+    if (demoMode || !isTauri() || !current) {
+      setRunningJobIds(undefined);
+      return;
+    }
+    try {
+      const ids = await invoke<string[]>("running_job_ids");
+      setRunningJobIds(new Set(ids));
+    } catch (e) {
+      console.warn("running_job_ids failed", e);
+      setRunningJobIds(new Set());
     }
   }
 
@@ -945,6 +988,13 @@ function App() {
           args: it.args ?? null,
           result: it.result,
         });
+      } else if (it.kind === "awaiting_user_input") {
+        current.parts.push({
+          kind: "input_request",
+          id: it.id.toString(),
+          question: it.question,
+          options: it.options ?? null,
+        });
       }
     }
     return out.slice(-12);
@@ -954,9 +1004,12 @@ function App() {
     () =>
       items.filter(
         (it): it is Extract<typeof items[number], { kind: "job" }> =>
-          it.kind === "job" && it.phase !== "completed",
+          it.kind === "job" &&
+          it.phase !== "completed" &&
+          runningJobIds !== undefined &&
+          runningJobIds.has(it.id),
       ),
-    [items],
+    [items, runningJobIds],
   );
 
   const completedJobKinds = useMemo(() => {
@@ -972,8 +1025,25 @@ function App() {
 
   useEffect(() => {
     void loadIndexReadiness();
+    void loadRunningJobIds();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode, completedJobKinds.size, activeJobs.length]);
+
+  useEffect(() => {
+    mediaReadinessCommandUnavailableRef.current = false;
+    void loadMediaReadiness();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, demoMode, completedJobKinds.size, activeJobs.length, sources.length, proxies.length]);
+
+  useEffect(() => {
+    if (demoMode || !isTauri() || !current || sourceMediaCount === 0) return;
+    const id = window.setInterval(() => {
+      void loadMediaReadiness();
+      void loadRunningJobIds();
+    }, activeJobs.length > 0 ? 2_000 : 5_000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJobs.length, current, demoMode, sourceMediaCount]);
 
   // Re-poll readiness when the user comes back to the window. Covers
   // the case where indexer subprocesses kept writing sidecars while
@@ -983,6 +1053,8 @@ function App() {
   useEffect(() => {
     function onFocus() {
       void loadIndexReadiness();
+      void loadMediaReadiness();
+      void loadRunningJobIds();
     }
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
@@ -1093,20 +1165,49 @@ function App() {
   const realIndexingMedia: IndexingMediaItem[] = useMemo(() => {
     const importBusy = activeJobs.some((job) => job.job_kind === "local_import" || job.job_kind === "url_import");
     const transcodeJob = activeJobs.find((job) => job.job_kind === "transcode");
+    const failedProxySources = failedTranscodeSourceNames(items);
+    const pendingProxyAssets = pendingProxyAssetIdSet(timelineSnapshot);
     if (sources.length > 0) {
       return sources.map((source) => {
         const sourceStem = source.name.replace(/\.[^.]+$/, "");
         const proxy = proxies.find((entry) => entry.stem.startsWith(`${sourceStem}-`));
+        const readinessEntry = findMediaReadinessEntry(mediaReadiness, source);
+        const readiness = readinessEntry ? mediaReadinessUi(readinessEntry) : null;
+        const proxyPending = pendingProxyAssets.has(source.id);
+        const proxyFailed = proxyPending && failedProxySources.has(source.name);
         return {
           id: source.id,
           assetId: source.id,
           title: source.name,
           stem: proxy?.stem ?? sourceStem,
-          detail: proxy
-            ? `${formatBytes(source.size_bytes)} source · proxy ready`
-            : `${formatBytes(source.size_bytes)} source · awaiting proxy/index`,
-          status: transcodeJob ? "processing" : proxy ? "indexed" : importBusy ? "imported" : "partial",
-          progress: transcodeJob?.percent ?? undefined,
+          detail: readiness
+            ? `${formatBytes(readinessEntry?.source_size_bytes ?? source.size_bytes)} source · ${readiness.detailSuffix}`
+            : proxy
+              ? `${formatBytes(source.size_bytes)} source · proxy ready`
+              : proxyFailed
+                ? `${formatBytes(source.size_bytes)} source · proxy failed`
+                : `${formatBytes(source.size_bytes)} source · awaiting proxy/index`,
+          status: readiness?.status ??
+            (proxy
+              ? "indexed"
+              : transcodeJob
+                ? "processing"
+                : proxyFailed
+                  ? "failed"
+                  : proxyPending
+                    ? "processing"
+                    : importBusy
+                      ? "imported"
+                      : "partial"),
+          progress: readiness
+            ? typeof readiness.progress === "number"
+              ? readiness.progress
+              : readiness.status === "processing"
+                ? transcodeJob?.percent ?? (proxyPending && !proxyFailed ? 0 : undefined)
+              : readiness.status === "indexed"
+                ? 100
+                : undefined
+            : transcodeJob?.percent ?? (proxyPending && !proxyFailed ? 0 : undefined),
         };
       });
     }
@@ -1118,7 +1219,7 @@ function App() {
       status: transcodeJob ? "processing" : importBusy ? "imported" : "indexed",
       progress: transcodeJob?.percent ?? undefined,
     }));
-  }, [activeJobs, proxies, sources]);
+  }, [activeJobs, items, mediaReadiness, proxies, sources, timelineSnapshot]);
 
   const loadedTranscript =
     transcriptState?.state === "loaded" ? transcriptState.transcript : null;
@@ -1161,11 +1262,23 @@ function App() {
           return {
             id: "real-transcripts",
             kind,
-            status: "indexing" as const,
-            progress: globalIndexJob.percent ?? undefined,
-            detail: globalIndexJob.status,
+            status: "queued" as const,
+            progress: undefined,
+            detail: "Waiting for transcript output",
           };
         }
+      }
+      const mediaCacheStatus = mediaReadiness
+        ? mediaReadinessTaskStatus(mediaReadiness, kind)
+        : null;
+      if (mediaCacheStatus) {
+        return {
+          id: `real-${kind}`,
+          kind,
+          status: mediaCacheStatus.status,
+          progress: mediaCacheStatus.progress ?? (mediaCacheStatus.status === "indexed" ? 100 : undefined),
+          detail: mediaCacheStatus.detail,
+        };
       }
       if (indexReadiness && indexTaskReady(indexReadiness, kind)) {
         return {
@@ -1207,7 +1320,7 @@ function App() {
         detail,
       };
     });
-  }, [activeJobs, completedJobKinds, hasImportedMedia, indexReadiness, loadedTranscript]);
+  }, [activeJobs, completedJobKinds, hasImportedMedia, indexReadiness, loadedTranscript, mediaReadiness]);
 
   const realIndexingReady = realIndexingTasks.some((task) => task.status === "indexed");
   const realIndexingStructure: IndexingStructurePreview | undefined = useMemo(() => {
@@ -1233,9 +1346,9 @@ function App() {
       scenes,
       segments: loadedTranscript?.segments.length,
       speakers,
-      transcriptPercent: loadedTranscript || indexReadiness?.transcripts ? 100 : completedJobKinds.has("indexing") ? 100 : undefined,
+      transcriptPercent: indexReadiness?.transcripts ? 100 : undefined,
     };
-  }, [completedJobKinds, indexReadiness?.scenes, indexReadiness?.scene_count, indexReadiness?.transcripts, loadedTranscript, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
+  }, [indexReadiness?.scenes, indexReadiness?.scene_count, indexReadiness?.transcripts, loadedTranscript, sourceMediaCount, timelineDuration, timelineSnapshot.cut_boundaries.length]);
 
   const realDeliveryTargets: DeliveryTarget[] = useMemo(
     () => [
@@ -1433,6 +1546,10 @@ function App() {
         );
       }}
       onSuggestion={(action) => void runEngineCommand(action.prompt)}
+      onRespondUserInput={async (callId, reply) => {
+        if (!isTauri()) return;
+        await invoke("respond_user_input", { callId, reply });
+      }}
       onRemoveChip={(chip) => dismissContextChip(chip)}
       permissionMode={permissionMode}
       onSetPermissionMode={(mode) => void changePermissionMode(mode)}
@@ -1656,6 +1773,7 @@ function App() {
                 tasks={realIndexingTasks}
                 structurePreview={realIndexingStructure}
                 indexerConfig={indexerConfig}
+                activeIndexingStatus={activeJobs.find((job) => job.job_kind === "indexing")?.status}
                 ready={realIndexingReady}
                 onRunIndex={() => {
                   void loadIndexerConfig();
@@ -2257,6 +2375,7 @@ function IndexReadinessPanel({
   tasks,
   structurePreview,
   indexerConfig,
+  activeIndexingStatus,
   ready,
   onRunIndex,
   onRefresh,
@@ -2268,6 +2387,7 @@ function IndexReadinessPanel({
   tasks: IndexingTask[];
   structurePreview?: IndexingStructurePreview;
   indexerConfig?: IndexerConfigSnapshot;
+  activeIndexingStatus?: string;
   ready: boolean;
   onRunIndex: () => void;
   /** Re-poll index readiness from disk. Needed when the dispatcher's
@@ -2329,8 +2449,8 @@ function IndexReadinessPanel({
     enabledTasks.length > 0 ? Math.round((readyCount / enabledTasks.length) * 100) : 0;
   return (
     <Stack gap="4" className="p-3">
-      <Inline justify="between" align="start" gap="2">
-        <Stack gap="1">
+      <Inline justify="between" align="start" gap="2" className="min-w-0">
+        <Stack gap="1" className="min-w-0">
           <Inline gap="1" align="center">
             <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
               Index readiness
@@ -2353,8 +2473,16 @@ function IndexReadinessPanel({
           <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
             {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {formatIndexerActivity(runningCount, queuedCount)}
           </span>
+          {activeIndexingStatus ? (
+            <span
+              className="block max-w-full truncate text-[10px] text-[var(--color-text-muted)]"
+              title={`Active indexer: ${activeIndexingStatus}`}
+            >
+              Active indexer: {compactActiveIndexerStatus(activeIndexingStatus)}
+            </span>
+          ) : null}
         </Stack>
-        <Pill status={readinessStatus} dot>
+        <Pill status={readinessStatus} dot className="shrink-0">
           {readinessLabel}
         </Pill>
       </Inline>
@@ -2418,13 +2546,10 @@ function IndexReadinessPanel({
                   : task.detail ?? indexTaskDetail(task.status);
                 const statusLabel = disabled ? "Disabled" : mediaStatusLabel(task.status);
                 return (
-                  <Inline
+                  <div
                     key={task.id}
-                    justify="between"
-                    align="center"
-                    gap="2"
                     className={cn(
-                      "px-2.5 py-1.5 transition-colors",
+                      "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-2.5 py-1.5 transition-colors",
                       disabled && "opacity-60",
                     )}
                   >
@@ -2433,7 +2558,10 @@ function IndexReadinessPanel({
                         {indexTaskLabel(task.kind)}
                       </span>
                       {showDetail ? (
-                        <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                        <span
+                          className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]"
+                          title={detail}
+                        >
                           {detail}
                         </span>
                       ) : null}
@@ -2450,7 +2578,7 @@ function IndexReadinessPanel({
                       />
                       <span>{statusLabel}</span>
                     </span>
-                  </Inline>
+                  </div>
                 );
               })}
             </Stack>
@@ -2851,6 +2979,74 @@ function indexTaskReady(
   return readiness[kind];
 }
 
+function mediaReadinessTaskStatus(
+  readiness: MediaReadinessSnapshot,
+  kind: IndexingTask["kind"],
+): { status: MediaIndexingStatus; detail: string; progress?: number } | null {
+  const transcriptProgress = speechProgressForTask(readiness, kind);
+  if (transcriptProgress) {
+    return {
+      status: "indexing",
+      detail: transcriptProgress.label,
+      progress: transcriptProgress.percent ?? undefined,
+    };
+  }
+  const cacheKey = mediaCacheKeyForTask(kind);
+  if (!cacheKey || readiness.entries.length === 0) return null;
+  const statuses = readiness.entries.map((entry) => entry.cache[cacheKey]);
+  if (statuses.some((status) => status === "failed")) {
+    return { status: "failed", detail: "Media service reported cache failure" };
+  }
+  if (statuses.some((status) => status === "pending")) {
+    return { status: "indexing", detail: "Media service is building this signal" };
+  }
+  if (statuses.every((status) => status === "ready" || status === "skipped")) {
+    return { status: "indexed", detail: "Found media-service output" };
+  }
+  if (statuses.some((status) => status === "ready" || status === "stale")) {
+    return { status: "partial", detail: "Some media-service output is available" };
+  }
+  if (statuses.every((status) => status === "unsupported")) {
+    return { status: "missing", detail: "Unsupported for this media" };
+  }
+  return null;
+}
+
+function speechProgressForTask(
+  readiness: MediaReadinessSnapshot,
+  kind: IndexingTask["kind"],
+): MediaReadinessSnapshot["entries"][number]["transcript_progress"] | null {
+  if (kind !== "transcripts" && kind !== "captions" && kind !== "speaker") {
+    return null;
+  }
+  return readiness.entries.find((entry) => entry.transcript_progress)?.transcript_progress ?? null;
+}
+
+function mediaCacheKeyForTask(
+  kind: IndexingTask["kind"],
+): keyof MediaCacheReadiness | null {
+  switch (kind) {
+    case "transcripts":
+      return "transcript";
+    case "captions":
+      return "captions";
+    case "scenes":
+      return "scenes";
+    case "audio":
+      return "audio_analysis";
+    case "face":
+      return "face_detection";
+    case "motion":
+      return "motion_analysis";
+    case "color":
+      return "color_analysis";
+    case "silence":
+      return "silence_detection";
+    case "speaker":
+      return null;
+  }
+}
+
 function jobKindLabel(kind: string): string {
   return kind
     .split("_")
@@ -2904,6 +3100,42 @@ function normalizePeak(value: number): number {
   return Math.max(0.04, Math.min(1, Math.abs(value)));
 }
 
+function pendingProxyAssetIdSet(snapshot: TimelineSnapshot): Set<string> {
+  const ids = new Set<string>();
+  for (const track of snapshot.tracks ?? []) {
+    if (track.kind !== "video") continue;
+    for (const item of track.items ?? []) {
+      if (item.kind !== "clip") continue;
+      if (!item.asset_id || item.duration_s <= 0) continue;
+      if (item.proxy_path !== null) continue;
+      if (item.playable_kind === "proxy") continue;
+      ids.add(item.asset_id);
+    }
+  }
+  return ids;
+}
+
+function failedTranscodeSourceNames(items: AnyAgentItem[]): Set<string> {
+  const names = new Set<string>();
+  for (const item of items) {
+    if (
+      item.kind !== "job" ||
+      item.job_kind !== "transcode" ||
+      item.phase !== "completed" ||
+      item.result === null ||
+      typeof item.result !== "object" ||
+      !("err" in item.result)
+    ) {
+      continue;
+    }
+    const match = item.status.match(/^transcode (.+): /);
+    if (match?.[1]) {
+      names.add(match[1]);
+    }
+  }
+  return names;
+}
+
 type AnyAgentItem = ReturnType<typeof useAgentStore.getState>["items"][number];
 type ToolCallItem = Extract<AnyAgentItem, { kind: "tool_call" }>;
 type JobItem = Extract<AnyAgentItem, { kind: "job" }>;
@@ -2950,6 +3182,22 @@ function summarizeToolForRail(item: ToolCallItem): string {
         : "Proposed timeline edit";
     case "find_episode_start":
       return "Found publishable episode start";
+    case "podcast_episode_spans":
+      return "Planned candidate episode spans";
+    case "podcast_edit_proposal":
+      return "Built edit proposal";
+    case "podcast_apply_accepted_edits":
+      return "Prepared accepted edits";
+    case "podcast_audio_polish":
+      return "Checked audio polish";
+    case "podcast_visual_polish":
+      return "Checked visual polish";
+    case "podcast_qc_report":
+      return "Ran podcast QC";
+    case "podcast_smooth_cut_boundaries":
+      return "Checked cut smoothness";
+    case "podcast_post_draft_check":
+      return "Checked draft boundaries";
     case "find_beat":
       return typeof record?.kind === "string"
         ? `Found ${record.kind} beats`
@@ -2974,6 +3222,15 @@ function summarizeToolForRail(item: ToolCallItem): string {
 function oneLine(text: string, max: number): string {
   const t = text.replace(/\s+/g, " ").trim();
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
+function compactActiveIndexerStatus(status: string): string {
+  const firstLine = status.split("\n").find((line) => line.trim().length > 0)?.trim() ?? status;
+  const running = firstLine.match(/^still running\s+(.+?)\s+·\s+.+?\s+·\s+(.+?)\s+elapsed$/);
+  if (running) {
+    return `${running[1].trim()} · ${running[2].trim()}`;
+  }
+  return oneLine(firstLine, 56);
 }
 
 function summarizeJobStatus(status: string): { summary: string; detail?: string } {
