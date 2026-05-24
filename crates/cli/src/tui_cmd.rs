@@ -35,16 +35,22 @@ use awidat_core::tools::{
     plan_emphasis::PlanEmphasisTool, plan_look_regions::PlanLookRegionsTool,
     plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
     plan_multicam::PlanMulticamTool, plan_reframe::PlanReframeTool,
-    plan_transition::PlanTransitionTool, poll_render::PollRenderTool,
-    preview_cache::PreviewCacheStatusTool, proxy_media::GenerateProxyTool,
-    proxy_media::ProxyStatusTool, read_index::ReadIndexTool,
-    relink_media::RelinkMediaTool, render_preflight::RenderPreflightTool,
-    request_user_input::RequestUserInputTool,
+    plan_transition::PlanTransitionTool,
+    podcast_apply_accepted_edits::PodcastApplyAcceptedEditsTool,
+    podcast_audio_polish::PodcastAudioPolishTool,
+    podcast_cleanup_candidates::PodcastCleanupCandidatesTool,
+    podcast_edit_proposal::PodcastEditProposalTool, podcast_episode_spans::PodcastEpisodeSpansTool,
+    podcast_post_draft_check::PodcastPostDraftCheckTool, podcast_qc_report::PodcastQcReportTool,
+    podcast_smooth_cut_boundaries::PodcastSmoothCutBoundariesTool,
+    podcast_story_map::PodcastStoryMapTool, podcast_visual_polish::PodcastVisualPolishTool,
+    poll_render::PollRenderTool, preview_cache::PreviewCacheStatusTool,
+    proxy_media::GenerateProxyTool, proxy_media::ProxyStatusTool, read_index::ReadIndexTool,
+    read_media_readiness::ReadMediaReadinessTool, relink_media::RelinkMediaTool,
+    render_preflight::RenderPreflightTool, request_user_input::RequestUserInputTool,
     search_broll::SearchBrollTool, shot_summary::ShotSummaryTool,
     start_indexing::StartIndexingTool, start_render::StartRenderTool,
     stream_remux::StreamRemuxTool, transcript_pack::TranscriptPackTool,
-    transcript_search::TranscriptSearchTool,
-    transition_context::TransitionContextTool,
+    transcript_search::TranscriptSearchTool, transition_context::TransitionContextTool,
     update_plan::UpdatePlanTool, use_broll::UseBrollTool,
     validate_transition_choice::ValidateTransitionChoiceTool, vedit_blame::VeditBlameTool,
     vedit_branch::VeditBranchTool, vedit_changed_clip_ids::VeditChangedClipIdsTool,
@@ -87,7 +93,8 @@ overview), broll_candidates (cutaway/B-roll hunting — wide/no-face \
 visible — needs whisper diarization + face), find_eye_contact \
 (direct-address moments), plan_reframe (static vertical/social crop \
 fragment from subject-center evidence).\
-\n  - **Raw lookup**: find_moment (transcript substring), read_index \
+\n  - **Raw lookup**: read_media_readiness (source/proxy/cache/index readiness), \
+find_moment (transcript substring), read_index \
 (any indexer channel), inspect_clip (one clip's metadata), \
 view_frame (extract a frame at a timestamp), color_scopes \
 (histogram/waveform/parade/vectorscope evidence for one frame).\
@@ -224,6 +231,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(RenderPreflightTool));
     registry.register(Arc::new(ProxyStatusTool));
     registry.register(Arc::new(GenerateProxyTool));
+    registry.register(Arc::new(ReadMediaReadinessTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RelinkMediaTool));
     registry.register(Arc::new(RequestUserInputTool));
@@ -240,6 +248,16 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(PlanMulticamTool));
     registry.register(Arc::new(PlanReframeTool));
     registry.register(Arc::new(PlanTransitionTool));
+    registry.register(Arc::new(PodcastApplyAcceptedEditsTool));
+    registry.register(Arc::new(PodcastAudioPolishTool));
+    registry.register(Arc::new(PodcastCleanupCandidatesTool));
+    registry.register(Arc::new(PodcastEditProposalTool));
+    registry.register(Arc::new(PodcastEpisodeSpansTool));
+    registry.register(Arc::new(PodcastPostDraftCheckTool));
+    registry.register(Arc::new(PodcastQcReportTool));
+    registry.register(Arc::new(PodcastSmoothCutBoundariesTool));
+    registry.register(Arc::new(PodcastStoryMapTool));
+    registry.register(Arc::new(PodcastVisualPolishTool));
     registry.register(Arc::new(StartIndexingTool));
     registry.register(Arc::new(TransitionContextTool));
     registry.register(Arc::new(ValidateTransitionChoiceTool));
