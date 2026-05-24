@@ -457,9 +457,7 @@ fn apply_one(
             ctx,
             locator,
         ),
-        EdlOp::RippleDelete { anchor } => {
-            apply_ripple_delete(working, index, anchor, ctx, locator)
-        }
+        EdlOp::RippleDelete { anchor } => apply_ripple_delete(working, index, anchor, ctx, locator),
         EdlOp::RippleTrim {
             anchor,
             edge,
@@ -474,9 +472,7 @@ fn apply_one(
             kind,
             at_position,
         } => apply_insert_track(working, index, name, *kind, *at_position),
-        EdlOp::DeleteTrack { name, force } => {
-            apply_delete_track(working, index, name, *force)
-        }
+        EdlOp::DeleteTrack { name, force } => apply_delete_track(working, index, name, *force),
         EdlOp::ApplyMulticamPlan { plan } => apply_multicam_plan(working, index, plan),
         EdlOp::InsertTransition {
             between,
@@ -706,15 +702,7 @@ fn apply_one(
             animation,
             phases,
         } => apply_insert_rich_title(
-            working,
-            index,
-            *start_s,
-            *end_s,
-            segments,
-            *position,
-            *font_size,
-            *animation,
-            *phases,
+            working, index, *start_s, *end_s, segments, *position, *font_size, *animation, *phases,
         ),
         EdlOp::InstantiateMotionTemplate {
             template_id,
@@ -4830,10 +4818,7 @@ fn apply_ripple_move(
 /// Find the first clip on `stack_child` (must be a Track) whose
 /// `link_group_id` matches `group_id`. Returns the child index in the
 /// track's children vec, or None.
-fn first_clip_with_link_group(
-    stack_child: &StackChild,
-    group_id: &str,
-) -> Option<usize> {
+fn first_clip_with_link_group(stack_child: &StackChild, group_id: &str) -> Option<usize> {
     let StackChild::Track(track) = stack_child else {
         return None;
     };
@@ -5118,7 +5103,13 @@ fn apply_ripple_trim(
     }
 
     // Shift downstream clips on the same track.
-    ripple_shift_after(working, locator.track_index, locator.child_index, downstream_delta, rate)?;
+    ripple_shift_after(
+        working,
+        locator.track_index,
+        locator.child_index,
+        downstream_delta,
+        rate,
+    )?;
     // Shift link-group siblings on other tracks. For each sibling,
     // we trim its own source_range by the same delta (so the
     // synced audio shrinks/extends with the video) and ripple-shift
@@ -5137,8 +5128,7 @@ fn apply_ripple_trim(
             };
             // Apply the same edge trim to the sibling.
             {
-                let StackChild::Track(sibling_track) =
-                    &mut working.tracks.children[track_index]
+                let StackChild::Track(sibling_track) = &mut working.tracks.children[track_index]
                 else {
                     continue;
                 };
@@ -5216,9 +5206,8 @@ fn ripple_shift_after(
             if let TrackChild::Gap(gap) = &track.children[after_index] {
                 let new_dur = child_duration(&track.children[after_index]) + delta_s;
                 let _ = gap;
-                track.children[after_index] = TrackChild::Gap(
-                    awidat_proto::otio::Gap::of_duration(new_dur, rate),
-                );
+                track.children[after_index] =
+                    TrackChild::Gap(awidat_proto::otio::Gap::of_duration(new_dur, rate));
                 return Ok(());
             }
         }
@@ -5302,20 +5291,23 @@ fn apply_delete_gap(
         _ => None,
     };
 
-    let (primary_removed_dur, primary_track_index) =
-        match remove_one_gap(working, index, locator.track_index, locator.child_index, side) {
-            Ok(v) => v,
-            Err(ApplyError::Invalid { message, .. }) => {
-                // No gap to remove on the primary track is a soft
-                // no-op, not an error — matches the pre-cascade
-                // behavior and lets the agent re-issue freely without
-                // crashing the envelope.
-                return Ok(format!(
-                    "delete_gap: {message}; left timeline unchanged",
-                ));
-            }
-            Err(other) => return Err(other),
-        };
+    let (primary_removed_dur, primary_track_index) = match remove_one_gap(
+        working,
+        index,
+        locator.track_index,
+        locator.child_index,
+        side,
+    ) {
+        Ok(v) => v,
+        Err(ApplyError::Invalid { message, .. }) => {
+            // No gap to remove on the primary track is a soft
+            // no-op, not an error — matches the pre-cascade
+            // behavior and lets the agent re-issue freely without
+            // crashing the envelope.
+            return Ok(format!("delete_gap: {message}; left timeline unchanged",));
+        }
+        Err(other) => return Err(other),
+    };
 
     let mut cascaded = Vec::<usize>::new();
     if let Some(group_id) = link_group_id.as_deref() {
@@ -5412,7 +5404,6 @@ fn remove_one_gap(
     Ok((removed_dur, track_index))
 }
 
-
 /// Strip every trailing `Gap` from a track so its last child is a
 /// real clip (or transition). Returns a no-op description when the
 /// track's tail is already non-gap. Looks up the track by display
@@ -5452,9 +5443,7 @@ fn apply_trim_track_tail(
     // a paired endpoint. Once we pop trailing gaps the "last clip"
     // doesn't change (gaps aren't clips), so reading from the
     // pre-mutation state is fine.
-    let primary_last_link_group_id = last_clip_link_group_id(
-        &working.tracks.children[primary_idx],
-    );
+    let primary_last_link_group_id = last_clip_link_group_id(&working.tracks.children[primary_idx]);
 
     let (primary_removed_count, primary_removed_total_s) =
         pop_trailing_gaps(&mut working.tracks.children[primary_idx]);
@@ -5477,8 +5466,7 @@ fn apply_trim_track_tail(
                 StackChild::Track(t) => t.name.clone(),
                 _ => continue,
             };
-            let (count, total_s) =
-                pop_trailing_gaps(&mut working.tracks.children[ti]);
+            let (count, total_s) = pop_trailing_gaps(&mut working.tracks.children[ti]);
             if count > 0 {
                 cascaded.push((name, count, total_s));
             }
@@ -5504,7 +5492,10 @@ fn apply_trim_track_tail(
                 )
             })
             .collect();
-        summary.push_str(&format!("; cascaded to linked tracks: {}", parts.join(", ")));
+        summary.push_str(&format!(
+            "; cascaded to linked tracks: {}",
+            parts.join(", ")
+        ));
     }
     Ok(summary)
 }
@@ -8133,9 +8124,7 @@ fn apply_insert_text_overlay(
             index,
             message: format!("insert_{role}: phases could not serialize: {error}"),
         })?;
-        effect
-            .metadata
-            .insert("phases".to_string(), serialized);
+        effect.metadata.insert("phases".to_string(), serialized);
     }
     if let Some(profile) = safe_area {
         effect
@@ -10350,8 +10339,7 @@ mod tests {
         let mut tl = Timeline::empty("test");
         let mut track = Track::empty("V1", TrackKind::Video);
         let mut existing = Clip::empty("foo");
-        existing.media_reference =
-            MediaReference::External(ExternalReference::new("raw/foo.mp4"));
+        existing.media_reference = MediaReference::External(ExternalReference::new("raw/foo.mp4"));
         existing.source_range = Some(TimeRange::new(
             RationalTime::new(0.0, 24.0),
             RationalTime::new(2.0 * 24.0, 24.0),
@@ -11838,9 +11826,11 @@ mod tests {
         };
         let mut tl = Tl::empty("test");
         let mut track = Track::empty("V1", TrackKind::Video);
-        track.children.push(TrackChild::Gap(
-            awidat_proto::otio::Gap::of_duration(5.0, 24.0),
-        ));
+        track
+            .children
+            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                5.0, 24.0,
+            )));
         for (i, name) in ["clip-0", "clip-1"].iter().enumerate() {
             let mut c = Clip::empty((*name).to_string());
             c.media_reference =
@@ -11942,7 +11932,9 @@ mod tests {
         let mut track = Track::empty("V1", TrackKind::Video);
         track
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(3.0, 24.0)));
+            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                3.0, 24.0,
+            )));
         for (i, name) in ["clip-0", "clip-1", "clip-2"].iter().enumerate() {
             let mut c = Clip::empty((*name).to_string());
             c.media_reference =
@@ -11993,7 +11985,9 @@ mod tests {
         tl.tracks.children.push(StackChild::Track(track));
         let env = EdlEnvelope {
             ops: vec![EdlOp::DeleteGap {
-                anchor: Anchor::ClipUuid { uuid: "solo".into() },
+                anchor: Anchor::ClipUuid {
+                    uuid: "solo".into(),
+                },
                 side: crate::edl::op::GapSide::After,
             }],
         };
@@ -12027,12 +12021,12 @@ mod tests {
         }
         track
             .children
-            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(10.0, 24.0)));
+            .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                10.0, 24.0,
+            )));
         tl.tracks.children.push(StackChild::Track(track));
         let env = EdlEnvelope {
-            ops: vec![EdlOp::TrimTrackTail {
-                track: "V1".into(),
-            }],
+            ops: vec![EdlOp::TrimTrackTail { track: "V1".into() }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         let StackChild::Track(t) = &new_tl.tracks.children[0] else {
@@ -12058,10 +12052,12 @@ mod tests {
         awidat_meta
             .extra
             .insert("link_group_id".into(), serde_json::json!("g0"));
-        let mut build = |name: &str, kind: TrackKind, clip_name: &str| {
+        let build = |name: &str, kind: TrackKind, clip_name: &str| {
             let mut t = Track::empty(name, kind);
             t.children
-                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(3.0, 24.0)));
+                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    3.0, 24.0,
+                )));
             let mut c = Clip::empty(clip_name.to_string());
             c.media_reference = MediaReference::External(ExternalReference::new("raw/0.mp4"));
             c.source_range = Some(TimeRange::new(
@@ -12118,7 +12114,7 @@ mod tests {
         awidat_meta
             .extra
             .insert("link_group_id".into(), serde_json::json!("g0"));
-        let mut build = |name: &str, kind: TrackKind, clip_name: &str| {
+        let build = |name: &str, kind: TrackKind, clip_name: &str| {
             let mut t = Track::empty(name, kind);
             let mut c = Clip::empty(clip_name.to_string());
             c.media_reference = MediaReference::External(ExternalReference::new("raw/0.mp4"));
@@ -12132,7 +12128,9 @@ mod tests {
             };
             t.children.push(TrackChild::Clip(c));
             t.children
-                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(7.0, 24.0)));
+                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    7.0, 24.0,
+                )));
             t
         };
         tl.tracks
@@ -12143,9 +12141,7 @@ mod tests {
             .push(StackChild::Track(build("A1", TrackKind::Audio, "a0")));
 
         let env = EdlEnvelope {
-            ops: vec![EdlOp::TrimTrackTail {
-                track: "V1".into(),
-            }],
+            ops: vec![EdlOp::TrimTrackTail { track: "V1".into() }],
         };
         let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert!(
@@ -12172,9 +12168,7 @@ mod tests {
         // self-correct without a separate view_timeline call.
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
-            ops: vec![EdlOp::TrimTrackTail {
-                track: "V".into(),
-            }],
+            ops: vec![EdlOp::TrimTrackTail { track: "V".into() }],
         };
         let err = apply(&tl, &env, &AnchorContext::empty()).unwrap_err();
         let message = format!("{err}");
@@ -12192,9 +12186,7 @@ mod tests {
     fn apply_trim_track_tail_no_op_when_track_already_ends_in_clip() {
         let tl = timeline_with_three_clips();
         let env = EdlEnvelope {
-            ops: vec![EdlOp::TrimTrackTail {
-                track: "V1".into(),
-            }],
+            ops: vec![EdlOp::TrimTrackTail { track: "V1".into() }],
         };
         let (_, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
         assert!(

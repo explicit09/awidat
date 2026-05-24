@@ -556,13 +556,12 @@ impl OpBuilder {
                     line: head,
                     field: "anchor".into(),
                 })?;
-                let delta_s =
-                    take_field_f64(&mut fields, "delta_s").ok_or_else(|| {
-                        EdlParseError::MissingField {
-                            line: head,
-                            field: "delta_s".into(),
-                        }
-                    })?;
+                let delta_s = take_field_f64(&mut fields, "delta_s").ok_or_else(|| {
+                    EdlParseError::MissingField {
+                        line: head,
+                        field: "delta_s".into(),
+                    }
+                })?;
                 Ok(EdlOp::RippleMove {
                     anchor,
                     delta_s,
@@ -594,7 +593,9 @@ impl OpBuilder {
                         return Err(EdlParseError::BadField {
                             line: head,
                             raw: format!("+ edge: {other}"),
-                            message: format!("ripple_trim: edge must be 'start' or 'end', got {other:?}"),
+                            message: format!(
+                                "ripple_trim: edge must be 'start' or 'end', got {other:?}"
+                            ),
                         });
                     }
                 };
