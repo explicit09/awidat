@@ -144,6 +144,7 @@ pub fn run() {
             commands::transcode::proxy_cache_lifecycle_report,
             commands::preview_cache::preview_cache_summary,
             commands::preview_cache::preview_cache_refresh,
+            commands::generated_media::list_generated_media,
             commands::media::list_source_media,
             commands::media::list_proxies,
             commands::media::read_media_readiness,

@@ -104,6 +104,8 @@ pub mod accounts {
     pub const ANTHROPIC_API_KEY: &str = "anthropic_api_key";
     /// Pexels API key — used by the b-roll search/use tools (Phase 3).
     pub const PEXELS_API_KEY: &str = "pexels_api_key";
+    /// OpenRouter API key — used by generated-media video providers.
+    pub const OPENROUTER_API_KEY: &str = "openrouter_api_key";
 }
 
 /// Env-var names corresponding to [`accounts`]. Kept in lockstep.
@@ -114,6 +116,8 @@ pub mod env_vars {
     pub const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
     /// Override for [`super::accounts::PEXELS_API_KEY`].
     pub const PEXELS_API_KEY: &str = "PEXELS_API_KEY";
+    /// Override for [`super::accounts::OPENROUTER_API_KEY`].
+    pub const OPENROUTER_API_KEY: &str = "OPENROUTER_API_KEY";
 }
 
 #[cfg(test)]
@@ -129,6 +133,7 @@ mod tests {
         assert_ne!(accounts::HF_TOKEN, env_vars::HF_TOKEN);
         assert_ne!(accounts::ANTHROPIC_API_KEY, env_vars::ANTHROPIC_API_KEY);
         assert_ne!(accounts::PEXELS_API_KEY, env_vars::PEXELS_API_KEY);
+        assert_ne!(accounts::OPENROUTER_API_KEY, env_vars::OPENROUTER_API_KEY);
     }
 
     #[test]

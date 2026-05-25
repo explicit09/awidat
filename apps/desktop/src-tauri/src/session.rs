@@ -17,18 +17,21 @@ use awidat_core::tools::{
     find_black_frames::FindBlackFramesTool, find_broll_opportunities::FindBrollOpportunitiesTool,
     find_dead_air::FindDeadAirTool, find_episode_start::FindEpisodeStartTool,
     find_eye_contact::FindEyeContactTool, find_false_starts::FindFalseStartsTool,
-    find_filler_words::FindFillerWordsTool, find_moment::FindMomentTool,
-    find_speaker_oncam::FindSpeakerOncamTool, granular_timeline::register_granular_timeline_tools,
-    import_media::ImportLocalTool, import_media::ImportUrlTool, inspect_clip::InspectClipTool,
-    inspect_moment::InspectMomentTool, list_assets::ListAssetsTool, list_bins::ListBinsTool,
-    list_looks::ListLooksTool, list_stringouts::ListStringoutsTool, load_skill::LoadSkillTool,
+    find_filler_words::FindFillerWordsTool,
+    find_generated_broll_opportunities::FindGeneratedBrollOpportunitiesTool,
+    find_moment::FindMomentTool, find_speaker_oncam::FindSpeakerOncamTool,
+    granular_timeline::register_granular_timeline_tools, import_media::ImportLocalTool,
+    import_media::ImportUrlTool, inspect_clip::InspectClipTool, inspect_moment::InspectMomentTool,
+    list_assets::ListAssetsTool, list_bins::ListBinsTool, list_looks::ListLooksTool,
+    list_stringouts::ListStringoutsTool, load_skill::LoadSkillTool,
     local_review_package::LocalReviewPackageTool, manage_assets::CreateBinTool,
     manage_assets::MarkSelectTool, manage_assets::MoveToBinTool, manage_assets::RateAssetTool,
     manage_assets::RenameAssetTool, manage_assets::TagAssetTool, plan_emphasis::PlanEmphasisTool,
-    plan_look_regions::PlanLookRegionsTool, plan_look_regions::ReviewLookRegionsTool,
-    plan_look_regions::StartLookRegionPassTool, plan_motion_scene::PlanMotionSceneTool,
-    plan_multicam::PlanMulticamTool, plan_reframe::PlanReframeTool,
-    plan_transition::PlanTransitionTool, plan_visual_support::PlanVisualSupportTool,
+    plan_generated_media::PlanGeneratedMediaTool, plan_look_regions::PlanLookRegionsTool,
+    plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
+    plan_motion_scene::PlanMotionSceneTool, plan_multicam::PlanMulticamTool,
+    plan_reframe::PlanReframeTool, plan_transition::PlanTransitionTool,
+    plan_visual_support::PlanVisualSupportTool,
     podcast_apply_accepted_edits::PodcastApplyAcceptedEditsTool,
     podcast_audio_polish::PodcastAudioPolishTool,
     podcast_cleanup_candidates::PodcastCleanupCandidatesTool,
@@ -36,21 +39,23 @@ use awidat_core::tools::{
     podcast_post_draft_check::PodcastPostDraftCheckTool, podcast_qc_report::PodcastQcReportTool,
     podcast_smooth_cut_boundaries::PodcastSmoothCutBoundariesTool,
     podcast_story_map::PodcastStoryMapTool, podcast_visual_polish::PodcastVisualPolishTool,
-    poll_render::PollRenderTool, preview_cache::PreviewCacheStatusTool,
-    proxy_media::GenerateProxyTool, proxy_media::ProxyStatusTool, read_index::ReadIndexTool,
+    poll_generated_media_job::PollGeneratedMediaJobTool, poll_render::PollRenderTool,
+    preview_cache::PreviewCacheStatusTool, proxy_media::GenerateProxyTool,
+    proxy_media::ProxyStatusTool, read_index::ReadIndexTool,
     read_media_readiness::ReadMediaReadinessTool, relink_media::RelinkMediaTool,
     render_preflight::RenderPreflightTool, request_user_input::RequestUserInputTool,
     search_broll::SearchBrollTool, shot_summary::ShotSummaryTool,
-    start_indexing::StartIndexingTool, start_render::StartRenderTool,
-    stream_remux::StreamRemuxTool, transcript_pack::TranscriptPackTool,
-    transcript_search::TranscriptSearchTool, transition_context::TransitionContextTool,
-    update_plan::UpdatePlanTool, use_broll::UseBrollTool, vedit_blame::VeditBlameTool,
-    vedit_branch::VeditBranchTool, vedit_changed_clip_ids::VeditChangedClipIdsTool,
-    vedit_checkout::VeditCheckoutTool, vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool,
-    vedit_log::VeditLogTool, vedit_merge_preflight::VeditMergePreflightTool,
-    vedit_revert::VeditRevertTool, vedit_show::VeditShowTool, vedit_tag::VeditTagTool,
-    verify_render::VerifyRenderTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
-    view_timeline::ViewTimelineTool,
+    start_generated_media_job::StartGeneratedMediaJobTool, start_indexing::StartIndexingTool,
+    start_render::StartRenderTool, stream_remux::StreamRemuxTool,
+    transcript_pack::TranscriptPackTool, transcript_search::TranscriptSearchTool,
+    transition_context::TransitionContextTool, update_plan::UpdatePlanTool,
+    use_broll::UseBrollTool, use_generated_media::UseGeneratedMediaTool,
+    vedit_blame::VeditBlameTool, vedit_branch::VeditBranchTool,
+    vedit_changed_clip_ids::VeditChangedClipIdsTool, vedit_checkout::VeditCheckoutTool,
+    vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
+    vedit_merge_preflight::VeditMergePreflightTool, vedit_revert::VeditRevertTool,
+    vedit_show::VeditShowTool, vedit_tag::VeditTagTool, verify_render::VerifyRenderTool,
+    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use tokio::sync::mpsc;
@@ -105,6 +110,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(PlanLookRegionsTool));
     registry.register(Arc::new(ReviewLookRegionsTool));
     registry.register(Arc::new(PlanEmphasisTool));
+    registry.register(Arc::new(PlanGeneratedMediaTool));
     registry.register(Arc::new(PlanMulticamTool));
     registry.register(Arc::new(PlanReframeTool));
     registry.register(Arc::new(PlanTransitionTool));
@@ -120,7 +126,9 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(PodcastSmoothCutBoundariesTool));
     registry.register(Arc::new(PodcastStoryMapTool));
     registry.register(Arc::new(PodcastVisualPolishTool));
+    registry.register(Arc::new(PollGeneratedMediaJobTool));
     registry.register(Arc::new(StartIndexingTool));
+    registry.register(Arc::new(StartGeneratedMediaJobTool));
     registry.register(Arc::new(TransitionContextTool));
     registry.register(Arc::new(UpdatePlanTool));
     registry.register(Arc::new(FindBeatTool));
@@ -130,8 +138,10 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(ViewTimelineTool));
     registry.register(Arc::new(BrollCandidatesTool));
     registry.register(Arc::new(FindBrollOpportunitiesTool));
+    registry.register(Arc::new(FindGeneratedBrollOpportunitiesTool));
     registry.register(Arc::new(SearchBrollTool));
     registry.register(Arc::new(UseBrollTool));
+    registry.register(Arc::new(UseGeneratedMediaTool));
     registry.register(Arc::new(DownloadYtClipTool));
     registry.register(Arc::new(VeditCommitTool));
     registry.register(Arc::new(VeditDiffTool));
@@ -233,5 +243,15 @@ mod tests {
         let registry = build_registry();
         assert!(registry.get("plan_emphasis").is_some());
         assert!(registry.get("plan_reframe").is_some());
+    }
+
+    #[test]
+    fn desktop_registry_includes_generated_media_tools() {
+        let registry = build_registry();
+        assert!(registry.get("plan_generated_media").is_some());
+        assert!(registry.get("find_generated_broll_opportunities").is_some());
+        assert!(registry.get("start_generated_media_job").is_some());
+        assert!(registry.get("poll_generated_media_job").is_some());
+        assert!(registry.get("use_generated_media").is_some());
     }
 }

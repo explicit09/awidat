@@ -52,6 +52,7 @@ pub mod dismissal;
 pub mod edl;
 pub mod episode_map;
 pub mod error;
+pub mod generated_media;
 pub mod lessons;
 pub mod mcp_host;
 pub mod media_catalog_mutation;

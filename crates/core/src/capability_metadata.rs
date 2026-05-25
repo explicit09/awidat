@@ -66,8 +66,13 @@ impl CapabilityMetadata {
                 metadata.export_supported = SupportLevel::NotSupported;
                 metadata.required_indexes = vec!["clip_embeddings".into()];
             }
-            "transcript_pack" | "transcript_search" | "find_dead_air" | "find_filler_words"
-            | "find_false_starts" | "find_episode_start" => {
+            "transcript_pack"
+            | "transcript_search"
+            | "find_dead_air"
+            | "find_filler_words"
+            | "find_false_starts"
+            | "find_episode_start"
+            | "find_generated_broll_opportunities" => {
                 metadata.export_supported = SupportLevel::NotSupported;
                 metadata.required_indexes = vec!["transcript".into()];
             }
@@ -155,6 +160,45 @@ impl CapabilityMetadata {
                 metadata.preview_supported = SupportLevel::Supported;
                 metadata.export_supported = SupportLevel::NotSupported;
                 metadata.side_effects = vec!["uses network access".into()];
+            }
+            "plan_generated_media" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::Supported;
+                metadata.export_supported = SupportLevel::Unknown;
+                metadata.approval_required = false;
+                metadata.side_effects = Vec::new();
+            }
+            "poll_generated_media_job" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::Supported;
+                metadata.export_supported = SupportLevel::Unknown;
+                metadata.approval_required = true;
+                metadata.side_effects = vec![
+                    "reads generated media registry records".into(),
+                    "polls OpenRouter jobs and downloads completed outputs under raw/generated"
+                        .into(),
+                    "updates generated media registry records".into(),
+                ];
+            }
+            "use_generated_media" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::Supported;
+                metadata.export_supported = SupportLevel::Unknown;
+                metadata.approval_required = false;
+                metadata.side_effects = vec!["reads generated media registry records".into()];
+                metadata.known_limitations =
+                    vec!["returns an EDL fragment but does not apply it".into()];
+            }
+            "start_generated_media_job" => {
+                metadata.graph_mutates = false;
+                metadata.preview_supported = SupportLevel::Supported;
+                metadata.export_supported = SupportLevel::Unknown;
+                metadata.approval_required = true;
+                metadata.side_effects = vec![
+                    "writes generated media registry records".into(),
+                    "openrouter provider submits network video generation jobs when OPENROUTER_API_KEY is set".into(),
+                    "mock provider writes placeholder media under raw/generated".into(),
+                ];
             }
             "use_broll" | "apply_edl" => {
                 metadata.graph_mutates = true;
@@ -245,5 +289,44 @@ impl CapabilityMetadata {
             side_effects,
             known_limitations,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_media_tool_metadata_reports_registry_and_approval_behavior() {
+        let find = CapabilityMetadata::for_tool_name("find_generated_broll_opportunities", false);
+        assert!(!find.approval_required);
+        assert_eq!(find.required_indexes, vec!["transcript"]);
+
+        let start = CapabilityMetadata::for_tool_name("start_generated_media_job", true);
+        assert!(!start.graph_mutates);
+        assert!(start.approval_required);
+        assert!(
+            start
+                .side_effects
+                .iter()
+                .any(|effect| effect.contains("registry records"))
+        );
+
+        let poll = CapabilityMetadata::for_tool_name("poll_generated_media_job", false);
+        assert!(poll.approval_required);
+        assert!(
+            poll.side_effects
+                .iter()
+                .any(|effect| effect.contains("downloads completed outputs"))
+        );
+
+        let use_generated = CapabilityMetadata::for_tool_name("use_generated_media", false);
+        assert!(!use_generated.graph_mutates);
+        assert!(
+            use_generated
+                .known_limitations
+                .iter()
+                .any(|limitation| limitation.contains("does not apply it"))
+        );
     }
 }
