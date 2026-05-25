@@ -57,6 +57,7 @@ import { clampOpacity, evaluateAnimations } from "../timeline/animation";
 import { videoOverlayStyle as buildVideoOverlayStyle } from "./videoOverlayStyle";
 import {
   findActiveSegment,
+  findNextSegmentAfter,
   type PreviewTransition,
   type PlaySegment,
   usePreviewDuration,
@@ -256,7 +257,22 @@ function SegmentedPlayer({
     const v = active.ref.current;
     if (!v) return;
     if (segIdx < 0) {
-      // Past end of timeline → pause + park at last frame.
+      const nextIdx = findNextSegmentAfter(segments, timelineTime);
+      if (nextIdx >= 0) {
+        const next = segments[nextIdx];
+        ensureSlotLoaded(active, next);
+        active.segIdx = nextIdx;
+        applySegmentPlaybackSettings(v, next);
+        if (Math.abs(timelineTime - next.timelineStart) > 0.001) {
+          requestTimelineSeek(next.timelineStart);
+        } else {
+          tryAssignCurrentTime(v, next.sourceStart);
+          playActiveSlotIfNeeded(active);
+          primePreroll(nextIdx);
+        }
+        return;
+      }
+      // True end of timeline → pause + park at last frame.
       if (segments.length > 0) {
         const last = segments.length - 1;
         ensureSlotLoaded(active, segments[last]);

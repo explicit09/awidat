@@ -396,3 +396,21 @@ export function findActiveSegment(
   }
   return -1; // timeline-time falls in a gap between segments
 }
+
+/**
+ * Return the first segment that starts after `timelineTime`.
+ * Used by preview playback to recover from seeks into timeline gaps:
+ * while the render path can output black/silence, the live proxy
+ * player can only play real media segments.
+ */
+export function findNextSegmentAfter(
+  segments: PlaySegment[],
+  timelineTime: number,
+): number {
+  for (let index = 0; index < segments.length; index += 1) {
+    if (timelineTime < segments[index].timelineStart) {
+      return index;
+    }
+  }
+  return -1;
+}

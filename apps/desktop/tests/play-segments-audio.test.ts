@@ -46,6 +46,8 @@ const snapshot = {
           lut_path: null,
           title: null,
           video_overlay: null,
+          motion_shape: null,
+          motion_image: null,
           animations: [],
         },
       ],
