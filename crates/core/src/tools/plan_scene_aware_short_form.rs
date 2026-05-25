@@ -13,6 +13,7 @@ use serde::Deserialize;
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::scene_aware_short_form::{SceneAwareShortFormInput, build_scene_aware_short_form_plan};
+use crate::short_form_intelligence::{apply_to_scene_aware_input, build_short_form_intelligence};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Read-only scene-aware short-form planner.
@@ -94,7 +95,7 @@ impl ToolHandler for PlanSceneAwareShortFormTool {
         }
 
         let asset = AssetId::new(args.asset_id.clone());
-        let input = SceneAwareShortFormInput {
+        let mut input = SceneAwareShortFormInput {
             asset_id: args.asset_id,
             clip_id: args.clip_id,
             source_width: args.source_width,
@@ -111,6 +112,8 @@ impl ToolHandler for PlanSceneAwareShortFormTool {
             composition: sidecar_data(&ctx, "composition", &asset)?,
             clip: sidecar_data(&ctx, "clip", &asset)?,
         };
+        let intelligence = build_short_form_intelligence(&ctx.project_root, &input.asset_id);
+        apply_to_scene_aware_input(&mut input, &intelligence);
         let plan = build_scene_aware_short_form_plan(input);
         let body = serde_json::to_string_pretty(&plan)
             .map_err(|e| FunctionCallError::Fatal(format!("plan serialization failed: {e}")))?;

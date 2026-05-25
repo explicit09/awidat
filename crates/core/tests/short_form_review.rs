@@ -275,6 +275,72 @@ fn transcript_only_discovery_builds_complete_topic_windows() {
 }
 
 #[test]
+fn fused_clip_and_broll_recommendations_drive_review_packets() {
+    let mut input = transcript_only_input();
+    input.transcript = serde_json::json!({"segments": []});
+    input.editorial_moments = serde_json::json!({
+        "source": "fused_understanding",
+        "moments": [],
+        "clip_candidates": [{
+            "id": "clip-candidate:asset:moment:5000",
+            "kind": "clip_candidate",
+            "start_s": 5.0,
+            "end_s": 18.0,
+            "score": 0.92,
+            "text": "Retention improved by 42 percent once the transcript pipeline became stable.",
+            "reason": "Strong statistic candidate from fused understanding.",
+            "evidence_ids": ["understanding:asset:stat:5000"]
+        }]
+    });
+    input.broll_assets = serde_json::json!({
+        "source": "fused_understanding",
+        "recommendations": [{
+            "id": "broll-rec:asset:stat:5000",
+            "moment_id": "clip-candidate:asset:moment:5000",
+            "start_s": 5.0,
+            "end_s": 18.0,
+            "score": 0.94,
+            "category": "statistic",
+            "strategy": "motion_graphic",
+            "rationale": "Turn the numeric claim into an animated stat card.",
+            "placement": "motion_graphic_overlay"
+        }],
+        "candidates": []
+    });
+
+    let review = build_short_form_review(
+        input,
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 60.0,
+            profile: ShortFormProfile::EditorialReview,
+        },
+    );
+
+    let candidate = review
+        .candidates
+        .first()
+        .expect("fused clip candidate should produce review packet");
+    assert!(
+        candidate
+            .evidence
+            .iter()
+            .any(|line| line.contains("clip-candidate:asset:moment:5000"))
+    );
+    assert_eq!(
+        candidate.broll_plan.rationale,
+        "Turn the numeric claim into an animated stat card."
+    );
+    assert!(
+        candidate
+            .broll_plan
+            .suggestions
+            .iter()
+            .any(|suggestion| suggestion.contains("statistic"))
+    );
+}
+
+#[test]
 fn candidate_packet_includes_broll_layout_captions_metadata_and_edl() {
     let review = build_short_form_review(
         review_input(),

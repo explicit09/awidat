@@ -284,6 +284,7 @@ pub struct ReviewActionContract {
 
 #[derive(Debug, Clone)]
 struct Moment {
+    id: Option<String>,
     start_s: f64,
     end_s: f64,
     kind: String,
@@ -450,6 +451,14 @@ fn build_candidate(
 }
 
 fn moments_from_input(input: &ShortFormReviewInput) -> Vec<Moment> {
+    let clip_candidates = array_at(&input.editorial_moments, "/clip_candidates");
+    if !clip_candidates.is_empty() {
+        return clip_candidates
+            .into_iter()
+            .filter_map(|value| moment_from_value(value, Some("clip_candidate")))
+            .collect();
+    }
+
     let moments = array_at(&input.editorial_moments, "/moments");
     if !moments.is_empty() {
         return moments
@@ -472,6 +481,7 @@ fn moment_from_value(value: &serde_json::Value, default_kind: Option<&str>) -> O
     let end_s = number_field(value, &["end_s", "end"])?;
     let text = string_field(value, &["text", "summary"])?;
     Some(Moment {
+        id: string_field(value, &["id", "moment_id", "candidate_id"]),
         start_s,
         end_s,
         kind: string_field(value, &["kind", "type"])
@@ -517,6 +527,7 @@ fn topic_windows_from_transcript(
                 .join(" ");
             let speaker_id = common_speaker(&overlapping);
             Some(Moment {
+                id: None,
                 start_s,
                 end_s,
                 kind: "topic_window".to_string(),
@@ -600,6 +611,36 @@ fn plan_broll(input: &ShortFormReviewInput, moment: &Moment, topic: Option<&str>
         || lower_kind.contains("emotional")
         || lower_kind.contains("debate");
     let mut suggestions = broll_suggestions(&moment.text, topic);
+    if let Some(recommendation) = broll_recommendation_for_moment(input, moment) {
+        let recommendation_suggestions = recommendation_suggestions(recommendation);
+        if !recommendation_suggestions.is_empty() {
+            suggestions = recommendation_suggestions;
+        }
+        let acquisition_queries = acquisition_queries(&suggestions, topic);
+        let attached_assets = attach_broll_assets(input, &suggestions, topic);
+        let acquisition_commands = broll_acquisition_commands(&acquisition_queries);
+        return BrollPlan {
+            needed: true,
+            priority: if number_field(recommendation, &["score"]).unwrap_or(0.0) >= 0.75 {
+                "high"
+            } else {
+                "medium"
+            }
+            .to_string(),
+            suggestions,
+            acquisition_queries,
+            acquisition_commands,
+            attached_assets,
+            avoid_during: vec![
+                "strong facial reaction".to_string(),
+                "emotional personal beat".to_string(),
+                "guest credibility moment".to_string(),
+            ],
+            rationale: string_field(recommendation, &["rationale"]).unwrap_or_else(|| {
+                "Fused B-roll recommendation matched this short-form candidate.".to_string()
+            }),
+        };
+    }
     if suggestions.is_empty() && !face_sells_it {
         suggestions.push("supporting visual metaphor for the main claim".to_string());
     }
@@ -665,6 +706,75 @@ fn attach_broll_assets(
     assets.sort_by(|a, b| b.score.total_cmp(&a.score));
     assets.truncate(3);
     assets
+}
+
+fn broll_recommendation_for_moment<'a>(
+    input: &'a ShortFormReviewInput,
+    moment: &Moment,
+) -> Option<&'a serde_json::Value> {
+    let recommendations = array_at(&input.broll_assets, "/recommendations");
+    if recommendations.is_empty() {
+        return None;
+    }
+    if let Some(moment_id) = moment.id.as_deref()
+        && let Some(recommendation) = recommendations.iter().copied().find(|recommendation| {
+            string_field(recommendation, &["moment_id"])
+                .as_deref()
+                .is_some_and(|id| id == moment_id)
+        })
+    {
+        return Some(recommendation);
+    }
+    recommendations
+        .into_iter()
+        .filter(|recommendation| {
+            let start_s = number_field(recommendation, &["start_s", "start"]).unwrap_or(f64::NAN);
+            let end_s = number_field(recommendation, &["end_s", "end"]).unwrap_or(f64::NAN);
+            start_s.is_finite()
+                && end_s.is_finite()
+                && start_s < moment.end_s
+                && end_s > moment.start_s
+        })
+        .max_by(|a, b| {
+            number_field(a, &["score"])
+                .unwrap_or(0.0)
+                .total_cmp(&number_field(b, &["score"]).unwrap_or(0.0))
+        })
+}
+
+fn recommendation_suggestions(recommendation: &serde_json::Value) -> Vec<String> {
+    let mut suggestions = Vec::new();
+    let category = string_field(recommendation, &["category"]).unwrap_or_default();
+    let strategy = string_field(recommendation, &["strategy"]).unwrap_or_default();
+    let rationale = string_field(recommendation, &["rationale"]).unwrap_or_default();
+    match category.as_str() {
+        "statistic" => suggestions.push("animated statistic callout or infographic".to_string()),
+        "technical_concept" => {
+            suggestions.push("motion graphic explainer for the technical concept".to_string())
+        }
+        "product_mention" => {
+            suggestions.push("product UI, app screen, or workflow capture".to_string())
+        }
+        "entity_mention" | "historical_reference" => {
+            suggestions
+                .push("archival/reference visual matched to the mentioned entity".to_string());
+        }
+        "emotional_moment" | "storytelling" => {
+            suggestions
+                .push("subtle story-support cutaway that does not cover the reaction".to_string());
+        }
+        "analogy" => suggestions.push("generated visual metaphor for the analogy".to_string()),
+        _ => {}
+    }
+    if suggestions.is_empty() && !strategy.trim().is_empty() {
+        suggestions.push(format!("{strategy} support visual"));
+    }
+    if suggestions.is_empty() && !rationale.trim().is_empty() {
+        suggestions.push(rationale);
+    }
+    suggestions.sort();
+    suggestions.dedup();
+    suggestions
 }
 
 fn broll_acquisition_commands(queries: &[String]) -> Vec<ToolCommand> {
@@ -1332,6 +1442,9 @@ fn evidence(moment: &Moment, topic: Option<&str>, input: &ShortFormReviewInput) 
         format!("editorial moment kind: {}", moment.kind),
         format!("source range: {:.2}-{:.2}s", moment.start_s, moment.end_s),
     ];
+    if let Some(id) = &moment.id {
+        evidence.push(format!("stable intelligence id: {id}"));
+    }
     if !moment.reason.is_empty() {
         evidence.push(format!("moment reason: {}", moment.reason));
     }

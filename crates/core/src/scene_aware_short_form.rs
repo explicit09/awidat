@@ -498,6 +498,42 @@ fn plan_support_visuals(
     shots: &[SceneShotAnalysis],
 ) -> Vec<EditRecommendation> {
     let mut out = Vec::new();
+    for recommendation in broll_recommendations(input) {
+        let start_s = number_field(recommendation, "start_s", f64::NAN);
+        let end_s = number_field(recommendation, "end_s", f64::NAN);
+        if !start_s.is_finite() || !end_s.is_finite() || end_s <= start_s {
+            continue;
+        }
+        let Some(shot) = shot_at(shots, start_s) else {
+            continue;
+        };
+        let category = string_field(recommendation, "category").unwrap_or("broll");
+        let strategy = string_field(recommendation, "strategy").unwrap_or("support_visual");
+        let rationale =
+            string_field(recommendation, "rationale").unwrap_or("fused B-roll recommendation");
+        let kind = match category {
+            "statistic" | "technical_concept" => RecommendationKind::MotionScene,
+            _ if should_cover_with_broll(shot) => RecommendationKind::Broll,
+            _ => RecommendationKind::KeywordOverlay,
+        };
+        out.push(EditRecommendation {
+            kind,
+            start_s,
+            end_s: end_s.min(start_s + 4.0),
+            operation: match kind {
+                RecommendationKind::MotionScene => "Set Motion Scene / Insert Title".into(),
+                RecommendationKind::KeywordOverlay => "Insert Title / keyword overlay".into(),
+                _ => "Insert B-roll / PiP".into(),
+            },
+            transcript_reason: format!("fused B-roll recommendation: {rationale}"),
+            visual_reason: format!("{category} visual opportunity using {strategy} strategy"),
+            pacing_reason:
+                "uses the shared understanding spine instead of re-scanning transcript keywords"
+                    .into(),
+            safety_reason: "review placement against face/reaction value before applying".into(),
+            confidence: number_field(recommendation, "score", 0.74).clamp(0.0, 0.95),
+        });
+    }
     for segment in transcript_segments(&input.transcript) {
         let Some(shot) = shot_at(shots, segment.start_s) else {
             continue;
@@ -552,6 +588,16 @@ fn plan_support_visuals(
         }
     }
     out
+}
+
+fn broll_recommendations(input: &SceneAwareShortFormInput) -> Vec<&serde_json::Value> {
+    input
+        .clip
+        .pointer("/broll_recommendations")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 fn build_edl_fragment(
@@ -1229,6 +1275,10 @@ fn contains_abstract_visualizable_claim(text: &str) -> bool {
     .any(|needle| text.contains(needle))
 }
 
+fn string_field<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    value.get(field).and_then(|field| field.as_str())
+}
+
 fn is_hold_moment(input: &SceneAwareShortFormInput, shot: &SceneShotAnalysis) -> bool {
     input
         .editorial_moments
@@ -1586,6 +1636,58 @@ mod tests {
             !plan
                 .edl_fragment
                 .contains("B-roll placeholder: review concrete visual")
+        );
+    }
+
+    #[test]
+    fn fused_broll_recommendations_drive_scene_aware_support_visuals() {
+        let plan = build_scene_aware_short_form_plan(SceneAwareShortFormInput {
+            asset_id: "raw/demo.mp4".into(),
+            clip_id: "clip-1".into(),
+            source_width: 1080,
+            source_height: 1920,
+            transcript: serde_json::json!({
+                "segments": [{"start_s": 5.0, "end_s": 8.0, "text": "This claim needs support"}]
+            }),
+            shot: serde_json::json!({
+                "shots": [{"start_s": 5.0, "end_s": 8.0, "type": "medium", "motion": "static"}]
+            }),
+            composition: serde_json::json!({
+                "regions": [{
+                    "start_s": 5.0,
+                    "end_s": 8.0,
+                    "framing": "usable",
+                    "negative_space": {"side": "top", "score": 0.75}
+                }]
+            }),
+            clip: serde_json::json!({
+                "broll_recommendations": [{
+                    "id": "broll-rec:asset:stat:5000",
+                    "moment_id": "understanding:asset:stat:5000",
+                    "start_s": 5.0,
+                    "end_s": 8.0,
+                    "score": 0.91,
+                    "category": "statistic",
+                    "strategy": "motion_graphic",
+                    "rationale": "Animated stat card for the numeric claim."
+                }]
+            }),
+            ..SceneAwareShortFormInput::default()
+        });
+
+        let recommendation = plan
+            .recommendations
+            .iter()
+            .find(|rec| {
+                rec.transcript_reason
+                    .contains("Animated stat card for the numeric claim")
+            })
+            .expect("fused B-roll recommendation should become a scene-aware recommendation");
+        assert_eq!(recommendation.kind, RecommendationKind::MotionScene);
+        assert!(
+            recommendation
+                .pacing_reason
+                .contains("shared understanding spine")
         );
     }
 

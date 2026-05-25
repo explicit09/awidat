@@ -10,6 +10,9 @@ use serde::Deserialize;
 
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
+use crate::short_form_intelligence::{
+    apply_to_short_form_review_input, build_short_form_intelligence,
+};
 use crate::short_form_review::{
     ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
 };
@@ -105,7 +108,7 @@ impl ToolHandler for PlanShortFormReviewTool {
         }
 
         let asset = AssetId::new(args.asset_id.clone());
-        let input = ShortFormReviewInput {
+        let mut input = ShortFormReviewInput {
             asset_id: args.asset_id,
             source_width: args.source_width.unwrap_or(1920),
             source_height: args.source_height.unwrap_or(1080),
@@ -121,6 +124,8 @@ impl ToolHandler for PlanShortFormReviewTool {
             composition: sidecar_data(&ctx, "composition", &asset)?,
             broll_assets: sidecar_data(&ctx, "broll-candidates", &asset)?,
         };
+        let intelligence = build_short_form_intelligence(&ctx.project_root, &input.asset_id);
+        apply_to_short_form_review_input(&mut input, &intelligence);
         let review = build_short_form_review(
             input,
             ShortFormReviewOptions {
