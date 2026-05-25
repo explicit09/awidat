@@ -158,6 +158,7 @@ function SegmentedPlayer({
   const scrubInputRef = useRef<HTMLInputElement | null>(null);
   const scrubPointerIdRef = useRef<number | null>(null);
   const resumeAfterScrubRef = useRef(false);
+  const internalPauseRef = useRef<WeakSet<HTMLVideoElement>>(new WeakSet());
   // The currently-visible slot. The other slot is the preroll.
   const [activeKey, setActiveKey] = useState<"a" | "b">("a");
   // What each slot has loaded. Refs (not state) so the rVFC tick
@@ -367,7 +368,7 @@ function SegmentedPlayer({
       inactive.segIdx = nextIdx;
       applySegmentPlaybackSettings(v, next);
     }
-    if (!v.paused) v.pause();
+    if (!v.paused) pauseWithoutClearingIntent(v);
   }
 
   // Per-frame boundary check + time translation. Called from rVFC
@@ -409,8 +410,9 @@ function SegmentedPlayer({
       }
       if (nextV) applySegmentPlaybackSettings(nextV, next);
       // Pause the leaving slot, play the entering slot.
-      v.pause();
+      pauseWithoutClearingIntent(v);
       if (nextV) {
+        setPlaying(true);
         nextV.play().catch((err) => {
           handlePlayFailure(err, nextV);
         });
@@ -534,6 +536,22 @@ function SegmentedPlayer({
     }
   }
 
+  function pauseWithoutClearingIntent(v: HTMLVideoElement) {
+    internalPauseRef.current.add(v);
+    v.pause();
+    window.setTimeout(() => {
+      internalPauseRef.current.delete(v);
+    }, 500);
+  }
+
+  function handleActivePause(v: HTMLVideoElement) {
+    if (internalPauseRef.current.has(v)) {
+      internalPauseRef.current.delete(v);
+      return;
+    }
+    setPlaying(false);
+  }
+
   useEffect(() => {
     const v = slotsRef.current[activeKeyRef.current].ref.current;
     if (!v) return;
@@ -619,7 +637,7 @@ function SegmentedPlayer({
     const activeVideo = slotsRef.current[activeKeyRef.current].ref.current;
     resumeAfterScrubRef.current = Boolean(activeVideo && !activeVideo.paused);
     if (activeVideo && !activeVideo.paused) {
-      activeVideo.pause();
+      pauseWithoutClearingIntent(activeVideo);
       setPlaying(false);
     }
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -733,7 +751,7 @@ function SegmentedPlayer({
                 }
               : undefined
           }
-          onPause={activeKey === "a" ? () => setPlaying(false) : undefined}
+          onPause={activeKey === "a" ? (e) => handleActivePause(e.currentTarget) : undefined}
           onEnded={activeKey === "a" ? () => setPlaying(false) : undefined}
           onClick={activeKey === "a" ? togglePlay : undefined}
         />
@@ -757,7 +775,7 @@ function SegmentedPlayer({
                 }
               : undefined
           }
-          onPause={activeKey === "b" ? () => setPlaying(false) : undefined}
+          onPause={activeKey === "b" ? (e) => handleActivePause(e.currentTarget) : undefined}
           onEnded={activeKey === "b" ? () => setPlaying(false) : undefined}
           onClick={activeKey === "b" ? togglePlay : undefined}
         />
