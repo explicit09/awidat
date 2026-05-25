@@ -26,6 +26,7 @@ pub struct ShortFormReviewInput {
     pub gaze: serde_json::Value,
     pub frame_quality: serde_json::Value,
     pub composition: serde_json::Value,
+    pub broll_assets: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -82,6 +83,8 @@ pub struct ShortFormCandidate {
     pub suggested_caption: String,
     pub confidence: f64,
     pub review_actions: Vec<String>,
+    pub review_action_contracts: Vec<ReviewActionContract>,
+    pub workflow: ReviewWorkflow,
     pub draft_edl: String,
 }
 
@@ -127,7 +130,20 @@ pub struct BrollPlan {
     pub needed: bool,
     pub priority: String,
     pub suggestions: Vec<String>,
+    pub acquisition_queries: Vec<String>,
+    pub acquisition_commands: Vec<ToolCommand>,
+    pub attached_assets: Vec<BrollAssetCandidate>,
     pub avoid_during: Vec<String>,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrollAssetCandidate {
+    pub asset_id: String,
+    pub source: String,
+    pub start_s: f64,
+    pub end_s: f64,
+    pub score: f64,
     pub rationale: String,
 }
 
@@ -137,6 +153,7 @@ pub struct VerticalLayoutPlan {
     pub strategy: String,
     pub speaker_strategy: String,
     pub notes: Vec<String>,
+    pub edl_operations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +161,18 @@ pub struct CaptionPlan {
     pub group_words_min: usize,
     pub group_words_max: usize,
     pub placement: String,
+    pub style: String,
+    pub style_options: Vec<String>,
+    pub highlight_terms: Vec<String>,
+    pub groups: Vec<CaptionGroup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptionGroup {
+    pub start_s: f64,
+    pub end_s: f64,
+    pub text: String,
+    pub word_count: usize,
     pub highlight_terms: Vec<String>,
 }
 
@@ -156,16 +185,49 @@ pub struct PlatformVariant {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RankedSets {
-    pub safest: Vec<String>,
-    pub viral_risk: Vec<String>,
-    pub educational: Vec<String>,
-    pub funny_personality: Vec<String>,
+    pub safest: Vec<RankedSetEntry>,
+    pub viral_risk: Vec<RankedSetEntry>,
+    pub educational: Vec<RankedSetEntry>,
+    pub funny_personality: Vec<RankedSetEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RankedSetEntry {
+    pub candidate_id: String,
+    pub rank: usize,
+    pub score: f64,
+    pub rationale: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposalPolicy {
     pub apply_tool: String,
     pub approval_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewWorkflow {
+    pub preview: ToolCommand,
+    pub apply: ToolCommand,
+    pub render_preview: ToolCommand,
+    pub export: ToolCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCommand {
+    pub tool: String,
+    pub args: serde_json::Value,
+    pub approval_required: bool,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewActionContract {
+    pub action: String,
+    pub kind: String,
+    pub description: String,
+    pub command: Option<ToolCommand>,
+    pub args_schema: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -238,13 +300,21 @@ fn build_candidate(input: &ShortFormReviewInput, moment: Moment) -> ShortFormCan
     let hook = hook_from_text(&moment.text);
     let topic = topic_for_range(&input.topics, range.start_s, range.end_s);
     let clip_type = clip_type(&moment);
-    let broll_plan = plan_broll(&moment, topic.as_deref());
+    let broll_plan = plan_broll(input, &moment, topic.as_deref());
     let vertical_layout = plan_vertical_layout(input, &moment, broll_plan.needed);
+    let highlight_terms = highlight_terms(&moment.text, topic.as_deref());
     let caption_plan = CaptionPlan {
         group_words_min: 3,
         group_words_max: 7,
         placement: "lower-middle safe area".to_string(),
-        highlight_terms: highlight_terms(&moment.text, topic.as_deref()),
+        style: "bold_keyword".to_string(),
+        style_options: vec![
+            "bold_keyword".to_string(),
+            "karaoke".to_string(),
+            "clean_lower_middle".to_string(),
+        ],
+        highlight_terms: highlight_terms.clone(),
+        groups: caption_groups(input, &moment, &highlight_terms),
     };
     let suggested_title = suggested_title(&hook, topic.as_deref());
     let suggested_caption = suggested_caption(&moment.text);
@@ -265,7 +335,12 @@ fn build_candidate(input: &ShortFormReviewInput, moment: Moment) -> ShortFormCan
         &suggested_caption,
         &hook,
         &platform_variants,
+        &broll_plan,
+        &vertical_layout,
+        &caption_plan,
     );
+    let workflow = review_workflow(&draft_edl, &input.asset_id, &range);
+    let review_action_contracts = review_action_contracts(&workflow);
 
     ShortFormCandidate {
         candidate_id,
@@ -297,6 +372,8 @@ fn build_candidate(input: &ShortFormReviewInput, moment: Moment) -> ShortFormCan
             "add_remove_broll".to_string(),
             "export".to_string(),
         ],
+        review_action_contracts,
+        workflow,
         draft_edl,
     }
 }
@@ -439,7 +516,7 @@ fn score_moment(moment: &Moment) -> ScoreBreakdown {
     }
 }
 
-fn plan_broll(moment: &Moment, topic: Option<&str>) -> BrollPlan {
+fn plan_broll(input: &ShortFormReviewInput, moment: &Moment, topic: Option<&str>) -> BrollPlan {
     let lower_kind = moment.kind.to_lowercase();
     let face_sells_it = lower_kind.contains("funny")
         || lower_kind.contains("joke")
@@ -451,11 +528,17 @@ fn plan_broll(moment: &Moment, topic: Option<&str>) -> BrollPlan {
         suggestions.push("supporting visual metaphor for the main claim".to_string());
     }
     let needed = !face_sells_it || !suggestions.is_empty();
+    let acquisition_queries = acquisition_queries(&suggestions, topic);
+    let attached_assets = attach_broll_assets(input, &suggestions, topic);
+    let acquisition_commands = broll_acquisition_commands(&acquisition_queries);
 
     BrollPlan {
         needed,
         priority: if needed { "high" } else { "low" }.to_string(),
         suggestions,
+        acquisition_queries,
+        acquisition_commands,
+        attached_assets,
         avoid_during: vec![
             "strong facial reaction".to_string(),
             "emotional personal beat".to_string(),
@@ -467,6 +550,136 @@ fn plan_broll(moment: &Moment, topic: Option<&str>) -> BrollPlan {
             "Keep the speaker visible because the face/reaction is the main value.".to_string()
         },
     }
+}
+
+fn acquisition_queries(suggestions: &[String], topic: Option<&str>) -> Vec<String> {
+    let mut queries: Vec<String> = suggestions
+        .iter()
+        .map(|suggestion| {
+            suggestion
+                .split([',', ':'])
+                .next()
+                .unwrap_or(suggestion)
+                .trim()
+                .to_string()
+        })
+        .filter(|query| !query.is_empty())
+        .collect();
+    if let Some(topic) = topic
+        && !topic.trim().is_empty()
+    {
+        queries.push(topic.to_string());
+    }
+    queries.sort();
+    queries.dedup();
+    queries.truncate(5);
+    queries
+}
+
+fn attach_broll_assets(
+    input: &ShortFormReviewInput,
+    suggestions: &[String],
+    topic: Option<&str>,
+) -> Vec<BrollAssetCandidate> {
+    let terms = broll_match_terms(suggestions, topic);
+    let mut assets: Vec<BrollAssetCandidate> = array_at(&input.broll_assets, "/candidates")
+        .into_iter()
+        .filter_map(|candidate| broll_asset_from_value(candidate, &terms))
+        .collect();
+    assets.sort_by(|a, b| b.score.total_cmp(&a.score));
+    assets.truncate(3);
+    assets
+}
+
+fn broll_acquisition_commands(queries: &[String]) -> Vec<ToolCommand> {
+    let query = queries
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "supporting vertical B-roll".to_string());
+    vec![
+        ToolCommand {
+            tool: "search_broll".to_string(),
+            args: serde_json::json!({
+                "query": query,
+                "per_page": 5
+            }),
+            approval_required: false,
+            description: "Search external stock B-roll candidates before download/use.".to_string(),
+        },
+        ToolCommand {
+            tool: "find_generated_broll_opportunities".to_string(),
+            args: serde_json::json!({
+                "duration_s": 4.0,
+                "max_results": 12
+            }),
+            approval_required: false,
+            description: "Find moments suitable for generated B-roll support.".to_string(),
+        },
+    ]
+}
+
+fn broll_match_terms(suggestions: &[String], topic: Option<&str>) -> Vec<String> {
+    let mut terms = Vec::new();
+    for text in suggestions {
+        for word in text.split(|c: char| !c.is_alphanumeric()) {
+            let lower = word.to_lowercase();
+            if lower.len() >= 3 {
+                terms.push(lower);
+            }
+        }
+    }
+    if let Some(topic) = topic {
+        for word in topic.split(|c: char| !c.is_alphanumeric()) {
+            let lower = word.to_lowercase();
+            if lower.len() >= 3 {
+                terms.push(lower);
+            }
+        }
+    }
+    terms.sort();
+    terms.dedup();
+    terms
+}
+
+fn broll_asset_from_value(
+    value: &serde_json::Value,
+    terms: &[String],
+) -> Option<BrollAssetCandidate> {
+    let asset_id = string_field(value, &["asset_id", "asset"])?;
+    let query_terms: Vec<String> = value
+        .get("query_terms")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(|s| s.to_lowercase()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !terms.is_empty()
+        && !query_terms.is_empty()
+        && !query_terms.iter().any(|term| {
+            terms
+                .iter()
+                .any(|wanted| term.contains(wanted) || wanted.contains(term))
+        })
+    {
+        return None;
+    }
+    let start_s = number_field(value, &["start_s", "start"]).unwrap_or(0.0);
+    let end_s = number_field(value, &["end_s", "end"]).unwrap_or(start_s + 4.0);
+    let score = number_field(value, &["score", "confidence"]).unwrap_or(0.5);
+    let source =
+        string_field(value, &["source", "kind"]).unwrap_or_else(|| "existing_asset".into());
+    Some(BrollAssetCandidate {
+        asset_id,
+        source,
+        start_s: round2(start_s),
+        end_s: round2(end_s),
+        score: round2(score),
+        rationale: "matched B-roll candidate terms to the transcript/topic support plan"
+            .to_string(),
+    })
 }
 
 fn plan_vertical_layout(
@@ -503,6 +716,7 @@ fn plan_vertical_layout(
             "Keep the visible speaker in the safe center crop.".to_string()
         },
         notes: layout_notes(scene_count, shot_hint.as_deref()),
+        edl_operations: reframe_edl_operations(moment, face_count),
     }
 }
 
@@ -523,6 +737,130 @@ fn layout_notes(scene_count: usize, shot_hint: Option<&str>) -> Vec<String> {
     notes
 }
 
+fn reframe_edl_operations(moment: &Moment, face_count: usize) -> Vec<String> {
+    let zoom = if face_count > 1 { 1.28 } else { 1.18 };
+    let x = if face_count > 1 { 0.0 } else { -0.04 };
+    let params = serde_json::json!({
+        "aspect_ratio": "9:16",
+        "mode": if face_count > 1 { "dynamic_speaker_focus" } else { "active_speaker_center" },
+        "zoom": zoom,
+        "x": x,
+        "y": 0.0,
+        "safe_area": "mobile"
+    });
+    vec![format!(
+        "*** Set Effect\n\
+@@ anchor: transcript_snippet=\"{anchor}\"\n\
++ effect: awidat.reframe\n\
++ params_json: {params}\n\
++ rationale: speaker-aware 9:16 review reframe\n",
+        anchor = edl_string(&hook_from_text(&moment.text)),
+    )]
+}
+
+fn caption_groups(
+    input: &ShortFormReviewInput,
+    moment: &Moment,
+    highlight_terms: &[String],
+) -> Vec<CaptionGroup> {
+    let words = timed_words_for_range(input, moment.start_s, moment.end_s, &moment.text);
+    let mut groups = Vec::new();
+    let mut idx = 0;
+    while idx < words.len() {
+        let remaining = words.len() - idx;
+        if remaining < 3 {
+            break;
+        }
+        let mut take = remaining.min(7);
+        let tail = remaining - take;
+        if (1..3).contains(&tail) && take > 3 {
+            take -= 3 - tail;
+        }
+        let chunk = &words[idx..idx + take];
+        let text = chunk
+            .iter()
+            .map(|word| word.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let group_highlights = highlight_terms
+            .iter()
+            .filter(|term| text.to_lowercase().contains(&term.to_lowercase()))
+            .cloned()
+            .collect();
+        groups.push(CaptionGroup {
+            start_s: round2(chunk.first().map(|word| word.start_s).unwrap_or(0.0) - moment.start_s),
+            end_s: round2(
+                chunk.last().map(|word| word.end_s).unwrap_or(moment.end_s) - moment.start_s,
+            ),
+            text,
+            word_count: chunk.len(),
+            highlight_terms: group_highlights,
+        });
+        idx += take;
+        if groups.len() >= 12 {
+            break;
+        }
+    }
+    groups
+}
+
+#[derive(Debug, Clone)]
+struct TimedWord {
+    start_s: f64,
+    end_s: f64,
+    text: String,
+}
+
+fn timed_words_for_range(
+    input: &ShortFormReviewInput,
+    start_s: f64,
+    end_s: f64,
+    fallback_text: &str,
+) -> Vec<TimedWord> {
+    let mut words: Vec<TimedWord> = array_at(&input.transcript, "/segments")
+        .into_iter()
+        .filter(|segment| {
+            let segment_start = number_field(segment, &["start_s", "start"]).unwrap_or(f64::MAX);
+            let segment_end = number_field(segment, &["end_s", "end"]).unwrap_or(f64::MIN);
+            segment_start < end_s && segment_end > start_s
+        })
+        .flat_map(|segment| array_at(segment, "/words"))
+        .filter_map(|word| {
+            let word_start = number_field(word, &["start_s", "start"])?;
+            let word_end = number_field(word, &["end_s", "end"])?;
+            if word_start < start_s || word_end > end_s {
+                return None;
+            }
+            Some(TimedWord {
+                start_s: word_start,
+                end_s: word_end,
+                text: string_field(word, &["text", "word"]).unwrap_or_default(),
+            })
+        })
+        .filter(|word| !word.text.trim().is_empty())
+        .collect();
+    if !words.is_empty() {
+        words.sort_by(|a, b| a.start_s.total_cmp(&b.start_s));
+        return words;
+    }
+    synthetic_words(start_s, fallback_text)
+}
+
+fn synthetic_words(start_s: f64, text: &str) -> Vec<TimedWord> {
+    text.split_whitespace()
+        .enumerate()
+        .map(|(idx, raw)| {
+            let start = start_s + idx as f64 * 0.32;
+            TimedWord {
+                start_s: round2(start),
+                end_s: round2(start + 0.28),
+                text: raw.trim_matches(|c: char| c == '"' || c == ',').to_string(),
+            }
+        })
+        .filter(|word| !word.text.is_empty())
+        .collect()
+}
+
 fn draft_edl(
     input: &ShortFormReviewInput,
     range: &SourceRange,
@@ -531,13 +869,15 @@ fn draft_edl(
     caption: &str,
     hook: &str,
     platforms: &[PlatformVariant],
+    broll_plan: &BrollPlan,
+    vertical_layout: &VerticalLayoutPlan,
+    caption_plan: &CaptionPlan,
 ) -> String {
     let platform = platforms
         .first()
         .map(|variant| variant.platform.as_str())
         .unwrap_or("youtube_shorts");
-    let caption_end = range.duration_s.clamp(1.2, 3.0);
-    format!(
+    let mut edl = format!(
         "*** Begin EDL\n\
 *** Set Output Format\n\
 + aspect_ratio: 9:16\n\
@@ -550,12 +890,9 @@ fn draft_edl(
 + start: {start}\n\
 + end: {end}\n\
 + name: {name}\n\
-*** Insert Caption\n\
-+ start_s: 0\n\
-+ end_s: {caption_end}\n\
-+ text: \"{hook}\"\n\
-+ position: center\n\
-+ safe_area: mobile\n\
+{reframe_ops}\
+{broll_ops}\
+{caption_ops}\
 *** Set Loudness Target\n\
 + integrated_lufs: -14\n\
 + true_peak_db: -1\n\
@@ -564,38 +901,216 @@ fn draft_edl(
 + title: \"{title}\"\n\
 + description: \"{caption}\"\n\
 + tags: short-form,broll,review\n\
-*** End EDL\n",
+",
         asset = input.asset_id,
         start = range.start_s,
         end = range.end_s,
         name = candidate_id,
+        reframe_ops = vertical_layout.edl_operations.join(""),
+        broll_ops = broll_edl_operations(broll_plan, hook),
+        caption_ops = caption_edl_operations(caption_plan),
         title = edl_string(title),
         caption = edl_string(caption),
-        hook = edl_string(hook),
-    )
+    );
+    edl.push_str("*** End EDL\n");
+    edl
+}
+
+fn review_workflow(draft_edl: &str, asset_id: &str, range: &SourceRange) -> ReviewWorkflow {
+    ReviewWorkflow {
+        preview: ToolCommand {
+            tool: "apply_edl".to_string(),
+            args: serde_json::json!({
+                "edl": draft_edl,
+                "dry_run": true,
+                "reasoning": "Preview the short-form review candidate without committing."
+            }),
+            approval_required: false,
+            description: "Validate and preview the EDL as a dry run before committing.".to_string(),
+        },
+        apply: ToolCommand {
+            tool: "apply_edl".to_string(),
+            args: serde_json::json!({
+                "edl": draft_edl,
+                "dry_run": false,
+                "reasoning": "Apply the approved short-form review candidate."
+            }),
+            approval_required: true,
+            description: "Apply the approved edit through the normal mutation gate.".to_string(),
+        },
+        render_preview: ToolCommand {
+            tool: "start_render".to_string(),
+            args: serde_json::json!({
+                "scope": "segment",
+                "asset": asset_id,
+                "range": {
+                    "start_s": range.start_s,
+                    "end_s": range.end_s
+                }
+            }),
+            approval_required: true,
+            description: "Render a temporary source-range preview before committing the EDL."
+                .to_string(),
+        },
+        export: ToolCommand {
+            tool: "export_package".to_string(),
+            args: serde_json::json!({"format": "shorts"}),
+            approval_required: true,
+            description: "Export the approved vertical short through the export gate.".to_string(),
+        },
+    }
+}
+
+fn review_action_contracts(workflow: &ReviewWorkflow) -> Vec<ReviewActionContract> {
+    vec![
+        ReviewActionContract {
+            action: "approve".to_string(),
+            kind: "tool_command".to_string(),
+            description: "Apply the current draft EDL through the existing approval gate."
+                .to_string(),
+            command: Some(workflow.apply.clone()),
+            args_schema: serde_json::json!({"type": "object", "required": []}),
+        },
+        ReviewActionContract {
+            action: "reject".to_string(),
+            kind: "local_review_state".to_string(),
+            description: "Mark this candidate rejected without mutating the timeline.".to_string(),
+            command: None,
+            args_schema: serde_json::json!({"type": "object", "required": []}),
+        },
+        ReviewActionContract {
+            action: "extend_start".to_string(),
+            kind: "draft_adjustment".to_string(),
+            description: "Adjust the draft source start earlier before preview/apply.".to_string(),
+            command: None,
+            args_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"seconds": {"type": "number", "minimum": 0.0}},
+                "required": ["seconds"]
+            }),
+        },
+        ReviewActionContract {
+            action: "extend_end".to_string(),
+            kind: "draft_adjustment".to_string(),
+            description: "Adjust the draft source end later before preview/apply.".to_string(),
+            command: None,
+            args_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"seconds": {"type": "number", "minimum": 0.0}},
+                "required": ["seconds"]
+            }),
+        },
+        ReviewActionContract {
+            action: "change_caption_style".to_string(),
+            kind: "draft_adjustment".to_string(),
+            description: "Switch caption style and regenerate caption EDL groups.".to_string(),
+            command: None,
+            args_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"style": {"type": "string"}},
+                "required": ["style"]
+            }),
+        },
+        ReviewActionContract {
+            action: "add_remove_broll".to_string(),
+            kind: "draft_adjustment".to_string(),
+            description: "Attach, remove, or replace B-roll before preview/apply.".to_string(),
+            command: None,
+            args_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "asset_id": {"type": "string"},
+                    "operation": {"type": "string", "enum": ["add", "remove", "replace"]}
+                },
+                "required": ["operation"]
+            }),
+        },
+        ReviewActionContract {
+            action: "export".to_string(),
+            kind: "tool_command".to_string(),
+            description: "Export the approved short through the existing export gate.".to_string(),
+            command: Some(workflow.export.clone()),
+            args_schema: serde_json::json!({"type": "object", "required": []}),
+        },
+    ]
+}
+
+fn broll_edl_operations(plan: &BrollPlan, hook: &str) -> String {
+    plan.attached_assets
+        .first()
+        .map(|asset| {
+            format!(
+                "*** Insert BRoll\n\
+@@ anchor: transcript_snippet=\"{anchor}\"\n\
++ asset: {asset_id}\n\
++ duration_s: {duration}\n\
++ position: overlay\n",
+                anchor = edl_string(hook),
+                asset_id = asset.asset_id,
+                duration = round2((asset.end_s - asset.start_s).clamp(1.0, 6.0)),
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn caption_edl_operations(plan: &CaptionPlan) -> String {
+    plan.groups
+        .iter()
+        .map(|group| {
+            format!(
+                "*** Insert Caption\n\
++ start_s: {start}\n\
++ end_s: {end}\n\
++ text: \"{text}\"\n\
++ position: center\n\
++ safe_area: mobile\n",
+                start = group.start_s,
+                end = group.end_s,
+                text = edl_string(&group.text),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn build_ranked_sets(candidates: &[ShortFormCandidate]) -> RankedSets {
-    let top = |predicate: fn(&ShortFormCandidate) -> bool| {
+    let top = |predicate: fn(&ShortFormCandidate) -> bool, rationale: &str| {
         candidates
             .iter()
             .filter(|candidate| predicate(candidate))
             .take(5)
-            .map(|candidate| candidate.candidate_id.clone())
+            .map(|candidate| RankedSetEntry {
+                candidate_id: candidate.candidate_id.clone(),
+                rank: candidate.rank,
+                score: candidate.score.total,
+                rationale: rationale.to_string(),
+            })
             .collect()
     };
 
     RankedSets {
-        safest: top(|candidate| {
-            candidate.score.context_dependency_penalty < 0.4 && candidate.score.completeness > 0.5
-        }),
-        viral_risk: top(|candidate| {
-            candidate.score.hook_strength > 0.55 || candidate.clip_type == "hot_take"
-        }),
-        educational: top(|candidate| candidate.score.educational_value > 0.45),
-        funny_personality: top(|candidate| {
-            candidate.clip_type == "funny_personality" || candidate.score.emotional_intensity > 0.55
-        }),
+        safest: top(
+            |candidate| {
+                candidate.score.context_dependency_penalty < 0.4
+                    && candidate.score.completeness > 0.5
+            },
+            "safe pick: complete, standalone, and low context dependency",
+        ),
+        viral_risk: top(
+            |candidate| candidate.score.hook_strength > 0.55 || candidate.clip_type == "hot_take",
+            "viral-risk pick: strong hook or hot-take framing",
+        ),
+        educational: top(
+            |candidate| candidate.score.educational_value > 0.45,
+            "educational pick: explains a lesson, framework, or causal insight",
+        ),
+        funny_personality: top(
+            |candidate| {
+                candidate.clip_type == "funny_personality"
+                    || candidate.score.emotional_intensity > 0.55
+            },
+            "funny/personality pick: emotion, humor, or reaction-led value",
+        ),
     }
 }
 

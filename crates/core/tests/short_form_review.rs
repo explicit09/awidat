@@ -6,7 +6,9 @@ use awidat_core::short_form_review::{
 };
 use awidat_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
 use awidat_core::tools::apply_edl::ApplyEdlTool;
+use awidat_core::tools::export_package::ExportPackageTool;
 use awidat_core::tools::plan_short_form_review::PlanShortFormReviewTool;
+use awidat_core::tools::start_render::StartRenderTool;
 use tokio::sync::broadcast;
 
 fn review_input() -> ShortFormReviewInput {
@@ -20,7 +22,19 @@ fn review_input() -> ShortFormReviewInput {
                     "start_s": 12.0,
                     "end_s": 190.0,
                     "speaker_id": "host",
-                    "text": "Here is why AI coding is changing faster than people think. The old model was waiting for a tool to finish, but now the important shift is reviewing complete work. That changes how teams ship because the review loop becomes the product."
+                    "text": "Here is why AI coding is changing faster than people think. The old model was waiting for a tool to finish, but now the important shift is reviewing complete work. That changes how teams ship because the review loop becomes the product.",
+                    "words": [
+                        {"start_s": 12.4, "end_s": 12.7, "text": "Here"},
+                        {"start_s": 12.7, "end_s": 12.9, "text": "is"},
+                        {"start_s": 12.9, "end_s": 13.1, "text": "why"},
+                        {"start_s": 13.1, "end_s": 13.4, "text": "AI"},
+                        {"start_s": 13.4, "end_s": 13.8, "text": "coding"},
+                        {"start_s": 13.8, "end_s": 14.0, "text": "is"},
+                        {"start_s": 14.0, "end_s": 14.4, "text": "changing"},
+                        {"start_s": 14.4, "end_s": 14.8, "text": "faster"},
+                        {"start_s": 14.8, "end_s": 15.0, "text": "than"},
+                        {"start_s": 15.0, "end_s": 15.4, "text": "people"}
+                    ]
                 },
                 {
                     "start_s": 220.0,
@@ -84,6 +98,16 @@ fn review_input() -> ShortFormReviewInput {
         gaze: serde_json::json!({"segments": []}),
         frame_quality: serde_json::json!({"regions": []}),
         composition: serde_json::json!({"regions": []}),
+        broll_assets: serde_json::json!({
+            "candidates": [{
+                "asset_id": "raw/broll/ai-coding-ui.mp4",
+                "query_terms": ["AI", "coding", "review"],
+                "start_s": 0.0,
+                "end_s": 6.0,
+                "source": "existing_asset",
+                "score": 0.91
+            }]
+        }),
     }
 }
 
@@ -136,6 +160,16 @@ fn transcript_only_input() -> ShortFormReviewInput {
         gaze: serde_json::json!({"segments": []}),
         frame_quality: serde_json::json!({"regions": []}),
         composition: serde_json::json!({"regions": []}),
+        broll_assets: serde_json::json!({
+            "candidates": [{
+                "asset_id": "raw/broll/server-racks.mp4",
+                "query_terms": ["data", "center", "energy", "servers"],
+                "start_s": 2.0,
+                "end_s": 8.0,
+                "source": "existing_asset",
+                "score": 0.88
+            }]
+        }),
     }
 }
 
@@ -276,6 +310,23 @@ fn candidate_packet_includes_broll_layout_captions_metadata_and_edl() {
             .review_actions
             .contains(&"add_remove_broll".to_string())
     );
+    for action in [
+        "approve",
+        "reject",
+        "extend_start",
+        "extend_end",
+        "change_caption_style",
+        "add_remove_broll",
+        "export",
+    ] {
+        assert!(
+            packet
+                .review_action_contracts
+                .iter()
+                .any(|contract| contract.action == action),
+            "missing action contract for {action}"
+        );
+    }
     assert!(packet.draft_edl.contains("*** Begin EDL"));
     assert!(packet.draft_edl.contains("*** Set Output Format"));
     assert!(packet.draft_edl.contains("*** Insert Clip"));
@@ -291,6 +342,136 @@ fn candidate_packet_includes_broll_layout_captions_metadata_and_edl() {
             .approval_note
             .contains("autopilot/co-pilot/manual")
     );
+}
+
+#[test]
+fn v2_packet_attaches_broll_generates_reframe_caption_groups_and_workflow_commands() {
+    let review = build_short_form_review(
+        review_input(),
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 300.0,
+        },
+    );
+
+    let Some(packet) = review.candidates.first() else {
+        panic!("expected candidate packet");
+    };
+    assert!(
+        packet
+            .broll_plan
+            .attached_assets
+            .iter()
+            .any(|asset| asset.asset_id == "raw/broll/ai-coding-ui.mp4")
+    );
+    assert!(
+        packet
+            .broll_plan
+            .acquisition_queries
+            .iter()
+            .any(|query| query.contains("AI coding"))
+    );
+    assert!(
+        packet
+            .broll_plan
+            .acquisition_commands
+            .iter()
+            .any(|command| command.tool == "search_broll")
+    );
+    assert!(
+        packet
+            .broll_plan
+            .acquisition_commands
+            .iter()
+            .any(|command| command.tool == "find_generated_broll_opportunities")
+    );
+    assert_eq!(packet.caption_plan.style, "bold_keyword");
+    assert!(
+        packet
+            .caption_plan
+            .style_options
+            .contains(&"karaoke".to_string())
+    );
+    assert!(!packet.caption_plan.groups.is_empty());
+    assert_eq!(packet.caption_plan.groups[0].start_s, 0.4);
+    assert!(
+        packet
+            .caption_plan
+            .groups
+            .iter()
+            .all(|group| (3..=7).contains(&group.word_count))
+    );
+    assert!(
+        packet
+            .vertical_layout
+            .edl_operations
+            .iter()
+            .any(|op| op.contains("*** Set Effect") && op.contains("awidat.reframe"))
+    );
+    assert!(packet.draft_edl.contains("*** Insert BRoll"));
+    assert!(packet.draft_edl.contains("raw/broll/ai-coding-ui.mp4"));
+    assert!(packet.draft_edl.contains("*** Set Effect"));
+    if let Err(err) = parser::parse(&packet.draft_edl) {
+        panic!("V2 draft EDL should parse: {err}");
+    }
+    assert_eq!(packet.workflow.preview.tool, "apply_edl");
+    assert_eq!(
+        packet.workflow.preview.args["dry_run"],
+        serde_json::json!(true)
+    );
+    assert_eq!(packet.workflow.apply.tool, "apply_edl");
+    assert_eq!(
+        packet.workflow.apply.args["dry_run"],
+        serde_json::json!(false)
+    );
+    assert_eq!(packet.workflow.export.tool, "export_package");
+    assert_eq!(
+        packet.workflow.export.args["format"],
+        serde_json::json!("shorts")
+    );
+    assert_eq!(
+        packet.workflow.render_preview.args["scope"],
+        serde_json::json!("segment")
+    );
+    assert_eq!(
+        packet.workflow.render_preview.args["asset"],
+        serde_json::json!("raw/founder-interview.mp4")
+    );
+    assert!(!packet.workflow.preview.approval_required);
+    assert!(packet.workflow.apply.approval_required);
+    assert!(packet.workflow.render_preview.approval_required);
+    assert!(packet.workflow.export.approval_required);
+}
+
+#[test]
+fn ranked_sets_expose_top_five_candidate_packets_per_bucket() {
+    let review = build_short_form_review(
+        review_input(),
+        ShortFormReviewOptions {
+            max_candidates: 10,
+            max_duration_s: 300.0,
+        },
+    );
+
+    assert!(review.ranked_sets.safest.iter().all(|entry| entry.rank > 0));
+    assert!(
+        review
+            .ranked_sets
+            .educational
+            .iter()
+            .any(|entry| entry.rationale.contains("educational"))
+    );
+    assert!(
+        review
+            .ranked_sets
+            .viral_risk
+            .iter()
+            .any(|entry| entry.candidate_id.starts_with("short_"))
+    );
+    assert!(review.ranked_sets.safest.len() <= 5);
+    assert!(review.ranked_sets.viral_risk.len() <= 5);
+    assert!(review.ranked_sets.educational.len() <= 5);
+    assert!(review.ranked_sets.funny_personality.len() <= 5);
 }
 
 #[test]
@@ -322,6 +503,16 @@ fn review_tool_is_read_only_but_apply_edl_proposals_are_permission_gated() {
         name: "apply_edl".to_string(),
         args: serde_json::json!({"edl": packet.draft_edl, "dry_run": true}),
     }));
+    assert!(StartRenderTool.is_mutating(&ToolInvocation {
+        call_id: "call-4".to_string(),
+        name: "start_render".to_string(),
+        args: packet.workflow.render_preview.args.clone(),
+    }));
+    assert!(ExportPackageTool.is_mutating(&ToolInvocation {
+        call_id: "call-5".to_string(),
+        name: "export_package".to_string(),
+        args: packet.workflow.export.args.clone(),
+    }));
 }
 
 #[tokio::test]
@@ -334,6 +525,7 @@ async fn plan_short_form_review_tool_reads_sidecars_and_returns_review_packets()
     write_sidecar(dir.path(), "whisper", asset, input.transcript);
     write_sidecar(dir.path(), "topic", asset, input.topics);
     write_sidecar(dir.path(), "face", asset, input.face);
+    write_sidecar(dir.path(), "broll-candidates", asset, input.broll_assets);
 
     let output = PlanShortFormReviewTool
         .handle(
@@ -364,6 +556,10 @@ async fn plan_short_form_review_tool_reads_sidecars_and_returns_review_packets()
             panic!("tool output should include candidates array");
         });
     assert!(!candidates.is_empty());
+    assert_eq!(
+        review.pointer("/candidates/0/broll_plan/attached_assets/0/asset_id"),
+        Some(&serde_json::json!("raw/broll/server-racks.mp4"))
+    );
     assert_eq!(
         review.pointer("/proposal_policy/apply_tool"),
         Some(&serde_json::json!("apply_edl"))

@@ -112,6 +112,7 @@ impl ToolHandler for PlanShortFormReviewTool {
             gaze: sidecar_data(&ctx, "gaze", &asset)?,
             frame_quality: sidecar_data(&ctx, "frame-quality", &asset)?,
             composition: sidecar_data(&ctx, "composition", &asset)?,
+            broll_assets: sidecar_data(&ctx, "broll-candidates", &asset)?,
         };
         let review = build_short_form_review(
             input,
