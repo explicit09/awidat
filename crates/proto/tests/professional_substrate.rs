@@ -8,13 +8,15 @@ use awidat_proto::awidat_meta::{AwidatTimelineMetadata, BeatMarker, BeatMarkerRo
 use awidat_proto::professional::{
     AlignedTranscriptPhrase, AlignedTranscriptWord, AnimationTarget, AssetCatalog, AssetQuery,
     AssetReadiness, AssetRecord, AssetRole, AudioBus, AudioFinishingState, BezierHandles,
-    CapabilityArea, CapabilityRegistry, CapabilityStatus, ColorFinishingState, CompositionGraph,
-    CompositionNode, CompositionNodeType, DeliveryPreflightInput, DeliveryProfile, ExportMode,
-    ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink, ExpressionSource,
-    ExtrapolationMode, FindingSeverity, GradeStack, GroundingBoxFormat, GroundingDetection,
-    GroundingEvidence, GroundingEvidenceStatus, HardwareAccelerationPolicy, Keyframe,
-    MaskArtifactKind, MaskArtifactProfile, MaskQualityScorecard, MaskReviewDecision, MaskSidecar,
-    MatteGenerationFallback, MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings,
+    CapabilityArea, CapabilityRegistry, CapabilityStatus, ClipCandidate, ClipCandidateAssembly,
+    ClipCandidateAsset, ClipCandidatePackage, ClipCandidateScoreComponent, ColorFinishingState,
+    CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
+    DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink,
+    ExpressionSource, ExtrapolationMode, FindingSeverity, FusedMoment, FusedScene, GradeStack,
+    GroundingBoxFormat, GroundingDetection, GroundingEvidence, GroundingEvidenceStatus,
+    HardwareAccelerationPolicy, Keyframe, MaskArtifactKind, MaskArtifactProfile,
+    MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MatteGenerationFallback,
+    MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings,
     MediaIntelligenceAggregateState, MediaIntelligenceAsset, MediaIntelligenceLayer,
     MediaIntelligenceLayerKind, MediaIntelligenceLayerStatus, MediaIntelligencePackage,
     MotionGraphicsTemplate, MotionPackage, MotionScene, MotionSceneLayer, MotionSceneLayerKind,
@@ -25,7 +27,8 @@ use awidat_proto::professional::{
     SegmentationSessionOperation, SegmentationSessionOperationKind, SelectDecision, SourceRange,
     SourceSelect, StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, Stringout,
     TangentMode, TemplateSlot, TrackingPackage, TranscriptAlignmentPackage, TranscriptCorrection,
-    TranscriptCorrectionTarget, TranscriptEditAction, TranscriptEditRecord, WorkflowLens,
+    TranscriptCorrectionTarget, TranscriptEditAction, TranscriptEditRecord, UnderstandingAsset,
+    UnderstandingEvidenceKind, UnderstandingEvidenceRef, UnderstandingPackage, WorkflowLens,
 };
 
 #[test]
@@ -456,6 +459,134 @@ fn media_intelligence_package_round_trips() {
 
     let metadata = AwidatTimelineMetadata {
         media_intelligence: Some(roundtrip),
+        ..AwidatTimelineMetadata::default()
+    };
+    assert!(metadata.validate_professional_substrate().is_empty());
+}
+
+#[test]
+fn understanding_package_round_trips() {
+    let package = UnderstandingPackage {
+        assets: vec![UnderstandingAsset {
+            asset_id: "raw/interview.mov".into(),
+            scenes: vec![FusedScene {
+                id: "scene:raw-interview:0".into(),
+                range: SourceRange {
+                    start_s: 10.0,
+                    end_s: 30.0,
+                },
+                label: Some("wide interview shot".into()),
+                evidence: vec![UnderstandingEvidenceRef {
+                    kind: UnderstandingEvidenceKind::Scene,
+                    producer: "scenedetect".into(),
+                    ref_id: "index/scenedetect/raw/interview.mov.json#shots/0".into(),
+                }],
+            }],
+            moments: vec![FusedMoment {
+                id: "understanding:raw-interview:hook-1".into(),
+                asset_id: "raw/interview.mov".into(),
+                range: SourceRange {
+                    start_s: 12.0,
+                    end_s: 22.0,
+                },
+                category: "hook".into(),
+                label: "strong opening claim".into(),
+                scene_id: Some("scene:raw-interview:0".into()),
+                speaker_id: Some("SPEAKER_00".into()),
+                transcript_excerpt: Some("This changes how teams edit podcasts.".into()),
+                topics: vec!["AI editing".into()],
+                energy: Some("high".into()),
+                confidence: 0.86,
+                evidence: vec![
+                    UnderstandingEvidenceRef {
+                        kind: UnderstandingEvidenceKind::EditorialMoment,
+                        producer: "editorial-moments".into(),
+                        ref_id: "moment:hook-1".into(),
+                    },
+                    UnderstandingEvidenceRef {
+                        kind: UnderstandingEvidenceKind::Transcript,
+                        producer: "whisper".into(),
+                        ref_id: "segment:12-22".into(),
+                    },
+                ],
+                notes: vec!["retention hook".into()],
+            }],
+            missing_evidence: vec![UnderstandingEvidenceKind::Audio],
+        }],
+    };
+
+    let json = serde_json::to_string(&package).expect("serialize package");
+    let roundtrip: UnderstandingPackage = serde_json::from_str(&json).expect("deserialize package");
+
+    assert_eq!(roundtrip.assets[0].moments[0].category, "hook");
+    assert_eq!(
+        roundtrip.assets[0].moments[0].scene_id.as_deref(),
+        Some("scene:raw-interview:0")
+    );
+    assert!(roundtrip.validate().is_empty());
+
+    let metadata = AwidatTimelineMetadata {
+        understanding: Some(roundtrip),
+        ..AwidatTimelineMetadata::default()
+    };
+    assert!(metadata.validate_professional_substrate().is_empty());
+}
+
+#[test]
+fn clip_candidate_package_round_trips() {
+    let package = ClipCandidatePackage {
+        assets: vec![ClipCandidateAsset {
+            asset_id: "raw/interview.mov".into(),
+            candidates: vec![ClipCandidate {
+                id: "clip-candidate:raw-interview:hook-1".into(),
+                asset_id: "raw/interview.mov".into(),
+                range: SourceRange {
+                    start_s: 12.0,
+                    end_s: 42.0,
+                },
+                rank: 1,
+                score: 0.88,
+                explanation: "Strong hook with clear topic and short duration.".into(),
+                score_breakdown: vec![
+                    ClipCandidateScoreComponent {
+                        name: "hook_strength".into(),
+                        value: 0.95,
+                        reason: "editorial moment kind is hook".into(),
+                    },
+                    ClipCandidateScoreComponent {
+                        name: "duration_fit".into(),
+                        value: 0.82,
+                        reason: "candidate is within short-form range".into(),
+                    },
+                ],
+                evidence_ids: vec!["understanding:raw-interview:hook-1".into()],
+                assembly: ClipCandidateAssembly {
+                    asset_id: "raw/interview.mov".into(),
+                    source_range: SourceRange {
+                        start_s: 12.0,
+                        end_s: 42.0,
+                    },
+                    aspect_ratio: "9:16".into(),
+                    caption_style: "kinetic_emphasis".into(),
+                    hook_text: "This changes podcast editing.".into(),
+                    required_setup_ids: vec!["understanding:raw-interview:setup-1".into()],
+                },
+            }],
+        }],
+    };
+
+    let json = serde_json::to_string(&package).expect("serialize package");
+    let roundtrip: ClipCandidatePackage = serde_json::from_str(&json).expect("deserialize package");
+
+    assert_eq!(roundtrip.assets[0].candidates[0].rank, 1);
+    assert_eq!(
+        roundtrip.assets[0].candidates[0].assembly.aspect_ratio,
+        "9:16"
+    );
+    assert!(roundtrip.validate().is_empty());
+
+    let metadata = AwidatTimelineMetadata {
+        clip_candidates: Some(roundtrip),
         ..AwidatTimelineMetadata::default()
     };
     assert!(metadata.validate_professional_substrate().is_empty());

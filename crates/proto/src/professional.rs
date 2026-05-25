@@ -805,6 +805,387 @@ pub enum MediaIntelligenceAggregateState {
     Offline,
 }
 
+/// Consolidated understanding sidecar derived from transcript, scene, topic, audio, and moment evidence.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnderstandingPackage {
+    /// Per-asset fused understanding records.
+    #[serde(default)]
+    pub assets: Vec<UnderstandingAsset>,
+}
+
+impl UnderstandingPackage {
+    /// Validate fused understanding invariants.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut asset_ids = HashSet::new();
+        for asset in &self.assets {
+            if asset.asset_id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    "understanding asset has an empty asset_id",
+                ));
+            }
+            if !asset_ids.insert(asset.asset_id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!("understanding contains duplicate asset {}", asset.asset_id),
+                ));
+            }
+            diagnostics.extend(asset.validate());
+        }
+        diagnostics
+    }
+}
+
+/// Fused understanding for one source asset.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct UnderstandingAsset {
+    /// Source asset id.
+    pub asset_id: String,
+    /// Stable fused scene records.
+    #[serde(default)]
+    pub scenes: Vec<FusedScene>,
+    /// Stable fused moment records.
+    #[serde(default)]
+    pub moments: Vec<FusedMoment>,
+    /// Evidence channels that were expected but unavailable.
+    #[serde(default)]
+    pub missing_evidence: Vec<UnderstandingEvidenceKind>,
+}
+
+impl UnderstandingAsset {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut scene_ids = HashSet::new();
+        for scene in &self.scenes {
+            if scene.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "understanding asset {} has a scene with an empty id",
+                        self.asset_id
+                    ),
+                ));
+            }
+            if !scene_ids.insert(scene.id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "understanding asset {} has duplicate scene {}",
+                        self.asset_id, scene.id
+                    ),
+                ));
+            }
+            if !scene.range.is_valid() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!("understanding scene {} has an invalid range", scene.id),
+                ));
+            }
+        }
+
+        let mut moment_ids = HashSet::new();
+        for moment in &self.moments {
+            if moment.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "understanding asset {} has a moment with an empty id",
+                        self.asset_id
+                    ),
+                ));
+            }
+            if !moment_ids.insert(moment.id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "understanding asset {} has duplicate moment {}",
+                        self.asset_id, moment.id
+                    ),
+                ));
+            }
+            if !moment.range.is_valid() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!("understanding moment {} has an invalid range", moment.id),
+                ));
+            }
+            if !(0.0..=1.0).contains(&moment.confidence) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "understanding moment {} confidence is outside 0..1",
+                        moment.id
+                    ),
+                ));
+            }
+            if moment.evidence.is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!("understanding moment {} has no evidence", moment.id),
+                ));
+            }
+            if let Some(scene_id) = moment.scene_id.as_deref()
+                && !scene_ids.contains(scene_id)
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "understanding moment {} references missing scene {}",
+                        moment.id, scene_id
+                    ),
+                ));
+            }
+        }
+        diagnostics
+    }
+}
+
+/// Fused scene range from visual scene detection and nearby transcript evidence.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FusedScene {
+    /// Stable scene id.
+    pub id: String,
+    /// Source-time range.
+    pub range: SourceRange,
+    /// Optional coarse visual or semantic label.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub label: Option<String>,
+    /// Evidence references used to create this scene.
+    #[serde(default)]
+    pub evidence: Vec<UnderstandingEvidenceRef>,
+}
+
+/// Fused editorial moment with cross-modal evidence.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FusedMoment {
+    /// Stable fused moment id.
+    pub id: String,
+    /// Source asset id.
+    pub asset_id: String,
+    /// Source-time range.
+    pub range: SourceRange,
+    /// Moment type, e.g. hook, story, explanation, emotional_peak.
+    pub category: String,
+    /// Human-readable label.
+    pub label: String,
+    /// Optional scene this moment falls inside.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub scene_id: Option<String>,
+    /// Optional speaker id.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub speaker_id: Option<String>,
+    /// Transcript excerpt used for review.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub transcript_excerpt: Option<String>,
+    /// Topic labels intersecting this moment.
+    #[serde(default)]
+    pub topics: Vec<String>,
+    /// Energy label or scalar summary from audio evidence.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub energy: Option<String>,
+    /// Confidence in the fused understanding record.
+    pub confidence: f64,
+    /// Evidence references used to create this moment.
+    #[serde(default)]
+    pub evidence: Vec<UnderstandingEvidenceRef>,
+    /// Human-readable review notes.
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+/// Evidence channel used by understanding fusion.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnderstandingEvidenceKind {
+    /// Transcript or word/segment evidence.
+    #[default]
+    Transcript,
+    /// Scene-detection evidence.
+    Scene,
+    /// Speaker diarization evidence.
+    Speaker,
+    /// Topic segmentation evidence.
+    Topic,
+    /// Audio energy / silence evidence.
+    Audio,
+    /// Editorial moment evidence.
+    EditorialMoment,
+}
+
+/// Reference to one source evidence record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnderstandingEvidenceRef {
+    /// Evidence kind.
+    pub kind: UnderstandingEvidenceKind,
+    /// Producing indexer/tool name.
+    pub producer: String,
+    /// Stable sidecar-relative or semantic reference id.
+    pub ref_id: String,
+}
+
+/// Stored short-form clip candidate package.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClipCandidatePackage {
+    /// Per-asset clip candidates.
+    #[serde(default)]
+    pub assets: Vec<ClipCandidateAsset>,
+}
+
+impl ClipCandidatePackage {
+    /// Validate clip candidate package invariants.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut asset_ids = HashSet::new();
+        for asset in &self.assets {
+            if asset.asset_id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    "clip candidate asset has an empty asset_id",
+                ));
+            }
+            if !asset_ids.insert(asset.asset_id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!("clip candidates contain duplicate asset {}", asset.asset_id),
+                ));
+            }
+            diagnostics.extend(asset.validate());
+        }
+        diagnostics
+    }
+}
+
+/// Clip candidates for one asset.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClipCandidateAsset {
+    /// Source asset id.
+    pub asset_id: String,
+    /// Ranked candidates.
+    #[serde(default)]
+    pub candidates: Vec<ClipCandidate>,
+}
+
+impl ClipCandidateAsset {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut ids = HashSet::new();
+        for candidate in &self.candidates {
+            if candidate.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "clip candidate asset {} has a candidate with an empty id",
+                        self.asset_id
+                    ),
+                ));
+            }
+            if !ids.insert(candidate.id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "clip candidate asset {} has duplicate candidate {}",
+                        self.asset_id, candidate.id
+                    ),
+                ));
+            }
+            if !candidate.range.is_valid() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!("clip candidate {} has an invalid range", candidate.id),
+                ));
+            }
+            if !(0.0..=1.0).contains(&candidate.score) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!("clip candidate {} score is outside 0..1", candidate.id),
+                ));
+            }
+            if candidate.evidence_ids.is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!("clip candidate {} has no evidence ids", candidate.id),
+                ));
+            }
+            for component in &candidate.score_breakdown {
+                if component.name.trim().is_empty() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::PreAutonomyOrchestrationContract,
+                        format!(
+                            "clip candidate {} has an unnamed score component",
+                            candidate.id
+                        ),
+                    ));
+                }
+                if !(0.0..=1.0).contains(&component.value) {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::PreAutonomyOrchestrationContract,
+                        format!(
+                            "clip candidate {} component {} is outside 0..1",
+                            candidate.id, component.name
+                        ),
+                    ));
+                }
+            }
+        }
+        diagnostics
+    }
+}
+
+/// One reviewable short-form candidate.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClipCandidate {
+    /// Stable candidate id.
+    pub id: String,
+    /// Source asset id.
+    pub asset_id: String,
+    /// Source-time range.
+    pub range: SourceRange,
+    /// Candidate rank within asset.
+    pub rank: u32,
+    /// Overall score from 0..1.
+    pub score: f64,
+    /// Short explanation for review.
+    pub explanation: String,
+    /// Score components.
+    #[serde(default)]
+    pub score_breakdown: Vec<ClipCandidateScoreComponent>,
+    /// Evidence ids, usually fused moment ids.
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    /// One-click assembly metadata.
+    pub assembly: ClipCandidateAssembly,
+}
+
+/// One score component for a clip candidate.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClipCandidateScoreComponent {
+    /// Component name.
+    pub name: String,
+    /// Component value from 0..1.
+    pub value: f64,
+    /// Human-readable reason for the value.
+    pub reason: String,
+}
+
+/// Metadata required to assemble a reviewed short-form candidate.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ClipCandidateAssembly {
+    /// Source asset id.
+    pub asset_id: String,
+    /// Source range to assemble.
+    pub source_range: SourceRange,
+    /// Suggested aspect ratio, e.g. 9:16 or 1:1.
+    pub aspect_ratio: String,
+    /// Suggested caption preset/style.
+    pub caption_style: String,
+    /// Suggested hook text.
+    pub hook_text: String,
+    /// Required setup fused moment ids.
+    #[serde(default)]
+    pub required_setup_ids: Vec<String>,
+}
+
 /// Durable source review decision.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceSelect {
