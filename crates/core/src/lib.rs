@@ -69,6 +69,7 @@ pub mod rollout;
 pub mod scene_aware_short_form;
 pub mod session;
 pub mod session_registry;
+pub mod short_form_review;
 pub mod skills;
 pub mod structured_plan;
 pub mod subagent;

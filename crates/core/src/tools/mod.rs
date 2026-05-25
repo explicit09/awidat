@@ -49,6 +49,7 @@ pub mod plan_motion_scene;
 pub mod plan_multicam;
 pub mod plan_reframe;
 pub mod plan_scene_aware_short_form;
+pub mod plan_short_form_review;
 pub mod plan_transition;
 pub mod plan_visual_support;
 pub mod podcast_apply_accepted_edits;
