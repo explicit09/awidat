@@ -1591,12 +1591,12 @@ mod tests {
 
     #[test]
     fn applied_set_motion_scene_edl_surfaces_in_preview_snapshot() {
-        let edl = r#"
+        let edl = r##"
 *** Begin EDL
 *** Set Motion Scene
-+ scene_json: {"id":"scene-edl","duration_s":3.0,"fps":24.0,"width":1920,"height":1080,"layers":[{"id":"headline","kind":"text","from_s":0.5,"duration_s":2.0,"z_index":10,"params":{"text":"From EDL"}}]}
++ scene_json: {"id":"scene-edl","duration_s":3.0,"fps":24.0,"width":1920,"height":1080,"layers":[{"id":"panel","kind":"solid","from_s":0.0,"duration_s":3.0,"z_index":0,"params":{"x":0.08,"y":0.12,"width":0.84,"height":0.76,"color":"#111827","opacity":0.86}},{"id":"logo","kind":"image","from_s":0.2,"duration_s":2.4,"z_index":5,"params":{"asset":"raw/logo.png","x":0.12,"y":0.18,"width":0.28,"height":0.28,"fit":"contain","opacity":0.9}},{"id":"accent","kind":"shape","from_s":0.3,"duration_s":2.0,"z_index":6,"params":{"shape":"rect","x":0.12,"y":0.52,"width":0.28,"height":0.04,"color":"#22C55E","opacity":0.8}},{"id":"headline","kind":"text","from_s":0.5,"duration_s":2.0,"z_index":10,"params":{"text":"From EDL"}}]}
 *** End EDL
-"#;
+"##;
         let envelope = parse(edl).expect("motion scene EDL should parse");
         let timeline = Timeline::empty("motion-scene-edl-preview");
         let (timeline, outcome) =
@@ -1604,6 +1604,8 @@ mod tests {
 
         assert_eq!(outcome.applied.len(), 1);
         let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        // Preview uses the same protocol shape for authored and EDL-applied
+        // scenes, so this protects the real desktop path rather than only storage.
         let Some(title_track) = snapshot
             .tracks
             .iter()
@@ -1611,17 +1613,58 @@ mod tests {
         else {
             panic!("applied motion scene should surface through a preview title track");
         };
-        let TimelineItem::Clip {
-            clip_uuid,
-            title: Some(title),
-            ..
-        } = &title_track.items[0]
-        else {
-            panic!("expected motion scene title clip from applied EDL");
-        };
+        assert_eq!(title_track.items.len(), 4);
+        let has_panel = title_track.items.iter().any(|item| {
+            matches!(
+                item,
+                TimelineItem::Clip {
+                    clip_uuid,
+                    motion_shape: Some(shape),
+                    ..
+                } if clip_uuid == "scene-edl:panel" && shape.color == "#111827"
+            )
+        });
+        let has_image = title_track.items.iter().any(|item| {
+            matches!(
+                item,
+                TimelineItem::Clip {
+                    clip_uuid,
+                    motion_image: Some(image),
+                    ..
+                } if clip_uuid == "scene-edl:logo" && image.asset_id == "raw/logo.png"
+            )
+        });
+        let has_accent = title_track.items.iter().any(|item| {
+            matches!(
+                item,
+                TimelineItem::Clip {
+                    clip_uuid,
+                    motion_shape: Some(shape),
+                    ..
+                } if clip_uuid == "scene-edl:accent" && shape.color == "#22C55E"
+            )
+        });
+        let has_headline = title_track.items.iter().any(|item| {
+            matches!(
+                item,
+                TimelineItem::Clip {
+                    clip_uuid,
+                    title: Some(title),
+                    ..
+                } if clip_uuid == "scene-edl:headline" && title.text == "From EDL"
+            )
+        });
 
-        assert_eq!(clip_uuid, "scene-edl:headline");
-        assert_eq!(title.text, "From EDL");
+        assert!(has_panel);
+        assert!(has_image);
+        assert!(has_accent);
+        assert!(has_headline);
+        assert!(
+            snapshot
+                .preview_limitations
+                .iter()
+                .all(|limitation| limitation.kind != "motion_scene_layer_unsupported")
+        );
     }
 
     #[test]

@@ -11697,6 +11697,113 @@ mod tests {
     }
 
     #[test]
+    fn timeline_render_spec_and_preflight_cover_multilayer_motion_scene() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("raw")).unwrap();
+        fs::write(dir.path().join("raw/logo.png"), b"png fixture").unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![
+                MotionSceneLayer {
+                    id: "panel".into(),
+                    kind: MotionSceneLayerKind::Solid,
+                    from_s: 0.0,
+                    duration_s: 2.0,
+                    z_index: 0,
+                    params: [
+                        ("x".to_string(), serde_json::json!(0.08)),
+                        ("y".to_string(), serde_json::json!(0.12)),
+                        ("width".to_string(), serde_json::json!(0.84)),
+                        ("height".to_string(), serde_json::json!(0.76)),
+                        ("color".to_string(), serde_json::json!("#111827")),
+                        ("opacity".to_string(), serde_json::json!(0.86)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                MotionSceneLayer {
+                    id: "logo".into(),
+                    kind: MotionSceneLayerKind::Image,
+                    from_s: 0.2,
+                    duration_s: 1.5,
+                    z_index: 5,
+                    params: [
+                        ("asset".to_string(), serde_json::json!("raw/logo.png")),
+                        ("x".to_string(), serde_json::json!(0.12)),
+                        ("y".to_string(), serde_json::json!(0.18)),
+                        ("width".to_string(), serde_json::json!(0.28)),
+                        ("height".to_string(), serde_json::json!(0.28)),
+                        ("fit".to_string(), serde_json::json!("contain")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                MotionSceneLayer {
+                    id: "accent".into(),
+                    kind: MotionSceneLayerKind::Shape,
+                    from_s: 0.3,
+                    duration_s: 1.4,
+                    z_index: 6,
+                    params: [
+                        ("shape".to_string(), serde_json::json!("rect")),
+                        ("x".to_string(), serde_json::json!(0.12)),
+                        ("y".to_string(), serde_json::json!(0.52)),
+                        ("width".to_string(), serde_json::json!(0.28)),
+                        ("height".to_string(), serde_json::json!(0.04)),
+                        ("color".to_string(), serde_json::json!("#22C55E")),
+                        ("opacity".to_string(), serde_json::json!(0.8)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                MotionSceneLayer {
+                    id: "headline".into(),
+                    kind: MotionSceneLayerKind::Text,
+                    from_s: 0.5,
+                    duration_s: 1.2,
+                    z_index: 10,
+                    params: [("text".to_string(), serde_json::json!("Motion Scene"))]
+                        .into_iter()
+                        .collect(),
+                },
+            ],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        // Spec and preflight are the cheap contract: supported MotionScene
+        // layers must lower natively and select a render path before ffmpeg runs.
+        assert!(cmd.contains("drawtext=text='Motion Scene'"));
+        assert!(cmd.contains("drawbox=x=iw*0.08:y=ih*0.12:w=iw*0.84:h=ih*0.76"));
+        assert!(cmd.contains("drawbox=x=iw*0.12:y=ih*0.52:w=iw*0.28:h=ih*0.04"));
+        assert!(cmd.contains("raw/logo.png"), "image input missing: {cmd}");
+        assert!(
+            spec.limitations
+                .iter()
+                .all(|limitation| limitation.kind != "motion_scene_layer_unsupported"),
+            "supported multilayer scene should not emit unsupported limitation: {:?}",
+            spec.limitations
+        );
+
+        let preflight = analyze_timeline_render_preflight(dir.path()).unwrap();
+        assert_ne!(
+            preflight.backend,
+            crate::RenderBackendKind::StreamExportRemux
+        );
+        assert_eq!(preflight.segment_count, 1);
+        assert_eq!(preflight.title_count, 1);
+        assert!(
+            preflight
+                .limitations
+                .iter()
+                .all(|limitation| limitation.kind != "motion_scene_layer_unsupported"),
+            "preflight should agree the multilayer scene is native-renderable: {:?}",
+            preflight.limitations
+        );
+    }
+
+    #[test]
     fn timeline_render_preflight_reports_backend_without_creating_render_artifacts() {
         let dir = tempfile::tempdir().unwrap();
         write_fixture_project(dir.path());
@@ -15620,6 +15727,113 @@ animations: Vec::new(),
         assert!(output_path.exists());
     }
 
+    #[test]
+    fn ffmpeg_smoke_renders_multilayer_motion_scene() {
+        let Ok(ffmpeg) = crate::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+        let probe = std::process::Command::new(&ffmpeg)
+            .args(["-hide_banner", "-filters"])
+            .output();
+        let has_drawtext = probe
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("drawtext"))
+            .unwrap_or(false);
+        if !has_drawtext {
+            eprintln!(
+                "skipping ffmpeg_smoke_renders_multilayer_motion_scene: drawtext filter unavailable"
+            );
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        // The fixture helper creates the same project shape as timeline export;
+        // the synthetic assets make this an actual render, not just argv proof.
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![
+                MotionSceneLayer {
+                    id: "panel".into(),
+                    kind: MotionSceneLayerKind::Solid,
+                    from_s: 0.0,
+                    duration_s: 1.0,
+                    z_index: 0,
+                    params: [
+                        ("x".to_string(), serde_json::json!(0.08)),
+                        ("y".to_string(), serde_json::json!(0.12)),
+                        ("width".to_string(), serde_json::json!(0.84)),
+                        ("height".to_string(), serde_json::json!(0.76)),
+                        ("color".to_string(), serde_json::json!("#111827")),
+                        ("opacity".to_string(), serde_json::json!(0.86)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                MotionSceneLayer {
+                    id: "logo".into(),
+                    kind: MotionSceneLayerKind::Image,
+                    from_s: 0.1,
+                    duration_s: 0.8,
+                    z_index: 5,
+                    params: [
+                        ("asset".to_string(), serde_json::json!("raw/logo.png")),
+                        ("x".to_string(), serde_json::json!(0.12)),
+                        ("y".to_string(), serde_json::json!(0.18)),
+                        ("width".to_string(), serde_json::json!(0.28)),
+                        ("height".to_string(), serde_json::json!(0.28)),
+                        ("fit".to_string(), serde_json::json!("contain")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                MotionSceneLayer {
+                    id: "accent".into(),
+                    kind: MotionSceneLayerKind::Shape,
+                    from_s: 0.2,
+                    duration_s: 0.7,
+                    z_index: 6,
+                    params: [
+                        ("shape".to_string(), serde_json::json!("rect")),
+                        ("x".to_string(), serde_json::json!(0.12)),
+                        ("y".to_string(), serde_json::json!(0.52)),
+                        ("width".to_string(), serde_json::json!(0.28)),
+                        ("height".to_string(), serde_json::json!(0.04)),
+                        ("color".to_string(), serde_json::json!("#22C55E")),
+                        ("opacity".to_string(), serde_json::json!(0.8)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                },
+                MotionSceneLayer {
+                    id: "headline".into(),
+                    kind: MotionSceneLayerKind::Text,
+                    from_s: 0.2,
+                    duration_s: 0.7,
+                    z_index: 10,
+                    params: [("text".to_string(), serde_json::json!("Motion Scene"))]
+                        .into_iter()
+                        .collect(),
+                },
+            ],
+        );
+        write_synthetic_video(&ffmpeg, &dir.path().join("raw/x.mp4"), "blue");
+        write_synthetic_image(&ffmpeg, &dir.path().join("raw/logo.png"), "green");
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let output = std::process::Command::new(ffmpeg)
+            .args(&spec.args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "ffmpeg smoke failed\nargv: {}\nstderr:\n{}",
+            spec.args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(spec.output_path.exists());
+    }
+
     fn write_synthetic_video(ffmpeg: &Path, path: &Path, color: &str) {
         let output = std::process::Command::new(ffmpeg)
             .args([
@@ -15639,6 +15853,28 @@ animations: Vec::new(),
                 "yuv420p",
                 "-c:a",
                 "aac",
+                &path.to_string_lossy(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "failed to synthesize {}:\n{}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn write_synthetic_image(ffmpeg: &Path, path: &Path, color: &str) {
+        let output = std::process::Command::new(ffmpeg)
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("color=c={color}:s=80x80:d=0.1"),
+                "-frames:v",
+                "1",
                 &path.to_string_lossy(),
             ])
             .output()
