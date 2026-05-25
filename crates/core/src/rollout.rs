@@ -439,7 +439,9 @@ impl Recorder {
     /// writer task. If the channel is full we drop the item with a warn
     /// rather than block the agent loop (unlikely at 256 buffer size).
     pub fn record_message(&self, m: Message) {
-        self.send(WriterCmd::Append(RolloutItem::Message(m)));
+        self.send(WriterCmd::Append(RolloutItem::Message(
+            message_for_recording(m),
+        )));
     }
 
     /// Mark a compaction event in the log. Caller follows with a
@@ -547,8 +549,25 @@ async fn writer_loop(
         match cmd {
             WriterCmd::Append(item) => {
                 let is_message = matches!(item, RolloutItem::Message(_));
+                let status_update = match &item {
+                    RolloutItem::TurnStarted { .. } => {
+                        Some(crate::session_registry::SessionStatus::Active)
+                    }
+                    RolloutItem::TurnComplete { .. } => {
+                        Some(crate::session_registry::SessionStatus::Completed)
+                    }
+                    _ => None,
+                };
                 if let Err(e) = write_line(&mut file, &item) {
                     warn!(path = %path.display(), error = %e, "rollout: write failed");
+                }
+                if let (Some(reg), Some(status)) = (registry.as_ref(), status_update) {
+                    if let Err(e) = reg.set_status(&session_id, status) {
+                        warn!(
+                            error = %e,
+                            "session_registry: status update failed; continuing",
+                        );
+                    }
                 }
                 // Best-effort: bump registry stats after each
                 // Message line. Errors are logged once and ignored;
@@ -575,6 +594,45 @@ async fn writer_loop(
             }
         }
     }
+}
+
+fn message_for_recording(mut message: Message) -> Message {
+    for block in &mut message.content {
+        if let ContentBlock::ToolResult { content, .. } = block {
+            *content = redact_tool_result_images(content);
+        }
+    }
+    message
+}
+
+fn redact_tool_result_images(content: &serde_json::Value) -> serde_json::Value {
+    let serde_json::Value::Array(blocks) = content else {
+        return content.clone();
+    };
+    let mut redacted = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        if block.get("type").and_then(serde_json::Value::as_str) != Some("image") {
+            redacted.push(block.clone());
+            continue;
+        }
+        let source = block.get("source");
+        let media_type = source
+            .and_then(|s| s.get("media_type"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("image/*");
+        let data_len = source
+            .and_then(|s| s.get("data"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::len)
+            .unwrap_or(0);
+        redacted.push(serde_json::json!({
+            "type": "text",
+            "text": format!(
+                "[image omitted from rollout log: {media_type}, {data_len} base64 chars]"
+            ),
+        }));
+    }
+    serde_json::Value::Array(redacted)
 }
 
 fn write_line<W: std::io::Write>(w: &mut W, item: &RolloutItem) -> std::io::Result<()> {
@@ -822,6 +880,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turn_markers_update_registry_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
+        let registry = crate::session_registry::SessionRegistry::open(dir.path()).unwrap();
+
+        let id = rec.record_turn_start();
+        rec.flush().await.unwrap();
+        let row = registry.get(&rec.meta().id).unwrap().unwrap();
+        assert_eq!(row.status, crate::session_registry::SessionStatus::Active);
+
+        rec.record_turn_complete(id);
+        rec.flush().await.unwrap();
+        let row = registry.get(&rec.meta().id).unwrap().unwrap();
+        assert_eq!(
+            row.status,
+            crate::session_registry::SessionStatus::Completed
+        );
+    }
+
+    #[tokio::test]
     async fn record_message_appends_line() {
         let dir = tempfile::tempdir().unwrap();
         let rec = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
@@ -834,6 +912,28 @@ mod tests {
         assert_eq!(lines.len(), 3, "meta + two messages");
         let m1: RolloutItem = serde_json::from_str(lines[1]).unwrap();
         assert!(matches!(m1, RolloutItem::Message(_)));
+    }
+
+    #[tokio::test]
+    async fn record_message_redacts_tool_result_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = Recorder::create(dir.path(), PathBuf::from("/tmp/proj"), "m".into()).unwrap();
+        rec.record_message(Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "toolu_1".into(),
+                content: crate::anthropic::tool_result::text_and_images(
+                    "frame at 12.000s",
+                    &[("image/png".into(), "a".repeat(1024))],
+                ),
+                is_error: None,
+            }],
+        });
+        rec.flush().await.unwrap();
+
+        let body = std::fs::read_to_string(rec.path()).unwrap();
+        assert!(!body.contains(&"a".repeat(1024)));
+        assert!(body.contains("image omitted from rollout log: image/png, 1024 base64 chars"));
     }
 
     #[tokio::test]

@@ -762,6 +762,13 @@ impl Session {
                     }
                     // end_turn / max_tokens / stop_sequence / refusal /
                     // pause_turn — outer loop ends.
+                    if should_emit_local_summary_fallback(
+                        forced_summary,
+                        any_tools_in_turn,
+                        &outcome,
+                    ) {
+                        self.emit_local_turn_summary().await;
+                    }
                     if let (Some(rec), Some(id)) = (&self.recorder, turn_id.clone()) {
                         rec.record_turn_complete(id);
                     }
@@ -1093,6 +1100,19 @@ impl Session {
             }
         }
     }
+
+    async fn emit_local_turn_summary(&self) {
+        let text = "Done. I completed the tool work above.";
+        let _ = self
+            .events_tx
+            .send(SessionEvent::TextDelta(text.to_string()));
+        let message = Message::assistant_text(text);
+        if let Some(rec) = &self.recorder {
+            rec.record_message(message.clone());
+        }
+        let mut h = self.history.lock().await;
+        h.push(message);
+    }
 }
 
 /// Recover the rollout's `<state_root>` from a session log path,
@@ -1196,6 +1216,17 @@ fn should_force_summary(
     outcome: &SamplingOutcome,
 ) -> bool {
     !forced_summary
+        && any_tools_in_turn
+        && !outcome.emitted_text
+        && !matches!(outcome.stop_reason, Some(StopReason::ToolUse))
+}
+
+fn should_emit_local_summary_fallback(
+    forced_summary: bool,
+    any_tools_in_turn: bool,
+    outcome: &SamplingOutcome,
+) -> bool {
+    forced_summary
         && any_tools_in_turn
         && !outcome.emitted_text
         && !matches!(outcome.stop_reason, Some(StopReason::ToolUse))
@@ -1311,6 +1342,17 @@ mod tests {
         };
 
         assert!(!should_force_summary(false, true, &outcome));
+    }
+
+    #[test]
+    fn emits_local_summary_when_forced_summary_stays_silent() {
+        let outcome = SamplingOutcome {
+            stop_reason: None,
+            usage: Usage::default(),
+            emitted_text: false,
+        };
+
+        assert!(should_emit_local_summary_fallback(true, true, &outcome));
     }
 
     #[test]
