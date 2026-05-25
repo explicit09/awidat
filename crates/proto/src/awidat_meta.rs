@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use crate::professional::{
     AnimationTarget, AssetCatalog, AudioFinishingState, CapabilityRegistry, ColorFinishingState,
     CompositionGraph, DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity,
-    LearningSignal, MotionGraphicsTemplate, MotionPackage, PackageManifest, ParameterAnimation,
-    PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract, PreflightReport,
-    ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect, Stringout,
-    TrackingPackage, WorkflowLens,
+    LearningSignal, MotionGraphicsTemplate, MotionPackage, MotionScene, PackageManifest,
+    ParameterAnimation, PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract,
+    PreflightReport, ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect,
+    Stringout, TrackingPackage, WorkflowLens,
 };
 use crate::subtitle::SubtitleTrack;
 
@@ -97,6 +97,9 @@ pub struct AwidatTimelineMetadata {
     /// Reviewable motion packages proposed by agents.
     #[serde(default)]
     pub motion_packages: Vec<MotionPackage>,
+    /// Native procedural motion scenes proposed by agents.
+    #[serde(default)]
+    pub motion_scenes: Vec<MotionScene>,
     /// Serializable composition graphs.
     #[serde(default)]
     pub composition_graphs: Vec<CompositionGraph>,
@@ -217,6 +220,9 @@ impl AwidatTimelineMetadata {
         for template in &self.motion_templates {
             diagnostics.extend(template.validate());
         }
+        for scene in &self.motion_scenes {
+            diagnostics.extend(scene.validate());
+        }
         for graph in &self.composition_graphs {
             diagnostics.extend(graph.validate());
         }
@@ -269,8 +275,8 @@ impl AwidatTimelineMetadata {
             ),
             stage(
                 CapabilityArea::MotionGraphicsTemplates,
-                !self.motion_templates.is_empty(),
-                "motion graphics templates are missing",
+                !self.motion_templates.is_empty() || !self.motion_scenes.is_empty(),
+                "motion graphics templates and motion scenes are missing",
             ),
             stage(
                 CapabilityArea::CompositionGraph,

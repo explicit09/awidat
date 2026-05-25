@@ -4,6 +4,8 @@ description: Plan generated motion-graphic overlay assets as Awidat media overla
 version: 0.1.0
 tier: creative
 tools_allowlist:
+  - plan_visual_support
+  - plan_motion_scene
   - view_timeline
   - inspect_moment
   - apply_edl
@@ -18,6 +20,17 @@ tools_allowlist:
 Use this when the edit needs a generated motion graphic, callout,
 animated stat card, visual explainer, lower-third treatment, or other
 bespoke overlay asset.
+
+Before generating an overlay asset, call `plan_visual_support` for the
+visual need. If it returns `motion_scene`, prefer `plan_motion_scene`
+and its `Set Motion Scene` EDL for native, previewable/renderable
+layered motion. MotionScene supports text, rectangle/solid panels, and
+project-relative still image layers, with shared transforms and
+layer-local animations for opacity, position, scale, and rotation; keep
+actual footage in B-roll/PiP. Use the generated asset workflow below
+only when the scene needs custom motion beyond that subset,
+subject-aware compositing, video media inside the graphic, or a renderer
+path that MotionScene does not yet provide.
 
 ## Principle
 

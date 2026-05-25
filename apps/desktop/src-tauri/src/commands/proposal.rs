@@ -667,6 +667,7 @@ fn build_diff_hints(
             | EdlOp::AddProposalPackage { .. }
             | EdlOp::SetParameterAnimation { .. }
             | EdlOp::SetMotionTemplate { .. }
+            | EdlOp::SetMotionScene { .. }
             | EdlOp::AttachComposition { .. }
             | EdlOp::SetTrackingPackage { .. }
             | EdlOp::SetColorFinishing { .. }
@@ -889,6 +890,7 @@ fn op_kind_label(op: &EdlOp) -> &'static str {
         EdlOp::AddProposalPackage { .. } => "AddProposalPackage",
         EdlOp::SetParameterAnimation { .. } => "SetParameterAnimation",
         EdlOp::SetMotionTemplate { .. } => "SetMotionTemplate",
+        EdlOp::SetMotionScene { .. } => "SetMotionScene",
         EdlOp::AttachComposition { .. } => "AttachComposition",
         EdlOp::SetTrackingPackage { .. } => "SetTrackingPackage",
         EdlOp::SetColorFinishing { .. } => "SetColorFinishing",

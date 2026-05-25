@@ -15,7 +15,8 @@ use awidat_desktop_protocol::{
 use awidat_proto::awidat_meta;
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::professional::{
-    AnimationTarget, Easing, ExtrapolationMode, KeyframeInterpolation, ParameterAnimation,
+    AnimationTarget, Easing, ExtrapolationMode, KeyframeInterpolation, MotionScene,
+    MotionSceneLayer, MotionSceneLayerKind, MotionSceneTransform, ParameterAnimation,
     is_runtime_clip_parameter,
 };
 use awidat_proto::project::Project;
@@ -335,6 +336,8 @@ pub fn flatten_timeline_public(
                         lut_path,
                         title,
                         video_overlay,
+                        motion_shape: None,
+                        motion_image: None,
                         animations,
                     });
                     if !is_titles_track {
@@ -405,6 +408,24 @@ pub fn flatten_timeline_public(
             items,
         });
     }
+    if let Some(metadata) = timeline.metadata.awidat.as_ref() {
+        if let Some(track) = motion_scene_preview_track(metadata) {
+            let track_end_s = track
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    TimelineItem::Clip {
+                        track_start_s,
+                        duration_s,
+                        ..
+                    } => Some(track_start_s + duration_s),
+                    _ => None,
+                })
+                .fold(0.0_f64, f64::max);
+            max_end_s = max_end_s.max(track_end_s);
+            tracks.push(track);
+        }
+    }
 
     // Video tracks render above audio; preserve order within each kind.
     tracks.sort_by_key(|t| if t.kind == "video" { 0 } else { 1 });
@@ -423,9 +444,299 @@ pub fn flatten_timeline_public(
             limitations.extend(animation_preview_limitations_for_protocol(
                 parameter_animations,
             ));
+            if let Some(metadata) = timeline.metadata.awidat.as_ref() {
+                limitations.extend(motion_scene_preview_limitations_for_protocol(metadata));
+            }
             limitations
         },
         tracks,
+    }
+}
+
+fn motion_scene_preview_track(
+    metadata: &awidat_meta::AwidatTimelineMetadata,
+) -> Option<TimelineTrack> {
+    let mut items = Vec::new();
+    for scene in &metadata.motion_scenes {
+        for layer in sorted_motion_scene_layers(scene) {
+            let clip_uuid = format!("{}:{}", scene.id, layer.id);
+            let (title, motion_shape, motion_image) = match layer.kind {
+                MotionSceneLayerKind::Text => {
+                    let Some(text) =
+                        layer_string_param(layer, "text").filter(|text| !text.trim().is_empty())
+                    else {
+                        continue;
+                    };
+                    (
+                        Some(awidat_desktop_protocol::TitleStyling {
+                            text,
+                            position: layer_string_param(layer, "position")
+                                .unwrap_or_else(|| "center".into()),
+                            font_size: layer_u32_param(layer, "font_size").unwrap_or(64),
+                            color: layer_string_param(layer, "color")
+                                .unwrap_or_else(|| "#FFFFFF".into()),
+                            font_weight: layer_string_param(layer, "font_weight")
+                                .unwrap_or_else(|| "normal".into()),
+                            animation: motion_scene_animation_name(layer),
+                            reveal: layer_string_param(layer, "reveal")
+                                .unwrap_or_else(|| "none".into()),
+                        }),
+                        None,
+                        None,
+                    )
+                }
+                MotionSceneLayerKind::Image => {
+                    let Some(image) = motion_scene_image_for_protocol(layer) else {
+                        continue;
+                    };
+                    (None, None, Some(image))
+                }
+                _ => {
+                    let Some(shape) = motion_scene_shape_for_protocol(layer) else {
+                        continue;
+                    };
+                    (None, Some(shape), None)
+                }
+            };
+            items.push(TimelineItem::Clip {
+                index: items.len(),
+                name: format!("MotionScene {}", layer.id),
+                clip_uuid: clip_uuid.clone(),
+                track_start_s: layer.from_s,
+                duration_s: layer.duration_s,
+                asset_id: None,
+                source_start_s: Some(layer.from_s),
+                proxy_path: None,
+                playable_path: None,
+                playable_kind: awidat_desktop_protocol::PlayableKind::Missing,
+                thumbnail_dir: None,
+                waveform_path: None,
+                volume: None,
+                speed: None,
+                fade_in_s: None,
+                fade_out_s: None,
+                audio_lead_s: None,
+                audio_trail_s: None,
+                split_edit_reason: None,
+                split_edit_confidence: None,
+                link_group_id: None,
+                has_video: Some(false),
+                has_audio: Some(false),
+                color_correction: None,
+                lut_path: None,
+                title,
+                video_overlay: None,
+                motion_shape,
+                motion_image,
+                animations: motion_scene_layer_animations_for_protocol(layer, &clip_uuid),
+            });
+        }
+    }
+    if items.is_empty() {
+        None
+    } else {
+        Some(TimelineTrack {
+            name: "Motion Scenes".into(),
+            kind: "video".into(),
+            role: Some("titles".into()),
+            audio: None,
+            items,
+        })
+    }
+}
+
+fn motion_scene_preview_limitations_for_protocol(
+    metadata: &awidat_meta::AwidatTimelineMetadata,
+) -> Vec<TimelinePreviewLimitation> {
+    metadata
+        .motion_scenes
+        .iter()
+        .flat_map(|scene| {
+            scene.layers.iter().filter_map(move |layer| match layer.kind {
+                MotionSceneLayerKind::Text if layer_text_present(layer) => None,
+                MotionSceneLayerKind::Text => Some(TimelinePreviewLimitation {
+                    kind: "motion_scene_layer_unsupported".into(),
+                    message: format!(
+                        "MotionScene {} layer {} has no text parameter for live preview.",
+                        scene.id, layer.id
+                    ),
+                }),
+                _ if motion_scene_shape_for_protocol(layer).is_some() => None,
+                MotionSceneLayerKind::Image if motion_scene_image_for_protocol(layer).is_some() => {
+                    None
+                }
+                _ => Some(TimelinePreviewLimitation {
+                    kind: "motion_scene_layer_unsupported".into(),
+                    message: format!(
+                        "MotionScene {} layer {} is stored but not previewed by the native MotionScene preview yet.",
+                        scene.id, layer.id
+                    ),
+                }),
+            })
+        })
+        .collect()
+}
+
+fn sorted_motion_scene_layers(scene: &MotionScene) -> Vec<&MotionSceneLayer> {
+    let mut layers = scene.layers.iter().collect::<Vec<_>>();
+    layers.sort_by_key(|layer| layer.z_index);
+    layers
+}
+
+fn layer_text_present(layer: &MotionSceneLayer) -> bool {
+    layer_string_param(layer, "text").is_some_and(|text| !text.trim().is_empty())
+}
+
+fn layer_string_param(layer: &MotionSceneLayer, key: &str) -> Option<String> {
+    layer
+        .params
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
+fn layer_u32_param(layer: &MotionSceneLayer, key: &str) -> Option<u32> {
+    layer
+        .params
+        .get(key)
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+fn motion_scene_shape_for_protocol(
+    layer: &MotionSceneLayer,
+) -> Option<awidat_desktop_protocol::MotionShapeStyling> {
+    let is_rect = match layer.kind {
+        MotionSceneLayerKind::Shape => matches!(
+            layer_string_param(layer, "shape").as_deref(),
+            Some("rect" | "rectangle")
+        ),
+        MotionSceneLayerKind::Solid => true,
+        _ => false,
+    };
+    if !is_rect {
+        return None;
+    }
+    let transform = MotionSceneTransform::from_layer_params(&layer.params);
+    Some(awidat_desktop_protocol::MotionShapeStyling {
+        shape: "rect".into(),
+        x: transform.x,
+        y: transform.y,
+        width: transform.width,
+        height: transform.height,
+        color: layer_string_param(layer, "color").unwrap_or_else(|| "#FFFFFF".into()),
+        opacity: transform.opacity,
+        scale: transform.scale,
+        anchor_x: transform.anchor_x,
+        anchor_y: transform.anchor_y,
+        rotation_deg: transform.rotation_deg,
+    })
+}
+
+fn motion_scene_image_for_protocol(
+    layer: &MotionSceneLayer,
+) -> Option<awidat_desktop_protocol::MotionImageStyling> {
+    if layer.kind != MotionSceneLayerKind::Image {
+        return None;
+    }
+    let asset_id = layer_string_param(layer, "asset")
+        .or_else(|| layer_string_param(layer, "asset_id"))
+        .filter(|asset| !asset.trim().is_empty())?;
+    let transform = MotionSceneTransform::from_layer_params(&layer.params);
+    Some(awidat_desktop_protocol::MotionImageStyling {
+        asset_id,
+        x: transform.x,
+        y: transform.y,
+        width: transform.width,
+        height: transform.height,
+        opacity: transform.opacity,
+        fit: transform.fit.as_str().into(),
+        scale: transform.scale,
+        anchor_x: transform.anchor_x,
+        anchor_y: transform.anchor_y,
+        rotation_deg: transform.rotation_deg,
+    })
+}
+
+fn motion_scene_layer_animations_for_protocol(
+    layer: &MotionSceneLayer,
+    clip_uuid: &str,
+) -> Vec<awidat_desktop_protocol::TimelineParameterAnimation> {
+    layer
+        .motion_animations()
+        .into_iter()
+        .filter(|animation| is_phase_3a_parameter(&animation.parameter))
+        .map(
+            |animation| awidat_desktop_protocol::TimelineParameterAnimation {
+                id: format!("{clip_uuid}:{}", animation.parameter),
+                target: awidat_desktop_protocol::TimelineAnimationTarget {
+                    clip_id: clip_uuid.to_string(),
+                    parameter: animation.parameter,
+                },
+                keyframes: animation
+                    .keyframes
+                    .into_iter()
+                    .map(|keyframe| awidat_desktop_protocol::TimelineKeyframe {
+                        time_s: keyframe.time_s,
+                        value: keyframe.value,
+                        interpolation: interpolation_name(keyframe.interpolation).to_string(),
+                        easing: easing_name(keyframe.easing).to_string(),
+                        bezier: keyframe.bezier.map(|handles| {
+                            awidat_desktop_protocol::TimelineBezierHandles {
+                                out_x: handles.out_x,
+                                out_y: handles.out_y,
+                                in_x: handles.in_x,
+                                in_y: handles.in_y,
+                            }
+                        }),
+                        tangent_mode: tangent_mode_name(keyframe.tangent_mode).to_string(),
+                        spring: keyframe.spring.map(|spring| {
+                            awidat_desktop_protocol::TimelineSpringParameters {
+                                mass: spring.mass,
+                                stiffness: spring.stiffness,
+                                damping: spring.damping,
+                            }
+                        }),
+                    })
+                    .collect(),
+                pre_extrapolation: extrapolation_name(animation.pre_extrapolation).to_string(),
+                post_extrapolation: extrapolation_name(animation.post_extrapolation).to_string(),
+                motion_path: animation.motion_path.as_ref().map(|path| {
+                    awidat_desktop_protocol::TimelineMotionPath {
+                        points: path
+                            .points
+                            .iter()
+                            .map(|point| awidat_desktop_protocol::TimelineMotionPathPoint {
+                                time_s: point.time_s,
+                                x: point.x,
+                                y: point.y,
+                                outgoing_control: point.outgoing_control.map(|control| {
+                                    awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                                        x: control.x,
+                                        y: control.y,
+                                    }
+                                }),
+                                incoming_control: point.incoming_control.map(|control| {
+                                    awidat_desktop_protocol::TimelineMotionPathControlPoint {
+                                        x: control.x,
+                                        y: control.y,
+                                    }
+                                }),
+                            })
+                            .collect(),
+                    }
+                }),
+                rationale: None,
+            },
+        )
+        .collect()
+}
+
+fn motion_scene_animation_name(layer: &MotionSceneLayer) -> String {
+    match layer_string_param(layer, "animation").as_deref() {
+        Some("fade_slide_in") => "fade_in".into(),
+        Some(value) => value.to_string(),
+        None => "none".into(),
     }
 }
 
@@ -845,13 +1156,17 @@ fn project_root_relative(project_root: &Path, target_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use awidat_core::edl::anchor::AnchorContext;
+    use awidat_core::edl::apply::apply;
+    use awidat_core::edl::parser::parse;
     use awidat_proto::awidat_meta::{AwidatClipMetadata, SplitEditSpec};
     use awidat_proto::otio::{
         Clip, ExternalReference, MediaReference, RationalTime, StackChild, TimeRange, Timeline,
         Track, TrackChild, TrackKind, Transition,
     };
     use awidat_proto::professional::{
-        AnimationTarget, BezierHandles, Easing, Keyframe, KeyframeInterpolation, ParameterAnimation,
+        AnimationTarget, BezierHandles, Easing, Keyframe, KeyframeInterpolation, MotionScene,
+        MotionSceneLayer, MotionSceneLayerKind, ParameterAnimation,
     };
 
     #[test]
@@ -1015,6 +1330,298 @@ mod tests {
 
         assert_eq!(animations.len(), 1);
         assert_eq!(animations[0].target.parameter, "title.opacity");
+    }
+
+    #[test]
+    fn flatten_timeline_surfaces_text_motion_scene_as_preview_title() {
+        let mut timeline = Timeline::empty("motion-scene-preview");
+        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+            motion_scenes: vec![MotionScene {
+                id: "scene-a".to_string(),
+                duration_s: 3.0,
+                fps: 24.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![MotionSceneLayer {
+                    id: "headline".to_string(),
+                    kind: MotionSceneLayerKind::Text,
+                    from_s: 0.5,
+                    duration_s: 2.0,
+                    z_index: 10,
+                    params: [("text".to_string(), serde_json::json!("Motion Scene"))]
+                        .into_iter()
+                        .collect(),
+                }],
+                rationale: None,
+            }],
+            ..awidat_meta::AwidatTimelineMetadata::default()
+        });
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let Some(title_track) = snapshot
+            .tracks
+            .iter()
+            .find(|track| track.role.as_deref() == Some("titles"))
+        else {
+            panic!("motion scene should surface through a preview title track");
+        };
+        let TimelineItem::Clip {
+            clip_uuid,
+            track_start_s,
+            duration_s,
+            title: Some(title),
+            ..
+        } = &title_track.items[0]
+        else {
+            panic!("expected motion scene title clip");
+        };
+
+        assert_eq!(clip_uuid, "scene-a:headline");
+        assert_eq!(*track_start_s, 0.5);
+        assert_eq!(*duration_s, 2.0);
+        assert_eq!(title.text, "Motion Scene");
+    }
+
+    #[test]
+    fn unsupported_motion_scene_preview_layer_surfaces_limitation() {
+        let mut timeline = Timeline::empty("motion-scene-preview-limitation");
+        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+            motion_scenes: vec![MotionScene {
+                id: "scene-a".to_string(),
+                duration_s: 3.0,
+                fps: 24.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![MotionSceneLayer {
+                    id: "shape".to_string(),
+                    kind: MotionSceneLayerKind::Shape,
+                    from_s: 0.0,
+                    duration_s: 3.0,
+                    z_index: 1,
+                    params: [("shape".to_string(), serde_json::json!("circle"))]
+                        .into_iter()
+                        .collect(),
+                }],
+                rationale: None,
+            }],
+            ..awidat_meta::AwidatTimelineMetadata::default()
+        });
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+
+        assert!(snapshot.tracks.is_empty());
+        assert!(snapshot.preview_limitations.iter().any(|limitation| {
+            limitation.kind == "motion_scene_layer_unsupported"
+                && limitation.message.contains("scene-a layer shape")
+        }));
+    }
+
+    #[test]
+    fn flatten_timeline_surfaces_rectangle_motion_scene_as_preview_shape() {
+        let mut timeline = Timeline::empty("motion-scene-shape-preview");
+        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+            motion_scenes: vec![MotionScene {
+                id: "scene-a".to_string(),
+                duration_s: 3.0,
+                fps: 24.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![MotionSceneLayer {
+                    id: "panel".to_string(),
+                    kind: MotionSceneLayerKind::Shape,
+                    from_s: 0.25,
+                    duration_s: 1.5,
+                    z_index: 5,
+                    params: [
+                        ("shape".to_string(), serde_json::json!("rect")),
+                        ("x".to_string(), serde_json::json!(0.1)),
+                        ("y".to_string(), serde_json::json!(0.2)),
+                        ("width".to_string(), serde_json::json!(0.3)),
+                        ("height".to_string(), serde_json::json!(0.4)),
+                        ("color".to_string(), serde_json::json!("#224466")),
+                        ("opacity".to_string(), serde_json::json!(0.75)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                }],
+                rationale: None,
+            }],
+            ..awidat_meta::AwidatTimelineMetadata::default()
+        });
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let Some(shape_track) = snapshot.tracks.iter().find(|track| {
+            track.items.iter().any(|item| {
+                matches!(
+                    item,
+                    TimelineItem::Clip {
+                        motion_shape: Some(_),
+                        ..
+                    }
+                )
+            })
+        }) else {
+            panic!("rectangle motion scene should surface through a preview track");
+        };
+        let TimelineItem::Clip {
+            clip_uuid,
+            motion_shape: Some(shape),
+            title,
+            ..
+        } = &shape_track.items[0]
+        else {
+            panic!("expected motion scene shape clip");
+        };
+
+        assert_eq!(clip_uuid, "scene-a:panel");
+        assert!(title.is_none());
+        assert_eq!(shape.shape, "rect");
+        assert_eq!(shape.x, 0.1);
+        assert_eq!(shape.y, 0.2);
+        assert_eq!(shape.width, 0.3);
+        assert_eq!(shape.height, 0.4);
+        assert_eq!(shape.color, "#224466");
+        assert_eq!(shape.opacity, 0.75);
+        assert!(
+            snapshot
+                .preview_limitations
+                .iter()
+                .all(|limitation| { limitation.kind != "motion_scene_layer_unsupported" })
+        );
+    }
+
+    #[test]
+    fn flatten_timeline_surfaces_image_motion_scene_as_preview_image() {
+        let mut timeline = Timeline::empty("motion-scene-image-preview");
+        timeline.metadata.awidat = Some(awidat_meta::AwidatTimelineMetadata {
+            motion_scenes: vec![MotionScene {
+                id: "scene-a".to_string(),
+                duration_s: 3.0,
+                fps: 24.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![MotionSceneLayer {
+                    id: "logo".to_string(),
+                    kind: MotionSceneLayerKind::Image,
+                    from_s: 0.25,
+                    duration_s: 1.5,
+                    z_index: 8,
+                    params: [
+                        ("asset".to_string(), serde_json::json!("raw/logo.png")),
+                        ("x".to_string(), serde_json::json!(0.1)),
+                        ("y".to_string(), serde_json::json!(0.2)),
+                        ("width".to_string(), serde_json::json!(0.3)),
+                        ("height".to_string(), serde_json::json!(0.4)),
+                        ("opacity".to_string(), serde_json::json!(0.75)),
+                        ("fit".to_string(), serde_json::json!("contain")),
+                        ("scale".to_string(), serde_json::json!(1.15)),
+                        ("anchor_x".to_string(), serde_json::json!(0.5)),
+                        ("anchor_y".to_string(), serde_json::json!(0.5)),
+                        ("rotation_deg".to_string(), serde_json::json!(-6.0)),
+                        (
+                            "animations".to_string(),
+                            serde_json::json!([
+                                {
+                                    "parameter": "overlay.x",
+                                    "keyframes": [
+                                        { "time_s": 0.0, "value": 0.1 },
+                                        { "time_s": 1.5, "value": 0.2 }
+                                    ]
+                                }
+                            ]),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                }],
+                rationale: None,
+            }],
+            ..awidat_meta::AwidatTimelineMetadata::default()
+        });
+
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let Some(image_track) = snapshot.tracks.iter().find(|track| {
+            track.items.iter().any(|item| {
+                matches!(
+                    item,
+                    TimelineItem::Clip {
+                        motion_image: Some(_),
+                        ..
+                    }
+                )
+            })
+        }) else {
+            panic!("image motion scene should surface through a preview track");
+        };
+        let TimelineItem::Clip {
+            clip_uuid,
+            motion_image: Some(image),
+            title,
+            motion_shape,
+            animations,
+            ..
+        } = &image_track.items[0]
+        else {
+            panic!("expected motion scene image clip");
+        };
+
+        assert_eq!(clip_uuid, "scene-a:logo");
+        assert!(title.is_none());
+        assert!(motion_shape.is_none());
+        assert_eq!(image.asset_id, "raw/logo.png");
+        assert_eq!(image.x, 0.1);
+        assert_eq!(image.y, 0.2);
+        assert_eq!(image.width, 0.3);
+        assert_eq!(image.height, 0.4);
+        assert_eq!(image.opacity, 0.75);
+        assert_eq!(image.fit, "contain");
+        assert_eq!(image.scale, 1.15);
+        assert_eq!(image.anchor_x, 0.5);
+        assert_eq!(image.anchor_y, 0.5);
+        assert_eq!(image.rotation_deg, -6.0);
+        assert_eq!(animations.len(), 1);
+        assert_eq!(animations[0].target.parameter, "overlay.x");
+        assert!(
+            snapshot
+                .preview_limitations
+                .iter()
+                .all(|limitation| { limitation.kind != "motion_scene_layer_unsupported" })
+        );
+    }
+
+    #[test]
+    fn applied_set_motion_scene_edl_surfaces_in_preview_snapshot() {
+        let edl = r#"
+*** Begin EDL
+*** Set Motion Scene
++ scene_json: {"id":"scene-edl","duration_s":3.0,"fps":24.0,"width":1920,"height":1080,"layers":[{"id":"headline","kind":"text","from_s":0.5,"duration_s":2.0,"z_index":10,"params":{"text":"From EDL"}}]}
+*** End EDL
+"#;
+        let envelope = parse(edl).expect("motion scene EDL should parse");
+        let timeline = Timeline::empty("motion-scene-edl-preview");
+        let (timeline, outcome) =
+            apply(&timeline, &envelope, &AnchorContext::empty()).expect("EDL should apply");
+
+        assert_eq!(outcome.applied.len(), 1);
+        let snapshot = flatten_timeline_public(&timeline, Path::new("/tmp/project"));
+        let Some(title_track) = snapshot
+            .tracks
+            .iter()
+            .find(|track| track.role.as_deref() == Some("titles"))
+        else {
+            panic!("applied motion scene should surface through a preview title track");
+        };
+        let TimelineItem::Clip {
+            clip_uuid,
+            title: Some(title),
+            ..
+        } = &title_track.items[0]
+        else {
+            panic!("expected motion scene title clip from applied EDL");
+        };
+
+        assert_eq!(clip_uuid, "scene-edl:headline");
+        assert_eq!(title.text, "From EDL");
     }
 
     #[test]

@@ -18,6 +18,8 @@ tools_allowlist:
   - find_filler_words
   - find_false_starts
   - find_speaker_oncam
+  - plan_visual_support
+  - plan_motion_scene
   - find_broll_opportunities
   - inspect_clip
   - view_timeline
@@ -187,6 +189,23 @@ fresh inserts — that fails on round-boundary anchoring).
 
 Once the conversation flow is locked, make visual decisions:
 
+- For every nontrivial visual-support request, call `plan_visual_support`
+  first. Treat its lane as the routing decision before choosing tools:
+  `broll` for footage-like evidence, `motion_scene` for freeform
+  animated explainers/diagrams/kinetic text/charts/callouts,
+  `title_annotation` for simple lower thirds/captions/arrows/labels,
+  `effects_finishing` for direct changes to existing footage/audio, and
+  `timeline_edit` for structural edits.
+- When the lane is `motion_scene`, call `plan_motion_scene` and apply
+  the returned `Set Motion Scene` EDL. MotionScene natively
+  previews/renders text, rectangle/solid panels, and project-relative
+  still image layers. Use shared transforms (`x`, `y`, `width`,
+  `height`, `opacity`, `fit`, `scale`, `anchor_x`, `anchor_y`,
+  `rotation_deg`) plus layer-local `params.animations` for simple
+  fades, slides, scale, and rotation. Use still image layers for logos,
+  screenshots, product stills, diagrams, charts, and generated PNG
+  overlays. Use B-roll/PiP for actual footage; video/media MotionScene
+  layers remain stored with explicit limitations.
 - Use `find_speaker_oncam` and `shot_summary` to choose speaker angles,
   wide/two-shots, reactions, and resets. Avoid frantic cuts on every
   word swap; hold angles long enough to breathe.
@@ -380,7 +399,7 @@ finish themselves — that's worse than not starting.
       `view_timeline` or `inspect_clip` — no clip you've never seen.
 - [ ] Visual polish was handled or reported: speaker angle choices,
       jump-cut covers, b-roll opportunities, lower thirds/chapter cards,
-      and thumbnail candidates.
+      MotionScene plans where needed, and thumbnail candidates.
 - [ ] `Set Loudness Target` and `Set Package Metadata` were applied when
       producing publishable output, or the blocker was stated.
 - [ ] The user explicitly confirmed the **overall structure**. If the

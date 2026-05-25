@@ -472,6 +472,301 @@ pub struct MotionTemplateFill {
     pub slots: BTreeMap<String, serde_json::Value>,
 }
 
+/// Agent-authored procedural motion scene.
+///
+/// A MotionScene is a durable planning object for native animated explainers,
+/// callouts, title systems, and other generated motion layers. It records the
+/// scene contract without claiming a renderer can lower every layer kind yet.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MotionScene {
+    /// Stable scene id.
+    pub id: String,
+    /// Scene duration in seconds.
+    pub duration_s: f64,
+    /// Intended scene frame rate.
+    pub fps: f64,
+    /// Canvas width in pixels.
+    pub width: u32,
+    /// Canvas height in pixels.
+    pub height: u32,
+    /// Ordered motion layers.
+    #[serde(default)]
+    pub layers: Vec<MotionSceneLayer>,
+    /// Optional review rationale.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub rationale: Option<String>,
+}
+
+impl MotionScene {
+    /// Validate scene timing and layer bounds.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::MotionGraphicsTemplates,
+                "motion scene has an empty id",
+            ));
+        }
+        if !self.duration_s.is_finite() || self.duration_s <= 0.0 {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::MotionGraphicsTemplates,
+                format!("motion scene {} duration_s must be positive", self.id),
+            ));
+        }
+        if !self.fps.is_finite() || self.fps <= 0.0 {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::MotionGraphicsTemplates,
+                format!("motion scene {} fps must be positive", self.id),
+            ));
+        }
+        if self.width == 0 || self.height == 0 {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::MotionGraphicsTemplates,
+                format!(
+                    "motion scene {} canvas dimensions must be positive",
+                    self.id
+                ),
+            ));
+        }
+        for layer in &self.layers {
+            if layer.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::MotionGraphicsTemplates,
+                    format!("motion scene {} has a layer with an empty id", self.id),
+                ));
+            }
+            if !layer.from_s.is_finite() || layer.from_s < 0.0 {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::MotionGraphicsTemplates,
+                    format!(
+                        "motion scene {} layer {} from_s must be non-negative",
+                        self.id, layer.id
+                    ),
+                ));
+            }
+            if !layer.duration_s.is_finite() || layer.duration_s <= 0.0 {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::MotionGraphicsTemplates,
+                    format!(
+                        "motion scene {} layer {} duration_s must be positive",
+                        self.id, layer.id
+                    ),
+                ));
+            }
+            if layer.from_s + layer.duration_s > self.duration_s {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::MotionGraphicsTemplates,
+                    format!(
+                        "motion scene {} layer {} exceeds scene duration",
+                        self.id, layer.id
+                    ),
+                ));
+            }
+        }
+        diagnostics
+    }
+}
+
+/// One layer inside a procedural motion scene.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MotionSceneLayer {
+    /// Stable layer id.
+    pub id: String,
+    /// Layer kind.
+    #[serde(default)]
+    pub kind: MotionSceneLayerKind,
+    /// Layer start time in scene seconds.
+    pub from_s: f64,
+    /// Layer duration in seconds.
+    pub duration_s: f64,
+    /// Draw order; larger values appear above smaller values.
+    #[serde(default)]
+    pub z_index: i32,
+    /// Layer-specific parameters such as text, color, position, or asset id.
+    #[serde(default)]
+    pub params: BTreeMap<String, serde_json::Value>,
+}
+
+impl MotionSceneLayer {
+    /// Parse layer-local MotionScene animations from `params.animations`.
+    pub fn motion_animations(&self) -> Vec<MotionSceneLayerAnimation> {
+        self.params
+            .get("animations")
+            .and_then(serde_json::Value::as_array)
+            .map(|animations| {
+                animations
+                    .iter()
+                    .filter_map(MotionSceneLayerAnimation::from_value)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// Shared normalized MotionScene transform parsed from layer parameters.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MotionSceneTransform {
+    /// Left offset as a fraction of canvas width.
+    pub x: f64,
+    /// Top offset as a fraction of canvas height.
+    pub y: f64,
+    /// Layer width as a fraction of canvas width.
+    pub width: f64,
+    /// Layer height as a fraction of canvas height.
+    pub height: f64,
+    /// Layer opacity in 0..=1.
+    pub opacity: f64,
+    /// Asset fitting behavior inside the transform box.
+    pub fit: MotionSceneTransformFit,
+    /// Multiplier applied around the layer anchor.
+    pub scale: f64,
+    /// Anchor x within the layer box, in 0..=1.
+    pub anchor_x: f64,
+    /// Anchor y within the layer box, in 0..=1.
+    pub anchor_y: f64,
+    /// Clockwise rotation in degrees.
+    pub rotation_deg: f64,
+}
+
+impl Default for MotionSceneTransform {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+            opacity: 1.0,
+            fit: MotionSceneTransformFit::Cover,
+            scale: 1.0,
+            anchor_x: 0.5,
+            anchor_y: 0.5,
+            rotation_deg: 0.0,
+        }
+    }
+}
+
+impl MotionSceneTransform {
+    /// Parse common transform fields from layer params.
+    pub fn from_layer_params(params: &BTreeMap<String, serde_json::Value>) -> Self {
+        let mut transform = Self::default();
+        transform.x = finite_param(params, "x").unwrap_or(transform.x);
+        transform.y = finite_param(params, "y").unwrap_or(transform.y);
+        transform.width = positive_param(params, "width").unwrap_or(transform.width);
+        transform.height = positive_param(params, "height").unwrap_or(transform.height);
+        transform.opacity = finite_param(params, "opacity")
+            .unwrap_or(transform.opacity)
+            .clamp(0.0, 1.0);
+        transform.scale = positive_param(params, "scale").unwrap_or(transform.scale);
+        transform.anchor_x = finite_param(params, "anchor_x")
+            .unwrap_or(transform.anchor_x)
+            .clamp(0.0, 1.0);
+        transform.anchor_y = finite_param(params, "anchor_y")
+            .unwrap_or(transform.anchor_y)
+            .clamp(0.0, 1.0);
+        transform.rotation_deg = finite_param(params, "rotation_deg")
+            .or_else(|| finite_param(params, "rotation"))
+            .unwrap_or(transform.rotation_deg);
+        transform.fit = params
+            .get("fit")
+            .and_then(serde_json::Value::as_str)
+            .and_then(MotionSceneTransformFit::parse)
+            .unwrap_or(transform.fit);
+        transform
+    }
+}
+
+/// Layer-local MotionScene animation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MotionSceneLayerAnimation {
+    /// Parameter path, for example `overlay.x`.
+    pub parameter: String,
+    /// Layer-local scalar keyframes.
+    #[serde(default)]
+    pub keyframes: Vec<Keyframe>,
+    /// Behavior before the first keyframe.
+    #[serde(default)]
+    pub pre_extrapolation: ExtrapolationMode,
+    /// Behavior after the last keyframe.
+    #[serde(default)]
+    pub post_extrapolation: ExtrapolationMode,
+    /// Optional motion path for `overlay.position`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub motion_path: Option<MotionPath>,
+}
+
+impl MotionSceneLayerAnimation {
+    fn from_value(value: &serde_json::Value) -> Option<Self> {
+        let animation: Self = serde_json::from_value(value.clone()).ok()?;
+        if animation.parameter.trim().is_empty() || animation.keyframes.is_empty() {
+            return None;
+        }
+        Some(animation)
+    }
+}
+
+/// Fit mode for image-like MotionScene layers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionSceneTransformFit {
+    /// Fill the transform box while preserving aspect ratio.
+    #[default]
+    Cover,
+    /// Fit entirely inside the transform box while preserving aspect ratio.
+    Contain,
+    /// Stretch to exactly match the transform box.
+    Stretch,
+}
+
+impl MotionSceneTransformFit {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "cover" => Some(Self::Cover),
+            "contain" => Some(Self::Contain),
+            "stretch" | "fill" => Some(Self::Stretch),
+            _ => None,
+        }
+    }
+
+    /// Stable wire value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cover => "cover",
+            Self::Contain => "contain",
+            Self::Stretch => "stretch",
+        }
+    }
+}
+
+fn finite_param(params: &BTreeMap<String, serde_json::Value>, key: &str) -> Option<f64> {
+    params
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite())
+}
+
+fn positive_param(params: &BTreeMap<String, serde_json::Value>, key: &str) -> Option<f64> {
+    finite_param(params, key).filter(|value| *value > 0.0)
+}
+
+/// Motion scene layer kind.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionSceneLayerKind {
+    /// Text layer.
+    #[default]
+    Text,
+    /// Shape/vector layer.
+    Shape,
+    /// Still image layer.
+    Image,
+    /// Video/media layer.
+    Video,
+    /// Solid color background layer.
+    Solid,
+    /// Grouping layer.
+    Group,
+}
+
 /// Evidence attached to a proposal or decision.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceTrace {

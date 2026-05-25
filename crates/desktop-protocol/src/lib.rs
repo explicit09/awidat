@@ -1398,6 +1398,12 @@ pub enum TimelineItem {
         /// means a regular full-frame overlay/cutaway when the clip
         /// is on an upper video track.
         video_overlay: Option<VideoOverlayStyling>,
+        /// Procedural MotionScene shape styling. `None` for ordinary
+        /// media clips and MotionScene text clips.
+        motion_shape: Option<MotionShapeStyling>,
+        /// Procedural MotionScene image styling. `None` for ordinary
+        /// media clips and non-image MotionScene layers.
+        motion_image: Option<MotionImageStyling>,
         /// Supported parameter animations attached to this clip.
         animations: Vec<TimelineParameterAnimation>,
     },
@@ -1502,6 +1508,62 @@ pub struct VideoOverlayStyling {
     pub scale: Option<f64>,
     /// PiP margin as a fraction of output width/height.
     pub margin_pct: Option<f64>,
+}
+
+/// Styling fields for a native MotionScene shape preview.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct MotionShapeStyling {
+    /// Shape primitive. The first native subset supports `"rect"`.
+    pub shape: String,
+    /// Normalized x coordinate in output space.
+    pub x: f64,
+    /// Normalized y coordinate in output space.
+    pub y: f64,
+    /// Normalized width in output space.
+    pub width: f64,
+    /// Normalized height in output space.
+    pub height: f64,
+    /// Fill color, usually a hex color like `"#224466"`.
+    pub color: String,
+    /// Fill opacity in `[0, 1]`.
+    pub opacity: f64,
+    /// Static scale multiplier.
+    pub scale: f64,
+    /// Transform origin x in `[0, 1]`.
+    pub anchor_x: f64,
+    /// Transform origin y in `[0, 1]`.
+    pub anchor_y: f64,
+    /// Static clockwise rotation in degrees.
+    pub rotation_deg: f64,
+}
+
+/// Styling fields for a native MotionScene image preview.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "./")]
+pub struct MotionImageStyling {
+    /// Project-relative asset id/path.
+    pub asset_id: String,
+    /// Normalized x coordinate in output space.
+    pub x: f64,
+    /// Normalized y coordinate in output space.
+    pub y: f64,
+    /// Normalized width in output space.
+    pub width: f64,
+    /// Normalized height in output space.
+    pub height: f64,
+    /// Layer opacity in `[0, 1]`.
+    pub opacity: f64,
+    /// Fit behavior: `"cover"`, `"contain"`, or `"stretch"`.
+    pub fit: String,
+    /// Static scale multiplier.
+    pub scale: f64,
+    /// Transform origin x in `[0, 1]`.
+    pub anchor_x: f64,
+    /// Transform origin y in `[0, 1]`.
+    pub anchor_y: f64,
+    /// Static clockwise rotation in degrees.
+    pub rotation_deg: f64,
 }
 
 /// One paragraph-sized segment from a whisper transcript sidecar.
@@ -2078,6 +2140,8 @@ mod tests {
             lut_path: None,
             title: None,
             video_overlay: None,
+            motion_shape: None,
+            motion_image: None,
             animations: vec![TimelineParameterAnimation {
                 id: "anim-title-opacity".to_string(),
                 target: TimelineAnimationTarget {
@@ -2273,6 +2337,8 @@ mod tests {
             lut_path: None,
             title: None,
             video_overlay: None,
+            motion_shape: None,
+            motion_image: None,
             animations: vec![],
         };
         let json = serde_json::to_value(&item).unwrap();

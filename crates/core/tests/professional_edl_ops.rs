@@ -12,8 +12,8 @@ use awidat_proto::otio::{
     Timeline, Track, TrackChild, TrackKind,
 };
 use awidat_proto::professional::{
-    AnimationTarget, CapabilityArea, CompositionGraph, DeliveryProfile, Keyframe,
-    ParameterAnimation, SourceRange, WorkflowLens,
+    AnimationTarget, CapabilityArea, CompositionGraph, DeliveryProfile, Keyframe, MotionScene,
+    MotionSceneLayer, MotionSceneLayerKind, ParameterAnimation, SourceRange, WorkflowLens,
 };
 
 #[test]
@@ -46,6 +46,27 @@ fn professional_timeline_ops_roundtrip_through_edl_json() {
                 end_s: 8.0,
             }),
         },
+        EdlOp::SetMotionScene {
+            scene: MotionScene {
+                id: "scene-a".into(),
+                duration_s: 4.0,
+                fps: 30.0,
+                width: 1920,
+                height: 1080,
+                layers: vec![MotionSceneLayer {
+                    id: "headline".into(),
+                    kind: MotionSceneLayerKind::Text,
+                    from_s: 0.0,
+                    duration_s: 4.0,
+                    z_index: 10,
+                    params: std::collections::BTreeMap::from([(
+                        "text".into(),
+                        serde_json::json!("Key idea"),
+                    )]),
+                }],
+                rationale: Some("animated explainer callout".into()),
+            },
+        },
         EdlOp::SelectDeliveryProfile {
             profile: DeliveryProfile::youtube_1080p(),
         },
@@ -65,6 +86,38 @@ fn professional_timeline_ops_roundtrip_through_edl_json() {
         };
         assert_eq!(roundtrip, op);
     }
+}
+
+#[test]
+fn parser_and_apply_store_motion_scene_documents() {
+    let edl = r#"
+*** Begin EDL
+*** Set Motion Scene
++ scene_json: {"id":"scene-a","duration_s":4.0,"fps":30.0,"width":1920,"height":1080,"layers":[{"id":"headline","kind":"text","from_s":0.0,"duration_s":4.0,"z_index":10,"params":{"text":"Key idea"}}],"rationale":"animated explainer callout"}
+*** End EDL
+"#;
+    let envelope = match parse(edl) {
+        Ok(envelope) => envelope,
+        Err(error) => panic!("parse motion scene edl: {error}"),
+    };
+    assert!(matches!(envelope.ops[0], EdlOp::SetMotionScene { .. }));
+
+    let timeline = Timeline::empty("motion-scene-storage");
+    let (timeline, outcome) = match apply(&timeline, &envelope, &AnchorContext::empty()) {
+        Ok(result) => result,
+        Err(error) => panic!("apply motion scene edl: {error}"),
+    };
+    let Some(metadata) = timeline.metadata.awidat else {
+        panic!("timeline metadata missing");
+    };
+
+    assert_eq!(outcome.applied.len(), 1);
+    assert_eq!(metadata.motion_scenes.len(), 1);
+    assert_eq!(metadata.motion_scenes[0].id, "scene-a");
+    assert_eq!(
+        metadata.motion_scenes[0].layers[0].kind,
+        MotionSceneLayerKind::Text
+    );
 }
 
 #[test]

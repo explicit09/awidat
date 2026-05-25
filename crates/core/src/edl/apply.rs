@@ -864,6 +864,11 @@ fn apply_one(
             });
             Ok(format!("stored motion template {}", template.id))
         }
+        EdlOp::SetMotionScene { scene } => {
+            let meta = timeline_awidat_metadata(working);
+            replace_by_id(&mut meta.motion_scenes, scene.clone(), |item| &item.id);
+            Ok(format!("stored motion scene {}", scene.id))
+        }
         EdlOp::AttachComposition { graph, attach_to } => {
             let meta = timeline_awidat_metadata(working);
             replace_by_id(&mut meta.composition_graphs, graph.clone(), |item| &item.id);
@@ -1034,6 +1039,7 @@ fn resolve_locator_for_op(
         | EdlOp::AddProposalPackage { .. }
         | EdlOp::SetParameterAnimation { .. }
         | EdlOp::SetMotionTemplate { .. }
+        | EdlOp::SetMotionScene { .. }
         | EdlOp::AttachComposition { .. }
         | EdlOp::SetTrackingPackage { .. }
         | EdlOp::AuthorSubjectReframeFromTrack { .. }

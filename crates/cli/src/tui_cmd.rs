@@ -34,8 +34,9 @@ use awidat_core::tools::{
     manage_assets::RateAssetTool, manage_assets::RenameAssetTool, manage_assets::TagAssetTool,
     plan_emphasis::PlanEmphasisTool, plan_look_regions::PlanLookRegionsTool,
     plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
-    plan_multicam::PlanMulticamTool, plan_reframe::PlanReframeTool,
-    plan_transition::PlanTransitionTool,
+    plan_motion_scene::PlanMotionSceneTool, plan_multicam::PlanMulticamTool,
+    plan_reframe::PlanReframeTool, plan_transition::PlanTransitionTool,
+    plan_visual_support::PlanVisualSupportTool,
     podcast_apply_accepted_edits::PodcastApplyAcceptedEditsTool,
     podcast_audio_polish::PodcastAudioPolishTool,
     podcast_cleanup_candidates::PodcastCleanupCandidatesTool,
@@ -248,6 +249,8 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(PlanMulticamTool));
     registry.register(Arc::new(PlanReframeTool));
     registry.register(Arc::new(PlanTransitionTool));
+    registry.register(Arc::new(PlanVisualSupportTool));
+    registry.register(Arc::new(PlanMotionSceneTool));
     registry.register(Arc::new(PodcastApplyAcceptedEditsTool));
     registry.register(Arc::new(PodcastAudioPolishTool));
     registry.register(Arc::new(PodcastCleanupCandidatesTool));

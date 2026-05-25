@@ -2849,6 +2849,31 @@ button {
   overflow: hidden;
 }
 
+.timeline-motion-shape-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.timeline-motion-shape-rect {
+  position: absolute;
+}
+
+.timeline-motion-image-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.timeline-motion-image {
+  position: absolute;
+  display: block;
+}
+
 .timeline-title-overlay {
   position: absolute;
   left: 50%;

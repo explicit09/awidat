@@ -188,6 +188,14 @@ function SegmentedPlayer({
       ),
     [timelineSnapshot],
   );
+  const activeShapes = useMemo(
+    () => activeMotionShapeOverlays(timelineSnapshot),
+    [timelineSnapshot],
+  );
+  const activeImages = useMemo(
+    () => activeMotionImageOverlays(timelineSnapshot, projectRoot),
+    [timelineSnapshot, projectRoot],
+  );
   const activeVideoOverlays = useMemo(
     () =>
       videoOverlays.filter(
@@ -686,6 +694,14 @@ function SegmentedPlayer({
         />
         <TimelineTitleOverlays
           overlays={activeTitles}
+          timelineTime={timelineTime}
+        />
+        <TimelineMotionShapeOverlays
+          overlays={activeShapes}
+          timelineTime={timelineTime}
+        />
+        <TimelineMotionImageOverlays
+          overlays={activeImages}
           timelineTime={timelineTime}
         />
         <TimelineBroadcastOverlay
@@ -1600,6 +1616,42 @@ type PreviewTitleOverlay = {
   animations: TimelineParameterAnimation[];
 };
 
+type PreviewMotionShapeOverlay = {
+  key: string;
+  startS: number;
+  endS: number;
+  shape: "rect";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+  opacity: number;
+  scale: number;
+  anchorX: number;
+  anchorY: number;
+  rotationDeg: number;
+  animations: TimelineParameterAnimation[];
+};
+
+type PreviewMotionImageOverlay = {
+  key: string;
+  startS: number;
+  endS: number;
+  src: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  opacity: number;
+  fit: "cover" | "contain" | "fill";
+  scale: number;
+  anchorX: number;
+  anchorY: number;
+  rotationDeg: number;
+  animations: TimelineParameterAnimation[];
+};
+
 function activeTitleOverlays(
   snapshot: TimelineSnapshot,
   _durationS: number,
@@ -1634,6 +1686,78 @@ function activeTitleOverlays(
   return overlays;
 }
 
+function activeMotionShapeOverlays(
+  snapshot: TimelineSnapshot,
+): PreviewMotionShapeOverlay[] {
+  const overlays: PreviewMotionShapeOverlay[] = [];
+  for (const track of snapshot.tracks) {
+    for (const item of track.items) {
+      if (item.kind !== "clip" || item.motion_shape === null) continue;
+      if (item.motion_shape.shape !== "rect") continue;
+      const startS = item.track_start_s;
+      const endS = item.track_start_s + item.duration_s;
+      if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
+        continue;
+      }
+      overlays.push({
+        key: item.clip_uuid || item.name,
+        startS,
+        endS,
+        shape: "rect",
+        x: item.motion_shape.x,
+        y: item.motion_shape.y,
+        width: item.motion_shape.width,
+        height: item.motion_shape.height,
+        color: item.motion_shape.color || "#FFFFFF",
+        opacity: clampOpacity(item.motion_shape.opacity),
+        scale: item.motion_shape.scale,
+        anchorX: item.motion_shape.anchor_x,
+        anchorY: item.motion_shape.anchor_y,
+        rotationDeg: item.motion_shape.rotation_deg,
+        animations: item.animations ?? [],
+      });
+    }
+  }
+  return overlays;
+}
+
+function activeMotionImageOverlays(
+  snapshot: TimelineSnapshot,
+  projectRoot: string | null,
+): PreviewMotionImageOverlay[] {
+  const overlays: PreviewMotionImageOverlay[] = [];
+  for (const track of snapshot.tracks) {
+    for (const item of track.items) {
+      if (item.kind !== "clip" || item.motion_image === null) continue;
+      const src = projectAssetUrl(projectRoot, item.motion_image.asset_id);
+      if (src === null) continue;
+      const startS = item.track_start_s;
+      const endS = item.track_start_s + item.duration_s;
+      if (!Number.isFinite(startS) || !Number.isFinite(endS) || endS <= startS) {
+        continue;
+      }
+      overlays.push({
+        key: item.clip_uuid || item.name,
+        startS,
+        endS,
+        src,
+        x: item.motion_image.x,
+        y: item.motion_image.y,
+        width: item.motion_image.width,
+        height: item.motion_image.height,
+        opacity: clampOpacity(item.motion_image.opacity),
+        fit: motionImageFit(item.motion_image.fit),
+        scale: item.motion_image.scale,
+        anchorX: item.motion_image.anchor_x,
+        anchorY: item.motion_image.anchor_y,
+        rotationDeg: item.motion_image.rotation_deg,
+        animations: item.animations ?? [],
+      });
+    }
+  }
+  return overlays;
+}
+
 function broadcastOverlayOwnsProgramTitles(
   overlay: TimelineSnapshot["broadcast_overlay"],
 ): boolean {
@@ -1664,6 +1788,105 @@ function TimelineTitleOverlays({
       ))}
     </div>
   );
+}
+
+function TimelineMotionShapeOverlays({
+  overlays,
+  timelineTime,
+}: {
+  overlays: PreviewMotionShapeOverlay[];
+  timelineTime: number;
+}) {
+  const active = overlays.filter(
+    (overlay) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
+  );
+  if (active.length === 0) return null;
+  return (
+    <div className="timeline-motion-shape-layer" aria-hidden="true">
+      {active.map((overlay) => (
+        <div
+          key={overlay.key}
+          className="timeline-motion-shape-rect"
+          style={motionShapeOverlayStyle(overlay, timelineTime)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function TimelineMotionImageOverlays({
+  overlays,
+  timelineTime,
+}: {
+  overlays: PreviewMotionImageOverlay[];
+  timelineTime: number;
+}) {
+  const active = overlays.filter(
+    (overlay) => timelineTime >= overlay.startS && timelineTime < overlay.endS,
+  );
+  if (active.length === 0) return null;
+  return (
+    <div className="timeline-motion-image-layer" aria-hidden="true">
+      {active.map((overlay) => (
+        <img
+          key={overlay.key}
+          className="timeline-motion-image"
+          src={overlay.src}
+          style={motionImageOverlayStyle(overlay, timelineTime)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function motionShapeOverlayStyle(
+  overlay: PreviewMotionShapeOverlay,
+  timelineTime: number,
+): React.CSSProperties {
+  const animated = evaluateAnimations(overlay.animations, timelineTime - overlay.startS);
+  const x = animated["overlay.x"] ?? overlay.x;
+  const y = animated["overlay.y"] ?? overlay.y;
+  const scale = animated["overlay.scale"] ?? overlay.scale;
+  const rotationDeg = animated["overlay.rotation_deg"] ?? overlay.rotationDeg;
+  const opacity = clampOpacity(animated["overlay.opacity"] ?? overlay.opacity);
+  return {
+    left: `${x * 100}%`,
+    top: `${y * 100}%`,
+    width: `${overlay.width * 100}%`,
+    height: `${overlay.height * 100}%`,
+    background: overlay.color,
+    opacity,
+    transform: `scale(${scale}) rotate(${rotationDeg}deg)`,
+    transformOrigin: `${overlay.anchorX * 100}% ${overlay.anchorY * 100}%`,
+  };
+}
+
+function motionImageOverlayStyle(
+  overlay: PreviewMotionImageOverlay,
+  timelineTime: number,
+): React.CSSProperties {
+  const animated = evaluateAnimations(overlay.animations, timelineTime - overlay.startS);
+  const x = animated["overlay.x"] ?? overlay.x;
+  const y = animated["overlay.y"] ?? overlay.y;
+  const scale = animated["overlay.scale"] ?? overlay.scale;
+  const rotationDeg = animated["overlay.rotation_deg"] ?? overlay.rotationDeg;
+  const opacity = clampOpacity(animated["overlay.opacity"] ?? overlay.opacity);
+  return {
+    left: `${x * 100}%`,
+    top: `${y * 100}%`,
+    width: `${overlay.width * 100}%`,
+    height: `${overlay.height * 100}%`,
+    opacity,
+    objectFit: overlay.fit,
+    transform: `scale(${scale}) rotate(${rotationDeg}deg)`,
+    transformOrigin: `${overlay.anchorX * 100}% ${overlay.anchorY * 100}%`,
+  };
+}
+
+function motionImageFit(value: string): "cover" | "contain" | "fill" {
+  if (value === "contain") return "contain";
+  if (value === "stretch") return "fill";
+  return "cover";
 }
 
 function titleOverlayStyle(

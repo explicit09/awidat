@@ -30,7 +30,8 @@ use awidat_proto::awidat_meta::{
 };
 use awidat_proto::otio::{MediaReference, StackChild, TrackChild, TrackKind};
 use awidat_proto::professional::{
-    MaskOperation, ReframePath, TrackingPackage, canonical_runtime_clip_parameter,
+    MaskOperation, MotionScene, MotionSceneLayer, MotionSceneLayerKind, MotionSceneTransform,
+    MotionSceneTransformFit, ReframePath, TrackingPackage, canonical_runtime_clip_parameter,
 };
 use awidat_proto::project::{files, read_otio_timeline};
 use awidat_proto::subtitle::SubtitleTrack;
@@ -418,6 +419,21 @@ pub struct VideoOverlayPlan {
     /// Optional graph-derived alpha mask bounds for this overlay.
     pub mask: Option<OverlayMaskPlan>,
     /// Supported Phase 3A parameter animations attached to this overlay.
+    pub animations: Vec<RenderParameterAnimation>,
+}
+
+/// Render-time still image layer extracted from MotionScene metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MotionImagePlan {
+    /// Absolute path to the still image asset.
+    pub asset_path: PathBuf,
+    /// Start time on the master timeline, in seconds.
+    pub start_s: f64,
+    /// End time on the master timeline, in seconds.
+    pub end_s: f64,
+    /// Normalized placement and opacity.
+    pub transform: MotionSceneTransform,
+    /// Layer-local transform animations.
     pub animations: Vec<RenderParameterAnimation>,
 }
 
@@ -1420,6 +1436,7 @@ type TimelineFullPlan = (
     Vec<TimelineSegment>,
     Vec<TransitionPlan>,
     Vec<VideoOverlayPlan>,
+    Vec<MotionImagePlan>,
     Vec<TitlePlan>,
     Vec<SubtitleTrack>,
     Vec<AnnotationPlan>,
@@ -1466,7 +1483,7 @@ pub struct TimelineRenderPreflight {
 pub fn collect_timeline_segments(
     project_root: &Path,
 ) -> Result<Vec<TimelineSegment>, RenderTimelineError> {
-    let (segs, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, _, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok(segs)
 }
 
@@ -1482,7 +1499,7 @@ pub fn collect_timeline_segments(
 pub fn collect_timeline_plan(
     project_root: &Path,
 ) -> Result<(Vec<TimelineSegment>, Vec<TransitionPlan>), RenderTimelineError> {
-    let (segs, transitions, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
+    let (segs, transitions, _, _, _, _, _, _, _, _, _) = collect_timeline_full_plan(project_root)?;
     Ok((segs, transitions))
 }
 
@@ -1494,6 +1511,7 @@ pub fn analyze_timeline_render_preflight(
         segs,
         transitions,
         video_overlays,
+        motion_images,
         titles,
         editable_subtitle_tracks,
         annotations,
@@ -1520,6 +1538,7 @@ pub fn analyze_timeline_render_preflight(
         segments: &segs,
         transitions: &transitions,
         video_overlays: &video_overlays,
+        motion_images: &motion_images,
         titles: &titles,
         editable_subtitle_tracks: &editable_subtitle_tracks,
         annotations: &annotations,
@@ -1612,6 +1631,7 @@ pub fn collect_timeline_full_plan(
     let mut segs = Vec::new();
     let mut transitions = Vec::new();
     let mut video_overlays = Vec::new();
+    let mut motion_images = Vec::new();
     let mut titles = Vec::new();
     let editable_subtitle_tracks = timeline
         .metadata
@@ -1849,6 +1869,21 @@ pub fn collect_timeline_full_plan(
             });
         }
     }
+    if let Some(metadata) = timeline.metadata.awidat.as_ref() {
+        titles.extend(collect_motion_scene_title_plans(
+            metadata,
+            &mut render_limitations,
+        ));
+        annotations.extend(collect_motion_scene_shape_plans(
+            metadata,
+            &mut render_limitations,
+        ));
+        motion_images.extend(collect_motion_scene_image_plans(
+            project_root,
+            metadata,
+            &mut render_limitations,
+        ));
+    }
     apply_dynamic_title_keywords(
         &mut titles,
         &segs,
@@ -1883,6 +1918,7 @@ pub fn collect_timeline_full_plan(
         segs,
         transitions,
         video_overlays,
+        motion_images,
         titles,
         editable_subtitle_tracks,
         annotations,
@@ -1891,6 +1927,257 @@ pub fn collect_timeline_full_plan(
         loudness_target,
         render_limitations,
     ))
+}
+
+fn collect_motion_scene_title_plans(
+    metadata: &AwidatTimelineMetadata,
+    limitations: &mut Vec<RenderPlanLimitation>,
+) -> Vec<TitlePlan> {
+    let mut titles = Vec::new();
+    for scene in &metadata.motion_scenes {
+        for layer in sorted_motion_scene_layers(scene) {
+            match layer.kind {
+                MotionSceneLayerKind::Text => {
+                    let Some(text) = layer_text(layer) else {
+                        limitations.push(motion_scene_layer_limitation(
+                            scene,
+                            layer,
+                            "text layer has no text parameter",
+                        ));
+                        continue;
+                    };
+                    titles.push(TitlePlan {
+                        text,
+                        start_s: layer.from_s,
+                        end_s: layer.from_s + layer.duration_s,
+                        position: layer_title_position(layer),
+                        font_size: layer_u32_param(layer, "font_size").unwrap_or(64),
+                        color: layer_string_param(layer, "color")
+                            .unwrap_or_else(|| "#FFFFFF".to_string()),
+                        font_weight: layer_font_weight(layer),
+                        animation: layer_title_animation(layer),
+                        phases: None,
+                        reveal: layer_text_reveal(layer),
+                        role: "motion_scene".into(),
+                        safe_area: None,
+                        rich_segments: Vec::new(),
+                        word_timings: Vec::new(),
+                        animations: Vec::new(),
+                    });
+                }
+                MotionSceneLayerKind::Shape
+                | MotionSceneLayerKind::Solid
+                | MotionSceneLayerKind::Image => {}
+                _ => limitations.push(motion_scene_layer_limitation(
+                    scene,
+                    layer,
+                    "layer kind is stored but not lowered by the native MotionScene renderer yet",
+                )),
+            }
+        }
+    }
+    titles
+}
+
+fn collect_motion_scene_shape_plans(
+    metadata: &AwidatTimelineMetadata,
+    limitations: &mut Vec<RenderPlanLimitation>,
+) -> Vec<AnnotationPlan> {
+    let mut annotations = Vec::new();
+    for scene in &metadata.motion_scenes {
+        for layer in sorted_motion_scene_layers(scene) {
+            match layer.kind {
+                MotionSceneLayerKind::Shape | MotionSceneLayerKind::Solid => {
+                    if let Some(annotation) = motion_scene_rect_annotation(scene, layer) {
+                        annotations.push(annotation);
+                    } else {
+                        limitations.push(motion_scene_layer_limitation(
+                            scene,
+                            layer,
+                            "shape layer is stored but only rectangle/solid shapes are lowered by the native MotionScene renderer yet",
+                        ));
+                    }
+                }
+                MotionSceneLayerKind::Text => {}
+                _ => {}
+            }
+        }
+    }
+    annotations
+}
+
+fn collect_motion_scene_image_plans(
+    project_root: &Path,
+    metadata: &AwidatTimelineMetadata,
+    limitations: &mut Vec<RenderPlanLimitation>,
+) -> Vec<MotionImagePlan> {
+    let mut images = Vec::new();
+    for scene in &metadata.motion_scenes {
+        for layer in sorted_motion_scene_layers(scene) {
+            if layer.kind != MotionSceneLayerKind::Image {
+                continue;
+            }
+            let Some(asset) = layer_asset_param(layer) else {
+                limitations.push(motion_scene_layer_limitation(
+                    scene,
+                    layer,
+                    "image layer has no asset parameter for native MotionScene render",
+                ));
+                continue;
+            };
+            let asset_path = project_root.join(asset);
+            images.push(MotionImagePlan {
+                asset_path,
+                start_s: layer.from_s,
+                end_s: layer.from_s + layer.duration_s,
+                transform: MotionSceneTransform::from_layer_params(&layer.params),
+                animations: motion_scene_layer_animations_for_render(layer),
+            });
+        }
+    }
+    images
+}
+
+fn motion_scene_layer_animations_for_render(
+    layer: &MotionSceneLayer,
+) -> Vec<RenderParameterAnimation> {
+    layer
+        .motion_animations()
+        .into_iter()
+        .filter(|animation| is_phase_3a_parameter(&animation.parameter))
+        .map(|animation| RenderParameterAnimation {
+            parameter: animation.parameter,
+            keyframes: animation.keyframes,
+            pre_extrapolation: animation.pre_extrapolation,
+            post_extrapolation: animation.post_extrapolation,
+            motion_path: animation.motion_path,
+        })
+        .collect()
+}
+
+fn motion_scene_rect_annotation(
+    scene: &MotionScene,
+    layer: &MotionSceneLayer,
+) -> Option<AnnotationPlan> {
+    let is_rect = match layer.kind {
+        MotionSceneLayerKind::Shape => matches!(
+            layer_string_param(layer, "shape").as_deref(),
+            Some("rect" | "rectangle")
+        ),
+        MotionSceneLayerKind::Solid => true,
+        _ => false,
+    };
+    if !is_rect {
+        return None;
+    }
+    let color = layer_string_param(layer, "color").unwrap_or_else(|| "#FFFFFF".into());
+    let opacity = layer_f64_param(layer, "opacity")
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    Some(AnnotationPlan {
+        kind: AnnotationKind::Rectangle,
+        start_s: layer.from_s,
+        end_s: layer.from_s + layer.duration_s,
+        x: layer_f64_param(layer, "x").unwrap_or(0.0),
+        y: layer_f64_param(layer, "y").unwrap_or(0.0),
+        width: layer_f64_param(layer, "width").unwrap_or(1.0),
+        height: layer_f64_param(layer, "height").unwrap_or(1.0),
+        color: format!("{color}@{opacity}"),
+        stroke_width: 0,
+        label: Some(format!("{}:{}", scene.id, layer.id)),
+    })
+}
+
+fn layer_asset_param(layer: &MotionSceneLayer) -> Option<&str> {
+    layer
+        .params
+        .get("asset")
+        .or_else(|| layer.params.get("asset_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|asset| !asset.trim().is_empty() && !asset.contains(".."))
+}
+
+fn sorted_motion_scene_layers(scene: &MotionScene) -> Vec<&MotionSceneLayer> {
+    let mut layers = scene.layers.iter().collect::<Vec<_>>();
+    layers.sort_by_key(|layer| layer.z_index);
+    layers
+}
+
+fn layer_text(layer: &MotionSceneLayer) -> Option<String> {
+    layer_string_param(layer, "text").filter(|text| !text.trim().is_empty())
+}
+
+fn layer_string_param(layer: &MotionSceneLayer, key: &str) -> Option<String> {
+    layer
+        .params
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
+fn layer_u32_param(layer: &MotionSceneLayer, key: &str) -> Option<u32> {
+    layer
+        .params
+        .get(key)
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+fn layer_f64_param(layer: &MotionSceneLayer, key: &str) -> Option<f64> {
+    layer
+        .params
+        .get(key)
+        .and_then(|value| value.as_f64())
+        .filter(|value| value.is_finite())
+}
+
+fn layer_title_position(layer: &MotionSceneLayer) -> TitlePosition {
+    match layer_string_param(layer, "position").as_deref() {
+        Some("top") => TitlePosition::Top,
+        Some("bottom") => TitlePosition::Bottom,
+        _ => TitlePosition::Center,
+    }
+}
+
+fn layer_font_weight(layer: &MotionSceneLayer) -> TitleWeight {
+    match layer_string_param(layer, "font_weight").as_deref() {
+        Some("bold") => TitleWeight::Bold,
+        _ => TitleWeight::Normal,
+    }
+}
+
+fn layer_title_animation(layer: &MotionSceneLayer) -> TitleAnimation {
+    match layer_string_param(layer, "animation").as_deref() {
+        Some("fade_in") | Some("fade_slide_in") => TitleAnimation::FadeIn,
+        Some("fade_out") => TitleAnimation::FadeOut,
+        Some("fade_in_out") => TitleAnimation::FadeInOut,
+        Some("slide_in") => TitleAnimation::SlideIn,
+        Some("slide_out") => TitleAnimation::SlideOut,
+        _ => TitleAnimation::None,
+    }
+}
+
+fn layer_text_reveal(layer: &MotionSceneLayer) -> TextReveal {
+    match layer_string_param(layer, "reveal").as_deref() {
+        Some("typewriter") => TextReveal::Typewriter,
+        Some("word") => TextReveal::Word,
+        Some("line") => TextReveal::Line,
+        _ => TextReveal::None,
+    }
+}
+
+fn motion_scene_layer_limitation(
+    scene: &MotionScene,
+    layer: &MotionSceneLayer,
+    message: &str,
+) -> RenderPlanLimitation {
+    RenderPlanLimitation {
+        kind: "motion_scene_layer_unsupported".into(),
+        animation_id: None,
+        clip_id: Some(format!("{}:{}", scene.id, layer.id)),
+        parameter: Some(format!("{:?}", layer.kind)),
+        message: format!("MotionScene {} layer {}: {message}", scene.id, layer.id),
+    }
 }
 
 fn collect_effective_parameter_animations(
@@ -4668,6 +4955,98 @@ fn append_video_overlays(
     }
 }
 
+fn append_motion_images(
+    base: FilterPlan,
+    motion_images: &[MotionImagePlan],
+    first_image_input: usize,
+) -> FilterPlan {
+    if motion_images.is_empty() {
+        return base;
+    }
+    let mut filter = base.filter_complex;
+    let mut current = base.video_out_label;
+    for (idx, image) in motion_images.iter().enumerate() {
+        let input_idx = first_image_input + idx;
+        let scaled = format!("[motion_image_scaled{idx}]");
+        let reference = format!("[motion_image_ref{idx}]");
+        let rotated = format!("[motion_image_rotated{idx}]");
+        let alpha = format!("[motion_image_alpha{idx}]");
+        let next = format!("[motion_image_v{idx}]");
+        let scale = motion_image_animation_value_expr(image, "overlay.scale", "1", "t");
+        let width = format!("{}*({scale})", fmt_filter_num(image.transform.width));
+        let height = format!("{}*({scale})", fmt_filter_num(image.transform.height));
+        let opacity = motion_image_animation_value_expr(
+            image,
+            "overlay.opacity",
+            &fmt_filter_num(image.transform.opacity),
+            "t",
+        );
+        let x = motion_image_animation_value_expr(
+            image,
+            "overlay.x",
+            &fmt_filter_num(image.transform.x),
+            "t",
+        );
+        let y = motion_image_animation_value_expr(
+            image,
+            "overlay.y",
+            &fmt_filter_num(image.transform.y),
+            "t",
+        );
+        let rotation_deg = motion_image_rotation_deg_expr(image, "t");
+        let scale_mode = match image.transform.fit {
+            MotionSceneTransformFit::Contain => ":force_original_aspect_ratio=decrease",
+            MotionSceneTransformFit::Cover => ":force_original_aspect_ratio=increase",
+            MotionSceneTransformFit::Stretch => "",
+        };
+        if !filter.ends_with(';') && !filter.is_empty() {
+            filter.push(';');
+        }
+        filter.push_str(&format!(
+            "[{input_idx}:v:0]format=rgba,setpts=PTS-STARTPTS[motion_image_src{idx}];\
+             [motion_image_src{idx}]{current}scale2ref=w=main_w*({width}):h=main_h*({height}){scale_mode}:eval=frame{scaled}{reference};\
+             {scaled}format=rgba,rotate='(PI/180)*({rotation_deg})':ow='hypot(iw\\,ih)':oh='hypot(iw\\,ih)':c=none{rotated};\
+             {rotated}format=rgba,colorchannelmixer=aa={opacity}{alpha};\
+             {reference}{alpha}overlay=x=main_w*({x}):y=main_h*({y}):enable='between(t\\,{start}\\,{end})'{next}",
+            start = image.start_s,
+            end = image.end_s,
+        ));
+        current = next;
+    }
+    FilterPlan {
+        filter_complex: filter,
+        video_out_label: current,
+        audio_out_label: base.audio_out_label,
+    }
+}
+
+fn motion_image_rotation_deg_expr(image: &MotionImagePlan, time_var: &str) -> String {
+    let fallback = fmt_filter_num(image.transform.rotation_deg);
+    motion_image_animation_value_expr(image, "overlay.rotation_deg", &fallback, time_var)
+}
+
+fn motion_image_animation_value_expr(
+    image: &MotionImagePlan,
+    parameter: &str,
+    fallback: &str,
+    time_var: &str,
+) -> String {
+    image
+        .animations
+        .iter()
+        .find(|animation| animation.parameter == parameter)
+        .map(|animation| {
+            let local_time_var = format!("({time_var}-{})", fmt_filter_num(image.start_s));
+            keyframes_to_ffmpeg_expr_with_extrapolation(
+                &animation.keyframes,
+                &local_time_var,
+                animation.pre_extrapolation,
+                animation.post_extrapolation,
+            )
+        })
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 fn append_annotations(base: FilterPlan, annotations: &[AnnotationPlan]) -> FilterPlan {
     if annotations.is_empty() {
         return base;
@@ -4710,6 +5089,11 @@ fn rectangle_annotation_filter(
     annotation: &AnnotationPlan,
 ) -> String {
     let color = annotation_filter_color(&annotation.color);
+    let thickness = if annotation.stroke_width == 0 {
+        "fill".to_string()
+    } else {
+        annotation.stroke_width.to_string()
+    };
     format!(
         "{in_label}drawbox=x=iw*{x}:y=ih*{y}:w=iw*{width}:h=ih*{height}:color={color}:t={stroke}:enable='between(t\\,{start}\\,{end})'{out_label}",
         x = fmt_filter_num(annotation.x),
@@ -4717,7 +5101,7 @@ fn rectangle_annotation_filter(
         width = fmt_filter_num(annotation.width),
         height = fmt_filter_num(annotation.height),
         color = color,
-        stroke = annotation.stroke_width,
+        stroke = thickness,
         start = fmt_filter_num(annotation.start_s),
         end = fmt_filter_num(annotation.end_s),
     )
@@ -4825,6 +5209,15 @@ fn valid_filter_color(raw: &str) -> bool {
     let color = raw.trim();
     if color.is_empty() || color != raw {
         return false;
+    }
+    let (color, alpha) = color.split_once('@').unwrap_or((color, ""));
+    if !alpha.is_empty() {
+        let Ok(alpha) = alpha.parse::<f64>() else {
+            return false;
+        };
+        if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+            return false;
+        }
     }
     if let Some(hex) = color.strip_prefix('#') {
         return matches!(hex.len(), 3 | 4 | 6 | 8) && hex.chars().all(|ch| ch.is_ascii_hexdigit());
@@ -8963,6 +9356,7 @@ pub fn build_timeline_argv_full_with_annotations(
         segs,
         transitions,
         video_overlays,
+        &[],
         annotations,
         titles,
         &[],
@@ -8985,6 +9379,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
     video_overlays: &[VideoOverlayPlan],
+    motion_images: &[MotionImagePlan],
     annotations: &[AnnotationPlan],
     titles: &[TitlePlan],
     editable_subtitle_tracks: &[SubtitleTrack],
@@ -8995,8 +9390,10 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     ass_workdir: Option<&Path>,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
-    let first_matte_input =
-        segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
+    let first_motion_image_input = segs.len() + video_overlays.len();
+    let first_matte_input = first_motion_image_input
+        + motion_images.len()
+        + usize::from(browser_broadcast_overlay.is_some());
     let video_overlays = assign_overlay_matte_input_indices(video_overlays, first_matte_input);
     let first_mask_input = first_matte_input + renderable_overlay_matte_count(&video_overlays);
     let segs = assign_mask_input_indices(segs, first_mask_input);
@@ -9013,6 +9410,9 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     for overlay in &video_overlays {
         append_video_overlay_input_args(&mut argv, &overlay.segment);
     }
+    for image in motion_images {
+        append_motion_image_input_args(&mut argv, image);
+    }
     if let Some(path) = browser_broadcast_overlay {
         argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
     }
@@ -9028,7 +9428,8 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     }
     let base = FilterPlanner::new(&segs, transitions).plan();
     let media = append_video_overlays(base, &video_overlays, segs.len());
-    let annotated = append_annotations(media, annotations);
+    let images = append_motion_images(media, motion_images, first_motion_image_input);
+    let annotated = append_annotations(images, annotations);
     let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
         &[]
     } else {
@@ -9051,7 +9452,7 @@ pub(crate) fn build_timeline_argv_full_with_annotations_and_ass(
     let plan = planner.decorate_video_filter(annotated.filter_complex, annotated.video_out_label);
     let mut filter_complex = plan.filter_complex;
     let video_out_label = if browser_broadcast_overlay.is_some() {
-        let overlay_input = segs.len() + video_overlays.len();
+        let overlay_input = first_motion_image_input + motion_images.len();
         let out = "[browser_broadcast_v]".to_string();
         filter_complex.push_str(&format!(
             "{}[{overlay_input}:v:0]format=rgba[browser_broadcast_overlay];{}[browser_broadcast_overlay]overlay=x=0:y=0:format=auto{out};",
@@ -9116,6 +9517,17 @@ fn append_video_overlay_input_args(argv: &mut Vec<String>, segment: &TimelineSeg
     }
 }
 
+fn append_motion_image_input_args(argv: &mut Vec<String>, image: &MotionImagePlan) {
+    argv.extend([
+        "-loop".into(),
+        "1".into(),
+        "-t".into(),
+        format!("{}", image.end_s - image.start_s),
+        "-i".into(),
+        image.asset_path.to_string_lossy().into_owned(),
+    ]);
+}
+
 fn still_graphic_asset(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -9177,6 +9589,7 @@ pub fn build_timeline_argv_with_audio_tracks_and_annotations(
         segs,
         transitions,
         video_overlays,
+        &[],
         annotations,
         titles,
         &[],
@@ -9199,6 +9612,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     segs: &[TimelineSegment],
     transitions: &[TransitionPlan],
     video_overlays: &[VideoOverlayPlan],
+    motion_images: &[MotionImagePlan],
     annotations: &[AnnotationPlan],
     titles: &[TitlePlan],
     editable_subtitle_tracks: &[SubtitleTrack],
@@ -9210,8 +9624,10 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     ass_workdir: Option<&Path>,
 ) -> Vec<String> {
     let mut argv = vec!["-y".to_string(), "-loglevel".into(), "info".into()];
-    let first_matte_input =
-        segs.len() + video_overlays.len() + usize::from(browser_broadcast_overlay.is_some());
+    let first_motion_image_input = segs.len() + video_overlays.len();
+    let first_matte_input = first_motion_image_input
+        + motion_images.len()
+        + usize::from(browser_broadcast_overlay.is_some());
     let video_overlays = assign_overlay_matte_input_indices(video_overlays, first_matte_input);
     let first_mask_input = first_matte_input + renderable_overlay_matte_count(&video_overlays);
     let segs = assign_mask_input_indices(segs, first_mask_input);
@@ -9227,6 +9643,9 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     }
     for overlay in &video_overlays {
         append_video_overlay_input_args(&mut argv, &overlay.segment);
+    }
+    for image in motion_images {
+        append_motion_image_input_args(&mut argv, image);
     }
     if let Some(path) = browser_broadcast_overlay {
         argv.extend(["-i".into(), path.to_string_lossy().into_owned()]);
@@ -9272,7 +9691,8 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
         &video_overlays,
         segs.len(),
     );
-    let annotated = append_annotations(media, annotations);
+    let images = append_motion_images(media, motion_images, first_motion_image_input);
+    let annotated = append_annotations(images, annotations);
     filter = annotated.filter_complex;
     let mut video_label = annotated.video_out_label;
     let titles = if broadcast_overlay_owns_program_titles(broadcast_overlay) {
@@ -9301,7 +9721,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
     }
 
     if browser_broadcast_overlay.is_some() {
-        let overlay_input = segs.len() + video_overlays.len();
+        let overlay_input = first_motion_image_input + motion_images.len();
         let out = "[browser_broadcast_v]".to_string();
         filter.push_str(&format!(
             "{}[{overlay_input}:v:0]format=rgba[browser_broadcast_overlay];{video_label}[browser_broadcast_overlay]overlay=x=0:y=0:format=auto{out};",
@@ -9312,6 +9732,7 @@ pub(crate) fn build_timeline_argv_with_audio_tracks_and_annotations_and_ass(
 
     let mut next_input = segs.len()
         + video_overlays.len()
+        + motion_images.len()
         + usize::from(browser_broadcast_overlay.is_some())
         + renderable_overlay_matte_count(&video_overlays)
         + renderable_mask_count(&segs);
@@ -9738,6 +10159,7 @@ fn build_timeline_render_spec_inner(
         segs,
         transitions,
         video_overlays,
+        motion_images,
         titles,
         editable_subtitle_tracks,
         annotations,
@@ -9772,7 +10194,7 @@ fn build_timeline_render_spec_inner(
         )),
         None => renders_dir.join(format!("timeline-{timestamp}.mp4")),
     };
-    let input_paths = render_input_paths(&segs, &video_overlays, &audio_tracks);
+    let input_paths = render_input_paths(&segs, &video_overlays, &motion_images, &audio_tracks);
     validate_render_output_path(
         project_root,
         &output_path,
@@ -9791,6 +10213,7 @@ fn build_timeline_render_spec_inner(
             segments: &segs,
             transitions: &transitions,
             video_overlays: &video_overlays,
+            motion_images: &motion_images,
             titles: &titles,
             editable_subtitle_tracks: &editable_subtitle_tracks,
             annotations: &annotations,
@@ -9858,6 +10281,7 @@ fn build_timeline_render_spec_inner(
             &segs,
             &transitions,
             &video_overlays,
+            &motion_images,
             &annotations,
             &titles,
             &editable_subtitle_tracks,
@@ -9872,6 +10296,7 @@ fn build_timeline_render_spec_inner(
             &segs,
             &transitions,
             &video_overlays,
+            &motion_images,
             &annotations,
             &titles,
             &editable_subtitle_tracks,
@@ -9938,6 +10363,7 @@ struct TimelineStreamCopyFastPathInput<'a> {
     segments: &'a [TimelineSegment],
     transitions: &'a [TransitionPlan],
     video_overlays: &'a [VideoOverlayPlan],
+    motion_images: &'a [MotionImagePlan],
     titles: &'a [TitlePlan],
     editable_subtitle_tracks: &'a [SubtitleTrack],
     annotations: &'a [AnnotationPlan],
@@ -9968,6 +10394,9 @@ fn analyze_timeline_stream_copy_eligibility(
     }
     if !input.video_overlays.is_empty() {
         blockers.push("video_overlays");
+    }
+    if !input.motion_images.is_empty() {
+        blockers.push("motion_images");
     }
     if !input.titles.is_empty() {
         blockers.push("title_overlays");
@@ -10206,6 +10635,7 @@ fn safe_filename_slug(value: &str) -> String {
 fn render_input_paths(
     segs: &[TimelineSegment],
     video_overlays: &[VideoOverlayPlan],
+    motion_images: &[MotionImagePlan],
     audio_tracks: &[AudioTrackPlan],
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
@@ -10215,6 +10645,7 @@ fn render_input_paths(
             .iter()
             .map(|overlay| overlay.segment.asset_path.clone()),
     );
+    paths.extend(motion_images.iter().map(|image| image.asset_path.clone()));
     paths.extend(
         segs.iter()
             .filter_map(renderable_mask_source)
@@ -10295,9 +10726,9 @@ mod tests {
     use awidat_proto::professional::{
         BezierHandles, CompositionGraph, CompositionNode, CompositionNodeType, Easing,
         ExtrapolationMode, Keyframe, KeyframeInterpolation, MaskKeyframe, MaskOperation,
-        MaskSidecar, MatteSidecar, ParameterAnimation, ReframeKeyframe, ReframePath,
-        ReframeSmoothing, TrackKind as ProfessionalTrackKind, TrackSample, TrackSidecar,
-        TrackingPackage,
+        MaskSidecar, MatteSidecar, MotionScene, MotionSceneLayer, MotionSceneLayerKind,
+        ParameterAnimation, ReframeKeyframe, ReframePath, ReframeSmoothing,
+        TrackKind as ProfessionalTrackKind, TrackSample, TrackSidecar, TrackingPackage,
     };
     use std::fs;
 
@@ -10939,6 +11370,30 @@ mod tests {
         otio_path
     }
 
+    fn write_fixture_project_with_motion_scene(
+        dir: &Path,
+        layers: Vec<MotionSceneLayer>,
+    ) -> PathBuf {
+        let otio_path = write_fixture_project(dir);
+        let mut tl: Timeline = serde_json::from_slice(&fs::read(&otio_path).unwrap()).unwrap();
+        tl.metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .motion_scenes
+            .push(MotionScene {
+                id: "scene-a".into(),
+                duration_s: 2.0,
+                fps: 24.0,
+                width: 1920,
+                height: 1080,
+                layers,
+                rationale: Some("test motion scene".into()),
+            });
+        fs::write(&otio_path, serde_json::to_string_pretty(&tl).unwrap()).unwrap();
+        otio_path
+    }
+
     #[test]
     fn no_otio_returns_no_otio_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -11030,6 +11485,214 @@ mod tests {
                 .get("timeline_stream_copy_blocker_count")
                 .map(String::as_str),
             Some("0")
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_text_motion_scene_layer_to_drawtext() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "headline".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.25,
+                duration_s: 1.5,
+                z_index: 10,
+                params: [("text".to_string(), serde_json::json!("Motion Scene"))]
+                    .into_iter()
+                    .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        assert!(
+            cmd.contains("drawtext=text='Motion Scene'"),
+            "motion scene text should render via drawtext: {cmd}"
+        );
+        assert!(
+            spec.limitations
+                .iter()
+                .all(|limitation| limitation.kind != "motion_scene_layer_unsupported"),
+            "text layer should not emit unsupported limitation: {:?}",
+            spec.limitations
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_reports_unsupported_motion_scene_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "still-image".into(),
+                kind: MotionSceneLayerKind::Image,
+                from_s: 0.0,
+                duration_s: 1.0,
+                ..MotionSceneLayer::default()
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+        assert!(spec.limitations.iter().any(|limitation| {
+            limitation.kind == "motion_scene_layer_unsupported"
+                && limitation.clip_id.as_deref() == Some("scene-a:still-image")
+        }));
+    }
+
+    #[test]
+    fn timeline_render_spec_reports_unsupported_non_rectangle_motion_scene_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "circle".into(),
+                kind: MotionSceneLayerKind::Shape,
+                from_s: 0.0,
+                duration_s: 1.0,
+                params: [("shape".to_string(), serde_json::json!("circle"))]
+                    .into_iter()
+                    .collect(),
+                ..MotionSceneLayer::default()
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+
+        assert!(spec.limitations.iter().any(|limitation| {
+            limitation.kind == "motion_scene_layer_unsupported"
+                && limitation.clip_id.as_deref() == Some("scene-a:circle")
+                && limitation.message.contains("only rectangle/solid shapes")
+        }));
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_rectangle_motion_scene_layer_to_drawbox() {
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "panel".into(),
+                kind: MotionSceneLayerKind::Shape,
+                from_s: 0.25,
+                duration_s: 1.5,
+                z_index: 10,
+                params: [
+                    ("shape".to_string(), serde_json::json!("rect")),
+                    ("x".to_string(), serde_json::json!(0.1)),
+                    ("y".to_string(), serde_json::json!(0.2)),
+                    ("width".to_string(), serde_json::json!(0.3)),
+                    ("height".to_string(), serde_json::json!(0.4)),
+                    ("color".to_string(), serde_json::json!("#224466")),
+                    ("opacity".to_string(), serde_json::json!(0.75)),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        assert!(
+            cmd.contains("drawbox=x=iw*0.1:y=ih*0.2:w=iw*0.3:h=ih*0.4:color=#224466@0.75:t=fill:enable='between(t\\,0.25\\,1.75)'"),
+            "rectangle motion scene should render via drawbox: {cmd}"
+        );
+        assert!(
+            spec.limitations
+                .iter()
+                .all(|limitation| limitation.kind != "motion_scene_layer_unsupported"),
+            "rectangle layer should not emit unsupported limitation: {:?}",
+            spec.limitations
+        );
+    }
+
+    #[test]
+    fn timeline_render_spec_lowers_image_motion_scene_layer_to_overlay_input() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("raw")).unwrap();
+        fs::write(dir.path().join("raw/logo.png"), b"png fixture").unwrap();
+        write_fixture_project_with_motion_scene(
+            dir.path(),
+            vec![MotionSceneLayer {
+                id: "logo".into(),
+                kind: MotionSceneLayerKind::Image,
+                from_s: 0.25,
+                duration_s: 1.5,
+                z_index: 10,
+                params: [
+                    ("asset".to_string(), serde_json::json!("raw/logo.png")),
+                    ("x".to_string(), serde_json::json!(0.1)),
+                    ("y".to_string(), serde_json::json!(0.2)),
+                    ("width".to_string(), serde_json::json!(0.3)),
+                    ("height".to_string(), serde_json::json!(0.4)),
+                    ("opacity".to_string(), serde_json::json!(0.75)),
+                    ("fit".to_string(), serde_json::json!("contain")),
+                    ("scale".to_string(), serde_json::json!(1.2)),
+                    ("anchor_x".to_string(), serde_json::json!(0.5)),
+                    ("anchor_y".to_string(), serde_json::json!(0.5)),
+                    ("rotation_deg".to_string(), serde_json::json!(-6.0)),
+                    (
+                        "animations".to_string(),
+                        serde_json::json!([
+                            {
+                                "parameter": "overlay.x",
+                                "keyframes": [
+                                    { "time_s": 0.0, "value": 0.1 },
+                                    { "time_s": 1.5, "value": 0.2 }
+                                ]
+                            },
+                            {
+                                "parameter": "overlay.opacity",
+                                "keyframes": [
+                                    { "time_s": 0.0, "value": 0.25 },
+                                    { "time_s": 1.5, "value": 0.75 }
+                                ]
+                            },
+                            {
+                                "parameter": "overlay.rotation_deg",
+                                "keyframes": [
+                                    { "time_s": 0.0, "value": -6.0 },
+                                    { "time_s": 1.5, "value": 6.0 }
+                                ]
+                            }
+                        ]),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+        );
+
+        let spec = build_timeline_render_spec(dir.path()).unwrap();
+        let cmd = spec.args.join(" ");
+
+        assert!(
+            cmd.contains("-loop 1 -t 1.5 -i"),
+            "image motion scene should add a still-image input: {cmd}"
+        );
+        assert!(cmd.contains("raw/logo.png"), "image input missing: {cmd}");
+        assert!(
+            cmd.contains("overlay=x=main_w*(if(") && cmd.contains("y=main_h*(0.2)"),
+            "image motion scene should overlay with animated transform timing: {cmd}"
+        );
+        assert!(
+            cmd.contains("rotate='(PI/180)*(if("),
+            "image motion scene should lower animated rotation: {cmd}"
+        );
+        assert!(
+            cmd.contains("colorchannelmixer=aa=if("),
+            "image motion scene should lower animated opacity: {cmd}"
+        );
+        assert!(
+            spec.limitations
+                .iter()
+                .all(|limitation| limitation.kind != "motion_scene_layer_unsupported"),
+            "image layer should not emit unsupported limitation: {:?}",
+            spec.limitations
         );
     }
 
@@ -11527,7 +12190,7 @@ mod tests {
             },
         );
 
-        let (_, _, video_overlays, _, _, _, _, _, _, limitations) =
+        let (_, _, video_overlays, _, _, _, _, _, _, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert_eq!(video_overlays.len(), 1);
@@ -11769,7 +12432,7 @@ mod tests {
             },
         );
 
-        let (_, _, _, _, _, _, _, audio_tracks, _, limitations) =
+        let (_, _, _, _, _, _, _, _, audio_tracks, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());
@@ -11803,7 +12466,7 @@ mod tests {
             },
         );
 
-        let (segments, _, _, _, _, _, _, _, _, limitations) =
+        let (segments, _, _, _, _, _, _, _, _, _, limitations) =
             collect_timeline_full_plan(dir.path()).unwrap();
 
         assert!(limitations.is_empty());

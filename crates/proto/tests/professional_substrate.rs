@@ -15,7 +15,8 @@ use awidat_proto::professional::{
     HardwareAccelerationPolicy, Keyframe, MaskArtifactKind, MaskArtifactProfile,
     MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MatteGenerationFallback,
     MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings, MotionGraphicsTemplate,
-    MotionPackage, ParameterAnimation, PipelineReadinessReport, PreflightCheckKind,
+    MotionPackage, MotionScene, MotionSceneLayer, MotionSceneLayerKind, MotionSceneTransform,
+    MotionSceneTransformFit, ParameterAnimation, PipelineReadinessReport, PreflightCheckKind,
     RUNTIME_CLIP_PARAMETERS, ReadinessState, ReframeKeyframe, ReframePath, ReframeSmoothing,
     SegmentationIntent, SegmentationPrompt, SegmentationPromptKind, SegmentationPromptLabel,
     SegmentationPromptPackage, SegmentationRuntimeStatus, SegmentationSessionOperation,
@@ -40,6 +41,89 @@ fn runtime_clip_parameter_allowlist_matches_desktop_preview() {
         desktop_parameters, rust_parameters,
         "desktop preview runtime parameter support must match the Rust render/protocol allowlist"
     );
+}
+
+#[test]
+fn motion_scene_transform_parses_shared_layer_params() {
+    let layer = MotionSceneLayer {
+        id: "logo".into(),
+        kind: MotionSceneLayerKind::Image,
+        params: BTreeMap::from([
+            ("x".into(), serde_json::json!(0.1)),
+            ("y".into(), serde_json::json!(0.2)),
+            ("width".into(), serde_json::json!(0.3)),
+            ("height".into(), serde_json::json!(0.4)),
+            ("opacity".into(), serde_json::json!(0.75)),
+            ("fit".into(), serde_json::json!("contain")),
+        ]),
+        ..MotionSceneLayer::default()
+    };
+
+    let transform = MotionSceneTransform::from_layer_params(&layer.params);
+
+    assert_eq!(transform.x, 0.1);
+    assert_eq!(transform.y, 0.2);
+    assert_eq!(transform.width, 0.3);
+    assert_eq!(transform.height, 0.4);
+    assert_eq!(transform.opacity, 0.75);
+    assert_eq!(transform.fit, MotionSceneTransformFit::Contain);
+}
+
+#[test]
+fn motion_scene_transform_parses_scale_anchor_and_rotation() {
+    let layer = MotionSceneLayer {
+        id: "card".into(),
+        kind: MotionSceneLayerKind::Solid,
+        params: BTreeMap::from([
+            ("scale".into(), serde_json::json!(1.2)),
+            ("anchor_x".into(), serde_json::json!(0.5)),
+            ("anchor_y".into(), serde_json::json!(0.25)),
+            ("rotation_deg".into(), serde_json::json!(-8.0)),
+        ]),
+        ..MotionSceneLayer::default()
+    };
+
+    let transform = MotionSceneTransform::from_layer_params(&layer.params);
+
+    assert_eq!(transform.scale, 1.2);
+    assert_eq!(transform.anchor_x, 0.5);
+    assert_eq!(transform.anchor_y, 0.25);
+    assert_eq!(transform.rotation_deg, -8.0);
+}
+
+#[test]
+fn motion_scene_layer_animations_parse_from_params() {
+    let layer = MotionSceneLayer {
+        id: "logo".into(),
+        kind: MotionSceneLayerKind::Image,
+        params: BTreeMap::from([(
+            "animations".into(),
+            serde_json::json!([
+                {
+                    "parameter": "overlay.x",
+                    "keyframes": [
+                        { "time_s": 0.0, "value": 0.1 },
+                        { "time_s": 1.0, "value": 0.4 }
+                    ]
+                },
+                {
+                    "parameter": "overlay.rotation_deg",
+                    "keyframes": [
+                        { "time_s": 0.0, "value": -6.0 },
+                        { "time_s": 1.0, "value": 6.0 }
+                    ]
+                }
+            ]),
+        )]),
+        ..MotionSceneLayer::default()
+    };
+
+    let animations = layer.motion_animations();
+
+    assert_eq!(animations.len(), 2);
+    assert_eq!(animations[0].parameter, "overlay.x");
+    assert_eq!(animations[0].keyframes[0].value, 0.1);
+    assert_eq!(animations[1].parameter, "overlay.rotation_deg");
 }
 
 #[test]
@@ -96,6 +180,22 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
             }],
             ..MotionPackage::default()
         }],
+        motion_scenes: vec![MotionScene {
+            id: "scene-a".into(),
+            duration_s: 4.0,
+            fps: 30.0,
+            width: 1920,
+            height: 1080,
+            layers: vec![MotionSceneLayer {
+                id: "headline".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 0.0,
+                duration_s: 4.0,
+                z_index: 10,
+                params: BTreeMap::from([("text".into(), serde_json::json!("Key idea"))]),
+            }],
+            rationale: Some("animated explainer callout".into()),
+        }],
         expression_links: vec![ExpressionLink {
             id: "expr-audio-scale".into(),
             target_clip_id: "clip-a".into(),
@@ -147,6 +247,11 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
     assert_eq!(roundtrip.stringouts[0].select_ids, vec!["sel-a"]);
     assert_eq!(roundtrip.motion_packages[0].id, "motion-package-a");
     assert_eq!(roundtrip.motion_packages[0].affected_clips, vec!["clip-a"]);
+    assert_eq!(roundtrip.motion_scenes[0].id, "scene-a");
+    assert_eq!(
+        roundtrip.motion_scenes[0].layers[0].kind,
+        MotionSceneLayerKind::Text
+    );
     assert_eq!(roundtrip.expression_links[0].id, "expr-audio-scale");
     assert_eq!(roundtrip.expression_links[0].target_clip_id, "clip-a");
     let tracking_package = match roundtrip.tracking_package {
@@ -559,6 +664,21 @@ fn substrate_validation_catches_cross_stage_pipeline_issues() {
             }],
             ..MotionGraphicsTemplate::default()
         }],
+        motion_scenes: vec![MotionScene {
+            id: "scene-bad".into(),
+            duration_s: 3.0,
+            fps: 30.0,
+            width: 1920,
+            height: 1080,
+            layers: vec![MotionSceneLayer {
+                id: "late-layer".into(),
+                kind: MotionSceneLayerKind::Text,
+                from_s: 2.5,
+                duration_s: 1.0,
+                ..MotionSceneLayer::default()
+            }],
+            ..MotionScene::default()
+        }],
         composition_graphs: vec![CompositionGraph {
             id: "comp-bad".into(),
             nodes: vec![CompositionNode {
@@ -594,6 +714,11 @@ fn substrate_validation_catches_cross_stage_pipeline_issues() {
         messages
             .iter()
             .any(|message| message.contains("template-bad"))
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("layer late-layer exceeds scene duration"))
     );
     assert!(
         messages

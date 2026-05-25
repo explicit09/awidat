@@ -30,9 +30,9 @@ use awidat_proto::awidat_meta::{
 };
 use awidat_proto::professional::{
     AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
-    MotionGraphicsTemplate, ParameterAnimation, PipelineReadinessReport, PlannerPassContract,
-    PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange, SourceSelect, Stringout,
-    TrackingPackage, WorkflowLens,
+    MotionGraphicsTemplate, MotionScene, ParameterAnimation, PipelineReadinessReport,
+    PlannerPassContract, PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange,
+    SourceSelect, Stringout, TrackingPackage, WorkflowLens,
 };
 use thiserror::Error;
 
@@ -272,6 +272,7 @@ enum OpKind {
     AddProposalPackage,
     SetParameterAnimation,
     SetMotionTemplate,
+    SetMotionScene,
     AttachComposition,
     SetTrackingPackage,
     AuthorSubjectReframeFromTrack,
@@ -339,6 +340,7 @@ impl OpBuilder {
             "Add Proposal Package" => OpKind::AddProposalPackage,
             "Set Parameter Animation" => OpKind::SetParameterAnimation,
             "Set Motion Template" => OpKind::SetMotionTemplate,
+            "Set Motion Scene" => OpKind::SetMotionScene,
             "Attach Composition" => OpKind::AttachComposition,
             "Set Tracking Package" => OpKind::SetTrackingPackage,
             "Author Subject Reframe From Track" => OpKind::AuthorSubjectReframeFromTrack,
@@ -1424,6 +1426,9 @@ impl OpBuilder {
                     "template_json",
                     head,
                 )?,
+            }),
+            OpKind::SetMotionScene => Ok(EdlOp::SetMotionScene {
+                scene: take_required_json::<MotionScene>(&mut fields, "scene_json", head)?,
             }),
             OpKind::AttachComposition => Ok(EdlOp::AttachComposition {
                 graph: take_required_json::<CompositionGraph>(&mut fields, "graph_json", head)?,

@@ -92,6 +92,8 @@ impl ToolHandler for PodcastVisualPolishTool {
             }));
         }
         recommendations.extend([
+            "Call plan_visual_support before choosing b-roll, titles, MotionScene, or direct effects for each visual need.",
+            "When plan_visual_support returns motion_scene, call plan_motion_scene and apply its Set Motion Scene EDL before claiming native motion graphics are planned.",
             "Run plan_multicam or produce an angle plan with minimum hold duration; avoid switching on short backchannels.",
             "Use broll_candidates/find_broll_opportunities for jump-cut cover and visual examples.",
             "Plan reaction shots around emotional peaks, jokes, and strong claims.",
@@ -116,6 +118,11 @@ impl ToolHandler for PodcastVisualPolishTool {
             },
             "issues": issues,
             "recommendations": recommendations,
+            "visual_support_router": {
+                "tool": "plan_visual_support",
+                "motion_scene_followup": "plan_motion_scene",
+                "rule": "route each visual need before choosing b-roll, MotionScene, title/annotation, timeline edit, or effects"
+            },
             "required_before_render": true,
         });
         serde_json::to_string(&body)
@@ -186,6 +193,10 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|issue| issue["kind"] == "missing_multicam_evidence")
+        );
+        assert_eq!(
+            value["visual_support_router"]["tool"],
+            serde_json::json!("plan_visual_support")
         );
     }
 }

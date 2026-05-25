@@ -11,9 +11,9 @@ use std::fmt;
 use awidat_proto::awidat_meta::{BroadcastOverlayConfig, SemanticCutSpec, SplitEditSpec};
 use awidat_proto::professional::{
     AssetCatalog, AudioFinishingState, ColorFinishingState, CompositionGraph, DeliveryProfile,
-    MotionGraphicsTemplate, ParameterAnimation, PipelineReadinessReport, PlannerPassContract,
-    PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange, SourceSelect, Stringout,
-    TrackingPackage, WorkflowLens,
+    MotionGraphicsTemplate, MotionScene, ParameterAnimation, PipelineReadinessReport,
+    PlannerPassContract, PreflightReport, ProposalPackage, ReframeSmoothing, SourceRange,
+    SourceSelect, Stringout, TrackingPackage, WorkflowLens,
 };
 use awidat_proto::transitions::SemanticTransitionSpec;
 use serde::{Deserialize, Serialize};
@@ -762,6 +762,11 @@ pub enum EdlOp {
     SetMotionTemplate {
         /// Template document.
         template: MotionGraphicsTemplate,
+    },
+    /// Store or replace a native procedural motion scene.
+    SetMotionScene {
+        /// Motion scene document.
+        scene: MotionScene,
     },
     /// Attach a composition graph to a timeline range or keep it reusable.
     AttachComposition {

@@ -44,6 +44,8 @@ export type { DuckingControls } from "./generated/DuckingControls";
 export type { ColorCorrectionStyling } from "./generated/ColorCorrectionStyling";
 export type { TitleStyling } from "./generated/TitleStyling";
 export type { VideoOverlayStyling } from "./generated/VideoOverlayStyling";
+export type { MotionShapeStyling } from "./generated/MotionShapeStyling";
+export type { MotionImageStyling } from "./generated/MotionImageStyling";
 export type { BroadcastOverlayConfig } from "./generated/BroadcastOverlayConfig";
 export type { BroadcastHost } from "./generated/BroadcastHost";
 export type { BroadcastTimedEntry } from "./generated/BroadcastTimedEntry";
