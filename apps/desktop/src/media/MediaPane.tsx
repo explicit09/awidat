@@ -260,7 +260,7 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
     if (!v) return;
     if (v.paused) {
       v.play().catch((err) => {
-        setMediaError(`Playback failed: ${String(err)}`);
+        handlePlayFailure(err, v);
       });
     } else {
       v.pause();
@@ -271,6 +271,21 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
     const err = e.currentTarget.error;
     const code = err ? `code ${err.code}` : "unknown error";
     setMediaError(`Source preview failed to load (${code}).`);
+  }
+
+  function handlePlayFailure(err: unknown, v: HTMLVideoElement) {
+    if (isAutoplayBlocked(err)) {
+      window.setTimeout(() => {
+        if (!v.paused) {
+          setMediaError(null);
+        } else {
+          setPlaying(false);
+        }
+      }, 0);
+      return;
+    }
+    setMediaError(`Playback failed: ${String(err)}`);
+    setPlaying(false);
   }
 
   function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
@@ -365,7 +380,10 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
           }}
           onCanPlay={() => setMediaError(null)}
           onError={onVideoError}
-          onPlay={() => setPlaying(true)}
+          onPlay={() => {
+            setMediaError(null);
+            setPlaying(true);
+          }}
           onPause={() => setPlaying(false)}
           onEnded={() => setPlaying(false)}
           onClick={togglePlay}
@@ -439,6 +457,11 @@ function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function isAutoplayBlocked(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "NotAllowedError") return true;
+  return String(err).includes("NotAllowedError");
 }
 
 function MediaEmpty({ hasAnyProxies }: { hasAnyProxies: boolean }) {

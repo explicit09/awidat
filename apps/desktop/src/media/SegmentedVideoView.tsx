@@ -336,8 +336,7 @@ function SegmentedPlayer({
     const v = slot.ref.current;
     if (!v || !v.paused) return;
     v.play().catch((err) => {
-      setMediaError(`Playback failed: ${String(err)}`);
-      setPlaying(false);
+      handlePlayFailure(err, v);
     });
   }
 
@@ -412,7 +411,7 @@ function SegmentedPlayer({
       v.pause();
       if (nextV) {
         nextV.play().catch((err) => {
-          setMediaError(`Playback failed: ${String(err)}`);
+          handlePlayFailure(err, nextV);
         });
       }
       // Flip the visible slot. activeKey state drives the CSS
@@ -527,7 +526,7 @@ function SegmentedPlayer({
     if (!v) return;
     if (v.paused) {
       v.play().catch((err) => {
-        setMediaError(`Playback failed: ${String(err)}`);
+        handlePlayFailure(err, v);
       });
     } else {
       v.pause();
@@ -539,8 +538,7 @@ function SegmentedPlayer({
     if (!v) return;
     if (isPlaying && v.paused) {
       v.play().catch((err) => {
-        setMediaError(`Playback failed: ${String(err)}`);
-        setPlaying(false);
+        handlePlayFailure(err, v);
       });
     } else if (!isPlaying && !v.paused) {
       v.pause();
@@ -572,6 +570,21 @@ function SegmentedPlayer({
     const err = e.currentTarget.error;
     const code = err ? `code ${err.code}` : "unknown error";
     setMediaError(`Preview media failed to load (${code}).`);
+  }
+
+  function handlePlayFailure(err: unknown, v: HTMLVideoElement) {
+    if (isAutoplayBlocked(err)) {
+      window.setTimeout(() => {
+        if (!v.paused) {
+          setMediaError(null);
+        } else {
+          setPlaying(false);
+        }
+      }, 0);
+      return;
+    }
+    setMediaError(`Playback failed: ${String(err)}`);
+    setPlaying(false);
   }
 
   function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
@@ -695,7 +708,14 @@ function SegmentedPlayer({
             alignSlotAfterLoad("a");
           }}
           onError={onVideoError}
-          onPlay={activeKey === "a" ? () => setPlaying(true) : undefined}
+          onPlay={
+            activeKey === "a"
+              ? () => {
+                  setMediaError(null);
+                  setPlaying(true);
+                }
+              : undefined
+          }
           onPause={activeKey === "a" ? () => setPlaying(false) : undefined}
           onEnded={activeKey === "a" ? () => setPlaying(false) : undefined}
           onClick={activeKey === "a" ? togglePlay : undefined}
@@ -712,7 +732,14 @@ function SegmentedPlayer({
             alignSlotAfterLoad("b");
           }}
           onError={onVideoError}
-          onPlay={activeKey === "b" ? () => setPlaying(true) : undefined}
+          onPlay={
+            activeKey === "b"
+              ? () => {
+                  setMediaError(null);
+                  setPlaying(true);
+                }
+              : undefined
+          }
           onPause={activeKey === "b" ? () => setPlaying(false) : undefined}
           onEnded={activeKey === "b" ? () => setPlaying(false) : undefined}
           onClick={activeKey === "b" ? togglePlay : undefined}
@@ -2129,4 +2156,9 @@ function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function isAutoplayBlocked(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "NotAllowedError") return true;
+  return String(err).includes("NotAllowedError");
 }
