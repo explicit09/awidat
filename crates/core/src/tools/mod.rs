@@ -65,6 +65,7 @@ pub mod poll_render;
 pub mod preview_cache;
 pub mod proxy_media;
 pub mod read_index;
+pub mod read_media_intelligence;
 pub mod read_media_readiness;
 pub mod relink_media;
 pub mod render_preflight;

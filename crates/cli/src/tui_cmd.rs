@@ -49,6 +49,7 @@ use awidat_core::tools::{
     poll_generated_media_job::PollGeneratedMediaJobTool, poll_render::PollRenderTool,
     preview_cache::PreviewCacheStatusTool, proxy_media::GenerateProxyTool,
     proxy_media::ProxyStatusTool, read_index::ReadIndexTool,
+    read_media_intelligence::ReadMediaIntelligenceTool,
     read_media_readiness::ReadMediaReadinessTool, relink_media::RelinkMediaTool,
     render_preflight::RenderPreflightTool, request_user_input::RequestUserInputTool,
     search_broll::SearchBrollTool, shot_summary::ShotSummaryTool,
@@ -98,7 +99,7 @@ overview), broll_candidates (cutaway/B-roll hunting — wide/no-face \
 visible — needs whisper diarization + face), find_eye_contact \
 (direct-address moments), plan_reframe (static vertical/social crop \
 fragment from subject-center evidence).\
-\n  - **Raw lookup**: read_media_readiness (source/proxy/cache/index readiness), \
+\n  - **Raw lookup**: read_media_intelligence (progressive source/proxy/waveform/transcript/speakers/scenes/topics/moments/clips/b-roll state), read_media_readiness (source/proxy/cache/index readiness), \
 find_moment (transcript substring), read_index \
 (any indexer channel), inspect_clip (one clip's metadata), \
 view_frame (extract a frame at a timestamp), color_scopes \
@@ -236,6 +237,7 @@ pub fn build_full_registry(model: &str) -> ToolRegistry {
     registry.register(Arc::new(RenderPreflightTool));
     registry.register(Arc::new(ProxyStatusTool));
     registry.register(Arc::new(GenerateProxyTool));
+    registry.register(Arc::new(ReadMediaIntelligenceTool));
     registry.register(Arc::new(ReadMediaReadinessTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RelinkMediaTool));

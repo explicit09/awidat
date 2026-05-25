@@ -56,6 +56,7 @@ pub mod generated_media;
 pub mod lessons;
 pub mod mcp_host;
 pub mod media_catalog_mutation;
+pub mod media_intelligence;
 pub mod notes;
 pub mod orchestrator;
 pub mod pexels;
