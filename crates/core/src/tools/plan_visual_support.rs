@@ -138,7 +138,8 @@ pub fn route_visual_support_request(request: &str) -> VisualSupportRoute {
             "callout",
             "callouts",
         ],
-    ) {
+    ) || wants_still_graphic_motion_scene(&lower)
+    {
         return route(
             VisualSupportLane::MotionScene,
             supporting_lanes,
@@ -220,6 +221,9 @@ fn supporting_lanes_for_request(lower: &str) -> Vec<VisualSupportLane> {
     ) {
         lanes.push(VisualSupportLane::Broll);
     }
+    if wants_still_graphic_motion_scene(lower) {
+        lanes.push(VisualSupportLane::MotionScene);
+    }
     if contains_any(
         lower,
         &[
@@ -249,6 +253,37 @@ fn supporting_lanes_for_request(lower: &str) -> Vec<VisualSupportLane> {
         lanes.push(VisualSupportLane::MotionScene);
     }
     lanes
+}
+
+fn wants_still_graphic_motion_scene(lower: &str) -> bool {
+    contains_any(
+        lower,
+        &[
+            "logo",
+            "screenshot",
+            "product still",
+            "product image",
+            "still image",
+            "chart",
+            "diagram",
+            "generated png",
+        ],
+    ) && contains_any(
+        lower,
+        &[
+            "overlay",
+            "card",
+            "callout",
+            "panel",
+            "explainer",
+            "animate",
+            "animated",
+            "motion",
+            "show",
+            "place",
+            "add",
+        ],
+    )
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
