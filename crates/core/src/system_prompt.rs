@@ -222,6 +222,7 @@ shows the user red error cards. The single discovery call is cheap \
 and makes everything after it correct.\
 \n\nKey tools:\
 \n- view_episode: map of the project (assets + which indexers ran).\
+\n- read_understanding: inspect fused scene/moment understanding and reviewable short-form clip candidates with score explanations and assembly metadata.\
 \n- read_media_intelligence: inspect the progressive source/proxy/waveform/transcript/speakers/scenes/topics/moments/clips/b-roll state machine for each asset.\
 \n- read_media_readiness: verify source, playable artifact, proxy/cache, \
 and index-sidecar readiness before relying on transcript, scenes, speaker \

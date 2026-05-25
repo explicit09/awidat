@@ -43,20 +43,21 @@ use awidat_core::tools::{
     preview_cache::PreviewCacheStatusTool, proxy_media::GenerateProxyTool,
     proxy_media::ProxyStatusTool, read_index::ReadIndexTool,
     read_media_intelligence::ReadMediaIntelligenceTool,
-    read_media_readiness::ReadMediaReadinessTool, relink_media::RelinkMediaTool,
-    render_preflight::RenderPreflightTool, request_user_input::RequestUserInputTool,
-    search_broll::SearchBrollTool, shot_summary::ShotSummaryTool,
-    start_generated_media_job::StartGeneratedMediaJobTool, start_indexing::StartIndexingTool,
-    start_render::StartRenderTool, stream_remux::StreamRemuxTool,
-    transcript_pack::TranscriptPackTool, transcript_search::TranscriptSearchTool,
-    transition_context::TransitionContextTool, update_plan::UpdatePlanTool,
-    use_broll::UseBrollTool, use_generated_media::UseGeneratedMediaTool,
-    vedit_blame::VeditBlameTool, vedit_branch::VeditBranchTool,
-    vedit_changed_clip_ids::VeditChangedClipIdsTool, vedit_checkout::VeditCheckoutTool,
-    vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool, vedit_log::VeditLogTool,
-    vedit_merge_preflight::VeditMergePreflightTool, vedit_revert::VeditRevertTool,
-    vedit_show::VeditShowTool, vedit_tag::VeditTagTool, verify_render::VerifyRenderTool,
-    view_episode::ViewEpisodeTool, view_frame::ViewFrameTool, view_timeline::ViewTimelineTool,
+    read_media_readiness::ReadMediaReadinessTool, read_understanding::ReadUnderstandingTool,
+    relink_media::RelinkMediaTool, render_preflight::RenderPreflightTool,
+    request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
+    shot_summary::ShotSummaryTool, start_generated_media_job::StartGeneratedMediaJobTool,
+    start_indexing::StartIndexingTool, start_render::StartRenderTool,
+    stream_remux::StreamRemuxTool, transcript_pack::TranscriptPackTool,
+    transcript_search::TranscriptSearchTool, transition_context::TransitionContextTool,
+    update_plan::UpdatePlanTool, use_broll::UseBrollTool,
+    use_generated_media::UseGeneratedMediaTool, vedit_blame::VeditBlameTool,
+    vedit_branch::VeditBranchTool, vedit_changed_clip_ids::VeditChangedClipIdsTool,
+    vedit_checkout::VeditCheckoutTool, vedit_commit::VeditCommitTool, vedit_diff::VeditDiffTool,
+    vedit_log::VeditLogTool, vedit_merge_preflight::VeditMergePreflightTool,
+    vedit_revert::VeditRevertTool, vedit_show::VeditShowTool, vedit_tag::VeditTagTool,
+    verify_render::VerifyRenderTool, view_episode::ViewEpisodeTool, view_frame::ViewFrameTool,
+    view_timeline::ViewTimelineTool,
 };
 use awidat_core::{Session, ToolRegistry};
 use tokio::sync::mpsc;
@@ -98,6 +99,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(ProxyStatusTool));
     registry.register(Arc::new(GenerateProxyTool));
     registry.register(Arc::new(ReadMediaIntelligenceTool));
+    registry.register(Arc::new(ReadUnderstandingTool));
     registry.register(Arc::new(ReadMediaReadinessTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RelinkMediaTool));

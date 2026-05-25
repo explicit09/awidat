@@ -67,6 +67,7 @@ pub mod proxy_media;
 pub mod read_index;
 pub mod read_media_intelligence;
 pub mod read_media_readiness;
+pub mod read_understanding;
 pub mod relink_media;
 pub mod render_preflight;
 pub mod request_user_input;
