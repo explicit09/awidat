@@ -15,6 +15,9 @@ pub const DISCOURSE_MARKER_TOKENS: &[&str] = &[
     "i mean",
 ];
 
+const MAX_RESTART_LOOKBACK_S: f64 = 12.0;
+const MAX_SNIPPET_CHARS: usize = 320;
+
 /// A transcript segment in source-media seconds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TranscriptSegment {
@@ -153,21 +156,24 @@ pub fn false_start_ranges(
             .map(|(_, previous)| previous.end_s)
             .unwrap_or(clip_source_start_s);
 
-        let visible_start_s = preceding_start_s.max(clip_source_start_s);
+        let visible_start_s = preceding_start_s
+            .max(word.start_s - MAX_RESTART_LOOKBACK_S)
+            .max(clip_source_start_s);
         let visible_end_s = word.start_s.min(clip_source_end_s);
         if visible_end_s > visible_start_s {
+            let snippet = words
+                .iter()
+                .filter(|candidate| {
+                    candidate.start_s >= visible_start_s && candidate.end_s <= visible_end_s
+                })
+                .map(|candidate| candidate.text.trim())
+                .collect::<Vec<_>>()
+                .join(" ");
             ranges.push(FalseStartRange {
                 start_s: visible_start_s,
                 end_s: visible_end_s,
                 marker,
-                snippet: words
-                    .iter()
-                    .filter(|candidate| {
-                        candidate.start_s >= visible_start_s && candidate.end_s <= visible_end_s
-                    })
-                    .map(|candidate| candidate.text.trim())
-                    .collect::<Vec<_>>()
-                    .join(" "),
+                snippet: compact_snippet(&snippet),
             });
         }
         index += 1;
@@ -214,15 +220,16 @@ pub fn production_aside_ranges(
         if end_s <= start_s {
             continue;
         }
+        let snippet = segments[start_index..=end_index]
+            .iter()
+            .map(|candidate| candidate.text.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
         ranges.push(ProductionAsideRange {
             start_s,
             end_s,
             marker,
-            snippet: segments[start_index..=end_index]
-                .iter()
-                .map(|candidate| candidate.text.trim())
-                .collect::<Vec<_>>()
-                .join(" "),
+            snippet: compact_snippet(&snippet),
         });
     }
     merge_production_asides(ranges)
@@ -321,13 +328,25 @@ fn merge_production_asides(mut ranges: Vec<ProductionAsideRange>) -> Vec<Product
                 last.marker = format!("{},{}", last.marker, range.marker);
             }
             if !range.snippet.is_empty() && !last.snippet.contains(&range.snippet) {
-                last.snippet = format!("{} {}", last.snippet, range.snippet);
+                last.snippet = compact_snippet(&format!("{} {}", last.snippet, range.snippet));
             }
             continue;
         }
         merged.push(range);
     }
     merged
+}
+
+fn compact_snippet(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= MAX_SNIPPET_CHARS {
+        return trimmed.to_string();
+    }
+    let mut end = MAX_SNIPPET_CHARS;
+    while !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", trimmed[..end].trim_end())
 }
 
 fn restart_marker_at(words: &[TranscriptWord], index: usize) -> Option<String> {
@@ -419,6 +438,14 @@ mod tests {
         }
     }
 
+    fn word(text: &str, start_s: f64, end_s: f64) -> TranscriptWord {
+        TranscriptWord {
+            text: text.to_string(),
+            start_s,
+            end_s,
+        }
+    }
+
     #[test]
     fn production_aside_includes_coaching_lead_in() {
         let segments = vec![
@@ -483,5 +510,27 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         assert!((ranges[0].start_s - 1542.680).abs() < 1e-9);
         assert!((ranges[0].end_s - 1556.850).abs() < 1e-9);
+    }
+
+    #[test]
+    fn false_start_lookback_is_bounded_for_late_markers() {
+        let words = vec![
+            word("First", 0.0, 0.2),
+            word("publishable", 0.2, 0.5),
+            word("discussion", 0.5, 0.8),
+            word("goes", 90.0, 90.2),
+            word("on", 90.2, 90.4),
+            word("for", 90.4, 90.6),
+            word("minutes", 90.6, 91.0),
+            word("actually", 100.0, 100.3),
+            word("restart", 100.3, 100.7),
+        ];
+
+        let ranges = false_start_ranges(&words, 0.0, 120.0);
+
+        assert_eq!(ranges.len(), 1);
+        assert!((ranges[0].start_s - 88.0).abs() < 1e-9);
+        assert!((ranges[0].end_s - 100.0).abs() < 1e-9);
+        assert!(!ranges[0].snippet.contains("First publishable"));
     }
 }

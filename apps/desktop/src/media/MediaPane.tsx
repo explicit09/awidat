@@ -196,6 +196,8 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
   const seekRequestId = useMediaStore((s) => s.seekRequestId);
   const seekTargetS = useMediaStore((s) => s.seekTargetS);
   const lastPushedViewRef = useRef<string>("");
+  const scrubInputRef = useRef<HTMLInputElement | null>(null);
+  const scrubPointerIdRef = useRef<number | null>(null);
 
   // External seek requests (from timeline canvas click/drag) drive
   // the video element imperatively. We watch seekRequestId rather
@@ -307,14 +309,45 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
 
   function onScrubPointerDown(e: React.PointerEvent<HTMLInputElement>) {
     if (durationS <= 0) return;
+    scrubInputRef.current = e.currentTarget;
+    scrubPointerIdRef.current = e.pointerId;
     e.currentTarget.setPointerCapture(e.pointerId);
     seekFromScrubPointer(e.currentTarget, e.clientX);
   }
 
   function onScrubPointerMove(e: React.PointerEvent<HTMLInputElement>) {
-    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    if (scrubPointerIdRef.current !== e.pointerId) return;
     seekFromScrubPointer(e.currentTarget, e.clientX);
   }
+
+  function finishScrubPointer(pointerId: number) {
+    if (scrubPointerIdRef.current !== pointerId) return;
+    const el = scrubInputRef.current;
+    if (el?.hasPointerCapture(pointerId)) {
+      el.releasePointerCapture(pointerId);
+    }
+    scrubPointerIdRef.current = null;
+    scrubInputRef.current = null;
+  }
+
+  useEffect(() => {
+    function onWindowPointerMove(e: PointerEvent) {
+      if (scrubPointerIdRef.current !== e.pointerId) return;
+      const el = scrubInputRef.current;
+      if (el) seekFromScrubPointer(el, e.clientX);
+    }
+    function onWindowPointerUp(e: PointerEvent) {
+      finishScrubPointer(e.pointerId);
+    }
+    window.addEventListener("pointermove", onWindowPointerMove);
+    window.addEventListener("pointerup", onWindowPointerUp);
+    window.addEventListener("pointercancel", onWindowPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onWindowPointerMove);
+      window.removeEventListener("pointerup", onWindowPointerUp);
+      window.removeEventListener("pointercancel", onWindowPointerUp);
+    };
+  });
 
   return (
     <div className="video-wrap">
@@ -357,6 +390,8 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
           onInput={onScrubInput}
           onPointerDown={onScrubPointerDown}
           onPointerMove={onScrubPointerMove}
+          onPointerUp={(e) => finishScrubPointer(e.pointerId)}
+          onPointerCancel={(e) => finishScrubPointer(e.pointerId)}
           disabled={durationS === 0}
         />
         <div className="transport-time">

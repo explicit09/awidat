@@ -154,6 +154,8 @@ function SegmentedPlayer({
   );
   const refA = useRef<HTMLVideoElement | null>(null);
   const refB = useRef<HTMLVideoElement | null>(null);
+  const scrubInputRef = useRef<HTMLInputElement | null>(null);
+  const scrubPointerIdRef = useRef<number | null>(null);
   // The currently-visible slot. The other slot is the preroll.
   const [activeKey, setActiveKey] = useState<"a" | "b">("a");
   // What each slot has loaded. Refs (not state) so the rVFC tick
@@ -581,14 +583,45 @@ function SegmentedPlayer({
 
   function onScrubPointerDown(e: React.PointerEvent<HTMLInputElement>) {
     if (timelineDurationS <= 0) return;
+    scrubInputRef.current = e.currentTarget;
+    scrubPointerIdRef.current = e.pointerId;
     e.currentTarget.setPointerCapture(e.pointerId);
     seekFromScrubPointer(e.currentTarget, e.clientX);
   }
 
   function onScrubPointerMove(e: React.PointerEvent<HTMLInputElement>) {
-    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    if (scrubPointerIdRef.current !== e.pointerId) return;
     seekFromScrubPointer(e.currentTarget, e.clientX);
   }
+
+  function finishScrubPointer(pointerId: number) {
+    if (scrubPointerIdRef.current !== pointerId) return;
+    const el = scrubInputRef.current;
+    if (el?.hasPointerCapture(pointerId)) {
+      el.releasePointerCapture(pointerId);
+    }
+    scrubPointerIdRef.current = null;
+    scrubInputRef.current = null;
+  }
+
+  useEffect(() => {
+    function onWindowPointerMove(e: PointerEvent) {
+      if (scrubPointerIdRef.current !== e.pointerId) return;
+      const el = scrubInputRef.current;
+      if (el) seekFromScrubPointer(el, e.clientX);
+    }
+    function onWindowPointerUp(e: PointerEvent) {
+      finishScrubPointer(e.pointerId);
+    }
+    window.addEventListener("pointermove", onWindowPointerMove);
+    window.addEventListener("pointerup", onWindowPointerUp);
+    window.addEventListener("pointercancel", onWindowPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onWindowPointerMove);
+      window.removeEventListener("pointerup", onWindowPointerUp);
+      window.removeEventListener("pointercancel", onWindowPointerUp);
+    };
+  });
 
   // The hidden slot uses opacity 0 + pointer-events: none so it
   // doesn't intercept clicks on the visible video. Both elements
@@ -731,6 +764,8 @@ function SegmentedPlayer({
               onInput={onScrubInput}
               onPointerDown={onScrubPointerDown}
               onPointerMove={onScrubPointerMove}
+              onPointerUp={(e) => finishScrubPointer(e.pointerId)}
+              onPointerCancel={(e) => finishScrubPointer(e.pointerId)}
               disabled={timelineDurationS === 0}
             />
             <div className="transport-time">
