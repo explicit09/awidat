@@ -97,12 +97,89 @@ fn collect_timeline_issues(
     stack: &Stack,
     issues: &mut Vec<serde_json::Value>,
 ) {
+    collect_primary_av_duration_issue(stack, issues);
     for child in &stack.children {
         match child {
             StackChild::Track(track) => collect_track_issues(project_root, track, issues),
             StackChild::Stack(stack) => collect_timeline_issues(project_root, stack, issues),
             StackChild::Clip(_) | StackChild::Gap(_) => {}
         }
+    }
+}
+
+fn collect_primary_av_duration_issue(stack: &Stack, issues: &mut Vec<serde_json::Value>) {
+    let video = first_track_duration(stack, awidat_proto::otio::TrackKind::Video);
+    let audio = first_track_duration(stack, awidat_proto::otio::TrackKind::Audio);
+    let (Some((video_name, video_duration_s)), Some((audio_name, audio_duration_s))) =
+        (video, audio)
+    else {
+        return;
+    };
+    let drift_s = (video_duration_s - audio_duration_s).abs();
+    if drift_s > 0.25 {
+        issues.push(serde_json::json!({
+            "kind": "primary_av_duration_mismatch",
+            "severity": "error",
+            "video_track": video_name,
+            "audio_track": audio_name,
+            "video_duration_s": video_duration_s,
+            "audio_duration_s": audio_duration_s,
+            "drift_s": drift_s,
+            "message": "Primary video and audio track durations differ; linked cleanup likely changed only one side of A/V."
+        }));
+    }
+}
+
+fn first_track_duration(
+    stack: &Stack,
+    kind: awidat_proto::otio::TrackKind,
+) -> Option<(String, f64)> {
+    for child in &stack.children {
+        match child {
+            StackChild::Track(track) if track.kind == kind => {
+                let duration_s = track.children.iter().map(track_child_duration).sum();
+                return Some((track.name.clone(), duration_s));
+            }
+            StackChild::Stack(stack) => {
+                if let Some(found) = first_track_duration(stack, kind) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn track_child_duration(child: &TrackChild) -> f64 {
+    match child {
+        TrackChild::Clip(clip) => clip
+            .source_range
+            .as_ref()
+            .map(|range| range.duration.to_seconds())
+            .unwrap_or(0.0),
+        TrackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
+        TrackChild::Transition(transition) => {
+            transition.in_offset.to_seconds() + transition.out_offset.to_seconds()
+        }
+        TrackChild::Stack(stack) => stack
+            .children
+            .iter()
+            .map(|child| match child {
+                StackChild::Clip(clip) => clip
+                    .source_range
+                    .as_ref()
+                    .map(|range| range.duration.to_seconds())
+                    .unwrap_or(0.0),
+                StackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
+                StackChild::Track(track) => track.children.iter().map(track_child_duration).sum(),
+                StackChild::Stack(stack) => {
+                    first_track_duration(stack, awidat_proto::otio::TrackKind::Video)
+                        .map(|(_, duration)| duration)
+                        .unwrap_or(0.0)
+                }
+            })
+            .sum(),
     }
 }
 
@@ -211,6 +288,33 @@ mod tests {
         project.write(root).unwrap();
     }
 
+    fn write_av_mismatch_project(root: &std::path::Path) {
+        let mut project = Project::init(root).unwrap();
+        let asset = root.join("raw/episode.mov");
+        std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        std::fs::write(&asset, b"fake").unwrap();
+        let mut stack = awidat_proto::otio::Stack::empty("root");
+        for (name, kind, duration_s) in [
+            ("Video 1", TrackKind::Video, 30.0),
+            ("A1", TrackKind::Audio, 26.0),
+        ] {
+            let mut clip = Clip::empty(name);
+            clip.media_reference =
+                MediaReference::External(ExternalReference::new("raw/episode.mov"));
+            clip.source_range = Some(TimeRange::new(
+                RationalTime::zero(24.0),
+                RationalTime::new(duration_s * 24.0, 24.0),
+            ));
+            let mut track = Track::empty(name, kind);
+            track.children.push(TrackChild::Clip(clip));
+            stack.children.push(StackChild::Track(track));
+        }
+        let mut timeline = Timeline::empty("podcast");
+        timeline.tracks = stack;
+        project.timeline = timeline;
+        project.write(root).unwrap();
+    }
+
     #[tokio::test]
     async fn blocks_missing_media_and_reports_gaps() {
         let dir = tempfile::tempdir().unwrap();
@@ -241,6 +345,32 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|issue| issue["kind"] == "timeline_gap")
+        );
+    }
+
+    #[tokio::test]
+    async fn blocks_primary_av_duration_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        write_av_mismatch_project(dir.path());
+        let out = PodcastQcReportTool
+            .handle(
+                ToolInvocation {
+                    call_id: "q2".into(),
+                    name: "podcast_qc_report".into(),
+                    args: serde_json::json!({}),
+                },
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        assert_eq!(value["status"], "blocked");
+        assert!(
+            value["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|issue| issue["kind"] == "primary_av_duration_mismatch")
         );
     }
 }

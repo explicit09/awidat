@@ -2870,6 +2870,7 @@ fn apply_trim(
             message: "clip has no source_range; cannot trim a clip with implicit range".into(),
         });
     };
+    let link_group_id = clip_link_group_id(clip);
     let rate = range.start_time.rate;
     let original_start_s = range.start_time.to_seconds();
     let original_end_s = range.start_time.to_seconds() + range.duration.to_seconds();
@@ -2935,9 +2936,85 @@ fn apply_trim(
         awidat_proto::otio::RationalTime::new(new_dur * rate, rate),
     ));
     let name = clip.name.clone();
+    let mut linked_trim_count = 0usize;
+    if let Some(group_id) = link_group_id.as_deref() {
+        linked_trim_count = trim_linked_siblings(
+            working,
+            locator,
+            group_id,
+            target_start,
+            target_end,
+            original_start_s,
+            original_end_s,
+            index,
+        )?;
+    }
+    let linked_note = if linked_trim_count == 0 {
+        String::new()
+    } else {
+        format!(
+            " ({} linked sibling{} also trimmed)",
+            linked_trim_count,
+            if linked_trim_count == 1 { "" } else { "s" }
+        )
+    };
     Ok(format!(
-        "trimmed clip {name:?} to [{target_start:.3}s..{target_end:.3}s] ({new_dur:.3}s)"
+        "trimmed clip {name:?} to [{target_start:.3}s..{target_end:.3}s] ({new_dur:.3}s){linked_note}"
     ))
+}
+
+fn trim_linked_siblings(
+    working: &mut Timeline,
+    primary: ClipLocator,
+    group_id: &str,
+    target_start: f64,
+    target_end: f64,
+    original_start: f64,
+    original_end: f64,
+    index: usize,
+) -> Result<usize, ApplyError> {
+    let sibling_locators: Vec<_> = working
+        .tracks
+        .children
+        .iter()
+        .enumerate()
+        .filter_map(|(track_index, stack_child)| {
+            if track_index == primary.track_index {
+                return None;
+            }
+            clip_with_link_group_covering_range(stack_child, group_id, original_start, original_end)
+                .map(|child_index| ClipLocator {
+                    track_index,
+                    child_index,
+                })
+        })
+        .collect();
+    let mut count = 0usize;
+    for locator in sibling_locators {
+        let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
+            continue;
+        };
+        let TrackChild::Clip(clip) = &mut track.children[locator.child_index] else {
+            continue;
+        };
+        let Some(range) = clip.source_range.as_ref() else {
+            continue;
+        };
+        let rate = range.start_time.rate;
+        if target_end < target_start {
+            return Err(ApplyError::Invalid {
+                index,
+                message: format!("linked trim: end {target_end} must be >= start {target_start}"),
+            });
+        }
+        let new_dur = target_end - target_start;
+        clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+            awidat_proto::otio::RationalTime::new(target_start * rate, rate),
+            awidat_proto::otio::RationalTime::new(new_dur * rate, rate),
+        ));
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// Reset / extend a previously-trimmed clip's source range outward.
@@ -3378,6 +3455,67 @@ fn clip_link_group_id(clip: &Clip) -> Option<String> {
         .map(str::to_string)
 }
 
+fn clip_at_locator(timeline: &Timeline, locator: ClipLocator) -> Option<&Clip> {
+    let StackChild::Track(track) = timeline.tracks.children.get(locator.track_index)? else {
+        return None;
+    };
+    let TrackChild::Clip(clip) = track.children.get(locator.child_index)? else {
+        return None;
+    };
+    Some(clip)
+}
+
+fn clip_source_range_s(clip: &Clip) -> Option<(f64, f64)> {
+    let range = clip.source_range.as_ref()?;
+    let start_s = range.start_time.to_seconds();
+    Some((start_s, start_s + range.duration.to_seconds()))
+}
+
+fn clip_contains_source_time(clip: &Clip, at_s: f64) -> bool {
+    clip_source_range_s(clip).is_some_and(|(start_s, end_s)| at_s > start_s && at_s < end_s)
+}
+
+fn clip_covers_source_range(clip: &Clip, start_s: f64, end_s: f64) -> bool {
+    clip_source_range_s(clip).is_some_and(|(clip_start_s, clip_end_s)| {
+        start_s >= clip_start_s - 1e-6 && end_s <= clip_end_s + 1e-6
+    })
+}
+
+fn clip_with_link_group_containing(
+    stack_child: &StackChild,
+    group_id: &str,
+    at_s: f64,
+) -> Option<usize> {
+    let StackChild::Track(track) = stack_child else {
+        return None;
+    };
+    track.children.iter().position(|child| {
+        let TrackChild::Clip(clip) = child else {
+            return false;
+        };
+        clip_link_group_id(clip).as_deref() == Some(group_id)
+            && clip_contains_source_time(clip, at_s)
+    })
+}
+
+fn clip_with_link_group_covering_range(
+    stack_child: &StackChild,
+    group_id: &str,
+    start_s: f64,
+    end_s: f64,
+) -> Option<usize> {
+    let StackChild::Track(track) = stack_child else {
+        return None;
+    };
+    track.children.iter().position(|child| {
+        let TrackChild::Clip(clip) = child else {
+            return false;
+        };
+        clip_link_group_id(clip).as_deref() == Some(group_id)
+            && clip_covers_source_range(clip, start_s, end_s)
+    })
+}
+
 fn clip_uuid(clip: &Clip) -> Option<&str> {
     clip.metadata
         .awidat
@@ -3497,6 +3635,47 @@ fn apply_split(
         at_s
     };
     let at_s = snapped_at_s;
+    let link_group_id = clip_at_locator(working, locator).and_then(clip_link_group_id);
+    let split = split_clip_at_locator(working, index, locator, at_s)?;
+    let mut linked_split_count = 0usize;
+    if let Some(group_id) = link_group_id.as_deref() {
+        linked_split_count = split_linked_siblings(working, locator, group_id, at_s, index)?;
+    }
+    let linked_note = if linked_split_count == 0 {
+        String::new()
+    } else {
+        format!(
+            " ({} linked sibling{} also split)",
+            linked_split_count,
+            if linked_split_count == 1 { "" } else { "s" }
+        )
+    };
+    Ok(format!(
+        "split clip {original_name:?} at {at_s:.3}s → {original_name:?} \
+         [{start_s:.3}s..{at_s:.3}s] + {right_name:?}{right_anchor} \
+         [{at_s:.3}s..{end_s:.3}s]{linked_note}",
+        original_name = split.original_name,
+        right_name = split.right_name,
+        right_anchor = split.right_anchor,
+        start_s = split.start_s,
+        end_s = split.end_s,
+    ))
+}
+
+struct SplitResult {
+    original_name: String,
+    right_name: String,
+    right_anchor: String,
+    start_s: f64,
+    end_s: f64,
+}
+
+fn split_clip_at_locator(
+    working: &mut Timeline,
+    index: usize,
+    locator: ClipLocator,
+    at_s: f64,
+) -> Result<SplitResult, ApplyError> {
     let StackChild::Track(track) = &mut working.tracks.children[locator.track_index] else {
         return Err(ApplyError::Invalid {
             index,
@@ -3573,11 +3752,45 @@ fn apply_split(
         .as_deref()
         .map(|uuid| format!(" anchor=clip_uuid={uuid}"))
         .unwrap_or_default();
-    Ok(format!(
-        "split clip {original_name:?} at {at_s:.3}s → {original_name:?} \
-         [{start_s:.3}s..{at_s:.3}s] + {right_name:?}{right_anchor} \
-         [{at_s:.3}s..{end_s:.3}s]"
-    ))
+    Ok(SplitResult {
+        original_name,
+        right_name,
+        right_anchor,
+        start_s,
+        end_s,
+    })
+}
+
+fn split_linked_siblings(
+    working: &mut Timeline,
+    primary: ClipLocator,
+    group_id: &str,
+    at_s: f64,
+    index: usize,
+) -> Result<usize, ApplyError> {
+    let sibling_locators: Vec<_> = working
+        .tracks
+        .children
+        .iter()
+        .enumerate()
+        .filter_map(|(track_index, stack_child)| {
+            if track_index == primary.track_index {
+                return None;
+            }
+            clip_with_link_group_containing(stack_child, group_id, at_s).map(|child_index| {
+                ClipLocator {
+                    track_index,
+                    child_index,
+                }
+            })
+        })
+        .collect();
+    let mut count = 0usize;
+    for locator in sibling_locators {
+        split_clip_at_locator(working, index, locator, at_s)?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 fn apply_delete(
@@ -8825,6 +9038,38 @@ mod tests {
         tl
     }
 
+    fn linked_av_timeline() -> Timeline {
+        let mut tl = Timeline::empty("linked");
+        let mut video = Track::empty("Video 1", TrackKind::Video);
+        let mut audio = Track::empty("A1", TrackKind::Audio);
+        for (track, name, uuid) in [
+            (&mut video, "video", "video-uuid"),
+            (&mut audio, "audio", "audio-uuid"),
+        ] {
+            let mut extra = std::collections::HashMap::new();
+            extra.insert("clip_uuid".into(), serde_json::json!(uuid));
+            extra.insert("link_group_id".into(), serde_json::json!("lg-av"));
+            let mut clip = Clip::empty(name);
+            clip.media_reference =
+                MediaReference::External(ExternalReference::new("raw/episode.mov"));
+            clip.source_range = Some(TimeRange::new(
+                RationalTime::new(10.0 * 24.0, 24.0),
+                RationalTime::new(20.0 * 24.0, 24.0),
+            ));
+            clip.metadata = ClipMetadata {
+                awidat: Some(AwidatClipMetadata {
+                    extra,
+                    ..AwidatClipMetadata::default()
+                }),
+                ..ClipMetadata::default()
+            };
+            track.children.push(TrackChild::Clip(clip));
+        }
+        tl.tracks.children.push(StackChild::Track(video));
+        tl.tracks.children.push(StackChild::Track(audio));
+        tl
+    }
+
     fn add_one_second_handles(tl: &mut Timeline) {
         let StackChild::Track(track) = &mut tl.tracks.children[0] else {
             panic!("expected track")
@@ -9734,6 +9979,79 @@ mod tests {
         assert!((lr.duration.to_seconds() - 2.0).abs() < 1e-9);
         assert!((rr.duration.to_seconds() - 3.0).abs() < 1e-9);
         assert!((rr.start_time.to_seconds() - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn apply_split_cascades_to_linked_av_sibling() {
+        let tl = linked_av_timeline();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::SplitClip {
+                anchor: Anchor::ClipUuid {
+                    uuid: "video-uuid".into(),
+                },
+                at_s: 18.0,
+                snap: None,
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("1 linked sibling also split"),
+            "got {:?}",
+            outcome.applied[0].description
+        );
+        for stack_child in &new_tl.tracks.children {
+            let StackChild::Track(track) = stack_child else {
+                panic!()
+            };
+            assert_eq!(track.children.len(), 2);
+            let TrackChild::Clip(left) = &track.children[0] else {
+                panic!()
+            };
+            let TrackChild::Clip(right) = &track.children[1] else {
+                panic!()
+            };
+            assert_eq!(
+                clip_source_range_s(left).map(|(_, end)| (end * 1000.0).round() / 1000.0),
+                Some(18.0)
+            );
+            assert_eq!(
+                clip_source_range_s(right).map(|(start, _)| (start * 1000.0).round() / 1000.0),
+                Some(18.0)
+            );
+        }
+    }
+
+    #[test]
+    fn apply_trim_cascades_to_linked_av_sibling() {
+        let tl = linked_av_timeline();
+        let env = EdlEnvelope {
+            ops: vec![EdlOp::TrimClip {
+                anchor: Anchor::ClipUuid {
+                    uuid: "audio-uuid".into(),
+                },
+                start: Some(12.0),
+                end: Some(28.0),
+            }],
+        };
+        let (new_tl, outcome) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        assert!(
+            outcome.applied[0]
+                .description
+                .contains("1 linked sibling also trimmed"),
+            "got {:?}",
+            outcome.applied[0].description
+        );
+        for stack_child in &new_tl.tracks.children {
+            let StackChild::Track(track) = stack_child else {
+                panic!()
+            };
+            let TrackChild::Clip(clip) = &track.children[0] else {
+                panic!()
+            };
+            assert_eq!(clip_source_range_s(clip), Some((12.0, 28.0)));
+        }
     }
 
     fn extract_clip_uuid(clip: &Clip) -> Option<String> {

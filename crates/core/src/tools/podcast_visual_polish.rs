@@ -52,6 +52,20 @@ impl ToolHandler for PodcastVisualPolishTool {
             .as_ref()
             .and_then(|meta| meta.broadcast_overlay.as_ref())
             .is_some();
+        let broll_recommendation_count = project
+            .timeline
+            .metadata
+            .awidat
+            .as_ref()
+            .and_then(|meta| meta.broll_recommendations.as_ref())
+            .map(|package| {
+                package
+                    .assets
+                    .iter()
+                    .map(|asset| asset.recommendations.len())
+                    .sum::<usize>()
+            })
+            .unwrap_or(0);
 
         let mut issues = Vec::new();
         let mut recommendations = Vec::new();
@@ -80,6 +94,13 @@ impl ToolHandler for PodcastVisualPolishTool {
         }
         if !has_broadcast_overlay {
             recommendations.push("Plan lower thirds and chapter/title cards before final render.");
+        }
+        if broll_recommendation_count == 0 {
+            issues.push(serde_json::json!({
+                "kind": "broll_review_missing",
+                "severity": "warning",
+                "message": "No stored B-roll recommendation package found; run read_broll_recommendations/find_broll_opportunities or explicitly report B-roll as skipped before calling the podcast done."
+            }));
         }
         if caption_summary.caption_overlay_count > 0
             && caption_summary.missing_safe_area_caption_overlay_count > 0
@@ -113,6 +134,7 @@ impl ToolHandler for PodcastVisualPolishTool {
                 "face_asset_count": face_assets.len(),
                 "shot_asset_count": shot_assets.len(),
                 "topic_asset_count": topic_assets.len(),
+                "broll_recommendation_count": broll_recommendation_count,
                 "caption_summary": caption_summary,
                 "has_broadcast_overlay": has_broadcast_overlay
             },
@@ -193,6 +215,13 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|issue| issue["kind"] == "missing_multicam_evidence")
+        );
+        assert!(
+            value["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|issue| issue["kind"] == "broll_review_missing")
         );
         assert_eq!(
             value["visual_support_router"]["tool"],
