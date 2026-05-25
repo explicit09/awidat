@@ -343,6 +343,468 @@ impl SourceRange {
     }
 }
 
+/// Awidat-owned transcript alignment package derived from one transcript sidecar.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TranscriptAlignmentPackage {
+    /// Source asset id, usually a project-relative path under `raw/`.
+    pub asset_id: String,
+    /// Optional source media checksum used to detect stale alignment packages.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub source_sha256: Option<String>,
+    /// Stable word-level alignment records.
+    #[serde(default)]
+    pub words: Vec<AlignedTranscriptWord>,
+    /// Stable phrase-level groupings over word ids.
+    #[serde(default)]
+    pub phrases: Vec<AlignedTranscriptPhrase>,
+    /// Active correction records, separate from raw sidecar text.
+    #[serde(default)]
+    pub corrections: Vec<TranscriptCorrection>,
+    /// Reversible transcript edit history.
+    #[serde(default)]
+    pub edit_log: Vec<TranscriptEditRecord>,
+}
+
+impl TranscriptAlignmentPackage {
+    /// Validate local transcript alignment invariants.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        if self.asset_id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                CapabilityArea::SourceReviewSelects,
+                "transcript alignment package has an empty asset_id",
+            ));
+        }
+
+        let mut word_ids = HashSet::new();
+        for word in &self.words {
+            if word.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    "transcript alignment contains a word with an empty id",
+                ));
+            }
+            if !word_ids.insert(word.id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    format!(
+                        "transcript alignment contains duplicate word id {}",
+                        word.id
+                    ),
+                ));
+            }
+            if !word.range.is_valid() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    format!("word {} has an invalid source range", word.id),
+                ));
+            }
+            if word.original_text.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::warning(
+                    CapabilityArea::SourceReviewSelects,
+                    format!("word {} has empty original text", word.id),
+                ));
+            }
+        }
+
+        let mut phrase_ids = HashSet::new();
+        for phrase in &self.phrases {
+            if phrase.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    "transcript alignment contains a phrase with an empty id",
+                ));
+            }
+            if !phrase_ids.insert(phrase.id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    format!(
+                        "transcript alignment contains duplicate phrase id {}",
+                        phrase.id
+                    ),
+                ));
+            }
+            if !phrase.range.is_valid() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    format!("phrase {} has an invalid source range", phrase.id),
+                ));
+            }
+            if phrase.word_ids.is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    format!("phrase {} contains no word ids", phrase.id),
+                ));
+            }
+            for word_id in &phrase.word_ids {
+                if !word_ids.contains(word_id.as_str()) {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::SourceReviewSelects,
+                        format!("phrase {} references missing word {}", phrase.id, word_id),
+                    ));
+                }
+            }
+        }
+
+        let phrase_id_set: HashSet<&str> = self.phrases.iter().map(|p| p.id.as_str()).collect();
+        for correction in &self.corrections {
+            if correction.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    "transcript correction has an empty id",
+                ));
+            }
+            if correction.corrected_text.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    format!(
+                        "transcript correction {} has empty corrected text",
+                        correction.id
+                    ),
+                ));
+            }
+            match &correction.target {
+                TranscriptCorrectionTarget::Word { word_id } => {
+                    if !word_ids.contains(word_id.as_str()) {
+                        diagnostics.push(ProfessionalDiagnostic::error(
+                            CapabilityArea::SourceReviewSelects,
+                            format!(
+                                "transcript correction {} references missing word {}",
+                                correction.id, word_id
+                            ),
+                        ));
+                    }
+                }
+                TranscriptCorrectionTarget::Phrase { phrase_id } => {
+                    if !phrase_id_set.contains(phrase_id.as_str()) {
+                        diagnostics.push(ProfessionalDiagnostic::error(
+                            CapabilityArea::SourceReviewSelects,
+                            format!(
+                                "transcript correction {} references missing phrase {}",
+                                correction.id, phrase_id
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+
+        let correction_ids: HashSet<&str> = self
+            .corrections
+            .iter()
+            .map(|correction| correction.id.as_str())
+            .collect();
+        for edit in &self.edit_log {
+            if edit.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    "transcript edit record has an empty id",
+                ));
+            }
+            if !correction_ids.contains(edit.correction_id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::SourceReviewSelects,
+                    format!(
+                        "transcript edit {} references missing correction {}",
+                        edit.id, edit.correction_id
+                    ),
+                ));
+            }
+        }
+
+        diagnostics
+    }
+}
+
+/// One stable word in a transcript alignment package.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AlignedTranscriptWord {
+    /// Stable word id.
+    pub id: String,
+    /// Original transcript text from the producer sidecar.
+    pub original_text: String,
+    /// Optional corrected display text.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub corrected_text: Option<String>,
+    /// Source-time range in seconds.
+    pub range: SourceRange,
+    /// Occurrence index among normalized words for the asset.
+    pub occurrence: u32,
+    /// Diarized speaker id or corrected speaker label.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub speaker_id: Option<String>,
+    /// Producer confidence when available.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confidence: Option<f64>,
+}
+
+/// One stable phrase in a transcript alignment package.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AlignedTranscriptPhrase {
+    /// Stable phrase id.
+    pub id: String,
+    /// Source-time range spanning the phrase.
+    pub range: SourceRange,
+    /// Ordered word ids in this phrase.
+    #[serde(default)]
+    pub word_ids: Vec<String>,
+    /// Normalized phrase text at generation time.
+    pub text: String,
+    /// Speaker id when all phrase words share one speaker.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub speaker_id: Option<String>,
+}
+
+/// A transcript correction target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TranscriptCorrectionTarget {
+    /// Correct a single word.
+    Word {
+        /// Target word id.
+        word_id: String,
+    },
+    /// Correct a phrase.
+    Phrase {
+        /// Target phrase id.
+        phrase_id: String,
+    },
+}
+
+impl Default for TranscriptCorrectionTarget {
+    fn default() -> Self {
+        Self::Word {
+            word_id: String::new(),
+        }
+    }
+}
+
+/// One correction applied over the immutable raw transcript alignment.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptCorrection {
+    /// Stable correction id.
+    pub id: String,
+    /// Target word or phrase.
+    pub target: TranscriptCorrectionTarget,
+    /// Replacement text for display/editing.
+    pub corrected_text: String,
+    /// Original text captured before the correction was applied.
+    pub original_text: String,
+    /// Source of the correction, e.g. `user`, `agent`, or `import`.
+    pub source: String,
+    /// RFC3339 timestamp or equivalent producer timestamp.
+    pub corrected_at: String,
+}
+
+/// Reversible transcript edit lifecycle record.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptEditRecord {
+    /// Stable edit id.
+    pub id: String,
+    /// Correction id this edit applies or reverts.
+    pub correction_id: String,
+    /// Edit action.
+    pub action: TranscriptEditAction,
+    /// Whether the edit has been reverted.
+    #[serde(default)]
+    pub reverted: bool,
+    /// RFC3339 timestamp or equivalent producer timestamp.
+    pub recorded_at: String,
+}
+
+/// Transcript edit operation kind.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptEditAction {
+    /// Apply a correction.
+    #[default]
+    ApplyCorrection,
+    /// Revert a correction.
+    RevertCorrection,
+}
+
+/// Durable per-project media intelligence state derived from current artifacts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaIntelligencePackage {
+    /// Per-asset intelligence state.
+    #[serde(default)]
+    pub assets: Vec<MediaIntelligenceAsset>,
+}
+
+impl MediaIntelligencePackage {
+    /// Validate media intelligence package invariants.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut asset_ids = HashSet::new();
+        for asset in &self.assets {
+            if asset.asset_id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    "media intelligence asset has an empty asset_id",
+                ));
+            }
+            if !asset_ids.insert(asset.asset_id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "media intelligence contains duplicate asset {}",
+                        asset.asset_id
+                    ),
+                ));
+            }
+            diagnostics.extend(asset.validate());
+        }
+        diagnostics
+    }
+}
+
+/// Per-asset progressive intelligence state.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaIntelligenceAsset {
+    /// Source asset id.
+    pub asset_id: String,
+    /// Independent processing layers for this asset.
+    #[serde(default)]
+    pub layers: Vec<MediaIntelligenceLayer>,
+    /// Aggregate readiness for UI/agent routing.
+    #[serde(default)]
+    pub aggregate_state: MediaIntelligenceAggregateState,
+    /// Narrow next actions an agent can take.
+    #[serde(default)]
+    pub recommended_actions: Vec<String>,
+}
+
+impl MediaIntelligenceAsset {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut kinds = HashSet::new();
+        for layer in &self.layers {
+            if !kinds.insert(layer.kind) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "media intelligence asset {} has duplicate layer {:?}",
+                        self.asset_id, layer.kind
+                    ),
+                ));
+            }
+            if layer.status == MediaIntelligenceLayerStatus::Blocked
+                && layer
+                    .blocking_reason
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "media intelligence layer {:?} for {} is blocked without a reason",
+                        layer.kind, self.asset_id
+                    ),
+                ));
+            }
+            if layer.status == MediaIntelligenceLayerStatus::Ready && layer.artifact_refs.is_empty()
+            {
+                diagnostics.push(ProfessionalDiagnostic::warning(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "media intelligence layer {:?} for {} is ready without artifacts",
+                        layer.kind, self.asset_id
+                    ),
+                ));
+            }
+        }
+        diagnostics
+    }
+}
+
+/// One independently generated media intelligence layer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaIntelligenceLayer {
+    /// Layer kind.
+    pub kind: MediaIntelligenceLayerKind,
+    /// Layer status.
+    #[serde(default)]
+    pub status: MediaIntelligenceLayerStatus,
+    /// Artifact references, usually project-relative paths.
+    #[serde(default)]
+    pub artifact_refs: Vec<String>,
+    /// Producing indexer/tool/cache.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub producer: Option<String>,
+    /// Whether the artifact appears stale relative to source.
+    #[serde(default)]
+    pub stale: bool,
+    /// Human-readable blocking reason for blocked layers.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub blocking_reason: Option<String>,
+    /// RFC3339 timestamp or filesystem-derived timestamp.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub updated_at: Option<String>,
+}
+
+/// Independent intelligence layers generated progressively for one asset.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIntelligenceLayerKind {
+    /// Original source media exists and is readable.
+    #[default]
+    Source,
+    /// Editing/playback proxy.
+    Proxy,
+    /// Waveform or audio overview cache.
+    Waveform,
+    /// Word/segment transcript.
+    Transcript,
+    /// Speaker labels/diarization.
+    Speakers,
+    /// Shot or scene boundaries.
+    Scenes,
+    /// Semantic topics.
+    Topics,
+    /// Editorial moments.
+    Moments,
+    /// Ranked short-form clip candidates.
+    ClipCandidates,
+    /// B-roll opportunities/candidates.
+    Broll,
+}
+
+/// Status for one media intelligence layer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIntelligenceLayerStatus {
+    /// Artifact is available.
+    Ready,
+    /// Artifact is not available yet.
+    #[default]
+    Pending,
+    /// Work is currently running.
+    Processing,
+    /// Work is blocked by missing input or failure.
+    Blocked,
+    /// Layer is not applicable for this asset.
+    Unavailable,
+}
+
+/// Aggregate state for an asset across all media intelligence layers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaIntelligenceAggregateState {
+    /// All required layers are ready.
+    Ready,
+    /// Some layers are ready and some are pending.
+    #[default]
+    Partial,
+    /// At least one layer is actively processing.
+    Processing,
+    /// Source exists but required downstream work is blocked.
+    Blocked,
+    /// Source media is missing.
+    Offline,
+}
+
 /// Durable source review decision.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceSelect {

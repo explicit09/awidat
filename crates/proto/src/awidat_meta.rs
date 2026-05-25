@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use crate::professional::{
     AnimationTarget, AssetCatalog, AudioFinishingState, CapabilityRegistry, ColorFinishingState,
     CompositionGraph, DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity,
-    LearningSignal, MotionGraphicsTemplate, MotionPackage, MotionScene, PackageManifest,
-    ParameterAnimation, PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract,
-    PreflightReport, ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect,
-    Stringout, TrackingPackage, WorkflowLens,
+    LearningSignal, MediaIntelligencePackage, MotionGraphicsTemplate, MotionPackage, MotionScene,
+    PackageManifest, ParameterAnimation, PipelineReadinessReport, PipelineStageReadiness,
+    PlannerPassContract, PreflightReport, ProfessionalDiagnostic, ProposalPackage, ReadinessState,
+    SourceSelect, Stringout, TrackingPackage, TranscriptAlignmentPackage, WorkflowLens,
 };
 use crate::subtitle::SubtitleTrack;
 
@@ -85,6 +85,12 @@ pub struct AwidatTimelineMetadata {
     /// Pre-timeline ordered selects.
     #[serde(default)]
     pub stringouts: Vec<Stringout>,
+    /// Awidat-owned transcript alignment packages derived from transcript sidecars.
+    #[serde(default)]
+    pub transcript_alignments: Vec<TranscriptAlignmentPackage>,
+    /// Progressive media intelligence state for source assets.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub media_intelligence: Option<MediaIntelligencePackage>,
     /// Unified reviewable proposal packages across pipeline stages.
     #[serde(default)]
     pub proposal_packages: Vec<ProposalPackage>,
@@ -194,6 +200,13 @@ impl AwidatTimelineMetadata {
                     ));
                 }
             }
+        }
+
+        for package in &self.transcript_alignments {
+            diagnostics.extend(package.validate());
+        }
+        if let Some(package) = &self.media_intelligence {
+            diagnostics.extend(package.validate());
         }
 
         diagnostics.extend(validate_beat_markers(&self.beat_markers));

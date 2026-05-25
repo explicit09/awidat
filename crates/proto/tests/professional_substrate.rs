@@ -6,23 +6,26 @@ use std::path::Path;
 
 use awidat_proto::awidat_meta::{AwidatTimelineMetadata, BeatMarker, BeatMarkerRole};
 use awidat_proto::professional::{
-    AnimationTarget, AssetCatalog, AssetQuery, AssetReadiness, AssetRecord, AssetRole, AudioBus,
-    AudioFinishingState, BezierHandles, CapabilityArea, CapabilityRegistry, CapabilityStatus,
-    ColorFinishingState, CompositionGraph, CompositionNode, CompositionNodeType,
-    DeliveryPreflightInput, DeliveryProfile, ExportMode, ExportOutputSettings, ExportPreset,
-    ExportRange, ExpressionLink, ExpressionSource, ExtrapolationMode, FindingSeverity, GradeStack,
-    GroundingBoxFormat, GroundingDetection, GroundingEvidence, GroundingEvidenceStatus,
-    HardwareAccelerationPolicy, Keyframe, MaskArtifactKind, MaskArtifactProfile,
-    MaskQualityScorecard, MaskReviewDecision, MaskSidecar, MatteGenerationFallback,
-    MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings, MotionGraphicsTemplate,
-    MotionPackage, MotionScene, MotionSceneLayer, MotionSceneLayerKind, MotionSceneTransform,
-    MotionSceneTransformFit, ParameterAnimation, PipelineReadinessReport, PreflightCheckKind,
-    RUNTIME_CLIP_PARAMETERS, ReadinessState, ReframeKeyframe, ReframePath, ReframeSmoothing,
-    SegmentationIntent, SegmentationPrompt, SegmentationPromptKind, SegmentationPromptLabel,
-    SegmentationPromptPackage, SegmentationRuntimeStatus, SegmentationSessionOperation,
-    SegmentationSessionOperationKind, SelectDecision, SourceRange, SourceSelect,
-    StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, Stringout, TangentMode,
-    TemplateSlot, TrackingPackage, WorkflowLens,
+    AlignedTranscriptPhrase, AlignedTranscriptWord, AnimationTarget, AssetCatalog, AssetQuery,
+    AssetReadiness, AssetRecord, AssetRole, AudioBus, AudioFinishingState, BezierHandles,
+    CapabilityArea, CapabilityRegistry, CapabilityStatus, ColorFinishingState, CompositionGraph,
+    CompositionNode, CompositionNodeType, DeliveryPreflightInput, DeliveryProfile, ExportMode,
+    ExportOutputSettings, ExportPreset, ExportRange, ExpressionLink, ExpressionSource,
+    ExtrapolationMode, FindingSeverity, GradeStack, GroundingBoxFormat, GroundingDetection,
+    GroundingEvidence, GroundingEvidenceStatus, HardwareAccelerationPolicy, Keyframe,
+    MaskArtifactKind, MaskArtifactProfile, MaskQualityScorecard, MaskReviewDecision, MaskSidecar,
+    MatteGenerationFallback, MatteGenerationOutput, MatteGenerationRecipe, MatteGenerationSettings,
+    MediaIntelligenceAggregateState, MediaIntelligenceAsset, MediaIntelligenceLayer,
+    MediaIntelligenceLayerKind, MediaIntelligenceLayerStatus, MediaIntelligencePackage,
+    MotionGraphicsTemplate, MotionPackage, MotionScene, MotionSceneLayer, MotionSceneLayerKind,
+    MotionSceneTransform, MotionSceneTransformFit, ParameterAnimation, PipelineReadinessReport,
+    PreflightCheckKind, RUNTIME_CLIP_PARAMETERS, ReadinessState, ReframeKeyframe, ReframePath,
+    ReframeSmoothing, SegmentationIntent, SegmentationPrompt, SegmentationPromptKind,
+    SegmentationPromptLabel, SegmentationPromptPackage, SegmentationRuntimeStatus,
+    SegmentationSessionOperation, SegmentationSessionOperationKind, SelectDecision, SourceRange,
+    SourceSelect, StreamExportContract, StreamExportMode, StreamExportSpec, StreamKind, Stringout,
+    TangentMode, TemplateSlot, TrackingPackage, TranscriptAlignmentPackage, TranscriptCorrection,
+    TranscriptCorrectionTarget, TranscriptEditAction, TranscriptEditRecord, WorkflowLens,
 };
 
 #[test]
@@ -277,6 +280,185 @@ fn timeline_metadata_carries_all_professional_substrate_documents() {
             .iter()
             .any(|capability| capability.area == CapabilityArea::CompositionGraph)
     );
+}
+
+#[test]
+fn transcript_alignment_package_round_trips() {
+    let package = TranscriptAlignmentPackage {
+        asset_id: "raw/interview.mov".into(),
+        source_sha256: Some("abc123".into()),
+        words: vec![
+            AlignedTranscriptWord {
+                id: "word:asset:0:1000:1200:hello".into(),
+                original_text: "Hello".into(),
+                corrected_text: Some("hello".into()),
+                range: SourceRange {
+                    start_s: 1.0,
+                    end_s: 1.2,
+                },
+                occurrence: 0,
+                speaker_id: Some("SPEAKER_00".into()),
+                confidence: Some(0.97),
+            },
+            AlignedTranscriptWord {
+                id: "word:asset:1:1250:1450:world".into(),
+                original_text: "world".into(),
+                range: SourceRange {
+                    start_s: 1.25,
+                    end_s: 1.45,
+                },
+                occurrence: 1,
+                speaker_id: Some("SPEAKER_00".into()),
+                confidence: Some(0.95),
+                ..AlignedTranscriptWord::default()
+            },
+        ],
+        phrases: vec![AlignedTranscriptPhrase {
+            id: "phrase:asset:0:1:hello-world".into(),
+            range: SourceRange {
+                start_s: 1.0,
+                end_s: 1.45,
+            },
+            word_ids: vec![
+                "word:asset:0:1000:1200:hello".into(),
+                "word:asset:1:1250:1450:world".into(),
+            ],
+            text: "Hello world".into(),
+            speaker_id: Some("SPEAKER_00".into()),
+        }],
+        corrections: vec![TranscriptCorrection {
+            id: "corr-1".into(),
+            target: TranscriptCorrectionTarget::Word {
+                word_id: "word:asset:0:1000:1200:hello".into(),
+            },
+            corrected_text: "hello".into(),
+            original_text: "Hello".into(),
+            source: "user".into(),
+            corrected_at: "2026-05-25T00:00:00Z".into(),
+        }],
+        edit_log: vec![TranscriptEditRecord {
+            id: "edit-1".into(),
+            correction_id: "corr-1".into(),
+            action: TranscriptEditAction::ApplyCorrection,
+            reverted: false,
+            recorded_at: "2026-05-25T00:00:01Z".into(),
+        }],
+    };
+
+    let json = serde_json::to_string(&package).expect("serialize package");
+    let roundtrip: TranscriptAlignmentPackage =
+        serde_json::from_str(&json).expect("deserialize package");
+
+    assert_eq!(roundtrip.asset_id, "raw/interview.mov");
+    assert_eq!(roundtrip.words[0].corrected_text.as_deref(), Some("hello"));
+    assert_eq!(roundtrip.phrases[0].word_ids.len(), 2);
+    assert_eq!(
+        roundtrip.edit_log[0].action,
+        TranscriptEditAction::ApplyCorrection
+    );
+    assert!(roundtrip.validate().is_empty());
+
+    let metadata = AwidatTimelineMetadata {
+        transcript_alignments: vec![roundtrip],
+        ..AwidatTimelineMetadata::default()
+    };
+    assert!(metadata.validate_professional_substrate().is_empty());
+}
+
+#[test]
+fn media_intelligence_package_round_trips() {
+    let package = MediaIntelligencePackage {
+        assets: vec![MediaIntelligenceAsset {
+            asset_id: "raw/interview.mov".into(),
+            aggregate_state: MediaIntelligenceAggregateState::Partial,
+            recommended_actions: vec![
+                "generate_proxy".into(),
+                "run_start_indexing_with_whisper".into(),
+            ],
+            layers: vec![
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Source,
+                    status: MediaIntelligenceLayerStatus::Ready,
+                    artifact_refs: vec!["raw/interview.mov".into()],
+                    producer: Some("media_files".into()),
+                    stale: false,
+                    blocking_reason: None,
+                    updated_at: Some("2026-05-25T00:00:00Z".into()),
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Proxy,
+                    status: MediaIntelligenceLayerStatus::Pending,
+                    producer: Some("proxy_media".into()),
+                    ..MediaIntelligenceLayer::default()
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Waveform,
+                    status: MediaIntelligenceLayerStatus::Pending,
+                    ..MediaIntelligenceLayer::default()
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Transcript,
+                    status: MediaIntelligenceLayerStatus::Ready,
+                    artifact_refs: vec!["index/whisper/raw/interview.mov.json".into()],
+                    producer: Some("whisper".into()),
+                    ..MediaIntelligenceLayer::default()
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Speakers,
+                    status: MediaIntelligenceLayerStatus::Ready,
+                    artifact_refs: vec!["index/whisper/raw/interview.mov.json".into()],
+                    producer: Some("whisper".into()),
+                    ..MediaIntelligenceLayer::default()
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Scenes,
+                    status: MediaIntelligenceLayerStatus::Pending,
+                    producer: Some("scenedetect".into()),
+                    ..MediaIntelligenceLayer::default()
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Topics,
+                    status: MediaIntelligenceLayerStatus::Pending,
+                    producer: Some("topic".into()),
+                    ..MediaIntelligenceLayer::default()
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Moments,
+                    status: MediaIntelligenceLayerStatus::Pending,
+                    producer: Some("editorial-moments".into()),
+                    ..MediaIntelligenceLayer::default()
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::ClipCandidates,
+                    status: MediaIntelligenceLayerStatus::Pending,
+                    ..MediaIntelligenceLayer::default()
+                },
+                MediaIntelligenceLayer {
+                    kind: MediaIntelligenceLayerKind::Broll,
+                    status: MediaIntelligenceLayerStatus::Pending,
+                    ..MediaIntelligenceLayer::default()
+                },
+            ],
+        }],
+    };
+
+    let json = serde_json::to_string(&package).expect("serialize package");
+    let roundtrip: MediaIntelligencePackage =
+        serde_json::from_str(&json).expect("deserialize package");
+
+    assert_eq!(roundtrip.assets[0].asset_id, "raw/interview.mov");
+    assert_eq!(
+        roundtrip.assets[0].aggregate_state,
+        MediaIntelligenceAggregateState::Partial
+    );
+    assert_eq!(roundtrip.assets[0].layers.len(), 10);
+    assert!(roundtrip.validate().is_empty());
+
+    let metadata = AwidatTimelineMetadata {
+        media_intelligence: Some(roundtrip),
+        ..AwidatTimelineMetadata::default()
+    };
+    assert!(metadata.validate_professional_substrate().is_empty());
 }
 
 #[test]
