@@ -137,7 +137,7 @@ impl ToolHandler for UseGeneratedMediaTool {
                     "requires_disclosure": record.requires_disclosure,
                     "uses_likeness": record.uses_likeness
                 },
-                "next_step": "Hand the edl_fragment to apply_edl to actually place the cutaway."
+                "next_step": "Hand the edl_fragment to apply_edl to place the cutaway, then run view_timeline/podcast_visual_polish and verify this generated asset still matches the resolved transcript anchor before claiming B-roll is done."
             })
             .to_string(),
         ))

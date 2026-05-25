@@ -157,6 +157,7 @@ function SegmentedPlayer({
   const refB = useRef<HTMLVideoElement | null>(null);
   const scrubInputRef = useRef<HTMLInputElement | null>(null);
   const scrubPointerIdRef = useRef<number | null>(null);
+  const resumeAfterScrubRef = useRef(false);
   // The currently-visible slot. The other slot is the preroll.
   const [activeKey, setActiveKey] = useState<"a" | "b">("a");
   // What each slot has loaded. Refs (not state) so the rVFC tick
@@ -574,6 +575,7 @@ function SegmentedPlayer({
 
   function handlePlayFailure(err: unknown, v: HTMLVideoElement) {
     if (isAutoplayBlocked(err)) {
+      setMediaError(null);
       window.setTimeout(() => {
         if (!v.paused) {
           setMediaError(null);
@@ -614,6 +616,12 @@ function SegmentedPlayer({
     if (timelineDurationS <= 0) return;
     scrubInputRef.current = e.currentTarget;
     scrubPointerIdRef.current = e.pointerId;
+    const activeVideo = slotsRef.current[activeKeyRef.current].ref.current;
+    resumeAfterScrubRef.current = Boolean(activeVideo && !activeVideo.paused);
+    if (activeVideo && !activeVideo.paused) {
+      activeVideo.pause();
+      setPlaying(false);
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     seekFromScrubPointer(e.currentTarget, e.clientX);
   }
@@ -631,6 +639,15 @@ function SegmentedPlayer({
     }
     scrubPointerIdRef.current = null;
     scrubInputRef.current = null;
+    if (resumeAfterScrubRef.current) {
+      resumeAfterScrubRef.current = false;
+      const activeVideo = slotsRef.current[activeKeyRef.current].ref.current;
+      if (activeVideo) {
+        activeVideo.play().catch((err) => {
+          handlePlayFailure(err, activeVideo);
+        });
+      }
+    }
   }
 
   useEffect(() => {

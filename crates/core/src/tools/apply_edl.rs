@@ -283,6 +283,20 @@ impl ToolHandler for ApplyEdlTool {
             summary.push_str("\nmetadata: ");
             summary.push_str(&json);
         }
+        if !args.dry_run
+            && outcome
+                .applied
+                .iter()
+                .any(|op| op.metadata.kind == "insert_b_roll")
+        {
+            summary.push_str(
+                "\n\nRequired B-roll verification before claiming B-roll is done: run \
+                 view_timeline and podcast_visual_polish after this apply_edl result; \
+                 verify each inserted b-roll asset matches its transcript anchor, verify \
+                 overlays are not accidentally clustered from append placement, and list \
+                 any skipped or failed stock/generated candidates explicitly.",
+            );
+        }
         if !args.dry_run && crate::tools::podcast_qc_report::is_podcast_project(&project) {
             summary.push_str(
                 "\n\nRequired podcast follow-up before claiming done or rendering: run \
@@ -984,6 +998,29 @@ mod tests {
         assert!(out.content.contains("podcast_audio_polish"));
         assert!(out.content.contains("podcast_visual_polish"));
         assert!(out.content.contains("podcast_qc_report"));
+    }
+
+    #[tokio::test]
+    async fn broll_apply_output_requires_broll_verification() {
+        let dir = project_with_three_clips();
+        let edl = "\
+*** Begin EDL
+*** Insert BRoll
+@@ anchor: transcript_snippet=\"bravo\"
++ asset: raw/broll.mp4
++ duration_s: 2.0
++ position: overlay
+*** End EDL
+";
+        let out = ApplyEdlTool
+            .handle(invoke(serde_json::json!({"edl": edl})), ctx_at(dir.path()))
+            .await
+            .unwrap();
+
+        assert!(out.content.contains("Required B-roll verification"));
+        assert!(out.content.contains("view_timeline"));
+        assert!(out.content.contains("podcast_visual_polish"));
+        assert!(out.content.contains("not accidentally clustered"));
     }
 
     #[tokio::test]

@@ -6218,65 +6218,70 @@ fn apply_insert_broll(
             ))
         }
         super::op::BRollPosition::Overlay => {
-            // Find an overlay-target video track. v1: any video track
-            // that isn't the anchor's track. If none, create a fresh
-            // one named V<N+1> where N is the highest existing
-            // V-prefixed track number (or fall back to "V2").
-            let target_idx =
-                working
-                    .tracks
-                    .children
-                    .iter()
-                    .enumerate()
-                    .find_map(|(i, sc)| match sc {
-                        StackChild::Track(t)
-                            if matches!(t.kind, TrackKind::Video) && i != locator.track_index =>
-                        {
-                            Some(i)
-                        }
-                        _ => None,
-                    });
-
-            let target_idx = match target_idx {
-                Some(i) => i,
-                None => {
-                    let next_name = next_video_track_name(working);
-                    let track = Track::empty(next_name, TrackKind::Video);
-                    working.tracks.children.push(StackChild::Track(track));
-                    working.tracks.children.len() - 1
-                }
-            };
-
             // Anchor's track-time = sum of preceding child durations.
             // We need this so the agent can place the overlay
             // correctly even when the lower track has lots of
-            // earlier clips. v1 implementation: append at the end of
-            // the overlay track if its current duration is at-or-past
-            // the anchor's track-time; otherwise pad with a Gap.
+            // earlier clips. Insert into a free gap at that exact
+            // time; if every existing overlay track is occupied
+            // there, create another overlay track instead of
+            // appending to the end and silently moving the b-roll.
             let anchor_track_time =
                 track_time_at(working, locator.track_index, locator.child_index);
-            let StackChild::Track(target) = &mut working.tracks.children[target_idx] else {
-                return Err(ApplyError::Invalid {
-                    index,
-                    message: "broll: overlay target resolved to a non-track stack child".into(),
-                });
-            };
-            let target_cursor = track_cursor(target);
-            if target_cursor < anchor_track_time {
-                // Pad with a Gap so the broll lines up under the
-                // anchor on the lower track.
-                let gap_dur = anchor_track_time - target_cursor;
-                target
-                    .children
-                    .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
-                        gap_dur, rate,
-                    )));
+
+            let mut broll = Some(broll);
+            let mut target_name = None;
+            for track_idx in 0..working.tracks.children.len() {
+                if track_idx == locator.track_index {
+                    continue;
+                }
+                let StackChild::Track(target) = &mut working.tracks.children[track_idx] else {
+                    continue;
+                };
+                if !matches!(target.kind, TrackKind::Video) {
+                    continue;
+                }
+                let clip = broll.take().expect("broll clip available");
+                match insert_overlay_clip_at(
+                    target,
+                    TrackChild::Clip(clip),
+                    anchor_track_time,
+                    duration_s,
+                    rate,
+                ) {
+                    Ok(()) => {
+                        target_name = Some(target.name.clone());
+                        break;
+                    }
+                    Err(clip) => {
+                        let TrackChild::Clip(clip) = clip else {
+                            unreachable!("insert_overlay_clip_at returned non-clip")
+                        };
+                        broll = Some(clip);
+                    }
+                }
             }
-            target.children.push(TrackChild::Clip(broll));
+            if target_name.is_none() {
+                let next_name = next_video_track_name(working);
+                let mut track = Track::empty(next_name.clone(), TrackKind::Video);
+                let clip = broll.take().expect("broll clip available");
+                insert_overlay_clip_at(
+                    &mut track,
+                    TrackChild::Clip(clip),
+                    anchor_track_time,
+                    duration_s,
+                    rate,
+                )
+                .map_err(|_| ApplyError::Invalid {
+                    index,
+                    message: "broll: failed to insert on fresh overlay track".into(),
+                })?;
+                working.tracks.children.push(StackChild::Track(track));
+                target_name = Some(next_name);
+            }
             Ok(format!(
                 "inserted b-roll over {anchor_name:?} on overlay track {}: \
                  asset={asset:?} duration={duration_s:.3}s (overlay)",
-                target.name,
+                target_name.unwrap_or_else(|| "V?".into()),
             ))
         }
     }
@@ -8909,6 +8914,62 @@ fn track_cursor(track: &awidat_proto::otio::Track) -> f64 {
     track.children.iter().map(child_duration).sum()
 }
 
+fn insert_overlay_clip_at(
+    track: &mut awidat_proto::otio::Track,
+    clip: TrackChild,
+    start_s: f64,
+    duration_s: f64,
+    rate: f64,
+) -> Result<(), TrackChild> {
+    let cursor = track_cursor(track);
+    if cursor <= start_s + 1e-6 {
+        if start_s > cursor + 1e-6 {
+            track
+                .children
+                .push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    start_s - cursor,
+                    rate,
+                )));
+        }
+        track.children.push(clip);
+        return Ok(());
+    }
+
+    let mut t = 0.0;
+    for idx in 0..track.children.len() {
+        let child_dur = child_duration(&track.children[idx]);
+        let child_start = t;
+        let child_end = t + child_dur;
+        if start_s >= child_start - 1e-6 && start_s + duration_s <= child_end + 1e-6 {
+            if !matches!(track.children[idx], TrackChild::Gap(_)) {
+                return Err(clip);
+            }
+            let before = (start_s - child_start).max(0.0);
+            let after = (child_end - start_s - duration_s).max(0.0);
+            let mut replacement = Vec::new();
+            if before > 1e-6 {
+                replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    before, rate,
+                )));
+            }
+            replacement.push(clip);
+            if after > 1e-6 {
+                replacement.push(TrackChild::Gap(awidat_proto::otio::Gap::of_duration(
+                    after, rate,
+                )));
+            }
+            track.children.splice(idx..=idx, replacement);
+            return Ok(());
+        }
+        if start_s < child_end - 1e-6 {
+            return Err(clip);
+        }
+        t = child_end;
+    }
+
+    Err(clip)
+}
+
 fn child_duration(child: &TrackChild) -> f64 {
     match child {
         TrackChild::Clip(c) => c
@@ -11086,6 +11147,49 @@ mod tests {
             panic!("expected broll at v2 idx 1")
         };
         assert!(broll.name.starts_with("broll-from-clip-1"));
+    }
+
+    #[test]
+    fn apply_insert_broll_overlay_inserts_into_existing_gap_instead_of_appending() {
+        let tl = timeline_with_three_clips();
+        let env = EdlEnvelope {
+            ops: vec![
+                EdlOp::InsertBRoll {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "charlie snippet".into(),
+                    },
+                    asset: "raw/charlie-broll.mp4".into(),
+                    duration_s: 1.0,
+                    position: super::super::op::BRollPosition::Overlay,
+                },
+                EdlOp::InsertBRoll {
+                    anchor: Anchor::TranscriptSnippet {
+                        text: "bravo snippet".into(),
+                    },
+                    asset: "raw/bravo-broll.mp4".into(),
+                    duration_s: 1.0,
+                    position: super::super::op::BRollPosition::Overlay,
+                },
+            ],
+        };
+        let (new_tl, _) = apply(&tl, &env, &AnchorContext::empty()).unwrap();
+        let StackChild::Track(v2) = &new_tl.tracks.children[1] else {
+            panic!()
+        };
+        assert_eq!(v2.name, "V2");
+        assert_eq!(v2.children.len(), 4);
+        assert!(
+            matches!(&v2.children[0], TrackChild::Gap(g) if (g.source_range.duration.to_seconds() - 5.0).abs() < 1e-9)
+        );
+        assert!(
+            matches!(&v2.children[1], TrackChild::Clip(c) if matches!(&c.media_reference, MediaReference::External(r) if r.target_url == "raw/bravo-broll.mp4"))
+        );
+        assert!(
+            matches!(&v2.children[2], TrackChild::Gap(g) if (g.source_range.duration.to_seconds() - 4.0).abs() < 1e-9)
+        );
+        assert!(
+            matches!(&v2.children[3], TrackChild::Clip(c) if matches!(&c.media_reference, MediaReference::External(r) if r.target_url == "raw/charlie-broll.mp4"))
+        );
     }
 
     #[test]

@@ -198,6 +198,7 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
   const lastPushedViewRef = useRef<string>("");
   const scrubInputRef = useRef<HTMLInputElement | null>(null);
   const scrubPointerIdRef = useRef<number | null>(null);
+  const resumeAfterScrubRef = useRef(false);
 
   // External seek requests (from timeline canvas click/drag) drive
   // the video element imperatively. We watch seekRequestId rather
@@ -275,6 +276,7 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
 
   function handlePlayFailure(err: unknown, v: HTMLVideoElement) {
     if (isAutoplayBlocked(err)) {
+      setMediaError(null);
       window.setTimeout(() => {
         if (!v.paused) {
           setMediaError(null);
@@ -324,8 +326,14 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
 
   function onScrubPointerDown(e: React.PointerEvent<HTMLInputElement>) {
     if (durationS <= 0) return;
+    const v = videoRef.current;
     scrubInputRef.current = e.currentTarget;
     scrubPointerIdRef.current = e.pointerId;
+    resumeAfterScrubRef.current = Boolean(v && !v.paused);
+    if (v && !v.paused) {
+      v.pause();
+      setPlaying(false);
+    }
     e.currentTarget.setPointerCapture(e.pointerId);
     seekFromScrubPointer(e.currentTarget, e.clientX);
   }
@@ -343,6 +351,15 @@ function VideoView({ src, stem }: { src: string; stem: string }) {
     }
     scrubPointerIdRef.current = null;
     scrubInputRef.current = null;
+    if (resumeAfterScrubRef.current) {
+      resumeAfterScrubRef.current = false;
+      const v = videoRef.current;
+      if (v) {
+        v.play().catch((err) => {
+          handlePlayFailure(err, v);
+        });
+      }
+    }
   }
 
   useEffect(() => {
