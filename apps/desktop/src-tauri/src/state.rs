@@ -1,7 +1,7 @@
 //! Tauri-managed app state. One instance per running app, threaded
 //! into every command via `State<'_, AwidatState>`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -52,6 +52,11 @@ pub struct AwidatState {
     /// commands in the next commit.
     #[allow(dead_code)]
     pub jobs: Mutex<HashMap<String, JobHandle>>,
+    /// Proxy output paths currently owned by an active ffmpeg writer.
+    /// Project-load backfill and UI-triggered backfill can overlap, so
+    /// proxy generation needs a per-artifact gate rather than relying
+    /// on job-card state that arrives asynchronously in the frontend.
+    pub active_proxy_transcodes: Mutex<HashSet<PathBuf>>,
     /// Latest media-pane state pushed by the frontend: which proxy
     /// is loaded and where the user has the playhead. Prefixed onto
     /// `start_turn` user input so the agent knows what's on screen.

@@ -137,11 +137,12 @@ pub async fn transcode_project_proxies(
             }
         }
         let proxy_path = proxy_path_for(&proxies_dir, &asset);
-        if proxy_is_fresh(&asset, &proxy_path) {
+        if proxy_is_ready(&asset, &proxy_path).await {
             continue;
         }
-        transcode_one(&app, &state, &asset, &proxy_path).await?;
-        generated += 1;
+        if transcode_one(&app, &state, &asset, &proxy_path).await? {
+            generated += 1;
+        }
     }
     Ok(generated)
 }
@@ -475,18 +476,43 @@ pub async fn transcode_single_asset_in_project(
         Ok(_) => return Ok(None),
         Err(e) => return Err(format!("probe for transcode: {e}")),
     }
-    if proxy_is_fresh(asset_path, &proxy_path) {
+    if proxy_is_ready(asset_path, &proxy_path).await {
         return Ok(Some(proxy_path));
     }
-    transcode_one(app, state, asset_path, &proxy_path).await?;
+    let generated = transcode_one(app, state, asset_path, &proxy_path).await?;
     // Newly-finished proxy: tell the frontend so the playable URL
     // swaps from source to proxy mid-playback.
-    crate::events::emit_timeline_changed(app, project_root);
+    if generated {
+        crate::events::emit_timeline_changed(app, project_root);
+    }
     Ok(Some(proxy_path))
 }
 
 /// Run one ffmpeg transcode end-to-end with a live job card.
 async fn transcode_one(
+    app: &AppHandle,
+    state: &State<'_, AwidatState>,
+    asset: &Path,
+    proxy_path: &Path,
+) -> Result<bool, String> {
+    let proxy_key = proxy_path.to_path_buf();
+    if !reserve_proxy_transcode(state, &proxy_key).await {
+        tracing::debug!(
+            asset = %asset.display(),
+            proxy = %proxy_path.display(),
+            "proxy transcode already in flight; joining existing writer by skipping duplicate",
+        );
+        return Ok(false);
+    }
+
+    let result = transcode_one_reserved(app, state, asset, proxy_path)
+        .await
+        .map(|()| true);
+    release_proxy_transcode(state, &proxy_key).await;
+    result
+}
+
+async fn transcode_one_reserved(
     app: &AppHandle,
     state: &State<'_, AwidatState>,
     asset: &Path,
@@ -585,6 +611,22 @@ async fn transcode_one(
     }
 }
 
+async fn reserve_proxy_transcode(state: &AwidatState, proxy_path: &Path) -> bool {
+    state
+        .active_proxy_transcodes
+        .lock()
+        .await
+        .insert(proxy_path.to_path_buf())
+}
+
+async fn release_proxy_transcode(state: &AwidatState, proxy_path: &Path) {
+    state
+        .active_proxy_transcodes
+        .lock()
+        .await
+        .remove(proxy_path);
+}
+
 /// True iff `proxy` exists and its mtime is at-or-after `asset`'s.
 /// Inversely: false on missing-proxy OR stale-proxy.
 pub(crate) fn proxy_is_fresh(asset: &Path, proxy: &Path) -> bool {
@@ -600,6 +642,15 @@ pub(crate) fn proxy_is_fresh(asset: &Path, proxy: &Path) -> bool {
         return false;
     };
     proxy_mtime >= asset_mtime
+}
+
+async fn proxy_is_ready(asset: &Path, proxy: &Path) -> bool {
+    if !proxy_is_fresh(asset, proxy) {
+        return false;
+    }
+    awidat_render::probe_media(proxy)
+        .await
+        .is_ok_and(|probe| probe.has_video && probe.duration_s.is_some())
 }
 
 fn proxy_pending_path(proxy_path: &Path) -> PathBuf {
@@ -966,6 +1017,29 @@ mod tests {
         assert!(!orphan_old_schema.exists(), "orphan should be removed");
         assert!(current_proxy.exists(), "stale-by-mtime proxy must be kept");
         assert!(pending_inflight.exists(), "in-flight pending must be kept");
+    }
+
+    #[tokio::test]
+    async fn proxy_transcode_reservation_is_per_output_path() {
+        let state = AwidatState::default();
+        let first = PathBuf::from("/tmp/project/.awidat/proxies/a.mp4");
+        let second = PathBuf::from("/tmp/project/.awidat/proxies/b.mp4");
+
+        assert!(reserve_proxy_transcode(&state, &first).await);
+        assert!(
+            !reserve_proxy_transcode(&state, &first).await,
+            "same proxy path must have only one active writer",
+        );
+        assert!(
+            reserve_proxy_transcode(&state, &second).await,
+            "different proxy paths can transcode concurrently",
+        );
+
+        release_proxy_transcode(&state, &first).await;
+        assert!(
+            reserve_proxy_transcode(&state, &first).await,
+            "released proxy path can be reserved again",
+        );
     }
 
     #[test]

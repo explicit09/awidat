@@ -1278,6 +1278,15 @@ function App() {
             detail: "Transcript sidecar loaded",
           };
         }
+        if (indexReadiness?.transcripts) {
+          return {
+            id: "real-transcripts",
+            kind,
+            status: "indexed" as const,
+            progress: 100,
+            detail: "Found local transcript output",
+          };
+        }
         if (globalIndexJob) {
           return {
             id: "real-transcripts",

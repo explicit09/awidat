@@ -25,12 +25,12 @@
 //
 // Architecture:
 //
-//   timelineTime  ── store ──→  active segment ── this view ──→  active video
-//                                       ↑                             │
-//                                       └──── rVFC tick ──────────────┘
+//   monotonic timeline clock ──→ timelineTime ──→ active segment ──→ media
 //
-// Boundary detection is requestVideoFrameCallback (Step 9.4) when
-// available; timeupdate fallback otherwise.
+// Media elements are adapters. They follow timeline time and are only
+// hard-sought on external seeks, segment entry, pause, or large drift.
+// This avoids the seek/stall/drift loop caused by using playing video
+// elements as the master clock.
 
 import {
   useEffect,
@@ -57,8 +57,6 @@ import { clampOpacity, evaluateAnimations } from "../timeline/animation";
 import { videoOverlayStyle as buildVideoOverlayStyle } from "./videoOverlayStyle";
 import {
   findActiveSegment,
-  findNextSegmentAfter,
-  shouldAutoAdvanceTimelineGap,
   type PreviewTransition,
   type PlaySegment,
   usePreviewDuration,
@@ -135,6 +133,42 @@ type Slot = {
   segIdx: number;
 };
 
+type PreviewClock = {
+  baseTime: number;
+  playStartMs: number | null;
+  rate: number;
+  duration: number;
+};
+
+function safePlaybackRate(rate: number): number {
+  return Number.isFinite(rate) && rate > 0 ? Math.max(0.1, Math.min(5, rate)) : 1;
+}
+
+function previewClockNow(clock: PreviewClock): number {
+  if (clock.playStartMs === null) return clock.baseTime;
+  const elapsedS = ((performance.now() - clock.playStartMs) / 1000) * clock.rate;
+  const next = Math.max(0, clock.baseTime + elapsedS);
+  return clock.duration > 0 ? Math.min(next, clock.duration) : next;
+}
+
+function previewClockSeek(clock: PreviewClock, timeS: number) {
+  const clamped = clock.duration > 0 ? Math.min(timeS, clock.duration) : timeS;
+  clock.baseTime = Math.max(0, Number.isFinite(clamped) ? clamped : 0);
+  if (clock.playStartMs !== null) clock.playStartMs = performance.now();
+}
+
+function previewClockPlay(clock: PreviewClock) {
+  if (clock.playStartMs !== null) return;
+  if (clock.duration > 0 && clock.baseTime >= clock.duration) return;
+  clock.playStartMs = performance.now();
+}
+
+function previewClockPause(clock: PreviewClock) {
+  if (clock.playStartMs === null) return;
+  clock.baseTime = previewClockNow(clock);
+  clock.playStartMs = null;
+}
+
 function SegmentedPlayer({
   segments,
   chrome,
@@ -156,14 +190,6 @@ function SegmentedPlayer({
   );
   const refA = useRef<HTMLVideoElement | null>(null);
   const refB = useRef<HTMLVideoElement | null>(null);
-  const scrubInputRef = useRef<HTMLInputElement | null>(null);
-  const scrubPointerIdRef = useRef<number | null>(null);
-  const resumeAfterScrubRef = useRef(false);
-  const internalPauseRef = useRef<WeakSet<HTMLVideoElement>>(new WeakSet());
-  const gapClockRef = useRef<{ frame: number | null; lastMs: number | null }>({
-    frame: null,
-    lastMs: null,
-  });
   // The currently-visible slot. The other slot is the preroll.
   const [activeKey, setActiveKey] = useState<"a" | "b">("a");
   const [previewGap, setPreviewGap] = useState(false);
@@ -173,7 +199,6 @@ function SegmentedPlayer({
     a: { ref: refA, segIdx: -1 },
     b: { ref: refB, segIdx: -1 },
   });
-
   const timelineTime = useMediaStore((s) => s.timelineTime);
   const timelineDurationS = useMediaStore((s) => s.timelineDurationS);
   const isPlaying = useMediaStore((s) => s.isPlaying);
@@ -184,6 +209,14 @@ function SegmentedPlayer({
   const mediaError = useMediaStore((s) => s.mediaError);
   const setMediaError = useMediaStore((s) => s.setMediaError);
   const requestTimelineSeek = useMediaStore((s) => s.requestTimelineSeek);
+  const clockRef = useRef<PreviewClock>({
+    baseTime: timelineTime,
+    playStartMs: null,
+    rate,
+    duration: timelineDurationS,
+  });
+  const forceMediaSyncRef = useRef(true);
+  const lastSeekRequestRef = useRef(seekRequestId);
   // Subscribe to the snapshot itself (Zustand caches the reference)
   // and derive the overlay list with useMemo. The previous shape
   // returned a fresh array from inside the selector on every render,
@@ -253,122 +286,105 @@ function SegmentedPlayer({
   useEffect(() => {
     slotsRef.current.a.segIdx = -1;
     slotsRef.current.b.segIdx = -1;
+    forceMediaSyncRef.current = true;
   }, [segments]);
 
-  // Resync effect — single source of truth for "which slot is
-  // active, what segment is it loaded with, where is it parked."
-  //
-  // Driven by `timelineTime` (the canonical clock). Whenever the
-  // playhead moves — by rVFC progress, gap-clock progress, external
-  // seek, or segments-identity change — this effect decides:
-  //
-  //   1. What segment owns `timelineTime` (or which gap we're in).
-  //   2. Whether the active slot already has that segment loaded.
-  //      If not, but the preroll slot does → swap activeKey.
-  //      Otherwise load the active slot fresh.
-  //   3. Align the active slot's currentTime to the corresponding
-  //      source-time. Threshold ~50ms to avoid stutter from rVFC
-  //      writes that didn't change anything.
-  //   4. Preroll the next segment into the inactive slot.
-  //
-  // Critically: this is the ONLY place activeKey changes, the ONLY
-  // place slot.segIdx is mutated, and the ONLY place currentTime is
-  // written outside scrub. The rVFC tick is a progress signal — it
-  // does NOT swap slots, set activeKey, or touch the inactive slot.
   useEffect(() => {
-    const segIdx = findActiveSegment(segments, timelineTime);
+    const clock = clockRef.current;
+    clock.duration = timelineDurationS;
+    if (clock.baseTime > timelineDurationS && timelineDurationS > 0) {
+      clock.baseTime = timelineDurationS;
+    }
+  }, [timelineDurationS]);
 
-    if (segIdx < 0) {
-      // In a gap, before first segment, or past the last.
-      const nextIdx = findNextSegmentAfter(segments, timelineTime);
-      const activeKeyNow = activeKeyRef.current;
-      const active = slotsRef.current[activeKeyNow];
-      const v = active.ref.current;
-      if (!v) return;
+  useEffect(() => {
+    const clock = clockRef.current;
+    clock.baseTime = previewClockNow(clock);
+    clock.playStartMs = clock.playStartMs === null ? null : performance.now();
+    clock.rate = safePlaybackRate(rate);
+  }, [rate]);
 
-      if (nextIdx >= 0) {
-        const next = segments[nextIdx];
-        if (!shouldAutoAdvanceTimelineGap(timelineTime, next.timelineStart)) {
-          // Real gap. Park the active slot, show the gap overlay.
-          // The gap clock effect will inch timelineTime forward.
-          setPreviewGap(true);
-          active.segIdx = -1;
-          if (!v.paused) pauseWithoutClearingIntent(v);
-          return;
-        }
-        // Micro-gap (e.g. 1-frame rounding): snap forward.
-        requestTimelineSeek(next.timelineStart);
+  useEffect(() => {
+    if (lastSeekRequestRef.current === seekRequestId) return;
+    lastSeekRequestRef.current = seekRequestId;
+    previewClockSeek(clockRef.current, seekTargetS);
+    forceMediaSyncRef.current = true;
+  }, [seekRequestId, seekTargetS]);
+
+  useEffect(() => {
+    if (isPlaying) {
+      previewClockPlay(clockRef.current);
+      return;
+    }
+    previewClockPause(clockRef.current);
+    forceMediaSyncRef.current = true;
+    pauseSlot(slotsRef.current.a);
+    pauseSlot(slotsRef.current.b);
+  }, [isPlaying]);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    let frame = 0;
+    const tick = () => {
+      const next = previewClockNow(clockRef.current);
+      setTimelineTime(next);
+      if (timelineDurationS > 0 && next >= timelineDurationS) {
+        setPlaying(false);
         return;
       }
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [isPlaying, setPlaying, setTimelineTime, timelineDurationS]);
 
-      // True end of timeline → pause + park at last frame.
-      if (segments.length > 0) {
-        const last = segments.length - 1;
-        ensureSlotLoaded(active, segments[last]);
-        active.segIdx = last;
-        v.currentTime = segments[last].sourceEnd;
-      }
-      setPreviewGap(false);
-      v.pause();
+  // The timeline clock is authoritative. This effect maps the current
+  // timeline time to one media slot and only seeks the element on real
+  // discontinuities: external seek, segment entry, pause, or large drift.
+  useEffect(() => {
+    const segIdx = findActiveSegment(segments, timelineTime);
+    if (segIdx < 0) {
+      setPreviewGap(true);
+      pauseSlot(slotsRef.current.a);
+      pauseSlot(slotsRef.current.b);
       return;
     }
-
-    // Inside a real segment. Decide which slot should be active.
     setPreviewGap(false);
     const seg = segments[segIdx];
-    const activeKeyNow = activeKeyRef.current;
+    let activeKeyNow = activeKeyRef.current;
+    let active = slotsRef.current[activeKeyNow];
     const inactiveKeyNow: "a" | "b" = activeKeyNow === "a" ? "b" : "a";
-    const active = slotsRef.current[activeKeyNow];
     const inactive = slotsRef.current[inactiveKeyNow];
+    let enteredSegment = false;
 
-    if (active.segIdx === segIdx) {
-      // Active slot already owns this segment. Just align.
-      const v = active.ref.current;
-      if (!v) return;
-      applySegmentPlaybackSettings(v, seg);
-      alignCurrentTime(v, seg, timelineTime);
-      playActiveSlotIfNeeded(active);
-      primePreroll(segIdx);
-      return;
+    if (active.segIdx !== segIdx) {
+      if (inactive.segIdx === segIdx) {
+        pauseSlot(active);
+        activeKeyNow = inactiveKeyNow;
+        activeKeyRef.current = activeKeyNow;
+        setActiveKey(activeKeyNow);
+        active = inactive;
+      } else {
+        ensureSlotLoaded(active, seg);
+        active.segIdx = segIdx;
+      }
+      enteredSegment = true;
     }
-
-    if (inactive.segIdx === segIdx && inactive.ref.current) {
-      // The preroll slot has been holding this segment. Swap roles —
-      // this is the fast path at a boundary cross.
-      const oldV = active.ref.current;
-      if (oldV && !oldV.paused) pauseWithoutClearingIntent(oldV);
-      const newV = inactive.ref.current;
-      applySegmentPlaybackSettings(newV, seg);
-      alignCurrentTime(newV, seg, timelineTime);
-      setActiveKey(inactiveKeyNow);
-      activeKeyRef.current = inactiveKeyNow;
-      playActiveSlotIfNeeded(inactive);
-      primePreroll(segIdx);
-      return;
-    }
-
-    // Neither slot has it (initial load, big external seek, or
-    // segments array changed under us). Load the active slot fresh.
     const v = active.ref.current;
     if (!v) return;
-    ensureSlotLoaded(active, seg);
-    active.segIdx = segIdx;
     applySegmentPlaybackSettings(v, seg);
-    alignCurrentTime(v, seg, timelineTime);
+    syncVideoToTimeline(v, seg, timelineTime, {
+      force: forceMediaSyncRef.current || enteredSegment || !isPlaying,
+    });
+    forceMediaSyncRef.current = false;
+    if (isPlaying) {
+      playSlot(active);
+    } else {
+      pauseSlot(active);
+    }
     primePreroll(segIdx);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [segments, timelineTime, seekRequestId, seekTargetS]);
-
-  function alignCurrentTime(
-    v: HTMLVideoElement,
-    seg: PlaySegment,
-    tlTime: number,
-  ) {
-    const desired = seg.sourceStart + (tlTime - seg.timelineStart);
-    if (Math.abs(v.currentTime - desired) > 0.05) {
-      tryAssignCurrentTime(v, desired);
-    }
-  }
+  }, [segments, timelineTime, seekRequestId, seekTargetS, isPlaying]);
 
   // Set src + park at sourceStart for a slot. Idempotent — if the
   // slot already has the right src loaded, we skip the assignment
@@ -406,11 +422,21 @@ function SegmentedPlayer({
   function playActiveSlotIfNeeded(slot: Slot) {
     if (slot !== slotsRef.current[activeKeyRef.current]) return;
     if (!useMediaStore.getState().isPlaying) return;
+    playSlot(slot);
+  }
+
+  function playSlot(slot: Slot) {
     const v = slot.ref.current;
     if (!v || !v.paused) return;
     v.play().catch((err) => {
-      handlePlayFailure(err, v);
+      setMediaError(`Playback failed: ${String(err)}`);
+      setPlaying(false);
     });
+  }
+
+  function pauseSlot(slot: Slot) {
+    const v = slot.ref.current;
+    if (v && !v.paused) v.pause();
   }
 
   // Prime the inactive slot with the segment AFTER `currentSegIdx`
@@ -439,101 +465,7 @@ function SegmentedPlayer({
       inactive.segIdx = nextIdx;
       applySegmentPlaybackSettings(v, next);
     }
-    if (!v.paused) pauseWithoutClearingIntent(v);
-  }
-
-  // Progress signal — translates the active slot's video clock into
-  // `timelineTime`. Pure write: no slot swaps, no activeKey changes,
-  // no inactive-slot touching. The resync effect above owns boundary
-  // crosses by observing `timelineTime >= seg.timelineEnd`.
-  //
-  // `slotKey` is captured by the caller (rVFC effect or timeupdate
-  // handler), not read from `activeKeyRef`. That's the race fix: if
-  // a stale rVFC fires after activeKey flipped, slotKey still points
-  // at the OLD slot, and the guard below bails. Reading
-  // `activeKeyRef.current` here would let stale ticks translate the
-  // OLD video's currentTime against the NEW segment's sourceStart
-  // and yank `timelineTime` backwards by tens of seconds (the
-  // symptom that triggered this rewrite).
-  function advanceTimelineFromVideo(slotKey: "a" | "b", vTime: number) {
-    if (slotKey !== activeKeyRef.current) return;
-    const slot = slotsRef.current[slotKey];
-    const segIdx = slot.segIdx;
-    const segs = segmentsRef.current;
-    if (segIdx < 0 || segIdx >= segs.length) return;
-    const seg = segs[segIdx];
-    // Guard against the decoder reporting a time outside this
-    // segment's source window (mid-seek, late callback after a
-    // boundary write). Bailing prevents one stale frame from
-    // translating into a bogus timelineTime.
-    if (vTime < seg.sourceStart - 0.05) return;
-    if (vTime >= seg.sourceEnd - 0.001) {
-      // Hit the end of this segment. Park the video at sourceEnd
-      // (its next frame would be past our slice) and push
-      // timelineTime to the boundary. The resync effect then
-      // either (a) finds the preroll slot already holding the next
-      // segment and swaps activeKey, (b) snaps timelineTime
-      // forward across a micro-gap, or (c) parks the player at
-      // end-of-timeline. The tick stays out of all three paths.
-      const v = slot.ref.current;
-      if (v && !v.paused) pauseWithoutClearingIntent(v);
-      setTimelineTime(seg.timelineEnd);
-      return;
-    }
-    setTimelineTime(seg.timelineStart + (vTime - seg.sourceStart));
-  }
-
-  // Mount rVFC on the active slot. Re-mounts when activeKey flips
-  // so we always observe the playing video. The slotKey is captured
-  // in the closure so a stale callback can't write the wrong slot.
-  useEffect(() => {
-    const slotKey = activeKey;
-    const v = slotsRef.current[slotKey].ref.current;
-    if (!v) return;
-    type RVFCMetadata = { mediaTime: number };
-    type RVFCVideo = HTMLVideoElement & {
-      requestVideoFrameCallback?: (
-        cb: (now: number, metadata: RVFCMetadata) => void,
-      ) => number;
-      cancelVideoFrameCallback?: (id: number) => void;
-    };
-    const rvfcVideo = v as RVFCVideo;
-    if (typeof rvfcVideo.requestVideoFrameCallback !== "function") {
-      // Fallback: timeupdate handler runs unmodified.
-      return;
-    }
-    let cancelled = false;
-    let handle = 0;
-    // Bind requestVideoFrameCallback to `rvfcVideo` — WebKit (and the
-    // spec) requires the receiver to be an HTMLVideoElement. Unbound
-    // `next(tick)` throws "Can only call ... on instances of
-    // HTMLVideoElement" and kills the only progress signal that
-    // advances `timelineTime`, which manifests as the preview
-    // starting, freezing on the first frame, falling back to
-    // `timeupdate`, then stuttering.
-    const requestFrame = rvfcVideo.requestVideoFrameCallback.bind(rvfcVideo);
-    const cancelFrame = rvfcVideo.cancelVideoFrameCallback?.bind(rvfcVideo);
-    const tick = (_now: number, metadata: RVFCMetadata) => {
-      if (cancelled) return;
-      advanceTimelineFromVideo(slotKey, metadata.mediaTime);
-      handle = requestFrame(tick);
-    };
-    handle = requestFrame(tick);
-    return () => {
-      cancelled = true;
-      cancelFrame?.(handle);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey]);
-
-  // timeupdate fallback. Same delta-only semantics as rVFC; the
-  // slotKey is bound by which <video> element fired the event (the
-  // active one — onTimeUpdate is only wired when activeKey matches).
-  function onTimeUpdate(
-    slotKey: "a" | "b",
-    e: React.SyntheticEvent<HTMLVideoElement>,
-  ) {
-    advanceTimelineFromVideo(slotKey, e.currentTarget.currentTime);
+    if (!v.paused) v.pause();
   }
 
   function alignSlotAfterLoad(key: "a" | "b") {
@@ -590,97 +522,29 @@ function SegmentedPlayer({
   }, []);
 
   function togglePlay() {
-    if (previewGap) {
-      setPlaying(!useMediaStore.getState().isPlaying);
-      return;
-    }
-    const v = slotsRef.current[activeKeyRef.current].ref.current;
-    if (!v) return;
-    if (v.paused) {
-      v.play().catch((err) => {
-        handlePlayFailure(err, v);
-      });
+    if (isPlaying) {
+      setPlaying(false);
     } else {
-      v.pause();
+      if (timelineDurationS > 0 && timelineTime >= timelineDurationS) {
+        requestTimelineSeek(0);
+        previewClockSeek(clockRef.current, 0);
+      }
+      setPlaying(true);
     }
-  }
-
-  function pauseWithoutClearingIntent(v: HTMLVideoElement) {
-    internalPauseRef.current.add(v);
-    v.pause();
-    window.setTimeout(() => {
-      internalPauseRef.current.delete(v);
-    }, 500);
-  }
-
-  function handleActivePause(v: HTMLVideoElement) {
-    if (internalPauseRef.current.has(v)) {
-      internalPauseRef.current.delete(v);
-      return;
-    }
-    setPlaying(false);
   }
 
   useEffect(() => {
     const v = slotsRef.current[activeKeyRef.current].ref.current;
     if (!v) return;
-    if (previewGap) {
-      if (!v.paused) pauseWithoutClearingIntent(v);
-      return;
-    }
     if (isPlaying && v.paused) {
       v.play().catch((err) => {
-        handlePlayFailure(err, v);
+        setMediaError(`Playback failed: ${String(err)}`);
+        setPlaying(false);
       });
     } else if (!isPlaying && !v.paused) {
       v.pause();
     }
-  }, [activeKey, isPlaying, previewGap, setMediaError, setPlaying]);
-
-  useEffect(() => {
-    if (!previewGap || !isPlaying) {
-      stopGapClock();
-      return;
-    }
-    gapClockRef.current.lastMs = null;
-    const tick = (nowMs: number) => {
-      const clock = gapClockRef.current;
-      const lastMs = clock.lastMs ?? nowMs;
-      clock.lastMs = nowMs;
-      const deltaS = Math.max(0, ((nowMs - lastMs) / 1000) * rate);
-      const state = useMediaStore.getState();
-      const current = state.timelineTime;
-      const nextIdx = findNextSegmentAfter(segmentsRef.current, current);
-      const nextStart =
-        nextIdx >= 0
-          ? segmentsRef.current[nextIdx]?.timelineStart
-          : state.timelineDurationS;
-      const nextTime = Math.min(current + deltaS, nextStart ?? current);
-      if (nextIdx >= 0 && nextStart !== undefined && nextTime >= nextStart - 0.001) {
-        requestTimelineSeek(nextStart);
-        return;
-      }
-      if (nextIdx < 0 && state.timelineDurationS > 0 && nextTime >= state.timelineDurationS) {
-        setTimelineTime(state.timelineDurationS);
-        setPlaying(false);
-        return;
-      }
-      setTimelineTime(nextTime);
-      clock.frame = window.requestAnimationFrame(tick);
-    };
-    gapClockRef.current.frame = window.requestAnimationFrame(tick);
-    return stopGapClock;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewGap, isPlaying, rate]);
-
-  function stopGapClock() {
-    const frame = gapClockRef.current.frame;
-    if (frame !== null) {
-      window.cancelAnimationFrame(frame);
-    }
-    gapClockRef.current.frame = null;
-    gapClockRef.current.lastMs = null;
-  }
+  }, [activeKey, isPlaying, setMediaError, setPlaying]);
 
   function applySegmentPlaybackSettings(v: HTMLVideoElement, seg: PlaySegment) {
     const segmentVolume = Number.isFinite(seg.volume)
@@ -709,22 +573,6 @@ function SegmentedPlayer({
     setMediaError(`Preview media failed to load (${code}).`);
   }
 
-  function handlePlayFailure(err: unknown, v: HTMLVideoElement) {
-    if (isAutoplayBlocked(err)) {
-      setMediaError(null);
-      window.setTimeout(() => {
-        if (!v.paused) {
-          setMediaError(null);
-        } else {
-          setPlaying(false);
-        }
-      }, 0);
-      return;
-    }
-    setMediaError(`Playback failed: ${String(err)}`);
-    setPlaying(false);
-  }
-
   function onScrub(e: React.ChangeEvent<HTMLInputElement>) {
     const t = Number(e.target.value);
     if (Number.isFinite(t)) requestTimelineSeek(t);
@@ -750,63 +598,14 @@ function SegmentedPlayer({
 
   function onScrubPointerDown(e: React.PointerEvent<HTMLInputElement>) {
     if (timelineDurationS <= 0) return;
-    scrubInputRef.current = e.currentTarget;
-    scrubPointerIdRef.current = e.pointerId;
-    const activeVideo = slotsRef.current[activeKeyRef.current].ref.current;
-    resumeAfterScrubRef.current = useMediaStore.getState().isPlaying;
-    if (activeVideo && !activeVideo.paused) {
-      pauseWithoutClearingIntent(activeVideo);
-    }
-    if (useMediaStore.getState().isPlaying) {
-      setPlaying(false);
-    }
     e.currentTarget.setPointerCapture(e.pointerId);
     seekFromScrubPointer(e.currentTarget, e.clientX);
   }
 
   function onScrubPointerMove(e: React.PointerEvent<HTMLInputElement>) {
-    if (scrubPointerIdRef.current !== e.pointerId) return;
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
     seekFromScrubPointer(e.currentTarget, e.clientX);
   }
-
-  function finishScrubPointer(pointerId: number) {
-    if (scrubPointerIdRef.current !== pointerId) return;
-    const el = scrubInputRef.current;
-    if (el?.hasPointerCapture(pointerId)) {
-      el.releasePointerCapture(pointerId);
-    }
-    scrubPointerIdRef.current = null;
-    scrubInputRef.current = null;
-    if (resumeAfterScrubRef.current) {
-      resumeAfterScrubRef.current = false;
-      const activeVideo = slotsRef.current[activeKeyRef.current].ref.current;
-      setPlaying(true);
-      if (activeVideo && !previewGap) {
-        activeVideo.play().catch((err) => {
-          handlePlayFailure(err, activeVideo);
-        });
-      }
-    }
-  }
-
-  useEffect(() => {
-    function onWindowPointerMove(e: PointerEvent) {
-      if (scrubPointerIdRef.current !== e.pointerId) return;
-      const el = scrubInputRef.current;
-      if (el) seekFromScrubPointer(el, e.clientX);
-    }
-    function onWindowPointerUp(e: PointerEvent) {
-      finishScrubPointer(e.pointerId);
-    }
-    window.addEventListener("pointermove", onWindowPointerMove);
-    window.addEventListener("pointerup", onWindowPointerUp);
-    window.addEventListener("pointercancel", onWindowPointerUp);
-    return () => {
-      window.removeEventListener("pointermove", onWindowPointerMove);
-      window.removeEventListener("pointerup", onWindowPointerUp);
-      window.removeEventListener("pointercancel", onWindowPointerUp);
-    };
-  });
 
   // The hidden slot uses opacity 0 + pointer-events: none so it
   // doesn't intercept clicks on the visible video. Both elements
@@ -857,23 +656,12 @@ function SegmentedPlayer({
           className="video-el"
           preload="auto"
           style={styleA}
-          onTimeUpdate={activeKey === "a" ? (e) => onTimeUpdate("a", e) : undefined}
           onLoadedMetadata={() => alignSlotAfterLoad("a")}
           onCanPlay={() => {
             setMediaError(null);
             alignSlotAfterLoad("a");
           }}
           onError={onVideoError}
-          onPlay={
-            activeKey === "a"
-              ? () => {
-                  setMediaError(null);
-                  setPlaying(true);
-                }
-              : undefined
-          }
-          onPause={activeKey === "a" ? (e) => handleActivePause(e.currentTarget) : undefined}
-          onEnded={activeKey === "a" ? () => setPlaying(false) : undefined}
           onClick={activeKey === "a" ? togglePlay : undefined}
         />
         <video
@@ -881,23 +669,12 @@ function SegmentedPlayer({
           className="video-el"
           preload="auto"
           style={styleB}
-          onTimeUpdate={activeKey === "b" ? (e) => onTimeUpdate("b", e) : undefined}
           onLoadedMetadata={() => alignSlotAfterLoad("b")}
           onCanPlay={() => {
             setMediaError(null);
             alignSlotAfterLoad("b");
           }}
           onError={onVideoError}
-          onPlay={
-            activeKey === "b"
-              ? () => {
-                  setMediaError(null);
-                  setPlaying(true);
-                }
-              : undefined
-          }
-          onPause={activeKey === "b" ? (e) => handleActivePause(e.currentTarget) : undefined}
-          onEnded={activeKey === "b" ? () => setPlaying(false) : undefined}
           onClick={activeKey === "b" ? togglePlay : undefined}
         />
         <TimelineVideoOverlays
@@ -964,8 +741,6 @@ function SegmentedPlayer({
               onInput={onScrubInput}
               onPointerDown={onScrubPointerDown}
               onPointerMove={onScrubPointerMove}
-              onPointerUp={(e) => finishScrubPointer(e.pointerId)}
-              onPointerCancel={(e) => finishScrubPointer(e.pointerId)}
               disabled={timelineDurationS === 0}
             />
             <div className="transport-time">
@@ -991,21 +766,6 @@ function SegmentedPlayer({
   );
 }
 
-function TimelineGapOverlay() {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        background: "#000",
-        pointerEvents: "none",
-        zIndex: 2,
-      }}
-      aria-hidden="true"
-    />
-  );
-}
-
 function TimelineTransitionOverlay({
   transition,
   timelineTime,
@@ -1016,6 +776,7 @@ function TimelineTransitionOverlay({
   isPlaying: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const lastSyncKeyRef = useRef<string>("");
   const [src, setSrc] = useState<string | null>(null);
   const setMediaError = useMediaStore((s) => s.setMediaError);
   const overlaySide =
@@ -1056,7 +817,11 @@ function TimelineTransitionOverlay({
       overlaySide === "incoming"
         ? transition.to.sourceStart - transition.inOffset + elapsed
         : transition.from.sourceEnd - transition.inOffset + elapsed;
-    if (Math.abs(v.currentTime - sourceTime) > 0.05) {
+    const syncKey = `${overlaySegment.proxyPath}:${overlaySide}:${transition.timelineStart}`;
+    const force = syncKey !== lastSyncKeyRef.current || !isPlaying || v.paused;
+    lastSyncKeyRef.current = syncKey;
+    const drift = Math.abs((v.currentTime || 0) - sourceTime);
+    if (Number.isFinite(sourceTime) && drift > (force ? 0.02 : 0.5)) {
       tryAssignCurrentTime(v, sourceTime);
     }
     const speed = Number.isFinite(overlaySegment.speed)
@@ -1346,6 +1111,7 @@ function TimelineVideoOverlay({
   isPlaying: boolean;
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const lastSyncKeyRef = useRef<string>("");
   const [previewHeightPx, setPreviewHeightPx] = useState<number | null>(null);
   const [src, setSrc] = useState<string | null>(() =>
     cachedMediaStreamUrl(overlay.proxyPath) ?? null,
@@ -1386,7 +1152,11 @@ function TimelineVideoOverlay({
     const v = ref.current;
     if (!v) return;
     const desired = overlay.sourceStart + (timelineTime - overlay.timelineStart);
-    if (Number.isFinite(desired) && Math.abs(v.currentTime - desired) > 0.08) {
+    const syncKey = `${overlay.proxyPath}:${overlay.timelineStart}:${overlay.zIndex}`;
+    const force = syncKey !== lastSyncKeyRef.current || !isPlaying || v.paused;
+    lastSyncKeyRef.current = syncKey;
+    const drift = Math.abs((v.currentTime || 0) - desired);
+    if (Number.isFinite(desired) && drift > (force ? 0.02 : 0.5)) {
       tryAssignCurrentTime(v, desired);
     }
     const speed = Number.isFinite(overlay.speed)
@@ -2283,6 +2053,37 @@ function MediaErrorOverlay({ message }: { message: string }) {
   );
 }
 
+function TimelineGapOverlay() {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "#000",
+        pointerEvents: "none",
+        zIndex: 2,
+      }}
+      aria-hidden="true"
+    />
+  );
+}
+
+function syncVideoToTimeline(
+  v: HTMLVideoElement,
+  seg: PlaySegment,
+  timelineTime: number,
+  opts: { force?: boolean } = {},
+) {
+  const desired = seg.sourceStart + (timelineTime - seg.timelineStart);
+  if (!Number.isFinite(desired)) return;
+  const drift = Math.abs((v.currentTime || 0) - desired);
+  const playingVideo = !v.paused;
+  const threshold = opts.force || !playingVideo ? 0.02 : 0.5;
+  if (drift > threshold) {
+    tryAssignCurrentTime(v, desired);
+  }
+}
+
 // Some browsers throw when setting currentTime before the readyState
 // reaches HAVE_METADATA. Clamp to a guarded write so the segment
 // swap doesn't crash if the user spam-scrubs.
@@ -2328,9 +2129,4 @@ function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-function isAutoplayBlocked(err: unknown): boolean {
-  if (err instanceof DOMException && err.name === "NotAllowedError") return true;
-  return String(err).includes("NotAllowedError");
 }
