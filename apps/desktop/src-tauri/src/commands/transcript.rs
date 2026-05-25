@@ -33,6 +33,7 @@
 
 use std::path::Path;
 
+use awidat_core::transcript_alignment::{PhraseGroupingOptions, normalize_whisper_alignment};
 use awidat_desktop_protocol::{Transcript, TranscriptSegment, TranscriptSpeaker, TranscriptWord};
 use awidat_proto::index::AssetId;
 use serde::Deserialize;
@@ -298,6 +299,10 @@ struct WhisperSidecarBody {
 
 #[derive(Debug, Deserialize)]
 struct RawSegment {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    phrase_id: Option<String>,
     text: String,
     start_s: f64,
     end_s: f64,
@@ -307,6 +312,8 @@ struct RawSegment {
 
 #[derive(Debug, Deserialize)]
 struct RawWord {
+    #[serde(default)]
+    id: Option<String>,
     text: String,
     start_s: f64,
     end_s: f64,
@@ -321,6 +328,12 @@ struct RawSpeaker {
 }
 
 fn parse_transcript(asset_stem: String, sidecar: serde_json::Value) -> Result<Transcript, String> {
+    let alignment = sidecar
+        .get("asset_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|asset_id| {
+            normalize_whisper_alignment(asset_id, &sidecar, PhraseGroupingOptions::default()).ok()
+        });
     let body_value = sidecar
         .get("data")
         .cloned()
@@ -330,17 +343,40 @@ fn parse_transcript(asset_stem: String, sidecar: serde_json::Value) -> Result<Tr
     let mut segments: Vec<TranscriptSegment> = body
         .segments
         .into_iter()
-        .map(|s| TranscriptSegment {
-            text: s.text,
-            start_s: s.start_s,
-            end_s: s.end_s,
-            speaker_id: s.speaker_id,
+        .map(|s| {
+            let RawSegment {
+                id,
+                phrase_id,
+                text,
+                start_s,
+                end_s,
+                speaker_id,
+            } = s;
+            TranscriptSegment {
+                phrase_id: phrase_id.or_else(|| {
+                    alignment
+                        .as_ref()
+                        .and_then(|alignment| phrase_id_for_segment(alignment, start_s, end_s))
+                }),
+                id,
+                text,
+                start_s,
+                end_s,
+                speaker_id,
+            }
         })
         .collect();
     let mut words: Vec<TranscriptWord> = body
         .words
         .into_iter()
-        .map(|w| TranscriptWord {
+        .enumerate()
+        .map(|(index, w)| TranscriptWord {
+            id: w.id.or_else(|| {
+                alignment
+                    .as_ref()
+                    .and_then(|alignment| alignment.words.get(index))
+                    .map(|word| word.id.clone())
+            }),
             text: w.text,
             start_s: w.start_s,
             end_s: w.end_s,
@@ -376,6 +412,21 @@ fn parse_transcript(asset_stem: String, sidecar: serde_json::Value) -> Result<Tr
         words,
         speakers,
     })
+}
+
+fn phrase_id_for_segment(
+    alignment: &awidat_proto::professional::TranscriptAlignmentPackage,
+    start_s: f64,
+    end_s: f64,
+) -> Option<String> {
+    alignment
+        .phrases
+        .iter()
+        .find(|phrase| {
+            (phrase.range.start_s - start_s).abs() < 0.001
+                && (phrase.range.end_s - end_s).abs() < 0.001
+        })
+        .map(|phrase| phrase.id.clone())
 }
 
 #[cfg(test)]
@@ -417,6 +468,12 @@ mod tests {
         assert_eq!(t.words.len(), 2);
         assert_eq!(t.speakers.len(), 2);
         assert_eq!(t.segments[0].speaker_id.as_deref(), Some("SPEAKER_00"));
+        assert!(
+            t.words[0]
+                .id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("word:"))
+        );
     }
 
     #[test]

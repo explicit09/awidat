@@ -1573,6 +1573,12 @@ pub struct MotionImageStyling {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 pub struct TranscriptSegment {
+    /// Stable segment id when provided by the transcript source.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Stable phrase id when this segment maps to an alignment phrase.
+    #[serde(default)]
+    pub phrase_id: Option<String>,
     /// Concatenated text of the segment (whisper's own merging).
     pub text: String,
     /// Source-time start, in seconds.
@@ -1587,6 +1593,9 @@ pub struct TranscriptSegment {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "./")]
 pub struct TranscriptWord {
+    /// Stable word id for transcript-driven editing.
+    #[serde(default)]
+    pub id: Option<String>,
     /// Word text (whisper-trimmed, may include punctuation).
     pub text: String,
     /// Source-time start, in seconds.

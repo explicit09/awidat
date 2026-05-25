@@ -74,6 +74,7 @@ pub mod subagent;
 pub mod system_prompt;
 pub mod tool;
 pub mod tools;
+pub mod transcript_alignment;
 pub mod transcript_cleanup;
 pub mod transcript_pack;
 pub mod vc;
