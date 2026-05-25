@@ -35,7 +35,6 @@ use crate::tool::{
     ToolRegistry, UserInputRequest,
 };
 
-const DEFAULT_MAX_TURN_ITERATIONS: usize = 48;
 const ENABLE_ITERATION_COMPACTION: bool = false;
 
 /// One event emitted by the agent loop. The REPL prints these; the TUI
@@ -560,7 +559,7 @@ impl Session {
         user_input: impl Into<String>,
         cancel: CancellationToken,
     ) -> Result<(), SessionError> {
-        self.run_turn_capped(user_input, cancel, DEFAULT_MAX_TURN_ITERATIONS)
+        self.run_turn_with_iteration_limit(user_input, cancel, None)
             .await
     }
 
@@ -574,6 +573,16 @@ impl Session {
         user_input: impl Into<String>,
         cancel: CancellationToken,
         max_iterations: usize,
+    ) -> Result<(), SessionError> {
+        self.run_turn_with_iteration_limit(user_input, cancel, Some(max_iterations))
+            .await
+    }
+
+    async fn run_turn_with_iteration_limit(
+        &self,
+        user_input: impl Into<String>,
+        cancel: CancellationToken,
+        max_iterations: Option<usize>,
     ) -> Result<(), SessionError> {
         let _ = self.events_tx.send(SessionEvent::TurnStart);
 
@@ -596,17 +605,6 @@ impl Session {
         // Outer loop: keep sampling until the model says end_turn (or
         // we're cancelled).
         //
-        // Legitimate editorial flows can burn 8-12 iterations on
-        // exploration before settling into the cut. Keep enough
-        // headroom for that, but stop well before a confused tool loop
-        // can keep mutating the timeline for dozens of cycles.
-        //
-        // Iteration count is a poor proxy for context pressure in
-        // tool-heavy editing turns: a valid sequence of small tool
-        // calls can hit the loop threshold while the model still has
-        // plenty of context. Keep automatic in-turn compaction off
-        // unless it is driven by real token/context usage.
-        let max_inner_iterations = max_iterations;
         let mut compacted = false;
         // Cross-iteration tracker used to detect tool-driven turns
         // that would otherwise end immediately after a tool result.
@@ -614,7 +612,31 @@ impl Session {
         // does not, we force one short text-only summary iteration.
         let mut any_tools_in_turn = false;
         let mut forced_summary = false;
-        for iter in 0..max_inner_iterations {
+        let mut iter = 0usize;
+        loop {
+            if let Some(max_inner_iterations) = max_iterations
+                && iter >= max_inner_iterations
+            {
+                // Iteration cap reached — defensive against bounded
+                // sub-agent loops. Normal desktop turns intentionally
+                // do not use this cap; they follow the model/tool
+                // protocol until the model reaches a terminal answer,
+                // matching the Codex turn-loop shape.
+                warn!(max_inner_iterations, "hit iteration cap; pausing turn");
+                let message = format!(
+                    "Turn paused after {max_inner_iterations} sampling iterations. \
+                     I stopped before the next assistant response to avoid an uncontrolled tool loop. \
+                     Send \"continue\" to resume from the current project state."
+                );
+                self.emit_local_turn_summary(&message).await;
+                let _ = self.events_tx.send(SessionEvent::Error(message.clone()));
+                if let (Some(rec), Some(id)) = (&self.recorder, turn_id) {
+                    rec.record_turn_complete(id);
+                }
+                let _ = self.events_tx.send(SessionEvent::TurnEnd);
+                return Err(SessionError::Other(message));
+            }
+
             if cancel.is_cancelled() {
                 let _ = self.events_tx.send(SessionEvent::Error("cancelled".into()));
                 if let (Some(rec), Some(id)) = (&self.recorder, turn_id.clone()) {
@@ -669,7 +691,7 @@ impl Session {
             // Compaction failures are non-fatal — we log and continue
             // without compacting; the only cost is hitting the hard
             // stop sooner.
-            if should_compact_on_iteration(compacted, iter, max_inner_iterations) {
+            if max_iterations.is_some_and(|max| should_compact_on_iteration(compacted, iter, max)) {
                 compacted = true;
                 let history_for_summary = self.history.lock().await.clone();
                 match crate::compact::compact_history(&self.client, &history_for_summary, &cancel)
@@ -740,6 +762,7 @@ impl Session {
             if matches!(outcome.stop_reason, Some(StopReason::ToolUse)) {
                 any_tools_in_turn = true;
             }
+            iter = iter.saturating_add(1);
 
             match outcome.stop_reason {
                 Some(StopReason::ToolUse) => {
@@ -790,25 +813,6 @@ impl Session {
                 }
             }
         }
-        // Iteration cap reached — defensive against runaway tool loops.
-        // This is not a clean success: make the pause visible and
-        // persist it so the desktop chat never appears to stop on a
-        // bare tool result.
-        warn!(max_inner_iterations, "hit iteration cap; pausing turn");
-        let message = format!(
-            "Turn paused after {max_inner_iterations} sampling iterations. \
-             I stopped before the next assistant response to avoid an uncontrolled tool loop. \
-             Send \"continue\" to resume from the current project state."
-        );
-        self.emit_local_turn_summary(&message).await;
-        let _ = self.events_tx.send(SessionEvent::Error(message.clone()));
-        // Cap-reached is still a closed rollout turn — record the
-        // boundary so resume doesn't re-discard the cap'd turn.
-        if let (Some(rec), Some(id)) = (&self.recorder, turn_id) {
-            rec.record_turn_complete(id);
-        }
-        let _ = self.events_tx.send(SessionEvent::TurnEnd);
-        Err(SessionError::Other(message))
     }
 
     /// One streaming sampling iteration. Returns the inner-loop outcome
