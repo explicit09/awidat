@@ -17,6 +17,7 @@ tools_allowlist:
   - find_dead_air
   - find_filler_words
   - find_false_starts
+  - podcast_editorial_review_pack
   - find_speaker_oncam
   - plan_visual_support
   - plan_motion_scene
@@ -129,7 +130,17 @@ Use:
 find_dead_air(max_silence_s=1.5)
 find_filler_words(aggressive=false)
 find_false_starts()
+podcast_editorial_review_pack()
 ```
+
+Treat these scanners as recall, not judgment. Before proposing cleanup
+cuts from transcript/audio evidence, call `podcast_editorial_review_pack`
+and classify each relevant packet yourself as `cut`, `keep`, or
+`review` with an editorial label. Silence alone is not dead air; a
+restart marker alone is not a false start; repeated welcomes alone do
+not define episode boundaries. Use before/during/after transcript
+context to decide whether the moment is publishable content, setup,
+coaching, not-recording chatter, natural pacing, or a real cut.
 
 Before mechanical cleanup, run the deeper semantic planner:
 

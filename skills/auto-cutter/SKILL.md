@@ -11,6 +11,7 @@ tools_allowlist:
   - find_dead_air
   - find_filler_words
   - find_false_starts
+  - podcast_editorial_review_pack
   - inspect_moment
   - inspect_clip
   - view_timeline
@@ -96,7 +97,16 @@ Then cross-check with:
 find_dead_air(max_silence_s=1.0)
 find_filler_words(aggressive=false)
 find_false_starts()
+podcast_editorial_review_pack()
 ```
+
+Do not let those scanners decide the edit. They are recall signals for
+the active AI. Use `podcast_editorial_review_pack` to inspect
+before/during/after transcript context and classify each candidate as
+`cut`, `keep`, or `review` before applying cleanup. This is especially
+important for off-camera coaching, "we weren't recording" moments,
+natural pauses, and repeated intro attempts where literal phrases like
+"welcome" are weaker evidence than conversational intent.
 
 For social/short-form output, rerun with `--preset aggressive`; for
 interviews or tutorials, use `--preset gentle`.
@@ -112,6 +122,8 @@ the audit shows only the intended extraction and cleanup edits.
 ## Rules
 
 - Never use energy alone to find the episode start.
+- Never use scanner labels alone as editorial truth; classify the
+  transcript context with `podcast_editorial_review_pack` first.
 - Never run mechanical cleanup before episode-span and retake review.
 - Never remove conditional fillers ("like", "you know") unless the
   surrounding transcript still reads naturally.
@@ -122,6 +134,8 @@ the audit shows only the intended extraction and cleanup edits.
 
 - The episode start was chosen with `find_episode_start`.
 - `episode_span_plan.py` and `retake_plan.py` were run before mechanical cleanup.
+- `podcast_editorial_review_pack` was used before cleanup cuts from
+  transcript/audio recall signals.
 - Medium/high-risk retake cuts were checked with `assess_edit_quality`
   and any risky hard cuts were annotated with `Set Cut Intent` or
   repaired with split edits / b-roll instead of decorative dissolves.

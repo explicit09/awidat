@@ -153,11 +153,26 @@ pub fn podcast_production_intake_plan() -> StructuredPlan {
                 ]
             },
             {
+                "id": "editorial-review-pack",
+                "description": "Package cleanup and boundary evidence for active AI classification",
+                "allowed_tools": ["podcast_editorial_review_pack"],
+                "model_tier": "fast",
+                "depends_on": ["story-map"],
+                "verification": {
+                    "required": true,
+                    "tools": ["podcast_editorial_review_pack"],
+                    "requirements": ["False-start, production-aside, and silence recall signals are packaged with transcript context for cut/keep/review classification"]
+                },
+                "actions": [
+                    {"tool": "podcast_editorial_review_pack", "args": {}}
+                ]
+            },
+            {
                 "id": "cleanup-candidates",
                 "description": "Group existing audio/transcript cleanup candidates by risk",
                 "allowed_tools": ["podcast_cleanup_candidates"],
                 "model_tier": "fast",
-                "depends_on": ["story-map"],
+                "depends_on": ["editorial-review-pack"],
                 "verification": {
                     "required": true,
                     "tools": ["podcast_cleanup_candidates"],
@@ -259,7 +274,7 @@ pub fn format_intake_report_for_agent(
     let mut out = String::new();
     out.push_str("Podcast production intake completed. Use this evidence before editing.\n");
     out.push_str(
-        "Mandatory follow-up behavior: follow the loaded podcast production skill; use the episode-bounds and episode-span evidence before deciding the publishable start/end; if episode-span reports requires_user_choice, ask which episode to produce before applying extraction or cleanup; present the edit-proposal safe/review/risky groups before mutation; do not call apply_edl for review/risky proposal items until the user approves them and assess_edit_quality has been run for the proposal item's continuity_gate args; when proposal items are accepted, call podcast_apply_accepted_edits with explicit accepted_ids, then run its returned apply_edl call, then run view_timeline, vedit_diff, podcast_smooth_cut_boundaries, and podcast_post_draft_check; run every assess_edit_quality call returned by podcast_smooth_cut_boundaries before final render, even for safe cuts; if a boundary is dirty, prefer recut, J/L cut, or b-roll before visible transitions; after applying a draft extraction, cleanup, or smoothing EDL, re-run podcast_audio_polish, podcast_visual_polish, and podcast_qc_report before render; do not start final render while podcast_qc_report is blocked; preserve source timestamps and media references; ask before final render; after render, ask the user to review sync, captions, pacing, and audio quality.\n\n",
+        "Mandatory follow-up behavior: follow the loaded podcast production skill; use the episode-bounds and episode-span evidence before deciding the publishable start/end; if episode-span reports requires_user_choice, ask which episode to produce before applying extraction or cleanup; use the editorial-review-pack evidence to classify cleanup/boundary packets as cut/keep/review from transcript context before trusting scanner labels; present the edit-proposal safe/review/risky groups before mutation; do not call apply_edl for review/risky proposal items until the user approves them and assess_edit_quality has been run for the proposal item's continuity_gate args; when proposal items are accepted, call podcast_apply_accepted_edits with explicit accepted_ids, then run its returned apply_edl call, then run view_timeline, vedit_diff, podcast_smooth_cut_boundaries, and podcast_post_draft_check; run every assess_edit_quality call returned by podcast_smooth_cut_boundaries before final render, even for safe cuts; if a boundary is dirty, prefer recut, J/L cut, or b-roll before visible transitions; after applying a draft extraction, cleanup, or smoothing EDL, re-run podcast_audio_polish, podcast_visual_polish, and podcast_qc_report before render; do not start final render while podcast_qc_report is blocked; preserve source timestamps and media references; ask before final render; after render, ask the user to review sync, captions, pacing, and audio quality.\n\n",
     );
     for step in &report.step_results {
         out.push_str(&format!("## Step: {}\n", step.step_id));

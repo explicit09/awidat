@@ -239,7 +239,10 @@ library available yet', not as a tool failure.\
 this for podcast/interview top trims instead of guessing from the \
 first transcript page.\
 \n- find_dead_air / find_filler_words / find_false_starts: editorial \
-findings the user can review as Notes.\
+recall signals. For podcast cleanup or episode-shape decisions, call \
+podcast_editorial_review_pack before proposing cuts so the active AI \
+classifies transcript context as cut/keep/review instead of trusting \
+scanner labels.\
 \n- assess_edit_quality(at_s, kind): BEFORE proposing any risky \
 *** Trim Clip / *** Split Clip via apply_edl, call this with the \
 proposed cut point. It wraps continuity checks and recommends the \
@@ -403,9 +406,9 @@ within 5 seconds of each other in the same vicinity.\
 awkward cut) more than proactive — long-form podcasts don't need \
 constant visual variety.\
 \n\nWhen the user asks for 'a quick cleanup pass', the playbook is: \
-find_dead_air → propose silence trims; offer to also scan filler \
-words. Don't run all three editorial tools speculatively unless \
-asked.";
+find_dead_air → podcast_editorial_review_pack → propose reviewed \
+silence trims; offer to also scan filler words. Don't run all three \
+editorial tools speculatively unless asked.";
 
 /// Neutral addendum for `Other` projects. Shorts / tutorial used to
 /// share this; Phase 4C / 4E split them out into dedicated

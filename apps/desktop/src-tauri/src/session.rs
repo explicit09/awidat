@@ -35,7 +35,9 @@ use awidat_core::tools::{
     podcast_apply_accepted_edits::PodcastApplyAcceptedEditsTool,
     podcast_audio_polish::PodcastAudioPolishTool,
     podcast_cleanup_candidates::PodcastCleanupCandidatesTool,
-    podcast_edit_proposal::PodcastEditProposalTool, podcast_episode_spans::PodcastEpisodeSpansTool,
+    podcast_edit_proposal::PodcastEditProposalTool,
+    podcast_editorial_review_pack::PodcastEditorialReviewPackTool,
+    podcast_episode_spans::PodcastEpisodeSpansTool,
     podcast_post_draft_check::PodcastPostDraftCheckTool, podcast_qc_report::PodcastQcReportTool,
     podcast_smooth_cut_boundaries::PodcastSmoothCutBoundariesTool,
     podcast_story_map::PodcastStoryMapTool, podcast_visual_polish::PodcastVisualPolishTool,
@@ -125,6 +127,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(PodcastApplyAcceptedEditsTool));
     registry.register(Arc::new(PodcastAudioPolishTool));
     registry.register(Arc::new(PodcastCleanupCandidatesTool));
+    registry.register(Arc::new(PodcastEditorialReviewPackTool));
     registry.register(Arc::new(PodcastEditProposalTool));
     registry.register(Arc::new(PodcastEpisodeSpansTool));
     registry.register(Arc::new(PodcastPostDraftCheckTool));

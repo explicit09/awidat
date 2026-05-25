@@ -72,6 +72,7 @@ impl CapabilityMetadata {
             | "find_filler_words"
             | "find_false_starts"
             | "find_episode_start"
+            | "podcast_editorial_review_pack"
             | "find_generated_broll_opportunities" => {
                 metadata.export_supported = SupportLevel::NotSupported;
                 metadata.required_indexes = vec!["transcript".into()];
