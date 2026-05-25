@@ -33,6 +33,7 @@ fn caption_fixture() -> TitlePlan {
         color: "#FFFFFF".into(),
         font_weight: TitleWeight::Bold,
         animation: TitleAnimation::None,
+        phases: None,
         reveal: TextReveal::None,
         role: "caption".into(),
         safe_area: None,

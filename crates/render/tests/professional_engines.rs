@@ -29,8 +29,22 @@ use awidat_render::professional::{
     lower_tracker_parameter_bindings, motion_package_summary, plan_delivery_queue_item,
     plan_stream_export_args, summarize_color_finishing, summarize_tracking_package,
 };
-use awidat_render::{RenderJobSpec, TitleAnimation, TitlePosition};
+use awidat_render::{RenderBackendKind, RenderJobSpec, TitleAnimation, TitlePosition};
 use serde_json::json;
+
+fn test_render_job_spec() -> RenderJobSpec {
+    RenderJobSpec {
+        args: vec!["-y".into(), "renders/timeline.mp4".into()],
+        backend: RenderBackendKind::TimelineFfmpegReencode,
+        total_duration_s: Some(10.0),
+        cwd: None,
+        output_path: PathBuf::from("renders/timeline.mp4"),
+        input_paths: Vec::new(),
+        manifest_path: None,
+        limitations: Vec::new(),
+        metadata: BTreeMap::new(),
+    }
+}
 
 #[test]
 fn tracking_engine_generates_confident_sidecar_from_motion_evidence() {
@@ -1822,13 +1836,7 @@ fn audio_volume_automation_lowers_to_expression_and_reports_ducking_conflict() {
 #[test]
 fn delivery_profile_updates_render_spec_and_queue_manifest() {
     let profile = DeliveryProfile::youtube_1080p();
-    let spec = RenderJobSpec {
-        args: vec!["-y".into(), "renders/timeline.mp4".into()],
-        total_duration_s: Some(10.0),
-        cwd: None,
-        output_path: PathBuf::from("renders/timeline.mp4"),
-        limitations: Vec::new(),
-    };
+    let spec = test_render_job_spec();
     let profiled = apply_delivery_profile_to_spec(spec, &profile);
 
     assert!(profiled.args.windows(2).any(|w| w == ["-s:v", "1920x1080"]));
@@ -1863,13 +1871,7 @@ fn delivery_profile_updates_render_spec_and_queue_manifest() {
 #[test]
 fn export_preset_lowers_codecs_container_and_audio_settings() {
     let preset = ExportPreset::vertical_short_form();
-    let spec = RenderJobSpec {
-        args: vec!["-y".into(), "renders/timeline.mp4".into()],
-        total_duration_s: Some(10.0),
-        cwd: None,
-        output_path: PathBuf::from("renders/timeline.mp4"),
-        limitations: Vec::new(),
-    };
+    let spec = test_render_job_spec();
 
     let profiled = match apply_export_preset_to_spec(spec, &preset) {
         Ok(spec) => spec,
@@ -1889,13 +1891,7 @@ fn export_preset_lowers_codecs_container_and_audio_settings() {
 #[test]
 fn export_preset_sets_faststart_for_mp4_delivery() {
     let preset = ExportPreset::vertical_short_form();
-    let spec = RenderJobSpec {
-        args: vec!["-y".into(), "renders/timeline.mp4".into()],
-        total_duration_s: Some(10.0),
-        cwd: None,
-        output_path: PathBuf::from("renders/timeline.mp4"),
-        limitations: Vec::new(),
-    };
+    let spec = test_render_job_spec();
 
     let profiled = match apply_export_preset_to_spec(spec, &preset) {
         Ok(spec) => spec,
@@ -1915,13 +1911,7 @@ fn export_preset_sets_faststart_for_mp4_delivery() {
 fn export_preset_auto_hardware_uses_videotoolbox_for_h264_on_macos() {
     let mut preset = ExportPreset::vertical_short_form();
     preset.output.hardware_acceleration = HardwareAccelerationPolicy::Auto;
-    let spec = RenderJobSpec {
-        args: vec!["-y".into(), "renders/timeline.mp4".into()],
-        total_duration_s: Some(10.0),
-        cwd: None,
-        output_path: PathBuf::from("renders/timeline.mp4"),
-        limitations: Vec::new(),
-    };
+    let spec = test_render_job_spec();
 
     let profiled = match apply_export_preset_to_spec(spec, &preset) {
         Ok(spec) => spec,
@@ -1941,13 +1931,7 @@ fn export_preset_auto_hardware_uses_videotoolbox_for_h264_on_macos() {
 fn export_preset_auto_hardware_keeps_software_codec_when_no_native_mapping_exists() {
     let mut preset = ExportPreset::vertical_short_form();
     preset.output.hardware_acceleration = HardwareAccelerationPolicy::Auto;
-    let spec = RenderJobSpec {
-        args: vec!["-y".into(), "renders/timeline.mp4".into()],
-        total_duration_s: Some(10.0),
-        cwd: None,
-        output_path: PathBuf::from("renders/timeline.mp4"),
-        limitations: Vec::new(),
-    };
+    let spec = test_render_job_spec();
 
     let profiled = match apply_export_preset_to_spec(spec, &preset) {
         Ok(spec) => spec,
@@ -1968,13 +1952,7 @@ fn export_preset_require_hardware_errors_when_codec_has_no_mapping() {
         hardware_acceleration: HardwareAccelerationPolicy::Require,
         ..ExportOutputSettings::mp4()
     };
-    let spec = RenderJobSpec {
-        args: vec!["-y".into(), "renders/timeline.mp4".into()],
-        total_duration_s: Some(10.0),
-        cwd: None,
-        output_path: PathBuf::from("renders/timeline.mp4"),
-        limitations: Vec::new(),
-    };
+    let spec = test_render_job_spec();
 
     let err = match apply_export_preset_to_spec(spec, &preset) {
         Ok(_) => panic!("unsupported required hardware should fail"),
