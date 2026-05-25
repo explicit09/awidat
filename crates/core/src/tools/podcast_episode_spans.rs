@@ -34,6 +34,7 @@ struct AssetSpanReport {
     asset_id: String,
     status: String,
     episode_spans: serde_json::Value,
+    rejected_spans: serde_json::Value,
     recommended_span: serde_json::Value,
     requires_user_choice: bool,
     evidence: serde_json::Value,
@@ -211,6 +212,10 @@ fn run_planner(
             .get("episode_spans")
             .cloned()
             .unwrap_or_else(|| serde_json::json!([])),
+        rejected_spans: parsed
+            .get("rejected_spans")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
         recommended_span: parsed
             .get("recommended_span")
             .cloned()
@@ -315,9 +320,9 @@ mod tests {
                 "segments": [
                     {"start_s": 0.0, "end_s": 5.0, "text": "Pre show setup chat."},
                     {"start_s": 10.0, "end_s": 20.0, "text": "Welcome to the show. In this episode we discuss product validation."},
-                    {"start_s": 80.0, "end_s": 90.0, "text": "Thanks for listening and follow us for more."},
-                    {"start_s": 100.0, "end_s": 110.0, "text": "Welcome back. Today we have a different topic."},
-                    {"start_s": 160.0, "end_s": 170.0, "text": "See you next time."}
+                    {"start_s": 500.0, "end_s": 510.0, "text": "Thanks for listening and follow us for more."},
+                    {"start_s": 700.0, "end_s": 710.0, "text": "Welcome back. Today we have a different topic."},
+                    {"start_s": 1200.0, "end_s": 1210.0, "text": "See you next time."}
                 ]
             }),
         );
@@ -355,5 +360,58 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn rejects_rehearsal_false_starts_before_publishable_episode() {
+        let dir = tempfile::tempdir().unwrap();
+        let asset = "raw/rehearsal.mov";
+        write_sidecar(
+            dir.path(),
+            "whisper",
+            asset,
+            serde_json::json!({
+                "segments": [
+                    {"start_s": 238.0, "end_s": 245.0, "text": "Pre show planning chatter before we start."},
+                    {"start_s": 676.445, "end_s": 677.165, "text": "You're welcome."},
+                    {"start_s": 1206.615, "end_s": 1220.455, "text": "Hello, everyone. Welcome to Technogia. I'm just practicing. Am I supposed to look at that camera?"},
+                    {"start_s": 1293.855, "end_s": 1309.270, "text": "Welcome to Technocia Talks. Today we have a special guest. That was a practice. Cut."},
+                    {"start_s": 1350.535, "end_s": 1378.975, "text": "Welcome to Technosia Talks. Today, we have a very interesting guest with us. What's the other one? Hold it for me one last time."},
+                    {"start_s": 1463.375, "end_s": 1486.080, "text": "Welcome to Technocia Talks. Today, we have a very special guest with us. Thank you for coming, mister Youssef."},
+                    {"start_s": 1500.0, "end_s": 4594.27, "text": "Sustained interview discussion about climate engineering, coral reefs, vertical farming, and the founder story."}
+                ]
+            }),
+        );
+        write_sidecar(
+            dir.path(),
+            "audio-energy",
+            asset,
+            serde_json::json!({"silences": [{"start_s": 224.0, "end_s": 238.0}]}),
+        );
+        write_sidecar(
+            dir.path(),
+            "topic",
+            asset,
+            serde_json::json!({"topics": []}),
+        );
+
+        let out = PodcastEpisodeSpansTool
+            .handle(
+                ToolInvocation {
+                    call_id: "c1".into(),
+                    name: "podcast_episode_spans".into(),
+                    args: serde_json::json!({"asset_id": asset}),
+                },
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out.content).unwrap();
+        let asset_report = &value["assets"][0];
+        let spans = asset_report["episode_spans"].as_array().unwrap();
+        assert_eq!(asset_report["requires_user_choice"], false);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(asset_report["recommended_span"]["start_s"], 1463.375);
+        assert!(asset_report["rejected_spans"].as_array().unwrap().len() >= 4);
     }
 }

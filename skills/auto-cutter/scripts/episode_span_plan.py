@@ -13,6 +13,18 @@ from typing import Any
 INTRO_RE = re.compile(r"\b(welcome|today we have|in this episode|this is episode|welcome back)\b", re.I)
 OUTRO_RE = re.compile(r"\b(thanks for listening|that'?s all|see you next time|subscribe|follow us)\b", re.I)
 RESET_RE = re.compile(r"\b(next episode|new episode|welcome back|now we'?re going to|different topic)\b", re.I)
+REHEARSAL_RE = re.compile(
+    r"\b("
+    r"practice|practicing|cut|one more time|try again|start over|"
+    r"hold it for me|don't mind me|am i supposed|is it on me|321|3 2 1|"
+    r"what'?s the other one|look at that camera"
+    r")\b",
+    re.I,
+)
+
+MIN_PUBLISHABLE_DURATION_S = 12 * 60.0
+MIN_SHORT_EPISODE_WITH_OUTRO_S = 4 * 60.0
+REHEARSAL_SCAN_WINDOW_S = 180.0
 
 
 def load_body(path: str | None) -> dict[str, Any]:
@@ -67,6 +79,48 @@ def detect_boundaries(segs: list[dict[str, Any]], audio: dict[str, Any], topic_b
     return sorted(boundaries, key=lambda b: (b["time_s"], b["kind"]))
 
 
+def text_between(
+    segs: list[dict[str, Any]], start_s: float, end_s: float, max_window_s: float | None = None
+) -> str:
+    scan_end = min(end_s, start_s + max_window_s) if max_window_s else end_s
+    return " ".join(
+        seg["text"]
+        for seg in segs
+        if seg["end_s"] >= start_s and seg["start_s"] <= scan_end
+    )
+
+
+def classify_span(span: dict[str, Any], segs: list[dict[str, Any]]) -> dict[str, Any]:
+    # Boundary candidates are noisy; only sustained, non-rehearsal spans should become user choices.
+    duration = float(span["duration_s"])
+    reasons = list(span.get("reasons", []))
+    rejection_reasons = []
+    early_text = text_between(
+        segs,
+        float(span["start_s"]),
+        float(span["end_s"]),
+        max_window_s=REHEARSAL_SCAN_WINDOW_S,
+    )
+
+    if REHEARSAL_RE.search(early_text):
+        rejection_reasons.append("rehearsal_or_false_start_language")
+
+    has_outro = "outro_language" in reasons
+    long_enough = duration >= MIN_PUBLISHABLE_DURATION_S
+    short_episode_with_outro = has_outro and duration >= MIN_SHORT_EPISODE_WITH_OUTRO_S
+    if not long_enough and not short_episode_with_outro:
+        rejection_reasons.append("too_short_for_publishable_episode")
+
+    if rejection_reasons:
+        return {
+            **span,
+            "classification": "rejected",
+            "publishable": False,
+            "rejection_reasons": rejection_reasons,
+        }
+    return {**span, "classification": "publishable", "publishable": True}
+
+
 def build_spans(segs: list[dict[str, Any]], boundaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not segs:
         return []
@@ -96,6 +150,18 @@ def build_spans(segs: list[dict[str, Any]], boundaries: list[dict[str, Any]]) ->
     return spans
 
 
+def publishable_plan(spans: list[dict[str, Any]], segs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    classified = [classify_span(span, segs) for span in spans]
+    episode_spans = []
+    rejected_spans = []
+    for span in classified:
+        if span["publishable"]:
+            episode_spans.append({**span, "label": f"episode_{len(episode_spans) + 1}"})
+        else:
+            rejected_spans.append(span)
+    return episode_spans, rejected_spans
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--transcript", required=True)
@@ -108,7 +174,8 @@ def main() -> None:
     topic_body = load_body(args.topic)
     segs = segments(transcript)
     boundaries = detect_boundaries(segs, audio, topic_body)
-    spans = build_spans(segs, boundaries)
+    raw_spans = build_spans(segs, boundaries)
+    spans, rejected_spans = publishable_plan(raw_spans, segs)
     high_conf = [s for s in spans if s["confidence"] >= 0.7]
     recommended = high_conf[0] if high_conf else (spans[0] if spans else None)
     print(
@@ -116,6 +183,7 @@ def main() -> None:
             {
                 "status": "planned",
                 "episode_spans": spans,
+                "rejected_spans": rejected_spans,
                 "recommended_span": recommended,
                 "requires_user_choice": len(high_conf) > 1,
                 "evidence": boundaries,
