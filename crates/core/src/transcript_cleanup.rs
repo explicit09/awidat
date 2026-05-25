@@ -81,6 +81,20 @@ pub struct FalseStartRange {
     pub snippet: String,
 }
 
+/// A source range where the transcript is likely production talk,
+/// coaching, or a botched-take reset instead of publishable dialogue.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProductionAsideRange {
+    /// Source range start in source-media seconds.
+    pub start_s: f64,
+    /// Source range end in source-media seconds.
+    pub end_s: f64,
+    /// The phrase family that triggered the range.
+    pub marker: String,
+    /// Text inside the selected production-aside range.
+    pub snippet: String,
+}
+
 /// Return transcript segment ranges that are dense enough in filler
 /// or discourse-marker tokens to be removed by deterministic cleanup.
 pub fn filler_dense_ranges(
@@ -161,11 +175,159 @@ pub fn false_start_ranges(
     ranges
 }
 
+/// Return production/coaching ranges that overlap a visible source span.
+pub fn production_aside_ranges(
+    segments: &[TranscriptSegment],
+    clip_source_start_s: f64,
+    clip_source_end_s: f64,
+) -> Vec<ProductionAsideRange> {
+    let mut ranges = Vec::new();
+    for (index, segment) in segments.iter().enumerate() {
+        let Some(marker) = production_marker(&segment.text) else {
+            continue;
+        };
+        let mut start_index = index;
+        while start_index > 0 {
+            let previous = &segments[start_index - 1];
+            if segment.start_s - previous.end_s > 20.0 || !production_lead_in(&previous.text) {
+                break;
+            }
+            start_index -= 1;
+        }
+
+        let mut end_index = index;
+        while end_index + 1 < segments.len() {
+            let current = &segments[end_index];
+            let next = &segments[end_index + 1];
+            if next.start_s - current.end_s > 6.0
+                || !(production_marker(&next.text).is_some()
+                    || production_lead_in(&next.text)
+                    || production_continuation(&next.text))
+            {
+                break;
+            }
+            end_index += 1;
+        }
+
+        let start_s = segments[start_index].start_s.max(clip_source_start_s);
+        let end_s = segments[end_index].end_s.min(clip_source_end_s);
+        if end_s <= start_s {
+            continue;
+        }
+        ranges.push(ProductionAsideRange {
+            start_s,
+            end_s,
+            marker,
+            snippet: segments[start_index..=end_index]
+                .iter()
+                .map(|candidate| candidate.text.trim())
+                .collect::<Vec<_>>()
+                .join(" "),
+        });
+    }
+    merge_production_asides(ranges)
+}
+
 /// Normalize a transcript token for filler/restart matching.
 pub fn normalize_transcript_token(text: &str) -> String {
     text.trim()
         .trim_matches(|c: char| matches!(c, '.' | ',' | '?' | '!' | ':' | ';'))
         .to_lowercase()
+}
+
+fn production_marker(text: &str) -> Option<String> {
+    let normalized = normalize_phrase(text);
+    let markers = [
+        ("you can just say", "coaching"),
+        ("we don't have to", "coaching"),
+        ("we dont have to", "coaching"),
+        ("go into a long", "coaching"),
+        ("when do you when do you decide", "coaching"),
+        ("hold it for me", "retake_direction"),
+        ("one more time", "retake_direction"),
+        ("try again", "retake_direction"),
+        ("start over", "retake_direction"),
+        ("that was a practice", "rehearsal"),
+        ("i'm just practicing", "rehearsal"),
+        ("im just practicing", "rehearsal"),
+        ("am i supposed", "setup_talk"),
+        ("look at that camera", "setup_talk"),
+        ("is it on me", "setup_talk"),
+        ("what's the other one", "setup_talk"),
+        ("whats the other one", "setup_talk"),
+    ];
+    for (needle, marker) in markers {
+        if normalized.contains(needle) {
+            return Some(marker.to_string());
+        }
+    }
+    if normalize_phrase(text)
+        .split_whitespace()
+        .any(|token| token == "cut")
+    {
+        return Some("retake_direction".to_string());
+    }
+    None
+}
+
+fn production_lead_in(text: &str) -> bool {
+    let normalized = normalize_phrase(text);
+    if normalized.contains("doing good") || normalized.contains("don't mind me") {
+        return true;
+    }
+    let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+    matches!(
+        tokens.as_slice(),
+        ["youre"]
+            | ["you're"]
+            | ["i"]
+            | ["think"]
+            | ["mhmm"]
+            | ["yeah"]
+            | ["okay"]
+            | ["mhmm", "i"]
+            | ["i", "think"]
+    )
+}
+
+fn production_continuation(text: &str) -> bool {
+    let normalized = normalize_phrase(text);
+    normalized.contains("i'm building")
+        || normalized.contains("im building")
+        || normalized.contains("i'm working")
+        || normalized.contains("im working")
+        || normalized.contains("ceo of")
+        || normalized.contains("this and this")
+        || normalized.contains("then maybe")
+}
+
+fn normalize_phrase(text: &str) -> String {
+    text.to_lowercase()
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '\''))
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn merge_production_asides(mut ranges: Vec<ProductionAsideRange>) -> Vec<ProductionAsideRange> {
+    ranges.sort_by(|left, right| left.start_s.total_cmp(&right.start_s));
+    let mut merged: Vec<ProductionAsideRange> = Vec::new();
+    for range in ranges {
+        if let Some(last) = merged.last_mut()
+            && range.start_s <= last.end_s + 0.001
+        {
+            last.end_s = last.end_s.max(range.end_s);
+            if !last.marker.contains(&range.marker) {
+                last.marker = format!("{},{}", last.marker, range.marker);
+            }
+            if !range.snippet.is_empty() && !last.snippet.contains(&range.snippet) {
+                last.snippet = format!("{} {}", last.snippet, range.snippet);
+            }
+            continue;
+        }
+        merged.push(range);
+    }
+    merged
 }
 
 fn restart_marker_at(words: &[TranscriptWord], index: usize) -> Option<String> {
@@ -243,4 +405,83 @@ fn tokenize(text: &str) -> Vec<String> {
 
 fn is_cleanup_filler_token(token: &str) -> bool {
     BASIC_FILLER_TOKENS.contains(&token) || DISCOURSE_MARKER_TOKENS.contains(&token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn segment(start_s: f64, end_s: f64, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            start_s,
+            end_s,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn production_aside_includes_coaching_lead_in() {
+        let segments = vec![
+            segment(1525.335, 1525.975, "problems."),
+            segment(1527.495, 1529.175, "You're"),
+            segment(1529.175, 1530.375, "doing good. Mhmm."),
+            segment(1531.255, 1533.390, "Mhmm. I"),
+            segment(1535.310, 1535.870, "think"),
+            segment(1542.590, 1543.870, "think you can just say, like,"),
+            segment(
+                1544.595,
+                1548.595,
+                "I'm building I'm working. I'm the CEO of CoralX.",
+            ),
+            segment(
+                1549.155,
+                1554.995,
+                "Then maybe we can ask you, when do you when do you decide to become a builder?",
+            ),
+            segment(1556.115, 1557.395, "We don't have to"),
+            segment(
+                1558.950,
+                1561.350,
+                "go into a long one on one in the beginning.",
+            ),
+            segment(1562.630, 1563.350, "Mhmm."),
+            segment(1568.550, 1569.990, "I've actually"),
+        ];
+
+        let ranges = production_aside_ranges(&segments, 1463.375, 1531.640);
+        assert_eq!(ranges.len(), 1);
+        assert!((ranges[0].start_s - 1527.495).abs() < 1e-9);
+        assert!((ranges[0].end_s - 1531.640).abs() < 1e-9);
+        assert!(ranges[0].snippet.contains("you can just say"));
+    }
+
+    #[test]
+    fn production_aside_returns_visible_overlap_for_later_clip() {
+        let segments = vec![
+            segment(1542.590, 1543.870, "think you can just say, like,"),
+            segment(
+                1544.595,
+                1548.595,
+                "I'm building I'm working. I'm the CEO of CoralX.",
+            ),
+            segment(
+                1549.155,
+                1554.995,
+                "Then maybe we can ask you, when do you when do you decide to become a builder?",
+            ),
+            segment(1556.115, 1557.395, "We don't have to"),
+            segment(
+                1558.950,
+                1561.350,
+                "go into a long one on one in the beginning.",
+            ),
+            segment(1562.630, 1563.350, "Mhmm."),
+            segment(1568.550, 1569.990, "I've actually"),
+        ];
+
+        let ranges = production_aside_ranges(&segments, 1542.680, 1556.850);
+        assert_eq!(ranges.len(), 1);
+        assert!((ranges[0].start_s - 1542.680).abs() < 1e-9);
+        assert!((ranges[0].end_s - 1556.850).abs() < 1e-9);
+    }
 }

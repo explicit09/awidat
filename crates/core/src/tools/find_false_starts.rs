@@ -30,7 +30,9 @@ use serde::Deserialize;
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
-use crate::transcript_cleanup::{TranscriptWord, false_start_ranges};
+use crate::transcript_cleanup::{
+    TranscriptSegment, TranscriptWord, false_start_ranges, production_aside_ranges,
+};
 
 /// Default cap on findings.
 const DEFAULT_MAX_RESULTS: usize = 20;
@@ -163,6 +165,20 @@ pub fn scan_false_starts(
                             return out;
                         }
                     }
+                    if let Some(segments) = load_whisper_segments(project_root, &asset_id) {
+                        scan_segments_for_production_asides(
+                            &segments,
+                            &asset_id,
+                            clip_source_start,
+                            clip_source_end,
+                            timeline_cursor_s + clip_track_start,
+                            &mut out,
+                        );
+                        if out.len() >= max_results {
+                            out.truncate(max_results);
+                            return out;
+                        }
+                    }
                     track_cursor_s += range.duration.to_seconds();
                 }
                 TrackChild::Gap(gap) => {
@@ -199,6 +215,27 @@ fn scan_words_for_restarts(
     }
 }
 
+fn scan_segments_for_production_asides(
+    segments: &[TranscriptSegment],
+    asset_id: &str,
+    clip_source_start: f64,
+    clip_source_end: f64,
+    timeline_offset: f64,
+    out: &mut Vec<FalseStartFinding>,
+) {
+    for range in production_aside_ranges(segments, clip_source_start, clip_source_end) {
+        out.push(FalseStartFinding {
+            asset_id: asset_id.to_string(),
+            marker: range.marker,
+            source_start_s: range.start_s,
+            source_end_s: range.end_s,
+            timeline_start_s: timeline_offset + (range.start_s - clip_source_start),
+            timeline_end_s: timeline_offset + (range.end_s - clip_source_start),
+            snippet: range.snippet,
+        });
+    }
+}
+
 /// One restart-marker hit. The fragment from `source_start_s` to
 /// `source_end_s` is the false-start the user might trim; `marker`
 /// is the word that triggered detection (so the agent can describe
@@ -221,6 +258,42 @@ pub struct FalseStartFinding {
     pub timeline_end_s: f64,
     /// Short human-readable preview of the false-start text.
     pub snippet: String,
+}
+
+fn load_whisper_segments(project_root: &Path, asset_id: &str) -> Option<Vec<TranscriptSegment>> {
+    let path = whisper_sidecar_path(project_root, asset_id);
+    let bytes = std::fs::read(&path).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let arr = value.pointer("/data/segments").and_then(|v| v.as_array())?;
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let text = item
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if text.is_empty() {
+            continue;
+        }
+        let start_s = item
+            .get("start_s")
+            .or_else(|| item.get("start"))
+            .and_then(|v| v.as_f64());
+        let end_s = item
+            .get("end_s")
+            .or_else(|| item.get("end"))
+            .and_then(|v| v.as_f64());
+        if let (Some(s), Some(e)) = (start_s, end_s)
+            && e > s
+        {
+            out.push(TranscriptSegment {
+                text: text.to_string(),
+                start_s: s,
+                end_s: e,
+            });
+        }
+    }
+    Some(out)
 }
 
 fn load_whisper_words(project_root: &Path, asset_id: &str) -> Option<Vec<TranscriptWord>> {
@@ -272,9 +345,10 @@ fn whisper_sidecar_path(project_root: &Path, asset_id: &str) -> PathBuf {
 const DESCRIPTION: &str = "\
 Detect places where the speaker began a thought, abandoned it, and \
 restarted (\"actually, what I meant was…\", \"wait, let me back up\", \
-etc). v1 heuristic: scans the whisper transcript for restart-marker \
-words ({wait, actually, let me}) and surfaces the preceding text \
-fragment as the candidate false-start.\
+etc), plus production/coaching asides such as \"cut\", \"one more time\", \
+or \"you can just say\". v1 heuristic: scans the whisper transcript \
+for restart markers and production-aside language, then surfaces the \
+visible source fragment as the candidate false-start.\
 \n\nEach finding: { asset_id, marker, source_start_s, source_end_s, \
 timeline_start_s, timeline_end_s, snippet }. The marker tells the \
 agent what triggered the detection so it can describe the Note. The \
