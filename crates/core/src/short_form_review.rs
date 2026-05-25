@@ -33,6 +33,7 @@ pub struct ShortFormReviewInput {
 pub struct ShortFormReviewOptions {
     pub max_candidates: usize,
     pub max_duration_s: f64,
+    pub profile: ShortFormProfile,
 }
 
 impl Default for ShortFormReviewOptions {
@@ -40,13 +41,22 @@ impl Default for ShortFormReviewOptions {
         Self {
             max_candidates: DEFAULT_MAX_CANDIDATES,
             max_duration_s: DEFAULT_MAX_DURATION_S,
+            profile: ShortFormProfile::EditorialReview,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShortFormProfile {
+    EditorialReview,
+    ViralSocial,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortFormReview {
     pub asset_id: String,
+    pub profile: ShortFormProfile,
     pub source_format: SourceFormat,
     pub candidates: Vec<ShortFormCandidate>,
     pub ranked_sets: RankedSets,
@@ -75,6 +85,7 @@ pub struct ShortFormCandidate {
     pub score: ScoreBreakdown,
     pub why_ai_picked_it: Vec<String>,
     pub evidence: Vec<String>,
+    pub profile_plan: ProfilePlan,
     pub broll_plan: BrollPlan,
     pub vertical_layout: VerticalLayoutPlan,
     pub caption_plan: CaptionPlan,
@@ -86,6 +97,47 @@ pub struct ShortFormCandidate {
     pub review_action_contracts: Vec<ReviewActionContract>,
     pub workflow: ReviewWorkflow,
     pub draft_edl: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfilePlan {
+    pub profile: ShortFormProfile,
+    pub pace: String,
+    pub trim_policy: TrimPolicy,
+    pub motion_policy: MotionPolicy,
+    pub overlay_recommendations: Vec<OverlayRecommendation>,
+    pub sound_cues: Vec<SoundCue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrimPolicy {
+    pub pause_policy: String,
+    pub filler_policy: String,
+    pub repetition_policy: String,
+    pub targets: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MotionPolicy {
+    pub cadence_s: (f64, f64),
+    pub zoom_style: String,
+    pub edl_operations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OverlayRecommendation {
+    pub kind: String,
+    pub start_s: f64,
+    pub end_s: f64,
+    pub text: String,
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoundCue {
+    pub kind: String,
+    pub start_s: f64,
+    pub rationale: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,13 +308,14 @@ pub fn build_short_form_review(
         options.max_duration_s
     };
 
+    let profile = options.profile;
     let mut candidates: Vec<ShortFormCandidate> = moments_from_input(&input)
         .into_iter()
         .filter(|moment| {
             let duration_s = moment.end_s - moment.start_s;
             duration_s > 4.0 && duration_s <= max_duration_s
         })
-        .map(|moment| build_candidate(&input, moment))
+        .map(|moment| build_candidate(&input, moment, profile))
         .collect();
 
     candidates.sort_by(|a, b| b.score.total.total_cmp(&a.score.total));
@@ -274,6 +327,7 @@ pub fn build_short_form_review(
     let ranked_sets = build_ranked_sets(&candidates);
     ShortFormReview {
         asset_id: input.asset_id.clone(),
+        profile,
         source_format: SourceFormat {
             width: input.source_width,
             height: input.source_height,
@@ -289,36 +343,51 @@ pub fn build_short_form_review(
     }
 }
 
-fn build_candidate(input: &ShortFormReviewInput, moment: Moment) -> ShortFormCandidate {
+fn build_candidate(
+    input: &ShortFormReviewInput,
+    moment: Moment,
+    profile: ShortFormProfile,
+) -> ShortFormCandidate {
     let range = SourceRange {
         start_s: round2(moment.start_s),
         end_s: round2(moment.end_s),
         duration_s: round2(moment.end_s - moment.start_s),
     };
     let duration_class = duration_class(range.duration_s);
-    let score = score_moment(&moment);
+    let score = score_moment(&moment, profile);
     let hook = hook_from_text(&moment.text);
     let topic = topic_for_range(&input.topics, range.start_s, range.end_s);
     let clip_type = clip_type(&moment);
     let broll_plan = plan_broll(input, &moment, topic.as_deref());
-    let vertical_layout = plan_vertical_layout(input, &moment, broll_plan.needed);
+    let vertical_layout = plan_vertical_layout(input, &moment, broll_plan.needed, profile);
     let highlight_terms = highlight_terms(&moment.text, topic.as_deref());
+    let profile_plan = profile_plan(profile, &moment);
+    let group_words_max = if matches!(profile, ShortFormProfile::ViralSocial) {
+        4
+    } else {
+        7
+    };
     let caption_plan = CaptionPlan {
         group_words_min: 3,
-        group_words_max: 7,
+        group_words_max,
         placement: "lower-middle safe area".to_string(),
-        style: "bold_keyword".to_string(),
+        style: if matches!(profile, ShortFormProfile::ViralSocial) {
+            "viral_kinetic_keyword"
+        } else {
+            "bold_keyword"
+        }
+        .to_string(),
         style_options: vec![
             "bold_keyword".to_string(),
             "karaoke".to_string(),
             "clean_lower_middle".to_string(),
         ],
         highlight_terms: highlight_terms.clone(),
-        groups: caption_groups(input, &moment, &highlight_terms),
+        groups: caption_groups(input, &moment, &highlight_terms, group_words_max),
     };
     let suggested_title = suggested_title(&hook, topic.as_deref());
     let suggested_caption = suggested_caption(&moment.text);
-    let platform_variants = platform_variants(duration_class, range.duration_s);
+    let platform_variants = platform_variants(profile, duration_class, range.duration_s);
     let story_arc = story_arc(&moment.text, &hook);
     let candidate_id = format!(
         "short_{:06}_{:06}",
@@ -338,6 +407,7 @@ fn build_candidate(input: &ShortFormReviewInput, moment: Moment) -> ShortFormCan
         &broll_plan,
         &vertical_layout,
         &caption_plan,
+        &profile_plan,
     );
     let workflow = review_workflow(&draft_edl, &input.asset_id, &range);
     let review_action_contracts = review_action_contracts(&workflow);
@@ -356,6 +426,7 @@ fn build_candidate(input: &ShortFormReviewInput, moment: Moment) -> ShortFormCan
         score,
         why_ai_picked_it,
         evidence,
+        profile_plan,
         broll_plan,
         vertical_layout,
         caption_plan,
@@ -473,21 +544,26 @@ fn common_speaker(segments: &[&Moment]) -> Option<String> {
     }
 }
 
-fn score_moment(moment: &Moment) -> ScoreBreakdown {
+fn score_moment(moment: &Moment, profile: ShortFormProfile) -> ScoreBreakdown {
     let text = moment.text.to_lowercase();
-    let hook_strength =
+    let mut hook_strength =
         bounded(0.35 + moment.model_score * 0.35 + keyword_score(&text, HOOK_KEYWORDS) * 0.3);
     let standalone_clarity = bounded(0.35 + clarity_score(&text) - context_dependency(&text) * 0.4);
     let emotional_intensity = bounded(0.2 + keyword_score(&text, EMOTION_KEYWORDS) * 0.5);
     let educational_value = bounded(0.25 + keyword_score(&text, VALUE_KEYWORDS) * 0.55);
     let completeness = bounded(0.25 + completeness_score(moment));
     let visual_potential = bounded(0.45 + keyword_score(&text, VISUAL_KEYWORDS) * 0.4);
-    let retention_prediction = bounded(
+    let mut retention_prediction = bounded(
         hook_strength * 0.35
             + standalone_clarity * 0.2
             + completeness * 0.25
             + educational_value * 0.2,
     );
+    if matches!(profile, ShortFormProfile::ViralSocial) {
+        hook_strength = bounded(hook_strength + 0.12 + emotional_intensity * 0.08);
+        retention_prediction =
+            bounded(retention_prediction + 0.15 + hook_strength * 0.08 + visual_potential * 0.05);
+    }
     let context_dependency_penalty = bounded(context_dependency(&text));
     let rambling_penalty = bounded(rambling_penalty(&text));
     let total = round2(
@@ -686,6 +762,7 @@ fn plan_vertical_layout(
     input: &ShortFormReviewInput,
     moment: &Moment,
     broll_needed: bool,
+    profile: ShortFormProfile,
 ) -> VerticalLayoutPlan {
     let speakers = input
         .transcript
@@ -716,7 +793,7 @@ fn plan_vertical_layout(
             "Keep the visible speaker in the safe center crop.".to_string()
         },
         notes: layout_notes(scene_count, shot_hint.as_deref()),
-        edl_operations: reframe_edl_operations(moment, face_count),
+        edl_operations: reframe_edl_operations(moment, face_count, profile),
     }
 }
 
@@ -737,7 +814,11 @@ fn layout_notes(scene_count: usize, shot_hint: Option<&str>) -> Vec<String> {
     notes
 }
 
-fn reframe_edl_operations(moment: &Moment, face_count: usize) -> Vec<String> {
+fn reframe_edl_operations(
+    moment: &Moment,
+    face_count: usize,
+    profile: ShortFormProfile,
+) -> Vec<String> {
     let zoom = if face_count > 1 { 1.28 } else { 1.18 };
     let x = if face_count > 1 { 0.0 } else { -0.04 };
     let params = serde_json::json!({
@@ -748,20 +829,109 @@ fn reframe_edl_operations(moment: &Moment, face_count: usize) -> Vec<String> {
         "y": 0.0,
         "safe_area": "mobile"
     });
-    vec![format!(
+    let mut ops = vec![format!(
         "*** Set Effect\n\
 @@ anchor: transcript_snippet=\"{anchor}\"\n\
 + effect: awidat.reframe\n\
 + params_json: {params}\n\
 + rationale: speaker-aware 9:16 review reframe\n",
         anchor = edl_string(&hook_from_text(&moment.text)),
-    )]
+    )];
+    if matches!(profile, ShortFormProfile::ViralSocial) {
+        let viral_params = serde_json::json!({
+            "mode": "viral_punch_in",
+            "cadence_s": [1.0, 3.0],
+            "zoom_sequence": [1.0, 1.18, 1.32],
+            "safe_area": "mobile"
+        });
+        ops.push(format!(
+            "*** Set Effect\n\
+@@ anchor: transcript_snippet=\"{anchor}\"\n\
++ effect: awidat.reframe\n\
++ params_json: {viral_params}\n\
++ rationale: viral_punch_in cadence every 1-3 seconds\n",
+            anchor = edl_string(&hook_from_text(&moment.text)),
+        ));
+    }
+    ops
+}
+
+fn profile_plan(profile: ShortFormProfile, moment: &Moment) -> ProfilePlan {
+    match profile {
+        ShortFormProfile::EditorialReview => ProfilePlan {
+            profile,
+            pace: "natural".to_string(),
+            trim_policy: TrimPolicy {
+                pause_policy: "balanced".to_string(),
+                filler_policy: "light".to_string(),
+                repetition_policy: "preserve_meaning".to_string(),
+                targets: vec![
+                    "trim_dead_air".to_string(),
+                    "remove_obvious_restarts".to_string(),
+                ],
+            },
+            motion_policy: MotionPolicy {
+                cadence_s: (6.0, 12.0),
+                zoom_style: "speaker_safe".to_string(),
+                edl_operations: Vec::new(),
+            },
+            overlay_recommendations: Vec::new(),
+            sound_cues: Vec::new(),
+        },
+        ShortFormProfile::ViralSocial => {
+            let hook = hook_from_text(&moment.text);
+            ProfilePlan {
+                profile,
+                pace: "aggressive".to_string(),
+                trim_policy: TrimPolicy {
+                    pause_policy: "aggressive".to_string(),
+                    filler_policy: "remove".to_string(),
+                    repetition_policy: "compress".to_string(),
+                    targets: vec![
+                        "remove_pauses_over_250ms".to_string(),
+                        "remove_filler_words".to_string(),
+                        "remove_repeated_phrases".to_string(),
+                        "tighten_to_hook_payoff".to_string(),
+                    ],
+                },
+                motion_policy: MotionPolicy {
+                    cadence_s: (1.0, 3.0),
+                    zoom_style: "rapid_punch_in".to_string(),
+                    edl_operations: vec![format!(
+                        "viral_punch_in: punch or zoom every 1-3s around '{}'",
+                        hook
+                    )],
+                },
+                overlay_recommendations: vec![OverlayRecommendation {
+                    kind: "meme_overlay".to_string(),
+                    start_s: 0.6,
+                    end_s: 2.2,
+                    text: "quick reaction or screenshot overlay for the hook".to_string(),
+                    rationale: "viral_social uses brief overlays to reset attention early."
+                        .to_string(),
+                }],
+                sound_cues: vec![
+                    SoundCue {
+                        kind: "whoosh".to_string(),
+                        start_s: 1.0,
+                        rationale: "accent the first punch-in without covering speech.".to_string(),
+                    },
+                    SoundCue {
+                        kind: "subtle_pop".to_string(),
+                        start_s: 2.5,
+                        rationale: "reinforce highlighted keyword caption beats.".to_string(),
+                    },
+                ],
+            }
+        }
+    }
 }
 
 fn caption_groups(
     input: &ShortFormReviewInput,
     moment: &Moment,
     highlight_terms: &[String],
+    group_words_max: usize,
 ) -> Vec<CaptionGroup> {
     let words = timed_words_for_range(input, moment.start_s, moment.end_s, &moment.text);
     let mut groups = Vec::new();
@@ -771,7 +941,7 @@ fn caption_groups(
         if remaining < 3 {
             break;
         }
-        let mut take = remaining.min(7);
+        let mut take = remaining.min(group_words_max);
         let tail = remaining - take;
         if (1..3).contains(&tail) && take > 3 {
             take -= 3 - tail;
@@ -872,6 +1042,7 @@ fn draft_edl(
     broll_plan: &BrollPlan,
     vertical_layout: &VerticalLayoutPlan,
     caption_plan: &CaptionPlan,
+    profile_plan: &ProfilePlan,
 ) -> String {
     let platform = platforms
         .first()
@@ -891,6 +1062,7 @@ fn draft_edl(
 + end: {end}\n\
 + name: {name}\n\
 {reframe_ops}\
+{profile_ops}\
 {broll_ops}\
 {caption_ops}\
 *** Set Loudness Target\n\
@@ -907,6 +1079,7 @@ fn draft_edl(
         end = range.end_s,
         name = candidate_id,
         reframe_ops = vertical_layout.edl_operations.join(""),
+        profile_ops = profile_edl_operations(profile_plan),
         broll_ops = broll_edl_operations(broll_plan, hook),
         caption_ops = caption_edl_operations(caption_plan),
         title = edl_string(title),
@@ -1035,6 +1208,28 @@ fn review_action_contracts(workflow: &ReviewWorkflow) -> Vec<ReviewActionContrac
     ]
 }
 
+fn profile_edl_operations(plan: &ProfilePlan) -> String {
+    if !matches!(plan.profile, ShortFormProfile::ViralSocial) {
+        return String::new();
+    }
+    plan.overlay_recommendations
+        .iter()
+        .map(|overlay| {
+            format!(
+                "*** Insert Title\n\
++ start_s: {start}\n\
++ end_s: {end}\n\
++ text: \"{text}\"\n\
++ position: top\n",
+                start = overlay.start_s,
+                end = overlay.end_s,
+                text = edl_string(&overlay.text),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn broll_edl_operations(plan: &BrollPlan, hook: &str) -> String {
     plan.attached_assets
         .first()
@@ -1149,7 +1344,30 @@ fn evidence(moment: &Moment, topic: Option<&str>, input: &ShortFormReviewInput) 
     evidence
 }
 
-fn platform_variants(duration_class: DurationClass, duration_s: f64) -> Vec<PlatformVariant> {
+fn platform_variants(
+    profile: ShortFormProfile,
+    duration_class: DurationClass,
+    duration_s: f64,
+) -> Vec<PlatformVariant> {
+    if matches!(profile, ShortFormProfile::ViralSocial) {
+        return vec![
+            variant(
+                "tiktok",
+                "strong",
+                "fast hook, kinetic captions, punch-in cadence",
+            ),
+            variant(
+                "instagram_reels",
+                "strong",
+                "cleaner viral cut with bold captions",
+            ),
+            variant(
+                "youtube_shorts",
+                "medium",
+                "tighten for a complete idea under Shorts norms",
+            ),
+        ];
+    }
     match duration_class {
         DurationClass::Micro => vec![
             variant("youtube_shorts", "strong", "fits a compact complete idea"),

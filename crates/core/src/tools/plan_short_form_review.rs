@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::FunctionCallError;
 use crate::anthropic::Tool as ToolSchema;
 use crate::short_form_review::{
-    ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
+    ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
 };
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
@@ -29,6 +29,8 @@ struct Args {
     max_candidates: Option<usize>,
     #[serde(default)]
     max_duration_s: Option<f64>,
+    #[serde(default)]
+    profile: Option<ShortFormProfile>,
 }
 
 #[async_trait]
@@ -69,6 +71,11 @@ impl ToolHandler for PlanShortFormReviewTool {
                         "minimum": 5,
                         "maximum": 300,
                         "description": "Maximum candidate duration. Default 300 seconds, allowing extended short-form when complete."
+                    },
+                    "profile": {
+                        "type": "string",
+                        "enum": ["editorial_review", "viral_social"],
+                        "description": "Editing profile. editorial_review is cleaner and complete; viral_social optimizes TikTok/Reels retention with aggressive pacing."
                     }
                 },
                 "required": ["asset_id"]
@@ -119,6 +126,7 @@ impl ToolHandler for PlanShortFormReviewTool {
             ShortFormReviewOptions {
                 max_candidates: args.max_candidates.unwrap_or(15).min(50),
                 max_duration_s: args.max_duration_s.unwrap_or(300.0).min(300.0),
+                profile: args.profile.unwrap_or(ShortFormProfile::EditorialReview),
             },
         );
         let body = serde_json::to_string_pretty(&review).map_err(|e| {

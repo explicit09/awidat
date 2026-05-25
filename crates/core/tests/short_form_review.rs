@@ -2,7 +2,8 @@
 
 use awidat_core::edl::parser;
 use awidat_core::short_form_review::{
-    DurationClass, ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
+    DurationClass, ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions,
+    build_short_form_review,
 };
 use awidat_core::tool::{SandboxMode, ToolContext, ToolHandler, ToolInvocation};
 use awidat_core::tools::apply_edl::ApplyEdlTool;
@@ -222,6 +223,7 @@ fn ranks_complete_extended_candidates_and_prefers_quality_over_duration() {
         ShortFormReviewOptions {
             max_candidates: 3,
             max_duration_s: 300.0,
+            profile: ShortFormProfile::EditorialReview,
         },
     );
 
@@ -249,6 +251,7 @@ fn transcript_only_discovery_builds_complete_topic_windows() {
         ShortFormReviewOptions {
             max_candidates: 3,
             max_duration_s: 300.0,
+            profile: ShortFormProfile::EditorialReview,
         },
     );
 
@@ -278,6 +281,7 @@ fn candidate_packet_includes_broll_layout_captions_metadata_and_edl() {
         ShortFormReviewOptions {
             max_candidates: 1,
             max_duration_s: 300.0,
+            profile: ShortFormProfile::EditorialReview,
         },
     );
 
@@ -351,6 +355,7 @@ fn v2_packet_attaches_broll_generates_reframe_caption_groups_and_workflow_comman
         ShortFormReviewOptions {
             max_candidates: 1,
             max_duration_s: 300.0,
+            profile: ShortFormProfile::EditorialReview,
         },
     );
 
@@ -444,12 +449,119 @@ fn v2_packet_attaches_broll_generates_reframe_caption_groups_and_workflow_comman
 }
 
 #[test]
+fn viral_social_profile_coexists_with_editorial_review_and_changes_packet_generation() {
+    let editorial = build_short_form_review(
+        review_input(),
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 300.0,
+            profile: ShortFormProfile::EditorialReview,
+        },
+    );
+    let viral = build_short_form_review(
+        review_input(),
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 300.0,
+            profile: ShortFormProfile::ViralSocial,
+        },
+    );
+
+    let Some(editorial_packet) = editorial.candidates.first() else {
+        panic!("expected editorial packet");
+    };
+    let Some(viral_packet) = viral.candidates.first() else {
+        panic!("expected viral packet");
+    };
+
+    assert_eq!(editorial.profile, ShortFormProfile::EditorialReview);
+    assert_eq!(viral.profile, ShortFormProfile::ViralSocial);
+    assert_eq!(
+        editorial_packet.profile_plan.profile,
+        ShortFormProfile::EditorialReview
+    );
+    assert_eq!(
+        viral_packet.profile_plan.profile,
+        ShortFormProfile::ViralSocial
+    );
+    assert!(viral_packet.score.hook_strength >= editorial_packet.score.hook_strength);
+    assert!(viral_packet.score.retention_prediction >= editorial_packet.score.retention_prediction);
+    assert_ne!(
+        viral_packet.caption_plan.style,
+        editorial_packet.caption_plan.style
+    );
+    assert_ne!(
+        viral_packet.platform_variants[0].platform,
+        editorial_packet.platform_variants[0].platform
+    );
+}
+
+#[test]
+fn viral_social_packet_contains_aggressive_pacing_overlay_sound_and_parseable_edl() {
+    let review = build_short_form_review(
+        review_input(),
+        ShortFormReviewOptions {
+            max_candidates: 1,
+            max_duration_s: 300.0,
+            profile: ShortFormProfile::ViralSocial,
+        },
+    );
+
+    let Some(packet) = review.candidates.first() else {
+        panic!("expected viral packet");
+    };
+    assert_eq!(packet.profile_plan.pace, "aggressive");
+    assert_eq!(packet.profile_plan.trim_policy.pause_policy, "aggressive");
+    assert!(
+        packet
+            .profile_plan
+            .trim_policy
+            .targets
+            .contains(&"remove_filler_words".to_string())
+    );
+    assert_eq!(packet.profile_plan.motion_policy.cadence_s, (1.0, 3.0));
+    assert!(
+        packet
+            .profile_plan
+            .motion_policy
+            .edl_operations
+            .iter()
+            .any(|op| op.contains("viral_punch_in"))
+    );
+    assert!(
+        packet
+            .profile_plan
+            .overlay_recommendations
+            .iter()
+            .any(|overlay| overlay.kind == "meme_overlay")
+    );
+    assert!(
+        packet
+            .profile_plan
+            .sound_cues
+            .iter()
+            .any(|cue| cue.kind == "whoosh")
+    );
+    assert_eq!(packet.caption_plan.group_words_max, 4);
+    assert_eq!(packet.caption_plan.style, "viral_kinetic_keyword");
+    assert_eq!(packet.platform_variants[0].platform, "tiktok");
+    assert!(packet.draft_edl.contains("*** Insert Title"));
+    assert!(packet.draft_edl.contains("viral_punch_in"));
+    if let Err(err) = parser::parse(&packet.draft_edl) {
+        panic!("viral draft EDL should parse: {err}");
+    }
+    assert!(!packet.workflow.preview.approval_required);
+    assert!(packet.workflow.apply.approval_required);
+}
+
+#[test]
 fn ranked_sets_expose_top_five_candidate_packets_per_bucket() {
     let review = build_short_form_review(
         review_input(),
         ShortFormReviewOptions {
             max_candidates: 10,
             max_duration_s: 300.0,
+            profile: ShortFormProfile::EditorialReview,
         },
     );
 
@@ -481,6 +593,7 @@ fn review_tool_is_read_only_but_apply_edl_proposals_are_permission_gated() {
         ShortFormReviewOptions {
             max_candidates: 1,
             max_duration_s: 300.0,
+            profile: ShortFormProfile::EditorialReview,
         },
     );
     let Some(packet) = review.candidates.first() else {
