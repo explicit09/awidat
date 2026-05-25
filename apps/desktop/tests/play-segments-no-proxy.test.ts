@@ -1,7 +1,9 @@
 import {
+  AUTO_ADVANCE_GAP_LIMIT_S,
   derivePreviewPlan,
   findActiveSegment,
   findNextSegmentAfter,
+  shouldAutoAdvanceTimelineGap,
 } from "../src/timeline/usePlaySegments";
 import type { TimelineSnapshot } from "../src/timeline/store";
 
@@ -161,3 +163,13 @@ assert(
   "true timeline end should not resolve to another segment",
 );
 console.log("ok  gap seeks resolve to the next playable segment");
+
+assert(
+  shouldAutoAdvanceTimelineGap(7 - AUTO_ADVANCE_GAP_LIMIT_S / 2, 7),
+  "sub-frame/micro gaps should auto-advance",
+);
+assert(
+  !shouldAutoAdvanceTimelineGap(5, 7),
+  "real timeline gaps should not silently jump to the next segment",
+);
+console.log("ok  preview only auto-advances across micro gaps");

@@ -21,10 +21,11 @@
 // identity so the SegmentedVideoView doesn't re-derive on every
 // render.
 //
-// v1 scope: video tracks only, single-track flat (V1). Multi-video
-// (V2 overlay) lands when we tackle B-roll preview. Until the preview
-// owns a separate audio mixer, linked audio tracks are visual/editing
-// state only; the proxy video remains the audible preview source.
+// The base program comes from the first non-title video track; upper
+// video tracks are composited as overlays for B-roll/PiP. Until the
+// preview owns a separate audio mixer, linked audio tracks are
+// visual/editing state only; the proxy video remains the audible
+// preview source.
 
 import { useMemo } from "react";
 import type { TimelineParameterAnimation } from "../protocol";
@@ -96,6 +97,8 @@ type PreviewPlan = {
   transitions: PreviewTransition[];
   duration: number;
 };
+
+export const AUTO_ADVANCE_GAP_LIMIT_S = 0.25;
 
 /**
  * Walk the snapshot's first video track and produce the playable
@@ -413,4 +416,12 @@ export function findNextSegmentAfter(
     }
   }
   return -1;
+}
+
+export function shouldAutoAdvanceTimelineGap(
+  timelineTime: number,
+  nextTimelineStart: number,
+): boolean {
+  const gapS = nextTimelineStart - timelineTime;
+  return gapS >= 0 && gapS <= AUTO_ADVANCE_GAP_LIMIT_S;
 }
