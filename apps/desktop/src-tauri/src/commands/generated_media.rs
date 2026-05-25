@@ -129,11 +129,12 @@ mod tests {
     #[test]
     fn entry_projects_video_path() {
         let dir = tempfile::tempdir().unwrap();
-        let record = GeneratedMediaRecord::mock_succeeded(
+        let record = GeneratedMediaRecord::new_mock_succeeded(
             "job-1",
             "raw/generated/mock/job-1.mp4",
             "quiet office",
-        );
+        )
+        .unwrap();
         let entry = entry_from_record(dir.path(), record).unwrap();
         assert_eq!(entry.job_id, "job-1");
         assert_eq!(entry.state, "succeeded");
