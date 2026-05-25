@@ -10,6 +10,7 @@ tools_allowlist:
   - find_filler_words
   - find_broll_opportunities
   - find_speaker_oncam
+  - plan_scene_aware_short_form
   - plan_reframe
   - apply_edl
   - view_timeline
@@ -72,7 +73,26 @@ have a strong short — tell the user honestly: "the strongest moments
 in this recording are mid-7 intensity; consider whether short-form
 is the right format for this content."
 
-### 2. Build the spine
+### 2. Build the scene-aware edit plan
+
+Before applying generic short-form mechanics, call the reusable scene
+intelligence planner for the selected candidate clip:
+
+```
+plan_scene_aware_short_form(asset_id=<asset>, clip_id=<timeline-clip>, source_width=<w>, source_height=<h>)
+```
+
+Use its structured recommendations as the planning source for captions,
+reframing, punch-ins, holds, b-roll, overlays, and MotionScene support.
+The planner is read-only: inspect its evidence reasons and EDL fragment,
+then apply only the reviewed operations through `apply_edl`.
+
+Treat scene-aware safety as stronger than defaults. If the planner moves
+captions away from the bottom third because of a face, mouth, hands, UI,
+product, key action, or busy region, keep that adaptive placement unless
+new visual evidence proves a safer choice.
+
+### 3. Build the spine
 
 Pick 3–5 beats total (including the hook). Order:
 
@@ -95,7 +115,7 @@ contract instead of using a static `awidat.reframe` effect. Reject paths
 with unsorted keyframes, centers outside 0..=1, scale below 1.0, or low
 confidence unless the user explicitly approves manual review.
 
-### 3. Tighten
+### 4. Tighten
 
 ```
 find_dead_air(max_silence_s=1.0)         # tighter than podcast threshold
@@ -105,7 +125,7 @@ find_filler_words(aggressive=true, max_results=50)
 Bundle every silence ≥ 1.0s and every filler into a single `apply_edl`
 envelope. The user reviews one ghost overlay covering the whole pass.
 
-### 4. B-roll pass
+### 5. B-roll pass
 
 ```
 find_broll_opportunities(duration_s=2.5, max_results=15)
@@ -118,7 +138,7 @@ self-censor.
 For each accepted b-roll Note, consult the `stock-broll` skill if the
 user wants Pexels-fetched cutaways.
 
-### 5. Caption pass
+### 6. Caption pass
 
 ```
 read_index(channel="transcript", asset_id=<the trimmed timeline output>)
@@ -223,7 +243,35 @@ python3 <skill-root>/scripts/caption_plan.py \
 Treat `status: "needs_review"` as evidence to revise phrase length,
 line wrapping, cue duration, or caption density before render handoff.
 
-Before claiming caption placement is visually safe, emit geometry evidence:
+Before claiming caption placement is visually safe, emit adaptive layout
+evidence with available visual sidecars:
+
+```bash
+python3 <skill-root>/scripts/caption_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --face index/face/raw/<asset>.json \
+  --gaze index/gaze/raw/<asset>.json \
+  --shot index/shot/raw/<asset>.json \
+  --composition index/composition/raw/<asset>.json \
+  --frame-quality index/frame-quality/raw/<asset>.json \
+  --phrase-preset short \
+  --max-chars-per-line 24 \
+  --output-format adaptive-layout > caption-layout.json
+```
+
+Use each recommendation's `edl_hint` when emitting `*** Insert Caption`:
+it preserves phrase timing and `word_timings_json`, maps richer layout zones
+onto renderer-supported title positions, and records the selected zone and
+estimated bounding box for review. Treat rejected zones as audit evidence:
+do not place captions over face, eyes, mouth, subject body, gaze line, key
+action, or unsafe frame areas unless the user explicitly accepts manual risk.
+
+To plan keyword emphasis, topic labels, progress labels, callouts, reaction
+text, or lower thirds with the same safety rules, pass `--layout-items` with
+an `items` array. Each item uses `id`, `overlay_kind`, `text`, `start_s`, and
+`end_s`; non-caption items return `insert_title` EDL hints.
+
+When only caption geometry is available, emit the simpler geometry evidence:
 
 ```bash
 python3 <skill-root>/scripts/caption_plan.py \
@@ -266,7 +314,8 @@ For each returned phrase, emit `*** Insert Caption` ops with:
 
 - `text`: 2–4 words per title, grouped by word timing, punctuation,
   speaker changes, and breath-length silence gaps
-- `position`: bottom-third
+- `position`: from adaptive layout `edl_hint.position`; bottom-third only
+  when the planner says it is safe
 - `font_size`: 48–64 (large enough on a phone)
 - `color`: white with 80%-alpha background OR black-on-yellow for
   the highest-energy beats

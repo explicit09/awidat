@@ -45,6 +45,7 @@ fn bundled_output_workflow_skills_load() {
         "stock-broll",
         "split-edit-director",
         "thematic-montage-director",
+        "talking-head-vertical",
         "tutorial",
         "version-control",
         "viral-clip-extractor",
@@ -415,6 +416,7 @@ fn output_workflow_skills_keep_the_edit_graph_in_the_loop() {
         "podcast-episode-producer",
         "rough-cut-assembler",
         "short-form",
+        "talking-head-vertical",
         "viral-clip-extractor",
     ] {
         let skill = registry.get(name).expect("workflow skill exists");
@@ -496,6 +498,57 @@ fn podcast_episode_skill_covers_full_editorial_process() {
         assert!(
             skill.body.contains(required),
             "podcast skill must cover process anchor {required:?}"
+        );
+    }
+}
+
+#[test]
+fn talking_head_vertical_skill_covers_native_pipeline_contract() {
+    let root = workspace_root().join("skills");
+    let (registry, errors) = SkillRegistry::discover(Some(&root), None);
+    assert!(errors.is_empty(), "skill load errors: {errors:?}");
+
+    let skill = registry
+        .get("talking-head-vertical")
+        .expect("talking-head-vertical exists");
+    for tool in [
+        "read_index",
+        "find_beat",
+        "find_speaker_oncam",
+        "plan_reframe",
+        "plan_emphasis",
+        "apply_edl",
+        "view_timeline",
+        "vedit_diff",
+        "verify_render",
+        "bash",
+    ] {
+        assert!(
+            skill.meta.tools_allowlist.iter().any(|t| t == tool),
+            "talking-head-vertical must allow {tool}"
+        );
+    }
+    for required in [
+        "talking_head_plan.py",
+        "face position",
+        "eye line",
+        "headroom",
+        "negative space",
+        "keep native vertical",
+        "Reframe horizontal footage to 9:16",
+        "hook must appear",
+        "0.8s",
+        "phrase-level",
+        "face-overlap risk",
+        "single small punch-in",
+        "apply_edl",
+        "view_timeline",
+        "vedit_diff",
+        "verify_render",
+    ] {
+        assert!(
+            skill.body.contains(required),
+            "talking-head-vertical must mention {required:?}"
         );
     }
 }
@@ -660,6 +713,30 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
                     {"t_s": 1.0, "faces": [{"at_camera": true}]},
                     {"t_s": 2.0, "faces": [{"at_camera": true}]}
                 ]
+            }
+        }),
+    )?;
+    let face = write_json(
+        fixtures.path().join("face.json"),
+        serde_json::json!({
+            "data": {
+                "per_frame": [
+                    {"t_s": 1.0, "faces": [{"confidence": 0.95, "bbox": {"x": 0.56, "y": 0.12, "w": 0.22, "h": 0.32}}]},
+                    {"t_s": 2.0, "faces": [{"confidence": 0.95, "bbox": {"x": 0.57, "y": 0.12, "w": 0.22, "h": 0.32}}]}
+                ]
+            }
+        }),
+    )?;
+    let composition = write_json(
+        fixtures.path().join("composition.json"),
+        serde_json::json!({
+            "data": {
+                "regions": [{
+                    "start_s": 0.0,
+                    "end_s": 30.0,
+                    "framing": "good",
+                    "negative_space": {"side": "left", "score": 0.72}
+                }]
             }
         }),
     )?;
@@ -1006,6 +1083,44 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
         &["--transcript", path(&transcript)],
         "phrases",
     )?;
+    let talking_head_plan = run_script(
+        &python,
+        root.join("skills/talking-head-vertical/scripts/talking_head_plan.py"),
+        &[
+            "--asset-id",
+            "raw/sample.mov",
+            "--clip-id",
+            "clip-1",
+            "--source-width",
+            "1920",
+            "--source-height",
+            "1080",
+            "--transcript",
+            path(&transcript),
+            "--audio-energy",
+            path(&audio),
+            "--moments",
+            path(&moments),
+            "--face",
+            path(&face),
+            "--shot",
+            path(&shot),
+            "--gaze",
+            path(&gaze),
+            "--composition",
+            path(&composition),
+            "--frame-quality",
+            path(&quality),
+            "--topic",
+            path(&topic),
+        ],
+        "readiness",
+    )?;
+    let talking_head_edl = talking_head_plan
+        .get("edl")
+        .and_then(|value| value.as_str())
+        .expect("talking-head planner emits EDL text");
+    edl::parse(talking_head_edl).expect("talking-head planner emitted parseable EDL");
     run_script(
         &python,
         root.join("skills/podcast-episode-producer/scripts/metadata_plan.py"),

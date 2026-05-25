@@ -33,7 +33,8 @@ use awidat_core::tools::{
     plan_generated_media::PlanGeneratedMediaTool, plan_look_regions::PlanLookRegionsTool,
     plan_look_regions::ReviewLookRegionsTool, plan_look_regions::StartLookRegionPassTool,
     plan_motion_scene::PlanMotionSceneTool, plan_multicam::PlanMulticamTool,
-    plan_reframe::PlanReframeTool, plan_transition::PlanTransitionTool,
+    plan_reframe::PlanReframeTool, plan_scene_aware_short_form::PlanSceneAwareShortFormTool,
+    plan_short_form_review::PlanShortFormReviewTool, plan_transition::PlanTransitionTool,
     plan_visual_support::PlanVisualSupportTool,
     podcast_apply_accepted_edits::PodcastApplyAcceptedEditsTool,
     podcast_audio_polish::PodcastAudioPolishTool,
@@ -204,6 +205,8 @@ async fn run_async(project_root: &Path, model_override: Option<&str>) -> Result<
     registry.register(Arc::new(PlanGeneratedMediaTool));
     registry.register(Arc::new(PlanMulticamTool));
     registry.register(Arc::new(PlanReframeTool));
+    registry.register(Arc::new(PlanSceneAwareShortFormTool));
+    registry.register(Arc::new(PlanShortFormReviewTool));
     registry.register(Arc::new(PlanTransitionTool));
     registry.register(Arc::new(PlanVisualSupportTool));
     registry.register(Arc::new(PlanMotionSceneTool));

@@ -8,6 +8,7 @@ import json
 import textwrap
 from pathlib import Path
 
+from adaptive_layout import plan_adaptive_layout
 from transcript_phrases import group_words_into_phrases, normalize_words
 
 
@@ -154,6 +155,22 @@ def wrap_caption_text(text: str, *, max_chars_per_line: int | None = None) -> st
 def load_body(path: str) -> dict:
     raw = json.loads(Path(path).read_text())
     return raw.get("data", raw)
+
+
+def load_optional_body(path: str | None) -> dict | None:
+    if not path:
+        return None
+    return load_body(path)
+
+
+def load_layout_items(path: str | None) -> list[dict]:
+    if not path:
+        return []
+    body = load_body(path)
+    items = body.get("items", body if isinstance(body, list) else [])
+    if not isinstance(items, list):
+        raise ValueError("layout items must be a list or an object with an items list")
+    return items
 
 
 def words(body: dict) -> list[dict]:
@@ -439,6 +456,12 @@ def build_geometry_scorecard(
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--transcript", required=True)
+    p.add_argument("--face")
+    p.add_argument("--gaze")
+    p.add_argument("--shot")
+    p.add_argument("--composition")
+    p.add_argument("--frame-quality")
+    p.add_argument("--layout-items")
     p.add_argument("--max-words", type=int, default=4)
     p.add_argument("--max-gap-s", type=float, default=0.5)
     p.add_argument("--phrase-preset", choices=("short", "medium", "long"))
@@ -469,7 +492,7 @@ def main() -> None:
     p.add_argument("--geometry-overlay-z-index", type=int, default=GEOMETRY_DEFAULTS["overlay_z_index"])
     p.add_argument(
         "--output-format",
-        choices=("json", "srt", "vtt", "scorecard", "geometry-scorecard"),
+        choices=("json", "srt", "vtt", "scorecard", "geometry-scorecard", "adaptive-layout"),
         default="json",
     )
     args = p.parse_args()
@@ -511,6 +534,22 @@ def main() -> None:
                 safe_margin_x=args.geometry_safe_margin_x,
                 safe_margin_y=args.geometry_safe_margin_y,
                 overlay_z_index=args.geometry_overlay_z_index,
+            ),
+            indent=2,
+        ))
+    elif args.output_format == "adaptive-layout":
+        print(json.dumps(
+            plan_adaptive_layout(
+                phrases + load_layout_items(args.layout_items),
+                face=load_optional_body(args.face),
+                gaze=load_optional_body(args.gaze),
+                shot=load_optional_body(args.shot),
+                composition=load_optional_body(args.composition),
+                frame_quality=load_optional_body(args.frame_quality),
+                frame_width=args.geometry_frame_width,
+                frame_height=args.geometry_frame_height,
+                safe_margin_x=args.geometry_safe_margin_x,
+                safe_margin_y=args.geometry_safe_margin_y,
             ),
             indent=2,
         ))
