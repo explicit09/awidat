@@ -283,6 +283,14 @@ impl ToolHandler for ApplyEdlTool {
             summary.push_str("\nmetadata: ");
             summary.push_str(&json);
         }
+        if !args.dry_run && crate::tools::podcast_qc_report::is_podcast_project(&project) {
+            summary.push_str(
+                "\n\nRequired podcast follow-up before claiming done or rendering: run \
+                 podcast_smooth_cut_boundaries for cleanup cuts when applicable, then \
+                 podcast_post_draft_check, podcast_audio_polish, podcast_visual_polish, \
+                 and podcast_qc_report after this apply_edl result.",
+            );
+        }
         Ok(ToolOutput::text(summary))
     }
 }
@@ -904,6 +912,22 @@ mod tests {
         dir
     }
 
+    fn mark_project_as_podcast(root: &Path) {
+        let mut project = Project::read(root).unwrap();
+        project
+            .timeline
+            .metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .extra
+            .insert(
+                "awidat_project_type".into(),
+                serde_json::json!({"kind": "podcast"}),
+            );
+        project.write(root).unwrap();
+    }
+
     #[test]
     fn description_declares_graph_native_edit_path() {
         assert!(DESCRIPTION.contains("graph-native editing path"));
@@ -937,6 +961,29 @@ mod tests {
             panic!()
         };
         assert!((c.source_range.as_ref().unwrap().duration.to_seconds() - 3.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn podcast_apply_edl_output_names_required_follow_up_gates() {
+        let dir = project_with_three_clips();
+        mark_project_as_podcast(dir.path());
+        let edl = "\
+*** Begin EDL
+*** Trim Clip
+@@ anchor: transcript_snippet=\"bravo\"
++ end: 3.0
+*** End EDL
+";
+        let out = ApplyEdlTool
+            .handle(invoke(serde_json::json!({"edl": edl})), ctx_at(dir.path()))
+            .await
+            .unwrap();
+
+        assert!(out.content.contains("Required podcast follow-up"));
+        assert!(out.content.contains("podcast_post_draft_check"));
+        assert!(out.content.contains("podcast_audio_polish"));
+        assert!(out.content.contains("podcast_visual_polish"));
+        assert!(out.content.contains("podcast_qc_report"));
     }
 
     #[tokio::test]

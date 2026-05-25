@@ -193,6 +193,24 @@ impl ToolHandler for StartRenderTool {
             backend,
             mut render_metadata_for_manifest,
         ) = if args.scope == "timeline" {
+            let project = Project::read(&ctx.project_root).map_err(|e| {
+                FunctionCallError::RespondToModel(format!(
+                    "start_render: failed to read project metadata: {e}"
+                ))
+            })?;
+            if crate::tools::podcast_qc_report::is_podcast_project(&project) {
+                let qc_report = crate::tools::podcast_qc_report::build_podcast_qc_report(
+                    &ctx.project_root,
+                    &project,
+                );
+                if qc_report["status"] == "blocked" {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "start_render: podcast timeline render blocked by QC. Run \
+                         podcast_qc_report and fix the error issue(s) before rendering. \
+                         Current QC: {qc_report}"
+                    )));
+                }
+            }
             crate::lessons::apply_learned_project_format_defaults(&ctx.project_root)
                 .map_err(|e| FunctionCallError::RespondToModel(format!("start_render: {e}")))?;
             let mut spec = match args.guide.as_ref() {
@@ -301,11 +319,6 @@ impl ToolHandler for StartRenderTool {
                         ))
                     })?;
             }
-            let project = Project::read(&ctx.project_root).map_err(|e| {
-                FunctionCallError::RespondToModel(format!(
-                    "start_render: failed to read project caption metadata: {e}"
-                ))
-            })?;
             let caption_summary = crate::captions::summarize_captions(&project);
             enrich_render_metadata_with_caption_summary(&mut spec.metadata, &caption_summary);
             (
@@ -972,6 +985,48 @@ mod tests {
         }
     }
 
+    fn write_podcast_av_mismatch_project(root: &std::path::Path) {
+        let mut project = awidat_proto::project::Project::init(root).unwrap();
+        let asset = root.join("raw/episode.mov");
+        std::fs::create_dir_all(asset.parent().unwrap()).unwrap();
+        std::fs::write(&asset, b"fake").unwrap();
+        project
+            .timeline
+            .metadata
+            .awidat
+            .as_mut()
+            .unwrap()
+            .extra
+            .insert(
+                "awidat_project_type".into(),
+                serde_json::json!({"kind": "podcast"}),
+            );
+
+        let mut stack = awidat_proto::otio::Stack::empty("root");
+        for (name, kind, duration_s) in [
+            ("Video 1", awidat_proto::otio::TrackKind::Video, 30.0),
+            ("A1", awidat_proto::otio::TrackKind::Audio, 26.0),
+        ] {
+            let mut clip = awidat_proto::otio::Clip::empty(name);
+            clip.media_reference = awidat_proto::otio::MediaReference::External(
+                awidat_proto::otio::ExternalReference::new("raw/episode.mov"),
+            );
+            clip.source_range = Some(awidat_proto::otio::TimeRange::new(
+                awidat_proto::otio::RationalTime::zero(24.0),
+                awidat_proto::otio::RationalTime::new(duration_s * 24.0, 24.0),
+            ));
+            let mut track = awidat_proto::otio::Track::empty(name, kind);
+            track
+                .children
+                .push(awidat_proto::otio::TrackChild::Clip(clip));
+            stack
+                .children
+                .push(awidat_proto::otio::StackChild::Track(track));
+        }
+        project.timeline.tracks = stack;
+        project.write(root).unwrap();
+    }
+
     #[test]
     fn start_render_manifest_for_preview_records_ffmpeg_replay() {
         let dir = tempfile::tempdir().unwrap();
@@ -1276,5 +1331,21 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("no clips")));
+    }
+
+    #[tokio::test]
+    async fn timeline_scope_blocks_podcast_render_when_qc_is_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        write_podcast_av_mismatch_project(dir.path());
+        let err = StartRenderTool
+            .handle(
+                invoke(serde_json::json!({"scope": "timeline"})),
+                ctx_at(dir.path()),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, FunctionCallError::RespondToModel(msg) if msg.contains("podcast timeline render blocked by QC") && msg.contains("primary_av_duration_mismatch"))
+        );
     }
 }

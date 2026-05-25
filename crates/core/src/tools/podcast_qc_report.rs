@@ -40,56 +40,76 @@ impl ToolHandler for PodcastQcReportTool {
                 "podcast_qc_report: failed to read project: {e}"
             ))
         })?;
-        let mut issues = Vec::new();
-        collect_timeline_issues(&ctx.project_root, &project.timeline.tracks, &mut issues);
-        let caption_summary = crate::captions::summarize_captions(&project);
-        for warning in &caption_summary.warnings {
-            issues.push(serde_json::json!({
-                "kind": "caption_warning",
-                "severity": "warning",
-                "message": warning,
-            }));
-        }
-        let audio_finishing = crate::professional::derive_audio_finishing_state(&project.timeline);
-        if audio_finishing.meters.is_empty() {
-            issues.push(serde_json::json!({
-                "kind": "audio_metering_missing",
-                "severity": "warning",
-                "message": "No audio meter readings found; run podcast_audio_polish before final render."
-            }));
-        }
-        if !project
-            .timeline
-            .metadata
-            .awidat
-            .as_ref()
-            .is_some_and(|meta| meta.cut_boundaries.len() > 0)
-        {
-            issues.push(serde_json::json!({
-                "kind": "cut_intent_missing",
-                "severity": "info",
-                "message": "No cut-boundary intent metadata found; suspicious cuts may be harder to audit."
-            }));
-        }
-        let status = if issues.iter().any(|issue| issue["severity"] == "error") {
-            "blocked"
-        } else if issues.iter().any(|issue| issue["severity"] == "warning") {
-            "needs_review"
-        } else {
-            "ready"
-        };
-        let body = serde_json::json!({
-            "status": status,
-            "summary_for_agent": format!("Podcast QC status: {status}. {} issue(s) before render.", issues.len()),
-            "issues": issues,
-            "caption_summary": caption_summary,
-            "audio_meter_count": audio_finishing.meters.len(),
-            "required_before_render": true,
-        });
+        let body = build_podcast_qc_report(&ctx.project_root, &project);
         serde_json::to_string(&body)
             .map(ToolOutput::text)
             .map_err(|e| FunctionCallError::Fatal(format!("podcast_qc_report serialize: {e}")))
     }
+}
+
+pub(crate) fn is_podcast_project(project: &Project) -> bool {
+    project
+        .timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .and_then(|meta| meta.extra.get("awidat_project_type"))
+        .and_then(|value| value.get("kind"))
+        .and_then(|value| value.as_str())
+        .is_some_and(|kind| kind == "podcast")
+        || project.timeline.name.eq_ignore_ascii_case("podcast")
+}
+
+pub(crate) fn build_podcast_qc_report(
+    project_root: &std::path::Path,
+    project: &Project,
+) -> serde_json::Value {
+    let mut issues = Vec::new();
+    collect_timeline_issues(project_root, &project.timeline.tracks, &mut issues);
+    let caption_summary = crate::captions::summarize_captions(project);
+    for warning in &caption_summary.warnings {
+        issues.push(serde_json::json!({
+            "kind": "caption_warning",
+            "severity": "warning",
+            "message": warning,
+        }));
+    }
+    let audio_finishing = crate::professional::derive_audio_finishing_state(&project.timeline);
+    if audio_finishing.meters.is_empty() {
+        issues.push(serde_json::json!({
+            "kind": "audio_metering_missing",
+            "severity": "warning",
+            "message": "No audio meter readings found; run podcast_audio_polish before final render."
+        }));
+    }
+    if !project
+        .timeline
+        .metadata
+        .awidat
+        .as_ref()
+        .is_some_and(|meta| meta.cut_boundaries.len() > 0)
+    {
+        issues.push(serde_json::json!({
+            "kind": "cut_intent_missing",
+            "severity": "info",
+            "message": "No cut-boundary intent metadata found; suspicious cuts may be harder to audit."
+        }));
+    }
+    let status = if issues.iter().any(|issue| issue["severity"] == "error") {
+        "blocked"
+    } else if issues.iter().any(|issue| issue["severity"] == "warning") {
+        "needs_review"
+    } else {
+        "ready"
+    };
+    serde_json::json!({
+        "status": status,
+        "summary_for_agent": format!("Podcast QC status: {status}. {} issue(s) before render.", issues.len()),
+        "issues": issues,
+        "caption_summary": caption_summary,
+        "audio_meter_count": audio_finishing.meters.len(),
+        "required_before_render": true,
+    })
 }
 
 fn collect_timeline_issues(
