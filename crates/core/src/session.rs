@@ -617,6 +617,9 @@ impl Session {
         for iter in 0..max_inner_iterations {
             if cancel.is_cancelled() {
                 let _ = self.events_tx.send(SessionEvent::Error("cancelled".into()));
+                if let (Some(rec), Some(id)) = (&self.recorder, turn_id.clone()) {
+                    rec.record_turn_complete(id);
+                }
                 return Err(SessionError::Cancelled);
             }
 
@@ -724,7 +727,16 @@ impl Session {
                 }
             }
 
-            let outcome = self.run_sampling(req, &cancel).await?;
+            let outcome = match self.run_sampling(req, &cancel).await {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    let _ = self.events_tx.send(SessionEvent::Error(err.to_string()));
+                    if let (Some(rec), Some(id)) = (&self.recorder, turn_id.clone()) {
+                        rec.record_turn_complete(id);
+                    }
+                    return Err(err);
+                }
+            };
             if matches!(outcome.stop_reason, Some(StopReason::ToolUse)) {
                 any_tools_in_turn = true;
             }
@@ -1281,6 +1293,67 @@ mod tests {
         let path = s.recorder.as_ref().unwrap().path();
         assert!(path.starts_with(dir.path().join("sessions")));
         assert!(path.exists(), "log file should be created");
+    }
+
+    #[tokio::test]
+    async fn client_error_completes_recorded_turn_and_emits_error() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = socket.read(&mut buf).await;
+            let body = r#"{"error":{"message":"synthetic failure"}}"#;
+            let response = format!(
+                "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let config = crate::anthropic::ClientConfig {
+            base_url: format!("http://{addr}"),
+            ..crate::anthropic::ClientConfig::default()
+        };
+        let client = Client::new("test-key", config).expect("client");
+        let dir = tempfile::tempdir().unwrap();
+        let s = Session::new(
+            client,
+            ToolRegistry::new(),
+            "claude-haiku-4-5-20251001",
+            None,
+            std::env::temp_dir(),
+        )
+        .with_recorder(dir.path());
+        let mut events = s.subscribe();
+
+        let err = s
+            .run_turn("hello", CancellationToken::new())
+            .await
+            .expect_err("API failure should abort the turn");
+        assert!(err.to_string().contains("synthetic failure"));
+
+        let mut saw_error = false;
+        while let Ok(event) = events.try_recv() {
+            if matches!(event, SessionEvent::Error(msg) if msg.contains("synthetic failure")) {
+                saw_error = true;
+                break;
+            }
+        }
+        assert!(
+            saw_error,
+            "client failure should be visible in the item stream"
+        );
+
+        let recorder = s.recorder.as_ref().expect("recorder mounted");
+        recorder.flush().await.unwrap();
+        let log = std::fs::read_to_string(recorder.path()).unwrap();
+        assert!(log.contains(r#""type":"turn_started""#));
+        assert!(log.contains(r#""type":"turn_complete""#));
     }
 
     /// Wiring smoke: `with_approval_channel` populates the field. The
