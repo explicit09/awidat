@@ -69,8 +69,13 @@ pub async fn start_turn(
         }
     };
 
+    let turn_id = format!(
+        "turn-{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
     let cancel = CancellationToken::new();
     *state.turn.lock().await = Some(TurnHandle {
+        id: turn_id.clone(),
         cancel: cancel.clone(),
     });
 
@@ -107,6 +112,7 @@ pub async fn start_turn(
     let session_for_turn = session.clone();
     let cancel_for_turn = cancel.clone();
     let app_for_turn = app.clone();
+    let turn_id_for_turn = turn_id.clone();
     tokio::spawn(async move {
         let result = if run_podcast_intake {
             let mut plan = podcast_production_intake_plan();
@@ -141,10 +147,12 @@ pub async fn start_turn(
         if let Err(e) = app_for_turn.emit(TURN_END_EVENT, payload) {
             warn!(error = %e, "failed to emit turn-end");
         }
+        clear_turn_if_current(&app_for_turn, &turn_id_for_turn).await;
     });
 
     let app_for_events = app.clone();
     let cancel_for_events = cancel.clone();
+    let turn_id_for_events = turn_id;
     tokio::spawn(async move {
         let mut text_streamer = TextStreamer::default();
         loop {
@@ -181,11 +189,18 @@ pub async fn start_turn(
             }
         }
 
-        let state = app_for_events.state::<AwidatState>();
-        *state.turn.lock().await = None;
+        clear_turn_if_current(&app_for_events, &turn_id_for_events).await;
     });
 
     Ok(())
+}
+
+async fn clear_turn_if_current(app: &AppHandle, turn_id: &str) {
+    let state = app.state::<AwidatState>();
+    let mut active = state.turn.lock().await;
+    if active.as_ref().is_some_and(|handle| handle.id == turn_id) {
+        *active = None;
+    }
 }
 
 /// Cancel the in-flight turn. No-op if no turn is running.

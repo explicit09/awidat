@@ -218,6 +218,9 @@ impl ActiveSession {
 
 /// Handle on a running turn. Owned by `AwidatState::turn`.
 pub struct TurnHandle {
+    /// Stable id for the active turn. Completion tasks use this to
+    /// avoid clearing a newer turn if an older cleanup path runs late.
+    pub id: String,
     /// Token the run-loop watches; flipped by `cancel_turn`.
     pub cancel: CancellationToken,
 }
