@@ -1,8 +1,12 @@
 //! MotionScene planner tool contract tests.
 
+use awidat_core::edl::anchor::AnchorContext;
+use awidat_core::edl::apply::apply;
 use awidat_core::edl::op::EdlOp;
 use awidat_core::edl::parser::parse;
 use awidat_core::tools::plan_motion_scene::plan_motion_scene_request;
+use awidat_core::tools::plan_visual_support::{VisualSupportLane, route_visual_support_request};
+use awidat_proto::otio::Timeline;
 use awidat_proto::professional::MotionSceneLayerKind;
 
 #[test]
@@ -84,5 +88,124 @@ fn planner_adds_panel_and_image_layers_for_visual_still_requests() {
                     .iter()
                     .any(|animation| animation["parameter"] == "overlay.opacity")
             })
+    );
+}
+
+#[test]
+fn planner_builds_multi_layer_explainer_scene() {
+    let plan = plan_motion_scene_request(
+        "create a three-step explainer card with a headline, step labels, callout arrow, and product screenshot",
+        Some("scene-steps"),
+        Some(4.0),
+        Some(1920),
+        Some(1080),
+        Some(30.0),
+        Some("raw/product.png"),
+    )
+    .expect("plan motion scene");
+
+    assert!(
+        plan.scene.layers.len() >= 7,
+        "expected panel, image, callout, headline, and step layers"
+    );
+    assert!(
+        plan.scene
+            .layers
+            .iter()
+            .any(|layer| layer.id == "background-panel")
+    );
+    assert!(
+        plan.scene
+            .layers
+            .iter()
+            .any(|layer| layer.id == "product-image")
+    );
+    assert!(
+        plan.scene
+            .layers
+            .iter()
+            .any(|layer| layer.id == "callout-accent")
+    );
+    let step_count = plan
+        .scene
+        .layers
+        .iter()
+        .filter(|layer| layer.id.starts_with("step-") && layer.kind == MotionSceneLayerKind::Text)
+        .count();
+    assert_eq!(step_count, 3);
+    assert!(
+        plan.scene.layers.iter().all(|layer| {
+            layer.params.contains_key("x")
+                || layer.kind == MotionSceneLayerKind::Text
+                || layer.kind == MotionSceneLayerKind::Group
+        }),
+        "non-text renderable layers should carry shared transforms"
+    );
+}
+
+#[test]
+fn visual_route_planner_and_apply_persist_multilayer_motion_scene() {
+    let request =
+        "explain the three-step onboarding process with a product screenshot and supporting b-roll";
+    let route = route_visual_support_request(request);
+
+    // This is the agent workflow contract: route the editorial need, plan
+    // the native MotionScene, then persist the returned Set Motion Scene EDL.
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    assert!(route.supporting_lanes.contains(&VisualSupportLane::Broll));
+    let motion_tools: Vec<&str> = route
+        .plan_steps
+        .iter()
+        .filter(|step| step.lane == VisualSupportLane::MotionScene)
+        .map(|step| step.tool.as_str())
+        .collect();
+    assert_eq!(motion_tools, vec!["plan_motion_scene", "apply_edl"]);
+
+    let plan = plan_motion_scene_request(
+        request,
+        Some("scene-onboarding-e2e"),
+        Some(4.0),
+        Some(1920),
+        Some(1080),
+        Some(30.0),
+        Some("raw/product.png"),
+    )
+    .expect("plan motion scene");
+    let envelope = parse(&plan.edl).expect("parse generated EDL");
+    let timeline = Timeline::empty("motion-scene-route-apply");
+    let (timeline, outcome) =
+        apply(&timeline, &envelope, &AnchorContext::empty()).expect("apply generated EDL");
+    let metadata = timeline.metadata.awidat.expect("awidat metadata");
+    let stored_scene = metadata
+        .motion_scenes
+        .iter()
+        .find(|scene| scene.id == "scene-onboarding-e2e")
+        .expect("stored motion scene");
+
+    assert_eq!(outcome.applied.len(), 1);
+    assert_eq!(stored_scene.layers.len(), plan.scene.layers.len());
+    assert!(
+        stored_scene
+            .layers
+            .iter()
+            .any(|layer| layer.kind == MotionSceneLayerKind::Text)
+    );
+    assert!(
+        stored_scene
+            .layers
+            .iter()
+            .any(|layer| layer.kind == MotionSceneLayerKind::Solid)
+    );
+    assert!(
+        stored_scene
+            .layers
+            .iter()
+            .any(|layer| layer.kind == MotionSceneLayerKind::Shape)
+    );
+    assert!(
+        stored_scene
+            .layers
+            .iter()
+            .any(|layer| layer.kind == MotionSceneLayerKind::Image)
     );
 }

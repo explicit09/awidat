@@ -22,15 +22,17 @@ animated stat card, visual explainer, lower-third treatment, or other
 bespoke overlay asset.
 
 Before generating an overlay asset, call `plan_visual_support` for the
-visual need. If it returns `motion_scene`, prefer `plan_motion_scene`
-and its `Set Motion Scene` EDL for native, previewable/renderable
-layered motion. MotionScene supports text, rectangle/solid panels, and
-project-relative still image layers, with shared transforms and
-layer-local animations for opacity, position, scale, and rotation; keep
-actual footage in B-roll/PiP. Use the generated asset workflow below
-only when the scene needs custom motion beyond that subset,
-subject-aware compositing, video media inside the graphic, or a renderer
-path that MotionScene does not yet provide.
+visual need and read its `needs`, `intents`, `primary_lane`,
+`supporting_lanes`, and `plan_steps`. If it returns `motion_scene`,
+prefer `plan_motion_scene` and its `Set Motion Scene` EDL for native,
+previewable/renderable layered motion. MotionScene supports multi-layer
+text, rectangle/solid panels, callout rectangles, and project-relative
+still image layers, with shared transforms and layer-local animations
+for opacity, position, scale, and rotation; keep actual footage in
+B-roll/PiP. Use the generated asset workflow below only when the scene
+needs custom motion beyond that subset, subject-aware compositing, video
+media inside the graphic, or a renderer path that MotionScene does not
+yet provide.
 
 ## Principle
 

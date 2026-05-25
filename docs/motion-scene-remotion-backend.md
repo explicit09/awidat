@@ -33,12 +33,24 @@ agents express motion graphics.
 
 Practical rule for agents:
 
+- Start with visual reasoning, not a renderer. Detect the need
+  (abstract explanation, product/asset mention, factual reference,
+  list/process, emotional emphasis, jump-cut cover, chapter transition,
+  or sponsor/CTA), then classify the intent (explain, show evidence,
+  summarize, decorate lightly, hide edit, emphasize quote, introduce
+  chapter, or compare before/after).
 - Use native MotionScene first for text, lower-thirds, simple panels, solid
   backgrounds, callout rectangles, still image overlays, and lightweight
   explainer graphics.
+- Let `plan_motion_scene` build layered native scenes for explainers:
+  background panel, headline, step labels, callout rectangles, and optional
+  still image layers when assets exist.
 - Use layer-local transform animations for simple procedural motion such as
   fades, slides, scale pops, and rotation on still overlays.
 - Use B-roll/PiP for real footage, demos, interviews, and video cutaways.
+- Use generated media for missing footage or still assets, then route the
+  resulting video through B-roll/PiP or the resulting still through
+  MotionScene image layers.
 - Use existing FFmpeg/editorial tools for edits to existing footage, audio,
   cuts, speed, transitions, color, and direct clip polish.
 - Consider a future Remotion backend only after native planning decides the

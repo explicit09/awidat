@@ -190,16 +190,28 @@ fresh inserts — that fails on round-boundary anchoring).
 Once the conversation flow is locked, make visual decisions:
 
 - For every nontrivial visual-support request, call `plan_visual_support`
-  first. Treat its lane as the routing decision before choosing tools:
-  `broll` for footage-like evidence, `motion_scene` for freeform
-  animated explainers/diagrams/kinetic text/charts/callouts,
-  `title_annotation` for simple lower thirds/captions/arrows/labels,
-  `effects_finishing` for direct changes to existing footage/audio, and
-  `timeline_edit` for structural edits.
+  first. Treat its `needs`, `intents`, `primary_lane`,
+  `supporting_lanes`, and `plan_steps` as the visual reasoning record,
+  not just a keyword route. The agent should detect abstract
+  explanations, product/asset mentions, factual references,
+  lists/processes, emotional emphasis, jump-cut covers,
+  chapter/topic transitions, and sponsor/CTA moments before choosing
+  tools.
+- Choose the lane from editorial intent: `broll` for actual footage or
+  evidence, `motion_scene` for native procedural explainers/diagrams/
+  cards/callouts/kinetic text/still overlays, generated media for new
+  footage or assets that do not exist yet, `title_annotation` for simple
+  lower thirds/captions/arrows/labels, `effects_finishing` for direct
+  changes to existing footage/audio, and `timeline_edit` for structural
+  edits.
+- Explain bigger visual choices before applying them: e.g. "this
+  section explains a process, so I am adding a MotionScene step card" or
+  "this mention needs real-world evidence, so I am looking for b-roll."
 - When the lane is `motion_scene`, call `plan_motion_scene` and apply
   the returned `Set Motion Scene` EDL. MotionScene natively
-  previews/renders text, rectangle/solid panels, and project-relative
-  still image layers. Use shared transforms (`x`, `y`, `width`,
+  previews/renders multi-layer text, rectangle/solid panels, callout
+  rectangles, and project-relative still image layers. Use shared
+  transforms (`x`, `y`, `width`,
   `height`, `opacity`, `fit`, `scale`, `anchor_x`, `anchor_y`,
   `rotation_deg`) plus layer-local `params.animations` for simple
   fades, slides, scale, and rotation. Use still image layers for logos,

@@ -1,6 +1,8 @@
 //! Visual-support routing policy tests.
 
-use awidat_core::tools::plan_visual_support::{VisualSupportLane, route_visual_support_request};
+use awidat_core::tools::plan_visual_support::{
+    VisualSupportIntent, VisualSupportLane, VisualSupportNeedKind, route_visual_support_request,
+};
 
 #[test]
 fn routes_abstract_explainer_to_motion_scene() {
@@ -74,4 +76,34 @@ fn exposes_supporting_lanes_for_hybrid_visual_requests() {
             .supporting_lanes
             .contains(&VisualSupportLane::TitleAnnotation)
     );
+}
+
+#[test]
+fn exposes_visual_reasoning_for_explainer_hybrid_requests() {
+    let route = route_visual_support_request(
+        "explain the 3 step onboarding process with a product screenshot and supporting b-roll",
+    );
+
+    assert_eq!(route.primary_lane, VisualSupportLane::MotionScene);
+    assert!(route.supporting_lanes.contains(&VisualSupportLane::Broll));
+    assert!(
+        route
+            .needs
+            .iter()
+            .any(|need| need.kind == VisualSupportNeedKind::ListOrProcess)
+    );
+    assert!(
+        route
+            .needs
+            .iter()
+            .any(|need| need.kind == VisualSupportNeedKind::ProductOrAssetMention)
+    );
+    assert!(route.intents.contains(&VisualSupportIntent::Explain));
+    assert!(route.intents.contains(&VisualSupportIntent::ShowEvidence));
+    assert!(route.plan_steps.iter().any(|step| {
+        step.lane == VisualSupportLane::MotionScene && step.tool == "plan_motion_scene"
+    }));
+    assert!(route.plan_steps.iter().any(|step| {
+        step.lane == VisualSupportLane::Broll && step.tool == "find_broll_opportunities"
+    }));
 }

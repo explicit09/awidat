@@ -72,93 +72,7 @@ pub fn plan_motion_scene_request(
         return Err("width and height must be positive".into());
     }
 
-    let mut layers = Vec::new();
-    if wants_panel_layer(request) {
-        layers.push(MotionSceneLayer {
-            id: "panel".into(),
-            kind: MotionSceneLayerKind::Solid,
-            from_s: 0.0,
-            duration_s,
-            z_index: 0,
-            params: BTreeMap::from([
-                ("x".into(), serde_json::json!(0.08)),
-                ("y".into(), serde_json::json!(0.18)),
-                ("width".into(), serde_json::json!(0.84)),
-                ("height".into(), serde_json::json!(0.64)),
-                ("color".into(), serde_json::json!("#101820")),
-                ("opacity".into(), serde_json::json!(0.72)),
-                (
-                    "animations".into(),
-                    serde_json::json!([
-                        {
-                            "parameter": "overlay.opacity",
-                            "keyframes": [
-                                { "time_s": 0.0, "value": 0.0 },
-                                { "time_s": 0.35, "value": 0.72 }
-                            ]
-                        }
-                    ]),
-                ),
-            ]),
-        });
-    }
-    if wants_image_layer(request) || image_asset.is_some() {
-        layers.push(MotionSceneLayer {
-            id: "image".into(),
-            kind: MotionSceneLayerKind::Image,
-            from_s: 0.0,
-            duration_s,
-            z_index: 5,
-            params: BTreeMap::from([
-                (
-                    "asset".into(),
-                    serde_json::json!(
-                        image_asset
-                            .filter(|asset| !asset.trim().is_empty())
-                            .unwrap_or("generated/overlays/motion-scene-still.png")
-                    ),
-                ),
-                ("x".into(), serde_json::json!(0.58)),
-                ("y".into(), serde_json::json!(0.18)),
-                ("width".into(), serde_json::json!(0.32)),
-                ("height".into(), serde_json::json!(0.32)),
-                ("opacity".into(), serde_json::json!(1.0)),
-                ("fit".into(), serde_json::json!("contain")),
-                ("scale".into(), serde_json::json!(1.0)),
-                (
-                    "animations".into(),
-                    serde_json::json!([
-                        {
-                            "parameter": "overlay.opacity",
-                            "keyframes": [
-                                { "time_s": 0.0, "value": 0.0 },
-                                { "time_s": 0.4, "value": 1.0 }
-                            ]
-                        },
-                        {
-                            "parameter": "overlay.scale",
-                            "keyframes": [
-                                { "time_s": 0.0, "value": 0.94 },
-                                { "time_s": 0.4, "value": 1.0 }
-                            ]
-                        }
-                    ]),
-                ),
-            ]),
-        });
-    }
-    layers.push(MotionSceneLayer {
-        id: "headline".into(),
-        kind: MotionSceneLayerKind::Text,
-        from_s: 0.0,
-        duration_s,
-        z_index: 10,
-        params: BTreeMap::from([
-            ("text".into(), serde_json::json!(headline_text(request))),
-            ("layout".into(), serde_json::json!("center_safe")),
-            ("animation".into(), serde_json::json!("fade_slide_in")),
-        ]),
-    });
+    let layers = planned_layers(request, duration_s, image_asset);
 
     let scene = MotionScene {
         id: scene_id
@@ -192,7 +106,23 @@ pub fn plan_motion_scene_request(
 
 fn wants_panel_layer(request: &str) -> bool {
     let request = request.to_ascii_lowercase();
-    ["panel", "card", "callout", "explainer", "diagram"]
+    [
+        "panel",
+        "card",
+        "callout",
+        "explainer",
+        "diagram",
+        "step",
+        "process",
+        "framework",
+    ]
+    .iter()
+    .any(|needle| request.contains(needle))
+}
+
+fn wants_callout_layer(request: &str) -> bool {
+    let request = request.to_ascii_lowercase();
+    ["callout", "arrow", "point to", "highlight", "accent"]
         .iter()
         .any(|needle| request.contains(needle))
 }
@@ -211,6 +141,197 @@ fn wants_image_layer(request: &str) -> bool {
     ]
     .iter()
     .any(|needle| request.contains(needle))
+}
+
+fn planned_layers(
+    request: &str,
+    duration_s: f64,
+    image_asset: Option<&str>,
+) -> Vec<MotionSceneLayer> {
+    let mut layers = Vec::new();
+    let step_count = planned_step_count(request);
+    let has_image = wants_image_layer(request) || image_asset.is_some();
+
+    if wants_panel_layer(request) || has_image {
+        layers.push(background_panel_layer(duration_s));
+    }
+    if has_image {
+        layers.push(image_layer(request, duration_s, image_asset));
+    }
+    if wants_callout_layer(request) || has_image {
+        layers.push(callout_accent_layer(duration_s));
+    }
+
+    layers.push(headline_layer(request, duration_s));
+    for index in 0..step_count {
+        layers.push(step_text_layer(index, duration_s));
+    }
+    layers
+}
+
+fn planned_step_count(request: &str) -> usize {
+    let lower = request.to_ascii_lowercase();
+    if contains_any(&lower, &["three-step", "3 step", "3-step", "three step"]) {
+        return 3;
+    }
+    if contains_any(&lower, &["two-step", "2 step", "2-step", "two step"]) {
+        return 2;
+    }
+    if contains_any(&lower, &["step", "process", "framework", "list"]) {
+        return 3;
+    }
+    0
+}
+
+fn background_panel_layer(duration_s: f64) -> MotionSceneLayer {
+    MotionSceneLayer {
+        id: "background-panel".into(),
+        kind: MotionSceneLayerKind::Solid,
+        from_s: 0.0,
+        duration_s,
+        z_index: 0,
+        params: BTreeMap::from([
+            ("x".into(), serde_json::json!(0.08)),
+            ("y".into(), serde_json::json!(0.16)),
+            ("width".into(), serde_json::json!(0.84)),
+            ("height".into(), serde_json::json!(0.68)),
+            ("color".into(), serde_json::json!("#101820")),
+            ("opacity".into(), serde_json::json!(0.72)),
+            (
+                "animations".into(),
+                serde_json::json!([
+                    {
+                        "parameter": "overlay.opacity",
+                        "keyframes": [
+                            { "time_s": 0.0, "value": 0.0 },
+                            { "time_s": 0.35, "value": 0.72 }
+                        ]
+                    }
+                ]),
+            ),
+        ]),
+    }
+}
+
+fn image_layer(request: &str, duration_s: f64, image_asset: Option<&str>) -> MotionSceneLayer {
+    MotionSceneLayer {
+        id: if request.to_ascii_lowercase().contains("product") {
+            "product-image".into()
+        } else {
+            "supporting-image".into()
+        },
+        kind: MotionSceneLayerKind::Image,
+        from_s: 0.0,
+        duration_s,
+        z_index: 5,
+        params: BTreeMap::from([
+            (
+                "asset".into(),
+                serde_json::json!(
+                    image_asset
+                        .filter(|asset| !asset.trim().is_empty())
+                        .unwrap_or("generated/overlays/motion-scene-still.png")
+                ),
+            ),
+            ("x".into(), serde_json::json!(0.58)),
+            ("y".into(), serde_json::json!(0.22)),
+            ("width".into(), serde_json::json!(0.30)),
+            ("height".into(), serde_json::json!(0.34)),
+            ("opacity".into(), serde_json::json!(1.0)),
+            ("fit".into(), serde_json::json!("contain")),
+            ("scale".into(), serde_json::json!(1.0)),
+            (
+                "animations".into(),
+                serde_json::json!([
+                    {
+                        "parameter": "overlay.opacity",
+                        "keyframes": [
+                            { "time_s": 0.0, "value": 0.0 },
+                            { "time_s": 0.4, "value": 1.0 }
+                        ]
+                    },
+                    {
+                        "parameter": "overlay.scale",
+                        "keyframes": [
+                            { "time_s": 0.0, "value": 0.94 },
+                            { "time_s": 0.4, "value": 1.0 }
+                        ]
+                    }
+                ]),
+            ),
+        ]),
+    }
+}
+
+fn callout_accent_layer(duration_s: f64) -> MotionSceneLayer {
+    MotionSceneLayer {
+        id: "callout-accent".into(),
+        kind: MotionSceneLayerKind::Shape,
+        from_s: 0.18,
+        duration_s: (duration_s - 0.18).max(0.01),
+        z_index: 6,
+        params: BTreeMap::from([
+            ("shape".into(), serde_json::json!("rectangle")),
+            ("x".into(), serde_json::json!(0.53)),
+            ("y".into(), serde_json::json!(0.29)),
+            ("width".into(), serde_json::json!(0.025)),
+            ("height".into(), serde_json::json!(0.18)),
+            ("color".into(), serde_json::json!("#F6C85F")),
+            ("opacity".into(), serde_json::json!(0.92)),
+            ("rotation_deg".into(), serde_json::json!(0.0)),
+            (
+                "animations".into(),
+                serde_json::json!([
+                    {
+                        "parameter": "overlay.opacity",
+                        "keyframes": [
+                            { "time_s": 0.0, "value": 0.0 },
+                            { "time_s": 0.3, "value": 0.92 }
+                        ]
+                    }
+                ]),
+            ),
+        ]),
+    }
+}
+
+fn headline_layer(request: &str, duration_s: f64) -> MotionSceneLayer {
+    MotionSceneLayer {
+        id: "headline".into(),
+        kind: MotionSceneLayerKind::Text,
+        from_s: 0.0,
+        duration_s,
+        z_index: 10,
+        params: BTreeMap::from([
+            ("text".into(), serde_json::json!(headline_text(request))),
+            ("layout".into(), serde_json::json!("center_safe")),
+            ("animation".into(), serde_json::json!("fade_slide_in")),
+        ]),
+    }
+}
+
+fn step_text_layer(index: usize, duration_s: f64) -> MotionSceneLayer {
+    let step_number = index + 1;
+    let y = 0.34 + (index as f64 * 0.11);
+    MotionSceneLayer {
+        id: format!("step-{step_number}-label"),
+        kind: MotionSceneLayerKind::Text,
+        from_s: 0.2 + (index as f64 * 0.16),
+        duration_s: (duration_s - (0.2 + (index as f64 * 0.16))).max(0.01),
+        z_index: 12 + i32::try_from(index).unwrap_or(0),
+        params: BTreeMap::from([
+            (
+                "text".into(),
+                serde_json::json!(format!("Step {step_number}")),
+            ),
+            ("layout".into(), serde_json::json!("left_safe")),
+            ("x".into(), serde_json::json!(0.14)),
+            ("y".into(), serde_json::json!(y)),
+            ("width".into(), serde_json::json!(0.36)),
+            ("height".into(), serde_json::json!(0.08)),
+            ("animation".into(), serde_json::json!("fade_slide_in")),
+        ]),
+    }
 }
 
 fn stable_scene_id(request: &str) -> String {
@@ -239,6 +360,10 @@ fn headline_text(request: &str) -> String {
     let mut text = trimmed.chars().take(77).collect::<String>();
     text.push_str("...");
     text
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
 }
 
 #[async_trait]
