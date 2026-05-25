@@ -35,7 +35,7 @@ use crate::tool::{
     ToolRegistry, UserInputRequest,
 };
 
-const DEFAULT_MAX_TURN_ITERATIONS: usize = 24;
+const DEFAULT_MAX_TURN_ITERATIONS: usize = 48;
 const ENABLE_ITERATION_COMPACTION: bool = false;
 
 /// One event emitted by the agent loop. The REPL prints these; the TUI
@@ -779,7 +779,8 @@ impl Session {
                         any_tools_in_turn,
                         &outcome,
                     ) {
-                        self.emit_local_turn_summary().await;
+                        self.emit_local_turn_summary("Done. I completed the tool work above.")
+                            .await;
                     }
                     if let (Some(rec), Some(id)) = (&self.recorder, turn_id.clone()) {
                         rec.record_turn_complete(id);
@@ -790,17 +791,24 @@ impl Session {
             }
         }
         // Iteration cap reached — defensive against runaway tool loops.
-        warn!(max_inner_iterations, "hit iteration cap; ending turn");
-        let _ = self.events_tx.send(SessionEvent::Error(format!(
-            "turn exceeded {max_inner_iterations} sampling iterations; ending"
-        )));
-        // Cap-reached is still a clean shutdown of the turn — record
-        // the boundary so resume doesn't re-discard the cap'd turn.
+        // This is not a clean success: make the pause visible and
+        // persist it so the desktop chat never appears to stop on a
+        // bare tool result.
+        warn!(max_inner_iterations, "hit iteration cap; pausing turn");
+        let message = format!(
+            "Turn paused after {max_inner_iterations} sampling iterations. \
+             I stopped before the next assistant response to avoid an uncontrolled tool loop. \
+             Send \"continue\" to resume from the current project state."
+        );
+        self.emit_local_turn_summary(&message).await;
+        let _ = self.events_tx.send(SessionEvent::Error(message.clone()));
+        // Cap-reached is still a closed rollout turn — record the
+        // boundary so resume doesn't re-discard the cap'd turn.
         if let (Some(rec), Some(id)) = (&self.recorder, turn_id) {
             rec.record_turn_complete(id);
         }
         let _ = self.events_tx.send(SessionEvent::TurnEnd);
-        Ok(())
+        Err(SessionError::Other(message))
     }
 
     /// One streaming sampling iteration. Returns the inner-loop outcome
@@ -1113,12 +1121,11 @@ impl Session {
         }
     }
 
-    async fn emit_local_turn_summary(&self) {
-        let text = "Done. I completed the tool work above.";
+    async fn emit_local_turn_summary(&self, text: &str) {
         let _ = self
             .events_tx
             .send(SessionEvent::TextDelta(text.to_string()));
-        let message = Message::assistant_text(text);
+        let message = Message::assistant_text(text.to_string());
         if let Some(rec) = &self.recorder {
             rec.record_message(message.clone());
         }
@@ -1353,6 +1360,53 @@ mod tests {
         recorder.flush().await.unwrap();
         let log = std::fs::read_to_string(recorder.path()).unwrap();
         assert!(log.contains(r#""type":"turn_started""#));
+        assert!(log.contains(r#""type":"turn_complete""#));
+    }
+
+    #[tokio::test]
+    async fn iteration_cap_is_visible_and_not_success() {
+        let client =
+            Client::new("test-key", crate::anthropic::ClientConfig::default()).expect("client");
+        let dir = tempfile::tempdir().unwrap();
+        let s = Session::new(
+            client,
+            ToolRegistry::new(),
+            "claude-haiku-4-5-20251001",
+            None,
+            std::env::temp_dir(),
+        )
+        .with_recorder(dir.path());
+        let mut events = s.subscribe();
+
+        let err = s
+            .run_turn_capped("hello", CancellationToken::new(), 0)
+            .await
+            .expect_err("iteration cap should not report success");
+        assert!(
+            err.to_string()
+                .contains("Turn paused after 0 sampling iterations")
+        );
+
+        let mut saw_text = false;
+        let mut saw_error = false;
+        while let Ok(event) = events.try_recv() {
+            match event {
+                SessionEvent::TextDelta(text) if text.contains("Turn paused after 0") => {
+                    saw_text = true;
+                }
+                SessionEvent::Error(message) if message.contains("Turn paused after 0") => {
+                    saw_error = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_text, "cap pause should be visible as assistant text");
+        assert!(saw_error, "cap pause should also surface as an error");
+
+        let recorder = s.recorder.as_ref().expect("recorder mounted");
+        recorder.flush().await.unwrap();
+        let log = std::fs::read_to_string(recorder.path()).unwrap();
+        assert!(log.contains("Turn paused after 0 sampling iterations"));
         assert!(log.contains(r#""type":"turn_complete""#));
     }
 
