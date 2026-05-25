@@ -41,6 +41,7 @@
 
 pub mod anthropic;
 pub mod awidat_md;
+pub mod broll_recommendations;
 pub mod capabilities;
 pub mod capability_metadata;
 pub mod caption_rendered_output_scorer;

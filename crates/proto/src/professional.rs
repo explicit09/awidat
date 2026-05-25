@@ -1186,6 +1186,235 @@ pub struct ClipCandidateAssembly {
     pub required_setup_ids: Vec<String>,
 }
 
+/// Stored B-roll recommendations derived from understanding records.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BrollRecommendationPackage {
+    /// Per-asset recommendation sets.
+    #[serde(default)]
+    pub assets: Vec<BrollRecommendationAsset>,
+}
+
+impl BrollRecommendationPackage {
+    /// Validate B-roll recommendation package invariants.
+    pub fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut asset_ids = HashSet::new();
+        for asset in &self.assets {
+            if asset.asset_id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    "B-roll recommendation asset has an empty asset_id",
+                ));
+            }
+            if !asset_ids.insert(asset.asset_id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "B-roll recommendations contain duplicate asset {}",
+                        asset.asset_id
+                    ),
+                ));
+            }
+            diagnostics.extend(asset.validate());
+        }
+        diagnostics
+    }
+}
+
+/// B-roll recommendations for one source asset.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BrollRecommendationAsset {
+    /// Source asset id.
+    pub asset_id: String,
+    /// Ranked recommendations.
+    #[serde(default)]
+    pub recommendations: Vec<BrollRecommendation>,
+}
+
+impl BrollRecommendationAsset {
+    fn validate(&self) -> Vec<ProfessionalDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut ids = HashSet::new();
+        for recommendation in &self.recommendations {
+            if recommendation.id.trim().is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "B-roll recommendation asset {} has a recommendation with an empty id",
+                        self.asset_id
+                    ),
+                ));
+            }
+            if !ids.insert(recommendation.id.as_str()) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "B-roll recommendation asset {} has duplicate recommendation {}",
+                        self.asset_id, recommendation.id
+                    ),
+                ));
+            }
+            if !recommendation.source_range.is_valid() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "B-roll recommendation {} has an invalid source range",
+                        recommendation.id
+                    ),
+                ));
+            }
+            if !(0.0..=1.0).contains(&recommendation.score) {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "B-roll recommendation {} score is outside 0..1",
+                        recommendation.id
+                    ),
+                ));
+            }
+            if recommendation.evidence_ids.is_empty() {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "B-roll recommendation {} has no evidence ids",
+                        recommendation.id
+                    ),
+                ));
+            }
+            if !recommendation.insertion.range.is_valid()
+                || recommendation.insertion.rationale.trim().is_empty()
+                || recommendation.insertion.placement.trim().is_empty()
+            {
+                diagnostics.push(ProfessionalDiagnostic::error(
+                    CapabilityArea::PreAutonomyOrchestrationContract,
+                    format!(
+                        "B-roll recommendation {} has an invalid insertion plan",
+                        recommendation.id
+                    ),
+                ));
+            }
+            for component in &recommendation.score_breakdown {
+                if component.name.trim().is_empty() {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::PreAutonomyOrchestrationContract,
+                        format!(
+                            "B-roll recommendation {} has an unnamed score component",
+                            recommendation.id
+                        ),
+                    ));
+                }
+                if !(0.0..=1.0).contains(&component.value) {
+                    diagnostics.push(ProfessionalDiagnostic::error(
+                        CapabilityArea::PreAutonomyOrchestrationContract,
+                        format!(
+                            "B-roll recommendation {} component {} is outside 0..1",
+                            recommendation.id, component.name
+                        ),
+                    ));
+                }
+            }
+        }
+        diagnostics
+    }
+}
+
+/// One scored B-roll recommendation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BrollRecommendation {
+    /// Stable recommendation id.
+    pub id: String,
+    /// Source asset id.
+    pub asset_id: String,
+    /// Fused moment id this recommendation supports.
+    pub moment_id: String,
+    /// Source range being covered or illustrated.
+    pub source_range: SourceRange,
+    /// Visual opportunity category.
+    pub category: BrollRecommendationCategory,
+    /// Asset/retrieval/generation strategy.
+    pub strategy: BrollAssetStrategy,
+    /// Overall score from 0..1.
+    pub score: f64,
+    /// Human-readable recommendation rationale.
+    pub rationale: String,
+    /// Score components.
+    #[serde(default)]
+    pub score_breakdown: Vec<BrollRecommendationScoreComponent>,
+    /// Evidence ids, usually fused moment ids and sidecar refs.
+    #[serde(default)]
+    pub evidence_ids: Vec<String>,
+    /// Suggested insertion plan.
+    pub insertion: BrollInsertionPlan,
+}
+
+/// Visual opportunity category for B-roll.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrollRecommendationCategory {
+    /// Explain a concept or process.
+    #[default]
+    Explanation,
+    /// Support a story or anecdote.
+    Storytelling,
+    /// Visualize a statistic or numeric claim.
+    Statistic,
+    /// Clarify an analogy.
+    Analogy,
+    /// Refer to a historical event or archival context.
+    HistoricalReference,
+    /// Mention a company, person, or brand.
+    EntityMention,
+    /// Show a product, app, workflow, or UI.
+    ProductMention,
+    /// Support an emotional story beat.
+    EmotionalMoment,
+    /// Explain a technical concept.
+    TechnicalConcept,
+}
+
+/// Strategy for sourcing the B-roll asset.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrollAssetStrategy {
+    /// Use existing project footage.
+    #[default]
+    ProjectFootage,
+    /// Search stock footage/stills.
+    Stock,
+    /// Generate a new image/video asset.
+    GeneratedVisual,
+    /// Use motion graphics/infographic treatment.
+    MotionGraphic,
+    /// Use archival/reference media.
+    ArchivalReference,
+}
+
+/// Score component for a B-roll recommendation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BrollRecommendationScoreComponent {
+    /// Component name.
+    pub name: String,
+    /// Component value from 0..1.
+    pub value: f64,
+    /// Human-readable reason.
+    pub reason: String,
+}
+
+/// Suggested B-roll insertion plan.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BrollInsertionPlan {
+    /// Fused moment or semantic anchor.
+    pub anchor_id: String,
+    /// Source/timeline-adjacent range to cover.
+    pub range: SourceRange,
+    /// Suggested duration.
+    pub duration_s: f64,
+    /// Placement style, e.g. cover_cutaway, pip, lower_third_graphic.
+    pub placement: String,
+    /// Human-readable insertion rationale.
+    pub rationale: String,
+}
+
 /// Durable source review decision.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SourceSelect {

@@ -41,8 +41,8 @@ use awidat_core::tools::{
     podcast_story_map::PodcastStoryMapTool, podcast_visual_polish::PodcastVisualPolishTool,
     poll_generated_media_job::PollGeneratedMediaJobTool, poll_render::PollRenderTool,
     preview_cache::PreviewCacheStatusTool, proxy_media::GenerateProxyTool,
-    proxy_media::ProxyStatusTool, read_index::ReadIndexTool,
-    read_media_intelligence::ReadMediaIntelligenceTool,
+    proxy_media::ProxyStatusTool, read_broll_recommendations::ReadBrollRecommendationsTool,
+    read_index::ReadIndexTool, read_media_intelligence::ReadMediaIntelligenceTool,
     read_media_readiness::ReadMediaReadinessTool, read_understanding::ReadUnderstandingTool,
     relink_media::RelinkMediaTool, render_preflight::RenderPreflightTool,
     request_user_input::RequestUserInputTool, search_broll::SearchBrollTool,
@@ -100,6 +100,7 @@ pub fn build_registry() -> ToolRegistry {
     registry.register(Arc::new(GenerateProxyTool));
     registry.register(Arc::new(ReadMediaIntelligenceTool));
     registry.register(Arc::new(ReadUnderstandingTool));
+    registry.register(Arc::new(ReadBrollRecommendationsTool));
     registry.register(Arc::new(ReadMediaReadinessTool));
     registry.register(Arc::new(ReadIndexTool));
     registry.register(Arc::new(RelinkMediaTool));

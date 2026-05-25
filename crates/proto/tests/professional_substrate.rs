@@ -8,6 +8,8 @@ use awidat_proto::awidat_meta::{AwidatTimelineMetadata, BeatMarker, BeatMarkerRo
 use awidat_proto::professional::{
     AlignedTranscriptPhrase, AlignedTranscriptWord, AnimationTarget, AssetCatalog, AssetQuery,
     AssetReadiness, AssetRecord, AssetRole, AudioBus, AudioFinishingState, BezierHandles,
+    BrollAssetStrategy, BrollInsertionPlan, BrollRecommendation, BrollRecommendationAsset,
+    BrollRecommendationCategory, BrollRecommendationPackage, BrollRecommendationScoreComponent,
     CapabilityArea, CapabilityRegistry, CapabilityStatus, ClipCandidate, ClipCandidateAssembly,
     ClipCandidateAsset, ClipCandidatePackage, ClipCandidateScoreComponent, ColorFinishingState,
     CompositionGraph, CompositionNode, CompositionNodeType, DeliveryPreflightInput,
@@ -587,6 +589,71 @@ fn clip_candidate_package_round_trips() {
 
     let metadata = AwidatTimelineMetadata {
         clip_candidates: Some(roundtrip),
+        ..AwidatTimelineMetadata::default()
+    };
+    assert!(metadata.validate_professional_substrate().is_empty());
+}
+
+#[test]
+fn broll_recommendation_package_round_trips() {
+    let package = BrollRecommendationPackage {
+        assets: vec![BrollRecommendationAsset {
+            asset_id: "raw/interview.mov".into(),
+            recommendations: vec![BrollRecommendation {
+                id: "broll-rec:raw-interview:stat-1".into(),
+                asset_id: "raw/interview.mov".into(),
+                moment_id: "understanding:raw-interview:stat-1".into(),
+                source_range: SourceRange {
+                    start_s: 48.0,
+                    end_s: 56.0,
+                },
+                category: BrollRecommendationCategory::Statistic,
+                strategy: BrollAssetStrategy::MotionGraphic,
+                score: 0.91,
+                rationale: "Turn the numeric claim into a simple animated stat card.".into(),
+                score_breakdown: vec![
+                    BrollRecommendationScoreComponent {
+                        name: "visual_specificity".into(),
+                        value: 0.92,
+                        reason: "transcript includes a concrete number".into(),
+                    },
+                    BrollRecommendationScoreComponent {
+                        name: "broll_need".into(),
+                        value: 0.9,
+                        reason: "statistic moments benefit from visual reinforcement".into(),
+                    },
+                ],
+                evidence_ids: vec!["understanding:raw-interview:stat-1".into()],
+                insertion: BrollInsertionPlan {
+                    anchor_id: "understanding:raw-interview:stat-1".into(),
+                    range: SourceRange {
+                        start_s: 49.0,
+                        end_s: 54.0,
+                    },
+                    duration_s: 5.0,
+                    placement: "motion_graphic_overlay".into(),
+                    rationale: "Keep the speaker visible while emphasizing the number.".into(),
+                },
+            }],
+        }],
+    };
+
+    let json = serde_json::to_string(&package).expect("serialize package");
+    let roundtrip: BrollRecommendationPackage =
+        serde_json::from_str(&json).expect("deserialize package");
+
+    assert_eq!(
+        roundtrip.assets[0].recommendations[0].category,
+        BrollRecommendationCategory::Statistic
+    );
+    assert_eq!(
+        roundtrip.assets[0].recommendations[0].strategy,
+        BrollAssetStrategy::MotionGraphic
+    );
+    assert!(roundtrip.validate().is_empty());
+
+    let metadata = AwidatTimelineMetadata {
+        broll_recommendations: Some(roundtrip),
         ..AwidatTimelineMetadata::default()
     };
     assert!(metadata.validate_professional_substrate().is_empty());

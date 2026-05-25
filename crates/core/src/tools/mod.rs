@@ -64,6 +64,7 @@ pub mod poll_generated_media_job;
 pub mod poll_render;
 pub mod preview_cache;
 pub mod proxy_media;
+pub mod read_broll_recommendations;
 pub mod read_index;
 pub mod read_media_intelligence;
 pub mod read_media_readiness;

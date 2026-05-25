@@ -17,13 +17,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::professional::{
-    AnimationTarget, AssetCatalog, AudioFinishingState, CapabilityRegistry, ClipCandidatePackage,
-    ColorFinishingState, CompositionGraph, DeliveryProfile, ExpressionLink, ExpressionSource,
-    FindingSeverity, LearningSignal, MediaIntelligencePackage, MotionGraphicsTemplate,
-    MotionPackage, MotionScene, PackageManifest, ParameterAnimation, PipelineReadinessReport,
-    PipelineStageReadiness, PlannerPassContract, PreflightReport, ProfessionalDiagnostic,
-    ProposalPackage, ReadinessState, SourceSelect, Stringout, TrackingPackage,
-    TranscriptAlignmentPackage, UnderstandingPackage, WorkflowLens,
+    AnimationTarget, AssetCatalog, AudioFinishingState, BrollRecommendationPackage,
+    CapabilityRegistry, ClipCandidatePackage, ColorFinishingState, CompositionGraph,
+    DeliveryProfile, ExpressionLink, ExpressionSource, FindingSeverity, LearningSignal,
+    MediaIntelligencePackage, MotionGraphicsTemplate, MotionPackage, MotionScene, PackageManifest,
+    ParameterAnimation, PipelineReadinessReport, PipelineStageReadiness, PlannerPassContract,
+    PreflightReport, ProfessionalDiagnostic, ProposalPackage, ReadinessState, SourceSelect,
+    Stringout, TrackingPackage, TranscriptAlignmentPackage, UnderstandingPackage, WorkflowLens,
 };
 use crate::subtitle::SubtitleTrack;
 
@@ -98,6 +98,9 @@ pub struct AwidatTimelineMetadata {
     /// Stored reviewable short-form clip candidates.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub clip_candidates: Option<ClipCandidatePackage>,
+    /// Stored scored B-roll recommendations.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub broll_recommendations: Option<BrollRecommendationPackage>,
     /// Unified reviewable proposal packages across pipeline stages.
     #[serde(default)]
     pub proposal_packages: Vec<ProposalPackage>,
@@ -219,6 +222,9 @@ impl AwidatTimelineMetadata {
             diagnostics.extend(package.validate());
         }
         if let Some(package) = &self.clip_candidates {
+            diagnostics.extend(package.validate());
+        }
+        if let Some(package) = &self.broll_recommendations {
             diagnostics.extend(package.validate());
         }
 
