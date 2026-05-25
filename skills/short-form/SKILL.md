@@ -243,7 +243,35 @@ python3 <skill-root>/scripts/caption_plan.py \
 Treat `status: "needs_review"` as evidence to revise phrase length,
 line wrapping, cue duration, or caption density before render handoff.
 
-Before claiming caption placement is visually safe, emit geometry evidence:
+Before claiming caption placement is visually safe, emit adaptive layout
+evidence with available visual sidecars:
+
+```bash
+python3 <skill-root>/scripts/caption_plan.py \
+  --transcript index/whisper/raw/<asset>.json \
+  --face index/face/raw/<asset>.json \
+  --gaze index/gaze/raw/<asset>.json \
+  --shot index/shot/raw/<asset>.json \
+  --composition index/composition/raw/<asset>.json \
+  --frame-quality index/frame-quality/raw/<asset>.json \
+  --phrase-preset short \
+  --max-chars-per-line 24 \
+  --output-format adaptive-layout > caption-layout.json
+```
+
+Use each recommendation's `edl_hint` when emitting `*** Insert Caption`:
+it preserves phrase timing and `word_timings_json`, maps richer layout zones
+onto renderer-supported title positions, and records the selected zone and
+estimated bounding box for review. Treat rejected zones as audit evidence:
+do not place captions over face, eyes, mouth, subject body, gaze line, key
+action, or unsafe frame areas unless the user explicitly accepts manual risk.
+
+To plan keyword emphasis, topic labels, progress labels, callouts, reaction
+text, or lower thirds with the same safety rules, pass `--layout-items` with
+an `items` array. Each item uses `id`, `overlay_kind`, `text`, `start_s`, and
+`end_s`; non-caption items return `insert_title` EDL hints.
+
+When only caption geometry is available, emit the simpler geometry evidence:
 
 ```bash
 python3 <skill-root>/scripts/caption_plan.py \
@@ -286,7 +314,8 @@ For each returned phrase, emit `*** Insert Caption` ops with:
 
 - `text`: 2–4 words per title, grouped by word timing, punctuation,
   speaker changes, and breath-length silence gaps
-- `position`: bottom-third
+- `position`: from adaptive layout `edl_hint.position`; bottom-third only
+  when the planner says it is safe
 - `font_size`: 48–64 (large enough on a phone)
 - `color`: white with 80%-alpha background OR black-on-yellow for
   the highest-energy beats
