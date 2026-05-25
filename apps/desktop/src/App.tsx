@@ -2222,10 +2222,16 @@ function ProjectMediaPanel({
       />
       <Stack gap="2">
         {media.length > 0 ? media.map((item) => (
-          <button
+          <div
             key={item.id}
-            type="button"
+            role="button"
+            tabIndex={0}
             onClick={() => {
+              if (item.stem) onSelectMedia(item.stem);
+            }}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
               if (item.stem) onSelectMedia(item.stem);
             }}
             className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2 text-left transition-colors hover:border-[var(--color-border)] hover:bg-[var(--color-surface-card-hover)]"
@@ -2275,7 +2281,7 @@ function ProjectMediaPanel({
                 </Button>
               </div>
             ) : null}
-          </button>
+          </div>
         )) : (
           <Card padding="sm" tone="flat">
             <Stack gap="2">
