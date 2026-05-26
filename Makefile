@@ -1,4 +1,4 @@
-.PHONY: check fmt clippy test eval eval-ci eval-stress python-smoke python-smoke-audio package install-local clean-dist desktop desktop-stop desktop-deps desktop-yt-dlp
+.PHONY: check fmt clippy test python-smoke python-smoke-audio package install-local clean-dist desktop desktop-stop desktop-deps desktop-yt-dlp
 
 check: fmt clippy test
 
@@ -10,15 +10,6 @@ clippy:
 
 test:
 	cargo test --workspace
-
-eval:
-	cargo run -p awidat-eval
-
-eval-ci:
-	cargo run -p awidat-eval -- --ci --json
-
-eval-stress:
-	cargo run -p awidat-eval -- --stress
 
 python-smoke:
 	python3 python/scripts/smoke_indexers.py --safe

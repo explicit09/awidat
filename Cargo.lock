@@ -925,26 +925,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "awidat-eval"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "awidat-core",
- "awidat-index",
- "awidat-mcp",
- "awidat-proto",
- "awidat-render",
- "awidat-test-support",
- "chrono",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "awidat-index"
 version = "0.1.0"
 dependencies = [

@@ -16,7 +16,6 @@ members = [
     "crates/config",
     "crates/secrets",
     "crates/index",
-    "crates/eval",
     "crates/desktop-protocol",
     "apps/desktop/src-tauri",
 
