@@ -71,6 +71,10 @@ use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
 use crate::awidat_mcp::tools::local_review_package::{self, LocalReviewPackageArgs};
+use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
+use crate::awidat_mcp::tools::plan_motion_scene::{self, PlanMotionSceneArgs};
+use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
+use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
 use crate::awidat_mcp::tools::read_broll_recommendations::{self, ReadBrollRecommendationsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
@@ -739,6 +743,78 @@ what setup must stay intact when cutting this beat standalone.",
         args: Parameters<InspectMomentArgs>,
     ) -> Result<String, ErrorData> {
         inspect_moment::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_emphasis` — read-only single-clip emphasis-motion planner.
+    #[tool(
+        description = "\
+Read-only emphasis planner. Given a clip id, optional beat times, visual \
+context, and an LLM-friendly style word, returns the strongest executable \
+single-clip parameter animation plus a parseable Set Parameter Animation EDL \
+fragment. Use it when the job is emphasis inside a clip, not a cut boundary.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_emphasis(
+        &self,
+        args: Parameters<PlanEmphasisArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_emphasis::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_motion_scene` — read-only native MotionScene planner.
+    #[tool(
+        description = "\
+Read-only planner for native procedural MotionScene documents. Use after \
+plan_visual_support chooses the motion_scene lane. It returns a valid \
+MotionScene plus a Set Motion Scene EDL snippet for apply_edl. Text layers \
+text, rectangle/solid, and project-asset image layers are preview/render \
+supported; video/media layers are stored with explicit limitations and \
+footage should use B-roll/PiP.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_motion_scene(
+        &self,
+        args: Parameters<PlanMotionSceneArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_motion_scene::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_reframe` — read-only static reframe planner.
+    #[tool(
+        description = "\
+Plan a static subject-aware reframe for vertical, square, or social \
+delivery. Returns an EDL fragment that sets the `awidat.reframe` clip \
+effect; the agent must pass that fragment to `apply_edl` to mutate the \
+timeline. Use this after `find_speaker_oncam`, gaze/face evidence, or \
+manual subject-center evidence identifies where the important subject sits \
+in frame.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_reframe(
+        &self,
+        args: Parameters<PlanReframeArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_reframe::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_transition` — read-only transition planner.
+    #[tool(
+        description = "\
+Read-only transition planner. Pass the JSON object returned by \
+transition_context. The tool recommends either a hard cut with Set Cut \
+Intent metadata or one supported visible transition with a named job, safe \
+duration, reason, alternate, and EDL fragment. It never applies the edit.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_transition(
+        &self,
+        args: Parameters<PlanTransitionArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_transition::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
