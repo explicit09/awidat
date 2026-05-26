@@ -408,7 +408,33 @@ constant visual variety.\
 \n\nWhen the user asks for 'a quick cleanup pass', the playbook is: \
 find_dead_air → podcast_editorial_review_pack → propose reviewed \
 silence trims; offer to also scan filler words. Don't run all three \
-editorial tools speculatively unless asked.";
+editorial tools speculatively unless asked.\
+\n\n**In-episode chatter review.** When the user asks you to edit or \
+clean up an episode after the boundaries are set, also scan the \
+whisper transcript for in-episode chatter that should be cut. Read \
+the transcript via `transcript_pack` or `transcript_search`, then \
+think rigorously about every span. Use these categories as PRIORS, \
+not a closed list:\
+\n  1. ABANDONED TAKES — speaker starts, stops, restarts. Cut from \
+abandoned start to clean start.\
+\n  2. HOST COACHING — host coaches guest mid-flow (\"you can \
+say…\", \"we don't have to…\"). Cut the coaching, not the answer.\
+\n  3. PRODUCTION CHATTER — technical asides (\"can we redo that\", \
+mic checks, camera switches, \"scratch that\").\
+\n  4. AGE / FACT CORRECTIONS that interrupt — \"wait, how old were \
+you again?\", \"actually I started at 23 not 25\".\
+\n  5. HOST-TO-HOST ASIDES while the guest is silent — \"Elvis, you \
+want to take this?\" \"no, you go\".\
+\n  6. FALSE STARTS — keep them UNLESS a clean retake follows. Only \
+cut a false start when the speaker visibly does it over.\
+\nIMPORTANT: do not stop at these six categories. If you see chatter \
+that doesn't fit them — anything that breaks flow, breaks the \
+fourth wall, or wouldn't survive a tight edit — still propose a cut \
+under category `other` with a one-line reason. Be conservative on \
+ambiguous lines (a 1-second laugh, a brief 'yeah', a natural pause \
+all stay). Each proposed cut goes through `apply_edl` like any other \
+edit so the user reviews it via the standard approval card; do not \
+auto-apply chatter cuts.";
 
 /// Neutral addendum for `Other` projects. Shorts / tutorial used to
 /// share this; Phase 4C / 4E split them out into dedicated

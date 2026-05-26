@@ -92,8 +92,19 @@ impl CodexSession {
         }
         let emitter: Arc<dyn ItemEmitter> =
             Arc::new(TauriEmitter::new(app, project_root.clone()));
-        let bridge =
-            CodexAppServer::launch(emitter, project_root.clone(), mcp_server_path).await?;
+        // Per-format editorial addendum (Podcast / Shorts / Tutorial /
+        // Other). Reads project type from the OTIO and assembles the
+        // matching playbook; rides on `developer_instructions` so the
+        // agent gets it without us touching codex's base prompt.
+        let developer_instructions =
+            Some(awidat_core::system_prompt::assemble_for_project(&project_root));
+        let bridge = CodexAppServer::launch(
+            emitter,
+            project_root.clone(),
+            mcp_server_path,
+            developer_instructions,
+        )
+        .await?;
         Ok(Self {
             bridge,
             project_root,

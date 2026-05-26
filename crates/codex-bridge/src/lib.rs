@@ -202,6 +202,7 @@ impl CodexAppServer {
         emit: Arc<dyn ItemEmitter>,
         project_root: PathBuf,
         mcp_server_path: Option<PathBuf>,
+        developer_instructions: Option<String>,
     ) -> Result<Self, BridgeError> {
         // 1. Build the CLI overrides FIRST so they're baked into the
         //    Config we hand off to the in-process app-server. The
@@ -294,12 +295,16 @@ impl CodexAppServer {
             .map_err(|e| BridgeError::Startup(format!("InProcessAppServerClient::start: {e}")))?;
         let request_handle = AppServerRequestHandle::InProcess(client.request_handle());
 
-        // 6. Start a fresh thread.
+        // 6. Start a fresh thread. The Awidat per-format addendum
+        //    (system_prompt.rs::PODCAST_ADDENDUM and friends) rides
+        //    on `developer_instructions` so codex's base prompt stays
+        //    intact while the editorial playbook layers on top.
         let thread_response: ThreadStartResponse = request_handle
             .request_typed(ClientRequest::ThreadStart {
                 request_id: RequestId::Integer(1),
                 params: ThreadStartParams {
                     cwd: Some(project_root.display().to_string()),
+                    developer_instructions,
                     ..ThreadStartParams::default()
                 },
             })
