@@ -121,7 +121,7 @@ pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> 
 
 /// Initialize a new awidat project at `<parent_dir>/<name>` and load
 /// it as the current project. Mirrors `awidat new --no-md=false
-/// --no-index` (init + starter AWIDAT.md, no asset import). Asset
+/// --no-index` (init + starter AGENTS.md, no asset import). Asset
 /// import is a separate step the frontend can chain after.
 ///
 /// `project_type` is optional — when present, it's serialized into
@@ -176,14 +176,14 @@ pub async fn init_project(
     .map_err(|e| format!("init join: {e}"))?
     .map_err(|e| format!("init: {e}"))?;
 
-    // Starter AWIDAT.md so the project is "ready" with no extra
+    // Starter AGENTS.md so the project is "ready" with no extra
     // hand-holding from the user. The CLI's `--no-md` flag isn't
     // exposed here — desktop init always writes it. If the user
     // doesn't want it they delete the file.
-    let md_path = project_dir.join("AWIDAT.md");
-    fs::write(&md_path, AWIDAT_MD_TEMPLATE)
+    let md_path = project_dir.join("AGENTS.md");
+    fs::write(&md_path, AGENTS_MD_TEMPLATE)
         .await
-        .map_err(|e| format!("write AWIDAT.md: {e}"))?;
+        .map_err(|e| format!("write AGENTS.md: {e}"))?;
 
     // Stamp project_type into the OTIO timeline's metadata.awidat.extra
     // slot if the caller specified one. Done as a separate step (post-
@@ -521,17 +521,17 @@ fn recents_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("awidat-desktop").join("recents.json"))
 }
 
-/// Starter AWIDAT.md identical to the CLI's. Kept inline rather than
+/// Starter AGENTS.md identical to the CLI's. Kept inline rather than
 /// shared with new_cmd.rs because the desktop binary mustn't depend
 /// on the CLI crate (would be circular: CLI bundles desktop in
 /// release builds, eventually).
-const AWIDAT_MD_TEMPLATE: &str = "\
+const AGENTS_MD_TEMPLATE: &str = "\
 # Project conventions
 
 This file is read by awidat at session start and added to the agent's \
 system prompt. Use it to record editorial conventions, ground rules, \
 and per-episode constraints. Edit freely; remove sections you don't \
-need. Subdirectories may also have their own `AWIDAT.md` for narrower \
+need. Subdirectories may also have their own `AGENTS.md` for narrower \
 scope.
 
 ## Speakers
