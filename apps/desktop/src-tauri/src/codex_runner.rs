@@ -150,15 +150,25 @@ pub fn spawn_codex_turn(
     // string. Use `format!("{:?}", ...)` which gives us a `"..."`
     // literal with backslashes escaped, matching the CLI's recipe.
     if let Some(mcp) = resolve_mcp_server_binary() {
-        let quoted = format!("{:?}", mcp.display().to_string());
+        let quoted_cmd = format!("{:?}", mcp.display().to_string());
         cmd.arg("-c")
-            .arg(format!("mcp_servers.awidat.command={quoted}"));
+            .arg(format!("mcp_servers.awidat.command={quoted_cmd}"));
+        // Codex calls `.env_clear()` on MCP-server spawn (see
+        // vendor/codex-rs/rmcp-client/src/stdio_server_launcher.rs:259),
+        // so a parent `cmd.env(...)` doesn't reach the grandchild MCP
+        // server. Forward project_root via per-server env config so
+        // the MCP server's McpToolCtx::resolve() finds the right path.
+        let quoted_root = format!("{:?}", project_root.display().to_string());
+        cmd.arg("-c").arg(format!(
+            "mcp_servers.awidat.env.AWIDAT_PROJECT_ROOT={quoted_root}"
+        ));
     }
     // Final positional arg is the prompt.
     cmd.arg(&prompt);
 
-    // Export AWIDAT_PROJECT_ROOT so the spawned awidat-mcp-server (a
-    // grandchild of this Tauri process) resolves to the right project.
+    // Also export to the codex-exec child itself — the TUI panel and
+    // any in-process consumers read from env. The MCP server gets it
+    // via the per-server config override above (not this env).
     cmd.env("AWIDAT_PROJECT_ROOT", &project_root);
     // Run codex from the project dir so any cwd-relative behavior
     // sees what the user is editing.
