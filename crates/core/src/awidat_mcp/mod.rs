@@ -62,6 +62,7 @@ use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
 use crate::awidat_mcp::tools::create_stringout::{self, CreateStringoutArgs};
 use crate::awidat_mcp::tools::diagnose_project_media::{self, DiagnoseProjectMediaArgs};
 use crate::awidat_mcp::tools::download_yt_clip::{self, DownloadYtClipArgs};
+use crate::awidat_mcp::tools::export_package::{self, ExportPackageArgs};
 use crate::awidat_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
 use crate::awidat_mcp::tools::find_beat::{self, FindBeatArgs};
 use crate::awidat_mcp::tools::find_black_frames::{self, FindBlackFramesArgs};
@@ -88,6 +89,7 @@ use crate::awidat_mcp::tools::list_bins::{self, ListBinsArgs};
 use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
+use crate::awidat_mcp::tools::load_skill::{self, LoadSkillArgs};
 use crate::awidat_mcp::tools::local_review_package::{self, LocalReviewPackageArgs};
 use crate::awidat_mcp::tools::manage_assets::{
     self, CreateBinArgs, MarkSelectArgs, MoveToBinArgs, RateAssetArgs, RenameAssetArgs,
@@ -121,6 +123,9 @@ use crate::awidat_mcp::tools::podcast_smooth_cut_boundaries::{
     self, PodcastSmoothCutBoundariesArgs,
 };
 use crate::awidat_mcp::tools::podcast_story_map::{self, PodcastStoryMapArgs};
+use crate::awidat_mcp::tools::podcast_visual_polish::{self, PodcastVisualPolishArgs};
+use crate::awidat_mcp::tools::poll_render::{self, PollRenderArgs};
+use crate::awidat_mcp::tools::preview_cache::{self, PreviewCacheArgs};
 use crate::awidat_mcp::tools::proxy_media::{self, GenerateProxyArgs};
 use crate::awidat_mcp::tools::read_broll_recommendations::{self, ReadBrollRecommendationsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
@@ -129,11 +134,18 @@ use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArg
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
 use crate::awidat_mcp::tools::relink_media::{self, RelinkMediaArgs};
 use crate::awidat_mcp::tools::render_preflight::{self, RenderPreflightArgs};
+use crate::awidat_mcp::tools::run_preview_cache_refresh::{self, RunPreviewCacheRefreshArgs};
 use crate::awidat_mcp::tools::search_broll::{self, SearchBrollArgs};
 use crate::awidat_mcp::tools::shot_summary::{self, ShotSummaryArgs};
+use crate::awidat_mcp::tools::start_generated_media_job::{self, StartGeneratedMediaJobArgs};
+use crate::awidat_mcp::tools::start_indexing::{self, StartIndexingArgs};
+use crate::awidat_mcp::tools::start_render::{self, StartRenderArgs};
+use crate::awidat_mcp::tools::stream_remux::{self, StreamRemuxArgs};
 use crate::awidat_mcp::tools::transcript_pack::{self, TranscriptPackArgs};
 use crate::awidat_mcp::tools::transcript_search::{self, TranscriptSearchArgs};
 use crate::awidat_mcp::tools::transition_context::{self, TransitionContextArgs};
+use crate::awidat_mcp::tools::use_broll::{self, UseBrollArgs};
+use crate::awidat_mcp::tools::use_generated_media::{self, UseGeneratedMediaArgs};
 use crate::awidat_mcp::tools::validate_transition_choice::{self, ValidateTransitionChoiceArgs};
 use crate::awidat_mcp::tools::vedit_blame::{self, VeditBlameArgs};
 use crate::awidat_mcp::tools::vedit_branch::{self, VeditBranchArgs};
@@ -2000,6 +2012,292 @@ timeline.",
         args: Parameters<PodcastEditProposalArgs>,
     ) -> Result<String, ErrorData> {
         podcast_edit_proposal::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `use_broll` — download a chosen Pexels video and return an
+    /// EDL fragment ready for apply_edl.
+    ///
+    /// Mutating: writes a downloaded file under `raw/broll/`.
+    #[tool(
+        description = "\
+Download a Pexels video chosen from a prior `search_broll` result and \
+return an EDL fragment ready to hand to `apply_edl`. Does NOT apply \
+the EDL itself — that's `apply_edl`'s job. The returned \
+`edl_fragment` is a `*** Begin EDL ... *** End EDL` block. The \
+download lands at `raw/broll/pexels-<id>.mp4`. Idempotent: if the \
+file already exists the tool returns the EDL fragment without \
+re-downloading. Per-session cap: 10 downloads. Defaults: \
+max_width=1920, position=overlay. Pass position=replace to cut the \
+underlying clip for the duration of the b-roll. Pass insert_as=pip \
+to return an Insert PiP fragment instead.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn use_broll(
+        &self,
+        args: Parameters<UseBrollArgs>,
+    ) -> Result<String, ErrorData> {
+        use_broll::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `use_generated_media` — return an Insert BRoll EDL fragment
+    /// for a completed generated-media asset.
+    ///
+    /// Marked destructive consistent with the other media-placement
+    /// tools in this batch; the run reads the generated-media
+    /// registry and assembles an EDL fragment the agent hands to
+    /// apply_edl.
+    #[tool(
+        description = "\
+Return a ready-to-apply Insert BRoll EDL fragment for a completed generated \
+media asset. This does not call apply_edl or mutate the timeline.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn use_generated_media(
+        &self,
+        args: Parameters<UseGeneratedMediaArgs>,
+    ) -> Result<String, ErrorData> {
+        use_generated_media::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `stream_remux` — start a stream-copy/remux export job.
+    ///
+    /// Mutating: spawns an ffmpeg job that writes to the project's
+    /// renders directory and persists a render manifest.
+    #[tool(
+        description = "\
+Start a first-class stream-copy/remux export. Use this for simple container \
+changes, stream extraction/reordering, subtitle/audio passthrough, or other \
+packet-preserving jobs that do not need timeline effects, overlays, transitions, \
+retiming, or re-encoding. Streams are explicit so the manifest records the exact \
+mapping and can be replayed deterministically.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn stream_remux(
+        &self,
+        args: Parameters<StreamRemuxArgs>,
+    ) -> Result<String, ErrorData> {
+        stream_remux::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_visual_polish` — forced visual/multicam planning
+    /// pass.
+    ///
+    /// Marked destructive consistent with the other podcast
+    /// finishing tools in this batch; the run reads project state
+    /// and produces a polish report that downstream mutating tools
+    /// consume.
+    #[tool(
+        description = "\
+Check podcast visual polish readiness: multicam evidence, b-roll planning, \
+chapters, lower thirds, and captions.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn podcast_visual_polish(
+        &self,
+        args: Parameters<PodcastVisualPolishArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_visual_polish::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `preview_cache_status` — preview-cache readiness + bounded
+    /// refresh plan.
+    #[tool(
+        description = "Report project preview-cache readiness and a bounded read-only refresh plan across proxies, thumbnails, and waveform sidecars.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn preview_cache_status(
+        &self,
+        args: Parameters<PreviewCacheArgs>,
+    ) -> Result<String, ErrorData> {
+        preview_cache::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `run_preview_cache_refresh` — execute the persisted
+    /// preview-cache refresh lifecycle using the ffmpeg-backed
+    /// executor.
+    ///
+    /// Marked destructive because the run writes proxy/preview files
+    /// under `.awidat/proxies/`, `.awidat/thumbnails/`, and
+    /// `.awidat/waveforms/`, and atomically updates the lifecycle
+    /// manifest at `.awidat/preview-cache/refresh-plan.json`.
+    #[tool(
+        description = "Run the persisted preview-cache refresh lifecycle to completion using the ffmpeg-backed executor. Resumes from any prior pending/in-progress tasks and skips already-completed tasks.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn run_preview_cache_refresh(
+        &self,
+        args: Parameters<RunPreviewCacheRefreshArgs>,
+    ) -> Result<String, ErrorData> {
+        run_preview_cache_refresh::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `export_package` — render timeline and write delivery sidecars
+    /// (subtitles, chapters, metadata, preflight, recipe) under
+    /// `renders/package/`.
+    ///
+    /// Marked destructive because the run starts a final-MP4 render
+    /// job and writes a bundle of delivery sidecars (SRT, VTT,
+    /// chapters, metadata JSON, thumbnail candidates, preflight,
+    /// enhancement recipe) to disk.
+    #[tool(
+        description = "\
+Export a delivery package under renders/package/: final MP4 render job, \
+timeline-relative SRT, VTT, chapter text, package metadata JSON, \
+thumbnail candidate JSON, or a turnover package for sound/color/VFX \
+review. Burned-in Insert Caption overlays remain part of rendered \
+exports; SRT/VTT are separate delivery artifacts. Rendered packages \
+lower through an ExportPreset and can request hardware_acceleration \
+off, auto, or require.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn export_package(
+        &self,
+        args: Parameters<ExportPackageArgs>,
+    ) -> Result<String, ErrorData> {
+        export_package::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `load_skill` — L2 progressive-disclosure tool: returns the full
+    /// `SKILL.md` body of a named editorial skill.
+    #[tool(
+        description = "\
+Load the full L2 body of a named editorial skill into the current \
+turn's context. Use this when the user's request maps to one of the \
+skills listed in the L1 catalog. The \
+returned text contains the skill's editorial style, step-by-step \
+playbook, and references to bundled scripts you can run via `bash`.\
+\n\n\
+Examples:\
+\n  load_skill(name='interview-tightener') — when the user asks to \
+tighten an interview\
+\n  load_skill(name='b-roll-suggester')   — when the user asks for \
+visual cutaway suggestions\
+\n  load_skill(name='podcast-episode-producer') — for the canonical \
+end-to-end episode flow\
+\n\n\
+You can call multiple skills in a single turn if the request spans \
+their domains (e.g. tighten THEN suggest b-roll).\
+",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn load_skill(
+        &self,
+        args: Parameters<LoadSkillArgs>,
+    ) -> Result<String, ErrorData> {
+        load_skill::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `start_render` — run ffmpeg to render a preview/segment/full
+    /// asset or the edited timeline. Mutating: writes a render
+    /// manifest under `<project>/renders/` and an ffmpeg output file.
+    ///
+    /// The MCP-side port runs ffmpeg INLINE: the call awaits the
+    /// subprocess to completion before returning. There is no
+    /// background job id; use `verify_render` against the returned
+    /// output_path.
+    #[tool(
+        description = "\
+Run an ffmpeg render to completion and return the result. NOTE: this \
+in-process MCP port runs ffmpeg inline — it does NOT return a job id; \
+it awaits the render and returns once ffmpeg exits. Scopes: 'preview' = \
+480p H.264 of an asset; 'segment' = trim [start_s, end_s) of an asset \
+via stream-copy; 'full' = high-bitrate H.264 of an asset; 'timeline' \
+= render the *edited timeline* by walking project.otio.json. Output \
+lands under <project>/renders/. Long renders block the agent turn — \
+for hour-long timeline exports use the desktop UI or `awidat render` \
+CLI instead.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn start_render(
+        &self,
+        args: Parameters<StartRenderArgs>,
+    ) -> Result<String, ErrorData> {
+        start_render::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `poll_render` — read the latest status of a render job started
+    /// by `start_render`. Currently stubbed out for the in-process MCP
+    /// server because `start_render` runs ffmpeg synchronously and the
+    /// server holds no cross-call job state.
+    #[tool(
+        description = "\
+Read the latest status of a render job started by `start_render`. \
+NOTE: in the in-process MCP server, start_render runs ffmpeg \
+synchronously and returns only when the render terminates, so there \
+is no in-flight job to poll. This tool returns an unsupported-error \
+and asks the caller to inspect the output_path / call verify_render \
+instead.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn poll_render(
+        &self,
+        args: Parameters<PollRenderArgs>,
+    ) -> Result<String, ErrorData> {
+        poll_render::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `start_indexing` — run the configured indexers over every media
+    /// file in the project's `raw/` directory. Mutating: writes
+    /// per-asset sidecars under `<project>/.awidat/index/`.
+    #[tool(
+        description = "\
+Run the configured indexers (whisper transcription, scene detection, \
+audio energy, editorial moments, etc) over every media file in the \
+project's raw/ dir. Returns the summary report inline once finished. \
+The dispatcher is sha-keyed — re-running on already-indexed assets is \
+a fast no-op, so it's safe to call any time you suspect sidecars might \
+be stale. Pass an optional `indexers` filter (e.g. ['whisper']) to \
+re-run only specific producers. WARNING: indexing a fresh asset can \
+take 20+ minutes for hour-long video; only call when the user has \
+asked for an editorial operation that needs the sidecars and \
+view_episode shows they're missing.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn start_indexing(
+        &self,
+        args: Parameters<StartIndexingArgs>,
+    ) -> Result<String, ErrorData> {
+        start_indexing::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `start_generated_media_job` — submit a generated-media (b-roll)
+    /// job and write the project-local registry. Mutating: writes
+    /// under `<project>/.awidat/generated-media/registry.json` and
+    /// (for `mock`) a placeholder file under `raw/generated/`.
+    #[tool(
+        description = "\
+Start a generated-media job and write the local generated-media \
+registry. Provider 'mock' creates an offline completed placeholder \
+record suitable for tests. Provider 'openrouter' submits an \
+asynchronous OpenRouter video generation job using OPENROUTER_API_KEY. \
+Provider 'seedance' is not direct; use OpenRouter or a future \
+dedicated adapter.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn start_generated_media_job(
+        &self,
+        args: Parameters<StartGeneratedMediaJobArgs>,
+    ) -> Result<String, ErrorData> {
+        start_generated_media_job::run(args.0, McpToolCtx::resolve())
+            .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
