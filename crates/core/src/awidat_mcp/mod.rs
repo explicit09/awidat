@@ -57,6 +57,7 @@ use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
+use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
 use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::awidat_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
@@ -200,6 +201,25 @@ calls — pass `start_s` to scroll.",
         args: Parameters<ViewTimelineArgs>,
     ) -> Result<String, ErrorData> {
         view_timeline::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `read_understanding` — fused scene/moment understanding +
+    /// derived clip candidates.
+    #[tool(
+        description = "\
+Read consolidated scene/moment understanding and derived short-form clip \
+candidates without side effects. Fuses existing transcript, scene, topic, \
+audio-energy, and editorial-moment sidecars, then returns reviewable clip \
+candidates with scores, explanations, evidence ids, and one-click assembly \
+metadata.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn read_understanding(
+        &self,
+        args: Parameters<ReadUnderstandingArgs>,
+    ) -> Result<String, ErrorData> {
+        read_understanding::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }

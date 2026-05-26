@@ -20,5 +20,6 @@ pub mod list_looks;
 pub mod list_markers;
 pub mod list_stringouts;
 pub mod read_index;
+pub mod read_understanding;
 pub mod view_episode;
 pub mod view_timeline;
