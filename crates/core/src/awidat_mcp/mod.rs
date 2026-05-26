@@ -93,8 +93,11 @@ use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
 use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
+use crate::awidat_mcp::tools::shot_summary::{self, ShotSummaryArgs};
 use crate::awidat_mcp::tools::transcript_pack::{self, TranscriptPackArgs};
 use crate::awidat_mcp::tools::transcript_search::{self, TranscriptSearchArgs};
+use crate::awidat_mcp::tools::transition_context::{self, TransitionContextArgs};
+use crate::awidat_mcp::tools::validate_transition_choice::{self, ValidateTransitionChoiceArgs};
 use crate::awidat_mcp::tools::vedit_blame::{self, VeditBlameArgs};
 use crate::awidat_mcp::tools::vedit_branch::{self, VeditBranchArgs};
 use crate::awidat_mcp::tools::vedit_changed_clip_ids::{self, VeditChangedClipIdsArgs};
@@ -106,6 +109,7 @@ use crate::awidat_mcp::tools::vedit_merge_preflight::{self, VeditMergePreflightA
 use crate::awidat_mcp::tools::vedit_show::{self, VeditShowArgs};
 use crate::awidat_mcp::tools::vedit_tag::{self, VeditTagArgs};
 use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
+use crate::awidat_mcp::tools::view_frame::{self, ViewFrameArgs};
 use crate::awidat_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
 /// The Awidat MCP server. One short-lived struct per child-process
@@ -1078,6 +1082,95 @@ autopilot/co-pilot/manual approval behavior remains in control.",
         args: Parameters<PlanShortFormReviewArgs>,
     ) -> Result<String, ErrorData> {
         plan_short_form_review::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `shot_summary` — compact roll-up of an asset's visual
+    /// structure.
+    #[tool(
+        description = "\
+Compact descriptive summary of an episode's visual structure: shot \
+count, mean shot length, histograms over shot type \
+(close-up/medium/wide/no-face) and motion (static/slow-pan/handheld/\
+fast-cut). Reads the `shot` indexer's sidecar. Use this to orient \
+yourself to a new asset — the answer to 'what does this video look \
+like, structurally?' before deciding whether to call \
+broll_candidates, find_speaker_oncam, or just inspect a few clips.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn shot_summary(
+        &self,
+        args: Parameters<ShotSummaryArgs>,
+    ) -> Result<String, ErrorData> {
+        shot_summary::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `transition_context` — read-only transition boundary context
+    /// packet for one adjacent timeline boundary.
+    #[tool(
+        description = "\
+Build a read-only transition decision context packet for one adjacent \
+timeline boundary. Returns adjacent clip metadata, timeline/source ranges, \
+transition handle availability, continuity verdict, transcript snippets, \
+suggested frame timestamps, per-side motion magnitudes and screen \
+directions (outgoing/incoming), motion-match classification \
+(aligned/opposed/orthogonal/unknown), and missing-signal names. This tool \
+does not choose or apply a transition; use it before deciding whether a \
+hard cut, semantic cut, split edit, b-roll cover, or visible transition \
+is warranted.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn transition_context(
+        &self,
+        args: Parameters<TransitionContextArgs>,
+    ) -> Result<String, ErrorData> {
+        transition_context::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `validate_transition_choice` — post-application motion
+    /// validator for motion-sensitive transitions.
+    #[tool(
+        description = "\
+After applying a motion-sensitive transition (whip_pan_*, pass_by_*, \
+motion_blur, slide_*, zoom_in, etc.), call this to verify the chosen \
+direction matches the source clips' measured motion. Returns the \
+transition's predicted direction, the measured directions from each \
+side's shot sidecar, a boolean motion_match, and an editorial verdict \
+('acceptable' / 'wrong_direction' / 'no_signal'). This is the \
+closed-loop check that lets future plan_transition calls weight \
+direction predictions more carefully.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn validate_transition_choice(
+        &self,
+        args: Parameters<ValidateTransitionChoiceArgs>,
+    ) -> Result<String, ErrorData> {
+        validate_transition_choice::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `view_frame` — extract one frame from an asset and return it
+    /// as a JSON payload with a base64-encoded image.
+    #[tool(
+        description = "\
+Extract a single frame from a video asset at time `t_s` and return it \
+as a JSON payload carrying base64-encoded image bytes plus a textual \
+summary. Use this to *see* a moment — for example, to confirm a cut \
+lands on the right shot, or to read text on screen. detail='preview' \
+(default, <=768px longest edge) keeps the image cheap; \
+detail='original' returns source resolution. format='png' (default) | \
+'jpeg'. Frames are cached under .awidat/cache/frames/ keyed by \
+(asset, time, format, dim, grade).",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn view_frame(
+        &self,
+        args: Parameters<ViewFrameArgs>,
+    ) -> Result<String, ErrorData> {
+        view_frame::run(args.0, McpToolCtx::resolve())
+            .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
