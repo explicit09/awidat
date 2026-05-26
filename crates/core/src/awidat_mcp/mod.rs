@@ -6,67 +6,54 @@
 //! JSON-RPC over stdin/stdout, lists our tools, and routes model tool
 //! calls into them.
 //!
-//! Why MCP instead of a deeper codex fork (step 2 design loop in
-//! `docs/superpowers/specs/...`): codex's "native" tool surface is
-//! JSON descriptors fed to the model, not a Rust trait we can
-//! implement. The actual Rust execution code for a tool has to live
-//! somewhere off the model's call path; MCP is the well-trodden hook
-//! and codex already handles connection lifecycle, schema negotiation,
-//! and approval routing for MCP servers. Putting our tools here keeps
-//! all Awidat changes in `crates/`, not `vendor/codex-rs/`, so future
-//! fork refreshes don't touch our tool surface.
+//! Why MCP instead of a deeper codex fork (step 2 design): codex's
+//! "native" tool surface is JSON descriptors fed to the model, not a
+//! Rust trait we can implement. The actual Rust execution code for a
+//! tool has to live somewhere off the model's call path; MCP is the
+//! well-trodden hook and codex already handles connection lifecycle,
+//! schema negotiation, and approval routing for MCP servers. Putting
+//! our tools here keeps all Awidat changes in `crates/`, not
+//! `vendor/codex-rs/`, so future fork refreshes don't touch our tool
+//! surface.
 //!
-//! Step 3 (read-only view_timeline stub) and step 4 (mutating-tool
-//! pre-execution approval gating) of the codex-harness migration
-//! ship here. Step 5 will bulk-port the ~100 real video tools.
+//! Step 5 of the migration ports the ~100 real video tools onto this
+//! server. Each tool's pure logic lives in
+//! [`crate::awidat_mcp::tools`]; the rmcp-facing wrappers (with
+//! `#[tool(...)]` and `annotations(...)`) are right here in
+//! [`AwidatMcpServer`].
 //!
 //! ## Adding a tool
 //!
-//! Write an `async fn` inside `impl AwidatMcpServer` with
-//! `#[tool(description = "...")]`. Annotate every tool with one of:
+//! 1. Write a `pub fn run(args, ctx) -> Result<String, String>` (or
+//!    equivalent) in `crates/core/src/awidat_mcp/tools/<name>.rs`,
+//!    keeping the logic free of `ToolHandler`/`ToolContext`.
+//! 2. Register it as a `pub mod` in `tools/mod.rs`.
+//! 3. Add a `#[tool(description = "...", annotations(...))]` method
+//!    here that calls into the new module.
 //!
-//! - `annotations(read_only_hint = true)` for tools that only read
-//!   project state. Codex won't fire an approval prompt for these.
-//! - `annotations(destructive_hint = true)` for tools that mutate
-//!   project state (EDL writes, render jobs, asset imports, bash).
-//!   Codex's `requires_mcp_tool_approval` gate (see
-//!   `vendor/codex-rs/core/src/mcp_tool_call.rs`) consults this and
-//!   fires the pre-execution approval prompt when
-//!   `approval_policy != "never"`.
-//!
-//! Tools missing either annotation are conservatively treated as
-//! mutating by codex (see `mcp_tool_call.rs::requires_mcp_tool_approval`).
-//! That fail-closed behavior is the right default; the annotations are
-//! how a tool opts out.
+//! Every tool must annotate ONE of:
+//!   - `read_only_hint = true`  — tool reads project state only.
+//!   - `destructive_hint = true` — tool mutates state (EDL writes,
+//!     render jobs, asset imports, bash).
+//! Codex respects these via `requires_mcp_tool_approval`
+//! (`vendor/codex-rs/core/src/mcp_tool_call.rs`) and fires a
+//! pre-execution approval prompt for destructive tools when
+//! `approval_policy != "never"`. Tools missing both annotations are
+//! conservatively treated as mutating (fail-closed).
 
+pub mod context;
+pub mod tools;
+
+use rmcp::ErrorData;
 use rmcp::ServerHandler;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::tool;
 use rmcp::tool_handler;
 use rmcp::tool_router;
-use schemars::JsonSchema;
-use serde::Deserialize;
-use serde::Serialize;
 
-/// Arguments for `view_timeline`.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ViewTimelineArgs {
-    /// Optional project root. Ignored by the skeleton; real
-    /// implementation in step 5 will read `project.otio.json` from
-    /// here.
-    #[serde(default)]
-    pub project_root: Option<String>,
-}
-
-/// Arguments for `apply_fake_edl`. Step 4 stub mutating tool used
-/// purely to exercise codex's pre-execution approval prompt; step 5
-/// replaces this with the real `apply_edl`.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ApplyFakeEdlArgs {
-    /// EDL text the model wants to apply. Ignored by the stub.
-    pub edl: String,
-}
+use crate::awidat_mcp::context::McpToolCtx;
+use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 
 /// The Awidat MCP server. One short-lived struct per child-process
 /// invocation. Holds a `ToolRouter` populated by the `#[tool_router]`
@@ -93,42 +80,26 @@ impl Default for AwidatMcpServer {
 
 #[tool_router]
 impl AwidatMcpServer {
-    /// Stub `view_timeline`. Step 5 replaces this body with an OTIO
-    /// read; for now it returns a canned summary so we can prove
-    /// codex calls into us end-to-end.
+    /// `list_markers` — read-only marker inventory across clip,
+    /// timeline, and guide-track scopes. Description text mirrors
+    /// `list_markers::DESCRIPTION` because `#[tool(description =
+    /// ...)]` only accepts a string literal.
     #[tool(
-        description = "View a summary of the current Awidat project's edited timeline. \
-            Skeleton implementation: returns a canned response while step 3 of the codex-harness \
-            migration proves the in-process MCP server wiring.",
+        description = "\
+List markers across the project timeline as JSON. Includes clip-level OTIO \
+markers, timeline-level metadata markers, and guide-track markers by default. \
+Use `start_s`/`end_s` for a timeline window, `marker_id`/`label`/`category` \
+for exact matching, and the include_* flags to limit scopes. The result is \
+read-only and suitable for finding marker ids before UpdateMarker/DeleteMarker \
+EDL operations.",
         annotations(read_only_hint = true)
     )]
-    pub async fn view_timeline(&self, _args: Parameters<ViewTimelineArgs>) -> String {
-        // Step 5 replaces this with the real OTIO loader. Until then,
-        // returning a recognizable string lets the agent (and us)
-        // confirm that the round trip works.
-        "Awidat MCP skeleton: view_timeline returned stub data. \
-         No project loaded; this is the hello-world wiring for step 3 \
-         of the codex-harness migration."
-            .to_string()
-    }
-
-    /// Stub `apply_fake_edl`. Annotated as destructive so codex
-    /// fires a pre-execution approval prompt; if the user approves,
-    /// we return a canned acknowledgement instead of actually
-    /// mutating anything. Step 5 replaces this with the real
-    /// `apply_edl` implementation.
-    #[tool(
-        description = "Apply an EDL envelope to the project's edited timeline. \
-            Mutates project state. Step 4 stub: returns a canned acknowledgement \
-            after the codex approval prompt fires.",
-        annotations(destructive_hint = true, read_only_hint = false)
-    )]
-    pub async fn apply_fake_edl(&self, args: Parameters<ApplyFakeEdlArgs>) -> String {
-        let preview: String = args.0.edl.chars().take(80).collect();
-        format!(
-            "Awidat MCP step-4 stub: apply_fake_edl accepted EDL prefix {preview:?}. \
-             No real mutation performed."
-        )
+    pub async fn list_markers(
+        &self,
+        args: Parameters<ListMarkersArgs>,
+    ) -> Result<String, ErrorData> {
+        list_markers::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
 
