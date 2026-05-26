@@ -1408,7 +1408,7 @@ This tool does not start, poll, or change render jobs; it writes a \
 verify-render evidence report and updates the adjacent render manifest when \
 one exists. Call start_render/poll_render separately, then pass the finished \
 output_path here.",
-        annotations(read_only_hint = true)
+        annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn verify_render(
         &self,
