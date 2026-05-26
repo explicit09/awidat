@@ -55,7 +55,10 @@ use rmcp::tool_router;
 use crate::awidat_mcp::context::McpToolCtx;
 use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
+use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
+use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
+use crate::awidat_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
 /// The Awidat MCP server. One short-lived struct per child-process
 /// invocation. Holds a `ToolRouter` populated by the `#[tool_router]`
@@ -137,6 +140,66 @@ space and apply a sensible strength.",
     )]
     pub async fn list_looks(&self, args: Parameters<ListLooksArgs>) -> Result<String, ErrorData> {
         list_looks::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `list_stringouts` — enumerate named select-collections.
+    #[tool(
+        description = "\
+List the project's named stringouts (ordered select-collections). \
+Each stringout has a stable id, an optional display name, and a count \
+of ordered select ids it references. Use `create_stringout` to add a \
+new one without disturbing existing ones — projects support multiple \
+stringouts in parallel (e.g. per arc, alt-cut, cold-open).",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn list_stringouts(
+        &self,
+        args: Parameters<ListStringoutsArgs>,
+    ) -> Result<String, ErrorData> {
+        list_stringouts::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `read_index` — read one footage-index channel for an asset.
+    #[tool(
+        description = "\
+Read one channel of the footage index for an asset. Channels: \
+'transcript' (whisper words+segments), 'scenes' (shot boundaries), \
+'audio_levels' (LUFS + silences), 'beats' (tempo + beat times), 'topics' (topic segmentation), \
+'editorial_moments' (typed edit beats), 'color' (per-frame color/exposure analysis), \
+'clip' (CLIP embedding metadata), 'face', 'gaze', 'shot', 'composition', \
+'frame_quality', 'summary' (one-line overview of all channels). Windowed channels accept \
+offset+limit (default 0+50). Result is capped at 8KB; page via offset \
+when truncated.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn read_index(&self, args: Parameters<ReadIndexArgs>) -> Result<String, ErrorData> {
+        read_index::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `view_timeline` — windowed view of the project's OTIO timeline.
+    #[tool(
+        description = "\
+Show clips in the project timeline within a time window. Each line is \
+one clip/gap/transition: track-kind, timeline time range, duration, name, \
+the exact `anchor=clip_uuid=<clip name>` value to use in apply_edl, \
+current `source=[start..end]` bounds, and media reference. Transition \
+lines show the visual range and the centered cut time (`cut=<seconds>`). For a user \
+request like \"trim the first N seconds\" of an existing clip, set Trim \
+Clip `start` to current source start + N; for \"trim the last N seconds\", \
+set `end` to current source end - N. Default window 60s starting at 0. \
+The header shows total timeline duration; the footer notes how many clips \
+are out of cap. Use `start_s`/`end_s`/`lines` to navigate. Stateless across \
+calls — pass `start_s` to scroll.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn view_timeline(
+        &self,
+        args: Parameters<ViewTimelineArgs>,
+    ) -> Result<String, ErrorData> {
+        view_timeline::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
