@@ -1,0 +1,1772 @@
+//! `verify_render` — verify an already-rendered output against the
+//! current project timeline. Ported from
+//! `crates/core/src/tools/verify_render.rs` to the in-process MCP
+//! server.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use awidat_proto::otio::{MediaReference, Stack, StackChild, Timeline, Track, TrackChild};
+use awidat_proto::project::Project;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio_util::sync::CancellationToken;
+
+use crate::awidat_mcp::context::McpToolCtx;
+
+const DEFAULT_DURATION_TOLERANCE_S: f64 = 0.25;
+const DEFAULT_SILENCE_THRESHOLD_DB: f64 = -45.0;
+const DEFAULT_MAX_UNEXPECTED_SILENCE_S: f64 = 1.5;
+const DEFAULT_BLACK_MIN_DURATION_S: f64 = 0.2;
+const DEFAULT_MAX_BLACK_SEGMENT_S: f64 = 0.5;
+const DEFAULT_SOURCE_RANGE_TOLERANCE_S: f64 = 0.05;
+const BOUNDARY_MARGIN_S: f64 = 0.2;
+
+/// Arguments to `verify_render`.
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
+pub struct VerifyRenderArgs {
+    /// Render path. Project-relative paths are resolved from project root.
+    #[serde(default)]
+    pub output_path: Option<String>,
+    /// Explicit expected duration. Defaults to the current timeline duration.
+    #[serde(default)]
+    pub expected_duration_s: Option<f64>,
+    /// Allowed absolute duration drift. Default 0.25s.
+    #[serde(default)]
+    pub duration_tolerance_s: Option<f64>,
+    /// quick checks near clip boundaries; thorough also adds mid-clip probes.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Optional edit_manifest.json/source-range manifest to compare to the timeline.
+    #[serde(default)]
+    pub source_range_manifest_path: Option<String>,
+    /// FFmpeg silencedetect threshold in dBFS. Default -45.
+    #[serde(default)]
+    pub silence_threshold_db: Option<f64>,
+    /// Silence ranges at least this long are flagged when they overlap edited content.
+    #[serde(default)]
+    pub max_unexpected_silence_s: Option<f64>,
+    /// Minimum blackdetect segment duration. Default 0.2s.
+    #[serde(default)]
+    pub black_min_duration_s: Option<f64>,
+    /// Black ranges longer than this fail the render. Default 0.5s.
+    #[serde(default)]
+    pub max_black_segment_s: Option<f64>,
+}
+
+#[derive(Clone)]
+struct VerifyRenderOptions {
+    expected_duration_s: Option<f64>,
+    duration_tolerance_s: f64,
+    mode: VerifyMode,
+    source_range_manifest_path: Option<PathBuf>,
+    silence_threshold_db: f64,
+    max_unexpected_silence_s: f64,
+    black_min_duration_s: f64,
+    max_black_segment_s: f64,
+    caption_frame_sampler_override:
+        Option<std::sync::Arc<dyn crate::caption_rendered_output_scorer::CaptionFrameSampler>>,
+}
+
+impl std::fmt::Debug for VerifyRenderOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerifyRenderOptions")
+            .field("expected_duration_s", &self.expected_duration_s)
+            .field("duration_tolerance_s", &self.duration_tolerance_s)
+            .field("mode", &self.mode)
+            .field(
+                "source_range_manifest_path",
+                &self.source_range_manifest_path,
+            )
+            .field("silence_threshold_db", &self.silence_threshold_db)
+            .field("max_unexpected_silence_s", &self.max_unexpected_silence_s)
+            .field("black_min_duration_s", &self.black_min_duration_s)
+            .field("max_black_segment_s", &self.max_black_segment_s)
+            .field(
+                "caption_frame_sampler_override",
+                &self
+                    .caption_frame_sampler_override
+                    .as_ref()
+                    .map(|_| "<sampler>"),
+            )
+            .finish()
+    }
+}
+
+impl Default for VerifyRenderOptions {
+    fn default() -> Self {
+        Self {
+            expected_duration_s: None,
+            duration_tolerance_s: DEFAULT_DURATION_TOLERANCE_S,
+            mode: VerifyMode::Quick,
+            source_range_manifest_path: None,
+            silence_threshold_db: DEFAULT_SILENCE_THRESHOLD_DB,
+            max_unexpected_silence_s: DEFAULT_MAX_UNEXPECTED_SILENCE_S,
+            black_min_duration_s: DEFAULT_BLACK_MIN_DURATION_S,
+            max_black_segment_s: DEFAULT_MAX_BLACK_SEGMENT_S,
+            caption_frame_sampler_override: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VerifyMode {
+    Quick,
+    Thorough,
+}
+
+#[derive(Debug, Serialize)]
+struct VerifyRenderReport {
+    passed: bool,
+    mode: VerifyMode,
+    output_path: String,
+    expected_duration_s: f64,
+    actual_duration_s: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    render_manifest: Option<RenderManifestEvidence>,
+    caption_summary: crate::captions::CaptionSummary,
+    gates: Vec<VerificationGate>,
+    timeline_manifest: TimelineManifest,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RenderManifestEvidence {
+    manifest_path: String,
+    manifest_id: String,
+    backend: String,
+    replay_kind: String,
+    input_count: usize,
+    output_count: usize,
+    sidecar_count: usize,
+    limitation_count: usize,
+    metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+struct VerificationGate {
+    name: String,
+    passed: bool,
+    message: String,
+    details: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct TimelineManifest {
+    expected_duration_s: f64,
+    source_ranges: Vec<SourceRangeEntry>,
+    missing_media: Vec<MissingMediaEntry>,
+    boundary_probes: Vec<BoundaryProbe>,
+    cut_boundaries: Vec<CutBoundary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct SourceRangeEntry {
+    clip_name: String,
+    asset: String,
+    timeline_start_s: f64,
+    timeline_end_s: f64,
+    source_start_s: f64,
+    source_end_s: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MissingMediaEntry {
+    clip_name: String,
+    reference_name: String,
+    timeline_start_s: f64,
+    timeline_end_s: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BoundaryProbe {
+    clip_name: String,
+    asset: String,
+    export_time_s: f64,
+    expected_source_time_s: f64,
+    label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CutBoundary {
+    from_clip_name: String,
+    to_clip_name: String,
+    from_asset: String,
+    to_asset: String,
+    at_s: f64,
+    gap_s: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceRangeManifest {
+    #[serde(alias = "source_ranges")]
+    final_kept_source_ranges: Vec<SourceRangeEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct SourceRangeManifestCheck {
+    passed: bool,
+    mismatches: Vec<String>,
+}
+
+/// Run `verify_render` against the project resolved from
+/// [`McpToolCtx`]. Returns the JSON body as `Ok(String)`; argument
+/// validation, ffmpeg failures, or manifest issues return `Err(String)`.
+pub async fn run(args: VerifyRenderArgs, ctx: McpToolCtx) -> Result<String, String> {
+    let output_path = match args.output_path.as_deref() {
+        Some(path) => resolve_project_path(&ctx.project_root, path, "output_path")?,
+        None => newest_render(&ctx.project_root)?,
+    };
+    if !output_path.is_file() {
+        return Err(format!(
+            "verify_render: output_path not found at {}",
+            output_path.display()
+        ));
+    }
+    let options = VerifyRenderOptions {
+        expected_duration_s: args.expected_duration_s,
+        duration_tolerance_s: args
+            .duration_tolerance_s
+            .unwrap_or(DEFAULT_DURATION_TOLERANCE_S),
+        mode: parse_mode(args.mode.as_deref())?,
+        source_range_manifest_path: args
+            .source_range_manifest_path
+            .as_deref()
+            .map(|path| {
+                resolve_project_path(&ctx.project_root, path, "source_range_manifest_path")
+            })
+            .transpose()?,
+        silence_threshold_db: args
+            .silence_threshold_db
+            .unwrap_or(DEFAULT_SILENCE_THRESHOLD_DB),
+        max_unexpected_silence_s: args
+            .max_unexpected_silence_s
+            .unwrap_or(DEFAULT_MAX_UNEXPECTED_SILENCE_S),
+        black_min_duration_s: args
+            .black_min_duration_s
+            .unwrap_or(DEFAULT_BLACK_MIN_DURATION_S),
+        max_black_segment_s: args
+            .max_black_segment_s
+            .unwrap_or(DEFAULT_MAX_BLACK_SEGMENT_S),
+        caption_frame_sampler_override: None,
+    };
+    validate_options(&options)?;
+
+    let report = verify_render_output(&ctx.project_root, &output_path, options).await?;
+    serde_json::to_string_pretty(&report)
+        .map_err(|e| format!("verify_render: encode report: {e}"))
+}
+
+async fn verify_render_output(
+    project_root: &Path,
+    output_path: &Path,
+    options: VerifyRenderOptions,
+) -> Result<VerifyRenderReport, String> {
+    let project = Project::read(project_root)
+        .map_err(|e| format!("verify_render: failed to read project: {e}"))?;
+    let mut timeline_manifest = collect_timeline_manifest(&project.timeline);
+    if options.mode == VerifyMode::Quick {
+        retain_quick_probes(&mut timeline_manifest.boundary_probes);
+    }
+
+    let mut gates = Vec::new();
+    add_missing_media_gate(&mut gates, project_root, &timeline_manifest);
+
+    let probe = awidat_render::probe_media(output_path)
+        .await
+        .map_err(|e| format!("verify_render: ffprobe failed: {e}"))?;
+    push_gate(
+        &mut gates,
+        "has_video_stream",
+        probe.has_video,
+        "rendered output contains at least one video stream",
+        json!({"stream_types": probe.stream_types}),
+    );
+    push_gate(
+        &mut gates,
+        "has_audio_stream",
+        probe.has_audio,
+        "rendered output contains at least one audio stream",
+        json!({"stream_types": probe.stream_types}),
+    );
+
+    let expected_duration_s = options
+        .expected_duration_s
+        .unwrap_or(timeline_manifest.expected_duration_s);
+    let duration_passed = probe
+        .duration_s
+        .map(|actual| (actual - expected_duration_s).abs() <= options.duration_tolerance_s)
+        .unwrap_or(false);
+    push_gate(
+        &mut gates,
+        "duration_match",
+        duration_passed,
+        "rendered duration is within tolerance",
+        json!({
+            "expected_duration_s": expected_duration_s,
+            "actual_duration_s": probe.duration_s,
+            "tolerance_s": options.duration_tolerance_s,
+        }),
+    );
+
+    add_source_duration_gate(&mut gates, project_root, &timeline_manifest.source_ranges).await;
+    add_source_range_manifest_gate(&mut gates, &timeline_manifest, &options)?;
+    let mut render_manifest = collect_render_manifest_evidence(output_path, &mut gates)?;
+    let caption_summary = crate::captions::summarize_captions(&project);
+    maybe_run_caption_scorer(
+        output_path,
+        &probe,
+        render_manifest.as_mut(),
+        &caption_summary,
+        options.caption_frame_sampler_override.as_deref(),
+    )
+    .await;
+    add_caption_evidence_gate(&mut gates, &caption_summary);
+    add_caption_safe_area_gate(&mut gates, &caption_summary);
+    add_manifest_caption_evidence_gate(&mut gates, render_manifest.as_ref(), &caption_summary);
+    add_caption_rendered_output_gate(&mut gates, render_manifest.as_ref(), &caption_summary);
+
+    let silence_ranges = awidat_render::generate_silences(
+        output_path,
+        options.silence_threshold_db,
+        options.max_unexpected_silence_s,
+        CancellationToken::new(),
+    )
+    .await
+    .map_err(|e| format!("verify_render: silencedetect failed: {e}"))?;
+    let unexpected_silences = silence_ranges
+        .into_iter()
+        .filter(|range| {
+            overlaps_content(range.start_s, range.end_s, &timeline_manifest.source_ranges)
+        })
+        .collect::<Vec<_>>();
+    push_gate(
+        &mut gates,
+        "no_long_unexpected_silence",
+        unexpected_silences.is_empty(),
+        "no long silence range overlaps edited timeline content",
+        json!({
+            "threshold_db": options.silence_threshold_db,
+            "max_unexpected_silence_s": options.max_unexpected_silence_s,
+            "ranges": unexpected_silences.iter().map(|range| json!({
+                "start_s": range.start_s,
+                "end_s": range.end_s,
+                "duration_s": range.end_s - range.start_s,
+                "db_floor": range.db_floor,
+            })).collect::<Vec<_>>(),
+        }),
+    );
+
+    let black_ranges = awidat_render::generate_black_frames(
+        output_path,
+        0.98,
+        options.black_min_duration_s,
+        CancellationToken::new(),
+    )
+    .await
+    .map_err(|e| format!("verify_render: blackdetect failed: {e}"))?;
+    let long_black_ranges = black_ranges
+        .into_iter()
+        .filter(|range| range.duration_s > options.max_black_segment_s)
+        .collect::<Vec<_>>();
+    push_gate(
+        &mut gates,
+        "no_long_black_segment",
+        long_black_ranges.is_empty(),
+        "no black-frame range exceeds max_black_segment_s",
+        json!({
+            "black_min_duration_s": options.black_min_duration_s,
+            "max_black_segment_s": options.max_black_segment_s,
+            "ranges": long_black_ranges.iter().map(|range| json!({
+                "start_s": range.start_s,
+                "end_s": range.end_s,
+                "duration_s": range.duration_s,
+            })).collect::<Vec<_>>(),
+        }),
+    );
+
+    add_boundary_probe_gate(
+        &mut gates,
+        probe.duration_s,
+        &timeline_manifest.boundary_probes,
+        &unexpected_silences,
+        &long_black_ranges,
+    );
+    add_cut_boundary_self_eval_gate(
+        &mut gates,
+        probe.duration_s,
+        &timeline_manifest.cut_boundaries,
+        &unexpected_silences,
+        &long_black_ranges,
+    );
+
+    let report = VerifyRenderReport {
+        passed: gates.iter().all(|gate| gate.passed),
+        mode: options.mode,
+        output_path: output_path.display().to_string(),
+        expected_duration_s,
+        actual_duration_s: probe.duration_s,
+        render_manifest,
+        caption_summary,
+        gates,
+        timeline_manifest,
+    };
+    write_verification_evidence(output_path, &report)?;
+    Ok(report)
+}
+
+fn add_caption_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    let consistent = summary.has_exportable_captions
+        == !matches!(
+            summary.selected_authority,
+            crate::captions::CaptionAuthority::None
+        );
+    push_gate(
+        gates,
+        "caption_evidence_consistent",
+        consistent,
+        "caption/subtitle authority and counts are internally consistent",
+        json!({
+            "selected_authority": summary.selected_authority.as_str(),
+            "editable_track_count": summary.editable_track_count,
+            "editable_cue_count": summary.editable_cue_count,
+            "caption_overlay_count": summary.caption_overlay_count,
+            "word_timed_caption_overlay_count": summary.word_timed_caption_overlay_count,
+            "safe_area_caption_overlay_count": summary.safe_area_caption_overlay_count,
+            "mobile_safe_area_caption_overlay_count": summary.mobile_safe_area_caption_overlay_count,
+            "missing_safe_area_caption_overlay_count": summary.missing_safe_area_caption_overlay_count,
+            "sidecar_cue_count": summary.sidecar_cue_count,
+            "has_exportable_captions": summary.has_exportable_captions,
+            "warnings": summary.warnings,
+        }),
+    );
+}
+
+fn add_caption_safe_area_gate(
+    gates: &mut Vec<VerificationGate>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    let passed =
+        summary.caption_overlay_count == 0 || summary.missing_safe_area_caption_overlay_count == 0;
+    push_gate(
+        gates,
+        "caption_safe_area_metadata_present",
+        passed,
+        "caption overlays carry safe-area metadata for layout preflight",
+        json!({
+            "caption_overlay_count": summary.caption_overlay_count,
+            "safe_area_caption_overlay_count": summary.safe_area_caption_overlay_count,
+            "mobile_safe_area_caption_overlay_count": summary.mobile_safe_area_caption_overlay_count,
+            "missing_safe_area_caption_overlay_count": summary.missing_safe_area_caption_overlay_count,
+        }),
+    );
+}
+
+fn add_manifest_caption_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    manifest: Option<&RenderManifestEvidence>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    let Some(manifest) = manifest else {
+        return;
+    };
+    let has_manifest_caption_metadata = manifest.metadata.contains_key("caption_authority");
+    let caption_metadata_required =
+        summary.has_exportable_captions && requires_caption_manifest_metadata(&manifest.backend);
+    if !has_manifest_caption_metadata && !caption_metadata_required {
+        return;
+    }
+    let expected = crate::captions::caption_summary_metadata(summary);
+    let mismatches = expected
+        .iter()
+        .filter_map(|(key, expected_value)| {
+            let actual = manifest.metadata.get(key).map(String::as_str);
+            (actual != Some(expected_value.as_str())).then(|| {
+                json!({
+                    "field": key,
+                    "manifest": actual,
+                    "timeline": expected_value,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    push_gate(
+        gates,
+        "render_manifest_caption_evidence_matches_timeline",
+        mismatches.is_empty(),
+        "render manifest caption metadata matches the current timeline caption summary",
+        json!({
+            "manifest_path": manifest.manifest_path,
+            "metadata": manifest.metadata,
+            "timeline": {
+                "caption_authority": summary.selected_authority.as_str(),
+                "caption_overlay_count": summary.caption_overlay_count,
+                "word_timed_caption_overlay_count": summary.word_timed_caption_overlay_count,
+                "safe_area_caption_overlay_count": summary.safe_area_caption_overlay_count,
+                "mobile_safe_area_caption_overlay_count": summary.mobile_safe_area_caption_overlay_count,
+                "missing_safe_area_caption_overlay_count": summary.missing_safe_area_caption_overlay_count,
+                "subtitle_sidecar_cue_count": summary.sidecar_cue_count,
+            },
+            "mismatches": mismatches,
+        }),
+    );
+}
+
+fn requires_caption_manifest_metadata(backend: &str) -> bool {
+    matches!(
+        backend,
+        "timeline_ffmpeg_reencode" | "timeline_raw_stream_gpu" | "package_export"
+    )
+}
+
+async fn maybe_run_caption_scorer(
+    output_path: &Path,
+    probe: &awidat_render::MediaProbe,
+    manifest: Option<&mut RenderManifestEvidence>,
+    caption_summary: &crate::captions::CaptionSummary,
+    sampler_override: Option<&dyn crate::caption_rendered_output_scorer::CaptionFrameSampler>,
+) {
+    if !caption_summary.has_exportable_captions {
+        return;
+    }
+    let Some(manifest) = manifest else {
+        return;
+    };
+    let Some(sidecar_csv) = manifest
+        .metadata
+        .get("libass_layout_sidecar_paths")
+        .cloned()
+    else {
+        return;
+    };
+    let sidecars = sidecar_csv
+        .split(',')
+        .filter(|segment| !segment.is_empty())
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    if sidecars.is_empty() {
+        return;
+    }
+
+    let safe_area_profile = if caption_summary.mobile_safe_area_caption_overlay_count > 0 {
+        "mobile"
+    } else {
+        "default"
+    };
+    let video_dims = (
+        probe.video_width.unwrap_or(1920),
+        probe.video_height.unwrap_or(1080),
+    );
+    let owned_sampler;
+    let sampler: &dyn crate::caption_rendered_output_scorer::CaptionFrameSampler =
+        if let Some(s) = sampler_override {
+            s
+        } else {
+            owned_sampler =
+                crate::caption_rendered_output_scorer::FfmpegFrameSampler::new(output_path.into());
+            &owned_sampler
+        };
+
+    match crate::caption_rendered_output_scorer::score_caption_rendered_output(
+        output_path,
+        &sidecars,
+        video_dims,
+        safe_area_profile,
+        sampler,
+    )
+    .await
+    {
+        Ok(evidence) => {
+            manifest.metadata.insert(
+                "caption_rendered_output_source".into(),
+                "frame_pixel_scorer".into(),
+            );
+            let status = if evidence.probe_count == 0 {
+                "skipped"
+            } else if evidence.safe_area_pass_count == evidence.probe_count
+                && evidence.occlusion_fail_count == 0
+            {
+                "passed"
+            } else {
+                "failed"
+            };
+            manifest
+                .metadata
+                .insert("caption_rendered_output_status".into(), status.into());
+            manifest.metadata.insert(
+                "caption_rendered_output_probe_count".into(),
+                evidence.probe_count.to_string(),
+            );
+            manifest.metadata.insert(
+                "caption_rendered_output_safe_area_pass_count".into(),
+                evidence.safe_area_pass_count.to_string(),
+            );
+            manifest.metadata.insert(
+                "caption_rendered_output_occlusion_fail_count".into(),
+                evidence.occlusion_fail_count.to_string(),
+            );
+            if let Some(reason) = evidence.fallback_reason {
+                manifest.metadata.insert(
+                    "caption_rendered_output_fallback_reason".into(),
+                    reason.into(),
+                );
+            }
+        }
+        Err(err) => {
+            let reason = match err {
+                crate::caption_rendered_output_scorer::ScorerError::SamplerUnavailable(_) => {
+                    "ffmpeg_unavailable"
+                }
+                crate::caption_rendered_output_scorer::ScorerError::RenderOutputMissing => {
+                    "render_output_missing"
+                }
+                crate::caption_rendered_output_scorer::ScorerError::SidecarParseFailed => {
+                    "sidecar_parse_failed"
+                }
+                crate::caption_rendered_output_scorer::ScorerError::Io(_) => "io_error",
+            };
+            manifest.metadata.insert(
+                "caption_rendered_output_fallback_reason".into(),
+                reason.into(),
+            );
+        }
+    }
+}
+
+fn add_caption_rendered_output_gate(
+    gates: &mut Vec<VerificationGate>,
+    manifest: Option<&RenderManifestEvidence>,
+    summary: &crate::captions::CaptionSummary,
+) {
+    if !summary.has_exportable_captions {
+        return;
+    }
+    let expected_probe_count = expected_caption_render_probe_count(summary);
+    let Some(manifest) = manifest else {
+        push_gate(
+            gates,
+            "caption_rendered_output_readable",
+            false,
+            "rendered caption output has artifact-level safe-area and occlusion evidence",
+            json!({
+                "reason": "missing_render_manifest",
+                "expected_probe_count": expected_probe_count,
+            }),
+        );
+        return;
+    };
+    let status = manifest
+        .metadata
+        .get("caption_rendered_output_status")
+        .map(String::as_str);
+    let mut probe_count =
+        parse_manifest_usize(&manifest.metadata, "caption_rendered_output_probe_count");
+    let mut safe_area_pass_count = parse_manifest_usize(
+        &manifest.metadata,
+        "caption_rendered_output_safe_area_pass_count",
+    );
+    let mut occlusion_fail_count = parse_manifest_usize(
+        &manifest.metadata,
+        "caption_rendered_output_occlusion_fail_count",
+    );
+    let source = manifest
+        .metadata
+        .get("caption_rendered_output_source")
+        .map(String::as_str);
+    let fallback_reason = manifest
+        .metadata
+        .get("caption_rendered_output_fallback_reason")
+        .map(String::as_str);
+    let has_evidence = status.is_some()
+        || probe_count.is_some()
+        || safe_area_pass_count.is_some()
+        || occlusion_fail_count.is_some();
+    let mut reason = "missing_caption_rendered_output_evidence";
+    let mut passed = status == Some("passed")
+        && probe_count.is_some_and(|count| count >= expected_probe_count)
+        && safe_area_pass_count.is_some_and(|count| count >= expected_probe_count)
+        && occlusion_fail_count == Some(0);
+    if has_evidence {
+        reason = if source == Some("frame_pixel_scorer") {
+            if passed {
+                "frame_pixel_scorer_passed"
+            } else {
+                "frame_pixel_scorer_failed"
+            }
+        } else if passed {
+            "passed"
+        } else {
+            "caption_rendered_output_evidence_failed"
+        };
+    } else if libass_layout_supports_caption_rendered_output(
+        &manifest.metadata,
+        expected_probe_count,
+    ) {
+        passed = true;
+        reason = if fallback_reason.is_some() {
+            "frame_pixel_scorer_unavailable_fell_back_to_libass_layout"
+        } else {
+            "derived_from_libass_layout_evidence"
+        };
+        probe_count = Some(expected_probe_count);
+        safe_area_pass_count = Some(expected_probe_count);
+        occlusion_fail_count = Some(0);
+    }
+    let status_detail = if status.is_some() {
+        status
+    } else if passed && reason == "derived_from_libass_layout_evidence" {
+        Some("derived")
+    } else {
+        None
+    };
+    push_gate(
+        gates,
+        "caption_rendered_output_readable",
+        passed,
+        "rendered caption output has artifact-level safe-area and occlusion evidence",
+        json!({
+            "reason": reason,
+            "manifest_path": manifest.manifest_path,
+            "caption_authority": summary.selected_authority.as_str(),
+            "expected_probe_count": expected_probe_count,
+            "caption_rendered_output_status": status_detail,
+            "caption_rendered_output_probe_count": probe_count,
+            "caption_rendered_output_safe_area_pass_count": safe_area_pass_count,
+            "caption_rendered_output_occlusion_fail_count": occlusion_fail_count,
+        }),
+    );
+}
+
+fn libass_layout_supports_caption_rendered_output(
+    metadata: &BTreeMap<String, String>,
+    expected_probe_count: usize,
+) -> bool {
+    let reason = metadata.get("timeline_backend_reason").map(String::as_str);
+    let claimed_count = parse_manifest_usize(metadata, "libass_caption_count");
+    let layout_sidecar_count = parse_manifest_usize(metadata, "libass_layout_sidecar_count");
+    let safe_area_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_safe_area_sidecar_count");
+    let wrapped_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_wrapped_sidecar_count");
+    let karaoke_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_karaoke_sidecar_count");
+    let playres_present = metadata
+        .get("libass_layout_playres")
+        .is_some_and(|value| !value.trim().is_empty());
+    reason == Some("ffmpeg_with_libass_captions")
+        && claimed_count.is_some_and(|count| count >= expected_probe_count)
+        && layout_sidecar_count.is_some_and(|count| count >= expected_probe_count)
+        && safe_area_sidecar_count.is_some_and(|count| count >= expected_probe_count)
+        && wrapped_sidecar_count.is_some()
+        && karaoke_sidecar_count.is_some()
+        && playres_present
+}
+
+fn expected_caption_render_probe_count(summary: &crate::captions::CaptionSummary) -> usize {
+    summary
+        .caption_overlay_count
+        .max(summary.editable_cue_count)
+        .max(summary.sidecar_cue_count)
+        .max(1)
+}
+
+fn parse_manifest_usize(metadata: &BTreeMap<String, String>, key: &str) -> Option<usize> {
+    metadata.get(key).and_then(|value| value.parse().ok())
+}
+
+fn collect_render_manifest_evidence(
+    output_path: &Path,
+    gates: &mut Vec<VerificationGate>,
+) -> Result<Option<RenderManifestEvidence>, String> {
+    let manifest_path = awidat_render::manifest_path_for_output(output_path);
+    if !manifest_path.is_file() {
+        push_gate(
+            gates,
+            "render_manifest_present",
+            false,
+            "render manifest is present next to the rendered output",
+            json!({"manifest_path": manifest_path}),
+        );
+        return Ok(None);
+    }
+    let manifest = awidat_render::read_render_manifest(&manifest_path).map_err(|e| {
+        format!(
+            "verify_render: read render manifest {}: {e}",
+            manifest_path.display()
+        )
+    })?;
+    let replay_kind = match &manifest.replay {
+        awidat_render::RenderReplayPlan::FfmpegArgv { .. } => "ffmpeg_argv",
+        awidat_render::RenderReplayPlan::Unsupported { .. } => "unsupported",
+    };
+    let backend = serde_json::to_value(&manifest.backend)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{:?}", manifest.backend));
+    push_gate(
+        gates,
+        "render_manifest_present",
+        true,
+        "render manifest is present next to the rendered output",
+        json!({
+            "manifest_path": manifest_path,
+            "manifest_id": manifest.manifest_id,
+            "backend": backend,
+            "replay_kind": replay_kind,
+            "input_count": manifest.inputs.len(),
+            "output_count": manifest.outputs.len(),
+            "sidecar_count": manifest.sidecars.len(),
+            "limitation_count": manifest.limitations.len(),
+        }),
+    );
+    add_render_manifest_required_artifacts_gate(gates, &manifest, &manifest_path);
+    add_render_feature_evidence_gate(gates, &manifest.backend, &manifest.metadata);
+    add_render_backend_evidence_gate(gates, &backend, &manifest.metadata);
+    add_libass_sidecar_evidence_gate(gates, &manifest.metadata, &manifest.sidecars);
+    Ok(Some(RenderManifestEvidence {
+        manifest_path: manifest_path.to_string_lossy().into_owned(),
+        manifest_id: manifest.manifest_id,
+        backend,
+        replay_kind: replay_kind.into(),
+        input_count: manifest.inputs.len(),
+        output_count: manifest.outputs.len(),
+        sidecar_count: manifest.sidecars.len(),
+        limitation_count: manifest.limitations.len(),
+        metadata: manifest.metadata,
+    }))
+}
+
+fn add_render_manifest_required_artifacts_gate(
+    gates: &mut Vec<VerificationGate>,
+    manifest: &awidat_render::RenderExecutionManifest,
+    manifest_path: &Path,
+) {
+    match awidat_render::validate_replay_manifest(manifest, manifest_path) {
+        Ok(()) => push_gate(
+            gates,
+            "render_manifest_required_artifacts_valid",
+            true,
+            "render manifest required inputs and sidecars exist with matching fingerprints",
+            json!({
+                "manifest_path": manifest_path,
+                "required_input_count": manifest.inputs.iter().filter(|input| input.required).count(),
+                "required_sidecar_count": manifest.sidecars.iter().filter(|sidecar| sidecar.required).count(),
+            }),
+        ),
+        Err(error) => {
+            let mut details = json!({
+                "manifest_path": manifest_path,
+                "error": error.to_string(),
+            });
+            if let Some(object) = details.as_object_mut() {
+                match &error {
+                    awidat_render::RenderReplayError::MissingRequiredArtifact {
+                        kind,
+                        artifact,
+                        ..
+                    }
+                    | awidat_render::RenderReplayError::FingerprintMismatch {
+                        kind,
+                        artifact,
+                        ..
+                    } => {
+                        object.insert("kind".into(), json!(kind));
+                        object.insert("artifact".into(), json!(artifact));
+                    }
+                    _ => {}
+                }
+            }
+            push_gate(
+                gates,
+                "render_manifest_required_artifacts_valid",
+                false,
+                "render manifest required inputs and sidecars exist with matching fingerprints",
+                details,
+            );
+        }
+    }
+}
+
+fn add_libass_sidecar_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    metadata: &BTreeMap<String, String>,
+    sidecars: &[awidat_render::RenderSidecarFingerprint],
+) {
+    let claimed_count = metadata
+        .get("libass_caption_count")
+        .and_then(|value| value.parse::<usize>().ok());
+    let reason = metadata.get("timeline_backend_reason").map(String::as_str);
+    let claims_libass = reason == Some("ffmpeg_with_libass_captions")
+        || claimed_count.is_some_and(|count| count > 0);
+    if !claims_libass {
+        return;
+    }
+
+    let required_ass_sidecar_count = sidecars
+        .iter()
+        .filter(|sidecar| sidecar.required && sidecar.path.to_ascii_lowercase().ends_with(".ass"))
+        .count();
+    let passed = claimed_count.is_some_and(|count| {
+        count > 0
+            && required_ass_sidecar_count >= count
+            && reason == Some("ffmpeg_with_libass_captions")
+    });
+    push_gate(
+        gates,
+        "libass_sidecar_evidence_present",
+        passed,
+        "libass caption render manifests include required ASS sidecar fingerprints",
+        json!({
+            "timeline_backend_reason": reason,
+            "libass_caption_count": claimed_count,
+            "required_ass_sidecar_count": required_ass_sidecar_count,
+            "sidecar_count": sidecars.len(),
+        }),
+    );
+    add_libass_layout_evidence_gate(gates, metadata, claimed_count, required_ass_sidecar_count);
+}
+
+fn add_libass_layout_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    metadata: &BTreeMap<String, String>,
+    claimed_count: Option<usize>,
+    required_ass_sidecar_count: usize,
+) {
+    let layout_sidecar_count = parse_manifest_usize(metadata, "libass_layout_sidecar_count");
+    let wrapped_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_wrapped_sidecar_count");
+    let safe_area_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_safe_area_sidecar_count");
+    let karaoke_sidecar_count =
+        parse_manifest_usize(metadata, "libass_layout_karaoke_sidecar_count");
+    let playres = metadata.get("libass_layout_playres").map(String::as_str);
+    let expected_count = claimed_count.unwrap_or(required_ass_sidecar_count);
+    let passed = expected_count > 0
+        && layout_sidecar_count.is_some_and(|count| count >= expected_count)
+        && wrapped_sidecar_count.is_some()
+        && safe_area_sidecar_count.is_some_and(|count| count >= expected_count)
+        && karaoke_sidecar_count.is_some()
+        && playres.is_some_and(|value| !value.is_empty());
+    push_gate(
+        gates,
+        "libass_layout_evidence_present",
+        passed,
+        "libass caption manifests include ASS layout/readability evidence",
+        json!({
+            "expected_caption_sidecar_count": expected_count,
+            "required_ass_sidecar_count": required_ass_sidecar_count,
+            "libass_layout_sidecar_count": layout_sidecar_count,
+            "libass_layout_playres": playres,
+            "libass_layout_wrapped_sidecar_count": wrapped_sidecar_count,
+            "libass_layout_safe_area_sidecar_count": safe_area_sidecar_count,
+            "libass_layout_karaoke_sidecar_count": karaoke_sidecar_count,
+        }),
+    );
+}
+
+fn add_render_feature_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    backend: &awidat_render::RenderBackendKind,
+    metadata: &BTreeMap<String, String>,
+) {
+    let expected = crate::capabilities::render_feature_metadata_for_backend(backend);
+    let expected_feature_id = expected.get("render_feature_id").map(String::as_str);
+    let expected_export_supported = expected
+        .get("render_feature_export_supported")
+        .map(String::as_str);
+    let expected_preview_supported = expected
+        .get("render_feature_preview_supported")
+        .map(String::as_str);
+    let expected_approval_required = expected
+        .get("render_feature_approval_required")
+        .map(String::as_str);
+    let expected_limitation_count = expected
+        .get("render_feature_limitation_count")
+        .map(String::as_str);
+    let feature_id = metadata.get("render_feature_id").map(String::as_str);
+    let preview_supported = metadata
+        .get("render_feature_preview_supported")
+        .map(String::as_str);
+    let export_supported = metadata
+        .get("render_feature_export_supported")
+        .map(String::as_str);
+    let approval_required = metadata
+        .get("render_feature_approval_required")
+        .map(String::as_str);
+    let limitation_count = metadata
+        .get("render_feature_limitation_count")
+        .map(String::as_str);
+    let passed = feature_id == expected_feature_id
+        && preview_supported == expected_preview_supported
+        && export_supported == expected_export_supported
+        && approval_required == expected_approval_required
+        && limitation_count == expected_limitation_count;
+    push_gate(
+        gates,
+        "render_feature_evidence_present",
+        passed,
+        "render manifest includes capability metadata for the selected backend",
+        json!({
+            "expected_feature_id": expected_feature_id,
+            "render_feature_id": feature_id,
+            "expected_preview_supported": expected_preview_supported,
+            "render_feature_preview_supported": preview_supported,
+            "expected_export_supported": expected_export_supported,
+            "render_feature_export_supported": export_supported,
+            "expected_approval_required": expected_approval_required,
+            "render_feature_approval_required": approval_required,
+            "expected_limitation_count": expected_limitation_count,
+            "render_feature_limitation_count": limitation_count,
+        }),
+    );
+}
+
+fn add_render_backend_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    backend: &str,
+    metadata: &BTreeMap<String, String>,
+) {
+    if backend == "stream_export_remux" {
+        add_stream_remux_evidence_gate(gates, metadata);
+        return;
+    }
+    if !matches!(
+        backend,
+        "timeline_ffmpeg_reencode" | "timeline_raw_stream_gpu"
+    ) {
+        return;
+    }
+    let manifest_backend = metadata.get("timeline_backend").map(String::as_str);
+    let reason = metadata.get("timeline_backend_reason").map(String::as_str);
+    let passed = manifest_backend == Some(backend) && reason.is_some_and(|value| !value.is_empty());
+    push_gate(
+        gates,
+        "render_backend_evidence_present",
+        passed,
+        "timeline render manifest includes backend-selection evidence",
+        json!({
+            "backend": backend,
+            "timeline_backend": manifest_backend,
+            "timeline_backend_reason": reason,
+            "gpu_transition_count": metadata.get("gpu_transition_count"),
+            "ffmpeg_transition_count": metadata.get("ffmpeg_transition_count"),
+            "libass_caption_count": metadata.get("libass_caption_count"),
+        }),
+    );
+    add_master_loudnorm_evidence_gate(gates, metadata);
+}
+
+fn add_master_loudnorm_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    metadata: &BTreeMap<String, String>,
+) {
+    let enabled = metadata.get("master_loudnorm_enabled").map(String::as_str) == Some("true");
+    if !enabled {
+        return;
+    }
+    let pass = metadata.get("master_loudnorm_pass").map(String::as_str);
+    let output_mode = metadata
+        .get("master_loudnorm_output_mode")
+        .map(String::as_str);
+    let passed = pass == Some("apply") && output_mode == Some("encoded_output");
+    push_gate(
+        gates,
+        "master_loudnorm_final_pass",
+        passed,
+        "two-pass master loudnorm render manifest records the final encoded apply pass",
+        json!({
+            "master_loudnorm_enabled": true,
+            "master_loudnorm_pass": pass,
+            "master_loudnorm_output_mode": output_mode,
+        }),
+    );
+}
+
+fn add_stream_remux_evidence_gate(
+    gates: &mut Vec<VerificationGate>,
+    metadata: &BTreeMap<String, String>,
+) {
+    let remux_backend = metadata.get("remux_backend").map(String::as_str);
+    let eligibility_reason = metadata.get("remux_eligibility_reason").map(String::as_str);
+    let copy_stream_count = metadata.get("copy_stream_count").map(String::as_str);
+    let transcode_stream_count = metadata.get("transcode_stream_count").map(String::as_str);
+    let all_streams_copy = metadata.get("all_streams_copy").map(String::as_str);
+    let passed = remux_backend == Some("stream_export_remux")
+        && eligibility_reason.is_some_and(|value| !value.is_empty())
+        && copy_stream_count.is_some()
+        && transcode_stream_count.is_some()
+        && all_streams_copy.is_some();
+    push_gate(
+        gates,
+        "stream_remux_evidence_present",
+        passed,
+        "stream-remux manifest includes packet-copy eligibility evidence",
+        json!({
+            "remux_backend": remux_backend,
+            "remux_eligibility_reason": eligibility_reason,
+            "copy_stream_count": copy_stream_count,
+            "transcode_stream_count": transcode_stream_count,
+            "all_streams_copy": all_streams_copy,
+        }),
+    );
+}
+
+fn verification_report_path_for_output(output_path: &Path) -> PathBuf {
+    let stem = output_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("render");
+    output_path.with_file_name(format!("{stem}.verify-render.json"))
+}
+
+fn write_verification_evidence(
+    output_path: &Path,
+    report: &VerifyRenderReport,
+) -> Result<PathBuf, String> {
+    let report_path = verification_report_path_for_output(output_path);
+    let bytes = serde_json::to_vec_pretty(report)
+        .map_err(|e| format!("verify_render: encode report artifact: {e}"))?;
+    std::fs::write(&report_path, bytes).map_err(|e| {
+        format!(
+            "verify_render: write report {}: {e}",
+            report_path.display()
+        )
+    })?;
+    attach_verification_summary(output_path, &report_path, report)?;
+    Ok(report_path)
+}
+
+fn attach_verification_summary(
+    output_path: &Path,
+    report_path: &Path,
+    report: &VerifyRenderReport,
+) -> Result<(), String> {
+    let manifest_path = awidat_render::manifest_path_for_output(output_path);
+    if !manifest_path.is_file() {
+        return Ok(());
+    }
+    let mut manifest = awidat_render::read_render_manifest(&manifest_path).map_err(|e| {
+        format!(
+            "verify_render: read render manifest {}: {e}",
+            manifest_path.display()
+        )
+    })?;
+    manifest.verification = Some(awidat_render::RenderVerificationSummary {
+        status: if report.passed { "passed" } else { "failed" }.into(),
+        report_path: report_path.to_string_lossy().into_owned(),
+    });
+    awidat_render::write_render_manifest(&manifest_path, &manifest).map_err(|e| {
+        format!(
+            "verify_render: update render manifest {}: {e}",
+            manifest_path.display()
+        )
+    })
+}
+
+fn collect_timeline_manifest(timeline: &Timeline) -> TimelineManifest {
+    let mut source_ranges = Vec::new();
+    let mut missing_media = Vec::new();
+    let mut boundary_probes = Vec::new();
+    let expected_duration_s = collect_stack_manifest(
+        &timeline.tracks,
+        0.0,
+        &mut source_ranges,
+        &mut missing_media,
+        &mut boundary_probes,
+    );
+    TimelineManifest {
+        expected_duration_s,
+        cut_boundaries: collect_cut_boundaries(&source_ranges),
+        source_ranges,
+        missing_media,
+        boundary_probes,
+    }
+}
+
+fn collect_cut_boundaries(ranges: &[SourceRangeEntry]) -> Vec<CutBoundary> {
+    let mut ordered = ranges.to_vec();
+    ordered.sort_by(|left, right| left.timeline_start_s.total_cmp(&right.timeline_start_s));
+    ordered
+        .windows(2)
+        .filter_map(|pair| {
+            let [left, right] = pair else {
+                return None;
+            };
+            let gap_s = right.timeline_start_s - left.timeline_end_s;
+            (gap_s >= -DEFAULT_SOURCE_RANGE_TOLERANCE_S).then(|| CutBoundary {
+                from_clip_name: left.clip_name.clone(),
+                to_clip_name: right.clip_name.clone(),
+                from_asset: left.asset.clone(),
+                to_asset: right.asset.clone(),
+                at_s: right.timeline_start_s,
+                gap_s: gap_s.max(0.0),
+            })
+        })
+        .collect()
+}
+
+fn collect_stack_manifest(
+    stack: &Stack,
+    timeline_start_s: f64,
+    ranges: &mut Vec<SourceRangeEntry>,
+    missing: &mut Vec<MissingMediaEntry>,
+    probes: &mut Vec<BoundaryProbe>,
+) -> f64 {
+    let mut max_duration_s = 0.0_f64;
+    for child in &stack.children {
+        let duration_s = match child {
+            StackChild::Track(track) => {
+                collect_track_manifest(track, timeline_start_s, ranges, missing, probes)
+            }
+            StackChild::Stack(stack) => {
+                collect_stack_manifest(stack, timeline_start_s, ranges, missing, probes)
+            }
+            StackChild::Clip(clip) => {
+                collect_clip_manifest(clip, timeline_start_s, ranges, missing, probes);
+                clip_duration_s(clip)
+            }
+            StackChild::Gap(gap) => gap.source_range.duration.to_seconds(),
+        };
+        max_duration_s = max_duration_s.max(duration_s);
+    }
+    max_duration_s
+}
+
+fn collect_track_manifest(
+    track: &Track,
+    timeline_start_s: f64,
+    ranges: &mut Vec<SourceRangeEntry>,
+    missing: &mut Vec<MissingMediaEntry>,
+    probes: &mut Vec<BoundaryProbe>,
+) -> f64 {
+    let mut cursor_s = timeline_start_s;
+    for child in &track.children {
+        match child {
+            TrackChild::Clip(clip) => {
+                collect_clip_manifest(clip, cursor_s, ranges, missing, probes);
+                cursor_s += clip_duration_s(clip);
+            }
+            TrackChild::Gap(gap) => cursor_s += gap.source_range.duration.to_seconds(),
+            TrackChild::Transition(_) => {}
+            TrackChild::Stack(stack) => {
+                cursor_s += collect_stack_manifest(stack, cursor_s, ranges, missing, probes);
+            }
+        }
+    }
+    cursor_s - timeline_start_s
+}
+
+fn collect_clip_manifest(
+    clip: &awidat_proto::otio::Clip,
+    timeline_start_s: f64,
+    ranges: &mut Vec<SourceRangeEntry>,
+    missing: &mut Vec<MissingMediaEntry>,
+    probes: &mut Vec<BoundaryProbe>,
+) {
+    if !clip.active {
+        return;
+    }
+    if is_generated_overlay_clip(clip) {
+        return;
+    }
+    let Some(source_range) = &clip.source_range else {
+        return;
+    };
+    let duration_s = source_range.duration.to_seconds();
+    if duration_s <= 0.0 {
+        return;
+    }
+    if let MediaReference::Missing(reference) = &clip.media_reference {
+        missing.push(MissingMediaEntry {
+            clip_name: clip.name.clone(),
+            reference_name: reference.name.clone(),
+            timeline_start_s,
+            timeline_end_s: timeline_start_s + duration_s,
+        });
+        return;
+    }
+    let MediaReference::External(reference) = &clip.media_reference else {
+        return;
+    };
+    let source_start_s = source_range.start_time.to_seconds();
+    let source_end_s = source_start_s + duration_s;
+    let timeline_end_s = timeline_start_s + duration_s;
+    ranges.push(SourceRangeEntry {
+        clip_name: clip.name.clone(),
+        asset: reference.target_url.clone(),
+        timeline_start_s,
+        timeline_end_s,
+        source_start_s,
+        source_end_s,
+    });
+
+    let margin_s = BOUNDARY_MARGIN_S.min(duration_s * 0.2);
+    push_probe(
+        probes,
+        clip,
+        reference.target_url.as_str(),
+        timeline_start_s + margin_s,
+        source_start_s + margin_s,
+        "start",
+    );
+    if duration_s > margin_s * 2.0 + 0.1 {
+        push_probe(
+            probes,
+            clip,
+            reference.target_url.as_str(),
+            timeline_end_s - margin_s,
+            source_end_s - margin_s,
+            "end",
+        );
+    }
+    if duration_s > 1.0 {
+        let mid_offset_s = duration_s / 2.0;
+        push_probe(
+            probes,
+            clip,
+            reference.target_url.as_str(),
+            timeline_start_s + mid_offset_s,
+            source_start_s + mid_offset_s,
+            "mid",
+        );
+    }
+}
+
+fn is_generated_overlay_clip(clip: &awidat_proto::otio::Clip) -> bool {
+    clip.effects.iter().any(|effect| {
+        effect.effect_name == "awidat.title"
+            || effect.effect_name == "awidat.annotation"
+            || matches!(
+                effect
+                    .metadata
+                    .get("role")
+                    .and_then(serde_json::Value::as_str),
+                Some("title" | "caption" | "captions" | "subtitle" | "subtitles")
+            )
+    })
+}
+
+fn push_probe(
+    probes: &mut Vec<BoundaryProbe>,
+    clip: &awidat_proto::otio::Clip,
+    asset: &str,
+    export_time_s: f64,
+    expected_source_time_s: f64,
+    label: &str,
+) {
+    probes.push(BoundaryProbe {
+        clip_name: clip.name.clone(),
+        asset: asset.into(),
+        export_time_s,
+        expected_source_time_s,
+        label: label.into(),
+    });
+}
+
+fn retain_quick_probes(probes: &mut Vec<BoundaryProbe>) {
+    probes.retain(|probe| probe.label != "mid");
+}
+
+fn clip_duration_s(clip: &awidat_proto::otio::Clip) -> f64 {
+    clip.source_range
+        .as_ref()
+        .map(|range| range.duration.to_seconds())
+        .unwrap_or(0.0)
+}
+
+fn add_missing_media_gate(
+    gates: &mut Vec<VerificationGate>,
+    project_root: &Path,
+    timeline_manifest: &TimelineManifest,
+) {
+    let mut missing = timeline_manifest
+        .missing_media
+        .iter()
+        .map(|entry| {
+            json!({
+                "clip_name": entry.clip_name,
+                "reference_name": entry.reference_name,
+                "timeline_start_s": entry.timeline_start_s,
+                "timeline_end_s": entry.timeline_end_s,
+                "reason": "missing_reference",
+            })
+        })
+        .collect::<Vec<_>>();
+    missing.extend(timeline_manifest.source_ranges.iter().filter_map(|range| {
+        let path = asset_path(project_root, &range.asset);
+        (!path.is_file()).then(|| {
+            json!({
+                "clip_name": range.clip_name,
+                "asset": range.asset,
+                "path": path,
+                "reason": "file_not_found",
+            })
+        })
+    }));
+    push_gate(
+        gates,
+        "no_missing_media",
+        missing.is_empty(),
+        "all active timeline source media files exist",
+        json!({ "missing": missing }),
+    );
+}
+
+async fn add_source_duration_gate(
+    gates: &mut Vec<VerificationGate>,
+    project_root: &Path,
+    ranges: &[SourceRangeEntry],
+) {
+    let mut failures = Vec::new();
+    for range in ranges {
+        let path = asset_path(project_root, &range.asset);
+        if !path.is_file() {
+            continue;
+        }
+        match awidat_render::probe_duration_s(&path).await {
+            Ok(Some(duration_s))
+                if range.source_end_s > duration_s + DEFAULT_SOURCE_RANGE_TOLERANCE_S =>
+            {
+                failures.push(json!({
+                    "clip_name": range.clip_name,
+                    "asset": range.asset,
+                    "source_end_s": range.source_end_s,
+                    "asset_duration_s": duration_s,
+                }));
+            }
+            Ok(_) => {}
+            Err(err) => failures.push(json!({
+                "clip_name": range.clip_name,
+                "asset": range.asset,
+                "error": err.to_string(),
+            })),
+        }
+    }
+    push_gate(
+        gates,
+        "source_ranges_within_media",
+        failures.is_empty(),
+        "timeline source ranges fit inside their source media durations",
+        json!({ "failures": failures }),
+    );
+}
+
+fn add_source_range_manifest_gate(
+    gates: &mut Vec<VerificationGate>,
+    timeline_manifest: &TimelineManifest,
+    options: &VerifyRenderOptions,
+) -> Result<(), String> {
+    let Some(path) = &options.source_range_manifest_path else {
+        push_gate(
+            gates,
+            "source_range_manifest_consistent",
+            true,
+            "no source_range_manifest_path supplied; checked current timeline source ranges only",
+            json!({"status": "skipped"}),
+        );
+        return Ok(());
+    };
+    let bytes = std::fs::read(path).map_err(|e| {
+        format!(
+            "verify_render: read source_range_manifest_path {}: {e}",
+            path.display()
+        )
+    })?;
+    let expected: SourceRangeManifest = serde_json::from_slice(&bytes).map_err(|e| {
+        format!(
+            "verify_render: parse source_range_manifest_path {}: {e}",
+            path.display()
+        )
+    })?;
+    let check = compare_source_range_manifest(
+        timeline_manifest,
+        &expected,
+        DEFAULT_SOURCE_RANGE_TOLERANCE_S,
+    );
+    push_gate(
+        gates,
+        "source_range_manifest_consistent",
+        check.passed,
+        "current timeline source ranges match supplied manifest",
+        json!({
+            "manifest_path": path,
+            "mismatches": check.mismatches,
+        }),
+    );
+    Ok(())
+}
+
+fn compare_source_range_manifest(
+    current: &TimelineManifest,
+    expected: &SourceRangeManifest,
+    tolerance_s: f64,
+) -> SourceRangeManifestCheck {
+    let mut mismatches = Vec::new();
+    if current.source_ranges.len() != expected.final_kept_source_ranges.len() {
+        mismatches.push(format!(
+            "range count differs: current={} manifest={}",
+            current.source_ranges.len(),
+            expected.final_kept_source_ranges.len()
+        ));
+    }
+    for (idx, (left, right)) in current
+        .source_ranges
+        .iter()
+        .zip(expected.final_kept_source_ranges.iter())
+        .enumerate()
+    {
+        if left.clip_name != right.clip_name || left.asset != right.asset {
+            mismatches.push(format!(
+                "range {idx} identity differs: current={}/{} manifest={}/{}",
+                left.clip_name, left.asset, right.clip_name, right.asset
+            ));
+        }
+        for (field, a, b) in [
+            (
+                "timeline_start_s",
+                left.timeline_start_s,
+                right.timeline_start_s,
+            ),
+            ("timeline_end_s", left.timeline_end_s, right.timeline_end_s),
+            ("source_start_s", left.source_start_s, right.source_start_s),
+            ("source_end_s", left.source_end_s, right.source_end_s),
+        ] {
+            if (a - b).abs() > tolerance_s {
+                mismatches.push(format!(
+                    "range {idx} {field} differs: current={a:.3} manifest={b:.3}"
+                ));
+            }
+        }
+    }
+    SourceRangeManifestCheck {
+        passed: mismatches.is_empty(),
+        mismatches,
+    }
+}
+
+fn add_boundary_probe_gate(
+    gates: &mut Vec<VerificationGate>,
+    duration_s: Option<f64>,
+    probes: &[BoundaryProbe],
+    unexpected_silences: &[awidat_render::SilenceRange],
+    long_black_ranges: &[awidat_render::BlackFrameRange],
+) {
+    let checks = probes
+        .iter()
+        .map(|probe| {
+            let in_duration = duration_s
+                .map(|duration| probe.export_time_s <= duration + DEFAULT_DURATION_TOLERANCE_S)
+                .unwrap_or(false);
+            let in_silence = unexpected_silences
+                .iter()
+                .any(|range| contains_time(range.start_s, range.end_s, probe.export_time_s));
+            let in_black = long_black_ranges
+                .iter()
+                .any(|range| contains_time(range.start_s, range.end_s, probe.export_time_s));
+            json!({
+                "clip_name": probe.clip_name,
+                "asset": probe.asset,
+                "label": probe.label,
+                "export_time_s": probe.export_time_s,
+                "expected_source_time_s": probe.expected_source_time_s,
+                "passed": in_duration && !in_silence && !in_black,
+                "in_duration": in_duration,
+                "in_unexpected_silence": in_silence,
+                "in_long_black_segment": in_black,
+            })
+        })
+        .collect::<Vec<_>>();
+    let passed = checks
+        .iter()
+        .all(|check| check["passed"].as_bool().unwrap_or(false));
+    push_gate(
+        gates,
+        "edited_boundary_probes",
+        passed,
+        "edited boundary probes land inside the render and avoid flagged black/silence ranges",
+        json!({ "probes": checks }),
+    );
+}
+
+fn add_cut_boundary_self_eval_gate(
+    gates: &mut Vec<VerificationGate>,
+    duration_s: Option<f64>,
+    boundaries: &[CutBoundary],
+    unexpected_silences: &[awidat_render::SilenceRange],
+    long_black_ranges: &[awidat_render::BlackFrameRange],
+) {
+    let checks = boundaries
+        .iter()
+        .map(|boundary| {
+            let in_duration = duration_s
+                .map(|duration| boundary.at_s <= duration + DEFAULT_DURATION_TOLERANCE_S)
+                .unwrap_or(false);
+            let in_silence = unexpected_silences
+                .iter()
+                .any(|range| contains_time(range.start_s, range.end_s, boundary.at_s));
+            let in_black = long_black_ranges
+                .iter()
+                .any(|range| contains_time(range.start_s, range.end_s, boundary.at_s));
+            json!({
+                "from_clip_name": boundary.from_clip_name,
+                "to_clip_name": boundary.to_clip_name,
+                "from_asset": boundary.from_asset,
+                "to_asset": boundary.to_asset,
+                "at_s": boundary.at_s,
+                "gap_s": boundary.gap_s,
+                "passed": in_duration && !in_silence && !in_black,
+                "in_duration": in_duration,
+                "in_unexpected_silence": in_silence,
+                "in_long_black_segment": in_black,
+            })
+        })
+        .collect::<Vec<_>>();
+    let passed = checks
+        .iter()
+        .all(|check| check["passed"].as_bool().unwrap_or(false));
+    push_gate(
+        gates,
+        "cut_boundary_self_eval",
+        passed,
+        "actual clip cut boundaries land inside the render and avoid flagged black/silence ranges",
+        json!({ "boundaries": checks }),
+    );
+}
+
+fn overlaps_content(start_s: f64, end_s: f64, ranges: &[SourceRangeEntry]) -> bool {
+    ranges
+        .iter()
+        .any(|range| start_s < range.timeline_end_s && end_s > range.timeline_start_s)
+}
+
+fn contains_time(start_s: f64, end_s: f64, t_s: f64) -> bool {
+    t_s >= start_s && t_s <= end_s
+}
+
+fn push_gate(
+    gates: &mut Vec<VerificationGate>,
+    name: &str,
+    passed: bool,
+    message: &str,
+    details: serde_json::Value,
+) {
+    gates.push(VerificationGate {
+        name: name.into(),
+        passed,
+        message: message.into(),
+        details,
+    });
+}
+
+fn parse_mode(mode: Option<&str>) -> Result<VerifyMode, String> {
+    match mode.unwrap_or("quick") {
+        "quick" => Ok(VerifyMode::Quick),
+        "thorough" => Ok(VerifyMode::Thorough),
+        other => Err(format!(
+            "verify_render: mode must be 'quick' or 'thorough', got {other:?}"
+        )),
+    }
+}
+
+fn validate_options(options: &VerifyRenderOptions) -> Result<(), String> {
+    for (name, value) in [
+        ("duration_tolerance_s", options.duration_tolerance_s),
+        ("max_unexpected_silence_s", options.max_unexpected_silence_s),
+        ("black_min_duration_s", options.black_min_duration_s),
+    ] {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(format!("verify_render: {name} must be finite and > 0"));
+        }
+    }
+    if !options.max_black_segment_s.is_finite() || options.max_black_segment_s < 0.0 {
+        return Err("verify_render: max_black_segment_s must be finite and non-negative".into());
+    }
+    if !options.silence_threshold_db.is_finite() || options.silence_threshold_db >= 0.0 {
+        return Err("verify_render: silence_threshold_db must be finite and < 0".into());
+    }
+    if let Some(expected) = options.expected_duration_s
+        && (!expected.is_finite() || expected <= 0.0)
+    {
+        return Err("verify_render: expected_duration_s must be finite and > 0".into());
+    }
+    Ok(())
+}
+
+fn resolve_project_path(
+    project_root: &Path,
+    value: &str,
+    field: &str,
+) -> Result<PathBuf, String> {
+    if value.trim().is_empty() {
+        return Err(format!("verify_render: {field} must not be empty"));
+    }
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        )
+    }) {
+        return Err(format!(
+            "verify_render: {field} must be project-relative and must not contain '..'"
+        ));
+    }
+    Ok(project_root.join(path))
+}
+
+fn asset_path(project_root: &Path, asset: &str) -> PathBuf {
+    let path = PathBuf::from(asset);
+    if path.is_absolute() {
+        path
+    } else {
+        project_root.join(path)
+    }
+}
+
+fn newest_render(project_root: &Path) -> Result<PathBuf, String> {
+    let renders_dir = project_root.join("renders");
+    let entries = std::fs::read_dir(&renders_dir).map_err(|e| {
+        format!(
+            "verify_render: failed to read renders directory {}: {e}",
+            renders_dir.display()
+        )
+    })?;
+    let mut candidates = Vec::new();
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("verify_render: read renders entry: {e}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("mp4") {
+            continue;
+        }
+        let modified = entry.metadata().and_then(|m| m.modified()).map_err(|e| {
+            format!(
+                "verify_render: read metadata for {}: {e}",
+                path.display()
+            )
+        })?;
+        candidates.push((modified, path));
+    }
+    candidates.sort_by_key(|(modified, _)| *modified);
+    candidates
+        .pop()
+        .map(|(_, path)| path)
+        .ok_or_else(|| "verify_render: no MP4 found under renders/; pass output_path".into())
+}
+
+pub const DESCRIPTION: &str = "\
+Verify an existing rendered MP4 against the current Awidat timeline. \
+Checks duration, audio/video stream presence, missing media, long black \
+segments, long unexpected silence, source-range manifest consistency, and \
+edited-boundary probes, caption evidence, and adjacent render manifests. \
+This tool does not start, poll, or change render jobs; it writes a \
+verify-render evidence report and updates the adjacent render manifest when \
+one exists. Call start_render/poll_render separately, then pass the finished \
+output_path here.";

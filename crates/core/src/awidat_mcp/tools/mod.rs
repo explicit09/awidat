@@ -16,9 +16,11 @@
 //! - Use [`crate::awidat_mcp::context::McpToolCtx::resolve`] to get
 //!   the project root.
 
+pub mod analyze_sync;
 pub mod assess_continuity;
 pub mod assess_edit_quality;
 pub mod color_scopes;
+pub mod diagnose_project_media;
 pub mod find_audio_asset;
 pub mod find_beat;
 pub mod find_black_frames;
@@ -60,6 +62,7 @@ pub mod read_index;
 pub mod read_media_intelligence;
 pub mod read_media_readiness;
 pub mod read_understanding;
+pub mod render_preflight;
 pub mod shot_summary;
 pub mod transcript_pack;
 pub mod transcript_search;
@@ -75,6 +78,7 @@ pub mod vedit_log;
 pub mod vedit_merge_preflight;
 pub mod vedit_show;
 pub mod vedit_tag;
+pub mod verify_render;
 pub mod view_episode;
 pub mod view_frame;
 pub mod view_timeline;

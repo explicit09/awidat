@@ -53,9 +53,11 @@ use rmcp::tool_handler;
 use rmcp::tool_router;
 
 use crate::awidat_mcp::context::McpToolCtx;
+use crate::awidat_mcp::tools::analyze_sync::{self, AnalyzeSyncArgs};
 use crate::awidat_mcp::tools::assess_continuity::{self, AssessContinuityArgs};
 use crate::awidat_mcp::tools::assess_edit_quality::{self, AssessEditQualityArgs};
 use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
+use crate::awidat_mcp::tools::diagnose_project_media::{self, DiagnoseProjectMediaArgs};
 use crate::awidat_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
 use crate::awidat_mcp::tools::find_beat::{self, FindBeatArgs};
 use crate::awidat_mcp::tools::find_black_frames::{self, FindBlackFramesArgs};
@@ -105,6 +107,7 @@ use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
 use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
+use crate::awidat_mcp::tools::render_preflight::{self, RenderPreflightArgs};
 use crate::awidat_mcp::tools::shot_summary::{self, ShotSummaryArgs};
 use crate::awidat_mcp::tools::transcript_pack::{self, TranscriptPackArgs};
 use crate::awidat_mcp::tools::transcript_search::{self, TranscriptSearchArgs};
@@ -120,6 +123,7 @@ use crate::awidat_mcp::tools::vedit_log::{self, VeditLogArgs};
 use crate::awidat_mcp::tools::vedit_merge_preflight::{self, VeditMergePreflightArgs};
 use crate::awidat_mcp::tools::vedit_show::{self, VeditShowArgs};
 use crate::awidat_mcp::tools::vedit_tag::{self, VeditTagArgs};
+use crate::awidat_mcp::tools::verify_render::{self, VerifyRenderArgs};
 use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::awidat_mcp::tools::view_frame::{self, ViewFrameArgs};
 use crate::awidat_mcp::tools::view_timeline::{self, ViewTimelineArgs};
@@ -1336,6 +1340,82 @@ or motivated transition may be needed.",
         args: Parameters<PodcastSmoothCutBoundariesArgs>,
     ) -> Result<String, ErrorData> {
         podcast_smooth_cut_boundaries::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `analyze_sync` — waveform-align external mics and cameras.
+    #[tool(
+        description = "\
+Analyze waveform sync between a reference asset and candidate camera/mic \
+assets. Uses FFmpeg waveform extraction and cross-correlation, reports \
+offset_s, confidence, optional speed_factor for small stable drift, and \
+an EDL Set Sync Group snippet. Low-confidence results are surfaced as \
+manual offset proposals instead of silently committing.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn analyze_sync(
+        &self,
+        args: Parameters<AnalyzeSyncArgs>,
+    ) -> Result<String, ErrorData> {
+        analyze_sync::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `diagnose_project_media` — surface repair diagnostics for
+    /// timeline media.
+    #[tool(
+        description = "\
+Inspect the current project for missing or unsafe timeline media references. \
+Returns structured repair diagnostics, including timeline paths, missing target \
+paths, safe relink candidates found in the project, and non-mutating repair \
+actions an agent can propose before rendering.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn diagnose_project_media(
+        &self,
+        args: Parameters<DiagnoseProjectMediaArgs>,
+    ) -> Result<String, ErrorData> {
+        diagnose_project_media::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `render_preflight` — inspect render backend selection without
+    /// starting a render job.
+    #[tool(
+        description = "\
+Inspect render backend selection, capability metadata, and limitations without \
+starting a render job.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn render_preflight(
+        &self,
+        args: Parameters<RenderPreflightArgs>,
+    ) -> Result<String, ErrorData> {
+        render_preflight::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `verify_render` — verify an already-rendered output against the
+    /// current project timeline.
+    #[tool(
+        description = "\
+Verify an existing rendered MP4 against the current Awidat timeline. \
+Checks duration, audio/video stream presence, missing media, long black \
+segments, long unexpected silence, source-range manifest consistency, and \
+edited-boundary probes, caption evidence, and adjacent render manifests. \
+This tool does not start, poll, or change render jobs; it writes a \
+verify-render evidence report and updates the adjacent render manifest when \
+one exists. Call start_render/poll_render separately, then pass the finished \
+output_path here.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn verify_render(
+        &self,
+        args: Parameters<VerifyRenderArgs>,
+    ) -> Result<String, ErrorData> {
+        verify_render::run(args.0, McpToolCtx::resolve())
+            .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
