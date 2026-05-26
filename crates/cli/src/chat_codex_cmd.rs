@@ -2,10 +2,11 @@
 //! migration.
 //!
 //! Drives the vendored codex agent loop end-to-end against an OpenAI
-//! key with zero Awidat tools registered. There's no project loaded,
-//! no AGENTS.md, no MCP servers — just the codex runtime answering a
-//! prompt. The point is to prove the integration is alive before we
-//! start porting the ~100 Awidat tools.
+//! key. Step 3 of the migration wires the in-process Awidat MCP
+//! server (`awidat-mcp-server` sibling binary) into codex via
+//! `[mcp_servers.awidat]` so the model can call our tools alongside
+//! codex's built-ins. The MCP server currently exposes one stub
+//! tool (`view_timeline`); step 5 ports the ~100 real video tools.
 //!
 //! Removed once `awidat tui` and `awidat chat` are rewired to codex in
 //! step 7 of the migration plan.
@@ -39,6 +40,15 @@ pub fn run(
         tracing::warn!(?err, "failed to set awidat originator override");
     }
 
+    // Auto-register the Awidat MCP server. We resolve the sibling
+    // `awidat-mcp-server` binary path from `std::env::current_exe()`
+    // so cargo dev builds, release builds, and brew installs all work
+    // with zero user config. User-supplied -c overrides are layered
+    // after ours, so a caller passing
+    // `-c mcp_servers.awidat.enabled=false` can opt out.
+    let mut raw_overrides = awidat_mcp_overrides();
+    raw_overrides.extend(config_overrides);
+
     let mut cli = ExecCli {
         prompt,
         // Don't insist on a git repo for the hello-world; the user
@@ -46,9 +56,7 @@ pub fn run(
         skip_git_repo_check: true,
         // Don't persist session state.
         ephemeral: true,
-        config_overrides: CliConfigOverrides {
-            raw_overrides: config_overrides,
-        },
+        config_overrides: CliConfigOverrides { raw_overrides },
         ..ExecCli::default()
     };
     // `dangerously_bypass_approvals_and_sandbox` and `model` live on
@@ -66,4 +74,32 @@ pub fn run(
             ExitCode::FAILURE
         }
     }
+}
+
+/// Build the `-c key=value` overrides that register our in-process MCP
+/// server with codex. The server binary is the `awidat-mcp-server`
+/// sibling of the running `awidat` binary. Returns an empty vec if we
+/// can't resolve the path (codex will run without our tools, which is
+/// the same as it was before step 3).
+fn awidat_mcp_overrides() -> Vec<String> {
+    let Ok(self_exe) = std::env::current_exe() else {
+        tracing::warn!("current_exe() failed; skipping awidat-mcp-server auto-registration");
+        return Vec::new();
+    };
+    let Some(parent) = self_exe.parent() else {
+        return Vec::new();
+    };
+    let server_bin = parent.join("awidat-mcp-server");
+    if !server_bin.exists() {
+        tracing::warn!(
+            path = %server_bin.display(),
+            "awidat-mcp-server sibling binary missing; codex will run without Awidat tools"
+        );
+        return Vec::new();
+    }
+    // Codex's `-c` parser expects TOML on the RHS, so the command
+    // string has to be a TOML-quoted string. Use a debug-formatted
+    // path which gives us a `"..."` literal with backslashes escaped.
+    let quoted = format!("{:?}", server_bin.display().to_string());
+    vec![format!("mcp_servers.awidat.command={quoted}")]
 }
