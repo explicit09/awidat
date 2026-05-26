@@ -17,9 +17,13 @@
 //!   the project root.
 
 pub mod color_scopes;
+pub mod find_audio_asset;
+pub mod find_beat;
 pub mod find_black_frames;
 pub mod find_dead_air;
 pub mod find_false_starts;
+pub mod find_filler_words;
+pub mod find_generated_broll_opportunities;
 pub mod list_looks;
 pub mod list_markers;
 pub mod list_stringouts;

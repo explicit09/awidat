@@ -54,9 +54,15 @@ use rmcp::tool_router;
 
 use crate::awidat_mcp::context::McpToolCtx;
 use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
+use crate::awidat_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
+use crate::awidat_mcp::tools::find_beat::{self, FindBeatArgs};
 use crate::awidat_mcp::tools::find_black_frames::{self, FindBlackFramesArgs};
 use crate::awidat_mcp::tools::find_dead_air::{self, FindDeadAirArgs};
 use crate::awidat_mcp::tools::find_false_starts::{self, FindFalseStartsArgs};
+use crate::awidat_mcp::tools::find_filler_words::{self, FindFillerWordsArgs};
+use crate::awidat_mcp::tools::find_generated_broll_opportunities::{
+    self, FindGeneratedBrollOpportunitiesArgs,
+};
 use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
@@ -572,6 +578,93 @@ sidecar instead. Read-only.",
         args: Parameters<TranscriptPackArgs>,
     ) -> Result<String, ErrorData> {
         transcript_pack::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_audio_asset` — ranked matches from the bundled audio
+    /// starter pack.
+    #[tool(
+        description = "\
+Search the bundled audio starter pack for a sound to drop on the \
+timeline. Returns a ranked list of matching audio files (sfx, music, \
+or ambience) with absolute paths suitable for apply_edl / ffmpeg. \
+Args: kind (required, one of sfx/music/ambience), mood (optional \
+free-text tag like 'hype' or 'tension'), max_duration_s (optional \
+upper bound), max_results (default 8, hard cap 32). Results are \
+ranked by mood-tag overlap first, then by duration ascending. When \
+the pack is empty or absent, returns an empty results list (not an \
+error).",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_audio_asset(
+        &self,
+        args: Parameters<FindAudioAssetArgs>,
+    ) -> Result<String, ErrorData> {
+        find_audio_asset::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_beat` — query the editorial-moments sidecar by kind /
+    /// speaker / score.
+    #[tool(
+        description = "\
+Query the editorial-moments index by beat kind, speaker, and minimum \
+editorial score. Returns beats sorted by score (highest first) with \
+moment_id, time range, kind, speaker, energy, b-roll need, \
+dependencies, and the model's note for why each is editorially \
+interesting. Kinds: hook, story, punchline, setup, question, answer, \
+cta, emotional_peak, dead_air, tangent, explanation. The \
+editorial-moments index is produced by `awidat index --indexer \
+editorial-moments`; if find_beat returns empty, the index hasn't run \
+yet.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_beat(&self, args: Parameters<FindBeatArgs>) -> Result<String, ErrorData> {
+        find_beat::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_filler_words` — scan whisper transcripts for verbal
+    /// fillers visible on the timeline.
+    #[tool(
+        description = "\
+Scan the project's whisper transcripts for filler words (\"um\", \
+\"uh\", etc) that the agent could suggest cutting. Each finding is a \
+single word's span: { asset_id, text, source_start_s, source_end_s, \
+timeline_start_s, timeline_end_s }. Default filler list: \
+um/uh/uhh/umm/ah/ahh/er/err. Pass `aggressive: true` to also include \
+discourse markers (like / so / just / yeah / basically / you know / \
+i mean). Pass `fillers: [...]` to override entirely. Findings are \
+intersected with the timeline's clip ranges. Default max_results=30, \
+hard cap 200. Returns an empty findings list when whisper sidecars \
+haven't landed yet.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_filler_words(
+        &self,
+        args: Parameters<FindFillerWordsArgs>,
+    ) -> Result<String, ErrorData> {
+        find_filler_words::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_generated_broll_opportunities` — transcript moments
+    /// suited for AI-generated B-roll.
+    #[tool(
+        description = "\
+Find transcript moments where AI-generated podcast B-roll would help: \
+visual concepts, explanations, abstract-to-concrete moments, emotional \
+spikes, story reconstruction, and statistics. This is read-only and \
+does not call a generation provider. Returns scored candidates with \
+OpenRouter/Seedance-ready prompts so the agent can review the moment \
+before calling `start_generated_media_job`.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_generated_broll_opportunities(
+        &self,
+        args: Parameters<FindGeneratedBrollOpportunitiesArgs>,
+    ) -> Result<String, ErrorData> {
+        find_generated_broll_opportunities::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
