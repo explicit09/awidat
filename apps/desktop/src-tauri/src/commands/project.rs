@@ -62,9 +62,10 @@ pub async fn set_project_root(
     }
 
     *state.project_root.lock().await = Some(buf.clone());
-    // Step 8d: each turn is its own codex subprocess, so there's
-    // nothing in-process to evict here when the project changes —
-    // the next `start_turn` will spawn against the new root.
+    // The codex bridge holds project_root + MCP env in its Config, so
+    // a project change requires a fresh bridge. Tear down here; the
+    // next `start_turn` will launch a new one (lazily) against `buf`.
+    tear_down_codex_session(&state).await;
     crate::commands::media::clear_media_server_files(&state)?;
     allow_project_asset_dirs(&app, &buf);
 
@@ -112,6 +113,7 @@ pub async fn current_project_root(state: State<'_, AwidatState>) -> Result<Optio
 pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> {
     ensure_project_switch_allowed(&state).await?;
     *state.project_root.lock().await = None;
+    tear_down_codex_session(&state).await;
     crate::commands::media::clear_media_server_files(&state)?;
     Ok(())
 }
@@ -193,6 +195,9 @@ pub async fn init_project(
     }
 
     *state.project_root.lock().await = Some(project_dir.clone());
+    // Drain any pre-existing bridge so the next start_turn picks up
+    // the new project_root.
+    tear_down_codex_session(&state).await;
     allow_project_asset_dirs(&app, &project_dir);
     if let Err(e) = update_recents(&project_dir).await {
         tracing::warn!(error = %e, "failed to update recents file");
@@ -298,6 +303,19 @@ async fn ensure_project_switch_allowed(state: &State<'_, AwidatState>) -> Result
         return Err("cannot change projects while an import/index/transcode job is running".into());
     }
     Ok(())
+}
+
+/// Drain any live codex bridge for the current project so the next
+/// `start_turn` rebuilds against the new cwd + MCP env override.
+/// Must be called AFTER `ensure_project_switch_allowed` (which refuses
+/// a switch if a turn is in flight) so we don't kill a running turn's
+/// pump task mid-event.
+pub(super) async fn tear_down_codex_session(state: &State<'_, AwidatState>) {
+    if let Some(session) = state.codex.lock().await.take() {
+        if let Err(e) = session.bridge.shutdown().await {
+            tracing::warn!(error = %e, "codex bridge shutdown on project switch returned error");
+        }
+    }
 }
 
 /// Return the most recently opened project paths, newest first.
@@ -451,6 +469,7 @@ pub async fn delete_project(
     if is_active {
         ensure_project_switch_allowed(&state).await?;
         *state.project_root.lock().await = None;
+        tear_down_codex_session(&state).await;
         crate::commands::media::clear_media_server_files(&state)?;
     }
 

@@ -901,6 +901,7 @@ name = "awidat-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "awidat-codex-bridge",
  "awidat-config",
  "awidat-core",
  "awidat-desktop-protocol",

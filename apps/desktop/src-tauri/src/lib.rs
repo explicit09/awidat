@@ -26,7 +26,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod app_menu;
-mod codex_runner;
 mod codex_session;
 mod commands;
 mod events;
