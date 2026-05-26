@@ -1,103 +1,37 @@
-//! `awidat lessons {learn,show}` — distill learned style from past
-//! sessions, or print the current rendered file.
+//! `awidat lessons {learn,show}` — STUBBED during the codex-harness migration.
 //!
-//! `learn` reads every `EditorialDecision` under `state_root` (#149)
-//! and writes a fresh `learned-style.md` to the user config dir
-//! (#150). `show` prints whatever's there now. The `Session::new`
-//! path reads that same file at session start and splices it into
-//! the system prompt.
+//! The original implementation scanned legacy Awidat rollout files via
+//! `awidat_core::rollout::Recorder::collect_decisions` and distilled
+//! `EditorialDecision` events into `learned-style.md`. Codex stores its
+//! rollouts at `~/.codex/sessions/` in a different format; the
+//! `Recorder` API and the legacy rollout layout are scheduled for
+//! deletion in step 8e/W.
 //!
-//! V1 surface is intentionally narrow — no `--clear`, no `--explain`.
-//! The full-rebuild semantics are the right default: every `learn`
-//! overwrites with patterns derived from current data.
+//! This subcommand stays wired into the clap enum so `awidat lessons …`
+//! prints a clear "not yet ported" message instead of failing with a
+//! linker error. The re-port onto codex's `RolloutRecorder` API is
+//! tracked alongside #60 (`history.rs` re-target).
+//!
+//! See `crates/core/src/lessons.rs` — the pattern extraction and
+//! markdown rendering helpers are still live and reusable once a
+//! codex-format reader replaces `Recorder::collect_decisions`.
 
-use std::path::PathBuf;
-
-use anyhow::{Context, Result, anyhow};
-use awidat_core::lessons;
-use awidat_core::rollout::Recorder;
+use anyhow::Result;
 
 pub fn learn() -> Result<()> {
-    let state_root = awidat_config::defaults::state_root()
-        .ok_or_else(|| anyhow!("could not resolve state root"))?;
-    let out_path = lessons::default_output_path()
-        .ok_or_else(|| anyhow!("could not resolve user config dir for learned-style.md"))?;
-
-    let decisions = Recorder::collect_decisions(&state_root)
-        .with_context(|| format!("failed to read decisions under {}", state_root.display()))?;
-    let total = decisions.len();
-    if total == 0 {
-        println!(
-            "No editorial decisions found yet under {}.\n\
-             Run `awidat tui`, accept or deny some apply_edl / start_render / bash \
-             modals, and try again.",
-            state_root.join("sessions").display()
-        );
-        return Ok(());
-    }
-
-    let patterns = lessons::extract_from_decisions(&decisions);
-    let Some(body) = lessons::render_markdown(&patterns, total) else {
-        println!(
-            "{} decisions read, but no patterns crossed the significance threshold.\n\
-             Patterns require ≥{} events with ≥{:.0}pp deviation from baseline.\n\
-             Keep using awidat — patterns surface as the histogram fills in.",
-            total,
-            lessons::MIN_EVENTS,
-            lessons::MIN_DEVIATION_PP,
-        );
-        return Ok(());
-    };
-
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    std::fs::write(&out_path, &body)
-        .with_context(|| format!("failed to write {}", out_path.display()))?;
-
-    println!(
-        "Wrote {} pattern{} to {}",
-        patterns.len(),
-        if patterns.len() == 1 { "" } else { "s" },
-        out_path.display()
+    eprintln!(
+        "awidat lessons learn: pending re-port onto codex rollouts \
+         (~/.codex/sessions/). Legacy Awidat rollout reader was retired \
+         during the codex-harness migration."
     );
-    println!("(distilled from {total} decisions across all rollout files)");
-    println!("\nPreview:\n");
-    print!("{body}");
     Ok(())
 }
 
 pub fn show() -> Result<()> {
-    let path = lessons::default_output_path()
-        .ok_or_else(|| anyhow!("could not resolve user config dir"))?;
-    match lessons::read_learned_style(&path) {
-        Some(body) => {
-            println!("# {}", path.display());
-            println!();
-            print!("{body}");
-        }
-        None => {
-            println!(
-                "No learned style at {}. Run `awidat lessons learn` to build one from \
-                 your session history.",
-                path.display()
-            );
-        }
-    }
+    eprintln!(
+        "awidat lessons show: pending re-port onto codex rollouts \
+         (~/.codex/sessions/). Legacy Awidat rollout reader was retired \
+         during the codex-harness migration."
+    );
     Ok(())
-}
-
-/// Override path for tests + advanced users. Not currently surfaced
-/// by the CLI but kept here so a future `--out <path>` flag is a
-/// one-line wiring change.
-#[allow(dead_code)]
-pub fn show_at(path: &PathBuf) -> Result<()> {
-    match lessons::read_learned_style(path) {
-        Some(body) => {
-            print!("{body}");
-            Ok(())
-        }
-        None => Err(anyhow!("no learned style at {}", path.display())),
-    }
 }

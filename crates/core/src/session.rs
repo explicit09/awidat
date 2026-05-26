@@ -423,36 +423,12 @@ impl Session {
         recorder.shutdown().await;
     }
 
-    /// Execute an already-approved structured plan through this session's
-    /// tool registry and approval cache.
-    pub async fn execute_structured_plan(
-        &self,
-        plan: &mut crate::structured_plan::StructuredPlan,
-        cancel: CancellationToken,
-    ) -> Result<
-        crate::structured_plan::PlanExecutionReport,
-        crate::structured_plan::PlanExecutionError,
-    > {
-        let ctx = ToolContext {
-            project_root: self.project_root.clone(),
-            events_tx: self.events_tx.clone(),
-            user_input_tx: self.user_input_tx.clone(),
-            job_manager: self.job_manager.clone(),
-            approval_tx: self.approval_tx.clone(),
-            sandbox_mode: SandboxMode::Default,
-            mcp_host: self.mcp_host.clone(),
-            skills: self.skills.clone(),
-            subagent_return: self.subagent_return.clone(),
-        };
-        let orchestrator = crate::orchestrator::ToolOrchestrator::new(
-            self.approval_tx.clone(),
-            self.approval_cache.clone(),
-            self.recorder.clone(),
-        );
-        crate::structured_plan::PlanExecutor::new(self.registry.clone())
-            .execute_with_orchestrator(plan, ctx, orchestrator, &cancel)
-            .await
-    }
+    // `execute_structured_plan` was removed in step 8e/Z together with the
+    // legacy `structured_plan` and `podcast_workflow` modules. The whole
+    // legacy harness (this `session.rs`, `orchestrator.rs`, `anthropic/`,
+    // `awidat_md.rs`) is scheduled for deletion in step 8e/W; this method
+    // was the only remaining caller of `structured_plan` and had to go
+    // first so the workspace stayed green after Z.
 
     /// Run one turn: append `user_input` to history, drive the two-loop
     /// engine until the model stops (or cancellation, or fatal error).
