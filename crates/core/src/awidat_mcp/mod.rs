@@ -57,12 +57,16 @@ use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
 use crate::awidat_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
 use crate::awidat_mcp::tools::find_beat::{self, FindBeatArgs};
 use crate::awidat_mcp::tools::find_black_frames::{self, FindBlackFramesArgs};
+use crate::awidat_mcp::tools::find_broll_opportunities::{self, FindBrollOpportunitiesArgs};
 use crate::awidat_mcp::tools::find_dead_air::{self, FindDeadAirArgs};
+use crate::awidat_mcp::tools::find_episode_start::{self, FindEpisodeStartArgs};
+use crate::awidat_mcp::tools::find_eye_contact::{self, FindEyeContactArgs};
 use crate::awidat_mcp::tools::find_false_starts::{self, FindFalseStartsArgs};
 use crate::awidat_mcp::tools::find_filler_words::{self, FindFillerWordsArgs};
 use crate::awidat_mcp::tools::find_generated_broll_opportunities::{
     self, FindGeneratedBrollOpportunitiesArgs,
 };
+use crate::awidat_mcp::tools::find_moment::{self, FindMomentArgs};
 use crate::awidat_mcp::tools::inspect_clip::{self, InspectClipArgs};
 use crate::awidat_mcp::tools::inspect_moment::{self, InspectMomentArgs};
 use crate::awidat_mcp::tools::list_assets::{self, ListAssetsArgs};
@@ -815,6 +819,98 @@ duration, reason, alternate, and EDL fragment. It never applies the edit.",
         args: Parameters<PlanTransitionArgs>,
     ) -> Result<String, ErrorData> {
         plan_transition::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_broll_opportunities` — transcript moments suited for stock
+    /// (Pexels) B-roll cutaways.
+    #[tool(
+        description = "\
+Surface moments where stock B-roll (from Pexels) would land well, by \
+scanning whisper transcripts for trigger phrases (\"look at\", \"imagine \
+a\", \"picture this\") followed by a concrete visual noun (\"skyline\", \
+\"office\", \"graph\"). Returns findings with asset_id, source_start_s, \
+source_end_s, timeline_start_s, timeline_end_s, reason, pexels_query, \
+and transcript_excerpt. Distinct from `broll_candidates` (in-footage \
+cutaways). Default max_results=12, hard cap 40. Empty findings means \
+whisper hasn't landed yet OR the transcript has no demonstrative \
+phrases — neither is an error.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_broll_opportunities(
+        &self,
+        args: Parameters<FindBrollOpportunitiesArgs>,
+    ) -> Result<String, ErrorData> {
+        find_broll_opportunities::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_episode_start` — publishable start of a podcast/interview
+    /// episode, rejecting pre-roll and rehearsal intros.
+    #[tool(
+        description = "\
+Find the actual publishable start of a podcast/interview episode by \
+scanning the whisper transcript for clean host-intro cues and rejecting \
+pre-roll, off-camera setup, and rehearsal intros. Use this before \
+trimming the top of a podcast or answering 'what time does the episode \
+start?'. It is safer than reading transcript offset 0 because raw \
+recordings often begin with real but unpublished chatter. Returns a \
+recommended start time, confidence, evidence transcript, and rejected \
+candidates. Requires the whisper transcript index.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_episode_start(
+        &self,
+        args: Parameters<FindEpisodeStartArgs>,
+    ) -> Result<String, ErrorData> {
+        find_episode_start::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_eye_contact` — time ranges where a face is looking at the
+    /// camera (direct address).
+    #[tool(
+        description = "\
+Find time ranges where at least one face on screen is looking at the \
+camera (gaze score within the at-camera threshold). Reads the gaze \
+sidecar; optionally filters by speaker via the face sidecar's \
+speaker→face mapping. Use this for moments of direct address — host \
+breaking the fourth wall, guest delivering a punchline to camera, the \
+closing pitch. Args: asset_id (optional restrict), min_duration_s \
+(default 1.0), speaker (optional), limit (default 50, hard cap 200). \
+Requires the gaze indexer; the speaker filter further requires the face \
+indexer + whisper diarization.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_eye_contact(
+        &self,
+        args: Parameters<FindEyeContactArgs>,
+    ) -> Result<String, ErrorData> {
+        find_eye_contact::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_moment` — BM25-ranked search over whisper transcript
+    /// segments.
+    #[tool(
+        description = "\
+BM25-ranked search across whisper transcript segments. Tokenizes the \
+query and ranks every segment by relevance — exact-substring queries \
+still match (they rank highest), and semantically-related queries \
+that share no substring (e.g. `battery problems` → `Note 7 battery \
+exploded`) now find their target. Returns asset_id + start/end \
+timestamps + speaker_id + a 200-char snippet + a relevance score per \
+match. Returns paths/ranges only, no audio or video — follow up with \
+`view_frame` for visuals or `read_index` for fuller context. Default \
+limit 25, hard cap 100. Results are ordered by score (best first). \
+English stopwords are filtered before ranking — use content words.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_moment(
+        &self,
+        args: Parameters<FindMomentArgs>,
+    ) -> Result<String, ErrorData> {
+        find_moment::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
