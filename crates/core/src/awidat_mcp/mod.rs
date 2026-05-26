@@ -66,13 +66,17 @@ use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
 use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
+use crate::awidat_mcp::tools::transcript_pack::{self, TranscriptPackArgs};
+use crate::awidat_mcp::tools::vedit_blame::{self, VeditBlameArgs};
 use crate::awidat_mcp::tools::vedit_branch::{self, VeditBranchArgs};
 use crate::awidat_mcp::tools::vedit_changed_clip_ids::{self, VeditChangedClipIdsArgs};
 use crate::awidat_mcp::tools::vedit_checkout::{self, VeditCheckoutArgs};
 use crate::awidat_mcp::tools::vedit_commit::{self, VeditCommitArgs};
 use crate::awidat_mcp::tools::vedit_diff::{self, VeditDiffArgs};
 use crate::awidat_mcp::tools::vedit_log::{self, VeditLogArgs};
+use crate::awidat_mcp::tools::vedit_merge_preflight::{self, VeditMergePreflightArgs};
 use crate::awidat_mcp::tools::vedit_show::{self, VeditShowArgs};
+use crate::awidat_mcp::tools::vedit_tag::{self, VeditTagArgs};
 use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::awidat_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
@@ -501,6 +505,73 @@ history entry without listing the full log again.",
     )]
     pub async fn vedit_show(&self, args: Parameters<VeditShowArgs>) -> Result<String, ErrorData> {
         vedit_show::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_blame` — project vedit history onto one clip.
+    #[tool(
+        description = "\
+Project vedit history onto one clip. Walks first-parent history from \
+HEAD (or start_ref), computes each commit's semantic diff, and returns \
+commits whose changes touch the supplied clip name or media reference. \
+This is attribution, not a branch checkout or merge operation.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_blame(
+        &self,
+        args: Parameters<VeditBlameArgs>,
+    ) -> Result<String, ErrorData> {
+        vedit_blame::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_merge_preflight` — check branch merge overlap without
+    /// merging.
+    #[tool(
+        description = "\
+Check whether a source ref can be safely merged into a target ref under \
+Awidat's proposed bounded merge rule: both sides must have changed \
+non-overlapping clip/media identifiers since their common ancestor. \
+This tool is read-only; it does not checkout, merge, resolve conflicts, \
+or modify refs.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_merge_preflight(
+        &self,
+        args: Parameters<VeditMergePreflightArgs>,
+    ) -> Result<String, ErrorData> {
+        vedit_merge_preflight::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_tag` — create or list named local vedit checkpoints.
+    #[tool(
+        description = "\
+Create or list local named vedit checkpoints. Tags are stable labels \
+under `.vedit/refs/tags/` that point at commits. They do not switch \
+HEAD, create branches, or merge anything. Use this for names like \
+`client-review-v1` or `before-tightening-pass`.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_tag(&self, args: Parameters<VeditTagArgs>) -> Result<String, ErrorData> {
+        vedit_tag::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `transcript_pack` — compact transcript evidence for planning.
+    #[tool(
+        description = "\
+Build a compact transcript pack from whisper sidecars for speech-led \
+cut, caption, and cleanup planning. Defaults to assets visible in the \
+current timeline; set include_all_assets=true to pack every whisper \
+sidecar instead. Read-only.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn transcript_pack(
+        &self,
+        args: Parameters<TranscriptPackArgs>,
+    ) -> Result<String, ErrorData> {
+        transcript_pack::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
