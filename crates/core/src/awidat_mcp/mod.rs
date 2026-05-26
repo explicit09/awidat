@@ -53,6 +53,8 @@ use rmcp::tool_handler;
 use rmcp::tool_router;
 
 use crate::awidat_mcp::context::McpToolCtx;
+use crate::awidat_mcp::tools::assess_continuity::{self, AssessContinuityArgs};
+use crate::awidat_mcp::tools::assess_edit_quality::{self, AssessEditQualityArgs};
 use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
 use crate::awidat_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
 use crate::awidat_mcp::tools::find_beat::{self, FindBeatArgs};
@@ -67,6 +69,7 @@ use crate::awidat_mcp::tools::find_generated_broll_opportunities::{
     self, FindGeneratedBrollOpportunitiesArgs,
 };
 use crate::awidat_mcp::tools::find_moment::{self, FindMomentArgs};
+use crate::awidat_mcp::tools::find_speaker_oncam::{self, FindSpeakerOncamArgs};
 use crate::awidat_mcp::tools::inspect_clip::{self, InspectClipArgs};
 use crate::awidat_mcp::tools::inspect_moment::{self, InspectMomentArgs};
 use crate::awidat_mcp::tools::list_assets::{self, ListAssetsArgs};
@@ -85,6 +88,7 @@ use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntellige
 use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
 use crate::awidat_mcp::tools::transcript_pack::{self, TranscriptPackArgs};
+use crate::awidat_mcp::tools::transcript_search::{self, TranscriptSearchArgs};
 use crate::awidat_mcp::tools::vedit_blame::{self, VeditBlameArgs};
 use crate::awidat_mcp::tools::vedit_branch::{self, VeditBranchArgs};
 use crate::awidat_mcp::tools::vedit_changed_clip_ids::{self, VeditChangedClipIdsArgs};
@@ -911,6 +915,85 @@ English stopwords are filtered before ranking — use content words.",
         args: Parameters<FindMomentArgs>,
     ) -> Result<String, ErrorData> {
         find_moment::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `assess_continuity` — read-only continuity assessor.
+    #[tool(
+        description = "\
+Evaluate whether a proposed cut/trim/split would jar the viewer. Reads \
+whisper / silence / motion / scenedetect sidecars and runs five rules: \
+mid-sentence, breath-beat preservation, mid-motion, speaker-turn \
+boundary, rhythm preservation. Returns a per-rule breakdown plus an \
+aggregate verdict (clean / risky / dirty / abstain). Args: at_s \
+(timeline-time seconds), kind (cut / trim_in / trim_out), asset_id \
+(optional — auto-resolved from the timeline). Read-only; applying the \
+edit is a separate apply_edl step.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn assess_continuity(
+        &self,
+        args: Parameters<AssessContinuityArgs>,
+    ) -> Result<String, ErrorData> {
+        assess_continuity::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `assess_edit_quality` — editorial-grammar recommendation above
+    /// the continuity verdict.
+    #[tool(
+        description = "\
+Assess the editorial quality of a candidate cut/trim/split. Wraps \
+assess_continuity and returns a recommendation using editing grammar: \
+hard cut, recut, cut on action, J-cut, L-cut, b-roll cover, or a \
+motivated transition. Read-only; applying the edit is a separate \
+apply_edl step. Use this before fixing dirty cuts so cross dissolves \
+are not the default repair.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn assess_edit_quality(
+        &self,
+        args: Parameters<AssessEditQualityArgs>,
+    ) -> Result<String, ErrorData> {
+        assess_edit_quality::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_speaker_oncam` — time ranges where a speaker's face is on
+    /// screen.
+    #[tool(
+        description = "\
+Find time ranges where a given speaker's face is on screen. Reads the \
+face indexer's per_frame data and the speaker→face_id mapping that \
+gets populated when whisper diarization ran before face-mcp. Use this \
+for editorial decisions about reaction shots, B-roll overlay timing, \
+and direct-address sequences. If the speaker→face mapping isn't \
+populated, the tool returns a hint explaining why (usually whisper \
+diarization didn't run).",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_speaker_oncam(
+        &self,
+        args: Parameters<FindSpeakerOncamArgs>,
+    ) -> Result<String, ErrorData> {
+        find_speaker_oncam::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `transcript_search` — substring search over whisper sidecars.
+    #[tool(
+        description = "\
+Search whisper transcript segments across project media, optionally \
+filtering by asset or speaker. Returns matching segments ranked by \
+match count, with start/end times, speaker, and a truncated text \
+preview. Read-only.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn transcript_search(
+        &self,
+        args: Parameters<TranscriptSearchArgs>,
+    ) -> Result<String, ErrorData> {
+        transcript_search::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
