@@ -203,18 +203,15 @@ impl CodexAppServer {
         project_root: PathBuf,
         mcp_server_path: Option<PathBuf>,
     ) -> Result<Self, BridgeError> {
-        // 1. Build the app-server Config, anchored at project_root.
-        let config = ConfigBuilder::default()
-            .fallback_cwd(Some(project_root.clone()))
-            .build()
-            .await
-            .map_err(|e| BridgeError::Startup(format!("ConfigBuilder::build: {e}")))?;
-
-        // 2. CLI overrides: register awidat-mcp-server and forward
-        //    AWIDAT_PROJECT_ROOT via per-server env config (codex
-        //    `.env_clear()`s on MCP spawn — see
-        //    vendor/codex-rs/rmcp-client/src/stdio_server_launcher.rs:259).
-        //    DO NOT regress af731e69 / 2889dc59.
+        // 1. Build the CLI overrides FIRST so they're baked into the
+        //    Config we hand off to the in-process app-server. The
+        //    server's ConfigManager only re-applies overrides on later
+        //    config reloads — the first turn uses the Config we pass
+        //    directly, so the mcp_servers.awidat entries MUST be in
+        //    there already. Codex `.env_clear()`s on MCP spawn (see
+        //    vendor/codex-rs/rmcp-client/src/stdio_server_launcher.rs:259),
+        //    so AWIDAT_PROJECT_ROOT has to ride the per-server env
+        //    override. DO NOT regress af731e69 / 2889dc59.
         let mut cli_overrides: Vec<(String, toml::Value)> = Vec::new();
         if let Some(mcp_path) = mcp_server_path {
             cli_overrides.push((
@@ -230,6 +227,15 @@ impl CodexAppServer {
                 "awidat-mcp-server path not provided; codex will run without Awidat tools"
             );
         }
+
+        // 2. Build the app-server Config WITH the overrides applied,
+        //    anchored at project_root.
+        let config = ConfigBuilder::default()
+            .fallback_cwd(Some(project_root.clone()))
+            .cli_overrides(cli_overrides.clone())
+            .build()
+            .await
+            .map_err(|e| BridgeError::Startup(format!("ConfigBuilder::build: {e}")))?;
 
         // 3. Mirror vendor/codex-rs/exec/src/lib.rs:530-555. arg0 +
         //    EnvironmentManager + ExecServerRuntimePaths drive the
