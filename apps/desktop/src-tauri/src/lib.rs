@@ -41,6 +41,23 @@ use tracing::{error, warn};
 /// Tauri entrypoint. Called from `main.rs`.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Codex's middleware depth (response streaming, MCP dispatch, sandbox
+    // wrappers, hooks) overflows the 2 MB default tokio worker stack on
+    // macOS. Codex's own arg0_dispatch_or_else allocates 16 MB stacks
+    // for the same reason (vendor/codex-rs/arg0/src/lib.rs:19). Install
+    // a matching runtime before Tauri builds its own — async_runtime::set
+    // is one-shot and must precede the first Tauri block_on.
+    let codex_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(16 * 1024 * 1024)
+        .thread_name("awidat-tokio")
+        .build()
+        .expect("build tokio runtime with 16 MB worker stacks");
+    tauri::async_runtime::set(codex_runtime.handle().clone());
+    // Keep the runtime alive for the lifetime of the process. Tauri only
+    // holds a Handle; if we drop the Runtime here the worker threads die.
+    std::mem::forget(codex_runtime);
+
     // Resolve API keys before any thread spawns and (when stored in the
     // OS keychain) export them so MCP indexer subprocesses inherit them.
     // Idempotent — guarded by a OnceLock.
