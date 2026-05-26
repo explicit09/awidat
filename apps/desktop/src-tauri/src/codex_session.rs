@@ -70,9 +70,28 @@ impl CodexSession {
     /// already verified there isn't an existing session for this
     /// project (otherwise we leak the previous one).
     pub async fn launch(app: AppHandle, project_root: PathBuf) -> Result<Self, BridgeError> {
+        let mcp_server_path = resolve_mcp_server_binary();
+        // Loud failure on the user-facing event bus when the sibling
+        // binary is missing — silently falling back to "codex with no
+        // Awidat tools" produces an agent that runs shell commands
+        // instead of view_timeline / apply_edl. That mode is unhelpful
+        // for editing; surface it before the user wastes a turn on it.
+        if mcp_server_path.is_none() {
+            let warning = "awidat-mcp-server binary missing next to awidat-desktop. \
+                The agent will fall back to shell-only and won't use Awidat tools \
+                (view_timeline, apply_edl, etc.). Build it with \
+                `cargo build -p awidat-cli --bin awidat-mcp-server`.";
+            tracing::error!("{warning}");
+            crate::events::emit_item(
+                &app,
+                awidat_desktop_protocol::Item::Error {
+                    id: awidat_desktop_protocol::Id::new("awidat-mcp-missing"),
+                    message: warning.to_string(),
+                },
+            );
+        }
         let emitter: Arc<dyn ItemEmitter> =
             Arc::new(TauriEmitter::new(app, project_root.clone()));
-        let mcp_server_path = resolve_mcp_server_binary();
         let bridge =
             CodexAppServer::launch(emitter, project_root.clone(), mcp_server_path).await?;
         Ok(Self {
