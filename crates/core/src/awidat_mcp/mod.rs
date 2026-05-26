@@ -88,11 +88,17 @@ use crate::awidat_mcp::tools::plan_scene_aware_short_form::{
 };
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
+use crate::awidat_mcp::tools::podcast_audio_polish::{self, PodcastAudioPolishArgs};
+use crate::awidat_mcp::tools::podcast_cleanup_candidates::{self, PodcastCleanupCandidatesArgs};
 use crate::awidat_mcp::tools::podcast_editorial_review_pack::{
     self, PodcastEditorialReviewPackArgs,
 };
 use crate::awidat_mcp::tools::podcast_episode_spans::{self, PodcastEpisodeSpansArgs};
+use crate::awidat_mcp::tools::podcast_post_draft_check::{self, PodcastPostDraftCheckArgs};
 use crate::awidat_mcp::tools::podcast_qc_report::{self, PodcastQcReportArgs};
+use crate::awidat_mcp::tools::podcast_smooth_cut_boundaries::{
+    self, PodcastSmoothCutBoundariesArgs,
+};
 use crate::awidat_mcp::tools::podcast_story_map::{self, PodcastStoryMapArgs};
 use crate::awidat_mcp::tools::read_broll_recommendations::{self, ReadBrollRecommendationsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
@@ -1255,6 +1261,81 @@ missing indexes: it reports missing evidence instead of failing the workflow.",
         args: Parameters<PodcastStoryMapArgs>,
     ) -> Result<String, ErrorData> {
         podcast_story_map::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_audio_polish` — podcast audio finishing readiness gate.
+    #[tool(
+        description = "\
+Check podcast audio finishing readiness: loudness, clipping, noise, buses, \
+and recommended mix processors. Returns a status (ready / needs_review / \
+needs_fix), issues by severity, the derived audio finishing state, and \
+recommended mix-chain steps. Read-only; reports against current timeline \
+metadata.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_audio_polish(
+        &self,
+        args: Parameters<PodcastAudioPolishArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_audio_polish::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_cleanup_candidates` — aggregate existing cleanup
+    /// evidence into safe/review/risky candidate buckets.
+    #[tool(
+        description = "\
+Aggregate existing podcast cleanup evidence into safe/review/risky \
+candidate buckets. Uses current dead-air, filler-word, and false-start \
+scanners; it does not mutate the timeline and does not require a new \
+audio-analysis indexer.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_cleanup_candidates(
+        &self,
+        args: Parameters<PodcastCleanupCandidatesArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_cleanup_candidates::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_post_draft_check` — verify draft episode boundaries
+    /// for leftover pre-show, retake, or tail chatter.
+    #[tool(
+        description = "\
+Check the current draft timeline's opening and ending transcript windows for \
+leftover pre-show, retake, or post-show chatter before render. Run after the \
+agent has made an extraction/cleanup draft and before final render. The tool \
+does not mutate the timeline.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_post_draft_check(
+        &self,
+        args: Parameters<PodcastPostDraftCheckArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_post_draft_check::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_smooth_cut_boundaries` — inspect cut boundaries created
+    /// by accepted podcast edits and emit the follow-up tool calls
+    /// needed to smooth them.
+    #[tool(
+        description = "\
+Locate adjacent clip boundaries created by accepted podcast cuts and return \
+the required smoothing checks. This tool is read-only. Run it after \
+podcast_apply_accepted_edits -> apply_edl -> view_timeline -> vedit_diff, \
+then run assess_edit_quality for each returned boundary. Use transition_context \
+and plan_transition only when the quality assessment indicates a visual repair \
+or motivated transition may be needed.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_smooth_cut_boundaries(
+        &self,
+        args: Parameters<PodcastSmoothCutBoundariesArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_smooth_cut_boundaries::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
