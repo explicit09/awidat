@@ -7,6 +7,14 @@
 
 use serde::{Deserialize, Serialize};
 
+// `Tool` and `CacheControl` were lifted to `crate::tool_schema` in step 8e —
+// they're provider-agnostic and used by 50+ in-process tool files, so they
+// outlive the legacy Anthropic harness. Re-exported here so existing
+// `use crate::anthropic::{Tool, ...}` call sites keep compiling (and so
+// the wire-protocol types below — `SystemBlock`, `MessagesRequest` — can
+// keep referring to them as if local).
+pub use crate::tool_schema::{CacheControl, Tool};
+
 /// Role of a message in the conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -179,51 +187,6 @@ pub mod tool_result {
         }
         Value::Array(blocks)
     }
-}
-
-/// Anthropic prompt-cache breakpoint marker. Attaching this to the
-/// last tool (or system block) tells the API to cache the prefix up
-/// through that point. Cache reads cost ~10% of normal input tokens
-/// with a 5-minute TTL; writes cost 25% more than uncached. For any
-/// session > ~3 turns the math is positive.
-///
-/// We only use the ephemeral variant — the 1-hour cache costs more
-/// to write and is overkill for our usage pattern (one project, one
-/// session).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CacheControl {
-    /// Always `"ephemeral"` for our usage.
-    #[serde(rename = "type")]
-    pub kind: String,
-}
-
-impl CacheControl {
-    /// 5-minute ephemeral cache. The right default for an awidat session.
-    pub fn ephemeral() -> Self {
-        Self {
-            kind: "ephemeral".into(),
-        }
-    }
-}
-
-/// One tool the model can call. We register every entry in our
-/// `ToolRegistry` here so the model knows the surface.
-///
-/// The `cache_control` field is set on the *last* tool of every
-/// request when caching is enabled — that one breakpoint covers
-/// every preceding tool plus the system prompt.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Tool {
-    /// Tool name, e.g. `"bash"`.
-    pub name: String,
-    /// Human-readable description for the model.
-    pub description: String,
-    /// JSON Schema for the inputs. The model is told to conform.
-    pub input_schema: serde_json::Value,
-    /// Prompt-cache breakpoint. Set on the last tool only; omitted
-    /// otherwise.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub cache_control: Option<CacheControl>,
 }
 
 /// `tool_choice` field on the request — controls whether the model is

@@ -8,7 +8,7 @@ use awidat_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Apply a relink candidate to timeline media references.

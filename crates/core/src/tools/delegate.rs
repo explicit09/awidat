@@ -29,7 +29,8 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::FunctionCallError;
-use crate::anthropic::{Client, ClientConfig, Tool as ToolSchema};
+use crate::anthropic::{Client, ClientConfig};
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry};
 
 /// The `delegate` tool. Mounted on the parent session only.

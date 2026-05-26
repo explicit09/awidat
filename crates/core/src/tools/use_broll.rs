@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::pexels;
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 

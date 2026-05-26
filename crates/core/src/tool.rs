@@ -28,7 +28,7 @@ use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Session approval cache key. Unlike the old "tool name forever"
 /// cache, this captures the operation being approved so approving one
@@ -347,7 +347,7 @@ pub trait ToolHandler: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// JSON Schema for the tool's args + a model-facing description.
-    /// The agent loop builds an [`crate::anthropic::Tool`] from this for
+    /// The agent loop builds an [`crate::tool_schema::Tool`] from this for
     /// every request. Default for the model family is what
     /// `schema_for_family` returns; this base method returns the
     /// canonical (Opus-targeted) shape.

@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use awidat_proto::project::Project;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `view_episode` tool.

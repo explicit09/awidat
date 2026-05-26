@@ -46,7 +46,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Per-download timeout. yt-dlp + a fast network can finish a 720p

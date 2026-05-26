@@ -12,7 +12,7 @@ use serde::Deserialize;
 use tokio::process::Command;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::media_catalog_mutation::{ensure_awidat_metadata, upsert_asset};
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 

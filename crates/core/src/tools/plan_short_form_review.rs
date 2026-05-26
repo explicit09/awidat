@@ -9,7 +9,7 @@ use awidat_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::short_form_intelligence::{
     apply_to_short_form_review_input, build_short_form_intelligence,
 };

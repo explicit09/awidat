@@ -16,8 +16,8 @@ impl ToolHandler for ReadOnlyTool {
         "inspect_media"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Inspect media without changing project files.".into(),
             input_schema: serde_json::json!({
@@ -52,8 +52,8 @@ impl ToolHandler for MutatingTool {
         "write_edit"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Write an edit decision to the project.".into(),
             input_schema: serde_json::json!({
@@ -84,8 +84,8 @@ impl ToolHandler for FindMomentLikeTool {
         "find_moment"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Search indexed editorial moments.".into(),
             input_schema: serde_json::json!({
@@ -120,8 +120,8 @@ impl ToolHandler for StartRenderLikeTool {
         "start_render"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Start a render job.".into(),
             input_schema: serde_json::json!({
@@ -152,8 +152,8 @@ impl ToolHandler for RenderPreflightLikeTool {
         "render_preflight"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Inspect render backend selection.".into(),
             input_schema: serde_json::json!({
@@ -187,8 +187,8 @@ impl ToolHandler for StreamRemuxLikeTool {
         "stream_remux"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Start a stream-copy remux job.".into(),
             input_schema: serde_json::json!({
@@ -219,8 +219,8 @@ impl ToolHandler for ProxyStatusLikeTool {
         "proxy_status"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Report proxy cache status.".into(),
             input_schema: serde_json::json!({
@@ -254,8 +254,8 @@ impl ToolHandler for PreviewCacheStatusLikeTool {
         "preview_cache_status"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Report preview cache status.".into(),
             input_schema: serde_json::json!({
@@ -290,8 +290,8 @@ impl ToolHandler for VerifyRenderLikeTool {
         "verify_render"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Verify a rendered output.".into(),
             input_schema: serde_json::json!({

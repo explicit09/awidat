@@ -21,8 +21,8 @@ use serde::Deserialize;
 use tokio::sync::oneshot;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
-use crate::session::SessionEvent;
+use crate::tool_schema::Tool as ToolSchema;
+use crate::events::SessionEvent;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput, UserInputRequest};
 
 /// The `request_user_input` tool.

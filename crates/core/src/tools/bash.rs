@@ -32,7 +32,7 @@ use tokio::time::timeout;
 use tracing::warn;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{
     ApprovalKey, SandboxMode, ToolHandler, ToolInvocation, ToolOutput, ToolSandboxPolicy,
 };

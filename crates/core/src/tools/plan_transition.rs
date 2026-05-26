@@ -9,7 +9,7 @@ use awidat_proto::transitions::{BuiltinTransition, MotionAlignment, lookup_built
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Read-only transition planner.

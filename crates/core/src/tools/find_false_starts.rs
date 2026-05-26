@@ -28,7 +28,7 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 use crate::transcript_cleanup::{
     TranscriptSegment, TranscriptWord, false_start_ranges, production_aside_ranges,

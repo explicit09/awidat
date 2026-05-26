@@ -17,7 +17,7 @@ use awidat_render::{OutputPathPolicy, RenderJobSpec, validate_render_output_path
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `export_package` tool.

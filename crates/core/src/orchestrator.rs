@@ -14,7 +14,7 @@ use tracing::warn;
 
 use crate::FunctionCallError;
 use crate::rollout::Recorder;
-use crate::session::SessionError;
+use crate::events::SessionError;
 use crate::tool::{
     ApprovalCache, ApprovalDecision, ApprovalRequest, SandboxMode, ToolContext, ToolHandler,
     ToolInvocation, ToolOutput, ToolSandboxPolicy,
@@ -252,7 +252,7 @@ mod tests {
     use async_trait::async_trait;
     use tokio::sync::broadcast;
 
-    use crate::anthropic::Tool as ToolSchema;
+    use crate::tool_schema::Tool as ToolSchema;
     use crate::tool::ApprovalKey;
 
     struct FakeMutating;

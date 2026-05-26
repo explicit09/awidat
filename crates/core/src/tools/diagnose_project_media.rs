@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 const DEFAULT_MAX_CANDIDATES: usize = 5;

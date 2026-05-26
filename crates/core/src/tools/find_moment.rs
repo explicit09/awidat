@@ -21,7 +21,7 @@ use bm25::{Document, Language, SearchEngineBuilder};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Hard cap on results returned. Codex's `list_dir` uses 25; matches.

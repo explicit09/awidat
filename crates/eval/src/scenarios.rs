@@ -2095,8 +2095,8 @@ impl ToolHandler for EvalMutatingTool {
         "eval_mutating"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: "eval_mutating".into(),
             description: "eval-only mutating tool".into(),
             input_schema: serde_json::json!({"type": "object"}),
@@ -2215,8 +2215,8 @@ impl ToolHandler for EvalSandboxedTool {
         "eval_sandboxed"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: "eval_sandboxed".into(),
             description: "eval-only sandboxed tool".into(),
             input_schema: serde_json::json!({"type": "object"}),

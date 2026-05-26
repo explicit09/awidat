@@ -55,6 +55,7 @@ pub mod dismissal;
 pub mod edl;
 pub mod episode_map;
 pub mod error;
+pub mod events;
 pub mod generated_media;
 pub mod lessons;
 pub mod mcp_host;
@@ -80,6 +81,7 @@ pub mod structured_plan;
 pub mod subagent;
 pub mod system_prompt;
 pub mod tool;
+pub mod tool_schema;
 pub mod tools;
 pub mod transcript_alignment;
 pub mod transcript_cleanup;
@@ -91,7 +93,8 @@ pub mod visual_signals;
 
 pub use capability_metadata::{CapabilityMetadata, SupportLevel};
 pub use error::FunctionCallError;
-pub use session::{Session, SessionError, SessionEvent};
+pub use events::{SessionError, SessionEvent};
+pub use session::Session;
 pub use tool::{
     ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry, UserInputRequest,
 };

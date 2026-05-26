@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 const DEFAULT_BINS: usize = 64;

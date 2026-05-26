@@ -9,7 +9,7 @@ use awidat_index::walk_indexer;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Read-only podcast story map.

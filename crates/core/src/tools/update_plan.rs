@@ -18,8 +18,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
-use crate::session::SessionEvent;
+use crate::tool_schema::Tool as ToolSchema;
+use crate::events::SessionEvent;
 use crate::tool::{PlanItem, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// The `update_plan` tool.

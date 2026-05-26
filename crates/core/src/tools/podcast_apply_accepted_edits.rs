@@ -13,7 +13,7 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Compile accepted podcast proposal IDs into one `apply_edl` batch.

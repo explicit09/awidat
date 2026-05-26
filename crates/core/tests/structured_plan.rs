@@ -254,8 +254,8 @@ impl ToolHandler for FakeMutating {
         "mutate_project"
     }
 
-    fn schema(&self) -> awidat_core::anthropic::Tool {
-        awidat_core::anthropic::Tool {
+    fn schema(&self) -> awidat_core::tool_schema::Tool {
+        awidat_core::tool_schema::Tool {
             name: self.name().into(),
             description: "Mutates the project.".into(),
             input_schema: serde_json::json!({"type": "object"}),

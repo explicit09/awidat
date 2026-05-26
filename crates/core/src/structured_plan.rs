@@ -14,7 +14,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::orchestrator::ToolOrchestrator;
-use crate::session::{SessionError, SessionEvent};
+use crate::events::{SessionError, SessionEvent};
 use crate::tool::{ApprovalCache, PlanItem, ToolContext, ToolInvocation, ToolOutput, ToolRegistry};
 
 /// A structured workflow plan ready for approval and execution.

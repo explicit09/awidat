@@ -7,7 +7,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::proxy::{
     ProxyStatus, proxy_path_for, proxy_pending_path, proxy_status_for, proxy_status_for_project,
 };

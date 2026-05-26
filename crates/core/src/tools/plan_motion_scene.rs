@@ -7,7 +7,7 @@ use awidat_proto::professional::{MotionScene, MotionSceneLayer, MotionSceneLayer
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::anthropic::Tool as ToolSchema;
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
 
 /// Planned MotionScene with storage instructions.
