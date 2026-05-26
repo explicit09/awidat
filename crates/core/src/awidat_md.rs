@@ -1,4 +1,4 @@
-//! `AWIDAT.md` discovery — hand-curated prose context the agent loads
+//! `AGENTS.md` discovery — hand-curated prose context the agent loads
 //! at session start.
 //!
 //! The Codex AGENTS.md / Claude Code CLAUDE.md pattern, ported. Both
@@ -20,16 +20,16 @@
 //! the project root override earlier (more general) ones because
 //! language models weight recent context more heavily.
 //!
-//! 1. **User scope** — `~/.awidat/AWIDAT.override.md`, falling back to
-//!    `~/.awidat/AWIDAT.md`. Personal preferences across all projects
+//! 1. **User scope** — `~/.awidat/AGENTS.override.md`, falling back to
+//!    `~/.awidat/AGENTS.md`. Personal preferences across all projects
 //!    ("always render at 1080p preview", "I like 90s clip durations").
-//! 2. **Project scope** — `<project_root>/AWIDAT.md`. Per-project
+//! 2. **Project scope** — `<project_root>/AGENTS.md`. Per-project
 //!    convention checked into source ("this is Joe Rogan's podcast,
 //!    speaker A is Joe", "never cut Joe's questions short").
-//! 3. **Local scope** — `<project_root>/AWIDAT.local.md`. Gitignored;
+//! 3. **Local scope** — `<project_root>/AGENTS.local.md`. Gitignored;
 //!    per-session preferences that shouldn't ship to teammates.
 //!
-//! At each layer, an `AWIDAT.override.md` next to (or instead of) the
+//! At each layer, an `AGENTS.override.md` next to (or instead of) the
 //! base file fully replaces the layer for temporary experimentation.
 //!
 //! # Cap
@@ -37,18 +37,18 @@
 //! Combined output capped at 32 KiB (matches Codex's
 //! `project_doc_max_bytes` default). Files are loaded in discovery
 //! order; once the cap is reached subsequent files are dropped with
-//! a warning. Producers should keep AWIDAT.md tight — bloated context
+//! a warning. Producers should keep AGENTS.md tight — bloated context
 //! files dilute the model's attention to what matters.
 
 use std::path::{Path, PathBuf};
 
-/// Maximum total size of all loaded AWIDAT.md files combined. Mirrors
+/// Maximum total size of all loaded AGENTS.md files combined. Mirrors
 /// Codex's `project_doc_max_bytes = 32 KiB` default.
 pub const MAX_BYTES: usize = 32 * 1024;
 
-const FILE_BASE: &str = "AWIDAT.md";
-const FILE_OVERRIDE: &str = "AWIDAT.override.md";
-const FILE_LOCAL: &str = "AWIDAT.local.md";
+const FILE_BASE: &str = "AGENTS.md";
+const FILE_OVERRIDE: &str = "AGENTS.override.md";
+const FILE_LOCAL: &str = "AGENTS.local.md";
 const SEP: &str = "\n\n--- awidat-doc ---\n\n";
 
 /// Discovery summary: the concatenated text the system prompt should
@@ -67,7 +67,7 @@ pub struct AwidatDocs {
     pub truncated: bool,
 }
 
-/// Discover and concatenate AWIDAT.md docs.
+/// Discover and concatenate AGENTS.md docs.
 ///
 /// `project_root` should be the project directory we're editing in;
 /// `home` is the user's home dir (`std::env::home_dir()`-shaped).
@@ -76,7 +76,7 @@ pub fn discover(project_root: &Path, home: Option<&Path>) -> AwidatDocs {
     let mut docs = AwidatDocs::default();
     let mut layers = Vec::<PathBuf>::new();
 
-    // Layer 1: user scope (~/.awidat/{AWIDAT.override.md,AWIDAT.md}).
+    // Layer 1: user scope (~/.awidat/{AGENTS.override.md,AGENTS.md}).
     // Override wins when present.
     if let Some(home) = home {
         let user_dir = home.join(".awidat");
@@ -89,8 +89,8 @@ pub fn discover(project_root: &Path, home: Option<&Path>) -> AwidatDocs {
         }
     }
 
-    // Layer 2: project scope (<root>/AWIDAT.md OR
-    // <root>/AWIDAT.override.md if the user wants to temporarily
+    // Layer 2: project scope (<root>/AGENTS.md OR
+    // <root>/AGENTS.override.md if the user wants to temporarily
     // replace).
     let project_override = project_root.join(FILE_OVERRIDE);
     let project_base = project_root.join(FILE_BASE);
@@ -100,7 +100,7 @@ pub fn discover(project_root: &Path, home: Option<&Path>) -> AwidatDocs {
         layers.push(project_base);
     }
 
-    // Layer 3: local scope (<root>/AWIDAT.local.md). Always loaded
+    // Layer 3: local scope (<root>/AGENTS.local.md). Always loaded
     // when present, layered on top of project scope. Producers add
     // this to .gitignore.
     let local_p = project_root.join(FILE_LOCAL);
@@ -160,11 +160,11 @@ mod tests {
     #[test]
     fn project_only_loads_project_md() {
         let dir = tempfile::tempdir().unwrap();
-        write(&dir.path().join("AWIDAT.md"), "host = speaker A");
+        write(&dir.path().join("AGENTS.md"), "host = speaker A");
         let docs = discover(dir.path(), None);
         assert_eq!(docs.text, "host = speaker A");
         assert_eq!(docs.sources.len(), 1);
-        assert!(docs.sources[0].ends_with("AWIDAT.md"));
+        assert!(docs.sources[0].ends_with("AGENTS.md"));
     }
 
     #[test]
@@ -172,10 +172,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         write(
-            &home.path().join(".awidat/AWIDAT.md"),
+            &home.path().join(".awidat/AGENTS.md"),
             "always render 1080p preview",
         );
-        write(&project.path().join("AWIDAT.md"), "host = speaker A");
+        write(&project.path().join("AGENTS.md"), "host = speaker A");
         let docs = discover(project.path(), Some(home.path()));
         assert!(docs.text.starts_with("always render 1080p preview"));
         assert!(docs.text.contains("host = speaker A"));
@@ -187,9 +187,9 @@ mod tests {
     fn override_replaces_base_at_user_scope() {
         let home = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
-        write(&home.path().join(".awidat/AWIDAT.md"), "base content");
+        write(&home.path().join(".awidat/AGENTS.md"), "base content");
         write(
-            &home.path().join(".awidat/AWIDAT.override.md"),
+            &home.path().join(".awidat/AGENTS.override.md"),
             "override content",
         );
         let docs = discover(project.path(), Some(home.path()));
@@ -200,9 +200,9 @@ mod tests {
     #[test]
     fn local_md_layers_on_top_of_project_md() {
         let project = tempfile::tempdir().unwrap();
-        write(&project.path().join("AWIDAT.md"), "team conventions");
+        write(&project.path().join("AGENTS.md"), "team conventions");
         write(
-            &project.path().join("AWIDAT.local.md"),
+            &project.path().join("AGENTS.local.md"),
             "my sandbox preferences",
         );
         let docs = discover(project.path(), None);
@@ -216,8 +216,8 @@ mod tests {
     #[test]
     fn empty_files_are_skipped() {
         let project = tempfile::tempdir().unwrap();
-        write(&project.path().join("AWIDAT.md"), "real content");
-        write(&project.path().join("AWIDAT.local.md"), "   \n\n   ");
+        write(&project.path().join("AGENTS.md"), "real content");
+        write(&project.path().join("AGENTS.local.md"), "   \n\n   ");
         let docs = discover(project.path(), None);
         assert_eq!(docs.text, "real content");
         assert_eq!(docs.sources.len(), 1);
@@ -230,8 +230,8 @@ mod tests {
         // overflow the 32KB cap and be dropped.
         let big = "a".repeat(30 * 1024);
         let extra = "b".repeat(10 * 1024);
-        write(&project.path().join("AWIDAT.md"), &big);
-        write(&project.path().join("AWIDAT.local.md"), &extra);
+        write(&project.path().join("AGENTS.md"), &big);
+        write(&project.path().join("AGENTS.local.md"), &extra);
         let docs = discover(project.path(), None);
         assert!(docs.bytes <= MAX_BYTES);
         assert!(docs.truncated, "expected truncation flag");
@@ -247,9 +247,9 @@ mod tests {
     #[test]
     fn project_override_replaces_project_base() {
         let project = tempfile::tempdir().unwrap();
-        write(&project.path().join("AWIDAT.md"), "checked-in convention");
+        write(&project.path().join("AGENTS.md"), "checked-in convention");
         write(
-            &project.path().join("AWIDAT.override.md"),
+            &project.path().join("AGENTS.override.md"),
             "experimental override",
         );
         let docs = discover(project.path(), None);

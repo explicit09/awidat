@@ -133,7 +133,7 @@ export function NewProjectForm({ onClose, onCreated }: Props) {
           )}
           <p className="field-hint">
             Awidat will create <code>{parent || "<parent>"}/{name || "<name>"}</code>{" "}
-            with an empty timeline and a starter <code>AWIDAT.md</code>. The
+            with an empty timeline and a starter <code>AGENTS.md</code>. The
             project type drives the agent's editorial defaults — podcast mode
             trims silences and respects breath beats; other modes fall back to
             neutral cleanup until your description tells the agent what to do.

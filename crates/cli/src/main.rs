@@ -50,7 +50,7 @@ enum Command {
     },
     /// Create a new project with optional source import + auto-indexing.
     /// The "one command per video" UX: scaffold + acquire source +
-    /// index + drop a starter AWIDAT.md.
+    /// index + drop a starter AGENTS.md.
     New {
         /// Project name. Used as the directory name under `cwd` (or
         /// under `--at`).
@@ -68,7 +68,7 @@ enum Command {
         /// dropping multiple assets before a single batch index pass.
         #[arg(long)]
         no_index: bool,
-        /// Skip writing the starter `AWIDAT.md`.
+        /// Skip writing the starter `AGENTS.md`.
         #[arg(long)]
         no_md: bool,
         /// Symlink instead of copying when `--import` is a local path.

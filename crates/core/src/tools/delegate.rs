@@ -178,7 +178,7 @@ impl ToolHandler for DelegateTool {
         })?;
 
         // Build sub-system prompt: the sub-agent gets a fresh, focused
-        // prompt with NO inherited episode-map / AWIDAT.md noise. The
+        // prompt with NO inherited episode-map / AGENTS.md noise. The
         // sub-agent's job is the task; the system suffix tells it how
         // to return.
         let sys = format!(

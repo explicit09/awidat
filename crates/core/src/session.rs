@@ -189,7 +189,7 @@ impl Session {
     /// project directory (most of week 4) read it from the
     /// [`ToolContext`] handed to their `handle()`.
     ///
-    /// Discovery: if `AWIDAT.md` files exist (per
+    /// Discovery: if `AGENTS.md` files exist (per
     /// [`crate::awidat_md::discover`]), their concatenated contents
     /// are appended to the supplied `system_prompt` so the model
     /// inherits the producer's editorial conventions every session.
@@ -215,7 +215,7 @@ impl Session {
         let (events_tx, _) = broadcast::channel(4096);
         let project_root = project_root.into();
 
-        // Discover AWIDAT.md (user + project + local override) and
+        // Discover AGENTS.md (user + project + local override) and
         // splice into the system prompt under a fixed heading. dirs
         // gives us the user home; if it's missing we just skip the
         // user-scope layer and keep going.
@@ -266,7 +266,7 @@ impl Session {
             .and_then(crate::lessons::read_learned_style);
 
         // Compose the final system prompt: base prompt → episode map
-        // → AWIDAT.md → learned style. All extras stay in the tier-1
+        // → AGENTS.md → learned style. All extras stay in the tier-1
         // cache prefix so the cost is paid once per session. Skills
         // catalog is per-turn (see above).
         let mut sections: Vec<String> = Vec::new();
@@ -281,7 +281,7 @@ impl Session {
         }
         if !docs.text.is_empty() {
             sections.push(format!(
-                "## Project conventions (AWIDAT.md)\n\n{}",
+                "## Project conventions (AGENTS.md)\n\n{}",
                 docs.text
             ));
         }

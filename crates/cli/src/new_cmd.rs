@@ -1,14 +1,14 @@
 //! `awidat new` — one-command project creation.
 //!
 //! Combines `init` + asset acquisition + (optional) indexing + a
-//! starter `AWIDAT.md`. The Cursor / Claude Code / npm playbook for
+//! starter `AGENTS.md`. The Cursor / Claude Code / npm playbook for
 //! "user installs one thing, gets a working project."
 //!
 //! Modes:
 //! - `--import <URL>` — yt-dlp downloads the video into `raw/`.
 //! - `--import <PATH>` — copies (or symlinks) the local file into `raw/`.
 //! - omit `--import` — same as `awidat init`, but with the friendlier
-//!   next-step output and a starter AWIDAT.md.
+//!   next-step output and a starter AGENTS.md.
 //!
 //! Default behavior runs `awidat index` synchronously after the
 //! source lands, so the user sees the wall time honestly. Pass
@@ -39,7 +39,7 @@ pub struct NewArgs {
     pub at: Option<PathBuf>,
     /// Skip the post-creation `awidat index` run.
     pub no_index: bool,
-    /// Skip writing a starter `AWIDAT.md`.
+    /// Skip writing a starter `AGENTS.md`.
     pub no_md: bool,
     /// Use a symlink instead of a copy when importing a local path.
     /// Saves disk on large files; not applicable to URL imports.
@@ -85,11 +85,11 @@ pub fn run(args: NewArgs) -> Result<()> {
     }
 
     if !args.no_md {
-        let md_path = project_dir.join("AWIDAT.md");
-        std::fs::write(&md_path, AWIDAT_MD_TEMPLATE).with_context(|| {
-            format!("failed to write starter AWIDAT.md at {}", md_path.display())
+        let md_path = project_dir.join("AGENTS.md");
+        std::fs::write(&md_path, AGENTS_MD_TEMPLATE).with_context(|| {
+            format!("failed to write starter AGENTS.md at {}", md_path.display())
         })?;
-        println!("  ✓ Wrote starter AWIDAT.md (delete or edit to taste)");
+        println!("  ✓ Wrote starter AGENTS.md (delete or edit to taste)");
     }
 
     let imported_asset = match args.import.as_deref() {
@@ -394,13 +394,13 @@ fn human_size(p: &Path) -> String {
     }
 }
 
-const AWIDAT_MD_TEMPLATE: &str = "\
+const AGENTS_MD_TEMPLATE: &str = "\
 # Project conventions
 
 This file is read by awidat at session start and added to the agent's \
 system prompt. Use it to record editorial conventions, ground rules, \
 and per-episode constraints. Edit freely; remove sections you don't \
-need. Subdirectories may also have their own `AWIDAT.md` for narrower \
+need. Subdirectories may also have their own `AGENTS.md` for narrower \
 scope.
 
 ## Speakers
