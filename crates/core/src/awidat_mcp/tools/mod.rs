@@ -16,4 +16,6 @@
 //! - Use [`crate::awidat_mcp::context::McpToolCtx::resolve`] to get
 //!   the project root.
 
+pub mod list_looks;
 pub mod list_markers;
+pub mod view_episode;

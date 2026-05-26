@@ -53,7 +53,9 @@ use rmcp::tool_handler;
 use rmcp::tool_router;
 
 use crate::awidat_mcp::context::McpToolCtx;
+use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
+use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 
 /// The Awidat MCP server. One short-lived struct per child-process
 /// invocation. Holds a `ToolRouter` populated by the `#[tool_router]`
@@ -99,6 +101,42 @@ EDL operations.",
         args: Parameters<ListMarkersArgs>,
     ) -> Result<String, ErrorData> {
         list_markers::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `view_episode` — compact textual episode map.
+    #[tool(
+        description = "\
+Return a compact textual map of the episode: title, speaker count, \
+topic list with timestamps, and the current editorial state (clip \
+count, total duration, trimmed/untrimmed). The same map was injected \
+into your system prompt at session start; call this tool to refresh \
+it after edits or after a context compaction. No arguments. Cheap \
+and read-only.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn view_episode(
+        &self,
+        args: Parameters<ViewEpisodeArgs>,
+    ) -> Result<String, ErrorData> {
+        view_episode::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `list_looks` — agent-facing color-corrector look catalog.
+    #[tool(
+        description = "\
+Returns the agent-facing catalog of named color-corrector looks. \
+Each entry includes id, display_name, description, \
+default_input_space, default_output_space, default_size, \
+recommended_strength_min, recommended_strength_max, and tags. Use \
+this before composing an `awidat.lut` or `awidat.color_pipeline` \
+effect to pick a look that's compatible with the clip's input \
+space and apply a sensible strength.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn list_looks(&self, args: Parameters<ListLooksArgs>) -> Result<String, ErrorData> {
+        list_looks::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
