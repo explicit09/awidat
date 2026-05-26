@@ -1533,6 +1533,7 @@ per_page=5; cap 30. Requires PEXELS_API_KEY in env or the OS keychain.",
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
+<<<<<<< HEAD
     /// `import_local` — copy or symlink a local media file into the
     /// project's `raw/` directory and record it in the asset catalog.
     ///
@@ -1906,9 +1907,7 @@ if a stringout with that id already exists.",
         args: Parameters<SetTrackPropertyArgs>,
     ) -> Result<String, ErrorData> {
         granular_timeline::run_set_track_property(args.0, McpToolCtx::resolve())
-            .map_err(|msg| ErrorData::invalid_params(msg, None))
-    }
-
+=======
     /// `vedit_merge` — execute bounded local vedit branch merges.
     ///
     /// Marked destructive because the run writes
@@ -2000,6 +1999,7 @@ timeline.",
         args: Parameters<PodcastEditProposalArgs>,
     ) -> Result<String, ErrorData> {
         podcast_edit_proposal::run(args.0, McpToolCtx::resolve())
+>>>>>>> d12fa9c1 (Port vedit_merge, vedit_revert, podcast_apply_accepted_edits, podcast_edit_proposal (mutating))
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
