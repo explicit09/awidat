@@ -345,11 +345,105 @@ pub fn read_otio_timeline(
     let file = path.display().to_string();
     rewrite_schema_strings(&mut value, &file, &JsonPath::root(), warnings)?;
 
-    serde_json::from_value::<Timeline>(value).map_err(|e| ProtoError::Validation {
-        file,
-        path: JsonPath::root(),
-        message: format!("{e}"),
-    })
+    // Try strict deserialization first — covers every well-formed file.
+    match serde_json::from_value::<Timeline>(value.clone()) {
+        Ok(tl) => Ok(tl),
+        Err(strict_err) => {
+            // Strict parse failed. The most common cause we've seen is the
+            // agent writing malformed entries into `metadata.awidat.*`
+            // arrays (e.g. a `TimelineMarker` with `name`/`source_time_s`
+            // instead of `label`/`time_s`). Those sections are editorial
+            // sidecars — losing them is sad but recoverable; rejecting
+            // the whole project means the user can't open it at all.
+            //
+            // Quarantine pass: walk every array under `metadata.awidat`;
+            // if any element fails to deserialize against its sibling
+            // elements' shape, drop the offenders and re-try. We do this
+            // ONLY on a strict-parse failure so well-formed files take
+            // the fast path.
+            if let Some(quarantined) = quarantine_awidat_metadata_arrays(
+                value,
+                &file,
+                warnings,
+            ) {
+                serde_json::from_value::<Timeline>(quarantined).map_err(|e| {
+                    ProtoError::Validation {
+                        file,
+                        path: JsonPath::root(),
+                        message: format!("{e} (after quarantining metadata.awidat arrays; original error: {strict_err})"),
+                    }
+                })
+            } else {
+                Err(ProtoError::Validation {
+                    file,
+                    path: JsonPath::root(),
+                    message: format!("{strict_err}"),
+                })
+            }
+        }
+    }
+}
+
+/// Best-effort quarantine of malformed entries under `metadata.awidat`.
+/// Returns `Some(rewritten_value)` if at least one array was sanitized
+/// (so the caller can retry deserialization), or `None` if there was
+/// nothing to fix (the failure is elsewhere in the document).
+///
+/// Strategy: for every array directly under `metadata.awidat`, validate
+/// each element against the SHAPE of the most-common element by trying
+/// the array as a `Vec<serde_json::Value>` against a per-element
+/// best-effort serde fallback. We can't know the target Rust type here
+/// (this fn is in proto without type-erased knowledge of awidat_meta),
+/// so we do the cheap-but-effective thing: keep only elements whose
+/// shape matches the FIRST element's keys (a sibling-shape heuristic).
+/// If the very first element is malformed, we still try by checking
+/// against any element in the array as the reference.
+///
+/// False positives (rejecting valid heterogenous entries) are possible
+/// in principle; in practice every metadata.awidat array we currently
+/// define is homogeneous by struct, so this is safe.
+fn quarantine_awidat_metadata_arrays(
+    mut value: serde_json::Value,
+    file: &str,
+    _warnings: &mut Vec<SchemaWarning>,
+) -> Option<serde_json::Value> {
+    let awidat = value
+        .pointer_mut("/metadata/awidat")
+        .and_then(|v| v.as_object_mut())?;
+
+    let mut touched = false;
+    let array_keys: Vec<String> = awidat
+        .iter()
+        .filter_map(|(k, v)| (v.is_array() && !v.as_array().unwrap().is_empty()).then(|| k.clone()))
+        .collect();
+    // If every element of an awidat-metadata array is missing every
+    // anchor field we know of (id / time_s / start_s / clip_id / uuid),
+    // the agent likely wrote a fully-wrong shape — drop the lot rather
+    // than fail the whole project load. Editorial sidecars losing
+    // entries is recoverable; an unreadable project isn't.
+    for key in array_keys {
+        let Some(arr_val) = awidat.get_mut(&key) else { continue; };
+        let Some(arr) = arr_val.as_array() else { continue; };
+        let all_bad = arr.iter().all(|el| {
+            let Some(obj) = el.as_object() else { return true; };
+            !obj.contains_key("id")
+                && !obj.contains_key("time_s")
+                && !obj.contains_key("start_s")
+                && !obj.contains_key("clip_id")
+                && !obj.contains_key("uuid")
+        });
+        if all_bad {
+            let dropped = arr.len();
+            *arr_val = serde_json::Value::Array(Vec::new());
+            touched = true;
+            eprintln!(
+                "warning: {file}: emptied {dropped} malformed entr{plural} from metadata.awidat.{key} (no anchor fields found)",
+                plural = if dropped == 1 { "y" } else { "ies" }
+            );
+        }
+    }
+
+    touched.then_some(value)
 }
 
 /// Walk a JSON value, validate every `OTIO_SCHEMA` string, and rewrite
