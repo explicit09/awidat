@@ -182,6 +182,11 @@ pub struct CodexAppServer {
     request_handle: AppServerRequestHandle,
     /// Stable codex thread id (one per project lifecycle).
     thread_id: String,
+    /// Pre-rendered L1 skills catalog. Prepended to every `start_turn`
+    /// input so the agent sees the catalog per-turn (matching the
+    /// progressive-disclosure design in crates/core/src/skills.rs).
+    /// `None` when no skills are installed.
+    skills_catalog: Option<String>,
     /// Pending server-requests waiting for a desktop reply, keyed by
     /// the codex `item_id` we emitted to the renderer.
     pending: Arc<Mutex<HashMap<String, PendingServerRequest>>>,
@@ -203,6 +208,7 @@ impl CodexAppServer {
         project_root: PathBuf,
         mcp_server_path: Option<PathBuf>,
         developer_instructions: Option<String>,
+        skills_catalog: Option<String>,
     ) -> Result<Self, BridgeError> {
         // 1. Build the CLI overrides FIRST so they're baked into the
         //    Config we hand off to the in-process app-server. The
@@ -333,6 +339,7 @@ impl CodexAppServer {
         Ok(Self {
             request_handle,
             thread_id,
+            skills_catalog,
             pending,
             resolve_tx,
             shutdown_tx: Some(shutdown_tx),
@@ -347,6 +354,16 @@ impl CodexAppServer {
         input: String,
         model: Option<String>,
     ) -> Result<String, BridgeError> {
+        // Per-turn L1 skills catalog. The skills system's design (see
+        // crates/core/src/skills.rs) is progressive disclosure: the
+        // agent sees a catalog every turn, calls `load_skill(name=...)`
+        // to fetch the L2 body, runs L3 scripts via bash. Inject the
+        // catalog as a contextual fragment ahead of the user input so
+        // the agent always knows what skills exist this turn.
+        let text = match &self.skills_catalog {
+            Some(catalog) => format!("{catalog}\n\n{input}"),
+            None => input,
+        };
         let response: TurnStartResponse = self
             .request_handle
             .request_typed(ClientRequest::TurnStart {
@@ -354,7 +371,7 @@ impl CodexAppServer {
                 params: TurnStartParams {
                     thread_id: self.thread_id.clone(),
                     input: vec![UserInput::Text {
-                        text: input,
+                        text,
                         text_elements: Vec::new(),
                     }],
                     model,

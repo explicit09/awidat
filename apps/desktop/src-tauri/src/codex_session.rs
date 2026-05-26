@@ -98,17 +98,83 @@ impl CodexSession {
         // agent gets it without us touching codex's base prompt.
         let developer_instructions =
             Some(awidat_core::system_prompt::assemble_for_project(&project_root));
+        // Progressive-disclosure skills catalog. L1 (name + description)
+        // lands in every turn input as a contextual fragment; the agent
+        // calls `load_skill(name='...')` for the L2 body. User-installed
+        // skills under ~/Library/Application Support/awidat/skills and
+        // ~/.config/awidat/skills override bundled. See
+        // crates/core/src/skills.rs for the discovery rules.
+        let skills_catalog = render_skills_catalog();
         let bridge = CodexAppServer::launch(
             emitter,
             project_root.clone(),
             mcp_server_path,
             developer_instructions,
+            skills_catalog,
         )
         .await?;
         Ok(Self {
             bridge,
             project_root,
         })
+    }
+}
+
+/// Discover installed skills and render the L1 catalog as a
+/// contextual fragment ready to prepend to a turn input. Returns
+/// `None` if no skills are installed (then nothing gets prepended).
+///
+/// Discovery hierarchy from `awidat_core::skills`:
+///   1. user roots — `~/Library/Application Support/awidat/skills`
+///      and `~/.config/awidat/skills` (user overrides bundled)
+///   2. bundled — `<repo>/skills` in dev; in a packaged build,
+///      `<install>/share/awidat/skills`. We pick the repo-relative
+///      `skills/` dir via the running binary's grandparent (works in
+///      `cargo tauri dev`; packaged builds will need a separate
+///      resolver later when we ship installers).
+///
+/// Non-fatal: errors during discovery (malformed SKILL.md, etc.) are
+/// logged via `tracing::warn!` and dropped; the agent gets whatever
+/// loaded successfully.
+fn render_skills_catalog() -> Option<String> {
+    use awidat_core::context::ContextualUserFragment;
+    use awidat_core::skills::SkillRegistry;
+
+    let user_roots = user_skill_roots();
+    let bundled = bundled_skill_root();
+
+    let (registry, errors) =
+        SkillRegistry::discover_many(bundled.as_deref(), user_roots.iter().map(PathBuf::as_path));
+    for err in errors {
+        tracing::warn!(?err, "skill discovery: malformed entry skipped");
+    }
+    let fragment = registry.l1_fragment()?;
+    Some(fragment.render())
+}
+
+fn user_skill_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join("Library/Application Support/awidat/skills"));
+        roots.push(home.join(".config/awidat/skills"));
+    }
+    roots
+}
+
+/// Best-effort bundled-skills root. In `cargo tauri dev` the binary
+/// lives at `<repo>/target/debug/awidat-desktop`, so the skills dir
+/// is `<repo>/skills`. Walk up three dirs from the binary path.
+fn bundled_skill_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe
+        .parent()? // target/debug
+        .parent()? // target
+        .parent()? // repo root
+        .join("skills");
+    if candidate.is_dir() {
+        Some(candidate)
+    } else {
+        None
     }
 }
 
