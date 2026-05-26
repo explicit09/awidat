@@ -70,11 +70,17 @@ impl CodexRunOptions {
         // and the TUI's AwidatPanel resolve to the same project.
         // SAFETY: codex's run_main hasn't started yet; we're still
         // single-threaded inside fn main.
-        if let Some(root) = &self.project_root {
-            let root = absolute_project_root(root);
+        // Resolve the absolute project root once. We also set the env
+        // var locally so the TUI side-panel (which runs in our
+        // process) picks it up; the MCP server can't inherit our env
+        // because codex calls `env_clear()` on spawn (see
+        // vendor/codex-rs/rmcp-client/src/stdio_server_launcher.rs).
+        // For the MCP server we forward project_root via a per-server
+        // `mcp_servers.awidat.env.AWIDAT_PROJECT_ROOT` config override.
+        let abs_project_root = self.project_root.as_deref().map(absolute_project_root);
+        if let Some(root) = &abs_project_root {
             // SAFETY: single-threaded — codex_exec's tokio runtime
-            // is constructed by run_main, after this point. No other
-            // task is reading env yet.
+            // is constructed by run_main, after this point.
             unsafe {
                 std::env::set_var("AWIDAT_PROJECT_ROOT", root);
             }
@@ -83,7 +89,7 @@ impl CodexRunOptions {
         // Auto-register the Awidat MCP server alongside the user's
         // -c overrides. Caller's overrides come last so they can
         // disable us via `-c mcp_servers.awidat.enabled=false`.
-        let mut raw_overrides = awidat_mcp_overrides();
+        let mut raw_overrides = awidat_mcp_overrides(abs_project_root.as_deref());
         raw_overrides.extend(self.config_overrides);
 
         let mut cli = ExecCli {
@@ -148,7 +154,7 @@ pub fn run_with_options(options: CodexRunOptions) -> ExitCode {
 /// `#[tool(annotations(...))]` and codex respects those at dispatch
 /// time (see `vendor/codex-rs/core/src/mcp_tool_call.rs`'s
 /// `requires_mcp_tool_approval`).
-fn awidat_mcp_overrides() -> Vec<String> {
+fn awidat_mcp_overrides(project_root: Option<&Path>) -> Vec<String> {
     let Ok(self_exe) = std::env::current_exe() else {
         tracing::warn!("current_exe() failed; skipping awidat-mcp-server auto-registration");
         return Vec::new();
@@ -167,8 +173,17 @@ fn awidat_mcp_overrides() -> Vec<String> {
     // Codex's `-c` parser expects TOML on the RHS, so the command
     // string has to be a TOML-quoted string. Use a debug-formatted
     // path which gives us a `"..."` literal with backslashes escaped.
-    let quoted = format!("{:?}", server_bin.display().to_string());
-    vec![format!("mcp_servers.awidat.command={quoted}")]
+    let quoted_cmd = format!("{:?}", server_bin.display().to_string());
+    let mut overrides = vec![format!("mcp_servers.awidat.command={quoted_cmd}")];
+    if let Some(root) = project_root {
+        // Codex scrubs the MCP server's env on spawn, so we have to
+        // forward project_root explicitly via per-server env config.
+        let quoted_root = format!("{:?}", root.display().to_string());
+        overrides.push(format!(
+            "mcp_servers.awidat.env.AWIDAT_PROJECT_ROOT={quoted_root}"
+        ));
+    }
+    overrides
 }
 
 fn absolute_project_root(root: &Path) -> PathBuf {
