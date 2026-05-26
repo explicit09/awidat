@@ -63,6 +63,10 @@ use crate::awidat_mcp::tools::find_filler_words::{self, FindFillerWordsArgs};
 use crate::awidat_mcp::tools::find_generated_broll_opportunities::{
     self, FindGeneratedBrollOpportunitiesArgs,
 };
+use crate::awidat_mcp::tools::inspect_clip::{self, InspectClipArgs};
+use crate::awidat_mcp::tools::inspect_moment::{self, InspectMomentArgs};
+use crate::awidat_mcp::tools::list_assets::{self, ListAssetsArgs};
+use crate::awidat_mcp::tools::list_bins::{self, ListBinsArgs};
 use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
@@ -665,6 +669,76 @@ before calling `start_generated_media_job`.",
         args: Parameters<FindGeneratedBrollOpportunitiesArgs>,
     ) -> Result<String, ErrorData> {
         find_generated_broll_opportunities::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `list_assets` — paginated listing of project assets.
+    #[tool(
+        description = "\
+List source assets and renders in the project. Returns a numbered, \
+paginated list with file sizes. Scope: 'raw' (source media), 'renders' \
+(engine outputs), 'all' (both, default). 1-indexed offset, default \
+limit 25, hard cap 100. Use this to discover what's available before \
+calling `inspect_clip` or `read_index` on a specific asset.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn list_assets(
+        &self,
+        args: Parameters<ListAssetsArgs>,
+    ) -> Result<String, ErrorData> {
+        list_assets::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `list_bins` — enumerate available asset bins for the project.
+    #[tool(
+        description = "\
+List the available asset bins in this project. Returns built-in role \
+buckets (kind=role, ids like 'role:video', 'role:audio') plus any \
+user/agent-defined bins (kind=user). Pass any returned id as the \
+`bin` argument to `list_assets` to filter that surface.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn list_bins(&self, args: Parameters<ListBinsArgs>) -> Result<String, ErrorData> {
+        list_bins::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `inspect_clip` — one-page asset metadata from sidecars.
+    #[tool(
+        description = "\
+Get a one-page metadata summary for an asset: duration, frame_rate, audio \
+sample rate, loudness, language, speakers, shot count, segment count. \
+Aggregates from whichever indexer sidecars exist (whisper / scenedetect / \
+audio-energy). Use this before deciding which sidecar to read in detail \
+via `read_index`.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn inspect_clip(
+        &self,
+        args: Parameters<InspectClipArgs>,
+    ) -> Result<String, ErrorData> {
+        inspect_clip::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `inspect_moment` — drill into one editorial beat.
+    #[tool(
+        description = "\
+Drill into one editorial beat from the editorial-moments index. \
+Returns: the full moment record, ±N seconds of surrounding transcript \
+(default 10s), and any `dependencies` moments expanded inline so you \
+can read their notes without a second tool call. Use after find_beat \
+narrows to a candidate. The transcript window gives you the actual \
+phrases to anchor against in apply_edl. The dependencies tell you \
+what setup must stay intact when cutting this beat standalone.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn inspect_moment(
+        &self,
+        args: Parameters<InspectMomentArgs>,
+    ) -> Result<String, ErrorData> {
+        inspect_moment::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
