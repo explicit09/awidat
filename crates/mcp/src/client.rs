@@ -31,11 +31,16 @@ use crate::handler::{AwidatHandler, ProgressEvent};
 /// timeouts are layered above when a tool call is known to be quick.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-/// MCP protocol version we negotiate against. The actual string sent on the
-/// wire is `rmcp::model::ProtocolVersion::LATEST.as_str()` — exposed here
-/// for downstream code that wants to log it.
+/// MCP protocol version we negotiate against. rmcp 0.15 exposes the
+/// version as a `Display`-formatted newtype; older versions had
+/// `.as_str()` returning a `&'static str`. We string-format once and
+/// return a `&'static str` so call sites stay unchanged.
 pub fn mcp_protocol_version() -> &'static str {
-    rmcp::model::ProtocolVersion::LATEST.as_str()
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<String> = OnceLock::new();
+    CACHED
+        .get_or_init(|| rmcp::model::ProtocolVersion::LATEST.to_string())
+        .as_str()
 }
 
 /// Backwards-compat constant for code that imports `MCP_PROTOCOL_VERSION`.
@@ -281,10 +286,23 @@ impl Client {
         // Pre-load our handler with the ClientInfo we want to advertise.
         // The `ClientHandler::get_info` default returns ClientInfo::default();
         // we override on AwidatHandler by stashing this and returning it.
-        let init_params = InitializeRequestParams::new(
-            ClientCapabilities::default(),
-            Implementation::new(info.name, info.version),
-        );
+        // rmcp 0.15 dropped constructor methods on these param structs;
+        // build with struct literal. `Implementation` only ships
+        // `from_build_env()`, so we set name/version explicitly and
+        // leave the optional fields at default.
+        let init_params = InitializeRequestParams {
+            meta: None,
+            protocol_version: rmcp::model::ProtocolVersion::LATEST,
+            capabilities: ClientCapabilities::default(),
+            client_info: Implementation {
+                name: info.name,
+                title: None,
+                version: info.version,
+                description: None,
+                icons: None,
+                website_url: None,
+            },
+        };
         self.handler.set_client_info(init_params).await;
 
         let handler = self.handler.clone();
@@ -310,7 +328,7 @@ impl Client {
         let server_info = ServerInfo {
             name: peer_info.server_info.name,
             version: peer_info.server_info.version,
-            protocol_version: peer_info.protocol_version.as_str().to_string(),
+            protocol_version: peer_info.protocol_version.to_string(),
             capabilities: capabilities.clone(),
             instructions: peer_info.instructions,
         };
@@ -415,10 +433,14 @@ impl Client {
                 map
             }),
         };
-        let mut params = CallToolRequestParams::new(name.to_string());
-        if let Some(args) = arguments_obj {
-            params = params.with_arguments(args);
-        }
+        // rmcp 0.15: build with struct literal; `name` is `Cow<'static,
+        // str>`, owned `String` converts via `Cow::Owned`.
+        let params = CallToolRequestParams {
+            meta: None,
+            name: std::borrow::Cow::Owned(name.to_string()),
+            arguments: arguments_obj,
+            task: None,
+        };
 
         let to = req_timeout.unwrap_or(DEFAULT_REQUEST_TIMEOUT);
         let request = ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
