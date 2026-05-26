@@ -40,5 +40,13 @@ Our edits (re-apply after every refresh):
   gate signal was the provider `version` header, which still said "0.1.0" even
   after the User-Agent was fixed. The installed CLI sends `version: 0.128.0`,
   `session_id`, and no `thread-id` header.
+- vendor/codex-rs/exec/src/lib.rs: replace the hardcoded
+  `approval_policy: Some(AskForApproval::Never)` in `ConfigOverrides`
+  with a check that honors `config_toml.approval_policy` when the user
+  has explicitly set one (via -c or config). Without this, `codex exec`
+  unconditionally drops approvals in headless mode and per-tool MCP
+  approval prompts never fire even when annotations and config say
+  they should. Keeps `Never` as the default when the user hasn't set
+  a policy, so existing non-interactive callers don't change behavior.
 - vendor/codex-rs/Cargo.toml + Cargo.lock: deleted. The codex crates live
   inside Awidat's single root workspace.

@@ -400,11 +400,24 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     };
 
     // Load configuration and determine approval policy
+    //
+    // Awidat fork edit: honor an explicit `approval_policy` from the
+    // user's config or `-c` overrides instead of unconditionally
+    // hardcoding `Never`. This lets `awidat chat-codex -c
+    // approval_policy="on-request"` surface the codex approval
+    // prompts that `exec` normally suppresses. When the user hasn't
+    // set anything, we keep codex's headless default of `Never` so
+    // existing non-interactive callers don't change behavior.
+    // See vendor/codex-rs/SOURCE for the running list of fork edits.
+    let approval_policy_override = if config_toml.approval_policy.is_some() {
+        config_toml.approval_policy
+    } else {
+        Some(AskForApproval::Never)
+    };
     let overrides = ConfigOverrides {
         model,
         review_model: None,
-        // Default to never ask for approvals in headless mode. Feature flags can override.
-        approval_policy: Some(AskForApproval::Never),
+        approval_policy: approval_policy_override,
         approvals_reviewer: None,
         sandbox_mode,
         permission_profile: None,

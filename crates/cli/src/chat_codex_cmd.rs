@@ -2,11 +2,15 @@
 //! migration.
 //!
 //! Drives the vendored codex agent loop end-to-end against an OpenAI
-//! key. Step 3 of the migration wires the in-process Awidat MCP
-//! server (`awidat-mcp-server` sibling binary) into codex via
-//! `[mcp_servers.awidat]` so the model can call our tools alongside
-//! codex's built-ins. The MCP server currently exposes one stub
-//! tool (`view_timeline`); step 5 ports the ~100 real video tools.
+//! key. Step 3 wired the in-process Awidat MCP server
+//! (`awidat-mcp-server` sibling binary) into codex via
+//! `[mcp_servers.awidat]`. Step 4 closed the approval-flow loop:
+//! each tool on the server declares `read_only_hint` /
+//! `destructive_hint` via the rmcp `#[tool(annotations(...))]`
+//! macro, codex respects those at dispatch time, and the
+//! `vendor/codex-rs/exec/src/lib.rs` fork edit lets the user opt
+//! into seeing approval prompts via `-c approval_policy=...`.
+//! Step 5 ports the ~100 real video tools onto the server.
 //!
 //! Removed once `awidat tui` and `awidat chat` are rewired to codex in
 //! step 7 of the migration plan.
@@ -78,9 +82,15 @@ pub fn run(
 
 /// Build the `-c key=value` overrides that register our in-process MCP
 /// server with codex. The server binary is the `awidat-mcp-server`
-/// sibling of the running `awidat` binary. Returns an empty vec if we
-/// can't resolve the path (codex will run without our tools, which is
-/// the same as it was before step 3).
+/// sibling of the running `awidat` binary. Returns an empty vec if
+/// we can't resolve the path (codex will run without our tools,
+/// which is the same as it was before step 3).
+///
+/// Per-tool approval is NOT injected here — each tool declares its
+/// own `read_only_hint` / `destructive_hint` via
+/// `#[tool(annotations(...))]` and codex respects those at dispatch
+/// time (see `vendor/codex-rs/core/src/mcp_tool_call.rs`'s
+/// `requires_mcp_tool_approval`).
 fn awidat_mcp_overrides() -> Vec<String> {
     let Ok(self_exe) = std::env::current_exe() else {
         tracing::warn!("current_exe() failed; skipping awidat-mcp-server auto-registration");
