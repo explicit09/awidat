@@ -47,13 +47,17 @@ pub struct AwidatPanel {
 }
 
 impl AwidatPanel {
-    /// Try to construct an Awidat panel. Returns `None` when
-    /// `AWIDAT_PROJECT_ROOT` is unset, so callers can use it as a
-    /// "is Awidat active in this session?" gate without raising
-    /// errors in vanilla codex sessions.
+    /// Construct an Awidat panel. Always-visible per the step-6
+    /// design: when `AWIDAT_PROJECT_ROOT` is set, use it; otherwise
+    /// fall back to `current_dir()` so the panel still mounts and
+    /// renders the timeline-empty / no-project banner. This matches
+    /// the resolution policy in
+    /// `awidat_core::awidat_mcp::context::McpToolCtx::resolve`.
     pub fn detect() -> Option<Self> {
-        let value = std::env::var_os(PROJECT_ROOT_ENV)?;
-        let project_root = PathBuf::from(value);
+        let project_root = match std::env::var_os(PROJECT_ROOT_ENV) {
+            Some(value) => PathBuf::from(value),
+            None => std::env::current_dir().ok()?,
+        };
         Some(Self::for_root(project_root))
     }
 

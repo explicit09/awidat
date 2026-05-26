@@ -52,10 +52,11 @@ Our edits (re-apply after every refresh):
   add `awidat-proto = { workspace = true }` and `mod awidat;` for the
   step-6 side panel.
 - vendor/codex-rs/tui/src/awidat/{mod,timeline,project_insights}.rs:
-  new module hosting the Awidat panel. Auto-mounts when
-  `AWIDAT_PROJECT_ROOT` is set; renders to the right of the chat
-  column (36 cols fixed). Pure ratatui widgets reading from disk;
-  refresh by calling `AwidatPanel::refresh()` from App event handling.
+  new module hosting the Awidat panel. Always-visible policy:
+  uses `AWIDAT_PROJECT_ROOT` when set, otherwise falls back to
+  `current_dir()`. Renders to the right of the chat column (36 cols
+  fixed). Pure ratatui widgets reading from disk; refresh by calling
+  `AwidatPanel::refresh()` from App event handling.
 - vendor/codex-rs/tui/src/app.rs: `App` struct gains
   `awidat_panel: Option<AwidatPanel>` (initialized via
   `AwidatPanel::detect()`); `render_chat_widget_frame` does a
