@@ -15,7 +15,6 @@ use awidat_proto::validate::{ValidationWarning, validate_project};
 use clap::{Parser, Subcommand};
 
 mod apply_edl_cmd;
-mod chat_cmd;
 mod chat_codex_cmd;
 mod index_cmd;
 mod lessons_cmd;
@@ -25,9 +24,7 @@ mod plan_dead_air_edl_cmd;
 mod plan_ranges;
 mod plan_transcript_trim_edl_cmd;
 mod render_cmd;
-mod resume_cmd;
 mod skills_cmd;
-mod tui_cmd;
 mod upgrade_cmd;
 
 /// Top-level CLI.
@@ -187,27 +184,49 @@ enum Command {
         #[arg(long)]
         asset: Option<String>,
     },
-    /// Open a text-only REPL with the agent. Type a prompt; the agent
-    /// streams a reply and may call tools (week 3 ships `bash`).
-    /// Ctrl-D / EOF / `:quit` to exit.
+    /// Open a non-interactive agent turn against a project. The
+    /// initial prompt comes from `prompt`, args, or stdin; the agent
+    /// streams its reply, may call Awidat tools, and exits when the
+    /// turn finishes.
     Chat {
-        /// Project directory. Used today only as the agent's `cwd` for
-        /// shell tools; week 5+ wires it into context injection.
+        /// Project directory. Sets AWIDAT_PROJECT_ROOT so the Awidat
+        /// MCP server and TUI panel see the right project.
         path: PathBuf,
-        /// Override the default model id. Defaults to claude-sonnet-4-6.
-        #[arg(long)]
+        /// First user message. Omit to read from stdin.
+        prompt: Option<String>,
+        /// Override the model id. Inherits ~/.codex/config.toml when
+        /// unset.
+        #[arg(long, short = 'm')]
         model: Option<String>,
+        /// Skip codex's approval and sandbox prompts. Use with care
+        /// when the agent will mutate the project (apply_edl,
+        /// start_render, etc).
+        #[arg(long = "yolo", default_value_t = false)]
+        yolo: bool,
+        /// Codex-style `-c key=value` config overrides (e.g.
+        /// `-c approval_policy="on-request"`).
+        #[arg(long = "config", short = 'c', value_name = "key=value")]
+        config_overrides: Vec<String>,
     },
-    /// Open a Ratatui chat against a project, with the full editorial
-    /// tool registry mounted and approvals routed through a modal.
-    /// Ctrl-C cancels the in-flight turn; Ctrl-D from an empty composer
-    /// or `:q` from the modal exits.
+    /// Open a chat panel against a project with the timeline +
+    /// indexer sidebar mounted. Ctrl-C cancels the in-flight turn;
+    /// Ctrl-D / `:q` exits.
     Tui {
-        /// Project directory.
+        /// Project directory. Sets AWIDAT_PROJECT_ROOT so the
+        /// Awidat MCP server and TUI panel see the right project.
         path: PathBuf,
-        /// Override the default model id. Defaults to claude-sonnet-4-6.
-        #[arg(long)]
+        /// Optional initial prompt to seed the first turn.
+        prompt: Option<String>,
+        /// Override the model id. Inherits ~/.codex/config.toml when
+        /// unset.
+        #[arg(long, short = 'm')]
         model: Option<String>,
+        /// Skip codex's approval and sandbox prompts.
+        #[arg(long = "yolo", default_value_t = false)]
+        yolo: bool,
+        /// Codex-style `-c key=value` config overrides.
+        #[arg(long = "config", short = 'c', value_name = "key=value")]
+        config_overrides: Vec<String>,
     },
     /// Stash the Anthropic API key in the OS keychain so `awidat chat`
     /// and `awidat tui` work without ANTHROPIC_API_KEY in the env.
@@ -267,30 +286,6 @@ enum Command {
     },
     /// Print the version of the awidat binary.
     Version,
-    /// Drive the vendored codex agent loop directly. Hello-world spine
-    /// for the migration: no Awidat tools registered, no project
-    /// loaded — just verifies the codex runtime is alive against the
-    /// configured OpenAI key. Goes away once `tui`/`chat` are rewired
-    /// to codex in step 7 of the migration plan.
-    ChatCodex {
-        /// Prompt to send. If omitted, codex reads from stdin.
-        prompt: Option<String>,
-        /// Skip codex's approval and sandbox prompts. Intended for
-        /// smoke-testing where running the agent loop matters more
-        /// than gating side effects.
-        #[arg(long = "yolo", default_value_t = false)]
-        yolo: bool,
-        /// Override the model id. The vendored codex fork's frozen
-        /// SHA may not know about model names your config.toml uses;
-        /// override here.
-        #[arg(long = "model", short = 'm')]
-        model: Option<String>,
-        /// codex-style `-c key=value` config overrides, e.g.
-        /// `-c 'model_reasoning_effort="low"'`. Mirrors the global
-        /// flag on the published codex CLI.
-        #[arg(long = "config", short = 'c', value_name = "key=value")]
-        config_overrides: Vec<String>,
-    },
 }
 
 /// Sub-action for `awidat lessons`.
@@ -324,21 +319,102 @@ enum SkillsAction {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    // Special-case `chat-codex` before the regular dispatch: it owns
-    // its own tokio runtime (via `codex_arg0::arg0_dispatch_or_else`)
-    // and returns an ExitCode directly, so it doesn't compose into
-    // the `Result<()>` flow the other subcommands use.
-    if let Command::ChatCodex {
-        prompt,
-        yolo,
-        model,
-        config_overrides,
-    } = cli.command
-    {
-        return chat_codex_cmd::run(prompt, yolo, model, config_overrides);
+    // Special-case the codex-engine subcommands before the regular
+    // dispatch. They own their own tokio runtime (via
+    // `codex_arg0::arg0_dispatch_or_else`) and return an ExitCode
+    // directly, so they don't compose into the `Result<()>` flow the
+    // other subcommands use.
+    match cli.command {
+        Command::Chat {
+            path,
+            prompt,
+            model,
+            yolo,
+            config_overrides,
+        } => {
+            return chat_codex_cmd::run_with_options(chat_codex_cmd::CodexRunOptions {
+                prompt,
+                dangerously_bypass: yolo,
+                model,
+                config_overrides,
+                project_root: Some(path),
+                ephemeral: false,
+                skip_git_repo_check: true,
+                display_name: "awidat chat",
+            });
+        }
+        Command::Tui {
+            path,
+            prompt,
+            model,
+            yolo,
+            config_overrides,
+        } => {
+            return chat_codex_cmd::run_with_options(chat_codex_cmd::CodexRunOptions {
+                prompt,
+                dangerously_bypass: yolo,
+                model,
+                config_overrides,
+                project_root: Some(path),
+                ephemeral: false,
+                skip_git_repo_check: true,
+                display_name: "awidat tui",
+            });
+        }
+        Command::Resume { selector, model } => {
+            // `awidat resume` delegates to the codex engine the same
+            // way `chat` does. Codex persists rollouts under
+            // $CODEX_HOME and resolves them by its own selector
+            // grammar; surfacing those through Awidat's legacy
+            // rollout-recorder paths is step 7b work. The `selector`
+            // arg is forwarded as the initial prompt so the user can
+            // paste a session id and the agent can re-orient.
+            return chat_codex_cmd::run_with_options(chat_codex_cmd::CodexRunOptions {
+                prompt: selector,
+                dangerously_bypass: false,
+                model,
+                config_overrides: Vec::new(),
+                project_root: std::env::current_dir().ok(),
+                ephemeral: false,
+                skip_git_repo_check: true,
+                display_name: "awidat resume",
+            });
+        }
+        Command::Skills {
+            action: SkillsAction::Run {
+                name,
+                project,
+                model,
+            },
+        } => {
+            let prompt = match skills_cmd::prepare_run(&skills_cmd::RunArgs {
+                name,
+                project: project.clone(),
+                model: model.clone(),
+            }) {
+                Ok(prompt) => prompt,
+                Err(err) => {
+                    eprintln!("error: {err:#}");
+                    return ExitCode::from(1);
+                }
+            };
+            return chat_codex_cmd::run_with_options(chat_codex_cmd::CodexRunOptions {
+                prompt: Some(prompt),
+                dangerously_bypass: false,
+                model,
+                config_overrides: Vec::new(),
+                project_root: Some(project),
+                ephemeral: false,
+                skip_git_repo_check: true,
+                display_name: "awidat skills run",
+            });
+        }
+        _ => {}
     }
     let res = match cli.command {
-        Command::ChatCodex { .. } => unreachable!("handled above"),
+        Command::Chat { .. } | Command::Tui { .. } | Command::Resume { .. } => {
+            unreachable!("handled above")
+        }
         Command::Init { path } => cmd_init(&path),
         Command::New {
             name,
@@ -427,28 +503,15 @@ fn main() -> ExitCode {
                 },
             )
         }
-        Command::Chat { path, model } => chat_cmd::run(&path, model.as_deref()),
-        Command::Tui { path, model } => tui_cmd::run(&path, model.as_deref()),
         Command::SecretsSet { account } => cmd_secrets_set(&account),
         Command::Skills { action } => match action {
             SkillsAction::List => skills_cmd::list(skills_cmd::ListArgs),
-            SkillsAction::Run {
-                name,
-                project,
-                model,
-            } => skills_cmd::run(skills_cmd::RunArgs {
-                name,
-                project,
-                model,
-            }),
+            SkillsAction::Run { .. } => unreachable!("handled above"),
         },
         Command::Lessons { action } => match action {
             LessonsAction::Learn => lessons_cmd::learn(),
             LessonsAction::Show => lessons_cmd::show(),
         },
-        Command::Resume { selector, model } => {
-            resume_cmd::run(selector.as_deref(), model.as_deref())
-        }
         Command::Upgrade {
             from,
             check,

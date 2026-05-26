@@ -78,7 +78,11 @@ pub fn list(_args: ListArgs) -> Result<()> {
 /// to use that skill. The TUI flow is the standard one — no special
 /// session shape — but the first prompt is pre-filled so the user
 /// only has to hit enter.
-pub fn run(args: RunArgs) -> Result<()> {
+/// Validate the skill name + project dir and produce the initial
+/// prompt that will be passed to the codex engine on the first turn.
+/// `main` lifts this into the special-case dispatcher that owns
+/// the tokio runtime.
+pub fn prepare_run(args: &RunArgs) -> Result<String> {
     if !args.project.is_dir() {
         return Err(anyhow!(
             "project directory not found: {}",
@@ -97,18 +101,14 @@ pub fn run(args: RunArgs) -> Result<()> {
         return Err(anyhow!("no skill named {:?}. {suggestions}", args.name));
     }
 
-    println!("Opening TUI with the {} skill staged.", args.name);
+    println!("Opening session with the {} skill staged.", args.name);
     println!(
         "(The agent will call `load_skill(name={:?})` on its first turn to fetch the playbook.)",
         args.name
     );
     println!();
 
-    crate::tui_cmd::run_with_initial_prompt(
-        &args.project,
-        args.model.as_deref(),
-        Some(initial_prompt_for_skill(&args.name)),
-    )
+    Ok(initial_prompt_for_skill(&args.name))
 }
 
 /// The pre-filled first-turn user message. Concise: tell the agent

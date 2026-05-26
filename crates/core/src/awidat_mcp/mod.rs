@@ -393,7 +393,7 @@ under `<project>/.awidat/review-packages/` and returned as a JSON object.\
 If you are handing off a review render to a collaborator, use this tool before \
 you share the file manually; third-party review APIs are intentionally not part of \
 this local-only flow.",
-        annotations(read_only_hint = true)
+        annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn author_local_review_package(
         &self,
@@ -489,7 +489,7 @@ Create or list local vedit branches/alternates. A branch is a movable \
 ref under `.vedit/refs/heads/` that can hold an alternate cut. Creating \
 a branch does not switch HEAD or merge anything; use `vedit_checkout` \
 to switch the working timeline to an existing branch.",
-        annotations(read_only_hint = true)
+        annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn vedit_branch(
         &self,
@@ -523,7 +523,7 @@ Switch HEAD to an existing local vedit branch and restore \
 `project.otio.json` to that branch's committed timeline snapshot. This \
 is branch checkout for alternate cuts; it is not a merge and it does \
 not create an audit commit by itself.",
-        annotations(read_only_hint = true)
+        annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn vedit_checkout(
         &self,
@@ -541,7 +541,7 @@ Use this when the user asks to save this version, mark a checkpoint, or \
 commit a session of work. The commit message format is canonical: a \
 one-line imperative header plus an optional reasoning body. Returns \
 the new commit hash + the timeline-content hash.",
-        annotations(read_only_hint = true)
+        annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn vedit_commit(
         &self,
@@ -640,7 +640,7 @@ Create or list local named vedit checkpoints. Tags are stable labels \
 under `.vedit/refs/tags/` that point at commits. They do not switch \
 HEAD, create branches, or merge anything. Use this for names like \
 `client-review-v1` or `before-tightening-pass`.",
-        annotations(read_only_hint = true)
+        annotations(destructive_hint = true, read_only_hint = false)
     )]
     pub async fn vedit_tag(&self, args: Parameters<VeditTagArgs>) -> Result<String, ErrorData> {
         vedit_tag::run(args.0, McpToolCtx::resolve())
