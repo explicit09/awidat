@@ -17,6 +17,9 @@
 //!   the project root.
 
 pub mod color_scopes;
+pub mod find_black_frames;
+pub mod find_dead_air;
+pub mod find_false_starts;
 pub mod list_looks;
 pub mod list_markers;
 pub mod list_stringouts;
@@ -26,5 +29,12 @@ pub mod read_index;
 pub mod read_media_intelligence;
 pub mod read_media_readiness;
 pub mod read_understanding;
+pub mod vedit_branch;
+pub mod vedit_changed_clip_ids;
+pub mod vedit_checkout;
+pub mod vedit_commit;
+pub mod vedit_diff;
+pub mod vedit_log;
+pub mod vedit_show;
 pub mod view_episode;
 pub mod view_timeline;

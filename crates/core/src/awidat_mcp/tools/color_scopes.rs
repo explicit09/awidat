@@ -116,8 +116,7 @@ pub fn run(args: ColorScopesArgs, ctx: McpToolCtx) -> Result<String, String> {
         "t_s": args.t_s,
         "scopes": scopes,
     });
-    serde_json::to_string_pretty(&body)
-        .map_err(|e| format!("color_scopes: serialize failed: {e}"))
+    serde_json::to_string_pretty(&body).map_err(|e| format!("color_scopes: serialize failed: {e}"))
 }
 
 /// Compute color scopes from a packed RGB frame.

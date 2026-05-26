@@ -32,9 +32,8 @@ pub fn run(args: LocalReviewPackageArgs, ctx: McpToolCtx) -> Result<String, Stri
 
     let package = build_local_review_package(&ctx.project_root, &args.render_path, args.tags)
         .map_err(|e| format!("author_local_review_package: {e}"))?;
-    serde_json::to_string_pretty(&package).map_err(|e| {
-        format!("author_local_review_package: failed to serialize package: {e}")
-    })
+    serde_json::to_string_pretty(&package)
+        .map_err(|e| format!("author_local_review_package: failed to serialize package: {e}"))
 }
 
 /// Tool description, served to the model via MCP `tools/list`.

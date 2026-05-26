@@ -54,6 +54,9 @@ use rmcp::tool_router;
 
 use crate::awidat_mcp::context::McpToolCtx;
 use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
+use crate::awidat_mcp::tools::find_black_frames::{self, FindBlackFramesArgs};
+use crate::awidat_mcp::tools::find_dead_air::{self, FindDeadAirArgs};
+use crate::awidat_mcp::tools::find_false_starts::{self, FindFalseStartsArgs};
 use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
@@ -63,6 +66,13 @@ use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
 use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
+use crate::awidat_mcp::tools::vedit_branch::{self, VeditBranchArgs};
+use crate::awidat_mcp::tools::vedit_changed_clip_ids::{self, VeditChangedClipIdsArgs};
+use crate::awidat_mcp::tools::vedit_checkout::{self, VeditCheckoutArgs};
+use crate::awidat_mcp::tools::vedit_commit::{self, VeditCommitArgs};
+use crate::awidat_mcp::tools::vedit_diff::{self, VeditDiffArgs};
+use crate::awidat_mcp::tools::vedit_log::{self, VeditLogArgs};
+use crate::awidat_mcp::tools::vedit_show::{self, VeditShowArgs};
 use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::awidat_mcp::tools::view_timeline::{self, ViewTimelineArgs};
 
@@ -315,6 +325,182 @@ audio, visual evidence, or whether it should ask for repair/indexing first.",
         args: Parameters<ReadMediaReadinessArgs>,
     ) -> Result<String, ErrorData> {
         read_media_readiness::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_black_frames` — detect black-frame ranges in a source.
+    #[tool(
+        description = "\
+Detect black-frame ranges in one project source asset using FFmpeg \
+blackdetect. Use this as a quality/eval inspection tool after renders or \
+before accepting suspicious cuts; it is read-only and returns source-time \
+ranges with start_s, end_s, and duration_s.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_black_frames(
+        &self,
+        args: Parameters<FindBlackFramesArgs>,
+    ) -> Result<String, ErrorData> {
+        find_black_frames::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_dead_air` — silence findings on the timeline.
+    #[tool(
+        description = "\
+Surface silence ranges (\"dead air\") on the project timeline as \
+editorial findings. Reads the per-asset silence sidecars produced \
+on import, intersects each silence range with the clip's current \
+source_range on the timeline, and returns surviving silences plus \
+surrounding transcript context. Each finding has: asset_id, \
+source_start_s, source_end_s, timeline_start_s, timeline_end_s, \
+duration_s, transcript_before, transcript_after. Default \
+min_duration_s=1.5; max_results=20, hard cap 100. Returns empty \
+when no silence sidecars exist.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_dead_air(
+        &self,
+        args: Parameters<FindDeadAirArgs>,
+    ) -> Result<String, ErrorData> {
+        find_dead_air::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `find_false_starts` — restart-marker / production-aside heuristic.
+    #[tool(
+        description = "\
+Detect places where the speaker began a thought, abandoned it, and \
+restarted, plus production/coaching asides such as \"cut\", \"one more \
+time\", or \"you can just say\". v1 heuristic: scans the whisper transcript \
+for restart markers and production-aside language, then surfaces the \
+visible source fragment as the candidate false-start. Each finding: \
+{ asset_id, marker, source_start_s, source_end_s, timeline_start_s, \
+timeline_end_s, snippet }. Default max_results=20, hard cap 100. \
+Treat findings as suggestions for user review — never auto-trim.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn find_false_starts(
+        &self,
+        args: Parameters<FindFalseStartsArgs>,
+    ) -> Result<String, ErrorData> {
+        find_false_starts::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_branch` — create or list local vedit branches.
+    #[tool(
+        description = "\
+Create or list local vedit branches/alternates. A branch is a movable \
+ref under `.vedit/refs/heads/` that can hold an alternate cut. Creating \
+a branch does not switch HEAD or merge anything; use `vedit_checkout` \
+to switch the working timeline to an existing branch.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_branch(
+        &self,
+        args: Parameters<VeditBranchArgs>,
+    ) -> Result<String, ErrorData> {
+        vedit_branch::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_changed_clip_ids` — clip names touched by a vedit diff.
+    #[tool(
+        description = "\
+List the sorted clip names, media references, and clip animation targets \
+touched by a vedit diff. Default: from='session-start', to='HEAD'. \
+Read-only preflight for history review or future merge conflict checks; \
+does not checkout, merge, or modify refs.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_changed_clip_ids(
+        &self,
+        args: Parameters<VeditChangedClipIdsArgs>,
+    ) -> Result<String, ErrorData> {
+        vedit_changed_clip_ids::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_checkout` — switch HEAD to an existing branch.
+    #[tool(
+        description = "\
+Switch HEAD to an existing local vedit branch and restore \
+`project.otio.json` to that branch's committed timeline snapshot. This \
+is branch checkout for alternate cuts; it is not a merge and it does \
+not create an audit commit by itself.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_checkout(
+        &self,
+        args: Parameters<VeditCheckoutArgs>,
+    ) -> Result<String, ErrorData> {
+        vedit_checkout::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_commit` — snapshot the timeline as a vedit commit.
+    #[tool(
+        description = "\
+Snapshot the project's current `project.otio.json` as a vedit commit. \
+Use this when the user asks to save this version, mark a checkpoint, or \
+commit a session of work. The commit message format is canonical: a \
+one-line imperative header plus an optional reasoning body. Returns \
+the new commit hash + the timeline-content hash.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_commit(
+        &self,
+        args: Parameters<VeditCommitArgs>,
+    ) -> Result<String, ErrorData> {
+        vedit_commit::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_diff` — structured diff between two refs.
+    #[tool(
+        description = "\
+Show the structured diff between two refs. Default: \
+`from='session-start'`, `to='HEAD'` — i.e. everything that's changed \
+since this session began. Returns: { from, to, change_count, \
+structural_changes_empty, changes: [...] } as a list of structured \
+operations (TrackAdded, Trimmed, Moved, Added, Removed, Replaced, \
+TransitionAdded/Removed, EffectsChanged). Pass explicit refs to \
+compare arbitrary points: branch names, full hashes, or short hashes \
+(>= 4 hex chars).",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_diff(&self, args: Parameters<VeditDiffArgs>) -> Result<String, ErrorData> {
+        vedit_diff::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_log` — recent vedit commits, newest-first.
+    #[tool(
+        description = "\
+List recent vedit commits, newest-first. Each entry: { commit_hash, \
+timeline_hash, timestamp, header, full_message, action_metadata, \
+parents }. The header is the first line of the commit message; \
+full_message is the body for deep dives. Default limit=30, hard cap \
+200. Returns an empty entries list when the repo has no commits yet.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_log(&self, args: Parameters<VeditLogArgs>) -> Result<String, ErrorData> {
+        vedit_log::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `vedit_show` — one vedit commit with diff from first parent.
+    #[tool(
+        description = "\
+Show one vedit commit with its message, hashes, parents, and semantic \
+diff from the first parent to that commit. Use this for deep-diving a \
+history entry without listing the full log again.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn vedit_show(&self, args: Parameters<VeditShowArgs>) -> Result<String, ErrorData> {
+        vedit_show::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
