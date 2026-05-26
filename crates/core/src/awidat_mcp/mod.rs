@@ -57,7 +57,9 @@ use crate::awidat_mcp::tools::analyze_sync::{self, AnalyzeSyncArgs};
 use crate::awidat_mcp::tools::apply_edl::{self, ApplyEdlArgs};
 use crate::awidat_mcp::tools::assess_continuity::{self, AssessContinuityArgs};
 use crate::awidat_mcp::tools::assess_edit_quality::{self, AssessEditQualityArgs};
+use crate::awidat_mcp::tools::attempt_completion::{self, AttemptCompletionArgs};
 use crate::awidat_mcp::tools::broll_candidates::{self, BrollCandidatesArgs};
+use crate::awidat_mcp::tools::clip_search::{self, ClipSearchArgs};
 use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
 use crate::awidat_mcp::tools::create_stringout::{self, CreateStringoutArgs};
 use crate::awidat_mcp::tools::diagnose_project_media::{self, DiagnoseProjectMediaArgs};
@@ -124,6 +126,7 @@ use crate::awidat_mcp::tools::podcast_smooth_cut_boundaries::{
 };
 use crate::awidat_mcp::tools::podcast_story_map::{self, PodcastStoryMapArgs};
 use crate::awidat_mcp::tools::podcast_visual_polish::{self, PodcastVisualPolishArgs};
+use crate::awidat_mcp::tools::poll_generated_media_job::{self, PollGeneratedMediaJobArgs};
 use crate::awidat_mcp::tools::poll_render::{self, PollRenderArgs};
 use crate::awidat_mcp::tools::preview_cache::{self, PreviewCacheArgs};
 use crate::awidat_mcp::tools::proxy_media::{self, GenerateProxyArgs};
@@ -134,6 +137,7 @@ use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArg
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
 use crate::awidat_mcp::tools::relink_media::{self, RelinkMediaArgs};
 use crate::awidat_mcp::tools::render_preflight::{self, RenderPreflightArgs};
+use crate::awidat_mcp::tools::request_user_input::{self, RequestUserInputArgs};
 use crate::awidat_mcp::tools::run_preview_cache_refresh::{self, RunPreviewCacheRefreshArgs};
 use crate::awidat_mcp::tools::search_broll::{self, SearchBrollArgs};
 use crate::awidat_mcp::tools::shot_summary::{self, ShotSummaryArgs};
@@ -144,6 +148,7 @@ use crate::awidat_mcp::tools::stream_remux::{self, StreamRemuxArgs};
 use crate::awidat_mcp::tools::transcript_pack::{self, TranscriptPackArgs};
 use crate::awidat_mcp::tools::transcript_search::{self, TranscriptSearchArgs};
 use crate::awidat_mcp::tools::transition_context::{self, TransitionContextArgs};
+use crate::awidat_mcp::tools::update_plan::{self, UpdatePlanArgs};
 use crate::awidat_mcp::tools::use_broll::{self, UseBrollArgs};
 use crate::awidat_mcp::tools::use_generated_media::{self, UseGeneratedMediaArgs};
 use crate::awidat_mcp::tools::validate_transition_choice::{self, ValidateTransitionChoiceArgs};
@@ -2298,6 +2303,117 @@ dedicated adapter.",
     ) -> Result<String, ErrorData> {
         start_generated_media_job::run(args.0, McpToolCtx::resolve())
             .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `poll_generated_media_job` — read a generated-media registry
+    /// record from disk and return job state + output metadata.
+    /// Read-only in the MCP port; does NOT re-poll OpenRouter or
+    /// download outputs (that path needs an out-of-process worker).
+    #[tool(
+        description = "\
+Read a generated-media registry record and return job state plus output \
+metadata. Read-only: reads the on-disk registry under \
+`<project>/.awidat/generated-media/registry.json` and returns whatever \
+state was persisted by `start_generated_media_job`. NOTE: the \
+in-process MCP server does NOT poll OpenRouter or download completed \
+outputs from this call — if the record is still in flight, re-run \
+`start_generated_media_job` from a desktop session that has the \
+out-of-process worker wired up.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn poll_generated_media_job(
+        &self,
+        args: Parameters<PollGeneratedMediaJobArgs>,
+    ) -> Result<String, ErrorData> {
+        poll_generated_media_job::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `update_plan` — record the agent's current editorial plan as an
+    /// ordered checklist. The MCP port drops the legacy
+    /// `SessionEvent::EditPlanUpdate` broadcast and just echoes the
+    /// validated plan back as a JSON record.
+    #[tool(
+        description = "\
+Record the current editorial plan as an ordered list of steps. Use this \
+to make your reasoning visible: what you've done, what you're doing now, \
+what's left. Convention: at most one step `in_progress` at a time. The \
+MCP port echoes the plan back as a JSON record — there is no event \
+broadcast or persisted file in this server; the plan exists in the \
+conversation transcript. Call again whenever the plan changes \
+meaningfully (don't spam every micro-step).",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn update_plan(
+        &self,
+        args: Parameters<UpdatePlanArgs>,
+    ) -> Result<String, ErrorData> {
+        update_plan::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `attempt_completion` — echo the final summary back as a tool
+    /// result. Under MCP this does NOT gate the turn; the model's
+    /// final assistant message still does.
+    #[tool(
+        description = "\
+Record your final answer/summary for the current turn. The `result` \
+string is echoed back verbatim as the tool result so it lands in the \
+conversation transcript. NOTE: under MCP this tool does NOT gate or end \
+the turn — the model's final assistant message is what closes the turn. \
+Use this when you want the summary to appear as a structured tool \
+result in addition to your free-form reply.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn attempt_completion(
+        &self,
+        args: Parameters<AttemptCompletionArgs>,
+    ) -> Result<String, ErrorData> {
+        attempt_completion::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `request_user_input` — stub. Will become functional once the
+    /// in-process server bridges MCP elicitation to the client. Until
+    /// then the agent should phrase the question in chat and wait
+    /// for the user's next message.
+    #[tool(
+        description = "\
+Ask the human a question and wait for a reply. NOTE: in the in-process \
+MCP server this is currently a stub — it returns an unsupported-error \
+and asks the agent to phrase the question in its chat reply and wait \
+for the user's next turn instead. Will become functional once the \
+server bridges MCP's elicitation protocol to the client.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn request_user_input(
+        &self,
+        args: Parameters<RequestUserInputArgs>,
+    ) -> Result<String, ErrorData> {
+        request_user_input::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `clip_search` — stub. Needs the lazy clip-mcp indexer
+    /// subprocess pool that's not yet wired into the in-process
+    /// server. Use `find_moment` for transcript-based search until
+    /// then.
+    #[tool(
+        description = "\
+Find frames matching a free-text query using per-second CLIP image \
+embeddings. NOTE: in the in-process MCP server this is currently a \
+stub — it returns an unsupported-error because the lazy clip-mcp \
+indexer subprocess pool is not yet wired in. Use `find_moment` for a \
+transcript-based search in the meantime; this tool will become \
+functional once the MCP indexer pool lands.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn clip_search(
+        &self,
+        args: Parameters<ClipSearchArgs>,
+    ) -> Result<String, ErrorData> {
+        clip_search::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
