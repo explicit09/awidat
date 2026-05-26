@@ -23,6 +23,12 @@ use tokio_util::sync::CancellationToken;
 /// have been removed.
 #[derive(Default)]
 pub struct AwidatState {
+    /// Live codex bridge for the currently-open project. `None` when
+    /// no project is open or after teardown (project switch, app
+    /// shutdown). Lazily constructed on the first `start_turn` for a
+    /// given `project_root`; rebuilt when the project changes
+    /// (different cwd / MCP env override).
+    pub codex: Mutex<Option<crate::codex_session::CodexSession>>,
     /// Active turn, if any. Set by `start_turn`, cleared on
     /// TurnEnd / Error / cancel.
     pub turn: Mutex<Option<TurnHandle>>,

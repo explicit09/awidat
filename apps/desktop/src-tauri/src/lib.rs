@@ -27,6 +27,7 @@
 
 mod app_menu;
 mod codex_runner;
+mod codex_session;
 mod commands;
 mod events;
 mod secrets;
@@ -199,18 +200,24 @@ pub fn run() {
     };
 
     // Intercept ExitRequested so the in-flight turn (if any) has a
-    // chance to terminate cleanly before the process dies. With the
-    // step-8 cutover the agent runs in a codex-exec subprocess; the
-    // CancellationToken in TurnHandle triggers SIGKILL of the child
-    // via the reader task in `codex_runner`, which `kill_on_drop`
-    // would also handle but cancelling explicitly lets the reader
-    // emit `awidat://turn-end` first.
+    // chance to terminate cleanly and the codex bridge drains its
+    // pump task before the process dies. Bridge shutdown is async;
+    // we block on it so the event-pump's last turn-end emit and
+    // JSONRPC drain land before Tauri tears the runtime down.
     app.run(move |handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } = event {
             let state = handle.state::<AwidatState>();
             tauri::async_runtime::block_on(async {
+                // Cancel the in-flight turn first so the bridge's
+                // pump-task drains a TurnInterrupt-shaped completion
+                // rather than getting kicked while a turn is open.
                 if let Some(turn) = state.turn.lock().await.take() {
                     turn.cancel.cancel();
+                }
+                if let Some(session) = state.codex.lock().await.take() {
+                    if let Err(e) = session.bridge.shutdown().await {
+                        tracing::warn!(error = %e, "codex bridge shutdown returned error");
+                    }
                 }
             });
         }

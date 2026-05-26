@@ -27,6 +27,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
 
 # Awidat crates we wrap.
+awidat-codex-bridge = { workspace = true }
 awidat-core = { workspace = true }
 awidat-desktop-protocol = { workspace = true }
 awidat-proto = { workspace = true }

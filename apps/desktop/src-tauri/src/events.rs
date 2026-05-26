@@ -47,6 +47,15 @@ pub fn emit_item(app: &AppHandle, item: Item) {
     }
 }
 
+/// Emit a turn-end signal. `error: Some(msg)` indicates the turn
+/// failed (codex error, child exit, mapping error); `None` is a clean
+/// completion. Frontend uses this to clear the "thinking..." spinner.
+pub fn emit_turn_end(app: &AppHandle, error: Option<String>) {
+    if let Err(e) = app.emit(TURN_END_EVENT, TurnEndEvent { error }) {
+        warn!(error = %e, "emit turn-end failed");
+    }
+}
+
 /// Notify the frontend that one project's on-disk timeline changed.
 pub fn emit_timeline_changed(app: &AppHandle, project_root: &Path) {
     let payload = project_root.to_string_lossy().into_owned();
