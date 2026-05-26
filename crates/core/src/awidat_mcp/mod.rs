@@ -56,6 +56,7 @@ use crate::awidat_mcp::context::McpToolCtx;
 use crate::awidat_mcp::tools::analyze_sync::{self, AnalyzeSyncArgs};
 use crate::awidat_mcp::tools::assess_continuity::{self, AssessContinuityArgs};
 use crate::awidat_mcp::tools::assess_edit_quality::{self, AssessEditQualityArgs};
+use crate::awidat_mcp::tools::broll_candidates::{self, BrollCandidatesArgs};
 use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
 use crate::awidat_mcp::tools::diagnose_project_media::{self, DiagnoseProjectMediaArgs};
 use crate::awidat_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
@@ -82,6 +83,7 @@ use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
 use crate::awidat_mcp::tools::local_review_package::{self, LocalReviewPackageArgs};
 use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
 use crate::awidat_mcp::tools::plan_generated_media::{self, PlanGeneratedMediaArgs};
+use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
 use crate::awidat_mcp::tools::plan_motion_scene::{self, PlanMotionSceneArgs};
 use crate::awidat_mcp::tools::plan_multicam::{self, PlanMulticamArgs};
 use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
@@ -90,6 +92,7 @@ use crate::awidat_mcp::tools::plan_scene_aware_short_form::{
 };
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
+use crate::awidat_mcp::tools::plan_visual_support::{self, PlanVisualSupportArgs};
 use crate::awidat_mcp::tools::podcast_audio_polish::{self, PodcastAudioPolishArgs};
 use crate::awidat_mcp::tools::podcast_cleanup_candidates::{self, PodcastCleanupCandidatesArgs};
 use crate::awidat_mcp::tools::podcast_editorial_review_pack::{
@@ -108,6 +111,7 @@ use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntellige
 use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
 use crate::awidat_mcp::tools::render_preflight::{self, RenderPreflightArgs};
+use crate::awidat_mcp::tools::search_broll::{self, SearchBrollArgs};
 use crate::awidat_mcp::tools::shot_summary::{self, ShotSummaryArgs};
 use crate::awidat_mcp::tools::transcript_pack::{self, TranscriptPackArgs};
 use crate::awidat_mcp::tools::transcript_search::{self, TranscriptSearchArgs};
@@ -1362,6 +1366,51 @@ manual offset proposals instead of silently committing.",
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
+    /// `plan_visual_support` — read-only router for visual-support
+    /// requests.
+    #[tool(
+        description = "\
+Read-only visual-support router. Given a user request or agent-detected \
+visual need, choose the smallest useful lane: timeline edit, b-roll, \
+motion scene, title/annotation, or effects/finishing. Use before choosing \
+between b-roll, generated video, freeform motion graphics, and direct \
+FFmpeg/Rust render primitives.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_visual_support(
+        &self,
+        args: Parameters<PlanVisualSupportArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_visual_support::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_look_regions` — generate a look-region/LUT plan and
+    /// project-local LUTs from color sidecars.
+    ///
+    /// Marked destructive because the run writes `renders/<stem>.edl`,
+    /// `renders/<stem>.json`, `renders/<stem>.md`, and generated
+    /// `.cube` LUTs under `luts/generated/`. The original
+    /// `ToolHandler` had `is_mutating = true` for the same reason.
+    #[tool(
+        description = "\
+Create a graph-native look-region/LUT plan from the current timeline and \
+color-analysis indexes. This does not edit project.otio.json directly. \
+It writes renders/<stem>.edl, renders/<stem>.json, renders/<stem>.md, and \
+generated .cube LUTs under luts/generated/. After this tool, call \
+apply_edl with the returned edl_path, inspect vedit_diff, render the \
+timeline, then call review_look_regions on the render.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn plan_look_regions(
+        &self,
+        args: Parameters<PlanLookRegionsArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_look_regions::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
     /// `diagnose_project_media` — surface repair diagnostics for
     /// timeline media.
     #[tool(
@@ -1415,6 +1464,51 @@ output_path here.",
         args: Parameters<VerifyRenderArgs>,
     ) -> Result<String, ErrorData> {
         verify_render::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `broll_candidates` — find shots usable as B-roll cutaways.
+    #[tool(
+        description = "\
+Find shots usable as B-roll: no main face on screen, steady camera, sharp \
+frames. Reads `shot` (mandatory) and `frame-quality` (optional). Returns \
+shots ranked by duration descending. Defaults filter to types ['no-face', \
+'wide'] + motions ['static', 'slow-pan'] + sharp_fraction >= 0.5. Override \
+per call: e.g. broll_candidates(types=['wide'], min_duration_s=3) for \
+sustained wide cutaways only. Use this when the user asks for cutaways, \
+B-roll, transition material, or 'something to cut to' — i.e. anytime you \
+need a frame that isn't a talking head.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn broll_candidates(
+        &self,
+        args: Parameters<BrollCandidatesArgs>,
+    ) -> Result<String, ErrorData> {
+        broll_candidates::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `search_broll` — query Pexels for stock B-roll matching a
+    /// free-form query.
+    #[tool(
+        description = "\
+Search Pexels for stock B-roll videos matching a free-form query. Returns \
+{ query, per_page, total_results, results: [{ pexels_id, duration_s, \
+width, height, preview_thumbnail, pexels_page, attribution, renditions, \
+frame_previews }] }. Use this to scout candidate cutaways for a moment \
+surfaced by `find_broll_opportunities` (or any other moment you think \
+wants b-roll). Tell the user the previews; they pick. Then call \
+`use_broll(pexels_id, ...)` to download + place. Be specific in your \
+query: \"empty city street at dawn\" beats \"loneliness\". Default \
+per_page=5; cap 30. Requires PEXELS_API_KEY in env or the OS keychain.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn search_broll(
+        &self,
+        args: Parameters<SearchBrollArgs>,
+    ) -> Result<String, ErrorData> {
+        search_broll::run(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
