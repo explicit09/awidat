@@ -16,12 +16,15 @@
 //! - Use [`crate::awidat_mcp::context::McpToolCtx::resolve`] to get
 //!   the project root.
 
+pub mod color_scopes;
 pub mod list_looks;
 pub mod list_markers;
 pub mod list_stringouts;
+pub mod local_review_package;
 pub mod read_broll_recommendations;
 pub mod read_index;
 pub mod read_media_intelligence;
+pub mod read_media_readiness;
 pub mod read_understanding;
 pub mod view_episode;
 pub mod view_timeline;

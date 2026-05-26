@@ -53,12 +53,15 @@ use rmcp::tool_handler;
 use rmcp::tool_router;
 
 use crate::awidat_mcp::context::McpToolCtx;
+use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
 use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
+use crate::awidat_mcp::tools::local_review_package::{self, LocalReviewPackageArgs};
 use crate::awidat_mcp::tools::read_broll_recommendations::{self, ReadBrollRecommendationsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
+use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
 use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::awidat_mcp::tools::view_timeline::{self, ViewTimelineArgs};
@@ -255,6 +258,63 @@ plus aggregate state and next actions.",
         args: Parameters<ReadMediaIntelligenceArgs>,
     ) -> Result<String, ErrorData> {
         read_media_intelligence::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `color_scopes` — luma/RGB histograms, waveform, RGB parade, and
+    /// vectorscope evidence from one sampled video frame.
+    #[tool(
+        description = "\
+Computes color scope evidence from one video frame: luma histogram, \
+RGB histogram, luma waveform, RGB parade, and Cb/Cr vectorscope. Use \
+this before or after applying color effects when you need objective \
+frame-level exposure, channel balance, and chroma distribution evidence.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn color_scopes(
+        &self,
+        args: Parameters<ColorScopesArgs>,
+    ) -> Result<String, ErrorData> {
+        color_scopes::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `author_local_review_package` — author a local review package
+    /// from a rendered output path and the latest vedit commit.
+    #[tool(
+        description = "\
+Author a local review package from a rendered output path. The package links that \
+asset to the latest vedit commit, including commit header, commit hash, timeline hash, \
+generated time, tags, and the commit reasoning body. The package is written as JSON \
+under `<project>/.awidat/review-packages/` and returned as a JSON object.\
+If you are handing off a review render to a collaborator, use this tool before \
+you share the file manually; third-party review APIs are intentionally not part of \
+this local-only flow.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn author_local_review_package(
+        &self,
+        args: Parameters<LocalReviewPackageArgs>,
+    ) -> Result<String, ErrorData> {
+        local_review_package::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `read_media_readiness` — read-only media/cache/index readiness.
+    #[tool(
+        description = "\
+Read media readiness for the current project without side effects. Returns \
+source existence, playable artifact choice, proxy/thumbnail/waveform cache \
+state, index sidecar availability, and recommended next actions so the agent \
+knows whether it can rely on transcript, word timings, speaker labels, scenes, \
+audio, visual evidence, or whether it should ask for repair/indexing first.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn read_media_readiness(
+        &self,
+        args: Parameters<ReadMediaReadinessArgs>,
+    ) -> Result<String, ErrorData> {
+        read_media_readiness::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
