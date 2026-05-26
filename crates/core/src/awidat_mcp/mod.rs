@@ -54,11 +54,14 @@ use rmcp::tool_router;
 
 use crate::awidat_mcp::context::McpToolCtx;
 use crate::awidat_mcp::tools::analyze_sync::{self, AnalyzeSyncArgs};
+use crate::awidat_mcp::tools::apply_edl::{self, ApplyEdlArgs};
 use crate::awidat_mcp::tools::assess_continuity::{self, AssessContinuityArgs};
 use crate::awidat_mcp::tools::assess_edit_quality::{self, AssessEditQualityArgs};
 use crate::awidat_mcp::tools::broll_candidates::{self, BrollCandidatesArgs};
 use crate::awidat_mcp::tools::color_scopes::{self, ColorScopesArgs};
+use crate::awidat_mcp::tools::create_stringout::{self, CreateStringoutArgs};
 use crate::awidat_mcp::tools::diagnose_project_media::{self, DiagnoseProjectMediaArgs};
+use crate::awidat_mcp::tools::download_yt_clip::{self, DownloadYtClipArgs};
 use crate::awidat_mcp::tools::find_audio_asset::{self, FindAudioAssetArgs};
 use crate::awidat_mcp::tools::find_beat::{self, FindBeatArgs};
 use crate::awidat_mcp::tools::find_black_frames::{self, FindBlackFramesArgs};
@@ -73,6 +76,11 @@ use crate::awidat_mcp::tools::find_generated_broll_opportunities::{
 };
 use crate::awidat_mcp::tools::find_moment::{self, FindMomentArgs};
 use crate::awidat_mcp::tools::find_speaker_oncam::{self, FindSpeakerOncamArgs};
+use crate::awidat_mcp::tools::granular_timeline::{
+    self, DeleteClipsArgs, MoveClipArgs, RippleTrimArgs, RollTrimArgs, SetClipPropertyArgs,
+    SetMarkerArgs, SetTrackPropertyArgs, SlipClipArgs, SplitClipArgs, TrimClipArgs,
+};
+use crate::awidat_mcp::tools::import_media::{self, ImportLocalArgs, ImportUrlArgs};
 use crate::awidat_mcp::tools::inspect_clip::{self, InspectClipArgs};
 use crate::awidat_mcp::tools::inspect_moment::{self, InspectMomentArgs};
 use crate::awidat_mcp::tools::list_assets::{self, ListAssetsArgs};
@@ -81,6 +89,10 @@ use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
 use crate::awidat_mcp::tools::local_review_package::{self, LocalReviewPackageArgs};
+use crate::awidat_mcp::tools::manage_assets::{
+    self, CreateBinArgs, MarkSelectArgs, MoveToBinArgs, RateAssetArgs, RenameAssetArgs,
+    TagAssetArgs,
+};
 use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
 use crate::awidat_mcp::tools::plan_generated_media::{self, PlanGeneratedMediaArgs};
 use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
@@ -105,11 +117,13 @@ use crate::awidat_mcp::tools::podcast_smooth_cut_boundaries::{
     self, PodcastSmoothCutBoundariesArgs,
 };
 use crate::awidat_mcp::tools::podcast_story_map::{self, PodcastStoryMapArgs};
+use crate::awidat_mcp::tools::proxy_media::{self, GenerateProxyArgs};
 use crate::awidat_mcp::tools::read_broll_recommendations::{self, ReadBrollRecommendationsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
 use crate::awidat_mcp::tools::read_media_readiness::{self, ReadMediaReadinessArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
+use crate::awidat_mcp::tools::relink_media::{self, RelinkMediaArgs};
 use crate::awidat_mcp::tools::render_preflight::{self, RenderPreflightArgs};
 use crate::awidat_mcp::tools::search_broll::{self, SearchBrollArgs};
 use crate::awidat_mcp::tools::shot_summary::{self, ShotSummaryArgs};
@@ -1510,6 +1524,382 @@ per_page=5; cap 30. Requires PEXELS_API_KEY in env or the OS keychain.",
     ) -> Result<String, ErrorData> {
         search_broll::run(args.0, McpToolCtx::resolve())
             .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `import_local` — copy or symlink a local media file into the
+    /// project's `raw/` directory and record it in the asset catalog.
+    ///
+    /// Mutating: writes under `raw/` and rewrites `project.otio.json`.
+    #[tool(
+        description = "\
+Import a local media file into the project's raw/ directory and record \
+it in the durable asset catalog. Pass an absolute `source_path`, an \
+optional `destination_name` (a single safe file name under raw/), and \
+optional `link: true` to create a symlink instead of copying.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn import_local(
+        &self,
+        args: Parameters<ImportLocalArgs>,
+    ) -> Result<String, ErrorData> {
+        import_media::run_local(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `import_url` — download a URL into `raw/` via yt-dlp and record
+    /// it in the asset catalog.
+    ///
+    /// Mutating: writes under `raw/` and rewrites `project.otio.json`.
+    #[tool(
+        description = "\
+Download a URL into the project's raw/ directory via yt-dlp and record \
+it in the durable asset catalog. Pass an http(s) `url` and an optional \
+`destination_name` (a single safe file name under raw/). Requires \
+`yt-dlp` on PATH.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn import_url(
+        &self,
+        args: Parameters<ImportUrlArgs>,
+    ) -> Result<String, ErrorData> {
+        import_media::run_url(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `download_yt_clip` — fetch a YouTube/Vimeo clip into
+    /// `raw/broll/` via yt-dlp and return an EDL fragment.
+    ///
+    /// Mutating: writes a downloaded file under `raw/broll/` and a
+    /// caveat record under `.awidat/yt_caveats.json`.
+    #[tool(
+        description = "\
+Download a YouTube or Vimeo clip via yt-dlp into raw/broll/ and return \
+a ready-to-paste *** Insert BRoll EDL fragment. Gated on \
+`acknowledged: true` — the agent must explain the third-party copyright \
+caveat to the user and get explicit confirmation before setting it. \
+Allowed hosts: youtube.com, m.youtube.com, youtu.be, vimeo.com. \
+Idempotent: the same URL maps to the same on-disk path (sha-keyed) and \
+skips the re-download. Optional `source_start_s` + `source_end_s` trim \
+a sub-window via yt-dlp --download-sections. Per-session cap: 10 \
+downloads. Does NOT apply the edit — hand the edl_fragment to \
+apply_edl.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn download_yt_clip(
+        &self,
+        args: Parameters<DownloadYtClipArgs>,
+    ) -> Result<String, ErrorData> {
+        download_yt_clip::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `relink_media` — apply a safe relink candidate to timeline
+    /// media references.
+    ///
+    /// Mutating: rewrites `project.otio.json` after substituting
+    /// matching ExternalReference target URLs.
+    #[tool(
+        description = "\
+Apply a safe relink candidate to timeline media references. Use \
+`diagnose_project_media` first to find missing/unsafe references and \
+candidate project-relative replacements. Provide old_target_url and/or \
+clip_id plus a new_target_url that already exists under the project \
+root.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn relink_media(
+        &self,
+        args: Parameters<RelinkMediaArgs>,
+    ) -> Result<String, ErrorData> {
+        relink_media::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `generate_proxy` — generate or refresh the .awidat proxy for
+    /// one raw asset.
+    ///
+    /// Mutating: writes a transcoded proxy file under
+    /// `.awidat/proxies/`.
+    #[tool(
+        description = "\
+Generate or refresh the .awidat proxy for one raw asset. The proxy is \
+the cached low-bitrate playback file under `<project>/.awidat/proxies/`. \
+Pass `asset_id` as the project-relative path of a raw asset (for \
+example `raw/take-1.mov`); pass `force: true` to regenerate even when \
+an up-to-date proxy already exists. Skips ffmpeg when the proxy is \
+already fresh and `force` is false.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn generate_proxy(
+        &self,
+        args: Parameters<GenerateProxyArgs>,
+    ) -> Result<String, ErrorData> {
+        proxy_media::run(args.0, McpToolCtx::resolve())
+            .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `apply_edl` — the load-bearing EDL mutation tool.
+    #[tool(
+        description = "\
+Commit an Edit Decision List (EDL) to the project timeline — this \
+WRITES project.otio.json. The EDL is a freeform envelope (NOT \
+JSON-escaped multi-line content — pass the raw text). Begins with \
+`*** Begin EDL` and ends with `*** End EDL`. This is the graph-native \
+editing path. Use it for timeline changes instead of rewriting \
+project.otio.json by hand or producing edited media directly with \
+bash/FFmpeg. Operations include Trim/Untrim/Delete/Split/Insert Clip, \
+Insert/Delete Transition, Move Clip, Insert BRoll/PiP, Set Volume / \
+Speed / Effect / Time Remap / Freeze / Color Correction / Output \
+Format / Loudness Target / Package Metadata / Broadcast Overlay, \
+Apply LUT / Remove LUT, Insert/Set Title, Insert Caption. Anchors are \
+content-based (transcript_snippet, clip_uuid, scene_change_index). \
+Time fields are seconds into source media. By default this commits; \
+set dry_run=true to validate the parse without writing. Pass \
+`reasoning` for the auto-commit body so future log reads have audit \
+trail.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn apply_edl(
+        &self,
+        args: Parameters<ApplyEdlArgs>,
+    ) -> Result<String, ErrorData> {
+        apply_edl::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `create_stringout` — append a new named stringout.
+    #[tool(
+        description = "\
+Create a new named stringout (ordered select-collection) in the \
+project. Projects support multiple parallel stringouts (per arc, \
+alt-cut, cold-open) — calling this never replaces an existing one. \
+'id' is required; 'name' is an optional display label; 'items' is an \
+ordered list of select ids the stringout points at. Returns an error \
+if a stringout with that id already exists.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn create_stringout(
+        &self,
+        args: Parameters<CreateStringoutArgs>,
+    ) -> Result<String, ErrorData> {
+        create_stringout::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    // ---- manage_assets sub-tools ----
+
+    /// `create_bin` — create a durable asset bin.
+    #[tool(
+        description = "Create a durable user/agent asset bin in the project catalog.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn create_bin(
+        &self,
+        args: Parameters<CreateBinArgs>,
+    ) -> Result<String, ErrorData> {
+        manage_assets::run_create_bin(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `move_to_bin` — move an asset to a durable bin or clear its bin.
+    #[tool(
+        description = "Move a catalog asset into a durable bin, or clear its bin.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn move_to_bin(
+        &self,
+        args: Parameters<MoveToBinArgs>,
+    ) -> Result<String, ErrorData> {
+        manage_assets::run_move_to_bin(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `rename_asset` — set an asset display label.
+    #[tool(
+        description = "Set the human-readable label for a catalog asset without renaming the source file.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn rename_asset(
+        &self,
+        args: Parameters<RenameAssetArgs>,
+    ) -> Result<String, ErrorData> {
+        manage_assets::run_rename_asset(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `tag_asset` — add or remove asset tags.
+    #[tool(
+        description = "Add or remove durable tags on a catalog asset.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn tag_asset(
+        &self,
+        args: Parameters<TagAssetArgs>,
+    ) -> Result<String, ErrorData> {
+        manage_assets::run_tag_asset(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `rate_asset` — set an asset rating.
+    #[tool(
+        description = "Set an asset rating from 0 to 5.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn rate_asset(
+        &self,
+        args: Parameters<RateAssetArgs>,
+    ) -> Result<String, ErrorData> {
+        manage_assets::run_rate_asset(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `mark_select` — create or update a durable source select.
+    #[tool(
+        description = "Create or update a durable source select for an asset range.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn mark_select(
+        &self,
+        args: Parameters<MarkSelectArgs>,
+    ) -> Result<String, ErrorData> {
+        manage_assets::run_mark_select(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    // ---- granular_timeline sub-tools ----
+
+    /// `split_clip` — granular timeline split.
+    #[tool(
+        description = "Split a clip by lowering to apply_edl's graph-native Split Clip operation; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn split_clip(
+        &self,
+        args: Parameters<SplitClipArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_split_clip(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `trim_clip` — granular timeline trim.
+    #[tool(
+        description = "Trim a clip by lowering to apply_edl's graph-native Trim Clip operation; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn trim_clip(
+        &self,
+        args: Parameters<TrimClipArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_trim_clip(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `move_clip` — granular timeline move.
+    #[tool(
+        description = "Move a clip by lowering to apply_edl's Move Clip operation; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn move_clip(
+        &self,
+        args: Parameters<MoveClipArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_move_clip(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `delete_clips` — granular timeline batch delete.
+    #[tool(
+        description = "Delete one or more clips in a single apply_edl envelope; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn delete_clips(
+        &self,
+        args: Parameters<DeleteClipsArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_delete_clips(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `roll_trim` — granular timeline roll edit.
+    #[tool(
+        description = "Roll an edit point by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn roll_trim(
+        &self,
+        args: Parameters<RollTrimArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_roll_trim(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `slip_clip` — granular timeline slip.
+    #[tool(
+        description = "Slip a clip by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn slip_clip(
+        &self,
+        args: Parameters<SlipClipArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_slip_clip(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `ripple_trim` — granular timeline ripple trim.
+    #[tool(
+        description = "Ripple-trim a clip by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn ripple_trim(
+        &self,
+        args: Parameters<RippleTrimArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_ripple_trim(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `set_marker` — granular timeline marker add/update.
+    #[tool(
+        description = "Add or update a timeline marker by lowering to apply_edl's Professional Timeline Edit marker operations; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn set_marker(
+        &self,
+        args: Parameters<SetMarkerArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_set_marker(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `set_clip_property` — granular timeline clip volume/speed/effect.
+    #[tool(
+        description = "Set basic clip properties by lowering to existing apply_edl ops such as Set Volume, Set Speed, or Set Effect; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn set_clip_property(
+        &self,
+        args: Parameters<SetClipPropertyArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_set_clip_property(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `set_track_property` — granular timeline track audio properties.
+    #[tool(
+        description = "Set basic track audio properties by lowering to apply_edl's Set Track Audio op; apply_edl remains the canonical mutation path.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn set_track_property(
+        &self,
+        args: Parameters<SetTrackPropertyArgs>,
+    ) -> Result<String, ErrorData> {
+        granular_timeline::run_set_track_property(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
