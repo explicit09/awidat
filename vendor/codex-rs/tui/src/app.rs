@@ -482,6 +482,11 @@ pub(crate) struct App {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
+    // Awidat fork edit: optional side panel that mounts when
+    // AWIDAT_PROJECT_ROOT is set. `None` in vanilla codex sessions
+    // (the renderer falls back to full-width chat). See
+    // vendor/codex-rs/SOURCE.
+    pub(crate) awidat_panel: Option<crate::awidat::AwidatPanel>,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
@@ -971,6 +976,7 @@ See the Codex keymap documentation for supported actions and examples."
             session_telemetry: session_telemetry.clone(),
             app_event_tx,
             chat_widget,
+            awidat_panel: crate::awidat::AwidatPanel::detect(),
             workspace_command_runner: Some(workspace_command_runner),
             config,
             state_db,
@@ -1302,15 +1308,39 @@ See the Codex keymap documentation for supported actions and examples."
         tui: &mut tui::Tui,
         terminal_resize_reflow_enabled: bool,
     ) -> Result<Rect> {
-        let desired_height = self.chat_widget.desired_height(tui.terminal.size()?.width);
+        // Awidat fork edit: when the Awidat panel is active, reserve
+        // its column from the chat widget's width budget so the
+        // composer measures correctly. When inactive (no panel), the
+        // chat widget gets the full terminal width — vanilla codex
+        // behavior. See vendor/codex-rs/SOURCE.
+        let terminal_width = tui.terminal.size()?.width;
+        let chat_width = match self.awidat_panel {
+            Some(_) => terminal_width.saturating_sub(crate::awidat::PANEL_WIDTH),
+            None => terminal_width,
+        };
+        let desired_height = self.chat_widget.desired_height(chat_width);
         let mut rendered_area = Rect::default();
+        // Closure capturing the split + render logic so it's identical
+        // in both the resize-reflow and non-reflow branches.
+        // Closure isn't shared between branches because both `tui.draw`
+        // and `tui.draw_with_resize_reflow` take `FnOnce`; build a tiny
+        // helper inline in each branch instead. The split logic itself
+        // is captured in `split_chat_and_panel` below for de-duplication.
+        let awidat_panel_active = self.awidat_panel.is_some();
         if terminal_resize_reflow_enabled {
             tui.draw_with_resize_reflow(desired_height, |frame| {
                 let area = frame.area();
                 rendered_area = area;
-                self.chat_widget.render(area, frame.buffer);
-                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                let (chat_area, panel_area) =
+                    split_chat_and_panel(area, awidat_panel_active);
+                self.chat_widget.render(chat_area, frame.buffer);
+                if let (Some(panel), Some(panel_area)) =
+                    (self.awidat_panel.as_ref(), panel_area)
+                {
+                    ratatui::widgets::Widget::render(panel, panel_area, frame.buffer);
+                }
+                if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(chat_area));
                     frame.set_cursor_position((x, y));
                 }
             })?;
@@ -1318,14 +1348,41 @@ See the Codex keymap documentation for supported actions and examples."
             tui.draw(desired_height, |frame| {
                 let area = frame.area();
                 rendered_area = area;
-                self.chat_widget.render(area, frame.buffer);
-                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                let (chat_area, panel_area) =
+                    split_chat_and_panel(area, awidat_panel_active);
+                self.chat_widget.render(chat_area, frame.buffer);
+                if let (Some(panel), Some(panel_area)) =
+                    (self.awidat_panel.as_ref(), panel_area)
+                {
+                    ratatui::widgets::Widget::render(panel, panel_area, frame.buffer);
+                }
+                if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(chat_area));
                     frame.set_cursor_position((x, y));
                 }
             })?;
         }
         Ok(rendered_area)
+    }
+}
+
+/// Awidat fork helper: split a frame area between chat (left) and
+/// the Awidat side panel (right, fixed [`crate::awidat::PANEL_WIDTH`]).
+/// Returns `(chat_area, panel_area)`; `panel_area` is `None` when the
+/// panel is inactive OR when the terminal is too narrow to host it
+/// (we'd rather hide the panel than crowd the composer).
+fn split_chat_and_panel(area: Rect, panel_active: bool) -> (Rect, Option<Rect>) {
+    if panel_active && area.width > crate::awidat::PANEL_WIDTH {
+        let chunks = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Horizontal)
+            .constraints([
+                ratatui::layout::Constraint::Min(0),
+                ratatui::layout::Constraint::Length(crate::awidat::PANEL_WIDTH),
+            ])
+            .split(area);
+        (chunks[0], Some(chunks[1]))
+    } else {
+        (area, None)
     }
 }
 

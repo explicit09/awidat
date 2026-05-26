@@ -82,6 +82,10 @@ pub(crate) use codex_app_server_client::legacy_core;
 mod additional_dirs;
 mod app;
 mod app_backtrack;
+// Awidat fork edit: side-panel that mounts when AWIDAT_PROJECT_ROOT
+// is set in the env. Renders next to the chat column. See
+// vendor/codex-rs/SOURCE.
+mod awidat;
 mod app_command;
 mod app_event;
 mod app_event_sender;

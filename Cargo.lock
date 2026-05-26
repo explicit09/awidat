@@ -4295,6 +4295,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "assert_matches",
+ "awidat-proto",
  "base64 0.22.1",
  "chrono",
  "clap",
