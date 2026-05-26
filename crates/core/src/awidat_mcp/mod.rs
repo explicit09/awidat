@@ -88,6 +88,12 @@ use crate::awidat_mcp::tools::plan_scene_aware_short_form::{
 };
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
+use crate::awidat_mcp::tools::podcast_editorial_review_pack::{
+    self, PodcastEditorialReviewPackArgs,
+};
+use crate::awidat_mcp::tools::podcast_episode_spans::{self, PodcastEpisodeSpansArgs};
+use crate::awidat_mcp::tools::podcast_qc_report::{self, PodcastQcReportArgs};
+use crate::awidat_mcp::tools::podcast_story_map::{self, PodcastStoryMapArgs};
 use crate::awidat_mcp::tools::read_broll_recommendations::{self, ReadBrollRecommendationsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
 use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
@@ -1171,6 +1177,84 @@ detail='original' returns source resolution. format='png' (default) | \
     ) -> Result<String, ErrorData> {
         view_frame::run(args.0, McpToolCtx::resolve())
             .await
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_qc_report` — pre-render podcast QC gate.
+    #[tool(
+        description = "\
+Run pre-render podcast QC for gaps, missing media, captions, audio readiness, \
+and suspicious timeline structure. Returns a status (ready / needs_review / \
+blocked), an `issues` list with severity-tagged findings (missing_media, \
+inactive_clip, timeline_gap, primary_av_duration_mismatch, caption_warning, \
+audio_metering_missing, cut_intent_missing), plus a caption summary and audio \
+meter count. Read-only; the gate is informational and does not block the \
+render by itself.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_qc_report(
+        &self,
+        args: Parameters<PodcastQcReportArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_qc_report::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_editorial_review_pack` — compact AI editorial evidence
+    /// packets for podcast cleanup and episode-shape decisions.
+    #[tool(
+        description = "\
+Build a compact AI editorial review pack for podcast cleanup and \
+episode-shape decisions. The tool collects timeline-visible recall \
+signals such as false starts, production/coaching asides, and optional \
+silence ranges, then adds before/during/after transcript context and \
+an explicit classification schema. It is read-only and does not label \
+anything as a final cut. The active agent must classify each packet \
+as cut/keep/review before calling proposal or mutation tools.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_editorial_review_pack(
+        &self,
+        args: Parameters<PodcastEditorialReviewPackArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_editorial_review_pack::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_episode_spans` — plan candidate episode spans from
+    /// existing transcript/audio/topic evidence.
+    #[tool(
+        description = "\
+Plan candidate episode spans from existing transcript/audio/topic evidence. \
+Wraps the bundled auto-cutter episode_span_plan.py script; returns \
+recommended start/end spans and whether multiple high-confidence episodes \
+require the user to choose before extraction or cleanup.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_episode_spans(
+        &self,
+        args: Parameters<PodcastEpisodeSpansArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_episode_spans::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `podcast_story_map` — tolerant first-watch story pass that
+    /// surfaces strong beats, low-value spans, and production chatter.
+    #[tool(
+        description = "\
+Build a first-watch podcast story map from indexed editorial moments and \
+transcript sidecars. Returns hook/story/emotional/punchline/CTA candidates, \
+tangent/dead-air candidates, and transcript spans that look like production \
+or meta-direction chatter inside the interview. This tool is tolerant of \
+missing indexes: it reports missing evidence instead of failing the workflow.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn podcast_story_map(
+        &self,
+        args: Parameters<PodcastStoryMapArgs>,
+    ) -> Result<String, ErrorData> {
+        podcast_story_map::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
