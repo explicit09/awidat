@@ -1,0 +1,34 @@
+[package]
+name = "awidat-codex-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "In-process codex app-server bridge for Awidat surfaces"
+
+[lib]
+name = "awidat_codex_bridge"
+
+[dependencies]
+# Desktop wire protocol — the `Item` types we emit.
+awidat-desktop-protocol = { workspace = true }
+
+# Codex app-server in-process client + protocol types.
+codex-app-server-client = { workspace = true }
+codex-app-server-protocol = { workspace = true }
+codex-config = { workspace = true }
+codex-core = { workspace = true }
+codex-protocol = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-feedback = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+codex-utils-absolute-path = { workspace = true }

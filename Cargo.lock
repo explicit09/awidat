@@ -823,6 +823,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "awidat-codex-bridge"
+version = "0.1.0"
+dependencies = [
+ "awidat-desktop-protocol",
+ "codex-app-server-client",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-config",
+ "codex-core",
+ "codex-feedback",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
 name = "awidat-config"
 version = "0.1.0"
 dependencies = [

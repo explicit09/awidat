@@ -17,6 +17,7 @@ members = [
     "crates/secrets",
     "crates/index",
     "crates/desktop-protocol",
+    "crates/codex-bridge",
     "apps/desktop/src-tauri",
 
     # Forked codex harness — see vendor/codex-rs/SOURCE.
@@ -213,6 +214,7 @@ awidat-config = { path = "crates/config" }
 awidat-secrets = { path = "crates/secrets" }
 awidat-index = { path = "crates/index" }
 awidat-desktop-protocol = { path = "crates/desktop-protocol" }
+awidat-codex-bridge = { path = "crates/codex-bridge" }
 awidat-test-support = { path = "crates/test-support" }
 
 # Forked codex harness crates (we own these — see vendor/codex-rs/SOURCE).
