@@ -62,11 +62,9 @@ pub async fn set_project_root(
     }
 
     *state.project_root.lock().await = Some(buf.clone());
-    // Drop the active session (if any) and clear any resume path.
-    // The old session's recorder is flushed + shutdown inside
-    // `replace`, so the rollout for the previous project is sealed
-    // before the next turn opens a new one.
-    state.active.lock().await.replace(None).await;
+    // Step 8d: each turn is its own codex subprocess, so there's
+    // nothing in-process to evict here when the project changes —
+    // the next `start_turn` will spawn against the new root.
     crate::commands::media::clear_media_server_files(&state)?;
     allow_project_asset_dirs(&app, &buf);
 
@@ -114,7 +112,6 @@ pub async fn current_project_root(state: State<'_, AwidatState>) -> Result<Optio
 pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> {
     ensure_project_switch_allowed(&state).await?;
     *state.project_root.lock().await = None;
-    state.active.lock().await.replace(None).await;
     crate::commands::media::clear_media_server_files(&state)?;
     Ok(())
 }
@@ -196,7 +193,6 @@ pub async fn init_project(
     }
 
     *state.project_root.lock().await = Some(project_dir.clone());
-    state.active.lock().await.replace(None).await;
     allow_project_asset_dirs(&app, &project_dir);
     if let Err(e) = update_recents(&project_dir).await {
         tracing::warn!(error = %e, "failed to update recents file");
@@ -455,7 +451,6 @@ pub async fn delete_project(
     if is_active {
         ensure_project_switch_allowed(&state).await?;
         *state.project_root.lock().await = None;
-        state.active.lock().await.replace(None).await;
         crate::commands::media::clear_media_server_files(&state)?;
     }
 

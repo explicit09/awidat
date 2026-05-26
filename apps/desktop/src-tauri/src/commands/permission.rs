@@ -47,11 +47,10 @@ pub async fn set_permission_mode(
         .ok_or_else(|| "no project loaded".to_string())?;
     write_mode(&project_root, mode)?;
 
-    // The system prompt includes the permission mode. Drop the cached
-    // session so the next turn rebuilds with the newly selected mode.
-    // Preserves any pending resume_log_path so the user's chat
-    // identity survives a permission flip.
-    state.active.lock().await.clear_session().await;
+    // Step 8d: codex's subprocess is spawned fresh for every turn, so
+    // there's no cached agent state to evict here — the next
+    // `start_turn` will see the new permission_mode value on disk.
+    let _ = state;
     Ok(())
 }
 

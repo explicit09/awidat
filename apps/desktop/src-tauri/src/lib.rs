@@ -1,19 +1,16 @@
 //! Awidat desktop app — Tauri backend.
 //!
-//! Imports `awidat-core` (agent loop) and `awidat-desktop-protocol`
-//! (frontend wire types). Exposes Tauri commands that build a
-//! `Session`, drive `run_turn`, translate `SessionEvent` into
-//! protocol [`Item`](awidat_desktop_protocol::Item)s, and route
-//! approval / user-input responses back to the agent loop. Also
-//! handles project lifecycle (open / new / recents) and — in
-//! upcoming commits — asset import + indexing with progress.
+//! Step 8 cut the desktop over to driving the codex engine via a
+//! subprocess per turn (`codex-exec --json`). The legacy in-process
+//! `awidat-core` `Session` is no longer instantiated from here; the
+//! Tauri commands translate codex's JSONL event stream into the
+//! desktop wire protocol [`Item`](awidat_desktop_protocol::Item) shape.
 //!
 //! # Module layout
 //!
 //! - `state.rs` — `AwidatState` (the type Tauri threads through commands)
 //! - `events.rs` — Tauri channel name constants + `emit_item` helper
-//! - `session.rs` — `build_session` / tool registry
-//! - `bridges.rs` — long-lived approval / user-input forwarders
+//! - `codex_runner.rs` — spawn/monitor the `codex-exec` subprocess
 //! - `commands/turn.rs` — `start_turn`, `cancel_turn`, `respond_*`
 //! - `commands/project.rs` — `set_project_root`, `init_project`,
 //!   `current_project_root`, `recent_projects`
@@ -201,23 +198,19 @@ pub fn run() {
         }
     };
 
-    // Intercept ExitRequested so the current Session's rollout writer
-    // has a chance to flush before the process dies. Without this the
-    // last turn's messages can be stuck in the writer's mpsc queue
-    // when the user quits, producing an incomplete-turn marker on the
-    // next resume.
+    // Intercept ExitRequested so the in-flight turn (if any) has a
+    // chance to terminate cleanly before the process dies. With the
+    // step-8 cutover the agent runs in a codex-exec subprocess; the
+    // CancellationToken in TurnHandle triggers SIGKILL of the child
+    // via the reader task in `codex_runner`, which `kill_on_drop`
+    // would also handle but cancelling explicitly lets the reader
+    // emit `awidat://turn-end` first.
     app.run(move |handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } = event {
             let state = handle.state::<AwidatState>();
-            // Take the session out of the slot synchronously, then
-            // run its shutdown on a small blocking-task. We can't
-            // `.await` here because this callback is sync; we use
-            // tauri's async-runtime block-on to drive the shutdown
-            // to completion before the process exits.
             tauri::async_runtime::block_on(async {
-                let mut active = state.active.lock().await;
-                if let Some(session) = active.session.take() {
-                    session.shutdown_recorder().await;
+                if let Some(turn) = state.turn.lock().await.take() {
+                    turn.cancel.cancel();
                 }
             });
         }
