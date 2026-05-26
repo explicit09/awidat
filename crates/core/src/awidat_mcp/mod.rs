@@ -79,8 +79,14 @@ use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
 use crate::awidat_mcp::tools::local_review_package::{self, LocalReviewPackageArgs};
 use crate::awidat_mcp::tools::plan_emphasis::{self, PlanEmphasisArgs};
+use crate::awidat_mcp::tools::plan_generated_media::{self, PlanGeneratedMediaArgs};
 use crate::awidat_mcp::tools::plan_motion_scene::{self, PlanMotionSceneArgs};
+use crate::awidat_mcp::tools::plan_multicam::{self, PlanMulticamArgs};
 use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
+use crate::awidat_mcp::tools::plan_scene_aware_short_form::{
+    self, PlanSceneAwareShortFormArgs,
+};
+use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
 use crate::awidat_mcp::tools::read_broll_recommendations::{self, ReadBrollRecommendationsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
@@ -994,6 +1000,84 @@ preview. Read-only.",
         args: Parameters<TranscriptSearchArgs>,
     ) -> Result<String, ErrorData> {
         transcript_search::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_generated_media` — read-only generated-media prompt planner.
+    #[tool(
+        description = "\
+Read-only planner for generated b-roll. Returns deterministic prompt \
+candidates and provider/mode options without writing the registry.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_generated_media(
+        &self,
+        args: Parameters<PlanGeneratedMediaArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_generated_media::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_multicam` — read-only flattened multicam program planner.
+    #[tool(
+        description = "\
+Create a reviewable N-camera podcast direction plan. The tool uses \
+diarized transcript segments plus face speaker mapping, shot type, and \
+frame quality sidecars when present. It returns flattened Program Video \
+decisions with source_asset and reason metadata; it does not create OTIO \
+multicam stacks.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_multicam(
+        &self,
+        args: Parameters<PlanMulticamArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_multicam::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_scene_aware_short_form` — read-only scene-aware short-form
+    /// planner.
+    #[tool(
+        description = "\
+Build a read-only scene-aware short-form edit plan for one candidate clip. \
+The tool uses existing Awidat evidence sidecars when available: transcript, \
+word timings, topics, editorial moments, audio energy, face/gaze, scene and \
+shot detection, frame quality, composition, and CLIP metadata. It analyzes \
+shot layout, caption safety, negative space, motion intensity, weak visuals, \
+and semantic support-visual opportunities, then returns structured \
+recommendations with transcript, visual, pacing, safety, and confidence \
+reasons plus an EDL fragment. The returned EDL is reviewable and should be \
+applied separately with apply_edl only after inspection.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_scene_aware_short_form(
+        &self,
+        args: Parameters<PlanSceneAwareShortFormArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_scene_aware_short_form::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `plan_short_form_review` — read-only long-form to short-form
+    /// review planner.
+    #[tool(
+        description = "\
+Build a read-only long-form to short-form review plan for one asset. \
+The tool ranks complete standalone candidate moments, allows extended \
+short-form up to five minutes when the idea earns it, recommends B-roll \
+by default when support visuals clarify the idea, plans speaker-aware \
+9:16 layouts for wide long-form sources, and returns reviewable draft EDL \
+packages plus title, caption, platform, confidence, and human review \
+actions. It does not apply edits; use apply_edl separately after review so \
+autopilot/co-pilot/manual approval behavior remains in control.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn plan_short_form_review(
+        &self,
+        args: Parameters<PlanShortFormReviewArgs>,
+    ) -> Result<String, ErrorData> {
+        plan_short_form_review::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
