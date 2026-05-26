@@ -13,10 +13,15 @@ name = "awidat_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+# Pin `tauri` to 2.11.x: tauri 2.10 + tauri-runtime-wry 2.11 (or
+# vice-versa) ships a mismatched WebviewDispatch trait surface that
+# fails to compile. Pinning the top-level crate forces cargo to resolve
+# a consistent 2.11.x stack across tauri, tauri-runtime, tauri-runtime-wry.
+# `tauri-build` and plugins are versioned independently and stay on `"2"`.
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "~2.11", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
