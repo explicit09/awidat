@@ -1,6 +1,15 @@
 //! Session construction: builds the `awidat-core` `ToolRegistry` and
 //! the `Session` itself. Factored out so multiple commands (and any
 //! future re-builders) can call into the same recipe.
+//!
+//! **Step 8 status:** the Tauri commands no longer call these. The
+//! desktop drives the codex engine via `crate::codex_runner` (which
+//! spawns `codex-exec --json` as a subprocess). This module stays
+//! compiled (so the test suite keeps validating the registry shape)
+//! but its constructors are dead-code in the production graph. Step
+//! 8b deletes the file along with `bridges.rs`.
+
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::sync::Arc;

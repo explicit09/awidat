@@ -96,6 +96,10 @@ fn write_mode(project_root: &Path, mode: PermissionMode) -> Result<(), String> {
 
 /// Public read helper for the agent's system-prompt builder
 /// (Phase 1.9). Wrapped pub for cross-module access.
+///
+/// Step 8: only `bridges.rs` (now dead) calls this. Kept compiled so
+/// the legacy path stays buildable; deletion lands with step 8b.
+#[allow(dead_code)]
 pub fn read_mode_pub(project_root: &Path) -> PermissionMode {
     read_mode(project_root)
 }

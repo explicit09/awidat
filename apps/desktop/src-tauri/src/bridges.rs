@@ -1,6 +1,14 @@
 //! Long-lived bridges that forward agent-loop requests
 //! (`ApprovalRequest`, `UserInputRequest`) into the protocol stream
 //! the frontend consumes.
+//!
+//! **Step 8 status:** dead code. The Tauri commands no longer spin
+//! up a `Session`, so no `ApprovalRequest` ever flows here. The
+//! module stays so the legacy harness still compiles in the
+//! workspace — step 8b deletes it once codex's approval channel is
+//! bridged in a step-8b-shaped way.
+
+#![allow(dead_code)]
 
 use awidat_core::tool::{ApprovalDecision, ApprovalRequest, UserInputRequest};
 use awidat_desktop_protocol::{Id, Item, ItemLifecycle, PermissionMode, ProposalSource};

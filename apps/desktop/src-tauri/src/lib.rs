@@ -30,6 +30,7 @@
 
 mod app_menu;
 mod bridges;
+mod codex_runner;
 mod commands;
 mod events;
 mod secrets;

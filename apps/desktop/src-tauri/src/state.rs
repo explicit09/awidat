@@ -41,8 +41,17 @@ pub struct AwidatState {
     /// Pending approval requests awaiting the user's decision, keyed
     /// by the `call_id` the frontend received in the matching
     /// `ApprovalRequest` Item.
+    ///
+    /// **Step 8:** unused — codex's approval channel isn't bridged
+    /// yet. Field kept so [`crate::bridges`] still compiles while the
+    /// step-8b wiring is in flight.
+    #[allow(dead_code)]
     pub pending_approvals: Mutex<HashMap<String, oneshot::Sender<ApprovalDecision>>>,
     /// Pending `request_user_input` calls keyed by `call_id`.
+    ///
+    /// **Step 8:** unused — same rationale as
+    /// [`Self::pending_approvals`].
+    #[allow(dead_code)]
     pub pending_inputs: Mutex<HashMap<String, oneshot::Sender<String>>>,
     /// In-flight long jobs (yt-dlp / indexing) keyed by job-item id,
     /// so a `cancel_job` command can find them. Tracking by id rather
@@ -225,6 +234,11 @@ impl ActiveSession {
 pub struct TurnHandle {
     /// Stable id for the active turn. Completion tasks use this to
     /// avoid clearing a newer turn if an older cleanup path runs late.
+    /// Read-after-write for the codex subprocess driver in step 8 is
+    /// in the reader task itself; the surface API doesn't expose it
+    /// yet, so `#[allow(dead_code)]` keeps the warning quiet until
+    /// step 8b adds the turn-correlation in turn-end events.
+    #[allow(dead_code)]
     pub id: String,
     /// Token the run-loop watches; flipped by `cancel_turn`.
     pub cancel: CancellationToken,
