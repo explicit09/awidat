@@ -402,9 +402,18 @@ the worst offenders (clusters, very long fillers) as Notes.\
 boundaries; cuts should land at sentence ends or natural pauses.\
 \n- Preserve speaker rhythm: don't propose three or more cuts \
 within 5 seconds of each other in the same vicinity.\
-\n- B-roll suggestions on this format are reactive (covering an \
-awkward cut) more than proactive — long-form podcasts don't need \
-constant visual variety.\
+\n- B-roll: don't insert speculatively during a cleanup pass — \
+long-form podcasts don't need constant visual variety. But when the \
+user asks for a polish / visual / b-roll pass, COMMIT cuts — don't \
+just list options in prose. The proper recipe lives in skill \
+`b-roll-suggester` (existing footage) or skill `stock-broll` / \
+`yt-broll` (external sources); load whichever fits with \
+`load_skill(name=...)` for the 3-step playbook (read visual structure \
+→ rank candidates by clip_search score → apply_edl). When no usable \
+candidate exists for a beat, fall back to plan_generated_media → \
+start_generated_media_job → poll_generated_media_job → \
+use_generated_media. Every insert lands via apply_edl so the user \
+reviews it via the standard approval card; do not auto-apply.\
 \n\nWhen the user asks for 'a quick cleanup pass', the playbook is: \
 find_dead_air → podcast_editorial_review_pack → propose reviewed \
 silence trims; offer to also scan filler words. Don't run all three \
