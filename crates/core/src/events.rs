@@ -1,16 +1,90 @@
 //! Session event + error types — the public surface the legacy agent loop
-//! emitted, and the only piece a handful of tools (and the structured-plan
-//! executor) read by name.
+//! emitted, kept around for forward compatibility while the codex-rs
+//! migration is in flight.
 //!
-//! Lifted out of `crate::session` in step 8e: the codex-driven loop in
-//! `vendor/codex-rs/` doesn't produce or consume these types directly, but
-//! `update_plan`, `request_user_input`, `delegate`, `delegate_all`, and
-//! `structured_plan` still emit them via the shared broadcast channel.
-//! Keeping them in their own module lets the legacy `session.rs` /
-//! `orchestrator.rs` modules be deleted in the final sweep without
-//! disturbing the in-process tool surface.
+//! Step 8e/W: the codex-driven loop in `vendor/codex-rs/` does not emit
+//! or consume these types. The legacy in-process tool surface that did
+//! (`update_plan`, `request_user_input`, `delegate`, `delegate_all`) was
+//! deleted in this step. The types stay re-exported from `lib.rs` so
+//! `awidat_core::SessionEvent` / `SessionError` are still valid type
+//! paths for any caller that imports them by name (and so the
+//! `desktop-protocol` doc-comment cross-reference still resolves).
+//!
+//! `ClientError`, `StopReason`, and `Usage` used to live in the deleted
+//! `crate::anthropic` module. They are inlined here as small standalone
+//! types so `events.rs` no longer depends on the harness wire layer.
 
-use crate::anthropic::{ClientError, StopReason, Usage};
+use std::time::Duration;
+
+/// Stream parse error — placeholder inlined from the deleted
+/// `crate::anthropic::sse` to keep `ClientError::Parse` valid without
+/// pulling the harness back in.
+#[derive(Debug, thiserror::Error)]
+#[error("stream parse error")]
+pub struct StreamParseError;
+
+/// HTTP-shaped client error from the legacy Anthropic wire client.
+/// Inlined here so `SessionError::Client` stays representable without
+/// the deleted `crate::anthropic::Client`.
+#[derive(Debug, thiserror::Error)]
+pub enum ClientError {
+    /// HTTP / network failure.
+    #[error("network error: {0}")]
+    Network(String),
+    /// Server returned a non-2xx with an error body.
+    #[error("API returned {status}: {message}")]
+    Api {
+        /// HTTP status code.
+        status: u16,
+        /// Error message from the server.
+        message: String,
+    },
+    /// Stream closed before completion. Treat as retryable.
+    #[error("stream closed prematurely: {0}")]
+    StreamClosed(String),
+    /// No event arrived within the idle window.
+    #[error("idle timeout after {0:?} with no event")]
+    Timeout(Duration),
+    /// Parser error — malformed frame from the server.
+    #[error("stream parse error: {0}")]
+    Parse(#[from] StreamParseError),
+    /// API key missing — neither env var nor keychain has it.
+    #[error("ANTHROPIC_API_KEY not set in env or keychain")]
+    MissingApiKey,
+}
+
+/// Why a model iteration stopped. Inlined here from the deleted
+/// `crate::anthropic::messages` module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// Natural completion.
+    EndTurn,
+    /// Hit `max_tokens`.
+    MaxTokens,
+    /// A stop sequence.
+    StopSequence,
+    /// The model emitted a `tool_use` block; the next turn must include
+    /// `tool_result`s.
+    ToolUse,
+    /// Refusal.
+    Refusal,
+    /// Pause for a tool call we've not yet implemented.
+    PauseTurn,
+}
+
+/// Token usage from a model response. Inlined here from the deleted
+/// `crate::anthropic::messages` module.
+#[derive(Debug, Clone, Default)]
+pub struct Usage {
+    /// Input token count.
+    pub input_tokens: Option<u32>,
+    /// Output token count.
+    pub output_tokens: Option<u32>,
+    /// Cached input tokens (cache read hit).
+    pub cache_read_input_tokens: Option<u32>,
+    /// Cached input tokens (cache write).
+    pub cache_creation_input_tokens: Option<u32>,
+}
 
 /// One event emitted by the agent loop. The REPL prints these; the TUI
 /// will render them more richly later.

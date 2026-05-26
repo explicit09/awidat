@@ -1,11 +1,18 @@
 //! Pattern extraction over captured editorial decisions (#150).
 //!
-//! Reads `EditorialDecision` records from past rollout files (#149)
-//! and distills them into a `learned-style.md` that future sessions
-//! splice into their system prompt. Pure histogram math — no LLM in
-//! the extraction path. Every learned bullet cites the data ("you
-//! accepted 11 of 12 cases like this") so the user can audit and
+//! Distills past editorial decisions into a `learned-style.md` that
+//! future sessions splice into their system prompt. Pure histogram math
+//! — no LLM in the extraction path. Every learned bullet cites the data
+//! ("you accepted 11 of 12 cases like this") so the user can audit and
 //! agree or override.
+//!
+//! **Step 8e/W:** the legacy `rollout::Recorder::collect_decisions`
+//! reader was retired with the legacy harness. `extract_from_decisions`
+//! and `render_markdown` are still useful — they're pure pattern
+//! extraction over the `EditorialDecision` shape — and will be re-wired
+//! to a codex-rollout-format reader in a follow-up. The `EditorialDecision`
+//! struct moved here from `rollout.rs` so the extraction layer survives
+//! independent of the rollout layer.
 //!
 //! V1 patterns:
 //! - per-tool deny rate (which tools the user rejects most often)
@@ -24,7 +31,49 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::rollout::{EditorialDecision, Recorder};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// One captured editorial decision. Stable on disk: extending this
+/// struct must be additive (new fields with `#[serde(default)]`), since
+/// older session logs may already be on disk when a new awidat reads
+/// them.
+///
+/// Originally lived in `crate::rollout`; moved here in step 8e/W when
+/// the legacy harness's rollout layer was deleted. The codex-rollout
+/// reader follow-up (#60) will re-populate `Vec<EditorialDecision>` for
+/// `extract_from_decisions` from `~/.codex/sessions/` JSONL files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorialDecision {
+    /// Tool name (`apply_edl`, `start_render`, `bash`, …).
+    pub tool: String,
+    /// Same short summary the modal showed the user. Truncated; carries
+    /// just enough signal for pattern extraction (e.g. `apply_edl: 3
+    /// ops, score=0.72, kind=hook`).
+    pub args_summary: String,
+    /// Stable editorial dimensions extracted from the tool call. These
+    /// are deterministic learning inputs, not prose, so lesson
+    /// extraction can learn accepted/rejected cut types, transition
+    /// families, split-edit ranges, and b-roll/montage mode without
+    /// relying on fragile summary substrings.
+    #[serde(default)]
+    pub editorial_tags: Vec<String>,
+    /// Operation-scoped approval keys considered by the orchestrator.
+    /// Used to debug why an AllowForSession did or did not cover a
+    /// later request.
+    #[serde(default)]
+    pub approval_keys: Vec<crate::tool::ApprovalKey>,
+    /// Present for an explicit unsandboxed retry prompt after sandbox
+    /// denial. Absence means this was the first-attempt approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_reason: Option<String>,
+    /// What the user picked. String form for forward-compat: a future
+    /// awidat may add new decision variants and we don't want a session
+    /// log to be unreadable just because the enum grew.
+    pub decision: String,
+    /// When the modal was shown.
+    pub timestamp: DateTime<Utc>,
+}
 
 /// Minimum events for a pattern to make it into the report. Below
 /// this, the histogram is too noisy to be a real signal.
@@ -105,16 +154,10 @@ impl Pattern {
     }
 }
 
-/// Run the pattern extraction pass over all decisions under
-/// `state_root` and return the patterns that meet the thresholds.
-/// Empty result is a clean Ok — V1 awidat with no usage history just
-/// returns nothing.
-pub fn extract(state_root: &Path) -> std::io::Result<Vec<Pattern>> {
-    let decisions = Recorder::collect_decisions(state_root)?;
-    Ok(extract_from_decisions(&decisions))
-}
-
 /// Pure function over a slice of decisions — testable without disk.
+/// Until the codex-rollout reader lands (step 8e/W follow-up), there is
+/// no on-disk source feeding this in production; callers construct the
+/// slice from tests or a future codex-format JSONL parser.
 pub fn extract_from_decisions(decisions: &[EditorialDecision]) -> Vec<Pattern> {
     if decisions.is_empty() {
         return Vec::new();

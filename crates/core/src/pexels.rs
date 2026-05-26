@@ -5,11 +5,10 @@
 //! Anything else is YAGNI — the agent's b-roll loop only needs query →
 //! preview → pick → download.
 //!
-//! Key resolution mirrors [`crate::anthropic::Client::from_env_or_keychain`]:
-//! [`Client::from_env_or_keychain`] tries `PEXELS_API_KEY` then the
-//! `pexels_api_key` keychain account, errors with [`PexelsError::MissingApiKey`]
-//! otherwise. No config-file fallback — keys live in the keychain per
-//! `PLAN.md` §10.4.
+//! Key resolution: [`Client::from_env_or_keychain`] tries `PEXELS_API_KEY`
+//! then the `pexels_api_key` keychain account, and errors with
+//! [`PexelsError::MissingApiKey`] otherwise. No config-file fallback —
+//! keys live in the keychain per `PLAN.md` §10.4.
 //!
 //! Per-call rate budget is the caller's problem. Pexels' free tier caps
 //! at 200 search calls / hour; the b-roll tools cache search results

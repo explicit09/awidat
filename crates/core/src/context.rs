@@ -1,17 +1,11 @@
-//! Contextual fragments — typed, marker-tagged messages we inject
-//! into the per-turn message history (NOT the static system prompt).
+//! Contextual fragments — typed, marker-tagged content we inject into
+//! per-turn message history.
 //!
-//! Lifted from `harnesses/codex/codex-rs/core/src/context/fragment.rs`
-//! with the same trait shape:
-//!
-//!   - Each fragment type owns its `ROLE` (typically `developer` for
-//!     non-user provided context, `user` for skill bodies that were
-//!     "loaded by the user-or-agent's intent").
-//!   - Each fragment owns its `START_MARKER` / `END_MARKER` so the
-//!     compaction pass can recognize "this was injected context, not
-//!     user-typed input" and elide it from the summary if needed.
-//!   - `into_message()` materializes the fragment as a
-//!     `crate::anthropic::Message` ready to splice into history.
+//! Originally lifted from `harnesses/codex/codex-rs/core/src/context/fragment.rs`.
+//! Now that the legacy in-process agent loop is gone (step 8e/W), the
+//! consumer is the codex subprocess — we just need to render the fragment
+//! to a marker-tagged string that codex's prompt assembly can splice in.
+//! No `anthropic::Message` shape is required at this layer.
 //!
 //! Why fragments instead of system-prompt mutation:
 //!
@@ -22,19 +16,10 @@
 //!   - Compaction needs to identify-and-strip injected context to
 //!     produce a clean handoff summary. Markers are how it tells.
 
-use crate::anthropic::{ContentBlock, Message, Role};
-
-/// Trait for types that materialize as a marked message fragment in
-/// the per-turn history.
-///
-/// Implementations own the role + markers. `body()` is the raw payload
-/// without markers. `render()` concatenates them; `into_message()`
-/// builds the `Message` ready for the agent loop.
+/// Trait for types that materialize as a marked text fragment in the
+/// per-turn history. Implementations own the markers. `body()` is the
+/// raw payload without markers. `render()` concatenates them.
 pub trait ContextualUserFragment {
-    /// Anthropic API message role. Typically `Role::User` (treated as
-    /// "context the model should incorporate"). System-tier content
-    /// goes in the static system prompt, not here.
-    const ROLE: Role;
     /// Opening tag, e.g. `<skills_instructions>`. Used by both
     /// rendering and the matches-text check (so compaction can find
     /// fragments later).
@@ -68,25 +53,11 @@ pub trait ContextualUserFragment {
         }
         format!("{}{}{}", Self::START_MARKER, self.body(), Self::END_MARKER)
     }
-
-    /// Materialize as a `crate::anthropic::Message` ready for the
-    /// agent loop's history.
-    fn into_message(self) -> Message
-    where
-        Self: Sized,
-    {
-        Message {
-            role: Self::ROLE,
-            content: vec![ContentBlock::text(self.render())],
-        }
-    }
 }
 
 /// L1 catalog fragment — the list of available skills with one-line
-/// descriptions. Emitted as a fresh user-role message at the start of
-/// every turn (NOT a static system-prompt section), so the tier-1
-/// cache survives and the catalog stays separate from persisted
-/// conversation history.
+/// descriptions. Rendered as a marker-tagged block the codex subprocess
+/// can splice into the per-turn context (not the static system prompt).
 ///
 /// Format (matches codex's shape):
 ///
@@ -108,12 +79,6 @@ pub struct AvailableSkillsFragment {
 }
 
 impl ContextualUserFragment for AvailableSkillsFragment {
-    // Anthropic's API only accepts `user` / `assistant` roles — no
-    // `developer` like Codex/OpenAI. We use `user` for any context
-    // the model should treat as system-supplied-but-not-system-tier.
-    // The marker tags carry the semantic that codex's `developer`
-    // role would; the model recognizes them from prompt-engineering.
-    const ROLE: Role = Role::User;
     const START_MARKER: &'static str = "<skills_instructions>";
     const END_MARKER: &'static str = "</skills_instructions>";
 
@@ -202,21 +167,5 @@ mod tests {
         assert!(!AvailableSkillsFragment::matches_text(
             "<skill>different marker</skill>"
         ));
-    }
-
-    #[test]
-    fn into_message_has_user_role_and_marked_content() {
-        let frag = AvailableSkillsFragment {
-            skill_lines: vec!["  - x: y".to_string()],
-        };
-        let msg = frag.into_message();
-        assert_eq!(msg.role, Role::User);
-        match &msg.content[0] {
-            ContentBlock::Text { text, .. } => {
-                assert!(text.contains("<skills_instructions>"));
-                assert!(text.contains("</skills_instructions>"));
-            }
-            other => panic!("expected text block; got {other:?}"),
-        }
     }
 }

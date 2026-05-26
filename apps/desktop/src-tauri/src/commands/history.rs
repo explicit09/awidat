@@ -3,8 +3,8 @@
 //! **Step 8d:** stubbed out.
 //!
 //! The legacy implementation read `awidat-core`'s Anthropic-shape
-//! rollout JSONL files (`awidat_core::rollout::Recorder` +
-//! `awidat_core::anthropic::{ContentBlock, Message, Role}`) to
+//! rollout JSONL files (the now-deleted `awidat_core::rollout::Recorder`
+//! and `awidat_core::anthropic` Message/ContentBlock shapes) to
 //! reconstruct chat history for the React shell. The desktop has
 //! since cut over to driving the codex engine via a subprocess
 //! (`apps/desktop/src-tauri/src/codex_runner.rs`), which writes

@@ -272,7 +272,7 @@ pub struct UserInputRequest {
 /// Tool result. Most tools return text; multimodal tools (`view_frame`)
 /// return text + image content blocks via [`Self::with_images`].
 ///
-/// The agent loop converts this to a [`crate::anthropic::ContentBlock::ToolResult`]
+/// The codex harness materializes this into the wire `tool_result` shape
 /// before posting back to the model.
 #[derive(Debug, Clone, Default)]
 pub struct ToolOutput {

@@ -1,12 +1,19 @@
-//! Awidat agent loop and Anthropic API client.
+//! Awidat editorial core — tool implementations, project state, and the
+//! supporting types the codex-driven harness in `vendor/codex-rs/` calls
+//! into.
 //!
-//! Per `PLAN.md` §15 Week 3:
-//! - [`anthropic`] — typed messages, streaming SSE client, content-block
-//!   parser. Hand-rolled (no first-party Anthropic Rust SDK exists in 2026;
-//!   every harness in `harnesses/` hand-rolls this layer).
-//! - [`error::FunctionCallError`] — copied verbatim from
-//!   `harnesses/codex/codex-rs/core/src/function_tool.rs`.
-//! - Tools, `Session`, and the agent loop land in later phases of week 3.
+//! Step 8e/W: the legacy in-process agent loop (`session`, `orchestrator`,
+//! `compact`, the hand-rolled `anthropic` client, the `rollout` recorder,
+//! and the `awidat_md` system-prompt assembler) was deleted in this step.
+//! The codex subprocess in `vendor/codex-rs/` is now the only agent loop.
+//! What remains here:
+//! - [`error::FunctionCallError`] — tool dispatch result shape, copied
+//!   verbatim from `vendor/codex-rs/core/src/function_tool.rs`.
+//! - [`tools`] — in-process tool implementations the `awidat_mcp` MCP
+//!   wrappers delegate into.
+//! - [`awidat_mcp`] — MCP-server tool definitions codex invokes.
+//! - [`events`] — `SessionEvent` / `SessionError` shape kept for forward
+//!   compatibility while consumers migrate to codex's event stream.
 
 #![allow(
     clippy::clone_on_copy,
@@ -39,16 +46,13 @@
     )
 )]
 
-pub mod anthropic;
 pub mod awidat_mcp;
-pub mod awidat_md;
 pub mod broll_recommendations;
 pub mod capabilities;
 pub mod capability_metadata;
 pub mod caption_rendered_output_scorer;
 pub mod captions;
 pub mod clip_candidates;
-pub mod compact;
 pub mod context;
 pub mod continuity;
 pub mod dismissal;
@@ -62,17 +66,13 @@ pub mod mcp_host;
 pub mod media_catalog_mutation;
 pub mod media_intelligence;
 pub mod notes;
-pub mod orchestrator;
 pub mod pexels;
 pub mod preview_cache;
 pub mod preview_refresh_executor;
 pub mod professional;
 pub mod proxy;
 pub mod review;
-pub mod rollout;
 pub mod scene_aware_short_form;
-pub mod session;
-pub mod session_registry;
 pub mod short_form_intelligence;
 pub mod short_form_review;
 pub mod skills;
@@ -92,7 +92,6 @@ pub mod visual_signals;
 pub use capability_metadata::{CapabilityMetadata, SupportLevel};
 pub use error::FunctionCallError;
 pub use events::{SessionError, SessionEvent};
-pub use session::Session;
 pub use tool::{
     ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry, UserInputRequest,
 };
