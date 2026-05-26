@@ -18,7 +18,15 @@ awidat-mcp = { workspace = true }
 awidat-render = { workspace = true }
 awidat-tui = { workspace = true }
 awidat-secrets = { workspace = true }
-clap = { workspace = true }
+# Hello-world spine for the codex-harness migration. `chat-codex` is
+# a temporary subcommand that drives the vendored codex agent loop
+# end-to-end against an OpenAI key with zero Awidat tools registered.
+# It proves the integration and goes away once `tui`/`chat` are
+# rewired in step 7 of the migration plan.
+codex-exec = { workspace = true }
+codex-arg0 = { workspace = true }
+codex-utils-cli = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["io-std", "signal"] }
 tokio-util = { workspace = true }

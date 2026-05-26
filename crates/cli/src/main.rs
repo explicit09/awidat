@@ -16,6 +16,7 @@ use clap::{Parser, Subcommand};
 
 mod apply_edl_cmd;
 mod chat_cmd;
+mod chat_codex_cmd;
 mod index_cmd;
 mod lessons_cmd;
 mod new_cmd;
@@ -266,6 +267,25 @@ enum Command {
     },
     /// Print the version of the awidat binary.
     Version,
+    /// Drive the vendored codex agent loop directly. Hello-world spine
+    /// for the migration: no Awidat tools registered, no project
+    /// loaded — just verifies the codex runtime is alive against the
+    /// configured OpenAI key. Goes away once `tui`/`chat` are rewired
+    /// to codex in step 7 of the migration plan.
+    ChatCodex {
+        /// Prompt to send. If omitted, codex reads from stdin.
+        prompt: Option<String>,
+        /// Skip codex's approval and sandbox prompts. Intended for
+        /// smoke-testing where running the agent loop matters more
+        /// than gating side effects.
+        #[arg(long = "yolo", default_value_t = false)]
+        yolo: bool,
+        /// Override the model id. Our fork freezes at the codex SHA
+        /// from May 2026; newer model names in your config.toml may
+        /// be rejected. Pass an older id like `gpt-5` here.
+        #[arg(long = "model", short = 'm')]
+        model: Option<String>,
+    },
 }
 
 /// Sub-action for `awidat lessons`.
@@ -299,7 +319,15 @@ enum SkillsAction {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Special-case `chat-codex` before the regular dispatch: it owns
+    // its own tokio runtime (via `codex_arg0::arg0_dispatch_or_else`)
+    // and returns an ExitCode directly, so it doesn't compose into
+    // the `Result<()>` flow the other subcommands use.
+    if let Command::ChatCodex { prompt, yolo, model } = cli.command {
+        return chat_codex_cmd::run(prompt, yolo, model);
+    }
     let res = match cli.command {
+        Command::ChatCodex { .. } => unreachable!("handled above"),
         Command::Init { path } => cmd_init(&path),
         Command::New {
             name,
