@@ -16,11 +16,28 @@
 //! all Awidat changes in `crates/`, not `vendor/codex-rs/`, so future
 //! fork refreshes don't touch our tool surface.
 //!
-//! This module is the **skeleton** that step 3 of the codex-harness
-//! migration delivers: one read-only tool (`view_timeline`) returning
-//! stub data, just enough to prove codex talks to us end-to-end.
-//! Steps 4 and 5 add the approval pre-gate fork hook and bulk-port
-//! the ~100 real video tools.
+//! Step 3 (read-only view_timeline stub) and step 4 (mutating-tool
+//! pre-execution approval gating) of the codex-harness migration
+//! ship here. Step 5 will bulk-port the ~100 real video tools.
+//!
+//! ## Adding a tool
+//!
+//! Write an `async fn` inside `impl AwidatMcpServer` with
+//! `#[tool(description = "...")]`. Annotate every tool with one of:
+//!
+//! - `annotations(read_only_hint = true)` for tools that only read
+//!   project state. Codex won't fire an approval prompt for these.
+//! - `annotations(destructive_hint = true)` for tools that mutate
+//!   project state (EDL writes, render jobs, asset imports, bash).
+//!   Codex's `requires_mcp_tool_approval` gate (see
+//!   `vendor/codex-rs/core/src/mcp_tool_call.rs`) consults this and
+//!   fires the pre-execution approval prompt when
+//!   `approval_policy != "never"`.
+//!
+//! Tools missing either annotation are conservatively treated as
+//! mutating by codex (see `mcp_tool_call.rs::requires_mcp_tool_approval`).
+//! That fail-closed behavior is the right default; the annotations are
+//! how a tool opts out.
 
 use rmcp::ServerHandler;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -40,6 +57,15 @@ pub struct ViewTimelineArgs {
     /// here.
     #[serde(default)]
     pub project_root: Option<String>,
+}
+
+/// Arguments for `apply_fake_edl`. Step 4 stub mutating tool used
+/// purely to exercise codex's pre-execution approval prompt; step 5
+/// replaces this with the real `apply_edl`.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ApplyFakeEdlArgs {
+    /// EDL text the model wants to apply. Ignored by the stub.
+    pub edl: String,
 }
 
 /// The Awidat MCP server. One short-lived struct per child-process
@@ -73,7 +99,8 @@ impl AwidatMcpServer {
     #[tool(
         description = "View a summary of the current Awidat project's edited timeline. \
             Skeleton implementation: returns a canned response while step 3 of the codex-harness \
-            migration proves the in-process MCP server wiring."
+            migration proves the in-process MCP server wiring.",
+        annotations(read_only_hint = true)
     )]
     pub async fn view_timeline(&self, _args: Parameters<ViewTimelineArgs>) -> String {
         // Step 5 replaces this with the real OTIO loader. Until then,
@@ -83,6 +110,25 @@ impl AwidatMcpServer {
          No project loaded; this is the hello-world wiring for step 3 \
          of the codex-harness migration."
             .to_string()
+    }
+
+    /// Stub `apply_fake_edl`. Annotated as destructive so codex
+    /// fires a pre-execution approval prompt; if the user approves,
+    /// we return a canned acknowledgement instead of actually
+    /// mutating anything. Step 5 replaces this with the real
+    /// `apply_edl` implementation.
+    #[tool(
+        description = "Apply an EDL envelope to the project's edited timeline. \
+            Mutates project state. Step 4 stub: returns a canned acknowledgement \
+            after the codex approval prompt fires.",
+        annotations(destructive_hint = true, read_only_hint = false)
+    )]
+    pub async fn apply_fake_edl(&self, args: Parameters<ApplyFakeEdlArgs>) -> String {
+        let preview: String = args.0.edl.chars().take(80).collect();
+        format!(
+            "Awidat MCP step-4 stub: apply_fake_edl accepted EDL prefix {preview:?}. \
+             No real mutation performed."
+        )
     }
 }
 
