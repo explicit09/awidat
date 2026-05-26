@@ -84,6 +84,15 @@ pub trait ItemEmitter: Send + Sync + 'static {
     /// Emit the per-turn terminal signal. `error == None` means clean
     /// completion; `Some(msg)` is a turn-fatal failure.
     fn emit_turn_end(&self, error: Option<String>);
+    /// Signal that the project's on-disk OTIO has just been mutated by
+    /// a tool call. The desktop listens on `awidat://timeline-changed`
+    /// and refetches `project.otio.json`. The MCP server lives in a
+    /// subprocess that can't talk to Tauri's event bus, so the bridge
+    /// raises this event whenever a mutating awidat-MCP tool completes
+    /// (apply_edl, manage_assets, import_media, vedit_*, podcast_*, …).
+    /// Default impl is a no-op so non-Tauri emitters (tests, future
+    /// surfaces) don't have to care.
+    fn emit_timeline_changed(&self) {}
 }
 
 /// Reason an approval is pending — drives which response struct we
@@ -584,8 +593,17 @@ async fn handle_pump_event(
         }
         InProcessServerEvent::ServerNotification(notification) => {
             let turn_end = turn_end_from_notification(&notification);
+            let nudge_timeline = mappers::is_project_mutating_completion(&notification);
             for item in map_notification(&notification, text_buffers) {
                 emit.emit_item(item);
+            }
+            // Nudge the desktop to refetch project.otio.json after any
+            // mutating awidat-MCP tool completes. The MCP server lives
+            // in a subprocess and can't talk to Tauri's event bus
+            // itself, so the bridge is the only hop that knows when
+            // OTIO has just been rewritten under the React view.
+            if nudge_timeline {
+                emit.emit_timeline_changed();
             }
             if let Some(error) = turn_end {
                 emit.emit_turn_end(error);

@@ -21,17 +21,22 @@ use awidat_codex_bridge::{BridgeError, CodexAppServer, ItemEmitter};
 use awidat_desktop_protocol::Item;
 use tauri::AppHandle;
 
-use crate::events::{emit_item, emit_turn_end};
+use crate::events::{emit_item, emit_timeline_changed, emit_turn_end};
 
 /// Bridges the codex-bridge's pure-Rust [`ItemEmitter`] trait onto
 /// Tauri's `AppHandle::emit`. Clone-cheap (`AppHandle` is `Clone`).
+///
+/// `project_root` is bound at construction so `emit_timeline_changed`
+/// can identify which project the React side should refetch — the
+/// bridge raises that signal without knowing the path itself.
 pub struct TauriEmitter {
     app: AppHandle,
+    project_root: PathBuf,
 }
 
 impl TauriEmitter {
-    pub fn new(app: AppHandle) -> Self {
-        Self { app }
+    pub fn new(app: AppHandle, project_root: PathBuf) -> Self {
+        Self { app, project_root }
     }
 }
 
@@ -42,6 +47,10 @@ impl ItemEmitter for TauriEmitter {
 
     fn emit_turn_end(&self, error: Option<String>) {
         emit_turn_end(&self.app, error);
+    }
+
+    fn emit_timeline_changed(&self) {
+        emit_timeline_changed(&self.app, &self.project_root);
     }
 }
 
@@ -61,7 +70,8 @@ impl CodexSession {
     /// already verified there isn't an existing session for this
     /// project (otherwise we leak the previous one).
     pub async fn launch(app: AppHandle, project_root: PathBuf) -> Result<Self, BridgeError> {
-        let emitter: Arc<dyn ItemEmitter> = Arc::new(TauriEmitter::new(app));
+        let emitter: Arc<dyn ItemEmitter> =
+            Arc::new(TauriEmitter::new(app, project_root.clone()));
         let mcp_server_path = resolve_mcp_server_binary();
         let bridge =
             CodexAppServer::launch(emitter, project_root.clone(), mcp_server_path).await?;

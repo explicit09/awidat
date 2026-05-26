@@ -350,6 +350,39 @@ fn file_change_result(status: &PatchApplyStatus) -> Result<String, String> {
     }
 }
 
+/// True when a `ServerNotification::ItemCompleted` carries an
+/// awidat-MCP tool call that just successfully mutated project state
+/// on disk (most importantly `project.otio.json`). Used by the pump
+/// to nudge the desktop's `awidat://timeline-changed` listener so the
+/// React timeline view refetches.
+///
+/// Inclusion rule is "any awidat tool tagged `destructive_hint = true`
+/// that completed successfully." False positives (e.g. `start_render`
+/// queues a job but doesn't touch OTIO) just trigger an idempotent
+/// refetch, which is cheap. False negatives would leave the UI stale,
+/// which we already saw — biased toward over-emit.
+pub fn is_project_mutating_completion(notification: &ServerNotification) -> bool {
+    let ServerNotification::ItemCompleted(n) = notification else {
+        return false;
+    };
+    let ThreadItem::McpToolCall {
+        server,
+        status,
+        error,
+        ..
+    } = &n.item
+    else {
+        return false;
+    };
+    if server != "awidat" {
+        return false;
+    }
+    if error.is_some() {
+        return false;
+    }
+    matches!(status, McpToolCallStatus::Completed)
+}
+
 fn mcp_tool_result(
     status: &McpToolCallStatus,
     result: Option<&McpToolCallResult>,
