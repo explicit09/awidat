@@ -280,11 +280,16 @@ enum Command {
         /// than gating side effects.
         #[arg(long = "yolo", default_value_t = false)]
         yolo: bool,
-        /// Override the model id. Our fork freezes at the codex SHA
-        /// from May 2026; newer model names in your config.toml may
-        /// be rejected. Pass an older id like `gpt-5` here.
+        /// Override the model id. The vendored codex fork's frozen
+        /// SHA may not know about model names your config.toml uses;
+        /// override here.
         #[arg(long = "model", short = 'm')]
         model: Option<String>,
+        /// codex-style `-c key=value` config overrides, e.g.
+        /// `-c 'model_reasoning_effort="low"'`. Mirrors the global
+        /// flag on the published codex CLI.
+        #[arg(long = "config", short = 'c', value_name = "key=value")]
+        config_overrides: Vec<String>,
     },
 }
 
@@ -323,8 +328,14 @@ fn main() -> ExitCode {
     // its own tokio runtime (via `codex_arg0::arg0_dispatch_or_else`)
     // and returns an ExitCode directly, so it doesn't compose into
     // the `Result<()>` flow the other subcommands use.
-    if let Command::ChatCodex { prompt, yolo, model } = cli.command {
-        return chat_codex_cmd::run(prompt, yolo, model);
+    if let Command::ChatCodex {
+        prompt,
+        yolo,
+        model,
+        config_overrides,
+    } = cli.command
+    {
+        return chat_codex_cmd::run(prompt, yolo, model, config_overrides);
     }
     let res = match cli.command {
         Command::ChatCodex { .. } => unreachable!("handled above"),

@@ -16,6 +16,7 @@ use codex_arg0::arg0_dispatch_or_else;
 use codex_exec::Cli as ExecCli;
 use codex_exec::run_main;
 use codex_login::default_client::set_default_originator;
+use codex_utils_cli::CliConfigOverrides;
 
 /// Runtime entry point. Hands control to `codex_exec::run_main` via
 /// `arg0_dispatch_or_else`, which owns the tokio runtime for the
@@ -25,6 +26,7 @@ pub fn run(
     prompt: Option<String>,
     dangerously_bypass: bool,
     model: Option<String>,
+    config_overrides: Vec<String>,
 ) -> ExitCode {
     // Pre-set the originator before run_main can override it to
     // "codex_exec". OpenAI's gateway gates gpt-5.5 access on the
@@ -44,6 +46,9 @@ pub fn run(
         skip_git_repo_check: true,
         // Don't persist session state.
         ephemeral: true,
+        config_overrides: CliConfigOverrides {
+            raw_overrides: config_overrides,
+        },
         ..ExecCli::default()
     };
     // `dangerously_bypass_approvals_and_sandbox` and `model` live on
