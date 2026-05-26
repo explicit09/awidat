@@ -21,7 +21,6 @@ use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::TurnPlanStepStatus;
-use codex_app_server_protocol::UserInput as ProtocolUserInput;
 use serde_json::json;
 
 /// Item-id prefix for `Item::Text` synthesized from
@@ -260,25 +259,20 @@ pub fn map_thread_item(item: &ThreadItem, phase: Phase) -> Vec<Item> {
                 note: None,
             }]
         }
-        ThreadItem::UserMessage { id, content } => {
-            // Surface user messages as `Item::UserInput` so the renderer
-            // can stitch the conversation history when a Thread is
-            // resumed. Pick the first textual chunk; ignore non-text
-            // content for v1.
-            let text = content
-                .iter()
-                .find_map(|c| match c {
-                    ProtocolUserInput::Text { text, .. } => Some(text.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            if text.is_empty() {
-                return Vec::new();
-            }
-            vec![Item::UserInput {
-                id: Id::new(format!("codex-user-{id}")),
-                text,
-            }]
+        ThreadItem::UserMessage { .. } => {
+            // Codex echoes every user input back as a UserMessage
+            // ThreadItem. We DON'T render it: the desktop emits its
+            // own `Item::UserInput` at start_turn time (the clean
+            // user-typed text, before we prefix view-state context or
+            // the skills catalog). Surfacing codex's echo would
+            // double-render the input AND leak our internal context
+            // prefix into the chat as a visible bubble.
+            //
+            // For thread-resume (history.rs is currently stubbed), we
+            // will need a different path that reads the original
+            // user-typed text from a separate audit log rather than
+            // recovering it from codex's prefixed echo.
+            Vec::new()
         }
         // Web search, image, collab — drop until/unless desktop renders them.
         _ => Vec::new(),
