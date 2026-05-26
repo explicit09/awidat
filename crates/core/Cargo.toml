@@ -19,6 +19,18 @@ awidat-lut = { workspace = true }
 awidat-config = { workspace = true }
 awidat-mcp = { workspace = true }
 awidat-sandboxing = { workspace = true }
+# Server-side rmcp for the in-process Awidat MCP server (codex
+# registers it via [mcp_servers.awidat] and spawns it as a child
+# process over stdio). Features mirror crates/mcp's client features;
+# the macros feature wants "server" + "schemars" + "base64" because
+# rmcp 0.15's model/tool.rs references handler::server unconditionally.
+rmcp = { workspace = true, features = ["server", "macros", "schemars", "base64", "transport-io"] }
+# Direct schemars 1.x dep for the JsonSchema derive on MCP tool
+# argument structs. rmcp 0.15 depends on schemars 1.x; the workspace
+# pin is schemars 0.8.22 for codex compatibility, so this is a per-
+# crate override. We don't surface schemars types in our public API
+# so the version split is contained to this crate.
+schemars = "1.2.1"
 vedit-core = { workspace = true }
 dirs = { workspace = true }
 base64 = "0.22"

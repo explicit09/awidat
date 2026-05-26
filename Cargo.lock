@@ -814,11 +814,13 @@ dependencies = [
  "codex-exec",
  "codex-login",
  "codex-utils-cli",
+ "rmcp",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -857,7 +859,9 @@ dependencies = [
  "futures",
  "pretty_assertions",
  "reqwest 0.12.28",
+ "rmcp",
  "rusqlite",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "serde_yaml",

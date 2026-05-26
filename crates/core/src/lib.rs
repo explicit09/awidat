@@ -40,6 +40,7 @@
 )]
 
 pub mod anthropic;
+pub mod awidat_mcp;
 pub mod awidat_md;
 pub mod broll_recommendations;
 pub mod capabilities;
