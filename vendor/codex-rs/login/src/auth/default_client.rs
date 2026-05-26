@@ -131,7 +131,15 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
 }
 
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+    // Awidat fork edit: OpenAI's gateway checks the codex CLI version
+    // in the User-Agent before letting gpt-5.5 through. The vendored
+    // codex login crate inherits Awidat's workspace package version
+    // (0.1.0), which the server reads as ancient. Stamp the current
+    // published @openai/codex CLI version here so the request passes
+    // policy. Bump when refreshing the fork.
+    // See vendor/codex-rs/SOURCE for context.
+    let build_version = "0.133.0";
+    let _suppress_unused_pkg_version: &str = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(

@@ -26,6 +26,7 @@ awidat-secrets = { workspace = true }
 codex-exec = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-utils-cli = { workspace = true }
+codex-login = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["io-std", "signal"] }

@@ -1,7 +1,8 @@
 Source: https://github.com/openai/codex (codex-rs/)
-Forked at commit: 35aaa5d9fcb606fb6f27dd5747ecab3f4ba0c07e
-Subject: Bound websocket request sends with idle timeout (#20751)
-Date: 2026-05-01
+Forked at commit: 8a94430bb273623be42b68f144f1ab1df343bb53
+Subject: fix(process-hardening): preserve macos malloc diagnostics (#24479)
+Date: 2026-05-25
+Previous fork SHA: 35aaa5d9fcb606fb6f27dd5747ecab3f4ba0c07e (2026-05-01)
 
 We own this fork. Edits are normal code changes; we do not track upstream
 automatically. To pull a specific upstream change later, cherry-pick from a
@@ -9,3 +10,16 @@ local clone of openai/codex into vendor/codex-rs/.
 
 Awidat workspace lints (unwrap_used=deny, etc.) are scoped to crates/* and
 do not apply here.
+
+Our edits (re-apply after every refresh):
+- vendor/codex-rs/exec/src/cli.rs: `#[derive(Parser, Debug, Default)]` on `Cli`
+  so awidat-cli can construct one programmatically. See crates/cli/src/chat_codex_cmd.rs.
+- vendor/codex-rs/login/src/auth/default_client.rs:
+  `get_codex_user_agent` hardcodes build_version = "0.133.0" instead
+  of CARGO_PKG_VERSION. OpenAI's gateway gates gpt-5.5 on the User-Agent
+  version (errors as "requires a newer version of Codex"). The vendored
+  codex login crate inherits Awidat's 0.1.0 workspace package version,
+  which trips that check. `0.133.0` matches the current published
+  @openai/codex CLI. Bump to track upstream npm releases.
+- vendor/codex-rs/Cargo.toml + Cargo.lock: deleted. The codex crates live
+  inside Awidat's single root workspace.

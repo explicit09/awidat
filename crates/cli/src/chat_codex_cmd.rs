@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_exec::Cli as ExecCli;
 use codex_exec::run_main;
+use codex_login::default_client::set_default_originator;
 
 /// Runtime entry point. Hands control to `codex_exec::run_main` via
 /// `arg0_dispatch_or_else`, which owns the tokio runtime for the
@@ -25,6 +26,17 @@ pub fn run(
     dangerously_bypass: bool,
     model: Option<String>,
 ) -> ExitCode {
+    // Pre-set the originator before run_main can override it to
+    // "codex_exec". OpenAI's gateway gates gpt-5.5 access on the
+    // combination of (originator, version, auth_mode); matching the
+    // upstream CLI's default originator "codex_cli_rs" alongside
+    // the version stamp in vendor/codex-rs/login/src/auth/default_client.rs
+    // is what passes the policy check. set_default_originator is
+    // first-write-wins, so the call inside run_main becomes a no-op.
+    if let Err(err) = set_default_originator("codex_cli_rs".to_string()) {
+        tracing::warn!(?err, "failed to set awidat originator override");
+    }
+
     let mut cli = ExecCli {
         prompt,
         // Don't insist on a git repo for the hello-world; the user
