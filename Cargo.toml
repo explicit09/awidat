@@ -30,10 +30,12 @@ members = [
     "vendor/codex-rs/ansi-escape",
     "vendor/codex-rs/async-utils",
     "vendor/codex-rs/app-server",
+    "vendor/codex-rs/app-server-daemon",
     "vendor/codex-rs/app-server-transport",
     "vendor/codex-rs/app-server-client",
     "vendor/codex-rs/app-server-protocol",
     "vendor/codex-rs/app-server-test-client",
+    "vendor/codex-rs/bwrap",
     "vendor/codex-rs/debug-client",
     "vendor/codex-rs/apply-patch",
     "vendor/codex-rs/arg0",
@@ -50,7 +52,6 @@ members = [
     "vendor/codex-rs/collaboration-mode-templates",
     "vendor/codex-rs/connectors",
     "vendor/codex-rs/config",
-    "vendor/codex-rs/device-key",
     "vendor/codex-rs/shell-command",
     "vendor/codex-rs/shell-escalation",
     "vendor/codex-rs/skills",
@@ -76,6 +77,13 @@ members = [
     "vendor/codex-rs/mcp-server",
     "vendor/codex-rs/memories/read",
     "vendor/codex-rs/memories/write",
+    "vendor/codex-rs/memories/mcp",
+    "vendor/codex-rs/message-history",
+    "vendor/codex-rs/file-watcher",
+    "vendor/codex-rs/ext/extension-api",
+    "vendor/codex-rs/ext/goal",
+    "vendor/codex-rs/ext/guardian",
+    "vendor/codex-rs/ext/memories",
     "vendor/codex-rs/model-provider-info",
     "vendor/codex-rs/models-manager",
     "vendor/codex-rs/network-proxy",
@@ -102,9 +110,10 @@ members = [
     "vendor/codex-rs/utils/json-to-toml",
     "vendor/codex-rs/utils/home-dir",
     "vendor/codex-rs/utils/pty",
-    "vendor/codex-rs/utils/readiness",
     "vendor/codex-rs/utils/rustls-provider",
+    "vendor/codex-rs/utils/readiness",
     "vendor/codex-rs/utils/string",
+    "vendor/codex-rs/utils/template",
     "vendor/codex-rs/utils/cli",
     "vendor/codex-rs/utils/elapsed",
     "vendor/codex-rs/utils/sandbox-summary",
@@ -116,7 +125,6 @@ members = [
     "vendor/codex-rs/utils/plugins",
     "vendor/codex-rs/utils/fuzzy-match",
     "vendor/codex-rs/utils/stream-parser",
-    "vendor/codex-rs/utils/template",
     "vendor/codex-rs/codex-client",
     "vendor/codex-rs/codex-api",
     "vendor/codex-rs/state",
@@ -219,6 +227,7 @@ codex-ansi-escape = { path = "vendor/codex-rs/ansi-escape" }
 codex-api = { path = "vendor/codex-rs/codex-api" }
 codex-aws-auth = { path = "vendor/codex-rs/aws-auth" }
 codex-app-server = { path = "vendor/codex-rs/app-server" }
+codex-app-server-daemon = { path = "vendor/codex-rs/app-server-daemon" }
 codex-app-server-transport = { path = "vendor/codex-rs/app-server-transport" }
 codex-app-server-client = { path = "vendor/codex-rs/app-server-client" }
 codex-app-server-protocol = { path = "vendor/codex-rs/app-server-protocol" }
@@ -241,7 +250,6 @@ codex-core = { path = "vendor/codex-rs/core" }
 codex-core-api = { path = "vendor/codex-rs/core-api" }
 codex-core-plugins = { path = "vendor/codex-rs/core-plugins" }
 codex-core-skills = { path = "vendor/codex-rs/core-skills" }
-codex-device-key = { path = "vendor/codex-rs/device-key" }
 codex-exec = { path = "vendor/codex-rs/exec" }
 codex-file-system = { path = "vendor/codex-rs/file-system" }
 codex-exec-server = { path = "vendor/codex-rs/exec-server" }
@@ -249,6 +257,12 @@ codex-execpolicy = { path = "vendor/codex-rs/execpolicy" }
 codex-external-agent-migration = { path = "vendor/codex-rs/external-agent-migration" }
 codex-external-agent-sessions = { path = "vendor/codex-rs/external-agent-sessions" }
 codex-experimental-api-macros = { path = "vendor/codex-rs/codex-experimental-api-macros" }
+codex-extension-api = { path = "vendor/codex-rs/ext/extension-api" }
+codex-goal-extension = { path = "vendor/codex-rs/ext/goal" }
+codex-guardian = { path = "vendor/codex-rs/ext/guardian" }
+codex-file-watcher = { path = "vendor/codex-rs/file-watcher" }
+codex-message-history = { path = "vendor/codex-rs/message-history" }
+codex-memories-extension = { path = "vendor/codex-rs/ext/memories" }
 codex-features = { path = "vendor/codex-rs/features" }
 codex-feedback = { path = "vendor/codex-rs/feedback" }
 codex-install-context = { path = "vendor/codex-rs/install-context" }
@@ -306,11 +320,11 @@ codex-utils-output-truncation = { path = "vendor/codex-rs/utils/output-truncatio
 codex-utils-path = { path = "vendor/codex-rs/utils/path-utils" }
 codex-utils-plugins = { path = "vendor/codex-rs/utils/plugins" }
 codex-utils-pty = { path = "vendor/codex-rs/utils/pty" }
-codex-utils-readiness = { path = "vendor/codex-rs/utils/readiness" }
 codex-utils-rustls-provider = { path = "vendor/codex-rs/utils/rustls-provider" }
 codex-utils-sandbox-summary = { path = "vendor/codex-rs/utils/sandbox-summary" }
 codex-utils-sleep-inhibitor = { path = "vendor/codex-rs/utils/sleep-inhibitor" }
 codex-utils-stream-parser = { path = "vendor/codex-rs/utils/stream-parser" }
+codex-utils-readiness = { path = "vendor/codex-rs/utils/readiness" }
 codex-utils-string = { path = "vendor/codex-rs/utils/string" }
 codex-utils-template = { path = "vendor/codex-rs/utils/template" }
 codex-v8-poc = { path = "vendor/codex-rs/v8-poc" }
@@ -360,6 +374,7 @@ tempfile = "3.23.0"
 toml = { version = "0.9.5", default-features = false, features = ["parse", "display", "serde"] }
 toml_edit = "0.24.0"
 serde_yaml = "0.9"
+serde_ignored = "0.1.14"
 serde_path_to_error = "0.1.20"
 serde_with = "3.17"
 bm25 = "2.3.2"
@@ -415,12 +430,12 @@ csv = "1.3.1"
 ctor = "0.6.3"
 deno_core_icudata = "0.77.0"
 diffy = "0.4.2"
+divan = "0.1.21"
 dns-lookup = "3.0.1"
 dotenvy = "0.15.7"
 dunce = "1.0.4"
 ed25519-dalek = { version = "2.2.0", features = ["pkcs8"] }
 encoding_rs = "0.8.35"
-env-flags = "0.1.1"
 env_logger = "0.11.9"
 flate2 = "1.1.8"
 gethostname = "1.1.0"
@@ -440,6 +455,7 @@ indexmap = "2.12.0"
 insta = "1.46.3"
 inventory = "0.3.19"
 itertools = "0.14.0"
+jsonptr = { version = "0.7.1", default-features = false }
 jsonwebtoken = "9.3.1"
 landlock = "0.4.4"
 lazy_static = "1"
@@ -461,7 +477,6 @@ os_info = "3.12.0"
 owo-colors = "4.3.0"
 path-absolutize = "3.1.1"
 pathdiff = "0.2"
-p256 = "0.13.2"
 portable-pty = "0.9.0"
 predicates = "3"
 pulldown-cmark = "0.10"
@@ -522,7 +537,7 @@ uds_windows = "1.1.0"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
-v8 = "=146.4.0"
+v8 = "=147.4.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
@@ -541,29 +556,36 @@ zeroize = "1.8.2"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
+    "codex-goal-extension",
     "icu_provider",
     "openssl-sys",
-    "codex-utils-readiness",
-    "codex-utils-template",
     "codex-v8-poc",
 ]
 
 [profile.dev]
 # Keep line tables/backtraces while avoiding expensive full variable
 # debug info across local dev builds. Matches codex's default.
-debug = 1
+debug = "limited"
 
 [profile.dev-small]
 # Codex's "fast iterate" dev profile.
 inherits = "dev"
 opt-level = 0
-debug = 0
-strip = true
+debug = "none"
+strip = "symbols"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+[profile.profiling]
+# Codex profile for sampling profilers: release-shaped binary with
+# full debug info preserved and LTO disabled for faster recompiles.
+inherits = "release"
+debug = "full"
+lto = false
+strip = false
 
 # CI test binaries (esp. awidat-render-gpu with the full wgpu graph) link
 # into objects so large with the default `debuginfo=2` that ubuntu-latest
@@ -575,7 +597,7 @@ debug = "line-tables-only"
 
 [profile.ci-test]
 # Codex CI profile — smaller debug info, no optimization.
-debug = 1
+debug = "limited"
 inherits = "test"
 opt-level = 0
 
