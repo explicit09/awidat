@@ -7,7 +7,6 @@ members = [
     "crates/tools",
     "crates/mcp",
     "crates/sandboxing",
-    "crates/tui",
     "crates/cli",
     "crates/render",
     "crates/render-gpu",
@@ -207,7 +206,6 @@ awidat-core = { path = "crates/core" }
 awidat-tools = { path = "crates/tools" }
 awidat-mcp = { path = "crates/mcp" }
 awidat-sandboxing = { path = "crates/sandboxing" }
-awidat-tui = { path = "crates/tui" }
 awidat-render = { path = "crates/render" }
 awidat-render-gpu = { path = "crates/render-gpu" }
 awidat-effects = { path = "crates/effects" }

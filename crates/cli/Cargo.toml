@@ -24,7 +24,6 @@ awidat-core = { workspace = true }
 awidat-index = { workspace = true }
 awidat-mcp = { workspace = true }
 awidat-render = { workspace = true }
-awidat-tui = { workspace = true }
 awidat-secrets = { workspace = true }
 # Hello-world spine for the codex-harness migration. `chat-codex` is
 # a temporary subcommand that drives the vendored codex agent loop

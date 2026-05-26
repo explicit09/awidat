@@ -62,6 +62,7 @@ pub(super) async fn make_test_app() -> App {
         pending_startup_thread_start: false,
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
+        awidat_panel: None,
     }
 }
 

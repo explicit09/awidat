@@ -808,7 +808,6 @@ dependencies = [
  "awidat-proto",
  "awidat-render",
  "awidat-secrets",
- "awidat-tui",
  "clap",
  "codex-arg0",
  "codex-exec",
@@ -1063,28 +1062,6 @@ name = "awidat-tools"
 version = "0.1.0"
 dependencies = [
  "awidat-proto",
-]
-
-[[package]]
-name = "awidat-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "awidat-core",
- "awidat-proto",
- "chrono",
- "crossterm",
- "derive_more 2.1.1",
- "futures",
- "libc",
- "pretty_assertions",
- "ratatui",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "unicode-width 0.2.1",
 ]
 
 [[package]]
