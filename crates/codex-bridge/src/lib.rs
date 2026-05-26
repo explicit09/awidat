@@ -225,7 +225,17 @@ impl CodexAppServer {
         // 3. Mirror vendor/codex-rs/exec/src/lib.rs:530-555. arg0 +
         //    EnvironmentManager + ExecServerRuntimePaths drive the
         //    sandbox / re-exec dance.
-        let arg0_paths = Arg0DispatchPaths::default();
+        //
+        // Default's codex_self_exe is None — that's fine when codex
+        // owns the process (`arg0_dispatch_or_else` populates it from
+        // argv[0]), but the bridge runs in-process inside the Tauri
+        // app where argv[0] is the host binary. Stamp it from
+        // `current_exe()` so ExecServerRuntimePaths::from_optional_paths
+        // doesn't reject the startup. (Risk 6.1 from the planning doc.)
+        let mut arg0_paths = Arg0DispatchPaths::default();
+        if arg0_paths.codex_self_exe.is_none() {
+            arg0_paths.codex_self_exe = std::env::current_exe().ok();
+        }
         let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
             arg0_paths.codex_self_exe.clone(),
             arg0_paths.codex_linux_sandbox_exe.clone(),
