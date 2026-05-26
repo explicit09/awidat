@@ -56,7 +56,9 @@ use crate::awidat_mcp::context::McpToolCtx;
 use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
+use crate::awidat_mcp::tools::read_broll_recommendations::{self, ReadBrollRecommendationsArgs};
 use crate::awidat_mcp::tools::read_index::{self, ReadIndexArgs};
+use crate::awidat_mcp::tools::read_media_intelligence::{self, ReadMediaIntelligenceArgs};
 use crate::awidat_mcp::tools::read_understanding::{self, ReadUnderstandingArgs};
 use crate::awidat_mcp::tools::view_episode::{self, ViewEpisodeArgs};
 use crate::awidat_mcp::tools::view_timeline::{self, ViewTimelineArgs};
@@ -220,6 +222,39 @@ metadata.",
         args: Parameters<ReadUnderstandingArgs>,
     ) -> Result<String, ErrorData> {
         read_understanding::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `read_broll_recommendations` — scored B-roll opportunities.
+    #[tool(
+        description = "\
+Read scored B-roll recommendations derived from fused understanding without \
+side effects. Returns category, confidence score, asset strategy, insertion \
+plan, rationale, score breakdown, and source evidence ids for review.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn read_broll_recommendations(
+        &self,
+        args: Parameters<ReadBrollRecommendationsArgs>,
+    ) -> Result<String, ErrorData> {
+        read_broll_recommendations::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `read_media_intelligence` — progressive intelligence state.
+    #[tool(
+        description = "\
+Read the progressive intelligence state machine for raw media assets without \
+side effects. Returns independent layer readiness for source, proxy, waveform, \
+transcript, speakers, scenes, topics, moments, clip candidates, and b-roll, \
+plus aggregate state and next actions.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn read_media_intelligence(
+        &self,
+        args: Parameters<ReadMediaIntelligenceArgs>,
+    ) -> Result<String, ErrorData> {
+        read_media_intelligence::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 }
