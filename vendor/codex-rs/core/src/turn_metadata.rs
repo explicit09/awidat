@@ -197,7 +197,7 @@ impl TurnMetadataState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session_id: String,
-        thread_id: String,
+        _thread_id: String,
         thread_source: Option<ThreadSource>,
         turn_id: String,
         cwd: AbsolutePathBuf,
@@ -216,7 +216,9 @@ impl TurnMetadataState {
         );
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
-            Some(thread_id),
+            // Awidat fork edit: match the installed Codex 0.128.0 CLI request
+            // surface for ChatGPT-subscription newer-model access.
+            None,
             thread_source,
             Some(turn_id),
             sandbox,

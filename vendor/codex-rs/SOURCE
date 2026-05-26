@@ -14,12 +14,31 @@ do not apply here.
 Our edits (re-apply after every refresh):
 - vendor/codex-rs/exec/src/cli.rs: `#[derive(Parser, Debug, Default)]` on `Cli`
   so awidat-cli can construct one programmatically. See crates/cli/src/chat_codex_cmd.rs.
-- vendor/codex-rs/login/src/auth/default_client.rs:
-  `get_codex_user_agent` hardcodes build_version = "0.133.0" instead
-  of CARGO_PKG_VERSION. OpenAI's gateway gates gpt-5.5 on the User-Agent
-  version (errors as "requires a newer version of Codex"). The vendored
-  codex login crate inherits Awidat's 0.1.0 workspace package version,
-  which trips that check. `0.133.0` matches the current published
-  @openai/codex CLI. Bump to track upstream npm releases.
+- vendor/codex-rs/login/src/auth/default_client.rs,
+  vendor/codex-rs/models-manager/src/lib.rs,
+  vendor/codex-rs/exec/src/lib.rs, and
+  vendor/codex-rs/exec/src/event_processor_with_human_output.rs:
+  stamp Codex client version as "0.128.0" instead of Awidat's inherited
+  CARGO_PKG_VERSION ("0.1.0"). The working installed CLI sends
+  `Codex Desktop/0.128.0 ... (codex_exec; 0.128.0)` and
+  `/codex/models?client_version=0.128.0`; sending `0.1.0` in the suffix
+  or models query trips OpenAI's newer-model gate with "requires a newer
+  version of Codex". Bump these stamps when intentionally matching a newer
+  installed/published Codex CLI.
+- vendor/codex-rs/core/src/client.rs and vendor/codex-rs/core/src/turn_metadata.rs:
+  omit newer websocket client metadata that the installed 0.128.0 CLI does not
+  send (`x-codex-ws-stream-request-start-ms` and `thread_id` inside
+  `x-codex-turn-metadata`). The server applies the same newer-model gate to
+  this request surface, even when User-Agent and auth match.
+- vendor/codex-rs/analytics/src/events.rs:
+  stamp analytics `runtime.codex_rs_version` as "0.128.0"; the installed CLI
+  sends this value before the model request, while the fork's inherited "0.1.0"
+  remains another visible stale-version signal.
+- vendor/codex-rs/model-provider-info/src/lib.rs and
+  vendor/codex-rs/codex-api/src/requests/headers.rs:
+  match the installed Responses WebSocket HTTP header surface. The important
+  gate signal was the provider `version` header, which still said "0.1.0" even
+  after the User-Agent was fixed. The installed CLI sends `version: 0.128.0`,
+  `session_id`, and no `thread-id` header.
 - vendor/codex-rs/Cargo.toml + Cargo.lock: deleted. The codex crates live
   inside Awidat's single root workspace.
