@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use codex_utils_string::to_ascii_json_string;
 use serde::Serialize;
@@ -16,10 +18,19 @@ use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::SessionSource;
+use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+const MODEL_KEY: &str = "model";
+const REASONING_EFFORT_KEY: &str = "reasoning_effort";
 const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
+const USER_INPUT_REQUESTED_DURING_TURN_KEY: &str = "user_input_requested_during_turn";
+
+pub(crate) struct McpTurnMetadataContext<'a> {
+    pub(crate) model: &'a str,
+    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+}
 
 #[derive(Clone, Debug, Default)]
 struct WorkspaceGitMetadata {
@@ -61,7 +72,9 @@ pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    thread_source: Option<&'static str>,
+    thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread_source: Option<ThreadSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -107,7 +120,8 @@ fn merge_turn_metadata(
 
 fn build_turn_metadata_bag(
     session_id: Option<String>,
-    thread_source: Option<&'static str>,
+    thread_id: Option<String>,
+    thread_source: Option<ThreadSource>,
     turn_id: Option<String>,
     sandbox: Option<String>,
     repo_root: Option<String>,
@@ -122,6 +136,7 @@ fn build_turn_metadata_bag(
 
     TurnMetadataBag {
         session_id,
+        thread_id,
         thread_source,
         turn_id,
         workspaces,
@@ -151,6 +166,7 @@ pub async fn build_turn_metadata_header(
 
     build_turn_metadata_bag(
         /*session_id*/ None,
+        /*thread_id*/ None,
         /*thread_source*/ None,
         /*turn_id*/ None,
         sandbox.map(ToString::to_string),
@@ -173,13 +189,16 @@ pub(crate) struct TurnMetadataState {
     enriched_header: Arc<RwLock<Option<String>>>,
     turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
     responsesapi_client_metadata: Arc<RwLock<Option<HashMap<String, String>>>>,
+    user_input_requested_during_turn: Arc<AtomicBool>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl TurnMetadataState {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         session_id: String,
-        session_source: &SessionSource,
+        thread_id: String,
+        thread_source: Option<ThreadSource>,
         turn_id: String,
         cwd: AbsolutePathBuf,
         permission_profile: &PermissionProfile,
@@ -197,7 +216,8 @@ impl TurnMetadataState {
         );
         let base_metadata = build_turn_metadata_bag(
             Some(session_id),
-            session_source.thread_source_name(),
+            Some(thread_id),
+            thread_source,
             Some(turn_id),
             sandbox,
             /*repo_root*/ None,
@@ -215,6 +235,7 @@ impl TurnMetadataState {
             enriched_header: Arc::new(RwLock::new(None)),
             turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
             responsesapi_client_metadata: Arc::new(RwLock::new(None)),
+            user_input_requested_during_turn: Arc::new(AtomicBool::new(false)),
             enrichment_task: Arc::new(Mutex::new(None)),
         }
     }
@@ -248,9 +269,44 @@ impl TurnMetadataState {
         .or(Some(header))
     }
 
-    pub(crate) fn current_meta_value(&self) -> Option<serde_json::Value> {
-        self.current_header_value()
-            .and_then(|header| serde_json::from_str(&header).ok())
+    pub(crate) fn current_meta_value_for_mcp_request(
+        &self,
+        context: McpTurnMetadataContext<'_>,
+    ) -> Option<serde_json::Value> {
+        let header = self.current_header_value()?;
+        let mut metadata = serde_json::from_str::<serde_json::Map<String, Value>>(&header).ok()?;
+        metadata.insert(
+            MODEL_KEY.to_string(),
+            Value::String(context.model.to_string()),
+        );
+        match context.reasoning_effort {
+            Some(reasoning_effort) => {
+                metadata.insert(
+                    REASONING_EFFORT_KEY.to_string(),
+                    Value::String(reasoning_effort.to_string()),
+                );
+            }
+            None => {
+                metadata.remove(REASONING_EFFORT_KEY);
+            }
+        }
+        if self
+            .user_input_requested_during_turn
+            .load(Ordering::Relaxed)
+        {
+            metadata.insert(
+                USER_INPUT_REQUESTED_DURING_TURN_KEY.to_string(),
+                Value::Bool(true),
+            );
+        } else {
+            metadata.remove(USER_INPUT_REQUESTED_DURING_TURN_KEY);
+        }
+        Some(Value::Object(metadata))
+    }
+
+    pub(crate) fn mark_user_input_requested_during_turn(&self) {
+        self.user_input_requested_during_turn
+            .store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn set_responsesapi_client_metadata(
@@ -293,6 +349,7 @@ impl TurnMetadataState {
 
             let enriched_metadata = build_turn_metadata_bag(
                 state.base_metadata.session_id.clone(),
+                state.base_metadata.thread_id.clone(),
                 state.base_metadata.thread_source,
                 state.base_metadata.turn_id.clone(),
                 state.base_metadata.sandbox.clone(),

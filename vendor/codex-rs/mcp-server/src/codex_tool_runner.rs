@@ -116,6 +116,7 @@ pub async fn run_codex_tool_session(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         },
         trace: None,
     };
@@ -165,6 +166,7 @@ pub async fn run_codex_tool_session_reply(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
     {
@@ -222,6 +224,7 @@ async fn run_codex_tool_session_inner(
                         let approval_id = ev.effective_approval_id();
                         let ExecApprovalRequestEvent {
                             turn_id: _,
+                            started_at_ms: _,
                             command,
                             cwd,
                             call_id,
@@ -278,6 +281,7 @@ async fn run_codex_tool_session_inner(
                     EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                         call_id,
                         turn_id: _,
+                        started_at_ms: _,
                         reason,
                         grant_root,
                         changes,
@@ -318,9 +322,6 @@ async fn run_codex_tool_session_inner(
                     EventMsg::SessionConfigured(_) => {
                         tracing::error!("unexpected SessionConfigured event");
                     }
-                    EventMsg::ThreadNameUpdated(_) => {
-                        // Ignore session metadata updates in MCP tool runner.
-                    }
                     EventMsg::ThreadGoalUpdated(_) => {
                         // Ignore thread goal metadata updates in MCP tool runner.
                     }
@@ -332,13 +333,12 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::AgentReasoningRawContent(_)
                     | EventMsg::TurnStarted(_)
+                    | EventMsg::ThreadSettingsApplied(_)
                     | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::AgentReasoningSectionBreak(_)
                     | EventMsg::McpToolCallBegin(_)
                     | EventMsg::McpToolCallEnd(_)
-                    | EventMsg::McpListToolsResponse(_)
-                    | EventMsg::ListSkillsResponse(_)
                     | EventMsg::RealtimeConversationListVoicesResponse(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::TerminalInteraction(_)
@@ -351,7 +351,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::TurnDiff(_)
                     | EventMsg::WebSearchBegin(_)
                     | EventMsg::WebSearchEnd(_)
-                    | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
                     | EventMsg::TurnAborted(_)
                     | EventMsg::UserMessage(_)
@@ -368,7 +367,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::AgentMessageContentDelta(_)
                     | EventMsg::ReasoningContentDelta(_)
                     | EventMsg::ReasoningRawContentDelta(_)
-                    | EventMsg::SkillsUpdateAvailable
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::RequestUserInput(_)
                     | EventMsg::RequestPermissions(_)
