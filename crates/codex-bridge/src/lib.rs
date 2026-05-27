@@ -51,6 +51,8 @@ use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ToolRequestUserInputAnswer;
@@ -203,12 +205,18 @@ pub struct CodexAppServer {
 impl CodexAppServer {
     /// Spawn the in-process app-server for `project_root` and start its
     /// event pump.
+    ///
+    /// When `resume_thread_id` is `Some`, the bridge issues a
+    /// `thread/resume` instead of `thread/start`, so the existing
+    /// rollout's history is re-loaded and the same `thread_id` is
+    /// retained. Otherwise a fresh thread is created.
     pub async fn launch(
         emit: Arc<dyn ItemEmitter>,
         project_root: PathBuf,
         mcp_server_path: Option<PathBuf>,
         developer_instructions: Option<String>,
         skills_catalog: Option<String>,
+        resume_thread_id: Option<String>,
     ) -> Result<Self, BridgeError> {
         // 1. Build the CLI overrides FIRST so they're baked into the
         //    Config we hand off to the in-process app-server. The
@@ -315,22 +323,45 @@ impl CodexAppServer {
             .map_err(|e| BridgeError::Startup(format!("InProcessAppServerClient::start: {e}")))?;
         let request_handle = AppServerRequestHandle::InProcess(client.request_handle());
 
-        // 6. Start a fresh thread. The Awidat per-format addendum
+        // 6. Start (or resume) the thread. The Awidat per-format addendum
         //    (system_prompt.rs::PODCAST_ADDENDUM and friends) rides
         //    on `developer_instructions` so codex's base prompt stays
         //    intact while the editorial playbook layers on top.
-        let thread_response: ThreadStartResponse = request_handle
-            .request_typed(ClientRequest::ThreadStart {
-                request_id: RequestId::Integer(1),
-                params: ThreadStartParams {
-                    cwd: Some(project_root.display().to_string()),
-                    developer_instructions,
-                    ..ThreadStartParams::default()
-                },
-            })
-            .await
-            .map_err(|e| BridgeError::Startup(format!("thread/start: {e}")))?;
-        let thread_id = thread_response.thread.id;
+        //
+        //    Resume path: when the desktop asks to continue an existing
+        //    chat we call `thread/resume` against the stored thread_id.
+        //    Codex's `ThreadResumeParams` loads the rollout from disk
+        //    (vendor/codex-rs/app-server-protocol/src/protocol/v2/thread.rs)
+        //    and the resulting thread keeps the same id, so subsequent
+        //    `turn/start` calls thread off the persisted history.
+        let thread_id = if let Some(resume_id) = resume_thread_id {
+            let resume_response: ThreadResumeResponse = request_handle
+                .request_typed(ClientRequest::ThreadResume {
+                    request_id: RequestId::Integer(1),
+                    params: ThreadResumeParams {
+                        thread_id: resume_id.clone(),
+                        cwd: Some(project_root.display().to_string()),
+                        developer_instructions,
+                        ..ThreadResumeParams::default()
+                    },
+                })
+                .await
+                .map_err(|e| BridgeError::Startup(format!("thread/resume: {e}")))?;
+            resume_response.thread.id
+        } else {
+            let thread_response: ThreadStartResponse = request_handle
+                .request_typed(ClientRequest::ThreadStart {
+                    request_id: RequestId::Integer(1),
+                    params: ThreadStartParams {
+                        cwd: Some(project_root.display().to_string()),
+                        developer_instructions,
+                        ..ThreadStartParams::default()
+                    },
+                })
+                .await
+                .map_err(|e| BridgeError::Startup(format!("thread/start: {e}")))?;
+            thread_response.thread.id
+        };
 
         // 7. Set up the pump's communication channels.
         let pending: Arc<Mutex<HashMap<String, PendingServerRequest>>> =

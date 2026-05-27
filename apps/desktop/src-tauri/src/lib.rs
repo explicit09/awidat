@@ -135,6 +135,7 @@ pub fn run() {
             commands::history::load_chat_history,
             commands::history::load_chat_session,
             commands::history::start_new_chat_session,
+            commands::history::resume_chat_session,
             commands::history::rename_chat_session,
             commands::history::delete_chat_session,
             commands::notes::list_notes,

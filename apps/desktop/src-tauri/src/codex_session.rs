@@ -69,7 +69,15 @@ impl CodexSession {
     /// Launch a fresh bridge for `project_root`. Caller must have
     /// already verified there isn't an existing session for this
     /// project (otherwise we leak the previous one).
-    pub async fn launch(app: AppHandle, project_root: PathBuf) -> Result<Self, BridgeError> {
+    ///
+    /// When `resume_thread_id` is `Some`, the bridge re-attaches to an
+    /// existing codex thread (rollout-backed history) instead of
+    /// starting a fresh one.
+    pub async fn launch(
+        app: AppHandle,
+        project_root: PathBuf,
+        resume_thread_id: Option<String>,
+    ) -> Result<Self, BridgeError> {
         let mcp_server_path = resolve_mcp_server_binary();
         // Loud failure on the user-facing event bus when the sibling
         // binary is missing — silently falling back to "codex with no
@@ -111,6 +119,7 @@ impl CodexSession {
             mcp_server_path,
             developer_instructions,
             skills_catalog,
+            resume_thread_id,
         )
         .await?;
         Ok(Self {

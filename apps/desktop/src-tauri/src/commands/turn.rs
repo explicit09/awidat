@@ -95,7 +95,7 @@ pub async fn start_turn(
             None => true,
         };
         if needs_launch {
-            let session = CodexSession::launch(app.clone(), project_root.clone())
+            let session = CodexSession::launch(app.clone(), project_root.clone(), None)
                 .await
                 .map_err(|e| format!("launch codex bridge: {e}"))?;
             *slot = Some(session);

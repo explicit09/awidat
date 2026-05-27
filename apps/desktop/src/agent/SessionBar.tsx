@@ -80,7 +80,17 @@ export function SessionBar({
     if (!logPath) return;
     setLoading(true);
     try {
-      const history = await invoke<ChatHistory>("load_chat_session", { logPath });
+      // Resume binds the codex bridge to this thread so the next
+      // turn continues the conversation. Falls back to a read-only
+      // load if resume fails (e.g. a turn is running) so the user at
+      // least sees the messages.
+      let history: ChatHistory;
+      try {
+        history = await invoke<ChatHistory>("resume_chat_session", { logPath });
+      } catch (resumeErr) {
+        console.warn("resume_chat_session failed; falling back to read-only load", resumeErr);
+        history = await invoke<ChatHistory>("load_chat_session", { logPath });
+      }
       setActiveLogPath(history.session?.logPath ?? "");
       replaceItems(history.items);
       setHistoryOpen(false);
