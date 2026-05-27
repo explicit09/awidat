@@ -220,6 +220,20 @@ impl CodexAppServer {
         //    so AWIDAT_PROJECT_ROOT has to ride the per-server env
         //    override. DO NOT regress af731e69 / 2889dc59.
         let mut cli_overrides: Vec<(String, toml::Value)> = Vec::new();
+
+        // Auto-compaction. Codex's compact machinery
+        // (vendor/codex-rs/core/src/compact.rs) only fires when this
+        // config is set — default is None, meaning the agent runs
+        // until it hits the model's hard context limit and stalls.
+        // We hit exactly that in a session today: 24 polls + 12 video
+        // jobs ate the full 258k window before the edit finished.
+        // 200_000 trips compaction at ~78% utilization, leaving the
+        // post-compaction turn room to actually do something.
+        cli_overrides.push((
+            "model_auto_compact_token_limit".to_string(),
+            toml::Value::Integer(200_000),
+        ));
+
         if let Some(mcp_path) = mcp_server_path {
             cli_overrides.push((
                 "mcp_servers.awidat.command".to_string(),
