@@ -43,8 +43,28 @@ the primary asset shows >30% no-face: those are moments the speaker
 is briefly off-camera, not cutaway material. Stay on this skill.
 
 When the project DOES have a separate cutaway library, the user's
-own footage usually reads better than generic stock —
-generic stock.
+own footage usually reads better than generic stock — defer to
+`b-roll-suggester` for that case.
+
+## Never auto-place stock B-roll over these moments
+
+These beats are parasocial / emotional / proof-of-presence — the face
+IS the value, covering them kills the moment. Place stock BEFORE or
+AFTER, not during:
+
+- Laughter
+- Emotional confession
+- Heated debate
+- Punchline
+- Guest's strongest quote
+- Host directly addressing the audience
+- Moments with strong facial expression
+- Moments where visual accuracy is uncertain (would-be-guessing)
+
+This rule overrides every other rule below. The full trigger
+taxonomy (high-confidence / low-confidence / never) lives in the
+podcast addendum that's already in your system prompt; refer to it
+for which moments TO insert on.
 
 ## The 4-step playbook
 
@@ -105,14 +125,35 @@ to `apply_edl` to actually place the cutaway.
 
 ## Editorial conventions
 
-- **Cutaway duration: 2–4 seconds.** Less is too short to read; more
-  loses the speaker.
+- **Cutaway duration by situation** (match these — don't invent):
+  - Topic transition: 2–4 sec
+  - Product / tool mention: 2–5 sec
+  - Statistic: 2–4 sec (stat card or chart, not random stock)
+  - Complex explanation: 3–8 sec (longer end only for diagrams /
+    screen recordings)
+  - Covering a jump cut: 1–3 sec
+  - Short-form clip cutaway: 1–3 sec
+  - Cold open / trailer: 0.5–3 sec, trailer-style
+  - Default safe range: **2–4 seconds**. Less is too short to read;
+    holding past 8 sec in long-form becomes as boring as no B-roll.
+- **Density**: long-form episode keeps it LOW (only at topic shifts,
+  examples, stats, products, complex explanations, jump-cut covers).
+  Short-form clip targets 15–25% B-roll coverage; explainer clip
+  25–35%; cold open / trailer 35–60%.
 - **Match the visual to the literal noun.** "Skyline" → search for
   "skyline at dusk" or "city skyline morning", not "urban energy".
   Pexels' relevance ranker is concrete-friendly.
 - **Specific > generic.** "Empty Brooklyn street at dawn" beats
   "city street". The user can always swap a specific match; they
   can't conjure specificity from a generic one.
+- **Asset-priority sanity check before searching Pexels:** screen
+  recording / screenshot / chart / stat card almost always beat
+  generic stock for tech / business / explainer content. If the
+  speaker references a real product, real app UI, real chart, or
+  real news event, prefer a screen recording or screenshot tool over
+  Pexels. Pexels is the right call for archetypes (a busy office, a
+  city street, a forest, generic faceless hands on a keyboard) where
+  the literal visual doesn't need to be a specific real thing.
 - **Position is `overlay` by default**. The underlying audio still
   plays — the user hears the speaker while seeing the cutaway. Use
   `position="replace"` only when the speaker is silent under the
