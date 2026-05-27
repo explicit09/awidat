@@ -66,6 +66,7 @@ pub async fn set_project_root(
     // a project change requires a fresh bridge. Tear down here; the
     // next `start_turn` will launch a new one (lazily) against `buf`.
     tear_down_codex_session(&state).await;
+    spawn_generated_media_watcher(&state, &app, &buf).await;
     crate::commands::media::clear_media_server_files(&state)?;
     allow_project_asset_dirs(&app, &buf);
 
@@ -114,6 +115,7 @@ pub async fn close_project(state: State<'_, AwidatState>) -> Result<(), String> 
     ensure_project_switch_allowed(&state).await?;
     *state.project_root.lock().await = None;
     tear_down_codex_session(&state).await;
+    tear_down_generated_media_watcher(&state).await;
     crate::commands::media::clear_media_server_files(&state)?;
     Ok(())
 }
@@ -198,6 +200,7 @@ pub async fn init_project(
     // Drain any pre-existing bridge so the next start_turn picks up
     // the new project_root.
     tear_down_codex_session(&state).await;
+    spawn_generated_media_watcher(&state, &app, &project_dir).await;
     allow_project_asset_dirs(&app, &project_dir);
     if let Err(e) = update_recents(&project_dir).await {
         tracing::warn!(error = %e, "failed to update recents file");
@@ -315,6 +318,33 @@ pub(super) async fn tear_down_codex_session(state: &State<'_, AwidatState>) {
         if let Err(e) = session.bridge.shutdown().await {
             tracing::warn!(error = %e, "codex bridge shutdown on project switch returned error");
         }
+    }
+}
+
+/// Spawn the generated-media registry watcher for `project_root`.
+/// Replaces any previously-running watcher (e.g. from a stale project
+/// switch path).
+pub(super) async fn spawn_generated_media_watcher(
+    state: &State<'_, AwidatState>,
+    app: &AppHandle,
+    project_root: &std::path::Path,
+) {
+    // Drop any prior watcher first so cancellation propagates on the
+    // next tick.
+    if let Some(prev) = state.generated_media_watcher.lock().await.take() {
+        prev.cancel.cancel();
+    }
+    let handle = crate::generated_media_watcher::GeneratedMediaWatcher::spawn(
+        app.clone(),
+        project_root.to_path_buf(),
+    );
+    *state.generated_media_watcher.lock().await = Some(handle);
+}
+
+/// Cancel and drop the active generated-media watcher (if any).
+pub(super) async fn tear_down_generated_media_watcher(state: &State<'_, AwidatState>) {
+    if let Some(watcher) = state.generated_media_watcher.lock().await.take() {
+        watcher.cancel.cancel();
     }
 }
 
@@ -470,6 +500,7 @@ pub async fn delete_project(
         ensure_project_switch_allowed(&state).await?;
         *state.project_root.lock().await = None;
         tear_down_codex_session(&state).await;
+        tear_down_generated_media_watcher(&state).await;
         crate::commands::media::clear_media_server_files(&state)?;
     }
 

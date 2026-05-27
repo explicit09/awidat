@@ -29,6 +29,12 @@ pub struct AwidatState {
     /// given `project_root`; rebuilt when the project changes
     /// (different cwd / MCP env override).
     pub codex: Mutex<Option<crate::codex_session::CodexSession>>,
+    /// Watcher tailing `<project>/.awidat/generated-media/registry.json`
+    /// and emitting `Item::Job { kind: GeneratedMedia, … }` lifecycle
+    /// events so the chat UI shows external video-gen progress. One
+    /// per opened project; torn down on close / app exit.
+    pub generated_media_watcher:
+        Mutex<Option<crate::generated_media_watcher::GeneratedMediaWatcher>>,
     /// Active turn, if any. Set by `start_turn`, cleared on
     /// TurnEnd / Error / cancel.
     pub turn: Mutex<Option<TurnHandle>>,

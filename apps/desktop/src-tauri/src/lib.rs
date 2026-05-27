@@ -28,6 +28,7 @@
 mod app_menu;
 mod codex_session;
 mod commands;
+mod generated_media_watcher;
 mod events;
 mod secrets;
 mod state;
@@ -234,6 +235,9 @@ pub fn run() {
                     if let Err(e) = session.bridge.shutdown().await {
                         tracing::warn!(error = %e, "codex bridge shutdown returned error");
                     }
+                }
+                if let Some(watcher) = state.generated_media_watcher.lock().await.take() {
+                    watcher.cancel.cancel();
                 }
             });
         }

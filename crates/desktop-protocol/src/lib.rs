@@ -532,6 +532,13 @@ pub enum JobKind {
     /// (proxy generation) and from agent-initiated `start_render` tool
     /// calls (those surface as `Item::ToolCall`).
     Render,
+    /// External-provider video/image generation job (OpenRouter +
+    /// SeeDance, etc.). Lifecycle is watched on the desktop side by
+    /// tailing `<project>/.awidat/generated-media/registry.json`;
+    /// the agent itself sees these via `poll_generated_media_job`,
+    /// but the user wants visibility into "how many in flight, when
+    /// they land" without checking the registry by hand.
+    GeneratedMedia,
 }
 
 /// Terminal state of an [`Item::Job`].
