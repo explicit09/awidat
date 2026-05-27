@@ -58,9 +58,17 @@ DBSCAN_EPS = 0.4
 DBSCAN_MIN_SAMPLES = 1  # singleton clusters are valid (a guest who appears once)
 
 # Frame size to detect on. dlib HOG works at native resolution but
-# downscaling keeps a 4K stream fast without losing detection quality
-# at typical interview-cam shot scales.
-DETECT_WIDTH = int(os.environ.get("FACE_DETECT_WIDTH", "480"))
+# downscaling keeps a 4K stream fast. The default of 480 was too
+# aggressive for multi-cam podcast wide shots: three speakers each
+# occupying 5-10% of frame width became 24-48px faces, below HOG's
+# ~80px floor. Result: wide shots were classified `no-face` even
+# though three people were visible, which cascaded into `broll_
+# candidates` returning multi-cam wide-shot moments as "B-roll"
+# candidates — exactly the wrong kind of footage.
+# 960 puts the same 5-10% face at 48-96px, in HOG's reliable range.
+# Cost: ~4x more pixels per detect, ~2x wallclock per frame, fine
+# at the 0.5fps sample rate.
+DETECT_WIDTH = int(os.environ.get("FACE_DETECT_WIDTH", "960"))
 
 AT_CAMERA_THRESHOLD = 0.15
 
