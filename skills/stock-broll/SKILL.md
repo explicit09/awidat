@@ -34,9 +34,16 @@ footage and you need to bring some in.
 - A `broll_suggestion` Note from `find_broll_opportunities` already
   surfaced and the user clicked through it.
 
-If the project already has a strong in-footage cutaway library
-(`shot_summary` shows > 30% no-face shots), defer to `b-roll-suggester`
-instead — the user's own footage almost always reads better than
+Only defer to `b-roll-suggester` when the project has SEPARATE
+cutaway assets imported alongside the primary recording (drone shots,
+B-cam, demo footage, an explicit `b-roll/` directory in raw/). For
+single-asset talking-head projects — only the primary recording in
+raw/ — `b-roll-suggester` does not apply, even if `shot_summary` on
+the primary asset shows >30% no-face: those are moments the speaker
+is briefly off-camera, not cutaway material. Stay on this skill.
+
+When the project DOES have a separate cutaway library, the user's
+own footage usually reads better than generic stock —
 generic stock.
 
 ## The 4-step playbook

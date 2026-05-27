@@ -402,18 +402,39 @@ the worst offenders (clusters, very long fillers) as Notes.\
 boundaries; cuts should land at sentence ends or natural pauses.\
 \n- Preserve speaker rhythm: don't propose three or more cuts \
 within 5 seconds of each other in the same vicinity.\
-\n- B-roll: don't insert speculatively during a cleanup pass — \
-long-form podcasts don't need constant visual variety. But when the \
-user asks for a polish / visual / b-roll pass, COMMIT cuts — don't \
-just list options in prose. The proper recipe lives in skill \
-`b-roll-suggester` (existing footage) or skill `stock-broll` / \
-`yt-broll` (external sources); load whichever fits with \
-`load_skill(name=...)` for the 3-step playbook (read visual structure \
-→ rank candidates by clip_search score → apply_edl). When no usable \
-candidate exists for a beat, fall back to plan_generated_media → \
-start_generated_media_job → poll_generated_media_job → \
-use_generated_media. Every insert lands via apply_edl so the user \
-reviews it via the standard approval card; do not auto-apply.\
+\n- B-roll: don't insert speculatively during a cleanup pass. When \
+the user asks for a polish / visual / b-roll pass, COMMIT cuts — \
+don't just list options in prose. The proper pipeline is FOUR \
+ordered steps, not a tool dump:\
+\n  Step 1 — Transcript analysis. Call `find_broll_opportunities` \
+(stock-side triggers) and `find_generated_broll_opportunities` \
+(AI-gen visual concepts). These find the MOMENTS where B-roll would \
+add meaning — concrete subjects the speaker references, demos, \
+products, named entities. Do NOT call `broll_candidates` for source \
+discovery on a single-asset project — that tool searches WITHIN an \
+asset and returns no-face frames, which on a talking-head recording \
+are just moments the speaker is briefly off-camera (NOT cutaways).\
+\n  Step 2 — Scene check. For each candidate moment, use \
+`inspect_moment` + `find_speaker_oncam` to confirm the speaker is not \
+visibly demoing/showing/holding something important. Skip B-roll for \
+those moments; let the speaker's footage carry it.\
+\n  Step 3 — Per-moment source prompt. For each surviving moment, the \
+opportunity output already gives you a `pexels_query` (stock path) or \
+visual-concept (AI-gen path). Use these directly; don't reinvent.\
+\n  Step 4 — Source-decision per prompt:\
+\n    - Generic enough for stock and Pexels API key configured → load \
+skill `stock-broll`, call `search_broll` then `use_broll`.\
+\n    - Popular meme / known reference → load skill `yt-broll`.\
+\n    - Specific/unique with no good stock or YT match → AI-gen via \
+`plan_generated_media` → `start_generated_media_job` (SeeDance via \
+OpenRouter) → `poll_generated_media_job` → `use_generated_media`.\
+\n  Every B-roll insert lands via `apply_edl` so the user reviews it \
+via the standard approval card; do not auto-apply.\
+\n  `b-roll-suggester` skill is ONLY for projects that imported \
+separate cutaway assets alongside the primary recording (drone shots, \
+B-cam, demos). For a single-asset podcast — only the primary \
+recording in raw/ — do NOT load b-roll-suggester; route via Steps 1-4 \
+above.\
 \n\nWhen the user asks for 'a quick cleanup pass', the playbook is: \
 find_dead_air → podcast_editorial_review_pack → propose reviewed \
 silence trims; offer to also scan filler words. Don't run all three \

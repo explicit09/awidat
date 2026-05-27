@@ -1,6 +1,6 @@
 ---
 name: b-roll-suggester
-description: Find visual cutaways for spoken content. Composes shot type, camera motion, frame quality, and CLIP semantic search to suggest where to cut to what.
+description: Find visual cutaways for spoken content from an EXISTING IN-PROJECT B-roll library (separate cutaway assets imported alongside the primary recording). Composes shot type, camera motion, frame quality, and CLIP semantic search. Do NOT use for single-asset talking-head projects — route to stock-broll, yt-broll, or AI generation instead.
 version: 0.1.0
 tier: editorial
 tools_allowlist:
@@ -21,10 +21,11 @@ tools_allowlist:
 
 # B-roll suggester
 
-You are finding visual cutaways for spoken content. The user has a
-talking-head segment and wants to break up the visual monotony with
-relevant b-roll. Your job: given a passage of audio, **suggest what
-to cut TO and when**.
+You are finding visual cutaways for spoken content using B-roll
+footage that **already exists in the project** (drone shots, room
+shots, demo footage, imported cutaway library — anything separate
+from the speaker's primary recording). Your job: given a passage of
+audio, **suggest what existing cutaway to cut TO and when**.
 
 This skill is for a literal continuity cover or literal explanation
 cover. It is not a symbolic montage and not an associative essay edit.
@@ -37,13 +38,34 @@ matters more than reasoning." You DO NOT try to do CLIP embedding
 math in your head. You CALL `clip_search` with the right query and
 trust the score.
 
+## Precondition: this skill needs a real B-roll library
+
+**Do not run this skill if the project's only asset is the primary
+recording.** "No-face shots" in a single-asset talking-head project
+are NOT cutaways — they are moments the speaker is briefly off-camera,
+the camera was pointed at empty studio, or it's a wide multi-cam frame
+where the face detector missed the speakers. Treating those as B-roll
+inserts the speaker's own footage as "B-roll", which is not B-roll —
+it's a jump cut to the same person.
+
+Check first via `view_episode` or by inspecting `raw/`:
+- If `raw/` contains ONLY the primary recording (one asset, or one
+  primary + transcripts/audio sidecars): this skill does not apply.
+  Route to `stock-broll` (Pexels), `yt-broll` (popular references), or
+  `find_generated_broll_opportunities` → `plan_generated_media` →
+  `start_generated_media_job` → `use_generated_media` (AI-generated)
+  depending on what the transcript asks for.
+- If `raw/` contains separate cutaway material (b-roll/, broll/,
+  cutaways/, drone-shots/, demos/, screen-recordings/, anything other
+  than the primary recording): proceed below.
+
 ## The 3-step playbook
 
 ### 1. Read the visual structure
 
 ```
 view_episode      # confirm vision indexers ran
-shot_summary       # what's the visual texture of this asset?
+shot_summary       # what's the visual texture of the cutaway library?
 ```
 
 Use the full visual index set when it exists: `shot` for shot type and
@@ -51,12 +73,11 @@ motion, `frame-quality` for sharpness/readability, `gaze` for moments
 that should stay on the speaker, `clip` for semantic frame search, and
 `face` for speaker continuity.
 
-If `shot_summary` shows < 20% no-face shots, this video doesn't
-have meaningful b-roll. Tell the user honestly: "this video is
-mostly talking-head; the b-roll library is too thin for cutaways.
-Better path: tighten the speaking pace via interview-tightener."
-
-If 20%+ no-face: proceed.
+Run `shot_summary` against the **cutaway-library asset(s), not the
+primary recording**. If the cutaway library is thin or absent (<20%
+no-face shots there), the project doesn't have meaningful B-roll
+material to draw from — tell the user honestly and route to stock-broll
+or AI generation as above.
 
 ### 2. For each spoken passage, find the best cutaway
 
@@ -69,7 +90,10 @@ you specific timestamps or you'll pick high-energy beats via
 inspect_moment(moment_id=...)  → returns transcript + key concepts
 
 # What no-face/wide cutaways are available, ranked by usable duration?
-broll_candidates(min_duration_s=2.0, types=["no-face", "wide"])
+# CRITICAL: asset_id must point at a separate cutaway asset, NOT the
+# primary recording. Passing the primary asset_id returns "moments
+# inside the speaker's own footage" which is never B-roll.
+broll_candidates(asset_id="<cutaway-asset>", min_duration_s=2.0, types=["no-face", "wide"])
 
 # For each candidate, does its visual content match the spoken concept?
 clip_search(query="<concept from inspect_moment>", min_score=0.20)
