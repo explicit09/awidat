@@ -2327,6 +2327,7 @@ out-of-process worker wired up.",
         args: Parameters<PollGeneratedMediaJobArgs>,
     ) -> Result<String, ErrorData> {
         poll_generated_media_job::run(args.0, McpToolCtx::resolve())
+            .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
