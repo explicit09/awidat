@@ -11,10 +11,10 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{
     ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput, ToolRegistry,
 };
+use crate::tool_schema::Tool as ToolSchema;
 use crate::tools::apply_edl::ApplyEdlTool;
 
 /// Register all granular timeline wrappers.

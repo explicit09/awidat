@@ -5,8 +5,8 @@ use awidat_index::walk_indexer;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;

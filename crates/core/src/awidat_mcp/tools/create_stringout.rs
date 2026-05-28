@@ -40,9 +40,7 @@ pub fn run(args: CreateStringoutArgs, ctx: McpToolCtx) -> Result<String, String>
 
     let meta = ensure_awidat_metadata(&mut project.timeline);
     if meta.stringouts.iter().any(|s| s.id == id) {
-        return Err(format!(
-            "create_stringout: stringout {id} already exists"
-        ));
+        return Err(format!("create_stringout: stringout {id} already exists"));
     }
     let stringout = Stringout {
         id: id.clone(),

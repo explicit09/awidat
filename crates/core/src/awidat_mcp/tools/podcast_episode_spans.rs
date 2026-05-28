@@ -49,8 +49,8 @@ pub fn run(args: PodcastEpisodeSpansArgs, ctx: McpToolCtx) -> Result<String, Str
     if assets.is_empty() {
         let report = EpisodeSpanReport {
             status: "missing_indexes",
-            summary_for_agent:
-                "No whisper transcript sidecars found; cannot plan episode spans.".into(),
+            summary_for_agent: "No whisper transcript sidecars found; cannot plan episode spans."
+                .into(),
             assets: Vec::new(),
             missing_evidence: vec!["whisper transcript sidecar".into()],
         };

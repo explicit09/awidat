@@ -23,8 +23,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Default longest-edge dimension for `detail = "preview"`. Big enough to
 /// be useful, small enough to fit comfortably in the model's vision

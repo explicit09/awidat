@@ -23,12 +23,12 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::edl::op::{BRollPosition, EdlOp};
 use crate::edl::{
     AnchorContext, ApplyError, EdlParseError, apply as edl_apply, parse as edl_parse,
 };
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// The `apply_edl` tool.
 pub struct ApplyEdlTool;

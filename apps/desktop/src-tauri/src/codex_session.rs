@@ -98,14 +98,14 @@ impl CodexSession {
                 },
             );
         }
-        let emitter: Arc<dyn ItemEmitter> =
-            Arc::new(TauriEmitter::new(app, project_root.clone()));
+        let emitter: Arc<dyn ItemEmitter> = Arc::new(TauriEmitter::new(app, project_root.clone()));
         // Per-format editorial addendum (Podcast / Shorts / Tutorial /
         // Other). Reads project type from the OTIO and assembles the
         // matching playbook; rides on `developer_instructions` so the
         // agent gets it without us touching codex's base prompt.
-        let developer_instructions =
-            Some(awidat_core::system_prompt::assemble_for_project(&project_root));
+        let developer_instructions = Some(awidat_core::system_prompt::assemble_for_project(
+            &project_root,
+        ));
         // Progressive-disclosure skills catalog. L1 (name + description)
         // lands in every turn input as a contextual fragment; the agent
         // calls `load_skill(name='...')` for the L2 body. User-installed

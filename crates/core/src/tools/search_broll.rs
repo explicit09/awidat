@@ -14,9 +14,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::pexels;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Default per-page on Pexels searches. The agent's UI typically only
 /// previews top-3, so 5 is generous; the cap is 30.

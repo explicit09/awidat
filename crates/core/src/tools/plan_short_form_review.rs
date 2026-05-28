@@ -9,7 +9,6 @@ use awidat_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::short_form_intelligence::{
     apply_to_short_form_review_input, build_short_form_intelligence,
 };
@@ -17,6 +16,7 @@ use crate::short_form_review::{
     ShortFormProfile, ShortFormReviewInput, ShortFormReviewOptions, build_short_form_review,
 };
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Read-only planner for ranked short-form review candidates.
 pub struct PlanShortFormReviewTool;

@@ -151,8 +151,7 @@ pub fn run(args: PodcastStoryMapArgs, ctx: McpToolCtx) -> Result<String, String>
         missing_evidence,
         next_steps,
     };
-    serde_json::to_string(&response)
-        .map_err(|e| format!("podcast_story_map serialize: {e}"))
+    serde_json::to_string(&response).map_err(|e| format!("podcast_story_map serialize: {e}"))
 }
 
 #[derive(Debug, Clone)]

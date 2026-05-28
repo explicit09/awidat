@@ -88,8 +88,7 @@ pub fn run(args: FindEyeContactArgs, ctx: McpToolCtx) -> Result<String, String> 
              Run `awidat index --indexer face <project>` and retry."
         )
     })?;
-    let face_by_asset: std::collections::HashMap<String, serde_json::Value> =
-        face_walker.collect();
+    let face_by_asset: std::collections::HashMap<String, serde_json::Value> = face_walker.collect();
 
     let gaze_walker = walk_indexer(&ctx.project_root, "gaze").map_err(|e| {
         format!(
@@ -133,8 +132,7 @@ pub fn run(args: FindEyeContactArgs, ctx: McpToolCtx) -> Result<String, String> 
                         .and_then(|m| m.as_object())
                         .and_then(|m| m.get(speaker))
                         .and_then(|v| v.as_str())?;
-                    let face_frames =
-                        face_data.pointer("/per_frame").and_then(|v| v.as_array())?;
+                    let face_frames = face_data.pointer("/per_frame").and_then(|v| v.as_array())?;
                     let mut out = std::collections::HashMap::new();
                     for fr in face_frames {
                         let t = fr.get("t_s").and_then(|v| v.as_f64()).unwrap_or(0.0);

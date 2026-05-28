@@ -11,8 +11,8 @@ use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 const DEFAULT_DURATION_TOLERANCE_S: f64 = 0.25;
 const DEFAULT_SILENCE_THRESHOLD_DB: f64 = -45.0;

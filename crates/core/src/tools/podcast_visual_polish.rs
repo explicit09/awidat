@@ -6,8 +6,8 @@ use awidat_proto::otio::{MediaReference, StackChild, Track, TrackChild, TrackKin
 use awidat_proto::project::Project;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Build a podcast visual polish report from available indexes.
 pub struct PodcastVisualPolishTool;

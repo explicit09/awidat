@@ -19,8 +19,8 @@ use awidat_proto::transitions::{MotionAlignment, lookup_builtin_transition};
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 use crate::visual_signals::{MotionMatch, load_boundary_signals};
 
 /// Post-application motion validator.

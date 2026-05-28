@@ -126,8 +126,7 @@ pub fn run(args: PodcastPostDraftCheckArgs, ctx: McpToolCtx) -> Result<String, S
         ending_check,
         missing_evidence,
     };
-    serde_json::to_string(&report)
-        .map_err(|e| format!("podcast_post_draft_check serialize: {e}"))
+    serde_json::to_string(&report).map_err(|e| format!("podcast_post_draft_check serialize: {e}"))
 }
 
 fn collect_visible_transcript(project_root: &Path, timeline: &Timeline) -> Vec<VisibleTranscript> {

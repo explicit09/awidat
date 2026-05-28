@@ -74,8 +74,7 @@ pub fn run(args: PodcastCleanupCandidatesArgs, ctx: McpToolCtx) -> Result<String
         max_results,
     );
     if dead_air.is_empty() {
-        missing_evidence
-            .push("no timeline-visible dead-air findings from silence sidecars".into());
+        missing_evidence.push("no timeline-visible dead-air findings from silence sidecars".into());
     }
     for finding in dead_air {
         let candidate = CleanupCandidate {
@@ -141,8 +140,7 @@ pub fn run(args: PodcastCleanupCandidatesArgs, ctx: McpToolCtx) -> Result<String
         max_results,
     );
     if false_starts.is_empty() {
-        missing_evidence
-            .push("no timeline-visible false-start findings from whisper words".into());
+        missing_evidence.push("no timeline-visible false-start findings from whisper words".into());
     }
     for finding in false_starts {
         review_cuts.push(CleanupCandidate {
@@ -184,8 +182,7 @@ pub fn run(args: PodcastCleanupCandidatesArgs, ctx: McpToolCtx) -> Result<String
         risky_cuts,
         missing_evidence,
     };
-    serde_json::to_string(&report)
-        .map_err(|e| format!("podcast_cleanup_candidates serialize: {e}"))
+    serde_json::to_string(&report).map_err(|e| format!("podcast_cleanup_candidates serialize: {e}"))
 }
 
 pub const DESCRIPTION: &str = "\

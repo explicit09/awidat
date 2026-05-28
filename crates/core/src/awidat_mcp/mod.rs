@@ -103,15 +103,11 @@ use crate::awidat_mcp::tools::plan_look_regions::{self, PlanLookRegionsArgs};
 use crate::awidat_mcp::tools::plan_motion_scene::{self, PlanMotionSceneArgs};
 use crate::awidat_mcp::tools::plan_multicam::{self, PlanMulticamArgs};
 use crate::awidat_mcp::tools::plan_reframe::{self, PlanReframeArgs};
-use crate::awidat_mcp::tools::plan_scene_aware_short_form::{
-    self, PlanSceneAwareShortFormArgs,
-};
+use crate::awidat_mcp::tools::plan_scene_aware_short_form::{self, PlanSceneAwareShortFormArgs};
 use crate::awidat_mcp::tools::plan_short_form_review::{self, PlanShortFormReviewArgs};
 use crate::awidat_mcp::tools::plan_transition::{self, PlanTransitionArgs};
 use crate::awidat_mcp::tools::plan_visual_support::{self, PlanVisualSupportArgs};
-use crate::awidat_mcp::tools::podcast_apply_accepted_edits::{
-    self, PodcastApplyAcceptedEditsArgs,
-};
+use crate::awidat_mcp::tools::podcast_apply_accepted_edits::{self, PodcastApplyAcceptedEditsArgs};
 use crate::awidat_mcp::tools::podcast_audio_polish::{self, PodcastAudioPolishArgs};
 use crate::awidat_mcp::tools::podcast_cleanup_candidates::{self, PodcastCleanupCandidatesArgs};
 use crate::awidat_mcp::tools::podcast_edit_proposal::{self, PodcastEditProposalArgs};
@@ -606,10 +602,7 @@ commits whose changes touch the supplied clip name or media reference. \
 This is attribution, not a branch checkout or merge operation.",
         annotations(read_only_hint = true)
     )]
-    pub async fn vedit_blame(
-        &self,
-        args: Parameters<VeditBlameArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn vedit_blame(&self, args: Parameters<VeditBlameArgs>) -> Result<String, ErrorData> {
         vedit_blame::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -761,10 +754,7 @@ limit 25, hard cap 100. Use this to discover what's available before \
 calling `inspect_clip` or `read_index` on a specific asset.",
         annotations(read_only_hint = true)
     )]
-    pub async fn list_assets(
-        &self,
-        args: Parameters<ListAssetsArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn list_assets(&self, args: Parameters<ListAssetsArgs>) -> Result<String, ErrorData> {
         list_assets::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -977,10 +967,7 @@ limit 25, hard cap 100. Results are ordered by score (best first). \
 English stopwords are filtered before ranking — use content words.",
         annotations(read_only_hint = true)
     )]
-    pub async fn find_moment(
-        &self,
-        args: Parameters<FindMomentArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn find_moment(&self, args: Parameters<FindMomentArgs>) -> Result<String, ErrorData> {
         find_moment::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1222,10 +1209,7 @@ detail='original' returns source resolution. format='png' (default) | \
 (asset, time, format, dim, grade).",
         annotations(read_only_hint = true)
     )]
-    pub async fn view_frame(
-        &self,
-        args: Parameters<ViewFrameArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn view_frame(&self, args: Parameters<ViewFrameArgs>) -> Result<String, ErrorData> {
         view_frame::run(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
@@ -1583,10 +1567,7 @@ it in the durable asset catalog. Pass an http(s) `url` and an optional \
 `yt-dlp` on PATH.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn import_url(
-        &self,
-        args: Parameters<ImportUrlArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn import_url(&self, args: Parameters<ImportUrlArgs>) -> Result<String, ErrorData> {
         import_media::run_url(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
@@ -1687,10 +1668,7 @@ set dry_run=true to validate the parse without writing. Pass \
 trail.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn apply_edl(
-        &self,
-        args: Parameters<ApplyEdlArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn apply_edl(&self, args: Parameters<ApplyEdlArgs>) -> Result<String, ErrorData> {
         apply_edl::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1721,10 +1699,7 @@ if a stringout with that id already exists.",
         description = "Create a durable user/agent asset bin in the project catalog.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn create_bin(
-        &self,
-        args: Parameters<CreateBinArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn create_bin(&self, args: Parameters<CreateBinArgs>) -> Result<String, ErrorData> {
         manage_assets::run_create_bin(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1734,10 +1709,7 @@ if a stringout with that id already exists.",
         description = "Move a catalog asset into a durable bin, or clear its bin.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn move_to_bin(
-        &self,
-        args: Parameters<MoveToBinArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn move_to_bin(&self, args: Parameters<MoveToBinArgs>) -> Result<String, ErrorData> {
         manage_assets::run_move_to_bin(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1760,10 +1732,7 @@ if a stringout with that id already exists.",
         description = "Add or remove durable tags on a catalog asset.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn tag_asset(
-        &self,
-        args: Parameters<TagAssetArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn tag_asset(&self, args: Parameters<TagAssetArgs>) -> Result<String, ErrorData> {
         manage_assets::run_tag_asset(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1773,10 +1742,7 @@ if a stringout with that id already exists.",
         description = "Set an asset rating from 0 to 5.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn rate_asset(
-        &self,
-        args: Parameters<RateAssetArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn rate_asset(&self, args: Parameters<RateAssetArgs>) -> Result<String, ErrorData> {
         manage_assets::run_rate_asset(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1786,10 +1752,7 @@ if a stringout with that id already exists.",
         description = "Create or update a durable source select for an asset range.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn mark_select(
-        &self,
-        args: Parameters<MarkSelectArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn mark_select(&self, args: Parameters<MarkSelectArgs>) -> Result<String, ErrorData> {
         manage_assets::run_mark_select(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1801,10 +1764,7 @@ if a stringout with that id already exists.",
         description = "Split a clip by lowering to apply_edl's graph-native Split Clip operation; apply_edl remains the canonical mutation path.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn split_clip(
-        &self,
-        args: Parameters<SplitClipArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn split_clip(&self, args: Parameters<SplitClipArgs>) -> Result<String, ErrorData> {
         granular_timeline::run_split_clip(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1814,10 +1774,7 @@ if a stringout with that id already exists.",
         description = "Trim a clip by lowering to apply_edl's graph-native Trim Clip operation; apply_edl remains the canonical mutation path.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn trim_clip(
-        &self,
-        args: Parameters<TrimClipArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn trim_clip(&self, args: Parameters<TrimClipArgs>) -> Result<String, ErrorData> {
         granular_timeline::run_trim_clip(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1827,10 +1784,7 @@ if a stringout with that id already exists.",
         description = "Move a clip by lowering to apply_edl's Move Clip operation; apply_edl remains the canonical mutation path.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn move_clip(
-        &self,
-        args: Parameters<MoveClipArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn move_clip(&self, args: Parameters<MoveClipArgs>) -> Result<String, ErrorData> {
         granular_timeline::run_move_clip(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1853,10 +1807,7 @@ if a stringout with that id already exists.",
         description = "Roll an edit point by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn roll_trim(
-        &self,
-        args: Parameters<RollTrimArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn roll_trim(&self, args: Parameters<RollTrimArgs>) -> Result<String, ErrorData> {
         granular_timeline::run_roll_trim(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1866,10 +1817,7 @@ if a stringout with that id already exists.",
         description = "Slip a clip by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn slip_clip(
-        &self,
-        args: Parameters<SlipClipArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn slip_clip(&self, args: Parameters<SlipClipArgs>) -> Result<String, ErrorData> {
         granular_timeline::run_slip_clip(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1879,10 +1827,7 @@ if a stringout with that id already exists.",
         description = "Ripple-trim a clip by lowering to apply_edl's Professional Timeline Edit contract; apply_edl remains the canonical mutation path.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn ripple_trim(
-        &self,
-        args: Parameters<RippleTrimArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn ripple_trim(&self, args: Parameters<RippleTrimArgs>) -> Result<String, ErrorData> {
         granular_timeline::run_ripple_trim(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1892,10 +1837,7 @@ if a stringout with that id already exists.",
         description = "Add or update a timeline marker by lowering to apply_edl's Professional Timeline Edit marker operations; apply_edl remains the canonical mutation path.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn set_marker(
-        &self,
-        args: Parameters<SetMarkerArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn set_marker(&self, args: Parameters<SetMarkerArgs>) -> Result<String, ErrorData> {
         granular_timeline::run_set_marker(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -1941,10 +1883,7 @@ the merge and reports a conflict. On success it writes project.otio.json, \
 advances the target branch, and creates a two-parent merge commit.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn vedit_merge(
-        &self,
-        args: Parameters<VeditMergeArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn vedit_merge(&self, args: Parameters<VeditMergeArgs>) -> Result<String, ErrorData> {
         vedit_merge::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2038,10 +1977,7 @@ underlying clip for the duration of the b-roll. Pass insert_as=pip \
 to return an Insert PiP fragment instead.",
         annotations(destructive_hint = true, read_only_hint = false)
     )]
-    pub async fn use_broll(
-        &self,
-        args: Parameters<UseBrollArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn use_broll(&self, args: Parameters<UseBrollArgs>) -> Result<String, ErrorData> {
         use_broll::run(args.0, McpToolCtx::resolve())
             .await
             .map_err(|msg| ErrorData::invalid_params(msg, None))
@@ -2197,10 +2133,7 @@ their domains (e.g. tighten THEN suggest b-roll).\
 ",
         annotations(read_only_hint = true)
     )]
-    pub async fn load_skill(
-        &self,
-        args: Parameters<LoadSkillArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn load_skill(&self, args: Parameters<LoadSkillArgs>) -> Result<String, ErrorData> {
         load_skill::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2249,10 +2182,7 @@ and asks the caller to inspect the output_path / call verify_render \
 instead.",
         annotations(read_only_hint = true)
     )]
-    pub async fn poll_render(
-        &self,
-        args: Parameters<PollRenderArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn poll_render(&self, args: Parameters<PollRenderArgs>) -> Result<String, ErrorData> {
         poll_render::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2346,10 +2276,7 @@ conversation transcript. Call again whenever the plan changes \
 meaningfully (don't spam every micro-step).",
         annotations(read_only_hint = true)
     )]
-    pub async fn update_plan(
-        &self,
-        args: Parameters<UpdatePlanArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn update_plan(&self, args: Parameters<UpdatePlanArgs>) -> Result<String, ErrorData> {
         update_plan::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
@@ -2410,10 +2337,7 @@ transcript-based search in the meantime; this tool will become \
 functional once the MCP indexer pool lands.",
         annotations(read_only_hint = true)
     )]
-    pub async fn clip_search(
-        &self,
-        args: Parameters<ClipSearchArgs>,
-    ) -> Result<String, ErrorData> {
+    pub async fn clip_search(&self, args: Parameters<ClipSearchArgs>) -> Result<String, ErrorData> {
         clip_search::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }

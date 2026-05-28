@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Visual-support lane the agent should use first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

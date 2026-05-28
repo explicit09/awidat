@@ -41,8 +41,8 @@ pub fn run(args: VeditRevertArgs, ctx: McpToolCtx) -> Result<String, String> {
 
     let repo = vc::open_or_init(&ctx.project_root)
         .map_err(|e| format!("vedit_revert: opening repo failed: {e}"))?;
-    let restored = vc::restore_working_timeline(&repo, refstr)
-        .map_err(|e| format!("vedit_revert: {e}"))?;
+    let restored =
+        vc::restore_working_timeline(&repo, refstr).map_err(|e| format!("vedit_revert: {e}"))?;
 
     let commit_outcome = if args.commit {
         let header = args

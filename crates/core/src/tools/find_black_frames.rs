@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 const DEFAULT_PICTURE_BLACK_RATIO_TH: f64 = 0.98;
 const DEFAULT_MIN_DURATION_S: f64 = 0.2;

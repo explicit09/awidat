@@ -87,14 +87,12 @@ impl Default for AnchorArg {
 /// [`McpToolCtx`]. Returns a JSON body as `Ok(String)`.
 pub async fn run(args: DownloadYtClipArgs, ctx: McpToolCtx) -> Result<String, String> {
     if !args.acknowledged {
-        return Err(
-            "download_yt_clip: refused — `acknowledged` is false. \
+        return Err("download_yt_clip: refused — `acknowledged` is false. \
              Before setting acknowledged=true, you MUST explain to the user that \
              third-party clips have copyright implications they're responsible for \
              verifying, AND get their explicit confirmation. Once they confirm, \
              retry with acknowledged=true."
-                .into(),
-        );
+            .into());
     }
 
     let host = parse_host(&args.url).ok_or_else(|| {

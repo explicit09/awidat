@@ -1331,12 +1331,9 @@ See the Codex keymap documentation for supported actions and examples."
             tui.draw_with_resize_reflow(desired_height, |frame| {
                 let area = frame.area();
                 rendered_area = area;
-                let (chat_area, panel_area) =
-                    split_chat_and_panel(area, awidat_panel_active);
+                let (chat_area, panel_area) = split_chat_and_panel(area, awidat_panel_active);
                 self.chat_widget.render(chat_area, frame.buffer);
-                if let (Some(panel), Some(panel_area)) =
-                    (self.awidat_panel.as_ref(), panel_area)
-                {
+                if let (Some(panel), Some(panel_area)) = (self.awidat_panel.as_ref(), panel_area) {
                     ratatui::widgets::Widget::render(panel, panel_area, frame.buffer);
                 }
                 if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {
@@ -1348,12 +1345,9 @@ See the Codex keymap documentation for supported actions and examples."
             tui.draw(desired_height, |frame| {
                 let area = frame.area();
                 rendered_area = area;
-                let (chat_area, panel_area) =
-                    split_chat_and_panel(area, awidat_panel_active);
+                let (chat_area, panel_area) = split_chat_and_panel(area, awidat_panel_active);
                 self.chat_widget.render(chat_area, frame.buffer);
-                if let (Some(panel), Some(panel_area)) =
-                    (self.awidat_panel.as_ref(), panel_area)
-                {
+                if let (Some(panel), Some(panel_area)) = (self.awidat_panel.as_ref(), panel_area) {
                     ratatui::widgets::Widget::render(panel, panel_area, frame.buffer);
                 }
                 if let Some((x, y)) = self.chat_widget.cursor_pos(chat_area) {

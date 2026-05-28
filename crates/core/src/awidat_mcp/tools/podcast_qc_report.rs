@@ -24,10 +24,7 @@ pub fn run(_args: PodcastQcReportArgs, ctx: McpToolCtx) -> Result<String, String
     serde_json::to_string(&body).map_err(|e| format!("podcast_qc_report serialize: {e}"))
 }
 
-fn build_podcast_qc_report(
-    project_root: &std::path::Path,
-    project: &Project,
-) -> serde_json::Value {
+fn build_podcast_qc_report(project_root: &std::path::Path, project: &Project) -> serde_json::Value {
     let mut issues = Vec::new();
     collect_timeline_issues(project_root, &project.timeline.tracks, &mut issues);
     let caption_summary = crate::captions::summarize_captions(project);

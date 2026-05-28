@@ -102,8 +102,7 @@ pub fn run(args: FindMomentArgs, ctx: McpToolCtx) -> Result<String, String> {
         .enumerate()
         .map(|(idx, d)| Document::new(idx, d.text.clone()))
         .collect();
-    let engine =
-        SearchEngineBuilder::<usize>::with_documents(Language::English, bm25_docs).build();
+    let engine = SearchEngineBuilder::<usize>::with_documents(Language::English, bm25_docs).build();
 
     // Ask BM25 for `limit + 1` so we can detect more_available.
     let raw = engine.search(query, limit + 1);

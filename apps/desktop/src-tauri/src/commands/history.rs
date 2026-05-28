@@ -121,13 +121,11 @@ pub async fn load_chat_history(state: State<'_, AwidatState>) -> Result<ChatHist
     }
     let mut rollouts = Vec::new();
     walk_rollouts(&sessions_dir, &mut rollouts);
-    let rollout_path = rollouts.into_iter().find(|p| {
-        match read_first_line(p) {
-            Some(line) => parse_session_meta(&line)
-                .map(|m| m.thread_id == thread_id)
-                .unwrap_or(false),
-            None => false,
-        }
+    let rollout_path = rollouts.into_iter().find(|p| match read_first_line(p) {
+        Some(line) => parse_session_meta(&line)
+            .map(|m| m.thread_id == thread_id)
+            .unwrap_or(false),
+        None => false,
     });
     let Some(path) = rollout_path else {
         return Ok(ChatHistory {

@@ -10,8 +10,8 @@ use awidat_proto::project::Project;
 use serde::{Deserialize, Serialize};
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// The `list_markers` tool.
 pub struct ListMarkersTool;

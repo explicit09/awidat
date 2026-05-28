@@ -189,12 +189,8 @@ fn discover_color_indexes(project_root: &Path) -> Result<Vec<PathBuf>, String> {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    visit_json_files(&root, &mut out).map_err(|e| {
-        format!(
-            "plan_look_regions: failed to scan {}: {e}",
-            root.display()
-        )
-    })?;
+    visit_json_files(&root, &mut out)
+        .map_err(|e| format!("plan_look_regions: failed to scan {}: {e}", root.display()))?;
     out.sort();
     Ok(out)
 }
@@ -228,9 +224,7 @@ fn script_output(
         ));
     }
     if stdout.is_empty() {
-        return Err(format!(
-            "{tool_name}: script succeeded but emitted no JSON"
-        ));
+        return Err(format!("{tool_name}: script succeeded but emitted no JSON"));
     }
     let mut value: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
         format!(

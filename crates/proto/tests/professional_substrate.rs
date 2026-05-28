@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Professional substrate schema acceptance tests.
 
 use std::collections::BTreeMap;

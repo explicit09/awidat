@@ -59,10 +59,9 @@ pub async fn run(args: StartGeneratedMediaJobArgs, ctx: McpToolCtx) -> Result<St
 
     if args.provider == "openrouter" {
         let job_id = next_job_id(&args.prompt);
-        let config = crate::generated_media::openrouter::OpenRouterVideoConfig::from_env(
-            args.model.clone(),
-        )
-        .map_err(|e| format!("start_generated_media_job: {e}"))?;
+        let config =
+            crate::generated_media::openrouter::OpenRouterVideoConfig::from_env(args.model.clone())
+                .map_err(|e| format!("start_generated_media_job: {e}"))?;
         let record = crate::generated_media::openrouter::submit_video_job(
             &config,
             &job_id,

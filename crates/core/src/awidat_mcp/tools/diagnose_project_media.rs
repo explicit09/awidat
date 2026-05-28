@@ -70,18 +70,12 @@ pub fn run(args: DiagnoseProjectMediaArgs, ctx: McpToolCtx) -> Result<String, St
         match warning {
             ValidationWarning::TimelineMediaMissing { path, target_url } => {
                 missing_count += 1;
-                let candidates = candidate_relinks(
-                    &ctx.project_root,
-                    &target_url,
-                    &media_files,
-                    max_candidates,
-                );
+                let candidates =
+                    candidate_relinks(&ctx.project_root, &target_url, &media_files, max_candidates);
                 diagnostics.push(MediaDiagnostic {
                     kind: "missing_media",
                     timeline_path: path,
-                    resolved_path: Some(
-                        ctx.project_root.join(&target_url).display().to_string(),
-                    ),
+                    resolved_path: Some(ctx.project_root.join(&target_url).display().to_string()),
                     target_url,
                     repair_actions: vec![
                         "restore the missing file at target_url",

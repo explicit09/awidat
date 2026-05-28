@@ -29,9 +29,7 @@ pub fn run(args: PlanGeneratedMediaArgs, _ctx: McpToolCtx) -> Result<String, Str
     let style = args.style.as_deref().unwrap_or("natural editorial");
     let asset_requests = asset_requests_for_moment(moment, moment);
     let candidates = vec![
-        format!(
-            "{style} b-roll cutaway illustrating {moment}, steady camera, realistic lighting"
-        ),
+        format!("{style} b-roll cutaway illustrating {moment}, steady camera, realistic lighting"),
         format!("{style} establishing shot for {moment}, no text, no logos"),
         format!("{style} detail shot that supports {moment}, documentary tone"),
     ];

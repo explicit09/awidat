@@ -5,8 +5,8 @@ use awidat_proto::otio::{MediaReference, Stack, StackChild, Track, TrackChild};
 use awidat_proto::project::Project;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Build a podcast timeline QC report before render.
 pub struct PodcastQcReportTool;

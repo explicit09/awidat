@@ -21,9 +21,9 @@ use awidat_proto::project::Project;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::continuity::{self, ContinuityInputs, CutKind, assess_continuity as run_assess};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Tool that scores whether a proposed cut risks visual/audio continuity.
 pub struct AssessContinuityTool;

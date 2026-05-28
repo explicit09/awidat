@@ -11,10 +11,10 @@ use awidat_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::scene_aware_short_form::{SceneAwareShortFormInput, build_scene_aware_short_form_plan};
 use crate::short_form_intelligence::{apply_to_scene_aware_input, build_short_form_intelligence};
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Read-only scene-aware short-form planner.
 pub struct PlanSceneAwareShortFormTool;

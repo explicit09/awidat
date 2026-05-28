@@ -61,7 +61,10 @@ pub fn map_notification(
             buffer.push_str(&n.delta);
             let cumulative = buffer.clone();
             vec![Item::Text {
-                id: Id::new(format!("{REASONING_PREFIX}-{}-{}", n.item_id, n.content_index)),
+                id: Id::new(format!(
+                    "{REASONING_PREFIX}-{}-{}",
+                    n.item_id, n.content_index
+                )),
                 phase: ItemLifecycle::Delta,
                 text: cumulative,
             }]
@@ -308,9 +311,18 @@ pub fn build_capability_metadata_for_file_change(reason: Option<&str>) -> serde_
 /// Used only to color the approval card; not relied on for safety.
 fn command_looks_destructive(command: &str) -> bool {
     let lower = command.to_ascii_lowercase();
-    [" rm ", "mkfs", " dd ", "git push --force", "sudo ", " mv ", "shutdown", "reboot"]
-        .iter()
-        .any(|needle| lower.contains(needle))
+    [
+        " rm ",
+        "mkfs",
+        " dd ",
+        "git push --force",
+        "sudo ",
+        " mv ",
+        "shutdown",
+        "reboot",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
         || lower.starts_with("rm ")
         || lower.starts_with("mv ")
         || lower.starts_with("dd ")
@@ -437,10 +449,14 @@ mod tests {
         match (&first[0], &second[0]) {
             (
                 Item::Text {
-                    text: t1, phase: p1, ..
+                    text: t1,
+                    phase: p1,
+                    ..
                 },
                 Item::Text {
-                    text: t2, phase: p2, ..
+                    text: t2,
+                    phase: p2,
+                    ..
                 },
             ) => {
                 assert_eq!(t1, "hello ");
@@ -479,9 +495,9 @@ mod tests {
     }
 
     fn make_cwd() -> codex_utils_absolute_path::AbsolutePathBuf {
-        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(
-            std::path::PathBuf::from("/tmp"),
-        )
+        codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(std::path::PathBuf::from(
+            "/tmp",
+        ))
         .expect("/tmp is absolute")
     }
 

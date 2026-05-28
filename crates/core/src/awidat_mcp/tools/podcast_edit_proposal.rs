@@ -90,8 +90,7 @@ pub fn run(args: PodcastEditProposalArgs, ctx: McpToolCtx) -> Result<String, Str
         max_results,
     );
     if dead_air.is_empty() {
-        missing_evidence
-            .push("no timeline-visible dead-air findings from silence sidecars".into());
+        missing_evidence.push("no timeline-visible dead-air findings from silence sidecars".into());
     }
     for (index, finding) in dead_air.into_iter().enumerate() {
         let edit = ProposedEdit {
@@ -171,8 +170,7 @@ pub fn run(args: PodcastEditProposalArgs, ctx: McpToolCtx) -> Result<String, Str
         max_results,
     );
     if false_starts.is_empty() {
-        missing_evidence
-            .push("no timeline-visible false-start findings from whisper words".into());
+        missing_evidence.push("no timeline-visible false-start findings from whisper words".into());
     }
     for (index, finding) in false_starts.into_iter().enumerate() {
         review_edits.push(ProposedEdit {
@@ -227,8 +225,7 @@ pub fn run(args: PodcastEditProposalArgs, ctx: McpToolCtx) -> Result<String, Str
         risky_edits,
         missing_evidence,
     };
-    serde_json::to_string(&report)
-        .map_err(|e| format!("podcast_edit_proposal serialize: {e}"))
+    serde_json::to_string(&report).map_err(|e| format!("podcast_edit_proposal serialize: {e}"))
 }
 
 fn continuity_gate(

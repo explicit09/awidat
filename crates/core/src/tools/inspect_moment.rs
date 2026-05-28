@@ -15,8 +15,8 @@ use awidat_index::walk_indexer;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Tool that inspects an indexed editorial moment with transcript context.
 pub struct InspectMomentTool;

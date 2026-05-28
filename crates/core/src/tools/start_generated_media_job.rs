@@ -6,12 +6,12 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::generated_media::provider::{
     GeneratedMediaProvider, MockProvider, StartGeneratedMediaRequest,
 };
 use crate::generated_media::registry::Registry;
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Start a generated-media job and write the local registry.
 pub struct StartGeneratedMediaJobTool;

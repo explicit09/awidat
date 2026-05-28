@@ -9,8 +9,8 @@ use awidat_render::{OutputPathPolicy, RenderJobSpec, validate_render_output_path
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Start a stream-copy/remux export job for explicit source streams.
 pub struct StreamRemuxTool;

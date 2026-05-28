@@ -9,9 +9,9 @@ use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::review::build_local_review_package;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Build and persist a local review package.
 pub struct LocalReviewPackageTool;

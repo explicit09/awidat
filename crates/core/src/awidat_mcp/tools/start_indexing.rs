@@ -30,12 +30,10 @@ pub async fn run(args: StartIndexingArgs, ctx: McpToolCtx) -> Result<String, Str
         .map_err(|e| format!("start_indexing: load config: {e}"))?;
     let mut servers: Vec<_> = config.indexers().cloned().collect();
     if servers.is_empty() {
-        return Err(
-            "start_indexing: no indexers configured. \
+        return Err("start_indexing: no indexers configured. \
              Add `[[mcp.servers]]` entries with kind = \"indexer\" \
              to <project>/.awidat/config.toml or ~/.config/awidat/config.toml."
-                .into(),
-        );
+            .into());
     }
     if !args.indexers.is_empty() {
         servers.retain(|s| args.indexers.iter().any(|n| n == &s.name));
@@ -53,12 +51,8 @@ pub async fn run(args: StartIndexingArgs, ctx: McpToolCtx) -> Result<String, Str
         }
     }
 
-    let assets = collect_assets(&project_root).map_err(|e| {
-        format!(
-            "start_indexing: scan {}/raw: {e}",
-            project_root.display()
-        )
-    })?;
+    let assets = collect_assets(&project_root)
+        .map_err(|e| format!("start_indexing: scan {}/raw: {e}", project_root.display()))?;
     if assets.is_empty() {
         return Err(format!(
             "start_indexing: no assets to index. \

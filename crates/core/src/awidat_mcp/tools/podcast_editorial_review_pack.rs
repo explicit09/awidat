@@ -60,10 +60,7 @@ struct EditorialReviewPacket {
 /// Run `podcast_editorial_review_pack` against the project resolved
 /// from [`McpToolCtx`]. Returns the JSON body as `Ok(String)`;
 /// project-read errors return `Err(String)`.
-pub fn run(
-    args: PodcastEditorialReviewPackArgs,
-    ctx: McpToolCtx,
-) -> Result<String, String> {
+pub fn run(args: PodcastEditorialReviewPackArgs, ctx: McpToolCtx) -> Result<String, String> {
     let max_results = args
         .max_results
         .unwrap_or(DEFAULT_MAX_RESULTS)
@@ -74,9 +71,8 @@ pub fn run(
         .clamp(1.0, MAX_WINDOW_PADDING_S);
     let include_dead_air = args.include_dead_air.unwrap_or(true);
 
-    let project = Project::read(&ctx.project_root).map_err(|e| {
-        format!("podcast_editorial_review_pack: failed to read project: {e}")
-    })?;
+    let project = Project::read(&ctx.project_root)
+        .map_err(|e| format!("podcast_editorial_review_pack: failed to read project: {e}"))?;
 
     let report = build_review_pack(
         &ctx.project_root,
@@ -85,8 +81,7 @@ pub fn run(
         window_padding_s,
         include_dead_air,
     );
-    serde_json::to_string(&report)
-        .map_err(|e| format!("serialize editorial review pack: {e}"))
+    serde_json::to_string(&report).map_err(|e| format!("serialize editorial review pack: {e}"))
 }
 
 fn build_review_pack(

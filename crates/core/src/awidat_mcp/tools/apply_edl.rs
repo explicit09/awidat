@@ -74,8 +74,8 @@ pub fn run(args: ApplyEdlArgs, ctx: McpToolCtx) -> Result<String, String> {
         )
     })?;
     let anchor_ctx = AnchorContext::with_project_root(ctx.project_root.clone());
-    let (new_timeline, outcome) = edl_apply(&project.timeline, &envelope, &anchor_ctx)
-        .map_err(|e| format_apply_error(&e))?;
+    let (new_timeline, outcome) =
+        edl_apply(&project.timeline, &envelope, &anchor_ctx).map_err(|e| format_apply_error(&e))?;
 
     if !args.dry_run {
         let mut updated = project.clone();

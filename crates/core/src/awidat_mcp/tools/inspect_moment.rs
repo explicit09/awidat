@@ -37,9 +37,10 @@ pub fn run(args: InspectMomentArgs, ctx: McpToolCtx) -> Result<String, String> {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        if let Some(found) = moments.iter().find(|m| {
-            m.get("moment_id").and_then(|x| x.as_str()) == Some(args.moment_id.as_str())
-        }) {
+        if let Some(found) = moments
+            .iter()
+            .find(|m| m.get("moment_id").and_then(|x| x.as_str()) == Some(args.moment_id.as_str()))
+        {
             hit = Some((asset_id, found.clone(), moments));
             break;
         }

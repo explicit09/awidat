@@ -8,8 +8,8 @@ use awidat_proto::index::AssetId;
 use serde::Deserialize;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::tool::{ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// The `plan_multicam` tool.
 pub struct PlanMulticamTool;

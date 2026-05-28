@@ -185,8 +185,7 @@ pub fn run(args: PodcastApplyAcceptedEditsArgs, ctx: McpToolCtx) -> Result<Strin
             "podcast_post_draft_check"
         ],
     });
-    serde_json::to_string(&body)
-        .map_err(|e| format!("podcast_apply_accepted_edits serialize: {e}"))
+    serde_json::to_string(&body).map_err(|e| format!("podcast_apply_accepted_edits serialize: {e}"))
 }
 
 fn collect_candidates(project_root: &std::path::Path, timeline: &Timeline) -> Vec<Candidate> {

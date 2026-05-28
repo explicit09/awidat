@@ -38,6 +38,7 @@ export function JobCard({ item }: Props) {
     silences: "silences",
     motion: "motion signal",
     indexing: "indexing",
+    generated_media: "generated media",
     render: "export",
   };
   const cls = resultClass(item.result);

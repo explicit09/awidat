@@ -42,10 +42,7 @@ pub async fn run(args: ExportPackageArgs, ctx: McpToolCtx) -> Result<String, Str
         args.format.as_str(),
         "youtube" | "shorts" | "podcast" | "custom" | "turnover"
     ) {
-        return Err(format!(
-            "export_package: unknown format {:?}",
-            args.format
-        ));
+        return Err(format!("export_package: unknown format {:?}", args.format));
     }
     let hardware_policy = parse_hardware_acceleration(args.hardware_acceleration.as_deref())?;
 
@@ -119,8 +116,7 @@ pub async fn run(args: ExportPackageArgs, ctx: McpToolCtx) -> Result<String, Str
         *last = mp4_path.to_string_lossy().to_string();
     }
     spec.output_path = mp4_path.clone();
-    let export_preset =
-        package_export_preset_for_format(&args.format, &project, hardware_policy);
+    let export_preset = package_export_preset_for_format(&args.format, &project, hardware_policy);
     spec = awidat_render::professional::apply_export_preset_to_spec(spec, &export_preset)
         .map_err(|e| format!("export_package: export preset failed: {e}"))?;
     let preflight =

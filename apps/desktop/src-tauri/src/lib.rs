@@ -28,8 +28,8 @@
 mod app_menu;
 mod codex_session;
 mod commands;
-mod generated_media_watcher;
 mod events;
+mod generated_media_watcher;
 mod secrets;
 mod state;
 

@@ -206,10 +206,7 @@ fn describe(record: &awidat_core::generated_media::registry::GeneratedMediaRecor
         GeneratedMediaState::Running => format!("generating · {prompt}"),
         GeneratedMediaState::Succeeded => format!("ready · {prompt}"),
         GeneratedMediaState::Failed => {
-            let why = record
-                .failure_message
-                .as_deref()
-                .unwrap_or("unknown error");
+            let why = record.failure_message.as_deref().unwrap_or("unknown error");
             format!("failed · {prompt} — {why}")
         }
         GeneratedMediaState::Cancelled => format!("cancelled · {prompt}"),

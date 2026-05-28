@@ -7,11 +7,11 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::FunctionCallError;
-use crate::tool_schema::Tool as ToolSchema;
 use crate::proxy::{
     ProxyStatus, proxy_path_for, proxy_pending_path, proxy_status_for, proxy_status_for_project,
 };
 use crate::tool::{ApprovalKey, ToolContext, ToolHandler, ToolInvocation, ToolOutput};
+use crate::tool_schema::Tool as ToolSchema;
 
 /// Read proxy status for one or all raw assets.
 pub struct ProxyStatusTool;

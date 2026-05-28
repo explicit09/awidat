@@ -252,9 +252,7 @@ impl CodexAppServer {
                 toml::Value::String(project_root.display().to_string()),
             ));
         } else {
-            warn!(
-                "awidat-mcp-server path not provided; codex will run without Awidat tools"
-            );
+            warn!("awidat-mcp-server path not provided; codex will run without Awidat tools");
         }
 
         // 2. Build the app-server Config WITH the overrides applied,
