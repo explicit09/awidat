@@ -281,7 +281,7 @@ fn canonicalize_json_snapshot_value(value: &mut Value, options: &ContextSnapshot
         Value::Object(map) => {
             // Keep request-body snapshots stable when serde_json preserves insertion order.
             let mut entries = std::mem::take(map).into_iter().collect::<Vec<_>>();
-            entries.sort_by_key(|(left_key, _)| *left_key);
+            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
             for (key, mut value) in entries {
                 canonicalize_json_snapshot_value(&mut value, options);
                 map.insert(key, value);
