@@ -118,6 +118,7 @@ impl CodexRunOptions {
 
 /// `awidat chat-codex` entry point. Hello-world spine that proves
 /// the codex integration; kept around for smoke-testing.
+#[allow(dead_code)]
 pub fn run(
     prompt: Option<String>,
     dangerously_bypass: bool,

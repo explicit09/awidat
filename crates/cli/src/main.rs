@@ -391,7 +391,6 @@ fn main() -> ExitCode {
             let prompt = match skills_cmd::prepare_run(&skills_cmd::RunArgs {
                 name,
                 project: project.clone(),
-                model: model.clone(),
             }) {
                 Ok(prompt) => prompt,
                 Err(err) => {

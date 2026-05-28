@@ -30,8 +30,6 @@ pub struct RunArgs {
     pub name: String,
     /// Project directory to open the TUI against.
     pub project: PathBuf,
-    /// Override the model id (passed through to `awidat tui`).
-    pub model: Option<String>,
 }
 
 /// `awidat skills list`. Prints the discovered skill catalog with
