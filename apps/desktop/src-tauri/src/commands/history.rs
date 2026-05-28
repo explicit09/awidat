@@ -13,6 +13,7 @@
 //! (out of scope for this pass; they need a desktop-owned title
 //! sidecar + a destructive operation against codex's store).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -397,7 +398,7 @@ fn title_and_count(path: &Path) -> (String, usize) {
             && payload.get("role").and_then(|r| r.as_str()) == Some("user")
             && let Some(text) = extract_message_text(payload)
         {
-            title = Some(truncate_title(&text));
+            title = Some(truncate_title(&clean_user_message_text(&text)));
         }
     }
     (
@@ -440,12 +441,60 @@ fn truncate_title(text: &str) -> String {
     }
 }
 
-/// Read a rollout end-to-end and map each `response_item` of kind
-/// `message` to a desktop-protocol `Item`. User messages become
-/// `Item::UserInput`; assistant messages become a Completed
-/// `Item::Text`. Other rollout records (FunctionCall, Reasoning,
-/// EventMsg, …) are skipped — they're orchestrator-internal and
-/// the desktop renderer doesn't have a faithful representation.
+fn clean_user_message_text(text: &str) -> String {
+    let without_skills = strip_marker_block(
+        text.trim_start(),
+        "<skills_instructions>",
+        "</skills_instructions>",
+    );
+    strip_visible_context_prefix(without_skills.trim_start())
+        .trim()
+        .to_string()
+}
+
+fn strip_marker_block<'a>(text: &'a str, start: &str, end: &str) -> &'a str {
+    let Some(rest) = text.strip_prefix(start) else {
+        return text;
+    };
+    let Some(end_idx) = rest.find(end) else {
+        return text;
+    };
+    &rest[end_idx + end.len()..]
+}
+
+fn strip_visible_context_prefix(text: &str) -> &str {
+    let mut remaining = text;
+    if remaining.starts_with("[user is viewing ") {
+        remaining = remaining
+            .split_once('\n')
+            .map(|(_, rest)| rest)
+            .unwrap_or("");
+    }
+    remaining = remaining.trim_start();
+    if !remaining.starts_with("[visible context]") {
+        return remaining;
+    }
+
+    let mut byte_offset = "[visible context]".len();
+    if remaining[byte_offset..].starts_with('\n') {
+        byte_offset += 1;
+    }
+    let after_header = &remaining[byte_offset..];
+    for line in after_header.lines() {
+        byte_offset += line.len() + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !trimmed.starts_with("- ") {
+            break;
+        }
+    }
+    remaining.get(byte_offset..).unwrap_or("").trim_start()
+}
+
+/// Read a rollout end-to-end and map replay-safe `response_item`s to
+/// desktop-protocol `Item`s. User/assistant messages are restored as
+/// conversation text. Function calls are restored as inert completed
+/// tool-history cards; approval/input requests remain live-only and
+/// are not reconstructed from history.
 fn read_rollout_items(path: &Path) -> Vec<Item> {
     use std::io::{BufRead, BufReader};
     let Ok(file) = fs::File::open(path) else {
@@ -454,6 +503,7 @@ fn read_rollout_items(path: &Path) -> Vec<Item> {
     let reader = BufReader::new(file);
     let mut items = Vec::new();
     let mut counter: u64 = 0;
+    let mut function_call_items: HashMap<String, usize> = HashMap::new();
     for line in reader.lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
@@ -464,28 +514,73 @@ fn read_rollout_items(path: &Path) -> Vec<Item> {
         let Some(payload) = v.get("payload") else {
             continue;
         };
-        if payload.get("type").and_then(|t| t.as_str()) != Some("message") {
-            continue;
-        }
-        let role = payload.get("role").and_then(|r| r.as_str()).unwrap_or("");
-        let Some(text) = extract_message_text(payload) else {
-            continue;
-        };
-        counter += 1;
-        match role {
-            "user" => items.push(Item::UserInput {
-                id: Id::new(format!("hist-user-{counter}")),
-                text,
-            }),
-            "assistant" => items.push(Item::Text {
-                id: Id::new(format!("hist-asst-{counter}")),
-                phase: ItemLifecycle::Completed,
-                text,
-            }),
+        match payload.get("type").and_then(|t| t.as_str()) {
+            Some("message") => {
+                let role = payload.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                let Some(text) = extract_message_text(payload) else {
+                    continue;
+                };
+                counter += 1;
+                match role {
+                    "user" => items.push(Item::UserInput {
+                        id: Id::new(format!("hist-user-{counter}")),
+                        text: clean_user_message_text(&text),
+                    }),
+                    "assistant" => items.push(Item::Text {
+                        id: Id::new(format!("hist-asst-{counter}")),
+                        phase: ItemLifecycle::Completed,
+                        text,
+                    }),
+                    _ => {}
+                }
+            }
+            Some("function_call") => {
+                let Some(call_id) = payload.get("call_id").and_then(|c| c.as_str()) else {
+                    continue;
+                };
+                let name = payload
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("tool")
+                    .to_string();
+                let args = payload
+                    .get("arguments")
+                    .and_then(|a| a.as_str())
+                    .and_then(|raw| serde_json::from_str(raw).ok())
+                    .unwrap_or(serde_json::Value::Null);
+                let idx = items.len();
+                items.push(Item::ToolCall {
+                    id: Id::new(format!("hist-tool-{call_id}")),
+                    phase: ItemLifecycle::Completed,
+                    name,
+                    args,
+                    result: None,
+                });
+                function_call_items.insert(call_id.to_string(), idx);
+            }
+            Some("function_call_output") => {
+                let Some(call_id) = payload.get("call_id").and_then(|c| c.as_str()) else {
+                    continue;
+                };
+                let Some(idx) = function_call_items.get(call_id).copied() else {
+                    continue;
+                };
+                if let Some(Item::ToolCall { result, .. }) = items.get_mut(idx) {
+                    *result = Some(Ok(extract_function_output(payload)));
+                }
+            }
             _ => {}
         }
     }
     items
+}
+
+fn extract_function_output(payload: &serde_json::Value) -> String {
+    match payload.get("output") {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
 }
 
 /// Look up the active codex bridge's thread id, if any.
@@ -496,4 +591,67 @@ async fn current_live_thread_id(state: &State<'_, AwidatState>) -> Option<String
         .await
         .as_ref()
         .map(|s| s.bridge.thread_id().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn read_rollout_items_replays_function_calls_as_inert_completed_tool_history() {
+        let dir = match tempfile::tempdir() {
+            Ok(dir) => dir,
+            Err(err) => panic!("tempdir: {err}"),
+        };
+        let path = dir.path().join("rollout-test.jsonl");
+        let mut file = match fs::File::create(&path) {
+            Ok(file) => file,
+            Err(err) => panic!("create rollout: {err}"),
+        };
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"Inspect the timeline"}}]}}}}"#
+        ) {
+            panic!("write user: {err}");
+        }
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"function_call","name":"view_timeline","arguments":"{{\"detail\":\"summary\"}}","call_id":"call-1"}}}}"#
+        ) {
+            panic!("write call: {err}");
+        }
+        if let Err(err) = writeln!(
+            file,
+            r#"{{"type":"response_item","payload":{{"type":"function_call_output","call_id":"call-1","output":"timeline has 3 clips"}}}}"#
+        ) {
+            panic!("write output: {err}");
+        }
+
+        let items = read_rollout_items(&path);
+        assert_eq!(items.len(), 2);
+        match &items[1] {
+            Item::ToolCall {
+                phase,
+                name,
+                result,
+                ..
+            } => {
+                assert_eq!(*phase, ItemLifecycle::Completed);
+                assert_eq!(name, "view_timeline");
+                assert_eq!(result, &Some(Ok("timeline has 3 clips".to_string())));
+            }
+            other => panic!("expected inert tool history item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clean_user_message_text_removes_injected_skills_and_context() {
+        let text = "<skills_instructions>\n## Skills\n  - test: helper\n</skills_instructions>\n\n[user is viewing timeline around 00:12]\n[visible context]\n- clip: intro\n- selection: a-roll\n\nWhat should I cut first?\nKeep the hook.";
+
+        assert_eq!(
+            clean_user_message_text(text),
+            "What should I cut first?\nKeep the hook."
+        );
+    }
 }
