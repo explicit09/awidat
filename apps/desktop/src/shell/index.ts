@@ -44,6 +44,7 @@ export {
   type IndexerConfigSnapshot,
   type IndexerConfigEntry,
 } from "./IndexingDashboard";
+export { IndexRail, type IndexRailProps } from "./IndexRail";
 export {
   DeliverySurface,
   type DeliverySurfaceProps,

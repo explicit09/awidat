@@ -12,7 +12,7 @@ import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { PanelRightOpen, RefreshCw } from "lucide-react";
+import { PanelRightOpen } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
 import { useProjectStore } from "./app/state";
@@ -32,6 +32,7 @@ import {
   AppShell,
   CommandRail,
   DeliverySurface,
+  IndexRail,
   PreviewSurface,
   ProposalInspector,
   TimelineHybrid,
@@ -56,7 +57,7 @@ import {
 } from "./shell";
 import { Footer as ChromeFooter } from "./shell/chrome/Footer";
 import { Landing } from "./shell/empty/Landing";
-import { Button, Card, cn, IconButton, Inline, Stack, StatusPill, StatusPillFromMapping, type JobPillState, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
+import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
@@ -1800,18 +1801,15 @@ function App() {
               )
             }
             index={
-              <IndexReadinessPanel
-                sourceCount={sourceMediaCount}
+              <IndexRail
                 tasks={realIndexingTasks}
                 structurePreview={realIndexingStructure}
                 indexerConfig={indexerConfig}
-                activeIndexingStatus={activeJobs.find((job) => job.job_kind === "indexing")?.status}
                 ready={realIndexingReady}
-                onRunIndex={() => {
+                onReviewIndexResults={() => {
                   void loadIndexerConfig();
                   void runIndexers();
                 }}
-                onRefresh={() => void loadIndexReadiness()}
                 onToggleIndexer={(indexer) => void toggleProjectIndexer(indexer)}
                 onOpenConfigPath={openConfigPath}
                 onRevealConfigPath={revealConfigPath}
@@ -2344,14 +2342,6 @@ function mediaStatusPill(status: IndexingMediaItem["status"]): StatusPillMapping
   }
 }
 
-function formatIndexerActivity(runningCount: number, queuedCount: number): string {
-  if (runningCount === 0 && queuedCount === 0) return "idle";
-  const parts: string[] = [];
-  if (runningCount > 0) parts.push(`${runningCount} running`);
-  if (queuedCount > 0) parts.push(`${queuedCount} queued`);
-  return parts.join(", ");
-}
-
 function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
   switch (status) {
     case "indexed":
@@ -2371,406 +2361,6 @@ function mediaStatusLabel(status: IndexingMediaItem["status"]): string {
     case "missing":
       return "Missing";
   }
-}
-
-/** Small color dot per status for the calmer signal-row treatment.
- *  Tiny dot + muted text label replaces the big colored pill — same
- *  information, far less visual weight. Three semantic colors only:
- *  ready (green), in-flight (amber), needs-attention (red). */
-function statusDotColor(
-  status: IndexingMediaItem["status"] | "disabled",
-): string {
-  switch (status) {
-    case "indexed":
-    case "imported":
-      return "rgb(74, 200, 130)"; // muted green
-    case "indexing":
-    case "processing":
-    case "queued":
-    case "partial":
-      return "rgb(217, 165, 75)"; // muted amber
-    case "failed":
-      return "rgb(220, 100, 95)"; // muted red
-    case "missing":
-    case "disabled":
-      return "rgba(255, 255, 255, 0.25)"; // neutral / inactive
-  }
-}
-
-/**
- * Map each signal kind to the indexer(s) it depends on. When none of
- * the listed indexers is enabled in the project config, the signal
- * gets a "Disabled" treatment instead of a red "Missing" — different
- * meaning, different fix path. Signals not in this map are produced
- * by the global `indexing` job (whisper, scenedetect, etc.).
- */
-const SIGNAL_INDEXER_DEPS: Partial<Record<IndexingTask["kind"], string[]>> = {
-  transcripts: ["whisper"],
-  scenes: ["scenedetect"],
-  audio: ["audio-energy", "beats"],
-  captions: ["whisper"],
-  speaker: ["whisper"],
-  face: ["face"],
-  color: ["color-analysis"],
-  // motion and silence are built-in FFmpeg passes, not MCP indexers,
-  // so they have no entry in indexerConfig to check enabled-ness on.
-  // The previous deps ("motion" / "audio-energy") made the panel
-  // permanently render them as "Disabled". They follow normal
-  // missing/indexing/indexed status flow via the readiness sidecars.
-};
-
-/**
- * Three logical clusters the user actually thinks in. The current
- * arbitrary order (Transcripts/Scenes/Audio/Face/Motion/Color/…)
- * doesn't help anyone scan. Grouping by what the signal feeds into
- * does.
- */
-const SIGNAL_GROUPS: Array<{ label: string; kinds: IndexingTask["kind"][] }> = [
-  { label: "Speech & captions", kinds: ["transcripts", "captions", "speaker"] },
-  { label: "Visuals", kinds: ["scenes", "face", "color", "motion"] },
-  { label: "Audio", kinds: ["audio", "silence"] },
-];
-
-function isSignalDisabled(
-  kind: IndexingTask["kind"],
-  indexerConfig: IndexerConfigSnapshot | undefined,
-): boolean {
-  const deps = SIGNAL_INDEXER_DEPS[kind];
-  if (!deps || deps.length === 0) return false;
-  if (!indexerConfig) return false;
-  const enabledNames = new Set(
-    indexerConfig.indexers.filter((i) => i.enabled).map((i) => i.name),
-  );
-  return !deps.some((name) => enabledNames.has(name));
-}
-
-function IndexReadinessPanel({
-  sourceCount,
-  tasks,
-  structurePreview,
-  indexerConfig,
-  activeIndexingStatus,
-  ready,
-  onRunIndex,
-  onRefresh,
-  onToggleIndexer,
-  onOpenConfigPath,
-  onRevealConfigPath,
-}: {
-  sourceCount: number;
-  tasks: IndexingTask[];
-  structurePreview?: IndexingStructurePreview;
-  indexerConfig?: IndexerConfigSnapshot;
-  activeIndexingStatus?: string;
-  ready: boolean;
-  onRunIndex: () => void;
-  /** Re-poll index readiness from disk. Needed when the dispatcher's
-   *  event stream is gone (e.g. orphaned indexer subprocesses from a
-   *  previous binary's session) so the user can manually sync. */
-  onRefresh: () => void;
-  onToggleIndexer: (indexer: IndexerConfigEntry) => void;
-  onOpenConfigPath: (path: string) => void;
-  onRevealConfigPath: (path: string) => void;
-}) {
-  // Bucket tasks by group, dropping any kind that doesn't belong to a
-  // group (defensive — keeps the panel coherent if a new task kind
-  // ships before its group entry does).
-  const tasksByKind = new Map(tasks.map((t) => [t.kind, t]));
-  const groupedTasks = SIGNAL_GROUPS.map((group) => ({
-    label: group.label,
-    items: group.kinds
-      .map((kind) => tasksByKind.get(kind))
-      .filter((t): t is IndexingTask => t !== undefined),
-  })).filter((g) => g.items.length > 0);
-
-  // For the readiness denominator we want signals the project is
-  // *trying* to produce, not the whole catalog — otherwise a project
-  // with face/motion/speaker disabled looks permanently broken at
-  // "6 of 9 ready".
-  const enabledTasks = tasks.filter(
-    (task) => !isSignalDisabled(task.kind, indexerConfig),
-  );
-  const readyCount = enabledTasks.filter(
-    (task) => task.status === "indexed" || task.status === "imported",
-  ).length;
-  const runningCount = enabledTasks.filter(
-    (task) =>
-      task.status === "indexing" ||
-      task.status === "processing" ||
-      task.status === "partial",
-  ).length;
-  const queuedCount = enabledTasks.filter((task) => task.status === "queued").length;
-  const inFlightCount = runningCount + queuedCount;
-  const disabledCount = tasks.length - enabledTasks.length;
-  const activeIndexers = indexerConfig?.indexers.filter((indexer) => indexer.enabled) ?? [];
-  const complete = readyCount === enabledTasks.length && enabledTasks.length > 0;
-  const usable = ready || readyCount > 0;
-  const readinessLabel = complete
-    ? "Complete"
-    : usable
-      ? "Usable"
-      : inFlightCount > 0
-        ? "Indexing"
-        : "Needs index";
-  const readinessStatus: JobPillState = complete
-    ? "ready"
-    : usable
-      ? "failed"
-      : inFlightCount > 0
-        ? "running"
-        : "idle";
-  const readinessProgress =
-    enabledTasks.length > 0 ? Math.round((readyCount / enabledTasks.length) * 100) : 0;
-  return (
-    <Stack gap="4" className="p-3">
-      <Inline justify="between" align="start" gap="2" className="min-w-0">
-        <Stack gap="1" className="min-w-0">
-          <Inline gap="1" align="center">
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-              Index readiness
-            </span>
-            <IconButton
-              icon={<RefreshCw />}
-              label="Refresh from disk"
-              size="sm"
-              onClick={onRefresh}
-            />
-          </Inline>
-          <span className="text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
-            {readyCount} of {enabledTasks.length} signals ready
-            {disabledCount > 0 ? (
-              <span className="ml-1 text-[var(--text-caption)] font-normal text-[var(--color-text-muted)]">
-                · {disabledCount} disabled
-              </span>
-            ) : null}
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-            {sourceCount} source {sourceCount === 1 ? "item" : "items"} · {formatIndexerActivity(runningCount, queuedCount)}
-          </span>
-          {activeIndexingStatus ? (
-            <span
-              className="block max-w-full truncate text-[10px] text-[var(--color-text-muted)]"
-              title={`Active indexer: ${activeIndexingStatus}`}
-            >
-              Active indexer: {compactActiveIndexerStatus(activeIndexingStatus)}
-            </span>
-          ) : null}
-        </Stack>
-        <StatusPill
-          family="job"
-          state={readinessStatus}
-          label={readinessLabel}
-          className="shrink-0"
-        />
-      </Inline>
-      <Stack gap="1">
-        <Inline justify="between" align="center">
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
-            Evidence coverage
-          </span>
-          <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-            {readinessProgress}%
-          </span>
-        </Inline>
-        <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
-          <div
-            className="h-full rounded-full bg-[var(--color-warning)]"
-            style={{
-              width: `${readinessProgress}%`,
-              // brand-sweep: `complete` means evidence coverage hit ready; use the
-              // job-ready green, not brand orange (orange is reserved for CTAs).
-              backgroundColor: complete ? "var(--color-job-ready-dot)" : usable ? "var(--color-warning)" : "var(--color-processing)",
-            }}
-          />
-        </div>
-      </Stack>
-      {structurePreview ? (
-        <Stack gap="2">
-          <div className="grid grid-cols-2 gap-2">
-            <Metric label="Duration" value={structurePreview.duration ?? "—"} />
-            <Metric label="Scenes" value={structurePreview.scenes ?? "—"} />
-            <Metric label="Segments" value={structurePreview.segments ?? "—"} />
-            <Metric label="Transcript" value={typeof structurePreview.transcriptPercent === "number" ? `${structurePreview.transcriptPercent}%` : "—"} />
-          </div>
-          <button
-            type="button"
-            onClick={async () => {
-              try {
-                await invoke("trim_timeline_tail");
-              } catch (e) {
-                // eslint-disable-next-line no-console
-                console.warn("trim_timeline_tail failed", e);
-              }
-            }}
-            className="self-start h-7 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 text-[var(--text-caption)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] transition-colors"
-            title="Strip trailing empty space so the timeline ends on the last clip"
-          >
-            Trim empty tail
-          </button>
-        </Stack>
-      ) : null}
-      <Stack gap="3">
-        {groupedTasks.map((group) => (
-          <Stack key={group.label} gap="1">
-            <span className="text-[10px] uppercase tracking-[0.08em] font-semibold text-[var(--color-text-muted)] px-1">
-              {group.label}
-            </span>
-            <Stack gap="1">
-              {group.items.map((task) => {
-                const disabled = isSignalDisabled(task.kind, indexerConfig);
-                const showDetail =
-                  task.status !== "indexed" && task.status !== "imported";
-                const detail = disabled
-                  ? "Enable the indexer to compute this signal."
-                  : task.detail ?? indexTaskDetail(task.status);
-                const statusLabel = disabled ? "Disabled" : mediaStatusLabel(task.status);
-                return (
-                  <div
-                    key={task.id}
-                    className={cn(
-                      "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-2.5 py-1.5 transition-colors",
-                      disabled && "opacity-60",
-                    )}
-                  >
-                    <Stack gap="0" className="min-w-0">
-                      <span className="truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
-                        {indexTaskLabel(task.kind)}
-                      </span>
-                      {showDetail ? (
-                        <span
-                          className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]"
-                          title={detail}
-                        >
-                          {detail}
-                        </span>
-                      ) : null}
-                    </Stack>
-                    {/* Dot + label, not a colored pill. Color is held
-                        in reserve for active state — here we use it
-                        only to mark the status (green = ready, amber
-                        = working, red = needs attention). */}
-                    <span className="shrink-0 inline-flex items-center gap-1.5 text-[var(--text-caption)] text-[var(--color-text-muted)]">
-                      <span
-                        className="h-1.5 w-1.5 rounded-full"
-                        style={{ backgroundColor: statusDotColor(disabled ? "disabled" : task.status) }}
-                        aria-hidden
-                      />
-                      <span>{statusLabel}</span>
-                    </span>
-                  </div>
-                );
-              })}
-            </Stack>
-          </Stack>
-        ))}
-      </Stack>
-      {/* Status footer — when indexing is finished and usable, tell
-          the user to switch to the Agent rail to actually do work.
-          The action surface for "ask the agent" belongs in the rail
-          where they're typing commands, not in the index panel. */}
-      <Stack gap="2">
-        <div
-          className={cn(
-            "rounded-[var(--radius-sm)] border px-3 py-2 text-[var(--text-caption)]",
-            usable
-              ? "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.06)] text-[var(--color-job-ready-text)]"
-              : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-muted)]",
-          )}
-        >
-          {sourceCount === 0
-            ? "Import media to start indexing."
-            : usable
-              ? "Indexed — ready for the agent. Open the Agent rail to direct an edit."
-              : inFlightCount > 0
-                ? `Indexing… ${inFlightCount} signal${inFlightCount === 1 ? "" : "s"} in flight.`
-                : "Index pending. Re-run indexers to populate evidence."}
-        </div>
-        <button
-          type="button"
-          onClick={onRunIndex}
-          className="text-center text-[var(--text-caption)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors py-1"
-        >
-          Re-run indexers
-        </button>
-      </Stack>
-      {indexerConfig ? (
-        <Stack gap="2">
-          <Inline justify="between" align="center">
-            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-              Indexers
-            </span>
-            <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)]">
-              {activeIndexers.length} active
-            </span>
-          </Inline>
-          {indexerConfig.indexers.slice(0, 4).map((indexer) => (
-            <Inline
-              key={indexer.name}
-              justify="between"
-              align="center"
-              gap="2"
-              className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2"
-            >
-              <Stack gap="0" className="min-w-0">
-                <span className="truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">
-                  {indexer.name}
-                </span>
-                <span className="truncate text-[10px] text-[var(--color-text-muted)]">
-                  {indexer.cwd ?? "global"} · {indexer.resourceClass}
-                </span>
-              </Stack>
-              <Button variant="ghost" size="sm" onClick={() => onToggleIndexer(indexer)}>
-                {indexer.enabled ? "Disable" : "Enable"}
-              </Button>
-            </Inline>
-          ))}
-          <Inline gap="1" wrap="wrap">
-            {indexerConfig.projectPath ? (
-              <Button variant="ghost" size="sm" onClick={() => onRevealConfigPath(indexerConfig.projectPath!)}>
-                Project config
-              </Button>
-            ) : null}
-            {indexerConfig.globalPath ? (
-              <Button variant="ghost" size="sm" onClick={() => onOpenConfigPath(indexerConfig.globalPath!)}>
-                Global config
-              </Button>
-            ) : null}
-          </Inline>
-        </Stack>
-      ) : null}
-    </Stack>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-3 py-2">
-      <span className="block text-[var(--text-caption)] font-mono text-[var(--color-text-primary)]">{value}</span>
-      <span className="block text-[10px] uppercase tracking-[0.04em] text-[var(--color-text-muted)]">{label}</span>
-    </div>
-  );
-}
-
-function indexTaskLabel(kind: IndexingTask["kind"]): string {
-  const labels: Record<IndexingTask["kind"], string> = {
-    transcripts: "Transcripts",
-    scenes: "Scenes",
-    audio: "Audio analysis",
-    face: "Face detection",
-    motion: "Motion analysis",
-    color: "Color analysis",
-    silence: "Silence detection",
-    speaker: "Speaker diarization",
-    captions: "Caption readiness",
-  };
-  return labels[kind];
-}
-
-function indexTaskDetail(status: IndexingTask["status"]): string {
-  if (status === "indexed" || status === "imported") return "Ready for edit evidence";
-  if (status === "indexing" || status === "processing" || status === "partial") return "Indexing locally";
-  if (status === "failed") return "Needs attention";
-  return "Missing";
 }
 
 function CollapsedInspectorButton({
@@ -3134,15 +2724,6 @@ function summarizeToolForRail(item: ToolCallItem): string {
 function oneLine(text: string, max: number): string {
   const t = text.replace(/\s+/g, " ").trim();
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
-}
-
-function compactActiveIndexerStatus(status: string): string {
-  const firstLine = status.split("\n").find((line) => line.trim().length > 0)?.trim() ?? status;
-  const running = firstLine.match(/^still running\s+(.+?)\s+·\s+.+?\s+·\s+(.+?)\s+elapsed$/);
-  if (running) {
-    return `${running[1].trim()} · ${running[2].trim()}`;
-  }
-  return oneLine(firstLine, 56);
 }
 
 function summarizeJobStatus(status: string): { summary: string; detail?: string } {
