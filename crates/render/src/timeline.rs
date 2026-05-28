@@ -4562,6 +4562,9 @@ impl<'a> FilterPlanner<'a> {
             return base;
         }
         let mut filter = base.filter_complex.clone();
+        while filter.ends_with(';') {
+            filter.pop();
+        }
         filter.push(';');
         filter.push_str(&format_broadcast_overlay_graph(
             &in_label, &out_label, overlay, &parts,
@@ -4862,11 +4865,18 @@ fn append_video_overlays(
         let input_idx = first_overlay_input + idx;
         let pts_label = format!("[media_overlay_pts{idx}]");
         let scaled_label = format!("[media_overlay_scaled{idx}]");
-        let ref_label = format!("[media_overlay_ref{idx}]");
         let next = format!("[media_overlay_v{idx}]");
         let start = overlay.track_start_s;
         let end = overlay.track_start_s + effective_duration(&overlay.segment);
         let overlay_input = stage_overlay_video_input(&mut filter, input_idx, &overlay.segment);
+        // Defensive: a prior chunk may have left a trailing ';' so
+        // unconditionally pushing one here can produce ';;' which
+        // ffmpeg rejects as "No such filter: ''". Strip any trailing
+        // ';' before adding ours so we always end up with exactly one
+        // separator between filter clauses.
+        while filter.ends_with(';') {
+            filter.pop();
+        }
         filter.push(';');
         filter.push_str(&format!(
             "{overlay_input}setpts=PTS-STARTPTS+{start}/TB{pts_label};"
@@ -4917,21 +4927,27 @@ fn append_video_overlays(
         } else {
             (String::new(), transformed_label)
         };
+        // Use plain `scale` (single-input) instead of `scale2ref`
+        // (two-input). scale2ref made each overlay's scale dependent on
+        // a reference frame from the main chain, producing a deep
+        // cyclic-dependency in ffmpeg's filter scheduler that locked
+        // up with 0% CPU on all threads. Plain `scale` only needs the
+        // overlay's own [pts] input, breaking the chain.
         let overlay_filter = if let (VideoOverlayMode::FullFrame, Some(blend_mode)) =
             (&overlay.mode, overlay.segment.overlay_blend_mode.as_deref())
         {
             format!(
-                "{ref_label}{overlay_video_label}blend=all_mode={blend_mode}:all_opacity=1:enable='between(t\\,{start}\\,{end})'{next}",
+                "{current}{overlay_video_label}blend=all_mode={blend_mode}:all_opacity=1:enable='between(t\\,{start}\\,{end})'{next}",
                 overlay_video_label = opacity_filter.1,
             )
         } else {
             format!(
-                "{ref_label}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
+                "{current}{overlay_video_label}overlay=x={x_expr}:y={y_expr}:enable='between(t\\,{start}\\,{end})'{next}",
                 overlay_video_label = opacity_filter.1,
             )
         };
         filter.push_str(&format!(
-            "{pts_label}{current}scale2ref={scale_expr}{scaled_label}{ref_label};\
+            "{pts_label}scale={scale_expr}{scaled_label};\
              {rotation_filter}\
              {corner_pin_filter}\
              {mask_filter}\
@@ -5381,19 +5397,25 @@ fn overlay_mask_keyframe_value_expr(
 
 fn overlay_scale_expr(overlay: &VideoOverlayPlan, time_var: &str) -> String {
     let scale_multiplier = overlay_animation_value_expr(overlay, "overlay.scale", "1", time_var);
+    // Keep overlay sizing independent from the live program stream.
+    // Using scale2ref here makes every overlay wait on the previous
+    // composited output; large timelines can then stall inside
+    // ffmpeg's filter scheduler before the encoder receives a frame.
     match &overlay.mode {
         VideoOverlayMode::FullFrame => {
             if has_overlay_animation(overlay, "overlay.scale") {
-                format!("w=main_w*({scale_multiplier}):h=main_h*({scale_multiplier}):eval=frame")
+                format!(
+                    "w={TIMELINE_RENDER_WIDTH}*({scale_multiplier}):h={TIMELINE_RENDER_HEIGHT}*({scale_multiplier}):eval=frame"
+                )
             } else {
-                "w=main_w:h=main_h".to_string()
+                format!("w={TIMELINE_RENDER_WIDTH}:h={TIMELINE_RENDER_HEIGHT}")
             }
         }
         VideoOverlayMode::PiP { scale, .. } => {
             if has_overlay_animation(overlay, "overlay.scale") {
-                format!("w=main_w*{scale}*({scale_multiplier}):h=-2:eval=frame")
+                format!("w={TIMELINE_RENDER_WIDTH}*{scale}*({scale_multiplier}):h=-2:eval=frame")
             } else {
-                format!("w=main_w*{scale}:h=-2")
+                format!("w={TIMELINE_RENDER_WIDTH}*{scale}:h=-2")
             }
         }
     }
@@ -5489,20 +5511,10 @@ fn motion_blurred_overlay_transform_filter(
         format!("[media_overlay_blur{}_src1]", context.idx),
         format!("[media_overlay_blur{}_src2]", context.idx),
     ];
-    let base_labels = [
-        format!("[media_overlay_blur{}_base0]", context.idx),
-        format!("[media_overlay_blur{}_base1]", context.idx),
-        format!("[media_overlay_blur{}_base2]", context.idx),
-    ];
     let scaled_labels = [
         format!("[media_overlay_blur{}_scaled0]", context.idx),
         format!("[media_overlay_blur{}_scaled1]", context.idx),
         format!("[media_overlay_blur{}_scaled2]", context.idx),
-    ];
-    let ref_labels = [
-        format!("[media_overlay_blur{}_ref0]", context.idx),
-        format!("[media_overlay_blur{}_ref1]", context.idx),
-        format!("[media_overlay_blur{}_ref2]", context.idx),
     ];
     let rotated_labels = [
         format!("[media_overlay_blur{}_rot0]", context.idx),
@@ -5521,33 +5533,21 @@ fn motion_blurred_overlay_transform_filter(
     let offsets = [-half_shutter, 0.0, half_shutter];
     let weight = fmt_filter_num(1.0 / offsets.len() as f64);
     let mut filter = format!(
-        "{source_label}split=3{}{}{};{base_label}split=3{}{}{};",
+        "{source_label}split=3{}{}{};",
         sample_labels[0],
         sample_labels[1],
         sample_labels[2],
-        base_labels[0],
-        base_labels[1],
-        base_labels[2],
         source_label = context.source_label,
-        base_label = context.base_label,
     );
-    let mut current_base = String::new();
+    let mut current_base = context.base_label.to_string();
 
     for (sample_idx, offset) in offsets.into_iter().enumerate() {
         let sample_time_var = offset_time_var("t", offset);
         let sample_scale = overlay_scale_expr(context.overlay, &sample_time_var);
         filter.push_str(&format!(
-            "{}{}scale2ref={sample_scale}{}{};",
-            sample_labels[sample_idx],
-            base_labels[sample_idx],
-            scaled_labels[sample_idx],
-            ref_labels[sample_idx],
+            "{}scale={sample_scale}{};",
+            sample_labels[sample_idx], scaled_labels[sample_idx],
         ));
-        if sample_idx == 0 {
-            current_base = ref_labels[sample_idx].clone();
-        } else {
-            filter.push_str(&format!("{}nullsink;", ref_labels[sample_idx]));
-        }
         let rotation_deg = overlay_rotation_deg_expr(context.overlay, &sample_time_var);
         let has_rotation = rotation_deg.is_some();
         let overlay_video_label = if let Some(rotation_deg) = rotation_deg {
@@ -12091,7 +12091,7 @@ mod tests {
             "corner_pin graph should lower into the target overlay filter branch: {filter}"
         );
         assert!(
-            filter.contains("[media_overlay_ref0][media_overlay_corner_pin0]overlay="),
+            filter.contains("[outv][media_overlay_corner_pin0]overlay="),
             "corner-pinned replacement should composite after perspective lowering: {filter}"
         );
         assert!(
@@ -12123,7 +12123,7 @@ mod tests {
             "video matte graph should stream the matte instead of freezing frame 0: {filter}"
         );
         assert!(
-            filter.contains("[media_overlay_ref0][media_overlay_matte0]overlay="),
+            filter.contains("[outv][media_overlay_matte0]overlay="),
             "matte-applied overlay should feed the compositing stage: {filter}"
         );
         assert!(
@@ -12174,7 +12174,7 @@ mod tests {
             "mask graph should lower to an overlay alpha gate from the mask bounds: {filter}"
         );
         assert!(
-            filter.contains("[media_overlay_ref0][media_overlay_mask0]overlay="),
+            filter.contains("[outv][media_overlay_mask0]overlay="),
             "masked overlay should feed the compositing stage: {filter}"
         );
         assert!(
@@ -15109,7 +15109,7 @@ animations: Vec::new(),
             .unwrap();
         assert!(filter.contains("concat=n=1:v=1:a=1[outv][outa]"));
         assert!(filter.contains("[1:v:0]setpts=PTS-STARTPTS+1.5/TB"));
-        assert!(filter.contains("scale2ref=w=main_w*0.28:h=-2"));
+        assert!(filter.contains("scale=w=1920*0.28:h=-2"));
         assert!(filter.contains("overlay=x=main_w-overlay_w-main_w*0.035:y=main_h-overlay_h-main_h*0.035:enable='between(t\\,1.5\\,3.5)'"));
     }
 
@@ -15171,11 +15171,11 @@ animations: Vec::new(),
             "overlay x should include normalized motion: {filter}"
         );
         assert!(
-            filter.contains("w=main_w*0.3*("),
+            filter.contains("w=1920*0.3*("),
             "overlay scale should include multiplier expression: {filter}"
         );
         assert!(
-            filter.contains("scale2ref=w=main_w*0.3*(") && filter.contains(":eval=frame"),
+            filter.contains("scale=w=1920*0.3*(") && filter.contains(":eval=frame"),
             "animated overlay scale should be evaluated per frame: {filter}"
         );
     }
@@ -15425,7 +15425,7 @@ animations: Vec::new(),
         let filter = filter_complex_from_argv(&argv);
 
         assert!(
-            filter.matches("scale2ref=w=main_w*0.3*(").count() >= 3,
+            filter.matches("scale=w=1920*0.3*(").count() >= 3,
             "motion blur should scale each temporal transform sample independently: {filter}"
         );
         assert!(
@@ -15961,7 +15961,7 @@ animations: Vec::new(),
             .unwrap();
         assert!(filter.contains("concat=n=1:v=1:a=1[outv][outa]"));
         assert!(!filter.contains("concat=n=2"));
-        assert!(filter.contains("scale2ref=w=main_w:h=main_h"));
+        assert!(filter.contains("scale=w=1920:h=1080"));
         assert!(filter.contains("overlay=x=0:y=0:enable='between(t\\,1\\,3)'"));
     }
 
