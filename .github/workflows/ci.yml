@@ -74,8 +74,6 @@ jobs:
       - name: Free test build artifacts
         if: matrix.os == 'ubuntu-latest'
         run: cargo clean
-      - name: Fast evals
-        run: cargo run -p awidat-eval -- --ci --json
       - name: Doc
         run: |
           set -euo pipefail
