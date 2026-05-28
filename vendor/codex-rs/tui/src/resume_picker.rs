@@ -1160,36 +1160,39 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            _ if allow_plain_char_navigation && self.list_keymap.jump_top.is_pressed(key) => {
-                if !self.filtered_rows.is_empty() {
-                    self.selected = 0;
-                    self.ensure_selected_visible();
-                    self.request_frame();
-                }
+            _ if allow_plain_char_navigation
+                && self.list_keymap.jump_top.is_pressed(key)
+                && !self.filtered_rows.is_empty() =>
+            {
+                self.selected = 0;
+                self.ensure_selected_visible();
+                self.request_frame();
             }
-            _ if allow_plain_char_navigation && self.list_keymap.jump_bottom.is_pressed(key) => {
-                if !self.filtered_rows.is_empty() {
-                    self.selected = self.filtered_rows.len().saturating_sub(1);
+            _ if allow_plain_char_navigation
+                && self.list_keymap.jump_bottom.is_pressed(key)
+                && !self.filtered_rows.is_empty() =>
+            {
+                self.selected = self.filtered_rows.len().saturating_sub(1);
+                self.ensure_selected_visible();
+                self.maybe_load_more_for_scroll();
+                self.request_frame();
+            }
+            _ if allow_plain_char_navigation
+                && self.list_keymap.page_down.is_pressed(key)
+                && !self.filtered_rows.is_empty() =>
+            {
+                let step = self.view_rows.unwrap_or(10).max(1);
+                let target = self.selected.saturating_add(step);
+                let max_index = self.filtered_rows.len().saturating_sub(1);
+                if target > max_index && self.pagination.next_cursor.is_some() {
+                    self.pending_page_down_target = Some(target);
+                    self.load_more_if_needed(LoadTrigger::Scroll);
+                } else {
+                    self.selected = target.min(max_index);
                     self.ensure_selected_visible();
                     self.maybe_load_more_for_scroll();
-                    self.request_frame();
                 }
-            }
-            _ if allow_plain_char_navigation && self.list_keymap.page_down.is_pressed(key) => {
-                if !self.filtered_rows.is_empty() {
-                    let step = self.view_rows.unwrap_or(10).max(1);
-                    let target = self.selected.saturating_add(step);
-                    let max_index = self.filtered_rows.len().saturating_sub(1);
-                    if target > max_index && self.pagination.next_cursor.is_some() {
-                        self.pending_page_down_target = Some(target);
-                        self.load_more_if_needed(LoadTrigger::Scroll);
-                    } else {
-                        self.selected = target.min(max_index);
-                        self.ensure_selected_visible();
-                        self.maybe_load_more_for_scroll();
-                    }
-                    self.request_frame();
-                }
+                self.request_frame();
             }
             KeyEvent {
                 code: KeyCode::Tab, ..
@@ -1223,15 +1226,13 @@ impl PickerState {
                 code: KeyCode::Char(c),
                 modifiers,
                 ..
-            } => {
+            } if !modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT) =>
+            {
                 // basic text input for search
-                if !modifiers.contains(KeyModifiers::CONTROL)
-                    && !modifiers.contains(KeyModifiers::ALT)
-                {
-                    let mut new_query = self.query.clone();
-                    new_query.push(c);
-                    self.set_query(new_query);
-                }
+                let mut new_query = self.query.clone();
+                new_query.push(c);
+                self.set_query(new_query);
             }
             _ => {}
         }
