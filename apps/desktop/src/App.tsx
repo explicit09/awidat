@@ -154,6 +154,13 @@ function App() {
   const [, setRealVideoFrames] = useState<string[]>([]);
   const [realAudioPeaks, setRealAudioPeaks] = useState<number[]>([]);
   const [realPreviewSrc, setRealPreviewSrc] = useState<string | null>(null);
+  // Tracks whether the current `RealMediaPreviewSlot` has decoded its
+  // first frame. Lifted out of the slot so `PreviewSurface` can render
+  // the `FilmSlate` overlay until the swap and cross-fade it out once
+  // the player has something paintable. Reset to false whenever the
+  // selected media changes (see effect below) so re-selecting a clip
+  // re-shows the slate while its frame loads.
+  const [hasProxyFrame, setHasProxyFrame] = useState(false);
   const mediaReadinessCommandUnavailableRef = useRef(false);
   const [showNewProject, setShowNewProject] = useState(false);
   const [pendingImportPaths, setPendingImportPaths] = useState<string[] | null>(null);
@@ -870,6 +877,14 @@ function App() {
     };
   }, [demoMode, timelineSnapshot]);
 
+  // Reset the "first frame painted" flag whenever the selected media
+  // (or its quality-mode source) changes. Without this, switching to a
+  // new clip would skip showing the FilmSlate because the flag would
+  // still be true from the previously-loaded media.
+  useEffect(() => {
+    setHasProxyFrame(false);
+  }, [selectedPreviewMedia?.path]);
+
   useEffect(() => {
     if (demoMode || !isTauri() || !selectedPreviewMedia) {
       setRealPreviewSrc(null);
@@ -1460,6 +1475,51 @@ function App() {
   const effectiveInspector = demoMode ? screen2Inspector : inspectorData;
   const isTimelinePreview = !demoMode && timelineDuration > 0;
   const selectedPreviewChangeId = demoMode ? "c07" : activePreviewChangeId;
+
+  // FilmSlate inputs — only meaningful when we're previewing real
+  // source media (not the timeline-segmented view and not demo mode).
+  // The slate stays hidden in those modes by leaving `slateSourceMedia`
+  // undefined. Fields beyond `name` are best-effort: the current media
+  // store only carries `name` + `size_bytes`, and source-time duration
+  // (`sourceDurationS`) is populated once the <video> reads metadata.
+  // Resolution / codec / audio aren't surfaced by the model yet — left
+  // undefined so the slate collapses them. TODO(redesign): wire probe
+  // metadata once it lives on `SourceMediaEntry`.
+  const slateSourceMedia = useMemo(() => {
+    if (demoMode || isTimelinePreview) return undefined;
+    if (!selectedPreviewMedia) return undefined;
+    return {
+      name: selectedPreviewMedia.name,
+      sizeBytes: selectedSource?.size_bytes,
+      durationSec: sourceDurationS > 0 ? sourceDurationS : undefined,
+    };
+  }, [demoMode, isTimelinePreview, selectedPreviewMedia, selectedSource?.size_bytes, sourceDurationS]);
+
+  // Total indexers reported by the backend snapshot — keep in sync with
+  // the boolean fields on `IndexReadinessSnapshot`. Hard-coded rather
+  // than derived because the snapshot type is a flat record, not a list.
+  const INDEXER_TOTAL = 9;
+  const slateIndexing = useMemo(() => {
+    if (!indexReadiness) {
+      // No snapshot yet — show a calm "preparing" placeholder so the
+      // slate doesn't claim more progress than is real.
+      return {
+        ready: 0.1,
+        status: "Preparing media…",
+        detail: "Awaiting indexer status",
+      };
+    }
+    const ready = indexReadiness.ready_count;
+    const fraction = Math.max(0, Math.min(1, ready / INDEXER_TOTAL));
+    const transcriptSegment = indexReadiness.transcripts
+      ? " · transcript ready"
+      : "";
+    return {
+      ready: fraction,
+      status: fraction < 1 ? "Building proxy…" : "Decoding first frame…",
+      detail: `${ready} of ${INDEXER_TOTAL} indexers ready${transcriptSegment}`,
+    };
+  }, [indexReadiness]);
   const seekPreview = (timeS: number) => {
     if (demoMode) return;
     if (isTimelinePreview) {
@@ -1657,9 +1717,13 @@ function App() {
                   onTime={setSourceTime}
                   onDuration={setSourceDuration}
                   onPlaying={setMediaPlaying}
+                  onFirstFrame={() => setHasProxyFrame(true)}
                 />
               ) : undefined
             }
+            sourceMedia={slateSourceMedia}
+            hasProxyFrame={hasProxyFrame}
+            indexing={slateIndexing}
             onPlayPause={() => setMediaPlaying(!isPlaying)}
             onSelectChange={selectPreviewChange}
             onPrevCut={() => jumpPreviewChange(-1)}
@@ -1843,6 +1907,7 @@ function RealMediaPreviewSlot({
   onTime,
   onDuration,
   onPlaying,
+  onFirstFrame,
 }: {
   src: string;
   label: string;
@@ -1856,9 +1921,22 @@ function RealMediaPreviewSlot({
   onTime: (timeS: number) => void;
   onDuration: (durationS: number) => void;
   onPlaying: (playing: boolean) => void;
+  /**
+   * Fires once per mount when the `<video>` first reports that a
+   * frame is decoded and ready to display. Used by the parent to
+   * cross-fade out the `FilmSlate` loading overlay. Multiple frame
+   * events still fire `setHasPaintedFrame(true)` locally — the
+   * parent callback is invoked on every transition since it's
+   * idempotent (parent owns its own boolean).
+   */
+  onFirstFrame?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [hasPaintedFrame, setHasPaintedFrame] = useState(false);
+  const markPainted = () => {
+    setHasPaintedFrame(true);
+    onFirstFrame?.();
+  };
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1942,10 +2020,10 @@ function RealMediaPreviewSlot({
         preload="metadata"
         className="relative h-full w-full object-contain"
         onLoadedMetadata={(event) => onDuration(event.currentTarget.duration)}
-        onLoadedData={() => setHasPaintedFrame(true)}
-        onCanPlay={() => setHasPaintedFrame(true)}
+        onLoadedData={markPainted}
+        onCanPlay={markPainted}
         onTimeUpdate={(event) => {
-          setHasPaintedFrame(true);
+          markPainted();
           onTime(event.currentTarget.currentTime);
         }}
         onPlay={() => onPlaying(true)}

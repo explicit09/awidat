@@ -21,6 +21,33 @@ import {
   type TimelineMarkerKind,
 } from "../ui";
 import type { PreviewQualityMode } from "../media/previewSource";
+import { FilmSlate } from "./empty/FilmSlate";
+
+/**
+ * Shape of the loading-state metadata the slate needs. Anything not
+ * known at the call site is omitted — `FilmSlate` collapses missing
+ * fields silently.
+ */
+export type PreviewSourceMediaInfo = {
+  name: string;
+  resolution?: string;
+  codec?: string;
+  audio?: string;
+  sizeBytes?: number;
+  durationSec?: number;
+};
+
+/**
+ * Loading/indexing progress for the slate. `ready` is a 0..1 ratio
+ * (drives the bottom progress bar). `status`, `detail`, `eta` are
+ * caller-supplied display strings — see `FilmSlate` for examples.
+ */
+export type PreviewIndexingInfo = {
+  ready: number;
+  status: string;
+  detail: string;
+  eta?: string;
+};
 
 /**
  * PreviewSurface — the center "Preview / Review" surface from the design spec
@@ -83,6 +110,26 @@ export type PreviewSurfaceProps = {
   /** Slot for the actual video element (SegmentedVideoView wraps in Phase 2.11). */
   videoSlot?: ReactNode;
 
+  /**
+   * Currently-loaded source media descriptor. When present and
+   * `hasProxyFrame` is false, the `FilmSlate` placeholder is rendered
+   * over the video stage. When absent, no slate appears (the stage
+   * falls back to `videoSlot` / `VideoPlaceholder` as before).
+   */
+  sourceMedia?: PreviewSourceMediaInfo;
+  /**
+   * True once the underlying `<video>` element has decoded its first
+   * frame (or any other "ready to show something other than black"
+   * signal the parent wants to use). The slate cross-fades out when
+   * this flips to true.
+   */
+  hasProxyFrame?: boolean;
+  /**
+   * Live indexing/loading progress for the slate. Optional — if not
+   * provided, the slate falls back to neutral placeholder text.
+   */
+  indexing?: PreviewIndexingInfo;
+
   /** Callbacks — wired at cutover. */
   onSelectChange?: (change: PreviewChange) => void;
   onPlayPause?: () => void;
@@ -116,6 +163,9 @@ export function PreviewSurface({
   qualityMode = "auto",
   viewMode = "before-after",
   videoSlot,
+  sourceMedia,
+  hasProxyFrame = false,
+  indexing,
   onSelectChange,
   onPlayPause,
   onPrevCut,
@@ -197,9 +247,40 @@ export function PreviewSurface({
 
       {/* Video stage — pure black, no top border. The header above
           shares the same background so the viewer extends visually
-          to the very top of the panel. */}
+          to the very top of the panel.
+
+          Loading state: when `sourceMedia` is set but the underlying
+          player has not produced a first frame yet (`!hasProxyFrame`),
+          a `FilmSlate` overlay covers the stage. Both layers stay
+          mounted so the swap is a 200ms opacity cross-fade rather
+          than a hard cut. When no `sourceMedia` is supplied (e.g.
+          no project loaded yet) the slate is skipped entirely and
+          the legacy placeholder still appears. */}
       <div className="relative flex-1 min-h-0 min-w-0 bg-black overflow-hidden">
         {videoSlot ?? <VideoPlaceholder viewMode={viewMode} />}
+        {sourceMedia ? (
+          <div
+            className="absolute inset-0 transition-opacity duration-200"
+            style={{
+              opacity: hasProxyFrame ? 0 : 1,
+              pointerEvents: hasProxyFrame ? "none" : "auto",
+            }}
+            aria-hidden={hasProxyFrame}
+          >
+            <FilmSlate
+              filename={sourceMedia.name}
+              resolution={sourceMedia.resolution}
+              codec={sourceMedia.codec}
+              audio={sourceMedia.audio}
+              sizeBytes={sourceMedia.sizeBytes}
+              durationSec={sourceMedia.durationSec}
+              ready={indexing?.ready ?? 0.1}
+              status={indexing?.status ?? "Preparing media…"}
+              detail={indexing?.detail ?? "Decoding first frame"}
+              eta={indexing?.eta}
+            />
+          </div>
+        ) : null}
       </div>
 
       {/* Jump chips */}
