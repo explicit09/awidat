@@ -12,7 +12,7 @@ import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, RefreshCw } from "lucide-react";
+import { PanelRightOpen, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
 import { useProjectStore } from "./app/state";
@@ -55,6 +55,7 @@ import {
   type TimelineViewMode,
 } from "./shell";
 import { Footer as ChromeFooter } from "./shell/chrome/Footer";
+import { Landing } from "./shell/empty/Landing";
 import { Button, Card, cn, IconButton, Inline, Stack, StatusPill, StatusPillFromMapping, type JobPillState, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
@@ -74,7 +75,7 @@ import { useProposalInspectorData } from "./state/proposalAdapter";
 import { useTimelineStore } from "./timeline/store";
 import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
-import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
+import { MENU_COMMANDS, onMenuCommand } from "./app/menuCommands";
 import type { Item, JobKind, MediaCacheReadiness, MediaReadinessSnapshot, PermissionMode, TimelineSnapshot } from "./protocol";
 import {
   screen2Activity,
@@ -1518,7 +1519,7 @@ function App() {
   // land later as a small list above the inspector.
   const realWorkspace =
     !demoMode && !hasProject ? (
-      <NoProjectWorkspace />
+      <Landing />
     ) : !demoMode && stage === "deliver" ? (
       realDeliveryWorkspace
     ) : undefined;
@@ -2740,96 +2741,9 @@ function CollapsedRailSpine({
   );
 }
 
-function NoProjectWorkspace() {
-  return (
-    <div className="flex h-full min-h-0 items-center justify-center bg-[var(--color-surface-app)] p-4">
-      <div className="grid w-full max-w-4xl grid-cols-[minmax(0,1fr)_280px] gap-3">
-        <Card padding="lg" tone="elevated" className="min-h-[340px]">
-          <Stack gap="3" align="center" className="h-full justify-center text-center">
-            <span className="relative flex h-16 w-16 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-brand-secondary)]">
-              <Film className="h-7 w-7 stroke-[1.5]" />
-              <span className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full border border-[var(--color-border-active)] bg-[var(--color-surface-selected)]">
-                <ImportIcon className="h-3.5 w-3.5 stroke-[1.75]" />
-              </span>
-            </span>
-            <Stack gap="2" align="center" className="max-w-md">
-              <span className="text-[var(--text-h1)] font-semibold text-[var(--color-text-primary)]">
-                No project open yet
-              </span>
-              <span className="text-[var(--text-body)] leading-relaxed text-[var(--color-text-secondary)]">
-                Import media or create a new project to get started with intelligent proposals and review.
-              </span>
-            </Stack>
-            <Inline gap="2" wrap="wrap" justify="center">
-              <Button
-                variant="primary"
-                leadingIcon={<ImportIcon className="h-3.5 w-3.5 stroke-[1.75]" />}
-                onClick={() => emitMenuCommand(MENU_COMMANDS.IMPORT_FILES)}
-              >
-                Import media
-              </Button>
-              <Button
-                variant="secondary"
-                leadingIcon={<FolderOpen className="h-3.5 w-3.5 stroke-[1.75]" />}
-                onClick={() => emitMenuCommand(MENU_COMMANDS.OPEN_PROJECT)}
-              >
-                Open project
-              </Button>
-              <Button
-                variant="ghost"
-                leadingIcon={<Play className="h-3.5 w-3.5 stroke-[1.75]" />}
-                onClick={() => emitMenuCommand(MENU_COMMANDS.NEW_PROJECT)}
-              >
-                Start with example
-              </Button>
-            </Inline>
-            <Card padding="sm" tone="flat" className="max-w-md text-left">
-              <span className="text-[var(--text-caption)] leading-relaxed text-[var(--color-text-muted)]">
-                Awidat's agents will analyze your content and propose a tight, publish-ready edit.
-              </span>
-            </Card>
-          </Stack>
-        </Card>
-        <div className="grid gap-3">
-          <Card padding="md">
-            <Stack gap="3">
-              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-                What happens next
-              </span>
-              {[
-                "Media is indexed locally first.",
-                "The agent builds proposals with evidence.",
-                "You review, revise, and deliver safely.",
-              ].map((item, index) => (
-                <Inline key={item} gap="2" align="center">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] font-mono text-[var(--text-caption)] text-[var(--color-brand-secondary)]">
-                    {index + 1}
-                  </span>
-                  <span className="text-[var(--text-body-sm)] text-[var(--color-text-secondary)]">
-                    {item}
-                  </span>
-                </Inline>
-              ))}
-            </Stack>
-          </Card>
-          <Card padding="md">
-            <Stack gap="2">
-              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
-                System state
-              </span>
-              <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
-                Ready for local project
-              </span>
-              <span className="text-[var(--text-body-sm)] leading-relaxed text-[var(--color-text-secondary)]">
-                No media is loaded, no proposal is active, and no timeline changes can be applied until a project is opened.
-              </span>
-            </Stack>
-          </Card>
-        </div>
-      </div>
-    </div>
-  );
-}
+// `NoProjectWorkspace` was removed in Task 11 (redesign empty state). Its
+// replacement is `<Landing />` in `./shell/empty/Landing.tsx`, rendered
+// via `realWorkspace` above.
 
 /**
  * Footer — thin wrapper that delegates to the redesigned
