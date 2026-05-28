@@ -2211,20 +2211,14 @@ mod tests {
                         continue;
                     }
                     match ch {
-                        '\\' => {
-                            if in_single || in_double {
-                                escape = true;
-                            }
+                        '\\' if in_single || in_double => {
+                            escape = true;
                         }
-                        '\'' => {
-                            if !in_double {
-                                in_single = !in_single;
-                            }
+                        '\'' if !in_double => {
+                            in_single = !in_single;
                         }
-                        '"' => {
-                            if !in_single {
-                                in_double = !in_double;
-                            }
+                        '"' if !in_single => {
+                            in_double = !in_double;
                         }
                         '{' if !in_single && !in_double => level_brace += 1,
                         '}' if !in_single && !in_double => level_brace -= 1,
