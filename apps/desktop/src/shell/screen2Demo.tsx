@@ -113,7 +113,7 @@ export function Screen2MediaSlot() {
       <div className="absolute left-1/2 top-1/2 grid h-10 w-10 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-[var(--color-border-focus)] bg-[rgba(8,13,20,0.92)] text-[var(--color-brand-secondary)] shadow-[0_0_24px_rgba(56,189,248,0.3)]">
         <Scissors className="h-4 w-4 stroke-[1.7]" />
       </div>
-      <div className="absolute left-8 top-8 flex items-center gap-2 rounded-[var(--radius-sm)] border border-[rgba(245,158,11,0.45)] bg-[rgba(58,38,5,0.76)] px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-pill-pending-text)]">
+      <div className="absolute left-8 top-8 flex items-center gap-2 rounded-[var(--radius-sm)] border border-[rgba(245,158,11,0.45)] bg-[rgba(58,38,5,0.76)] px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-job-idle-text)]">
         <Sparkles className="h-3.5 w-3.5" />
         Active proposal overlay
       </div>
@@ -146,7 +146,7 @@ function Frame({ label, src, muted = false }: { label: string; src: string; mute
         {muted ? "Source timing" : "Proposed cut 07"}
       </div>
       {!muted ? (
-        <div className="absolute right-3 bottom-3 flex items-center gap-1 rounded-[var(--radius-xs)] border border-[rgba(34,197,94,0.35)] bg-[rgba(11,47,26,0.72)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-pill-accepted-text)]">
+        <div className="absolute right-3 bottom-3 flex items-center gap-1 rounded-[var(--radius-xs)] border border-[rgba(34,197,94,0.35)] bg-[rgba(11,47,26,0.72)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-proposal-accepted-text)]">
           <ShieldCheck className="h-3 w-3" />
           Review safe
         </div>

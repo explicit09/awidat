@@ -301,7 +301,7 @@ export function PreviewSurface({
                     "text-[var(--text-caption)] font-mono font-semibold border",
                     "transition-[background-color,border-color,color] duration-[120ms]",
                     c.id === activeChangeId
-                      ? "bg-[var(--color-pill-warning-fill)] border-[var(--color-pill-warning-border)] text-[var(--color-pill-warning-text)]"
+                      ? "bg-[var(--color-job-failed-fill)] border-[var(--color-job-failed-border)] text-[var(--color-job-failed-text)]"
                       : "bg-[var(--color-surface-card)] border-[var(--color-border-subtle)] text-[var(--color-text-secondary)] hover:border-[var(--color-border)] hover:text-[var(--color-text-primary)]",
                   )}
                   title={c.label}

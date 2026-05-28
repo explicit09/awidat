@@ -646,9 +646,9 @@ function DeliveryContextChip({
   tone: "blue" | "green" | "purple";
 }) {
   const toneClass = {
-    blue: "border-[rgba(59,130,246,0.5)] bg-[rgba(59,130,246,0.12)] text-[var(--color-pill-proposed-text)]",
-    green: "border-[rgba(32,201,151,0.5)] bg-[rgba(32,201,151,0.12)] text-[var(--color-pill-ready-text)]",
-    purple: "border-[rgba(168,85,247,0.5)] bg-[rgba(168,85,247,0.12)] text-[var(--color-pill-reviewing-text)]",
+    blue: "border-[rgba(59,130,246,0.5)] bg-[rgba(59,130,246,0.12)] text-[var(--color-proposal-proposed-text)]",
+    green: "border-[rgba(32,201,151,0.5)] bg-[rgba(32,201,151,0.12)] text-[var(--color-job-ready-text)]",
+    purple: "border-[rgba(168,85,247,0.5)] bg-[rgba(168,85,247,0.12)] text-[var(--color-proposal-proposed-text)]",
   }[tone];
 
   return (

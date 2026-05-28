@@ -1565,7 +1565,7 @@ function CutInspectorWorkspace() {
           <img src={podcastWide} alt="" className="h-full w-full object-cover opacity-90" />
           <div className="absolute inset-y-[12%] left-[46%] w-[14%] rounded-[var(--radius-sm)] border-2 border-[var(--color-brand-purple)] bg-[rgba(168,85,247,0.16)] shadow-[0_0_24px_rgba(168,85,247,0.24)]" />
           <div className="absolute inset-y-[8%] left-[53%] w-0.5 bg-[var(--color-viz-playhead)] shadow-[0_0_12px_var(--color-viz-playhead)]" />
-          <div className="absolute left-[46%] top-[12%] -translate-y-full rounded-t-[var(--radius-xs)] border border-[rgba(168,85,247,0.6)] bg-[rgba(30,15,50,0.85)] px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-pill-reviewing-text)]">
+          <div className="absolute left-[46%] top-[12%] -translate-y-full rounded-t-[var(--radius-xs)] border border-[rgba(168,85,247,0.6)] bg-[rgba(30,15,50,0.85)] px-2 py-1 text-[var(--text-caption)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-proposal-proposed-text)]">
             CUT 12 · L-cut
           </div>
           <div className="absolute bottom-4 left-4 rounded-[var(--radius-md)] border border-black/40 bg-black/70 px-3 py-2">

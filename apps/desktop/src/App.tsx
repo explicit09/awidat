@@ -2673,7 +2673,7 @@ function IndexReadinessPanel({
           className={cn(
             "rounded-[var(--radius-sm)] border px-3 py-2 text-[var(--text-caption)]",
             usable
-              ? "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.06)] text-[var(--color-pill-ready-text)]"
+              ? "border-[rgba(32,201,151,0.34)] bg-[rgba(32,201,151,0.06)] text-[var(--color-job-ready-text)]"
               : "border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[var(--color-text-muted)]",
           )}
         >
