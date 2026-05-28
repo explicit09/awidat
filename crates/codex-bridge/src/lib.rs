@@ -85,7 +85,7 @@ pub trait ItemEmitter: Send + Sync + 'static {
     fn emit_item(&self, item: Item);
     /// Emit the per-turn terminal signal. `error == None` means clean
     /// completion; `Some(msg)` is a turn-fatal failure.
-    fn emit_turn_end(&self, error: Option<String>);
+    fn emit_turn_end(&self, turn_id: String, error: Option<String>);
     /// Signal that the project's on-disk OTIO has just been mutated by
     /// a tool call. The desktop listens on `awidat://timeline-changed`
     /// and refetches `project.otio.json`. The MCP server lives in a
@@ -447,6 +447,7 @@ impl CodexAppServer {
                 "turn/interrupt returned error (likely already finished)"
             );
         }
+        clear_pending_for_turn(&self.pending, turn_id).await;
         Ok(())
     }
 
@@ -676,8 +677,9 @@ async fn handle_pump_event(
             if nudge_timeline {
                 emit.emit_timeline_changed();
             }
-            if let Some(error) = turn_end {
-                emit.emit_turn_end(error);
+            if let Some(turn_end) = turn_end {
+                clear_pending_for_turn(pending, &turn_end.turn_id).await;
+                emit.emit_turn_end(turn_end.turn_id, turn_end.error);
             }
         }
         InProcessServerEvent::ServerRequest(request) => {
@@ -690,14 +692,34 @@ async fn handle_pump_event(
 /// error result (`None` for a clean finish; `Some(msg)` for failed).
 /// The outer `Option` distinguishes "not a turn-end" from "is a
 /// turn-end".
-fn turn_end_from_notification(notification: &ServerNotification) -> Option<Option<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TurnEnd {
+    turn_id: String,
+    error: Option<String>,
+}
+
+fn turn_end_from_notification(notification: &ServerNotification) -> Option<TurnEnd> {
     match notification {
-        ServerNotification::TurnCompleted(n) => {
-            Some(n.turn.error.as_ref().map(|e| e.message.clone()))
-        }
-        ServerNotification::Error(n) => Some(Some(n.error.message.clone())),
+        ServerNotification::TurnCompleted(n) => Some(TurnEnd {
+            turn_id: n.turn.id.clone(),
+            error: n.turn.error.as_ref().map(|e| e.message.clone()),
+        }),
+        ServerNotification::Error(n) => Some(TurnEnd {
+            turn_id: n.turn_id.clone(),
+            error: Some(n.error.message.clone()),
+        }),
         _ => None,
     }
+}
+
+async fn clear_pending_for_turn(
+    pending: &Arc<Mutex<HashMap<String, PendingServerRequest>>>,
+    turn_id: &str,
+) {
+    pending
+        .lock()
+        .await
+        .retain(|_, request| request.turn_id != turn_id);
 }
 
 /// Insert one server-request into `pending` and surface the right
@@ -822,6 +844,93 @@ async fn handle_server_request(
         other => {
             debug!(id = ?other.id(), "codex-bridge: unhandled ServerRequest variant");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::{
+        ErrorNotification, Turn, TurnCompletedNotification, TurnError, TurnItemsView, TurnStatus,
+    };
+
+    #[test]
+    fn turn_end_from_notification_includes_turn_id() {
+        let notification = ServerNotification::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: Turn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                items_view: TurnItemsView::Full,
+                status: TurnStatus::Completed,
+                error: None,
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+            },
+        });
+
+        assert_eq!(
+            turn_end_from_notification(&notification),
+            Some(TurnEnd {
+                turn_id: "turn-1".to_string(),
+                error: None,
+            })
+        );
+    }
+
+    #[test]
+    fn turn_end_from_error_includes_turn_id() {
+        let notification = ServerNotification::Error(ErrorNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-err".to_string(),
+            will_retry: false,
+            error: TurnError {
+                message: "failed".to_string(),
+                codex_error_info: None,
+                additional_details: None,
+            },
+        });
+
+        assert_eq!(
+            turn_end_from_notification(&notification),
+            Some(TurnEnd {
+                turn_id: "turn-err".to_string(),
+                error: Some("failed".to_string()),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_pending_for_turn_removes_only_matching_turn() {
+        let pending = Arc::new(Mutex::new(HashMap::from([
+            (
+                "call-1".to_string(),
+                PendingServerRequest {
+                    jsonrpc_request_id: RequestId::Integer(1),
+                    kind: PendingKind::ExecApproval,
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    user_input_question_id: None,
+                },
+            ),
+            (
+                "call-2".to_string(),
+                PendingServerRequest {
+                    jsonrpc_request_id: RequestId::Integer(2),
+                    kind: PendingKind::UserInput,
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-2".to_string(),
+                    user_input_question_id: Some("question-1".to_string()),
+                },
+            ),
+        ])));
+
+        clear_pending_for_turn(&pending, "turn-1").await;
+
+        let pending = pending.lock().await;
+        assert!(!pending.contains_key("call-1"));
+        assert!(pending.contains_key("call-2"));
     }
 }
 

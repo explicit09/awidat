@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use awidat_codex_bridge::{BridgeError, CodexAppServer, ItemEmitter};
 use awidat_desktop_protocol::Item;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::events::{emit_item, emit_timeline_changed, emit_turn_end};
 
@@ -45,8 +45,17 @@ impl ItemEmitter for TauriEmitter {
         emit_item(&self.app, item);
     }
 
-    fn emit_turn_end(&self, error: Option<String>) {
-        emit_turn_end(&self.app, error);
+    fn emit_turn_end(&self, turn_id: String, error: Option<String>) {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<crate::state::AwidatState>();
+            let mut guard = state.turn.lock().await;
+            if guard.as_ref().map(|turn| turn.id.as_str()) == Some(turn_id.as_str()) {
+                guard.take();
+            }
+            drop(guard);
+            emit_turn_end(&app, turn_id, error);
+        });
     }
 
     fn emit_timeline_changed(&self) {
