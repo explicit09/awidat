@@ -1,0 +1,269 @@
+import type { ReactNode } from "react";
+import { Button, StatusPill, cn } from "../ui";
+import type {
+  IndexerConfigSnapshot,
+  IndexingStructurePreview,
+  IndexingTask,
+} from "./IndexingDashboard";
+import { buildRailModel, type RailModel, type RailSignal } from "./indexRailModel";
+
+/**
+ * IndexRailPro — Pro-mode rendering of the index readiness rail.
+ *
+ * Per redesign spec §7.1, replaces the 776-line 4-column IndexingDashboard
+ * concept layout with a dense, single-column rail consumed by AppShell's
+ * indexing surface. Sections:
+ *   1. Header — title + job pill + 1-line meta + 4px progress bar
+ *   2. 4-stat grid — Duration / Scenes / Segments / Transcript (— placeholders)
+ *   3. Three signal groups — Speech / Visuals / Audio (3-col tile grid each)
+ *   4. Indexers strip — "N indexers active · first 3 names · +overflow"
+ *
+ * Data shape: re-uses the existing IndexingTask / IndexerConfigSnapshot /
+ * IndexingStructurePreview types from IndexingDashboard so callers don't
+ * need to migrate state. The view-model is built in `indexRailModel.ts`.
+ */
+
+export type IndexRailProProps = {
+  tasks?: IndexingTask[];
+  structurePreview?: IndexingStructurePreview;
+  indexerConfig?: IndexerConfigSnapshot;
+  ready?: boolean;
+  /** Re-run / refresh all indexers. */
+  onRefreshIndexers?: () => void;
+  onOpenConfigPath?: (path: string) => void;
+};
+
+export function IndexRailPro({
+  tasks = [],
+  structurePreview,
+  indexerConfig,
+  ready = false,
+  onRefreshIndexers,
+  onOpenConfigPath,
+}: IndexRailProProps) {
+  const model = buildRailModel(tasks, structurePreview, indexerConfig);
+  return (
+    <div className="flex h-full min-h-0 flex-col overflow-y-auto bg-[var(--color-surface-panel)] text-[12px]">
+      <div className="flex flex-col gap-3 p-3.5">
+        <Header model={model} ready={ready} />
+        <StatGrid model={model} />
+        <SignalGroup title="Speech" signals={model.bySection.speech} />
+        <SignalGroup title="Visuals" signals={model.bySection.visuals} />
+        <SignalGroup title="Audio" signals={model.bySection.audio} />
+        <IndexersStrip model={model} />
+        <Footer
+          model={model}
+          indexerConfig={indexerConfig}
+          onRefreshIndexers={onRefreshIndexers}
+          onOpenConfigPath={onOpenConfigPath}
+        />
+      </div>
+    </div>
+  );
+}
+
+function Header({ model, ready }: { model: RailModel; ready: boolean }) {
+  const showReady = ready || model.percent >= 100;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between">
+        <h4 className="text-[13px] font-semibold text-[var(--color-text-primary)]">
+          Index readiness
+        </h4>
+        {showReady ? (
+          <StatusPill family="job" state="ready" />
+        ) : (
+          <StatusPill family="job" state="running" percent={model.percent} label="Indexing" />
+        )}
+      </div>
+      <div className="font-mono text-[11px] text-[var(--color-text-muted)]">
+        {model.ready} of {model.total} ready · {model.queued} queued
+        {model.etaText ? ` · ETA ${model.etaText}` : ""}
+      </div>
+      <div className="h-1 overflow-hidden rounded-full bg-[var(--color-surface-input)]">
+        <div
+          className="h-full bg-gradient-to-r from-[var(--color-brand)] to-[#FCA67A]"
+          style={{ width: `${Math.max(0, Math.min(100, model.percent))}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function StatGrid({ model }: { model: RailModel }) {
+  const cells: Array<{ val: ReactNode; lab: string }> = [
+    { val: model.durationLabel ?? "—", lab: "Duration" },
+    { val: typeof model.scenes === "number" ? model.scenes.toLocaleString() : "—", lab: "Scenes" },
+    {
+      val: typeof model.segments === "number" ? model.segments.toLocaleString() : "—",
+      lab: "Segments",
+    },
+    { val: model.transcriptLabel ?? "—", lab: "Transcript" },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-1.5">
+      {cells.map((c) => (
+        <div
+          key={c.lab}
+          className="rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2.5 py-2"
+        >
+          <div className="font-mono text-[13px] font-semibold text-[var(--color-text-primary)]">
+            {c.val}
+          </div>
+          <div className="mt-0.5 text-[10px] uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+            {c.lab}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SignalGroup({ title, signals }: { title: string; signals: RailSignal[] }) {
+  const readyCount = signals.filter((s) => s.state === "ready").length;
+  const padded: (RailSignal | null)[] = [...signals];
+  while (padded.length % 3 !== 0) padded.push(null);
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-baseline justify-between">
+        <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+          {title}
+        </span>
+        <span className="font-mono text-[11px] text-[var(--color-text-secondary)]">
+          {readyCount} / {signals.length} ready
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-px overflow-hidden rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-border-subtle)]">
+        {padded.map((s, i) =>
+          s ? <SignalTile key={s.name} signal={s} /> : <PadTile key={`pad-${i}`} />,
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SignalTile({ signal }: { signal: RailSignal }) {
+  return (
+    <div className="flex min-h-[42px] flex-col justify-between bg-[var(--color-surface-card)] px-2 py-1.5">
+      <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">
+        {signal.name}
+      </div>
+      <div className="flex items-center gap-1 font-mono text-[10px] text-[var(--color-text-muted)]">
+        {signal.state === "running" ? (
+          <StatusPill family="job" state="running" percent={signal.percent} dotOnly />
+        ) : (
+          <StatusPill family="job" state={signal.state} dotOnly />
+        )}
+        <span>
+          {signal.state}
+          {signal.state === "running" && signal.percent !== undefined
+            ? ` ${signal.percent}%`
+            : ""}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function PadTile() {
+  return (
+    <div className="min-h-[42px] bg-[var(--color-surface-card)] px-2 py-1.5 text-[var(--color-text-disabled)] opacity-40">
+      <span className="text-[11px]">—</span>
+    </div>
+  );
+}
+
+function IndexersStrip({ model }: { model: RailModel }) {
+  const names = model.indexers.map((i) => i.name);
+  const first = names.slice(0, 3);
+  const overflow = Math.max(0, names.length - 3);
+  return (
+    <div className="flex items-center justify-between border-t border-[var(--color-border-subtle)] pt-2 text-[11px] text-[var(--color-text-muted)]">
+      <span>
+        {names.length} {names.length === 1 ? "indexer" : "indexers"} active
+      </span>
+      <div className="flex flex-wrap gap-1">
+        {first.map((n) => (
+          <IndexerChip key={n} label={n} />
+        ))}
+        {overflow > 0 ? <IndexerChip label={`+${overflow}`} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function IndexerChip({ label }: { label: string }) {
+  return (
+    <span className="rounded border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-1.5 py-px font-mono text-[10px] text-[var(--color-text-secondary)]">
+      {label}
+    </span>
+  );
+}
+
+function Footer({
+  model,
+  indexerConfig,
+  onRefreshIndexers,
+  onOpenConfigPath,
+}: {
+  model: RailModel;
+  indexerConfig?: IndexerConfigSnapshot;
+  onRefreshIndexers?: () => void;
+  onOpenConfigPath?: (path: string) => void;
+}) {
+  const hasConfigPaths = Boolean(indexerConfig?.projectPath || indexerConfig?.globalPath);
+  if (!onRefreshIndexers && !hasConfigPaths) return null;
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-1.5 border-t border-[var(--color-border-subtle)] pt-2",
+        model.indexers.length === 0 ? "border-t-0 pt-0" : null,
+      )}
+    >
+      {onRefreshIndexers ? (
+        <Button variant="secondary" size="xs" onClick={onRefreshIndexers}>
+          Re-run indexers
+        </Button>
+      ) : null}
+      {indexerConfig?.projectPath ? (
+        <ConfigLine
+          label="Project config"
+          path={indexerConfig.projectPath}
+          onOpen={onOpenConfigPath}
+        />
+      ) : null}
+      {indexerConfig?.globalPath ? (
+        <ConfigLine
+          label="Global config"
+          path={indexerConfig.globalPath}
+          onOpen={onOpenConfigPath}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ConfigLine({
+  label,
+  path,
+  onOpen,
+}: {
+  label: string;
+  path: string;
+  onOpen?: (path: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen ? () => onOpen(path) : undefined}
+      disabled={!onOpen}
+      className="flex items-center justify-between gap-2 rounded text-left text-[10px] uppercase tracking-[0.06em] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)] disabled:cursor-default disabled:hover:text-[var(--color-text-muted)]"
+    >
+      <span className="font-semibold">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-right font-mono normal-case tracking-normal text-[var(--color-text-secondary)]">
+        {path}
+      </span>
+    </button>
+  );
+}
