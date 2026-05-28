@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAgentStore } from "./agent/store";
 import { useProjectStore } from "./app/state";
 import { NewProjectForm } from "./app/NewProjectForm";
+import { SettingsModal } from "./app/SettingsModal";
 import { useMediaStore } from "./media/store";
 import { GeneratedMediaPanel } from "./media/GeneratedMediaPanel";
 import { useGeneratedMediaStore, type GeneratedMediaEntry } from "./media/generatedMediaStore";
@@ -61,6 +62,7 @@ import { Button, Card, Inline, Stack, StatusPillFromMapping, type MediaIndexingS
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
+import { useSettings } from "./state/settings";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
 import {
   DELIVERY_TARGETS,
@@ -750,9 +752,26 @@ function App() {
         setPendingImportPaths(null);
         setPendingImportUrl(null);
         setShowNewProject(true);
+      } else if (id === MENU_COMMANDS.NAV_SETTINGS) {
+        useSettings.getState().open();
       }
     });
   });
+
+  // Global keyboard shortcut: ⌘, (or Ctrl+, on non-mac) opens
+  // Settings. Mounted once at the App root so the modal can be
+  // opened from anywhere. The settings modal handles its own Esc.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const isCommaShortcut = event.key === "," && (event.metaKey || event.ctrlKey);
+      if (isCommaShortcut) {
+        event.preventDefault();
+        useSettings.getState().open();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (demoMode) {
@@ -1840,6 +1859,7 @@ function App() {
         }}
       />
     )}
+    <SettingsModal />
     {showUrlImport && (
       <div className="modal-backdrop" onClick={() => setShowUrlImport(false)}>
         <div className="modal" onClick={(event) => event.stopPropagation()}>

@@ -2,6 +2,7 @@ import { Share2, Settings } from "lucide-react";
 import mark from "../../brand/awidat-mark.svg";
 import { useMode } from "../../state/mode";
 import { useProjectStore } from "../../app/state";
+import { useSettings } from "../../state/settings";
 
 /**
  * IdentityRow — row 1 of the redesigned top chrome.
@@ -20,6 +21,7 @@ export function IdentityRow() {
   const mode = useMode((s) => s.mode);
   const toggle = useMode((s) => s.toggle);
   const projectPath = useProjectStore((s) => s.current);
+  const openSettings = useSettings((s) => s.open);
   const project = projectPath ? { name: basename(projectPath), path: projectPath } : null;
 
   return (
@@ -50,7 +52,7 @@ export function IdentityRow() {
         <IconBtn label="Share">
           <Share2 size={14} />
         </IconBtn>
-        <IconBtn label="Settings">
+        <IconBtn label="Settings" onClick={openSettings}>
           <Settings size={14} />
         </IconBtn>
       </div>
@@ -76,10 +78,19 @@ const pillSegment = (active: boolean) =>
     ? "px-2 py-0.5 rounded-full bg-[var(--color-surface-selected)] text-[var(--color-text-primary)] shadow-[inset_0_0_0_1px_var(--color-border)]"
     : "px-2 py-0.5 rounded-full";
 
-function IconBtn({ children, label }: { children: React.ReactNode; label: string }) {
+function IconBtn({
+  children,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick?: () => void;
+}) {
   return (
     <button
       aria-label={label}
+      onClick={onClick}
       className="grid place-items-center w-6 h-6 rounded border border-transparent text-[var(--color-text-muted)] hover:border-[var(--color-border-subtle)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
     >
       {children}
