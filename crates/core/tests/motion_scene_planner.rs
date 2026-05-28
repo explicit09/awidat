@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 //! MotionScene planner tool contract tests.
 
 use awidat_core::edl::anchor::AnchorContext;
