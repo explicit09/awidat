@@ -65,7 +65,7 @@ fn read_marker(path: &AbsolutePathBuf) -> Result<String, SystemSkillsError> {
 fn embedded_system_skills_fingerprint() -> String {
     let mut items = Vec::new();
     collect_fingerprint_items(&SYSTEM_SKILLS_DIR, &mut items);
-    items.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    items.sort_unstable_by_key(|(name, _)| *name);
 
     let mut hasher = DefaultHasher::new();
     SYSTEM_SKILLS_MARKER_SALT.hash(&mut hasher);
