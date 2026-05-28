@@ -49,6 +49,7 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::PermissionGrantScope;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::RequestPermissionProfile;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadResumeParams;
@@ -125,6 +126,10 @@ pub struct PendingServerRequest {
     /// For [`PendingKind::UserInput`]: the question id we route the
     /// user's reply through.
     pub user_input_question_id: Option<String>,
+    /// For [`PendingKind::PermissionApproval`]: the permissions the
+    /// agent asked for. We grant exactly these on Allow/Session;
+    /// Deny drops them so the response carries an empty profile.
+    pub requested_permissions: Option<RequestPermissionProfile>,
 }
 
 /// User-facing decision for an approval prompt.
@@ -495,7 +500,14 @@ impl CodexAppServer {
                     ApprovalDecision::AllowForSession => PermissionGrantScope::Session,
                     ApprovalDecision::Deny => PermissionGrantScope::Turn,
                 };
-                let permissions = GrantedPermissionProfile::default();
+                let permissions = match decision {
+                    ApprovalDecision::Allow | ApprovalDecision::AllowForSession => pending
+                        .requested_permissions
+                        .as_ref()
+                        .map(granted_from_requested)
+                        .unwrap_or_default(),
+                    ApprovalDecision::Deny => GrantedPermissionProfile::default(),
+                };
                 serde_json::to_value(PermissionsRequestApprovalResponse {
                     permissions,
                     scope,
@@ -745,6 +757,7 @@ async fn handle_server_request(
                     thread_id: params.thread_id.clone(),
                     turn_id: params.turn_id.clone(),
                     user_input_question_id: None,
+                    requested_permissions: None,
                 },
             );
             emit.emit_item(Item::ApprovalRequest {
@@ -771,6 +784,7 @@ async fn handle_server_request(
                     thread_id: params.thread_id.clone(),
                     turn_id: params.turn_id.clone(),
                     user_input_question_id: None,
+                    requested_permissions: None,
                 },
             );
             emit.emit_item(Item::ApprovalRequest {
@@ -797,6 +811,7 @@ async fn handle_server_request(
                     thread_id: params.thread_id.clone(),
                     turn_id: params.turn_id.clone(),
                     user_input_question_id: None,
+                    requested_permissions: Some(params.permissions.clone()),
                 },
             );
             emit.emit_item(Item::ApprovalRequest {
@@ -832,6 +847,7 @@ async fn handle_server_request(
                     thread_id: params.thread_id.clone(),
                     turn_id: params.turn_id.clone(),
                     user_input_question_id: question_id,
+                    requested_permissions: None,
                 },
             );
             emit.emit_item(Item::AwaitingUserInput {
@@ -844,6 +860,16 @@ async fn handle_server_request(
         other => {
             debug!(id = ?other.id(), "codex-bridge: unhandled ServerRequest variant");
         }
+    }
+}
+
+/// Promote a requested permission profile to the granted shape we
+/// hand back on Allow/Session. We grant exactly what was asked for —
+/// scope (Turn vs Session) lives on the response, not the profile.
+fn granted_from_requested(requested: &RequestPermissionProfile) -> GrantedPermissionProfile {
+    GrantedPermissionProfile {
+        network: requested.network.clone(),
+        file_system: requested.file_system.clone(),
     }
 }
 
@@ -920,6 +946,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-1".to_string(),
                     user_input_question_id: None,
+                    requested_permissions: None,
                 },
             ),
             (
@@ -930,6 +957,7 @@ mod tests {
                     thread_id: "thread-1".to_string(),
                     turn_id: "turn-2".to_string(),
                     user_input_question_id: Some("question-1".to_string()),
+                    requested_permissions: None,
                 },
             ),
         ])));
