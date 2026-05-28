@@ -2571,7 +2571,9 @@ function IndexReadinessPanel({
             className="h-full rounded-full bg-[var(--color-warning)]"
             style={{
               width: `${readinessProgress}%`,
-              backgroundColor: complete ? "var(--color-brand)" : usable ? "var(--color-warning)" : "var(--color-processing)",
+              // brand-sweep: `complete` means evidence coverage hit ready; use the
+              // job-ready green, not brand orange (orange is reserved for CTAs).
+              backgroundColor: complete ? "var(--color-job-ready-dot)" : usable ? "var(--color-warning)" : "var(--color-processing)",
             }}
           />
         </div>

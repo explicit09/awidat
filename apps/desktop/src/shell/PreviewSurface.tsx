@@ -301,7 +301,8 @@ export function PreviewSurface({
               value={volume}
               onChange={(e) => onSetVolume?.(Number(e.target.value))}
               aria-label="Volume"
-              className="flex-1 accent-[var(--color-brand)]"
+              // brand-sweep: transport/playback controls use cyan, not brand orange.
+              className="flex-1 accent-[var(--color-brand-secondary)]"
             />
           </Inline>
         </Inline>

@@ -714,6 +714,7 @@ function ProductConceptBoard() {
                       ["Decision", "Accept, reject, revise before render"],
                     ].map(([label, detail]) => (
                       <Inline key={label} gap="2" align="start" className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 py-1">
+                        {/* brand-sweep: decorative list bullet in a concept diagram; brand orange used as a visual accent, not a status. */}
                         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-brand)] mt-1.5" />
                         <Stack gap="0" className="min-w-0">
                           <span className="text-[10px] font-semibold leading-3 text-[var(--color-text-primary)]">{label}</span>
@@ -1113,6 +1114,7 @@ function SemanticTranscriptPanel({ segments }: { segments: ReviewTranscriptSegme
     <div className="flex h-full min-h-0 flex-col bg-[var(--color-surface-app)]">
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border-subtle)] px-4">
         <Inline gap="2" align="center">
+          {/* brand-sweep: section-header glyph in the concept demo; decorative brand accent, not a status. */}
           <Eye className="h-3.5 w-3.5 stroke-[1.75] text-[var(--color-brand)]" />
           <span className="text-[var(--text-label)] font-semibold uppercase tracking-[var(--text-label--letter-spacing)] text-[var(--color-text-secondary)]">
             Review · Transcript

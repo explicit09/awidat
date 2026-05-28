@@ -46,6 +46,8 @@ const SENTIMENT_COLORS: Record<string, string> = {
   negative: "var(--color-danger)",
 };
 
+// brand-sweep: speaker C uses brand orange as a categorical palette slot
+// (decorative, not a CTA/status), alongside the viz speaker hues and purple.
 const SPEAKER_COLORS = [
   "var(--color-viz-speaker-a)",
   "var(--color-viz-speaker-b)",

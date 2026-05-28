@@ -34,7 +34,9 @@ export function LoadingState({
   return (
     <CenterCard className={className}>
       <Stack gap="4" align="center">
-        <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-brand)]">
+        {/* brand-sweep: in-progress loader uses the cyan in-flight accent
+            for parity with the progress bar below, not brand orange. */}
+        <span className="flex h-12 w-12 items-center justify-center rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] text-[var(--color-brand-secondary)]">
           <Loader className="h-6 w-6 stroke-[1.5] animate-spin" />
         </span>
         <Stack gap="2" align="center" className="text-center">
