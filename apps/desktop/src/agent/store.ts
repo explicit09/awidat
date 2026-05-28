@@ -14,6 +14,12 @@ type AgentState = {
   items: Item[];
   /** True from invoke('start_turn') until awidat://turn-end fires. */
   running: boolean;
+  /**
+   * Turn id of the currently in-flight turn. Cleared when the matching
+   * turn-end arrives. Used to drop stale turn-end events from a turn
+   * the user already cancelled and superseded.
+   */
+  activeTurnId: string | null;
   /** Last error from a turn-end event (if any). Cleared on next turn. */
   turnError: string | null;
   /** Upsert an Item: replace if `id` already present, append otherwise. */
@@ -24,6 +30,8 @@ type AgentState = {
   clear: () => void;
   /** Set the running flag explicitly. */
   setRunning: (running: boolean) => void;
+  /** Set/clear the active turn id. */
+  setActiveTurnId: (id: string | null) => void;
   /** Record a turn-end error. Pass null to clear. */
   setTurnError: (err: string | null) => void;
 };
@@ -37,6 +45,7 @@ function itemId(item: Item): string {
 export const useAgentStore = create<AgentState>((set) => ({
   items: [],
   running: false,
+  activeTurnId: null,
   turnError: null,
   upsert: (item) =>
     set((state) => {
@@ -49,8 +58,10 @@ export const useAgentStore = create<AgentState>((set) => ({
       next[idx] = item;
       return { items: next };
     }),
-  replace: (items) => set({ items, turnError: null, running: false }),
+  replace: (items) =>
+    set({ items, turnError: null, running: false, activeTurnId: null }),
   clear: () => set({ items: [], turnError: null }),
   setRunning: (running) => set({ running }),
+  setActiveTurnId: (id) => set({ activeTurnId: id }),
   setTurnError: (err) => set({ turnError: err }),
 }));

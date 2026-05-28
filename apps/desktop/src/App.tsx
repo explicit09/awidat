@@ -113,6 +113,7 @@ function App() {
   const running = useAgentStore((s) => s.running);
   const replaceAgentItems = useAgentStore((s) => s.replace);
   const setRunning = useAgentStore((s) => s.setRunning);
+  const setActiveTurnId = useAgentStore((s) => s.setActiveTurnId);
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const stage = useStageStore((s) => s.current);
   const setStage = useStageStore((s) => s.set);
@@ -369,18 +370,20 @@ function App() {
     setTurnError(null);
     setRunning(true);
     try {
-      await invoke("start_turn", {
+      const turnId = await invoke<string>("start_turn", {
         input,
         context: buildTurnContext(effectiveContextChips),
       });
+      setActiveTurnId(turnId);
     } catch (e) {
       if (String(e).includes("turn is already running")) {
         try {
           await invoke("cancel_turn");
-          await invoke("start_turn", {
+          const turnId = await invoke<string>("start_turn", {
             input,
             context: buildTurnContext(effectiveContextChips),
           });
+          setActiveTurnId(turnId);
           return;
         } catch (retryErr) {
           setTurnError(String(retryErr));

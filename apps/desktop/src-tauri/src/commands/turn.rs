@@ -32,7 +32,7 @@ pub async fn start_turn(
     state: State<'_, AwidatState>,
     input: String,
     context: Option<Vec<String>>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     if input.trim().is_empty() {
         return Err("empty input".into());
     }
@@ -118,11 +118,11 @@ pub async fn start_turn(
     // on TurnHandle for now; pass a fresh token to keep the type the
     // same. Future cleanup can drop the field.
     *state.turn.lock().await = Some(TurnHandle {
-        id: turn_id,
+        id: turn_id.clone(),
         cancel: CancellationToken::new(),
     });
 
-    Ok(())
+    Ok(turn_id)
 }
 
 /// Cancel the in-flight turn. Asks the bridge to issue

@@ -14,6 +14,7 @@ type Props = {
 export function Composer({ projectReady }: Props) {
   const running = useAgentStore((s) => s.running);
   const setRunning = useAgentStore((s) => s.setRunning);
+  const setActiveTurnId = useAgentStore((s) => s.setActiveTurnId);
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const [text, setText] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -45,12 +46,14 @@ export function Composer({ projectReady }: Props) {
     setTurnError(null);
     setRunning(true);
     try {
-      await invoke("start_turn", { input: trimmed });
+      const turnId = await invoke<string>("start_turn", { input: trimmed });
+      setActiveTurnId(turnId);
     } catch (err) {
       if (String(err).includes("turn is already running")) {
         try {
           await invoke("cancel_turn");
-          await invoke("start_turn", { input: trimmed });
+          const turnId = await invoke<string>("start_turn", { input: trimmed });
+          setActiveTurnId(turnId);
           return;
         } catch (retryErr) {
           setTurnError(String(retryErr));

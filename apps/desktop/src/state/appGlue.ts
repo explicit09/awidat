@@ -50,6 +50,7 @@ export function useAppGlue() {
   const clearAgent = useAgentStore((s) => s.clear);
   const upsertItem = useAgentStore((s) => s.upsert);
   const setRunning = useAgentStore((s) => s.setRunning);
+  const setActiveTurnId = useAgentStore((s) => s.setActiveTurnId);
   const setTurnError = useAgentStore((s) => s.setTurnError);
   const items = useAgentStore((s) => s.items);
 
@@ -102,10 +103,19 @@ export function useAppGlue() {
       upsertItem(item);
     });
     const endUnlisten = listen<TurnEndEvent>(TURN_END_EVENT, (event) => {
+      // Drop terminal events from turns the user has already cancelled
+      // and superseded with a newer turn. Without this guard, the stale
+      // turn-end clears `running` while the newer turn is still in
+      // flight, dropping the spinner and re-enabling the Send button.
+      const activeTurnId = useAgentStore.getState().activeTurnId;
+      if (activeTurnId !== null && event.payload.turnId !== activeTurnId) {
+        return;
+      }
       if (event.payload.error) {
         setTurnError(event.payload.error);
       }
       setRunning(false);
+      setActiveTurnId(null);
     });
     const menuUnlisten = listen<NativeMenuCommandEvent>(
       MENU_COMMAND_EVENT,
@@ -119,6 +129,7 @@ export function useAppGlue() {
   }, [
     upsertItem,
     setRunning,
+    setActiveTurnId,
     setTurnError,
     ingestProposal,
     ingestNote,
