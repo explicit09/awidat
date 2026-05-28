@@ -140,6 +140,10 @@ fn upsert_episode_stringout(meta: &mut awidat_proto::awidat_meta::AwidatTimeline
         select_ids.push(select_id);
     }
 
+    let kept: HashSet<&str> = select_ids.iter().map(String::as_str).collect();
+    meta.selects
+        .retain(|select| !is_episode_select(&select.id) || kept.contains(select.id.as_str()));
+
     let item_count = select_ids.len();
     let stringout = Stringout {
         id: "episodes-accepted".into(),
@@ -155,6 +159,10 @@ fn upsert_episode_stringout(meta: &mut awidat_proto::awidat_meta::AwidatTimeline
         None => meta.stringouts.push(stringout),
     }
     item_count
+}
+
+fn is_episode_select(id: &str) -> bool {
+    id.starts_with("episode:") && id.ends_with(":select")
 }
 
 fn normalize_episode_inputs(inputs: Vec<EpisodeSpanInput>) -> Result<Vec<EpisodeSpan>, String> {
@@ -374,5 +382,45 @@ mod tests {
                 .iter()
                 .any(|select| select.id.contains("false-start"))
         );
+    }
+
+    #[test]
+    fn episode_tools_prune_stale_selects_on_regenerate() {
+        let dir = tempfile::tempdir().unwrap();
+        Project::init(dir.path()).unwrap();
+        let ctx = ctx_at(dir.path());
+
+        run(
+            ApplyEpisodeSpansArgs {
+                episodes: vec![
+                    episode("episode-1", "accepted", 10.0, 110.0),
+                    episode("episode-2", "accepted", 200.0, 300.0),
+                ],
+                replace: true,
+                create_stringouts: true,
+            },
+            ctx.clone(),
+        )
+        .unwrap();
+
+        run(
+            ApplyEpisodeSpansArgs {
+                episodes: vec![episode("episode-1", "accepted", 10.0, 110.0)],
+                replace: true,
+                create_stringouts: true,
+            },
+            ctx.clone(),
+        )
+        .unwrap();
+
+        let project = Project::read(dir.path()).unwrap();
+        let meta = project.timeline.metadata.awidat.unwrap();
+        let episode_select_ids: Vec<_> = meta
+            .selects
+            .iter()
+            .filter(|select| is_episode_select(&select.id))
+            .map(|select| select.id.clone())
+            .collect();
+        assert_eq!(episode_select_ids, vec!["episode:episode-1:select"]);
     }
 }
