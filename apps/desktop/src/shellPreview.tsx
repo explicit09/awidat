@@ -7,7 +7,6 @@ import {
   CommandRail,
   PreviewSurface,
   ProposalInspector,
-  StageIndicator,
   TimelineHybrid,
 } from "./shell";
 import type {
@@ -17,8 +16,6 @@ import type {
   TimelineTab,
   TimelineViewMode,
 } from "./shell";
-import { AgentStatusBadge, Inline, StatusPill } from "./ui";
-import wordmark from "./brand/awidat-wordmark.svg";
 import { useStageStore } from "./state";
 
 const MOCK_CHANGES: PreviewChange[] = [
@@ -80,18 +77,8 @@ function Root() {
 
   return (
     <AppShell
-      topChromeStart={
-        <Inline gap="3" align="center">
-          <img src={wordmark} alt="Awidat" className="h-7" />
-        </Inline>
-      }
-      topChromeCenter={<StageIndicator />}
-      topChromeEnd={
-        <Inline gap="2" align="center">
-          <StatusPill family="proposal" state="proposed" label="12 pending" />
-          <AgentStatusBadge status="awaiting-review" detail="12 pending changes" />
-        </Inline>
-      }
+      // Top chrome (brand, stage tabs, status) now lives in `<TopChrome />`
+      // mounted by AppShell directly.
       inspector={<ProposalInspector data={MOCK_INSPECTOR} />}
       timeline={
         <TimelineHybrid

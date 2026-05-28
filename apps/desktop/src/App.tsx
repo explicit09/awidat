@@ -12,9 +12,8 @@ import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, Redo2, RefreshCw, Settings as SettingsIcon, Share2, Undo2 } from "lucide-react";
+import { Film, FolderOpen, Import as ImportIcon, PanelRightOpen, Play, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import wordmark from "./brand/awidat-wordmark.svg";
 import { useAgentStore } from "./agent/store";
 import { useProjectStore } from "./app/state";
 import { NewProjectForm } from "./app/NewProjectForm";
@@ -35,7 +34,6 @@ import {
   DeliverySurface,
   PreviewSurface,
   ProposalInspector,
-  StageIndicator,
   TimelineHybrid,
   type ActivityEntry,
   type ChatSessionSummary,
@@ -58,7 +56,7 @@ import {
 } from "./shell";
 import { JobsStatusBar } from "./shell/JobsStatusBar";
 import { toActiveJobLike, aggregatePercent } from "./shell/activeJobs";
-import { AgentStatusBadge, Button, Card, cn, IconButton, Inline, Stack, StatusPill, StatusPillFromMapping, type JobPillState, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
+import { Button, Card, cn, IconButton, Inline, Stack, StatusPill, StatusPillFromMapping, type JobPillState, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
@@ -722,17 +720,10 @@ function App() {
     void runEngineCommand("Revise the selected proposal and explain the tradeoffs.");
   }
 
-  function openDeliveryFromChrome() {
-    setStage(current ? "deliver" : "edit");
-  }
-
-  function openSettingsFromChrome() {
-    setStage("edit");
-    setRightPanel("index");
-    if (current) {
-      void loadIndexerConfig();
-    }
-  }
+  // Chrome handlers `openDeliveryFromChrome` / `openSettingsFromChrome`
+  // were removed alongside the old chrome JSX. The new `<TopChrome />`
+  // (IdentityRow + WorkspaceRow) is wired in Tasks 8–9; we will reintroduce
+  // these once the redesigned chrome handlers land.
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -1603,72 +1594,9 @@ function App() {
   return (
     <>
     <AppShell
-      topChromeStart={
-        <Inline gap={demoMode ? "3" : "2"} align="center">
-          {demoMode ? (
-            <Inline gap="1" align="center" aria-hidden>
-              <span className="h-3 w-3 rounded-full bg-[#ff5f57]" />
-              <span className="h-3 w-3 rounded-full bg-[#febc2e]" />
-              <span className="h-3 w-3 rounded-full bg-[#28c840]" />
-            </Inline>
-          ) : null}
-          {demoMode ? (
-            <span className="text-[13px] font-bold text-[var(--color-text-primary)]">Awidat</span>
-          ) : (
-            <img src={wordmark} alt="Awidat" className="h-6" />
-          )}
-        </Inline>
-      }
-      topChromeCenter={
-        <Inline gap="3" align="center" className="min-w-0">
-          <StageIndicator className="shrink-0" />
-          {demoMode ? (
-            <span className="min-w-0 truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-secondary)]">
-              {demoScreen.specLabel} · {demoScreen.title}
-            </span>
-          ) : null}
-        </Inline>
-      }
-      topChromeEnd={
-          <Inline gap="1" align="center">
-          {activeProposal || demoMode ? (
-            // Original used `status="warning"`; semantically this is "N proposals
-            // awaiting human review" → proposal/proposed, not job/failed.
-            <StatusPill
-              family="proposal"
-              state="proposed"
-              label={demoMode ? demoScreen.pendingLabel ?? "Demo" : `${effectiveChanges.length} pending`}
-            />
-          ) : null}
-          <AgentStatusBadge
-            status={
-              demoMode
-                ? "awaiting-review"
-                : running
-                ? "analyzing"
-                : activeProposal
-                  ? "awaiting-review"
-                  : current
-                    ? "online"
-                    : "idle"
-            }
-            detail={demoMode ? demoScreen.statusLabel : running ? "Working" : activeProposal ? "Review pending" : current ? "Ready" : "No project"}
-          />
-          {demoMode ? (
-            <>
-              <IconButton icon={<Undo2 />} label="Undo" size="md" />
-              <IconButton icon={<Redo2 />} label="Redo" size="md" />
-              <IconButton icon={<CircleHelp />} label="Help" size="md" />
-              <IconButton icon={<Bell />} label="Notifications" size="md" />
-              <span className="grid h-5 w-5 place-items-center rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] text-[9px] font-semibold text-[var(--color-text-secondary)]">
-                T
-              </span>
-            </>
-          ) : null}
-          <IconButton icon={<Share2 />} label="Share" size="md" onClick={openDeliveryFromChrome} />
-          <IconButton icon={<SettingsIcon />} label="Settings" size="md" onClick={openSettingsFromChrome} />
-        </Inline>
-      }
+      // Top chrome (brand, stage tabs, status, share/settings) now lives in
+      // `<TopChrome />` mounted by AppShell directly. Task 8 lands IdentityRow;
+      // Task 9 brings the workspace/stage row back.
       workspace={workspaceOverride}
       commandRail={
         <LeftWorkspaceRail

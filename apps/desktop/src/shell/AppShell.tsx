@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import wordmark from "../brand/awidat-wordmark.svg";
-import { AgentStatusBadge, Inline, cn } from "../ui";
+import { cn } from "../ui";
+import { TopChrome } from "./chrome/TopChrome";
 
 /**
  * AppShell — the v2 application shell.
@@ -23,9 +23,6 @@ import { AgentStatusBadge, Inline, cn } from "../ui";
  * Phase 2 task. Until those land, each region renders a placeholder.
  */
 export type AppShellProps = {
-  topChromeStart?: ReactNode;
-  topChromeCenter?: ReactNode;
-  topChromeEnd?: ReactNode;
   commandRail?: ReactNode;
   preview?: ReactNode;
   timeline?: ReactNode;
@@ -38,9 +35,6 @@ export type AppShellProps = {
 };
 
 export function AppShell({
-  topChromeStart,
-  topChromeCenter,
-  topChromeEnd,
   commandRail,
   preview,
   timeline,
@@ -51,21 +45,9 @@ export function AppShell({
   footer,
 }: AppShellProps) {
   return (
-    <div className="grid h-full w-full min-w-0 overflow-hidden grid-rows-[var(--layout-chrome-h)_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
-      {/* Top chrome */}
-      <header className="grid min-w-0 grid-cols-[auto_minmax(160px,1fr)_auto] items-center gap-3 overflow-hidden border-b border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] px-3">
-        <div className="flex min-w-0 items-center justify-start">
-          {topChromeStart ?? (
-            <Inline gap="2" align="center">
-              <img src={wordmark} alt="Awidat" className="h-7" />
-            </Inline>
-          )}
-        </div>
-        <div className="flex min-w-0 items-center justify-center overflow-hidden">{topChromeCenter}</div>
-        <div className="flex min-w-0 items-center justify-end overflow-hidden">
-          {topChromeEnd ?? <AgentStatusBadge status="idle" detail="No project" />}
-        </div>
-      </header>
+    <div className="grid h-full w-full min-w-0 overflow-hidden grid-rows-[auto_1fr_var(--layout-footer-h)] bg-[var(--color-surface-page)] text-[var(--color-text-primary)] font-sans">
+      {/* Top chrome — redesigned in Task 8 (IdentityRow) + Task 9 (WorkspaceRow). */}
+      <TopChrome />
 
       {/* Workspace */}
       {workspace ? (
