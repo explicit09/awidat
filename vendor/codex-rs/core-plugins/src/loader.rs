@@ -117,7 +117,7 @@ pub async fn load_plugins_from_layer_stack(
     let mut configured_plugins = configured_plugins_from_stack(config_layer_stack);
     configured_plugins.extend(extra_plugins);
     let mut configured_plugins: Vec<_> = configured_plugins.into_iter().collect();
-    configured_plugins.sort_unstable_by_key(|(name, _)| *name);
+    configured_plugins.sort_unstable_by_key(|(name, _)| name.clone());
 
     let mut plugins = Vec::with_capacity(configured_plugins.len());
     let mut seen_mcp_server_names = HashMap::<String, String>::new();
