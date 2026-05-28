@@ -13,6 +13,7 @@ import { UserInputCard } from "./UserInputCard";
 import { JobCard } from "./JobCard";
 import { useProjectStore } from "../app/state";
 import { EmptyState } from "../app/EmptyState";
+import { EmptyConversation } from "./EmptyConversation";
 import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "../timeline/store";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
@@ -65,9 +66,7 @@ export function ChatStream() {
         !turnError &&
         projectReady && (
           hasTimelineClips ? (
-            <p className="chat-empty chat-empty-loaded">
-              Timeline loaded. Ask Awidat for an edit, or select a clip below to inspect it.
-            </p>
+            <EmptyConversation />
           ) : timelineRefreshing ? (
             <p className="chat-empty chat-empty-loaded">Loading project...</p>
           ) : (
@@ -75,9 +74,7 @@ export function ChatStream() {
           )
         )}
       {items.length === 0 && !running && !turnError && !projectReady && (
-        <p className="chat-empty">
-          Open or create a project to get started.
-        </p>
+        <EmptyConversation />
       )}
       {items.map((item) => (
         <ItemView key={item.id} item={item} />
