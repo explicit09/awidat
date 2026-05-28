@@ -53,7 +53,7 @@ pub fn run() {
         .thread_stack_size(16 * 1024 * 1024)
         .thread_name("awidat-tokio")
         .build()
-        .expect("build tokio runtime with 16 MB worker stacks");
+        .unwrap_or_else(|err| panic!("build tokio runtime with 16 MB worker stacks: {err}"));
     tauri::async_runtime::set(codex_runtime.handle().clone());
     // Keep the runtime alive for the lifetime of the process. Tauri only
     // holds a Handle; if we drop the Runtime here the worker threads die.

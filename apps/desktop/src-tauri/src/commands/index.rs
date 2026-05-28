@@ -565,13 +565,12 @@ fn read_load_avg_1min() -> Option<f64> {
             .ok()?;
         let s = String::from_utf8(output.stdout).ok()?;
         // Output format: "{ 1.23 2.34 3.45 }"
-        return s
-            .trim()
+        s.trim()
             .trim_start_matches('{')
             .trim_end_matches('}')
             .split_whitespace()
             .next()
-            .and_then(|s| s.parse().ok());
+            .and_then(|s| s.parse().ok())
     }
     #[cfg(not(unix))]
     None

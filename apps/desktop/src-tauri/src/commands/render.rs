@@ -323,7 +323,7 @@ pub async fn start_reframe_render(
         match result {
             Ok(()) => {
                 emitter.ok_with_path(
-                    Some(format!("reframe complete")),
+                    Some("reframe complete".to_string()),
                     Some(output_for_task.to_string_lossy().into_owned()),
                 );
             }
