@@ -9,6 +9,7 @@
  */
 
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { editorDispatch } from "./editor/tauriDispatch";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -82,6 +83,7 @@ import { TimelinePane } from "./timeline/TimelinePane";
 import { useProposalStore } from "./timeline/proposal";
 import { MENU_COMMANDS, emitMenuCommand, onMenuCommand } from "./app/menuCommands";
 import type { Item, JobKind, MediaCacheReadiness, MediaReadinessSnapshot, PermissionMode, TimelineSnapshot } from "./protocol";
+import { TIMELINE_CHANGED_EVENT } from "./protocol";
 import {
   screen2Activity,
   SCREEN2_CURRENT_TIME_S,
@@ -1067,6 +1069,24 @@ function App() {
     return () => window.removeEventListener("focus", onFocus);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, demoMode]);
+
+  // Episode metadata lives in OTIO metadata.awidat.episodes, not in
+  // timelineSnapshot.cut_boundaries, so the cut-boundary-keyed effect
+  // above misses changes from apply_episode_spans. The bridge already
+  // emits timeline-changed after the mutating tool completes — re-pull
+  // episodes whenever it does for our current project.
+  useEffect(() => {
+    if (!isTauri() || !current) return;
+    const unlisten = listen<string>(TIMELINE_CHANGED_EVENT, (event) => {
+      if (event.payload === current) {
+        void loadProjectEpisodes();
+      }
+    });
+    return () => {
+      unlisten.then((u) => u());
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current]);
 
   // User-attached clips from the composer's @-mention picker. Keyed
   // by the asset id so the same clip can't get attached twice.
