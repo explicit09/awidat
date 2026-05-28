@@ -16,6 +16,7 @@ import { Bell, CircleHelp, Film, FolderOpen, Import as ImportIcon, PanelRightOpe
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import wordmark from "./brand/awidat-wordmark.svg";
 import { useAgentStore } from "./agent/store";
+import { itemsToConversationTurns } from "./agent/conversationTurns";
 import { useProjectStore } from "./app/state";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { useMediaStore } from "./media/store";
@@ -970,55 +971,10 @@ function App() {
   // agent's outputs are kept in order: text blocks and tool_calls
   // interleaved as they actually fired. The CommandRail renders the
   // user bubble + the per-turn inline tool/text stream.
-  const turns: ConversationTurn[] = useMemo(() => {
-    const out: ConversationTurn[] = [];
-    let current: ConversationTurn | null = null;
-    for (const it of items) {
-      if (it.kind === "user_input") {
-        current = {
-          id: it.id.toString(),
-          userText: it.text,
-          parts: [],
-        };
-        out.push(current);
-        continue;
-      }
-      if (!current) {
-        // Stray pre-input items (rare; could be a resumed session
-        // with no prompt). Synthesize a turn so they have a home.
-        current = { id: `pre-${it.id}`, userText: "", parts: [] };
-        out.push(current);
-      }
-      if (it.kind === "text") {
-        const text = it.text.trim();
-        if (text.length === 0) continue;
-        current.parts.push({ kind: "text", id: it.id.toString(), text });
-      } else if (it.kind === "tool_call") {
-        const status = !it.result
-          ? "running"
-          : "Err" in it.result
-            ? "failed"
-            : "done";
-        current.parts.push({
-          kind: "tool_call",
-          id: it.id.toString(),
-          name: it.name,
-          status,
-          summary: summarizeToolForRail(it),
-          args: it.args ?? null,
-          result: it.result,
-        });
-      } else if (it.kind === "awaiting_user_input") {
-        current.parts.push({
-          kind: "input_request",
-          id: it.id.toString(),
-          question: it.question,
-          options: it.options ?? null,
-        });
-      }
-    }
-    return out.slice(-12);
-  }, [items]);
+  const turns: ConversationTurn[] = useMemo(
+    () => itemsToConversationTurns(items, summarizeToolForRail),
+    [items],
+  );
 
   const activeJobs = useMemo(
     () =>
@@ -1578,6 +1534,10 @@ function App() {
       onRespondUserInput={async (callId, reply) => {
         if (!isTauri()) return;
         await invoke("respond_user_input", { callId, reply });
+      }}
+      onRespondApproval={async (callId, decision) => {
+        if (!isTauri()) return;
+        await invoke("respond_approval", { callId, decision });
       }}
       onRemoveChip={(chip) => dismissContextChip(chip)}
       permissionMode={permissionMode}
