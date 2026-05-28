@@ -4,9 +4,8 @@ import {
   Card,
   Inline,
   Stack,
-  StatusPill,
-  type JobPillState,
-  type ProposalPillState,
+  StatusPillFromMapping,
+  type StatusPillMapping,
 } from "../ui";
 import type { GeneratedMediaEntry } from "./generatedMediaStore";
 
@@ -92,25 +91,11 @@ function GeneratedMediaJobCard({
             {entry.prompt_excerpt}
           </span>
         </Stack>
-        {(() => {
-          const pill = statePill(entry.state);
-          const label = stateLabel(entry.state);
-          return pill.family === "job" ? (
-            <StatusPill
-              family="job"
-              state={pill.state}
-              label={label}
-              className="shrink-0"
-            />
-          ) : (
-            <StatusPill
-              family="proposal"
-              state={pill.state}
-              label={label}
-              className="shrink-0"
-            />
-          );
-        })()}
+        <StatusPillFromMapping
+          mapping={statePill(entry.state)}
+          label={stateLabel(entry.state)}
+          className="shrink-0"
+        />
       </Inline>
       <Inline justify="between" align="center" gap="2" className="mt-2">
         <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
@@ -140,11 +125,7 @@ function GeneratedMediaJobCard({
   );
 }
 
-type GeneratedPill =
-  | { family: "job"; state: JobPillState }
-  | { family: "proposal"; state: ProposalPillState };
-
-function statePill(state: string): GeneratedPill {
+function statePill(state: string): StatusPillMapping {
   switch (state) {
     case "succeeded":
       return { family: "job", state: "ready" };

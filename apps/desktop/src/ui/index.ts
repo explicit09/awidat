@@ -3,11 +3,13 @@ export { Button, type ButtonProps } from "./primitives/Button";
 export { IconButton, type IconButtonProps } from "./primitives/IconButton";
 export {
   StatusPill,
+  StatusPillFromMapping,
   resolveStatusLabel,
   type JobPillState,
   type ProposalPillState,
   type StatusPillProps,
-} from "./primitives/StatusPill.tsx";
+  type StatusPillMapping,
+} from "./primitives/StatusPill";
 export { Card, type CardProps } from "./primitives/Card";
 export { Stack, Inline, Divider, type StackProps } from "./primitives/Stack";
 export { EvidenceChip, type EvidenceChipProps } from "./primitives/EvidenceChip";

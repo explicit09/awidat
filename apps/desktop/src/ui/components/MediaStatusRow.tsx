@@ -1,9 +1,8 @@
 import type { ReactNode } from "react";
 import {
-  StatusPill,
-  type JobPillState,
-  type ProposalPillState,
-} from "../primitives/StatusPill.tsx";
+  StatusPillFromMapping,
+  type StatusPillMapping,
+} from "../primitives/StatusPill";
 import { Inline, Stack } from "../primitives/Stack";
 import { cn } from "../cn";
 
@@ -16,10 +15,6 @@ export type MediaIndexingStatus =
   | "partial"
   | "failed"
   | "missing";
-
-type StatusPillMapping =
-  | { family: "job"; state: JobPillState }
-  | { family: "proposal"; state: ProposalPillState };
 
 // Map each indexing status to a (family, state) pair on the new StatusPill API.
 // `processing`/`queued` were `reviewing` (awaiting human action) → proposal/proposed.
@@ -117,14 +112,7 @@ export function MediaStatusRow({
       </Stack>
       <Inline gap="2" align="center" className="shrink-0 max-w-[45%]">
         {meta}
-        {(() => {
-          const pill = PILL_FOR[status];
-          return pill.family === "job" ? (
-            <StatusPill family="job" state={pill.state} label={LABEL[status]} />
-          ) : (
-            <StatusPill family="proposal" state={pill.state} label={LABEL[status]} />
-          );
-        })()}
+        <StatusPillFromMapping mapping={PILL_FOR[status]} label={LABEL[status]} />
       </Inline>
     </Wrapper>
   );

@@ -6,7 +6,7 @@ import {
   type JobPillState,
   type ProposalPillState,
   type StatusPillProps,
-} from "./StatusPill.ts";
+} from "./StatusPill.logic";
 
 // Re-export the public contract from the React entry point so consumers
 // can `import { StatusPill, resolveStatusLabel, ... } from ".../StatusPill"`.
@@ -85,5 +85,76 @@ export function StatusPill(props: StatusPillProps & HTMLAttributes<HTMLSpanEleme
       <span className={dot({ family, state })} aria-hidden />
       {text}
     </span>
+  );
+}
+
+/**
+ * Discriminated mapping shape returned by call-site helpers (e.g. PILL_FOR
+ * tables, `statePill` switches) that compute a (family, state) pair from
+ * some upstream status string. Use with `<StatusPillFromMapping mapping={…}/>`
+ * to avoid repeating the family-branching ternary at every render site.
+ */
+export type StatusPillMapping =
+  | { family: "job"; state: JobPillState; percent?: number }
+  | { family: "proposal"; state: ProposalPillState };
+
+interface StatusPillFromMappingProps extends HTMLAttributes<HTMLSpanElement> {
+  mapping: StatusPillMapping;
+  label?: string;
+  dotOnly?: boolean;
+  size?: "sm" | "md";
+}
+
+/**
+ * Renders a <StatusPill> from a `{family, state}` mapping object — useful
+ * when the family/state comes from a helper that returns a discriminated
+ * union. Without this, every caller has to branch on `mapping.family` to
+ * satisfy StatusPillProps' discriminated union. Spreading the mapping
+ * doesn't work because TS can't narrow `family` at the spread site, so the
+ * branching still exists, but it lives ONCE inside this primitive instead
+ * of at every call site.
+ */
+export function StatusPillFromMapping({
+  mapping,
+  label,
+  dotOnly,
+  size,
+  className,
+  ...rest
+}: StatusPillFromMappingProps) {
+  if (mapping.family === "job") {
+    return mapping.state === "running" ? (
+      <StatusPill
+        {...rest}
+        family="job"
+        state="running"
+        percent={mapping.percent}
+        label={label}
+        dotOnly={dotOnly}
+        size={size}
+        className={className}
+      />
+    ) : (
+      <StatusPill
+        {...rest}
+        family="job"
+        state={mapping.state}
+        label={label}
+        dotOnly={dotOnly}
+        size={size}
+        className={className}
+      />
+    );
+  }
+  return (
+    <StatusPill
+      {...rest}
+      family="proposal"
+      state={mapping.state}
+      label={label}
+      dotOnly={dotOnly}
+      size={size}
+      className={className}
+    />
   );
 }

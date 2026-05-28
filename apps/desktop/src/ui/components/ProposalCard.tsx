@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Card } from "../primitives/Card";
-import { StatusPill, type ProposalPillState } from "../primitives/StatusPill.tsx";
+import { StatusPill, type ProposalPillState } from "../primitives/StatusPill";
 import { ConfidenceMeter } from "../primitives/ConfidenceMeter";
 import { RiskIndicator, type RiskLevel } from "../primitives/RiskIndicator";
 import { IconButton } from "../primitives/IconButton";

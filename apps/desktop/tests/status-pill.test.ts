@@ -3,7 +3,7 @@
  * React tree — we exercise the label/percent computation that drives it.
  */
 import { strict as assert } from "node:assert";
-import { resolveStatusLabel } from "../src/ui/primitives/StatusPill.ts";
+import { resolveStatusLabel } from "../src/ui/primitives/StatusPill.logic.ts";
 
 // Default labels per family/state
 assert.equal(resolveStatusLabel({ family: "job", state: "idle" }), "Idle");

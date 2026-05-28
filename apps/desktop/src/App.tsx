@@ -58,7 +58,7 @@ import {
 } from "./shell";
 import { JobsStatusBar } from "./shell/JobsStatusBar";
 import { toActiveJobLike, aggregatePercent } from "./shell/activeJobs";
-import { AgentStatusBadge, Button, Card, cn, IconButton, Inline, Stack, StatusPill, type JobPillState, type MediaIndexingStatus, type ProposalPillState } from "./ui";
+import { AgentStatusBadge, Button, Card, cn, IconButton, Inline, Stack, StatusPill, StatusPillFromMapping, type JobPillState, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
@@ -2278,15 +2278,11 @@ function ProjectMediaPanel({
                   </div>
                 ) : null}
               </Stack>
-              {(() => {
-                const pill = mediaStatusPill(item.status);
-                const label = mediaStatusLabel(item.status);
-                return pill.family === "job" ? (
-                  <StatusPill family="job" state={pill.state} label={label} className="shrink-0" />
-                ) : (
-                  <StatusPill family="proposal" state={pill.state} label={label} className="shrink-0" />
-                );
-              })()}
+              <StatusPillFromMapping
+                mapping={mediaStatusPill(item.status)}
+                label={mediaStatusLabel(item.status)}
+                className="shrink-0"
+              />
             </Inline>
             {item.assetId ? (
               <div className="mt-2 flex justify-end">
@@ -2320,11 +2316,7 @@ function ProjectMediaPanel({
   );
 }
 
-type MediaStatusPill =
-  | { family: "job"; state: JobPillState }
-  | { family: "proposal"; state: ProposalPillState };
-
-function mediaStatusPill(status: IndexingMediaItem["status"]): MediaStatusPill {
+function mediaStatusPill(status: IndexingMediaItem["status"]): StatusPillMapping {
   switch (status) {
     case "indexed":
     case "imported":
@@ -2514,14 +2506,13 @@ function IndexReadinessPanel({
       : inFlightCount > 0
         ? "Indexing"
         : "Needs index";
-  // "warning" → job/failed (lossy per Task 4). "missing" → job/idle.
-  const readinessStatus: { family: "job"; state: JobPillState } = complete
-    ? { family: "job", state: "ready" }
+  const readinessStatus: JobPillState = complete
+    ? "ready"
     : usable
-      ? { family: "job", state: "failed" }
+      ? "failed"
       : inFlightCount > 0
-        ? { family: "job", state: "running" }
-        : { family: "job", state: "idle" };
+        ? "running"
+        : "idle";
   const readinessProgress =
     enabledTasks.length > 0 ? Math.round((readyCount / enabledTasks.length) * 100) : 0;
   return (
@@ -2561,7 +2552,7 @@ function IndexReadinessPanel({
         </Stack>
         <StatusPill
           family="job"
-          state={readinessStatus.state}
+          state={readinessStatus}
           label={readinessLabel}
           className="shrink-0"
         />
