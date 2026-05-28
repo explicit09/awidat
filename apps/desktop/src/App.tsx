@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import wordmark from "./brand/awidat-wordmark.svg";
 import { useAgentStore } from "./agent/store";
 import { itemsToConversationTurns } from "./agent/conversationTurns";
+import { buildTurnContext, chatHistoryLoader } from "./agent/turnContext";
 import { useProjectStore } from "./app/state";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { useMediaStore } from "./media/store";
@@ -366,12 +367,18 @@ function App() {
     setTurnError(null);
     setRunning(true);
     try {
-      await invoke("start_turn", { input });
+      await invoke("start_turn", {
+        input,
+        context: buildTurnContext(effectiveContextChips),
+      });
     } catch (e) {
       if (String(e).includes("turn is already running")) {
         try {
           await invoke("cancel_turn");
-          await invoke("start_turn", { input });
+          await invoke("start_turn", {
+            input,
+            context: buildTurnContext(effectiveContextChips),
+          });
           return;
         } catch (retryErr) {
           setTurnError(String(retryErr));
@@ -592,9 +599,10 @@ function App() {
     if (!isTauri()) return;
     setChatLoading(true);
     try {
-      const history = await invoke<ChatHistory>("load_chat_session", {
-        logPath: session.logPath,
-      });
+      const history = await chatHistoryLoader<Item>(
+        (command, args) => invoke<ChatHistory>(command, args),
+        session,
+      );
       setActiveChatSession(history.session);
       replaceAgentItems(history.items);
     } catch (e) {
