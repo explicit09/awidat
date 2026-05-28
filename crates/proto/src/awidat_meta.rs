@@ -86,6 +86,9 @@ pub struct AwidatTimelineMetadata {
     /// Pre-timeline ordered selects.
     #[serde(default)]
     pub stringouts: Vec<Stringout>,
+    /// Detected or reviewed episode spans within source recordings.
+    #[serde(default)]
+    pub episodes: Vec<EpisodeSpan>,
     /// Awidat-owned transcript alignment packages derived from transcript sidecars.
     #[serde(default)]
     pub transcript_alignments: Vec<TranscriptAlignmentPackage>,
@@ -211,6 +214,7 @@ impl AwidatTimelineMetadata {
                 }
             }
         }
+        diagnostics.extend(validate_episode_spans(&self.episodes));
 
         for package in &self.transcript_alignments {
             diagnostics.extend(package.validate());
@@ -390,6 +394,110 @@ impl AwidatTimelineMetadata {
             })
             .unwrap_or_default()
     }
+}
+
+/// Durable episode span metadata stored under `Timeline.metadata.awidat`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EpisodeSpan {
+    /// Stable episode id, e.g. `"episode-1"` or `"raw-a-episode-2"`.
+    #[serde(default)]
+    pub id: String,
+    /// Human-readable episode name/title when known.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub name: Option<String>,
+    /// Presentation/order index within the source project.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub order: Option<u32>,
+    /// Project-relative source asset id/path that owns the source range.
+    #[serde(default)]
+    pub asset_id: String,
+    /// Source-relative start time in seconds.
+    #[serde(default)]
+    pub source_start_s: f64,
+    /// Source-relative end time in seconds.
+    #[serde(default)]
+    pub source_end_s: f64,
+    /// Detector/reviewer confidence in `[0, 1]`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub confidence: Option<f64>,
+    /// Review state for the span.
+    #[serde(default)]
+    pub status: EpisodeSpanStatus,
+    /// Human-readable or machine-readable evidence strings.
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    /// Forward-compat passthrough for detector-specific fields.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl EpisodeSpan {
+    pub fn duration_s(&self) -> f64 {
+        self.source_end_s - self.source_start_s
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EpisodeSpanStatus {
+    #[default]
+    ReviewNeeded,
+    Accepted,
+    Rejected,
+}
+
+fn validate_episode_spans(episodes: &[EpisodeSpan]) -> Vec<ProfessionalDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut ids = HashSet::new();
+
+    for episode in episodes {
+        let label = if episode.id.is_empty() {
+            "<empty>"
+        } else {
+            episode.id.as_str()
+        };
+
+        if episode.id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                "episode id must not be empty",
+            ));
+        } else if !ids.insert(episode.id.as_str()) {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("duplicate episode id {}", episode.id),
+            ));
+        }
+
+        if episode.asset_id.trim().is_empty() {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("episode {label} asset_id must not be empty"),
+            ));
+        }
+        if !episode.source_start_s.is_finite()
+            || !episode.source_end_s.is_finite()
+            || episode.source_end_s <= episode.source_start_s
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!(
+                    "episode {label} source range start_s {} must be before end_s {}",
+                    episode.source_start_s, episode.source_end_s
+                ),
+            ));
+        }
+        if let Some(confidence) = episode.confidence
+            && (!confidence.is_finite() || !(0.0..=1.0).contains(&confidence))
+        {
+            diagnostics.push(ProfessionalDiagnostic::error(
+                crate::professional::CapabilityArea::AssemblyAndTimelineOperations,
+                format!("episode {label} confidence {confidence} must be between 0 and 1"),
+            ));
+        }
+    }
+
+    diagnostics
 }
 
 fn detect_parameter_animation_conflicts(
