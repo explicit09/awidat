@@ -160,10 +160,12 @@ on a new track named `broll`.
 ### 4. Asset priority (already on the right side — see addendum)
 
 This skill's whole reason for existing is priority slot #1 (user's
-own footage). If you came here, you've already checked the project
-has a real cutaway library. If those candidates fail (no matches),
-fall back DOWN the priority list — screen-recording / screenshot,
-chart, then stock-broll, AI-gen — NOT laterally to in-asset slices.
+own footage) for literal continuity cover, not a symbolic montage. If
+you came here, you've already checked the project has a real cutaway
+library. If those candidates fail (no matches), fall back DOWN the
+priority list — screen-recording / screenshot, chart, then stock-broll,
+AI-gen — NOT laterally to in-asset slices. For associative imagery, use
+`thematic-montage-director` instead.
 
 ## Duration + density
 

@@ -676,11 +676,11 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
             "data": {
                 "segments": [
                     {"start_s": 0.0, "end_s": 5.0, "text": "Welcome to the show today we have Sarah.", "speaker_id": "A"},
-                    {"start_s": 5.0, "end_s": 70.0, "text": "We talk about launch risk and product lessons.", "speaker_id": "A"},
-                    {"start_s": 72.0, "end_s": 77.0, "text": "Thanks for listening, see you next time.", "speaker_id": "A"},
-                    {"start_s": 140.0, "end_s": 145.0, "text": "Welcome back, this is episode two with Daniel.", "speaker_id": "A"},
-                    {"start_s": 145.0, "end_s": 220.0, "text": "Now we're going to discuss fundraising.", "speaker_id": "B"},
-                    {"start_s": 221.0, "end_s": 226.0, "text": "Thanks for listening and subscribe.", "speaker_id": "A"}
+                    {"start_s": 5.0, "end_s": 300.0, "text": "We talk about launch risk and product lessons.", "speaker_id": "A"},
+                    {"start_s": 305.0, "end_s": 310.0, "text": "Thanks for listening, see you next time.", "speaker_id": "A"},
+                    {"start_s": 380.0, "end_s": 385.0, "text": "Welcome back, this is episode two with Daniel.", "speaker_id": "A"},
+                    {"start_s": 385.0, "end_s": 690.0, "text": "Now we're going to discuss fundraising.", "speaker_id": "B"},
+                    {"start_s": 695.0, "end_s": 700.0, "text": "Thanks for listening and subscribe.", "speaker_id": "A"}
                 ]
             }
         }),
@@ -764,8 +764,8 @@ fn workflow_helper_scripts_emit_json() -> Result<(), Box<dyn Error>> {
         serde_json::json!({
             "data": {
                 "topics": [
-                    {"start_s": 0.0, "end_s": 80.0, "label": "Episode One Launch Risk"},
-                    {"start_s": 140.0, "end_s": 230.0, "label": "next episode fundraising"}
+                    {"start_s": 0.0, "end_s": 315.0, "label": "Episode One Launch Risk"},
+                    {"start_s": 380.0, "end_s": 705.0, "label": "next episode fundraising"}
                 ]
             }
         }),
