@@ -72,6 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.2
@@ -95,6 +96,7 @@ jobs:
       - name: Generated protocol unchanged
         run: git diff --exit-code -- apps/desktop/src/protocol/generated
       - name: UI smoke
+        timeout-minutes: 10
         run: pnpm --dir apps/desktop test
       - name: Python safe smoke
         run: python3 python/scripts/smoke_safe.py
