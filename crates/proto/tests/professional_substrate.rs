@@ -2,8 +2,6 @@
 
 //! Professional substrate schema acceptance tests.
 
-#![allow(clippy::expect_used)]
-
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
