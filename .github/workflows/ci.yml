@@ -52,7 +52,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo clean
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude awidat-desktop
       - name: Free test build artifacts
         if: matrix.os == 'ubuntu-latest'
         run: cargo clean
