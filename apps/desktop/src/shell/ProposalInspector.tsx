@@ -18,13 +18,13 @@ import {
   ConfidenceMeter,
   ConfidenceRing,
   Inline,
-  Pill,
   ReviewActions,
   RiskIndicator,
   Stack,
+  StatusPill,
   cn,
   type ConfidenceLevel,
-  type PillStatus,
+  type ProposalPillState,
   type RiskLevel,
 } from "../ui";
 
@@ -78,7 +78,12 @@ export type Alternative = {
 
 export type ProposalInspectorData = {
   title: string;
-  status: PillStatus;
+  /**
+   * Proposal-family pill state. The inspector is always proposal-flavored,
+   * so we restrict the surface to the proposal state set. Display string
+   * can still be customized via `statusLabel`.
+   */
+  proposalState: ProposalPillState;
   statusLabel?: string;
   /** Time range in 24-frame TC string format (e.g. "00:06:35:21 - 00:06:42:05"). */
   timeRange?: string;
@@ -149,7 +154,7 @@ export function ProposalInspector({
               <span className="text-[var(--text-h3)] font-semibold text-[var(--color-text-primary)]">
                 {data.title}
               </span>
-              <Pill status={data.status}>{data.statusLabel ?? defaultStatusLabel(data.status)}</Pill>
+              <StatusPill family="proposal" state={data.proposalState} label={data.statusLabel} />
             </Inline>
             <KeyValue label="Time">
               <span className="font-mono text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
@@ -377,6 +382,3 @@ function toLevel(score: number): ConfidenceLevel {
   return "very-low";
 }
 
-function defaultStatusLabel(status: PillStatus): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}

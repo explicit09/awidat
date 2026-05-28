@@ -39,14 +39,14 @@ import {
   EvidenceChip,
   Inline,
   MediaStatusRow,
-  Pill,
   ReviewActions,
   RiskIndicator,
   Stack,
+  StatusPill,
   TimelineMarker,
   cn,
   type ChannelLane,
-  type PillStatus,
+  type ProposalPillState,
 } from "../ui";
 import type { CommandRailProps } from "./CommandRail";
 import { DeliverySurface, type DeliveryRenderSummary, type DeliveryTarget, type PreflightFinding } from "./DeliverySurface";
@@ -212,7 +212,7 @@ const semanticLanes: ChannelLane[] = [
 
 const cutInspectorData: ProposalInspectorData = {
   title: "Cut 12 · L-cut",
-  status: "pending",
+  proposalState: "proposed",
   statusLabel: "Pending",
   timeRange: "00:06:42:11 – 00:06:45:02",
   duration: "2.91s",
@@ -906,7 +906,11 @@ function ComponentSystemBoard() {
                   <Stack gap="1">
                     <Inline justify="between" align="center" gap="2">
                       <span className="truncate text-[var(--text-caption)] font-semibold text-[var(--color-text-primary)]">{title}</span>
-                      <Pill status={status as PillStatus} dot={false}>{status}</Pill>
+                      <StatusPill
+                        family="proposal"
+                        state={demoProposalState(status)}
+                        label={status}
+                      />
                     </Inline>
                     <span className="font-mono text-[10px] text-[var(--color-text-muted)]">{range}</span>
                     <span className="text-[10px] leading-3 text-[var(--color-text-secondary)]">Remove filler phrase while preserving speaker cadence.</span>
@@ -935,7 +939,17 @@ function ComponentSystemBoard() {
                   <span className="font-mono text-[10px] text-[var(--color-brand-secondary)]">{speaker}</span>
                   <span className="font-mono text-[10px] text-[var(--color-text-muted)]">{time}</span>
                   <span className="truncate text-[var(--text-caption)] text-[var(--color-text-secondary)]">{text}</span>
-                  <Pill status={state === "neutral" ? "neutral" : (state as PillStatus)} dot={false}>{state}</Pill>
+                  {state === "neutral" || state === "selected" ? (
+                    // migrated: old kind=neutral/selected → replaced with span (no StatusPill family fits;
+                    // neutral has no proposal/job equivalent and "selected" is a UI affordance, not a real status)
+                    <span className="text-[var(--color-text-muted)] text-[11px]">{state}</span>
+                  ) : (
+                    <StatusPill
+                      family="proposal"
+                      state={demoProposalState(state)}
+                      label={state}
+                    />
+                  )}
                 </div>
               ))}
             </div>
@@ -1159,7 +1173,17 @@ function SemanticTranscriptPanel({ segments }: { segments: ReviewTranscriptSegme
                 <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-secondary)]">
                   {typeof seg.confidence === "number" ? `${Math.round(seg.confidence * 100)} High` : "—"}
                 </span>
-                <Pill status={status as PillStatus} dot={false}>{status}</Pill>
+                {status === "warning" ? (
+                  // Lossy: old `status="warning"` → job/failed visually per Task 4 mapping.
+                  // The demo label is preserved as "warning" via label=.
+                  <StatusPill family="job" state="failed" label={status} />
+                ) : (
+                  <StatusPill
+                    family="proposal"
+                    state={demoProposalState(status)}
+                    label={status}
+                  />
+                )}
               </div>
             );
           })}
@@ -1263,7 +1287,7 @@ function SemanticTimelineWorkspace() {
                 </Inline>
                 <Inline justify="between">
                   <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">Confidence</span>
-                  <Pill status="accepted" dot={false}>High</Pill>
+                  <StatusPill family="proposal" state="accepted" label="High" />
                 </Inline>
               </Stack>
             </div>
@@ -1654,6 +1678,27 @@ function DemoImage({ src, label }: { src: string; label: string }) {
       </figcaption>
     </figure>
   );
+}
+
+/**
+ * Demo helper: lift loosely-typed demo status strings into the new
+ * ProposalPillState set. "pending" is folded into "proposed" (awaiting
+ * human action). Anything unknown falls back to "proposed" so the demo
+ * still renders.
+ */
+function demoProposalState(value: string): ProposalPillState {
+  switch (value) {
+    case "accepted":
+      return "accepted";
+    case "rejected":
+      return "rejected";
+    case "revised":
+      return "revised";
+    case "proposed":
+    case "pending":
+    default:
+      return "proposed";
+  }
 }
 
 // Keep these imports active for planned screen variants.

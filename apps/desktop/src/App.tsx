@@ -58,7 +58,7 @@ import {
 } from "./shell";
 import { JobsStatusBar } from "./shell/JobsStatusBar";
 import { toActiveJobLike, aggregatePercent } from "./shell/activeJobs";
-import { AgentStatusBadge, Button, Card, cn, IconButton, Inline, Pill, Stack, type MediaIndexingStatus, type PillStatus } from "./ui";
+import { AgentStatusBadge, Button, Card, cn, IconButton, Inline, Stack, StatusPill, type JobPillState, type MediaIndexingStatus, type ProposalPillState } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
@@ -1632,7 +1632,13 @@ function App() {
       topChromeEnd={
           <Inline gap="1" align="center">
           {activeProposal || demoMode ? (
-            <Pill status="warning">{demoMode ? demoScreen.pendingLabel ?? "Demo" : `${effectiveChanges.length} pending`}</Pill>
+            // Original used `status="warning"`; semantically this is "N proposals
+            // awaiting human review" → proposal/proposed, not job/failed.
+            <StatusPill
+              family="proposal"
+              state="proposed"
+              label={demoMode ? demoScreen.pendingLabel ?? "Demo" : `${effectiveChanges.length} pending`}
+            />
           ) : null}
           <AgentStatusBadge
             status={
@@ -2272,9 +2278,15 @@ function ProjectMediaPanel({
                   </div>
                 ) : null}
               </Stack>
-              <Pill status={mediaStatusPill(item.status)} dot={false} className="shrink-0">
-                {mediaStatusLabel(item.status)}
-              </Pill>
+              {(() => {
+                const pill = mediaStatusPill(item.status);
+                const label = mediaStatusLabel(item.status);
+                return pill.family === "job" ? (
+                  <StatusPill family="job" state={pill.state} label={label} className="shrink-0" />
+                ) : (
+                  <StatusPill family="proposal" state={pill.state} label={label} className="shrink-0" />
+                );
+              })()}
             </Inline>
             {item.assetId ? (
               <div className="mt-2 flex justify-end">
@@ -2308,22 +2320,29 @@ function ProjectMediaPanel({
   );
 }
 
-function mediaStatusPill(status: IndexingMediaItem["status"]): PillStatus {
+type MediaStatusPill =
+  | { family: "job"; state: JobPillState }
+  | { family: "proposal"; state: ProposalPillState };
+
+function mediaStatusPill(status: IndexingMediaItem["status"]): MediaStatusPill {
   switch (status) {
     case "indexed":
     case "imported":
-      return "ready";
+      return { family: "job", state: "ready" };
     case "indexing":
-      return "processing";
+      return { family: "job", state: "running" };
     case "processing":
     case "queued":
-      return "reviewing";
+      // "reviewing" → proposal/proposed (awaiting human / queued for action).
+      return { family: "proposal", state: "proposed" };
     case "partial":
-      return "warning";
+      // Lossy: original "warning" → job/failed visually per Task 4 mapping.
+      return { family: "job", state: "failed" };
     case "failed":
-      return "failed";
+      return { family: "job", state: "failed" };
     case "missing":
-      return "missing";
+      // "missing" → job/idle.
+      return { family: "job", state: "idle" };
   }
 }
 
@@ -2495,13 +2514,14 @@ function IndexReadinessPanel({
       : inFlightCount > 0
         ? "Indexing"
         : "Needs index";
-  const readinessStatus: PillStatus = complete
-    ? "ready"
+  // "warning" → job/failed (lossy per Task 4). "missing" → job/idle.
+  const readinessStatus: { family: "job"; state: JobPillState } = complete
+    ? { family: "job", state: "ready" }
     : usable
-      ? "warning"
+      ? { family: "job", state: "failed" }
       : inFlightCount > 0
-        ? "processing"
-        : "missing";
+        ? { family: "job", state: "running" }
+        : { family: "job", state: "idle" };
   const readinessProgress =
     enabledTasks.length > 0 ? Math.round((readyCount / enabledTasks.length) * 100) : 0;
   return (
@@ -2539,9 +2559,12 @@ function IndexReadinessPanel({
             </span>
           ) : null}
         </Stack>
-        <Pill status={readinessStatus} dot className="shrink-0">
-          {readinessLabel}
-        </Pill>
+        <StatusPill
+          family="job"
+          state={readinessStatus.state}
+          label={readinessLabel}
+          className="shrink-0"
+        />
       </Inline>
       <Stack gap="1">
         <Inline justify="between" align="center">

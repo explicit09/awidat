@@ -14,7 +14,7 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Button, Divider, Inline, Pill, Stack, cn } from "../ui";
+import { Button, Divider, Inline, Stack, StatusPill, cn } from "../ui";
 import type { PermissionMode } from "../protocol";
 
 /**
@@ -409,9 +409,7 @@ export function CommandRail({
               </button>
               <Inline gap="2" align="center" className="shrink-0">
                 {activePlanStep?.status === "in_progress" ? (
-                  <Pill status="processing" dot={false}>
-                    Running
-                  </Pill>
+                  <StatusPill family="job" state="running" label="Running" />
                 ) : null}
                 {plan.length > 0 ? (
                   <span className="font-mono text-[var(--text-caption)] text-[var(--color-text-muted)]">
@@ -1264,14 +1262,6 @@ function Section({ icon, label, children }: { icon?: ReactNode; label: string; c
 }
 
 function PlanRow({ step }: { step: PlanItem }) {
-  const pillStatus =
-    step.status === "complete"
-      ? "accepted"
-      : step.status === "in_progress"
-        ? "processing"
-        : step.status === "failed"
-          ? "failed"
-          : "pending";
   return (
     <Inline gap="2" align="start" className="rounded-[var(--radius-sm)] px-1.5 py-1 hover:bg-[var(--color-surface-hover)]">
       <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" style={{
@@ -1292,8 +1282,8 @@ function PlanRow({ step }: { step: PlanItem }) {
       )}>
         {step.text}
       </span>
-      {step.status === "in_progress" ? <Pill status={pillStatus} dot={false}>Running</Pill> : null}
-      {step.status === "failed" ? <Pill status={pillStatus} dot={false}>Failed</Pill> : null}
+      {step.status === "in_progress" ? <StatusPill family="job" state="running" label="Running" /> : null}
+      {step.status === "failed" ? <StatusPill family="job" state="failed" label="Failed" /> : null}
     </Inline>
   );
 }

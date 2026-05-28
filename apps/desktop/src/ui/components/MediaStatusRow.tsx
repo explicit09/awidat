@@ -1,5 +1,9 @@
 import type { ReactNode } from "react";
-import { Pill, type PillStatus } from "../primitives/Pill";
+import {
+  StatusPill,
+  type JobPillState,
+  type ProposalPillState,
+} from "../primitives/StatusPill.tsx";
 import { Inline, Stack } from "../primitives/Stack";
 import { cn } from "../cn";
 
@@ -13,15 +17,23 @@ export type MediaIndexingStatus =
   | "failed"
   | "missing";
 
-const PILL_FOR: Record<MediaIndexingStatus, PillStatus> = {
-  imported: "ready",
-  indexing: "processing",
-  processing: "reviewing",
-  queued: "reviewing",
-  indexed: "ready",
-  partial: "warning",
-  failed: "failed",
-  missing: "missing",
+type StatusPillMapping =
+  | { family: "job"; state: JobPillState }
+  | { family: "proposal"; state: ProposalPillState };
+
+// Map each indexing status to a (family, state) pair on the new StatusPill API.
+// `processing`/`queued` were `reviewing` (awaiting human action) → proposal/proposed.
+// `partial` was `warning` — lossy: becomes job/failed visually per Task 4 mapping.
+// `missing` becomes job/idle.
+const PILL_FOR: Record<MediaIndexingStatus, StatusPillMapping> = {
+  imported: { family: "job", state: "ready" },
+  indexing: { family: "job", state: "running" },
+  processing: { family: "proposal", state: "proposed" },
+  queued: { family: "proposal", state: "proposed" },
+  indexed: { family: "job", state: "ready" },
+  partial: { family: "job", state: "failed" },
+  failed: { family: "job", state: "failed" },
+  missing: { family: "job", state: "idle" },
 };
 
 const LABEL: Record<MediaIndexingStatus, string> = {
@@ -105,7 +117,14 @@ export function MediaStatusRow({
       </Stack>
       <Inline gap="2" align="center" className="shrink-0 max-w-[45%]">
         {meta}
-        <Pill status={PILL_FOR[status]}>{LABEL[status]}</Pill>
+        {(() => {
+          const pill = PILL_FOR[status];
+          return pill.family === "job" ? (
+            <StatusPill family="job" state={pill.state} label={LABEL[status]} />
+          ) : (
+            <StatusPill family="proposal" state={pill.state} label={LABEL[status]} />
+          );
+        })()}
       </Inline>
     </Wrapper>
   );

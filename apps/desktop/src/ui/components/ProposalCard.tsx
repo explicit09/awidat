@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Card } from "../primitives/Card";
-import { Pill, type PillStatus } from "../primitives/Pill";
+import { StatusPill, type ProposalPillState } from "../primitives/StatusPill.tsx";
 import { ConfidenceMeter } from "../primitives/ConfidenceMeter";
 import { RiskIndicator, type RiskLevel } from "../primitives/RiskIndicator";
 import { IconButton } from "../primitives/IconButton";
@@ -10,7 +10,11 @@ import { cn } from "../cn";
 
 export type ProposalCardProps = {
   title: string;
-  status: PillStatus;
+  /**
+   * Proposal-family pill state. Display label can be customized via
+   * `statusLabel`; default labels are "Proposed/Accepted/Rejected/Revised".
+   */
+  proposalState: ProposalPillState;
   statusLabel?: string;
   timeRange: string;
   cutType?: string;
@@ -26,24 +30,9 @@ export type ProposalCardProps = {
   className?: string;
 };
 
-const STATUS_LABEL: Record<PillStatus, string> = {
-  proposed: "Proposed",
-  pending: "Pending",
-  accepted: "Accepted",
-  rejected: "Rejected",
-  reviewing: "Reviewing",
-  processing: "Processing",
-  ready: "Ready",
-  failed: "Failed",
-  warning: "Warning",
-  missing: "Missing",
-  revised: "Revised",
-  neutral: "Neutral",
-};
-
 export function ProposalCard({
   title,
-  status,
+  proposalState,
   statusLabel,
   timeRange,
   cutType,
@@ -82,7 +71,7 @@ export function ProposalCard({
             </Inline>
           </Stack>
           <Inline gap="1" align="center">
-            <Pill status={status}>{statusLabel ?? STATUS_LABEL[status]}</Pill>
+            <StatusPill family="proposal" state={proposalState} label={statusLabel} />
             {onOverflow ? (
               <IconButton
                 size="sm"

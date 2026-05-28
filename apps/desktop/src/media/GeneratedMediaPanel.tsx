@@ -1,5 +1,13 @@
 import { RefreshCw, Sparkles } from "lucide-react";
-import { Button, Card, Inline, Pill, Stack, type PillStatus } from "../ui";
+import {
+  Button,
+  Card,
+  Inline,
+  Stack,
+  StatusPill,
+  type JobPillState,
+  type ProposalPillState,
+} from "../ui";
 import type { GeneratedMediaEntry } from "./generatedMediaStore";
 
 export function GeneratedMediaPanel({
@@ -84,9 +92,25 @@ function GeneratedMediaJobCard({
             {entry.prompt_excerpt}
           </span>
         </Stack>
-        <Pill status={statePill(entry.state)} dot={false} className="shrink-0">
-          {stateLabel(entry.state)}
-        </Pill>
+        {(() => {
+          const pill = statePill(entry.state);
+          const label = stateLabel(entry.state);
+          return pill.family === "job" ? (
+            <StatusPill
+              family="job"
+              state={pill.state}
+              label={label}
+              className="shrink-0"
+            />
+          ) : (
+            <StatusPill
+              family="proposal"
+              state={pill.state}
+              label={label}
+              className="shrink-0"
+            />
+          );
+        })()}
       </Inline>
       <Inline justify="between" align="center" gap="2" className="mt-2">
         <span className="truncate text-[var(--text-caption)] text-[var(--color-text-muted)]">
@@ -116,19 +140,26 @@ function GeneratedMediaJobCard({
   );
 }
 
-function statePill(state: string): PillStatus {
+type GeneratedPill =
+  | { family: "job"; state: JobPillState }
+  | { family: "proposal"; state: ProposalPillState };
+
+function statePill(state: string): GeneratedPill {
   switch (state) {
     case "succeeded":
-      return "ready";
+      return { family: "job", state: "ready" };
     case "queued":
     case "running":
-      return "processing";
+      return { family: "job", state: "running" };
     case "failed":
-      return "failed";
+      return { family: "job", state: "failed" };
     case "cancelled":
-      return "warning";
+      // Lossy: "warning" had no direct equivalent; cancelled is closer
+      // to "failed" than to "ready" — render in the failed treatment.
+      return { family: "job", state: "failed" };
     default:
-      return "reviewing";
+      // "reviewing" → proposal/proposed (awaiting human action).
+      return { family: "proposal", state: "proposed" };
   }
 }
 

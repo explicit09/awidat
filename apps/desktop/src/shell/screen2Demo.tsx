@@ -76,7 +76,7 @@ export const screen2AudioPeaks = Array.from({ length: 220 }, (_, i) => {
 
 export const screen2Inspector: ProposalInspectorData = {
   title: "Cut 07 · J-cut",
-  status: "pending",
+  proposalState: "proposed",
   statusLabel: "Pending",
   timeRange: "00:06:35:21 – 00:06:42:05",
   duration: "6.7s",

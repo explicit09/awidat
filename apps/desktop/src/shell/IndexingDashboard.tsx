@@ -23,8 +23,8 @@ import {
   Card,
   Inline,
   MediaStatusRow,
-  Pill,
   Stack,
+  StatusPill,
   cn,
   type MediaIndexingStatus,
 } from "../ui";
@@ -240,9 +240,7 @@ export function IndexingDashboard({
               </span>
             </Stack>
             {deliveryTarget ? (
-              <Pill status="proposed" dot={false}>
-                {deliveryTarget}
-              </Pill>
+              <StatusPill family="proposal" state="proposed" label={deliveryTarget} />
             ) : null}
             {hasMedia ? <SectionHeader title="Add media" /> : null}
             <Inline gap="2">
@@ -561,11 +559,14 @@ function IndexerConfigRow({
           </span>
           <Inline gap="1" align="center" className="shrink-0">
             {indexer.userConfigured ? (
-              <Pill status="proposed" dot={false}>override</Pill>
+              <StatusPill family="proposal" state="proposed" label="override" />
             ) : null}
-            <Pill status={indexer.enabled ? "ready" : "missing"} dot={false}>
-              {indexer.enabled ? "on" : "off"}
-            </Pill>
+            {indexer.enabled ? (
+              <StatusPill family="job" state="ready" label="on" />
+            ) : (
+              // "missing" → job/idle per Task 4 mapping.
+              <StatusPill family="job" state="idle" label="off" />
+            )}
             {onToggle ? (
               <button
                 type="button"

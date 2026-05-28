@@ -1,7 +1,13 @@
 export { BrandIcon, type BrandIconProps, type SimpleIconShape } from "./BrandIcon";
 export { Button, type ButtonProps } from "./primitives/Button";
 export { IconButton, type IconButtonProps } from "./primitives/IconButton";
-export { Pill, PILL_STATUSES, type PillStatus, type PillProps } from "./primitives/Pill";
+export {
+  StatusPill,
+  resolveStatusLabel,
+  type JobPillState,
+  type ProposalPillState,
+  type StatusPillProps,
+} from "./primitives/StatusPill.tsx";
 export { Card, type CardProps } from "./primitives/Card";
 export { Stack, Inline, Divider, type StackProps } from "./primitives/Stack";
 export { EvidenceChip, type EvidenceChipProps } from "./primitives/EvidenceChip";

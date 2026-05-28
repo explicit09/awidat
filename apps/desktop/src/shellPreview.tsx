@@ -17,7 +17,7 @@ import type {
   TimelineTab,
   TimelineViewMode,
 } from "./shell";
-import { AgentStatusBadge, Inline, Pill } from "./ui";
+import { AgentStatusBadge, Inline, StatusPill } from "./ui";
 import wordmark from "./brand/awidat-wordmark.svg";
 import { useStageStore } from "./state";
 
@@ -38,7 +38,8 @@ const MOCK_CHANGES: PreviewChange[] = [
 
 const MOCK_INSPECTOR: ProposalInspectorData = {
   title: "Cut 07 · J-cut",
-  status: "pending",
+  proposalState: "proposed",
+  statusLabel: "Pending",
   timeRange: "00:06:35:21 - 00:06:42:05",
   duration: "6.7s",
   cutType: "J-cut (audio leads)",
@@ -87,7 +88,7 @@ function Root() {
       topChromeCenter={<StageIndicator />}
       topChromeEnd={
         <Inline gap="2" align="center">
-          <Pill status="proposed">12 pending</Pill>
+          <StatusPill family="proposal" state="proposed" label="12 pending" />
           <AgentStatusBadge status="awaiting-review" detail="12 pending changes" />
         </Inline>
       }
