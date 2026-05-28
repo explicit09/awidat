@@ -948,11 +948,10 @@ impl ScanState {
             '(' => self.depth.paren += 1,
             ')' => self.depth.paren = (self.depth.paren - 1).max(0),
             '<' => self.depth.angle += 1,
-            '>' => {
-                if self.depth.angle > 0 {
-                    self.depth.angle -= 1;
-                }
+            '>' if self.depth.angle > 0 => {
+                self.depth.angle -= 1;
             }
+            '>' => {}
             _ => {}
         }
         self.previous_char = Some(ch);
