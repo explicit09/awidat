@@ -3948,6 +3948,379 @@ button {
   cursor: pointer;
 }
 
+/* ─── Wave 2 — Inspector Studio-Pro polish ─────────────────────────
+ * On-brand slider primitive, value-badge typography, LUT swatch,
+ * audio-fade steppers, split-edit/track-mix tightening. The visual
+ * vocabulary mirrors IndexRailPro: charcoal surfaces, cyan as the
+ * "active control" accent, mono badges right-aligned in a fixed
+ * column. */
+
+.properties-slider-pro {
+  flex: 1;
+  min-width: 92px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 999px;
+  /* the inline `style={background:...}` from Slider.tsx provides the
+   * fill gradient; we own thumb shape + hit area + focus ring here. */
+}
+
+.properties-slider-pro:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 3px;
+}
+
+/* WebKit / Blink */
+.properties-slider-pro::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: transparent; /* inline gradient on the input itself */
+}
+
+.properties-slider-pro::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-active);
+  background: var(--color-brand-secondary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+  transition: box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.properties-slider-pro:hover::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.18), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.properties-slider-pro:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.22), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.properties-slider-pro[data-rest="true"]::-webkit-slider-thumb {
+  background: var(--color-text-muted);
+  border-color: var(--color-border-strong);
+}
+
+/* Firefox */
+.properties-slider-pro::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.properties-slider-pro::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-active);
+  background: var(--color-brand-secondary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+  transition: box-shadow 120ms ease, background-color 120ms ease;
+}
+
+.properties-slider-pro:hover::-moz-range-thumb {
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.18), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+.properties-slider-pro[data-rest="true"]::-moz-range-thumb {
+  background: var(--color-text-muted);
+  border-color: var(--color-border-strong);
+}
+
+/* Value badge — always mono, right-aligned, fixed-width so the column
+ * doesn't reflow when the readout grows from "1.00" to "12.50". */
+.properties-value-badge {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.18em; /* thin space between number and unit */
+  min-width: 64px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.properties-value-badge .unit {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+
+.properties-value-badge[data-rest="true"] {
+  color: var(--color-text-muted);
+}
+
+/* LUT control — 28×16 swatch left of the path input. When no LUT is
+ * set, paint a diagonal charcoal slash to signal "empty". When a path
+ * is set but we have no first-frame average yet, fall back to a small
+ * 2-tone checkerboard. */
+.properties-lut-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.properties-lut-swatch {
+  flex-shrink: 0;
+  width: 28px;
+  height: 16px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 3px;
+  overflow: hidden;
+  background-color: var(--color-surface-input);
+}
+
+.properties-lut-swatch[data-state="empty"] {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--color-surface-input) 0,
+    var(--color-surface-input) 3px,
+    var(--color-surface-card) 3px,
+    var(--color-surface-card) 6px
+  );
+}
+
+.properties-lut-swatch[data-state="loaded"] {
+  background-image:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.05) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.05) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.05) 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+  background-color: var(--color-surface-card);
+}
+
+/* Audio fade — paired up/down steppers tucked into a compact row. */
+.properties-fade-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.properties-fade-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.properties-fade-cell-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  width: 18px;
+  text-align: right;
+}
+
+.properties-stepper {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-input);
+  overflow: hidden;
+}
+
+.properties-stepper input {
+  width: 48px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  text-align: right;
+  outline: none;
+}
+
+.properties-stepper button {
+  width: 18px;
+  border: 0;
+  border-left: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-input);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.properties-stepper button:hover {
+  background: var(--color-surface-input-hover);
+  color: var(--color-text-primary);
+}
+
+.properties-stepper-stack {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--color-border-subtle);
+}
+
+.properties-stepper-stack button {
+  height: 12px;
+  border-left: 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.properties-stepper-stack button:last-child {
+  border-bottom: 0;
+}
+
+/* Split-edit / inline apply — shrink the Apply chip to row height
+ * and dial it back to ghost so it doesn't shout. */
+.properties-inline-apply {
+  height: 22px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-card);
+  color: var(--color-text-secondary);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.properties-inline-apply:hover:not(:disabled) {
+  background: var(--color-surface-card-hover);
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+}
+
+.properties-inline-apply:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.properties-split-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.properties-split-row > span {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Track Mix — volume + mute/solo chips on one row, ducking row below.
+ * Chip toggles share the StatusPill rhythm: pill height, neutral when
+ * off, semantic when on. */
+.properties-mix-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.properties-chip-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: var(--color-surface-card);
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.properties-chip-toggle:hover {
+  border-color: var(--color-border);
+  color: var(--color-text-primary);
+}
+
+.properties-chip-toggle[data-on="true"][data-tone="mute"] {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+
+.properties-chip-toggle[data-on="true"][data-tone="solo"] {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+  color: #fcd34d;
+}
+
+.properties-chip-toggle[data-on="true"][data-tone="duck"] {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.12);
+  color: var(--color-proposal-proposed-text);
+}
+
+.properties-ducking-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Timing Metadata — mono everywhere, tighter row gaps. */
+.properties-meta-row .properties-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+}
+
+/* Delete button — keep the red but tighten its weight + casing so it
+ * reads as a decisive action, not an alarm. */
+.properties-danger-pro {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.10);
+  color: #fca5a5;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.properties-danger-pro:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: var(--color-danger);
+  color: #fecaca;
+}
+
 /* Step 1.7 — Editorial notes panel. Sits inside .workspace-chat at
  * the bottom (above the composer at app-shell level). Collapsible
  * header lets the user hide the panel without losing their place
