@@ -847,6 +847,14 @@ async fn handle_server_request(
     }
 }
 
+/// Monotonic client-side request id counter. App-server only needs
+/// uniqueness within one connection; this counter resets per process.
+fn next_request_id() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static COUNTER: AtomicI64 = AtomicI64::new(100);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -932,12 +940,4 @@ mod tests {
         assert!(!pending.contains_key("call-1"));
         assert!(pending.contains_key("call-2"));
     }
-}
-
-/// Monotonic client-side request id counter. App-server only needs
-/// uniqueness within one connection; this counter resets per process.
-fn next_request_id() -> i64 {
-    use std::sync::atomic::{AtomicI64, Ordering};
-    static COUNTER: AtomicI64 = AtomicI64::new(100);
-    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
