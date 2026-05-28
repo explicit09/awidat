@@ -54,8 +54,7 @@ import {
   type TimelineTab,
   type TimelineViewMode,
 } from "./shell";
-import { JobsStatusBar } from "./shell/JobsStatusBar";
-import { toActiveJobLike, aggregatePercent } from "./shell/activeJobs";
+import { Footer as ChromeFooter } from "./shell/chrome/Footer";
 import { Button, Card, cn, IconButton, Inline, Stack, StatusPill, StatusPillFromMapping, type JobPillState, type MediaIndexingStatus, type StatusPillMapping } from "./ui";
 import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
@@ -2832,94 +2831,14 @@ function NoProjectWorkspace() {
   );
 }
 
-function Footer({ demoMode = false }: { demoMode?: boolean }) {
-  const running = useAgentStore((s) => s.running);
-  const items = useAgentStore((s) => s.items);
-  if (demoMode) {
-    return (
-      <>
-        <Inline gap="3" align="center">
-          <span className="h-2 w-2 rounded-full bg-[var(--color-success)]" aria-hidden />
-          <span className="text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
-            Agent online
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Model: Awidat Pro 1.2
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Context window: 42m
-          </span>
-        </Inline>
-        <Inline gap="3" align="center">
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Autosaved 12:42:18 ✓
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Render queue 1
-          </span>
-          <span className="inline-flex h-3.5 items-end gap-0.5" aria-hidden>
-            {[5, 9, 4, 11, 7].map((h, i) => (
-              <span
-                key={i}
-                className="w-1 rounded-full bg-[var(--color-brand-secondary)]/60"
-                style={{ height: h }}
-              />
-            ))}
-          </span>
-          <span className="text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-            Disk 1.2 TB free
-          </span>
-        </Inline>
-      </>
-    );
-  }
-  const activeJobs = items.filter((item) => item.kind === "job" && item.phase !== "completed");
-  const renderQueueLabel = activeJobs.length > 0 ? activeJobs.length.toString() : "0";
-  const jobsForBar = activeJobs.map((it) => toActiveJobLike({ id: it.id, job_kind: (it as any).job_kind, status: (it as any).status, percent: (it as any).percent }));
-  return (
-    <>
-      <Inline gap="3" align="center" className="min-w-0">
-        <span
-          className="h-2 w-2 shrink-0 rounded-full"
-          style={{ backgroundColor: running ? "var(--color-warning)" : "var(--color-success)" }}
-          aria-hidden
-        />
-        <span className="shrink-0 text-[var(--text-body-sm)] font-semibold text-[var(--color-text-secondary)] font-mono">
-          {running ? "Agent working" : "Agent online"}
-        </span>
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
-          Model: Awidat Pro 1.2
-        </span>
-        <span className="min-w-0 truncate text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-          Context window: local
-        </span>
-      </Inline>
-      <Inline gap="3" align="center" className="min-w-0 justify-end">
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
-          Autosaved local ✓
-        </span>
-        <JobsStatusBar
-          jobs={jobsForBar}
-          totalPercent={aggregatePercent(jobsForBar)}
-        />
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-secondary)] font-mono">
-          Render queue {renderQueueLabel}
-        </span>
-        <span className="inline-flex h-3.5 shrink-0 items-end gap-0.5" aria-hidden>
-          {[4, 8, 5, 10, 6].map((h, i) => (
-            <span
-              key={i}
-              className="w-1 rounded-full bg-[var(--color-brand-secondary)]/60"
-              style={{ height: h }}
-            />
-          ))}
-        </span>
-        <span className="shrink-0 text-[var(--text-caption)] text-[var(--color-text-muted)] font-mono">
-          Disk local
-        </span>
-      </Inline>
-    </>
-  );
+/**
+ * Footer — thin wrapper that delegates to the redesigned
+ * `shell/chrome/Footer` (Task 10). The `demoMode` prop is retained for the
+ * call site but is currently a no-op; the redesigned footer renders the
+ * same job/system state in both demo and live runs.
+ */
+function Footer(_: { demoMode?: boolean }) {
+  return <ChromeFooter />;
 }
 
 function projectName(path: string): string {
