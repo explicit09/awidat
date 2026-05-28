@@ -5679,9 +5679,9 @@ button {
 .proposal-actions-primary,
 .modal-footer button.primary,
 .note-broll-use {
-  background: linear-gradient(180deg, #3d8ff0, #2b6fbf);
-  border-color: #5ba8ff;
-  color: #eef7ff;
+  background: linear-gradient(180deg, var(--color-brand), var(--color-brand-active));
+  border-color: var(--color-brand-hover);
+  color: var(--color-text-inverse);
 }
 
 .workspace-editor {

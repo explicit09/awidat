@@ -39,7 +39,7 @@ const LABEL: Record<MediaIndexingStatus, string> = {
   indexed: "Indexed",
   partial: "Partial",
   failed: "Failed",
-  missing: "Missing",
+  missing: "Not yet run",
 };
 
 export type MediaStatusRowProps = {

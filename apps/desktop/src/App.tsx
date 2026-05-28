@@ -1345,7 +1345,7 @@ function App() {
         detail = "Waiting for index output";
       } else {
         status = "missing";
-        detail = "Waiting for local indexer";
+        detail = "Not yet run";
       }
       return {
         id: `real-${kind}`,
