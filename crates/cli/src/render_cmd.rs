@@ -6,6 +6,16 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use awidat_render::RenderJobSpec;
 
+/// Derive a short id from the output mp4 path used to name ffmpeg log
+/// sidecars (`<id>.ffmpeg.stdout.log` / `<id>.ffmpeg.stderr.log`).
+fn manifest_id(output_path: &Path) -> String {
+    output_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "timeline".to_string())
+}
+
 pub fn run(project_root: &Path) -> Result<()> {
     let spec = awidat_render::build_timeline_render_spec(project_root).with_context(|| {
         format!(
@@ -29,13 +39,79 @@ pub fn run(project_root: &Path) -> Result<()> {
     if let Some(cwd) = &spec.cwd {
         cmd.current_dir(cwd);
     }
-    let output = cmd.output().context("failed to spawn ffmpeg")?;
-    if !output.status.success() {
-        bail!(
-            "ffmpeg render failed with status {}\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
+    // Capture stdout/stderr to per-render log files. Two prior failure
+    // modes ruled out:
+    //   * Command::output(): collected both pipes into memory; the
+    //     ~16 KB kernel pipe buffer filled (ffmpeg info-level emits
+    //     concat warnings + per-frame progress), ffmpeg blocked on
+    //     write, awidat blocked on read = deadlock at 0 % CPU. Hit
+    //     this with PID 39904.
+    //   * Stdio::inherit(): inherits the awidat parent's terminal;
+    //     when awidat runs in the background, ffmpeg writes to a tty
+    //     it doesn't own → SIGTTOU → process STOPPED. Hit this with
+    //     PID 46066 (STAT=T even after SIGCONT).
+    // Logs land next to the output mp4 so the user (or a postmortem
+    // tool) can read what ffmpeg did. Use separate threads to drain
+    // each pipe so neither blocks the other.
+    let log_dir = spec.output_path.parent().map(|p| p.to_path_buf());
+    let stdout_path = log_dir.as_ref().map(|d| {
+        d.join(format!(
+            "{}.ffmpeg.stdout.log",
+            manifest_id(&spec.output_path)
+        ))
+    });
+    let stderr_path = log_dir.as_ref().map(|d| {
+        d.join(format!(
+            "{}.ffmpeg.stderr.log",
+            manifest_id(&spec.output_path)
+        ))
+    });
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().context("failed to spawn ffmpeg")?;
+    let stdout_thread = child.stdout.take().and_then(|mut pipe| {
+        stdout_path.as_ref().map(|path| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                if let Ok(mut file) = std::fs::File::create(&path) {
+                    let _ = std::io::copy(&mut pipe, &mut file);
+                }
+            })
+        })
+    });
+    let stderr_thread = child.stderr.take().and_then(|mut pipe| {
+        stderr_path.as_ref().map(|path| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                if let Ok(mut file) = std::fs::File::create(&path) {
+                    let _ = std::io::copy(&mut pipe, &mut file);
+                }
+            })
+        })
+    });
+    let status = child.wait().context("ffmpeg wait failed")?;
+    if let Some(handle) = stdout_thread {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stderr_thread {
+        let _ = handle.join();
+    }
+    if !status.success() {
+        let stderr_tail = stderr_path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|s| {
+                s.lines()
+                    .rev()
+                    .take(40)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        bail!("ffmpeg render failed with status {status}\nlast stderr:\n{stderr_tail}");
     }
     awidat_render::finalize_render_manifest_file(&manifest_path)
         .with_context(|| format!("finalize render manifest {}", manifest_path.display()))?;
@@ -119,18 +195,45 @@ fn fingerprint_manifest_inputs(
     project_root: &Path,
     input_paths: &[std::path::PathBuf],
 ) -> Result<Vec<awidat_render::RenderInputFingerprint>> {
-    input_paths
-        .iter()
-        .map(|path| {
-            let path = if path.is_absolute() {
-                path.clone()
-            } else {
-                project_root.join(path)
-            };
-            awidat_render::fingerprint_file(&path, true)
-                .with_context(|| format!("fingerprint input {}", path.display()))
+    // Dedupe by absolute path before hashing. The render plan can
+    // reference the same media asset many times (a 40-min .mov sliced
+    // into 27 segments still hashes to the same digest); hashing it
+    // 27× wastes ~30 sec each, turning a single 5-sec hash into a
+    // 15-min stall. Software SHA-256 on multi-GB files is the bottleneck.
+    let mut seen: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut unique: Vec<std::path::PathBuf> = Vec::new();
+    let mut order: Vec<std::path::PathBuf> = Vec::with_capacity(input_paths.len());
+    for path in input_paths {
+        let abs = if path.is_absolute() {
+            path.clone()
+        } else {
+            project_root.join(path)
+        };
+        order.push(abs.clone());
+        if seen.insert(abs.clone()) {
+            unique.push(abs);
+        }
+    }
+    let mut by_path: std::collections::HashMap<
+        std::path::PathBuf,
+        awidat_render::RenderInputFingerprint,
+    > = std::collections::HashMap::new();
+    for abs in unique {
+        let fp = awidat_render::fingerprint_file(&abs, true)
+            .with_context(|| format!("fingerprint input {}", abs.display()))?;
+        by_path.insert(abs, fp);
+    }
+    // Preserve original ordering + duplicate count by cloning the
+    // cached fingerprint back into the result vec.
+    Ok(order
+        .into_iter()
+        .map(|abs| {
+            by_path
+                .get(&abs)
+                .cloned()
+                .with_context(|| format!("missing cached fingerprint for {}", abs.display()))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?)
 }
 
 #[cfg(test)]

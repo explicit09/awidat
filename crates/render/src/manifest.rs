@@ -394,11 +394,17 @@ pub fn manifest_path_for_output(output_path: &Path) -> PathBuf {
 }
 
 /// Fingerprint a file with SHA-256.
+///
+/// Uses a 4 MB read buffer. Previous 16 KB buffer + software SHA-256
+/// made 3.5 GB inputs hash for 50+ minutes on M-series and the render
+/// appeared hung. 4 MB amortizes the per-block syscall + SHA round
+/// overhead and brings real-world hash throughput from ~1 MB/s to
+/// hundreds of MB/s.
 pub fn fingerprint_file(
     path: &Path,
     required: bool,
 ) -> Result<RenderInputFingerprint, RenderManifestError> {
-    let mut file = fs::File::open(path).map_err(|source| RenderManifestError::Io {
+    let file = fs::File::open(path).map_err(|source| RenderManifestError::Io {
         path: path.to_string_lossy().into_owned(),
         source,
     })?;
@@ -406,10 +412,11 @@ pub fn fingerprint_file(
         path: path.to_string_lossy().into_owned(),
         source,
     })?;
+    let mut reader = std::io::BufReader::with_capacity(4 * 1024 * 1024, file);
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 16 * 1024];
+    let mut buffer = vec![0_u8; 4 * 1024 * 1024];
     loop {
-        let read = file
+        let read = reader
             .read(&mut buffer)
             .map_err(|source| RenderManifestError::Io {
                 path: path.to_string_lossy().into_owned(),
