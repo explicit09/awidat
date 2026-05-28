@@ -34,9 +34,10 @@ async function canReachApp() {
 async function ensureAppServer() {
   if (await canReachApp()) return;
 
-  appServer = spawn("pnpm", ["--dir", "apps/desktop", "dev", "--host", "127.0.0.1"], {
+  appServer = spawn("pnpm", ["--dir", "apps/desktop", "exec", "vite", "--host", "127.0.0.1"], {
     cwd: new URL("../../..", import.meta.url),
     env: { ...process.env, BROWSER: "none" },
+    detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -59,7 +60,11 @@ async function stopAppServer() {
     const stopped = new Promise((resolve) => {
       appServer.once("exit", resolve);
     });
-    appServer.kill("SIGTERM");
+    if (process.platform === "win32") {
+      appServer.kill("SIGTERM");
+    } else {
+      process.kill(-appServer.pid, "SIGTERM");
+    }
     await Promise.race([stopped, delay(2000)]);
   }
 }
@@ -475,6 +480,4 @@ await browser.close();
 await stopAppServer();
 
 console.log(`\n${passes.length} passed, ${failures.length} failed`);
-if (failures.length > 0) {
-  process.exit(1);
-}
+process.exit(failures.length > 0 ? 1 : 0);
