@@ -1424,6 +1424,176 @@ button {
   cursor: not-allowed;
 }
 
+/* New Project modal — Studio Pro refinements.
+   Scoped under `.new-project` so the type-card picker, kbd hints, and
+   path preview don't bleed into other modal callers (URL import, etc.). */
+.modal.new-project {
+  width: 540px;
+}
+
+.new-project .np-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-project .np-kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-input);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.new-project .np-kbd-primary {
+  margin-left: 6px;
+  border-color: rgba(10, 11, 11, 0.28);
+  background: rgba(10, 11, 11, 0.18);
+  color: rgba(10, 11, 11, 0.78);
+}
+
+.new-project .np-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.new-project .np-row input {
+  flex: initial;
+}
+
+.new-project .np-input-hint {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.new-project .np-types {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.new-project .np-type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.new-project .np-type-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-card);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms ease, border-color 100ms ease;
+}
+
+.new-project .np-type-card:hover:not(:disabled) {
+  background: var(--color-surface-card-hover);
+}
+
+.new-project .np-type-card-selected,
+.new-project .np-type-card-selected:hover:not(:disabled) {
+  border-color: var(--color-brand);
+  background: var(--color-surface-selected);
+}
+
+.new-project .np-type-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--color-text-secondary);
+}
+
+.new-project .np-type-card-selected .np-type-icon {
+  color: var(--color-brand);
+}
+
+.new-project .np-type-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.new-project .np-type-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.new-project .np-type-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.25;
+}
+
+.new-project .np-helper {
+  margin: 2px 0 0;
+}
+
+.new-project .np-preview {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-input);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.new-project .np-preview > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.new-project .np-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.new-project .np-spin {
+  animation: np-spin 720ms linear infinite;
+}
+
+@keyframes np-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-project .np-spin {
+    animation: none;
+  }
+}
+
 /* Persistent action bar between header and chat */
 .action-bar {
   display: flex;
