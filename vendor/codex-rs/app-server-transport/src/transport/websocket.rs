@@ -327,6 +327,7 @@ async fn run_websocket_outbound_loop<M, SinkError>(
     }
 }
 
+#[allow(clippy::collapsible_match)]
 async fn run_websocket_inbound_loop<M, StreamError>(
     websocket_reader: impl futures::stream::Stream<Item = Result<M, StreamError>> + Send + 'static,
     transport_event_tx: mpsc::Sender<TransportEvent>,

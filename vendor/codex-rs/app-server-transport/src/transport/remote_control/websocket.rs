@@ -1060,6 +1060,7 @@ fn next_reconnect_delay(reconnect_attempt: &mut u64) -> (std::time::Duration, bo
     (reconnect_delay, reconnect_backoff_reset)
 }
 
+#[allow(clippy::collapsible_match)]
 pub(super) async fn connect_remote_control_websocket(
     remote_control_target: &RemoteControlTarget,
     state_db: Option<&StateRuntime>,
