@@ -16,6 +16,7 @@ import { useMediaStore } from "../media/store";
 import { type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
 import { MotionAnimationControl } from "./MotionAnimationControl";
+import { CollapsiblePanel, type RevealLevel } from "../ui/primitives/CollapsiblePanel";
 
 /** Default values when a clip carries no awidat.volume / awidat.speed effect.
  *  Surface as "1.0" so the slider/input shows unity rather than empty. */
@@ -194,7 +195,7 @@ export function PropertiesPane() {
           </>
         ) : (
           <>
-            <PanelSection title="Visual">
+            <PanelSection title="Visual" revealLevel="pro">
               <ColorCorrectionControl
                 clipUuid={item.clip_uuid}
                 value={item.color_correction}
@@ -242,11 +243,11 @@ export function PropertiesPane() {
           </>
         )}
         {track?.audio && (
-          <PanelSection title="Track Mix">
+          <PanelSection title="Track Mix" revealLevel="pro">
             <TrackAudioControl trackName={track.name} audio={track.audio} />
           </PanelSection>
         )}
-        <PanelSection title="Timing Metadata">
+        <PanelSection title="Timing Metadata" revealLevel="advanced">
           <Field label="Source">
             <span className="properties-value">
               {sourceStart.toFixed(2)}s → {sourceEnd.toFixed(2)}s
@@ -266,7 +267,7 @@ export function PropertiesPane() {
             </code>
           </Field>
         </PanelSection>
-        <PanelSection title="Danger Zone">
+        <PanelSection title="Danger Zone" revealLevel="advanced">
           <div className="properties-action-row">
             <button className="properties-danger" onClick={() => void deleteClip()}>
               Delete clip
@@ -547,7 +548,7 @@ function TransitionEditor({
           </button>
         </div>
       </PanelSection>
-      <PanelSection title="Timing Metadata">
+      <PanelSection title="Timing Metadata" revealLevel="advanced">
         <Field label="Timeline">
           <span className="properties-value">
             {transition.track_start_s.toFixed(2)}s →{" "}
@@ -1653,10 +1654,19 @@ function Field({
 function PanelSection({
   title,
   children,
+  revealLevel,
 }: {
   title: string;
   children: React.ReactNode;
+  revealLevel?: RevealLevel;
 }) {
+  if (revealLevel !== undefined) {
+    return (
+      <CollapsiblePanel title={title} revealLevel={revealLevel}>
+        {children}
+      </CollapsiblePanel>
+    );
+  }
   return (
     <section className="properties-section">
       <h3>{title}</h3>
