@@ -2,17 +2,16 @@ import type { HTMLAttributes } from "react";
 import { cva } from "class-variance-authority";
 import { cn } from "../cn";
 import {
-  DEFAULT_LABELS,
   resolveStatusLabel,
-  type JobState,
-  type ProposalState,
+  type JobPillState,
+  type ProposalPillState,
   type StatusPillProps,
 } from "./StatusPill.ts";
 
 // Re-export the public contract from the React entry point so consumers
 // can `import { StatusPill, resolveStatusLabel, ... } from ".../StatusPill"`.
-export { resolveStatusLabel, DEFAULT_LABELS };
-export type { JobState, ProposalState, StatusPillProps };
+export { resolveStatusLabel };
+export type { JobPillState, ProposalPillState, StatusPillProps };
 
 const pill = cva(
   [
@@ -74,7 +73,8 @@ const dot = cva("h-1.5 w-1.5 shrink-0 rounded-full", {
 });
 
 export function StatusPill(props: StatusPillProps & HTMLAttributes<HTMLSpanElement>) {
-  const { family, state, label, percent, dotOnly = false, size = "md", className, ...rest } = props as any;
+  const { family, state, label, dotOnly = false, size = "md", className, ...rest } = props;
+  const percent = "percent" in props ? props.percent : undefined;
   const text = resolveStatusLabel({ family, state, label, percent });
 
   if (dotOnly) {

@@ -7,8 +7,8 @@
  * re-exports everything here.
  */
 
-export type JobState = "idle" | "running" | "ready" | "failed";
-export type ProposalState = "proposed" | "accepted" | "rejected" | "revised";
+export type JobPillState = "idle" | "running" | "ready" | "failed";
+export type ProposalPillState = "proposed" | "accepted" | "rejected" | "revised";
 
 /**
  * Discriminated union so `percent` is only valid on `family: 'job', state: 'running'`.
@@ -25,7 +25,7 @@ export type StatusPillProps =
     }
   | {
       family: "job";
-      state: Exclude<JobState, "running">;
+      state: Exclude<JobPillState, "running">;
       label?: string;
       percent?: never;
       dotOnly?: boolean;
@@ -33,14 +33,14 @@ export type StatusPillProps =
     }
   | {
       family: "proposal";
-      state: ProposalState;
+      state: ProposalPillState;
       label?: string;
       percent?: never;
       dotOnly?: boolean;
       size?: "sm" | "md";
     };
 
-export const DEFAULT_LABELS: Record<"job" | "proposal", Record<string, string>> = {
+const DEFAULT_LABELS: Record<"job" | "proposal", Record<string, string>> = {
   job: { idle: "Idle", running: "Running", ready: "Ready", failed: "Failed" },
   proposal: { proposed: "Proposed", accepted: "Accepted", rejected: "Rejected", revised: "Revised" },
 };
