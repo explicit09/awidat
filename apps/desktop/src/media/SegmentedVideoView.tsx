@@ -57,8 +57,12 @@ import { clampOpacity, evaluateAnimations } from "../timeline/animation";
 import { videoOverlayStyle as buildVideoOverlayStyle } from "./videoOverlayStyle";
 import {
   findActiveSegment,
+  findNextSegmentAfter,
   type PreviewTransition,
   type PlaySegment,
+  safeSegmentSpeed,
+  shouldAutoAdvanceTimelineGap,
+  sourceTimeForTimelineTime,
   usePreviewDuration,
   usePreviewTransitions,
   usePlaySegments,
@@ -344,6 +348,14 @@ function SegmentedPlayer({
   useEffect(() => {
     const segIdx = findActiveSegment(segments, timelineTime);
     if (segIdx < 0) {
+      const nextIdx = findNextSegmentAfter(segments, timelineTime);
+      if (
+        nextIdx >= 0 &&
+        shouldAutoAdvanceTimelineGap(timelineTime, segments[nextIdx].timelineStart)
+      ) {
+        requestTimelineSeek(segments[nextIdx].timelineStart);
+        return;
+      }
       setPreviewGap(true);
       pauseSlot(slotsRef.current.a);
       pauseSlot(slotsRef.current.b);
@@ -476,7 +488,7 @@ function SegmentedPlayer({
     if (!seg) return;
     const desired =
       key === activeKeyRef.current
-        ? seg.sourceStart + (useMediaStore.getState().timelineTime - seg.timelineStart)
+        ? sourceTimeForTimelineTime(seg, useMediaStore.getState().timelineTime)
         : seg.sourceStart;
     if (Math.abs(v.currentTime - desired) > 0.05) {
       tryAssignCurrentTime(v, desired);
@@ -495,13 +507,14 @@ function SegmentedPlayer({
     const seg = segments[segIdx];
     const stem = seg.sourceStem ?? stemFromProxyPath(seg.proxyPath);
     if (!stem) return;
-    const sec = Math.floor(timelineTime);
+    const sourceTime = sourceTimeForTimelineTime(seg, timelineTime);
+    const sec = Math.floor(sourceTime);
     const key = `${stem}:${sec}:${isPlaying ? "play" : "pause"}`;
     if (key === lastViewKeyRef.current) return;
     lastViewKeyRef.current = key;
     invoke("set_view_state", {
       stem,
-      currentTimeS: timelineTime,
+      currentTimeS: sourceTime,
       isPlaying,
     }).catch(() => {});
   }, [segments, timelineTime, isPlaying]);
@@ -550,9 +563,7 @@ function SegmentedPlayer({
     const segmentVolume = Number.isFinite(seg.volume)
       ? Math.max(0, Math.min(1, seg.volume))
       : 1;
-    const speed = Number.isFinite(seg.speed)
-      ? Math.max(0.0625, Math.min(16, seg.speed))
-      : 1;
+    const speed = safeSegmentSpeed(seg.speed);
     const effectiveVolume = Math.max(0, Math.min(1, segmentVolume * volume));
     const effectiveRate = Math.max(0.0625, Math.min(16, speed * rate));
     if (Math.abs(v.volume - effectiveVolume) > 0.001) v.volume = effectiveVolume;
@@ -812,11 +823,7 @@ function TimelineTransitionOverlay({
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !transition || !overlaySegment || !src) return;
-    const elapsed = timelineTime - transition.timelineStart;
-    const sourceTime =
-      overlaySide === "incoming"
-        ? transition.to.sourceStart - transition.inOffset + elapsed
-        : transition.from.sourceEnd - transition.inOffset + elapsed;
+    const sourceTime = sourceTimeForTimelineTime(overlaySegment, timelineTime);
     const syncKey = `${overlaySegment.proxyPath}:${overlaySide}:${transition.timelineStart}`;
     const force = syncKey !== lastSyncKeyRef.current || !isPlaying || v.paused;
     lastSyncKeyRef.current = syncKey;
@@ -824,9 +831,7 @@ function TimelineTransitionOverlay({
     if (Number.isFinite(sourceTime) && drift > (force ? 0.02 : 0.5)) {
       tryAssignCurrentTime(v, sourceTime);
     }
-    const speed = Number.isFinite(overlaySegment.speed)
-      ? Math.max(0.0625, Math.min(16, overlaySegment.speed))
-      : 1;
+    const speed = safeSegmentSpeed(overlaySegment.speed);
     if (Math.abs(v.playbackRate - speed) > 0.001) v.playbackRate = speed;
     if (isPlaying && v.paused) {
       v.play().catch(() => {});
@@ -1151,7 +1156,7 @@ function TimelineVideoOverlay({
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
-    const desired = overlay.sourceStart + (timelineTime - overlay.timelineStart);
+    const desired = sourceTimeForTimelineTime(overlay, timelineTime);
     const syncKey = `${overlay.proxyPath}:${overlay.timelineStart}:${overlay.zIndex}`;
     const force = syncKey !== lastSyncKeyRef.current || !isPlaying || v.paused;
     lastSyncKeyRef.current = syncKey;
@@ -1159,9 +1164,7 @@ function TimelineVideoOverlay({
     if (Number.isFinite(desired) && drift > (force ? 0.02 : 0.5)) {
       tryAssignCurrentTime(v, desired);
     }
-    const speed = Number.isFinite(overlay.speed)
-      ? Math.max(0.0625, Math.min(16, overlay.speed))
-      : 1;
+    const speed = safeSegmentSpeed(overlay.speed);
     if (Math.abs(v.playbackRate - speed) > 0.001) v.playbackRate = speed;
     v.muted = true;
     if (isPlaying && v.paused) {
@@ -2074,7 +2077,7 @@ function syncVideoToTimeline(
   timelineTime: number,
   opts: { force?: boolean } = {},
 ) {
-  const desired = seg.sourceStart + (timelineTime - seg.timelineStart);
+  const desired = sourceTimeForTimelineTime(seg, timelineTime);
   if (!Number.isFinite(desired)) return;
   const drift = Math.abs((v.currentTime || 0) - desired);
   const playingVideo = !v.paused;
