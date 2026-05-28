@@ -2235,8 +2235,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
-  font-size: 13px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  letter-spacing: 0.01em;
   text-align: center;
   padding: 0 24px;
   pointer-events: none;

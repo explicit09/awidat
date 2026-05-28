@@ -217,9 +217,10 @@ function TimelineCanvas({
 
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
 
-      // Hover affordance — a faint amber outline on the edge under
-      // the pointer when the user isn't yet dragging. Tells them
-      // "yes, you can grab this" before they commit.
+      // Hover affordance — faint cyan outline on the edge under the
+      // pointer when the user isn't yet dragging. Tells them "yes,
+      // you can grab this" before they commit. Cyan matches the
+      // brand-secondary token (--color-brand-secondary).
       if (edgeHover && !userTrim) {
         const item = snapshot.tracks[edgeHover.trackIndex]?.items.find(
           (it) => it.index === edgeHover.clipIndex,
@@ -230,18 +231,18 @@ function TimelineCanvas({
               ? item.track_start_s * pps
               : (item.track_start_s + item.duration_s) * pps;
           const yTop = RULER_HEIGHT + edgeHover.trackIndex * laneHeight + 4;
-          ctx.fillStyle = "rgba(120, 184, 255, 0.62)";
+          ctx.fillStyle = "rgba(56, 189, 248, 0.62)";
           ctx.fillRect(edgeX - 1, yTop, 2, laneHeight - 8);
         }
       }
 
-      // Draw the live drag-edge phantom on top of everything else.
-      // 2px amber line at the dragged x.
+      // Live drag-edge phantom — 2px cyan line at the dragged x so it
+      // stays consistent with the selection / hover language above.
       if (userTrim) {
         const x = userTrim.currentX;
         const yTop = RULER_HEIGHT;
         const yBot = RULER_HEIGHT + laneHeight * snapshot.tracks.length;
-        ctx.fillStyle = "#78b8ff";
+        ctx.fillStyle = "#38BDF8";
         ctx.fillRect(x - 1, yTop, 2, yBot - yTop);
       }
 
@@ -600,8 +601,7 @@ function TimelineCanvas({
     <div className="timeline-canvas-wrap" ref={containerRef}>
       {snapshot.tracks.length === 0 && (
         <div className="timeline-empty">
-          No clips on the timeline yet — ask the agent for an edit
-          ("trim filler", "cut to the punchline") and they'll show up here.
+          Drop a clip on a track to start editing.
         </div>
       )}
       <canvas
