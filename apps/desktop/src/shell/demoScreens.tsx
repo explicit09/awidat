@@ -497,6 +497,47 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
           speakers: 2,
           transcriptPercent: 78,
         }}
+        episodes={{
+          total: 3,
+          accepted: 1,
+          reviewNeeded: 1,
+          rejected: 1,
+          episodes: [
+            {
+              id: "episode-1",
+              name: "Technologia Talks",
+              order: 1,
+              startS: 128,
+              endS: 1642,
+              durationS: 1514,
+              confidence: 0.93,
+              status: "accepted",
+              evidenceCount: 3,
+            },
+            {
+              id: "episode-2",
+              name: "AI News Roundtable",
+              order: 2,
+              startS: 1810,
+              endS: 2511,
+              durationS: 701,
+              confidence: 0.71,
+              status: "review_needed",
+              evidenceCount: 2,
+            },
+            {
+              id: "episode-3",
+              name: "Rehearsal false start",
+              order: 3,
+              startS: 22,
+              endS: 94,
+              durationS: 72,
+              confidence: 0.28,
+              status: "rejected",
+              evidenceCount: 1,
+            },
+          ],
+        }}
         system={{ cpu: 62, diskFreeGB: 1242.4, tempC: 61 }}
         ready={false}
       />
@@ -510,6 +551,8 @@ export const demoScreens: Record<DemoScreenId, DemoScreenDefinition> = {
       "Speaker diarization",
       "Indexing in progress",
       "Ask agent for first cut",
+      "Episodes",
+      "Technologia Talks",
     ],
   },
   screen7: {

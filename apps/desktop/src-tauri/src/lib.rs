@@ -127,6 +127,7 @@ pub fn run() {
             commands::project::cancel_job,
             commands::project::running_job_ids,
             commands::project::get_project_type,
+            commands::project::get_project_episodes,
             commands::project::set_project_type,
             commands::dismissal::list_dismissals,
             commands::dismissal::dismiss_pattern,

@@ -8,6 +8,7 @@ import {
   Gauge,
   HardDrive,
   Import,
+  ListTree,
   LocateFixed,
   Palette,
   Scan,
@@ -27,6 +28,7 @@ import {
   Stack,
   cn,
   type MediaIndexingStatus,
+  type PillStatus,
 } from "../ui";
 
 /**
@@ -99,6 +101,24 @@ export type IndexingStructurePreview = {
   transcriptPercent?: number;
 };
 
+export type IndexingEpisodeSummary = {
+  total: number;
+  accepted: number;
+  reviewNeeded: number;
+  rejected: number;
+  episodes: Array<{
+    id: string;
+    name: string;
+    order: number;
+    startS: number;
+    endS: number;
+    durationS: number;
+    confidence: number;
+    status: "accepted" | "review_needed" | "rejected";
+    evidenceCount?: number;
+  }>;
+};
+
 export type IndexingDashboardProps = {
   projectName?: string;
   sourceCount?: number;
@@ -108,6 +128,7 @@ export type IndexingDashboardProps = {
   system?: IndexingSystemStatus;
   indexerConfig?: IndexerConfigSnapshot;
   structurePreview?: IndexingStructurePreview;
+  episodes?: IndexingEpisodeSummary;
   /** True when all 9 tasks are at least partially indexed. */
   ready?: boolean;
   onImport?: () => void;
@@ -156,6 +177,7 @@ export function IndexingDashboard({
   system,
   indexerConfig,
   structurePreview,
+  episodes,
   ready = false,
   onImport,
   onImportUrl,
@@ -220,6 +242,17 @@ export function IndexingDashboard({
     );
   const showStructurePreview = hasMedia && availableTaskCount > 0 && hasStructureMetrics;
   const preview = showStructurePreview ? structurePreview : undefined;
+  const episodeGroups = episodes
+    ? ([
+        ["Accepted episodes", "accepted"],
+        ["Review episodes", "review_needed"],
+        ["Rejected episodes", "rejected"],
+      ] as const).map(([label, status]) => ({
+        label,
+        status,
+        rows: episodes.episodes.filter((episode) => episode.status === status).slice(0, 4),
+      }))
+    : [];
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[minmax(230px,0.74fr)_minmax(280px,0.9fr)_minmax(430px,1.9fr)_minmax(210px,0.7fr)] bg-[var(--color-surface-app)]">
@@ -505,6 +538,61 @@ export function IndexingDashboard({
               </Card>
             ) : null}
 
+            {episodes && episodes.total > 0 ? (
+              <Card padding="md">
+                <Stack gap="3">
+                  <SectionHeader
+                    title="Episodes"
+                    subtitle={`${episodes.total} detected · ${episodes.accepted} accepted`}
+                  />
+                  <div className="grid grid-cols-3 gap-2">
+                    <MetricTile label="Review" value={formatMetric(episodes.reviewNeeded)} />
+                    <MetricTile label="Accepted" value={formatMetric(episodes.accepted)} />
+                    <MetricTile label="Rejected" value={formatMetric(episodes.rejected)} />
+                  </div>
+                  <Stack gap="3">
+                    {episodeGroups
+                      .filter((group) => group.rows.length > 0)
+                      .map((group) => (
+                        <Stack key={group.status} gap="1">
+                          <span className="text-[10px] uppercase tracking-[0.08em] font-semibold text-[var(--color-text-muted)]">
+                            {group.label}
+                          </span>
+                          <Stack gap="2">
+                            {group.rows.map((episode) => (
+                              <div
+                                key={episode.id}
+                                className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2.5 py-2"
+                              >
+                                <Inline justify="between" gap="2" align="start">
+                                  <Inline gap="2" align="start" className="min-w-0">
+                                    <ListTree className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-text-muted)] stroke-[1.75]" />
+                                    <Stack gap="1" className="min-w-0">
+                                      <span className="truncate text-[var(--text-body-sm)] font-semibold text-[var(--color-text-primary)]">
+                                        {episode.name || `Episode ${episode.order}`}
+                                      </span>
+                                      <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                                        #{episode.order || "?"} · {formatSeconds(episode.startS)}-{formatSeconds(episode.endS)}
+                                      </span>
+                                      <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                                        {formatSeconds(episode.durationS)} · {Math.round(episode.confidence * 100)}% · {formatMetric(episode.evidenceCount)} evidence
+                                      </span>
+                                    </Stack>
+                                  </Inline>
+                                  <Pill status={episodeStatusPill(episode.status)} dot={false}>
+                                    {episodeStatusLabel(episode.status)}
+                                  </Pill>
+                                </Inline>
+                              </div>
+                            ))}
+                          </Stack>
+                        </Stack>
+                      ))}
+                  </Stack>
+                </Stack>
+              </Card>
+            ) : null}
+
             {system ? (
               <Card padding="md">
                 <Stack gap="3">
@@ -674,6 +762,42 @@ function MetricTile({ label, value }: { label: string; value: string }) {
 
 function formatMetric(value: number | undefined): string {
   return typeof value === "number" ? value.toLocaleString() : "—";
+}
+
+function formatSeconds(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "00:00";
+  const total = Math.floor(value);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function episodeStatusPill(
+  status: IndexingEpisodeSummary["episodes"][number]["status"],
+): PillStatus {
+  switch (status) {
+    case "accepted":
+      return "ready";
+    case "review_needed":
+      return "warning";
+    case "rejected":
+      return "failed";
+  }
+}
+
+function episodeStatusLabel(status: IndexingEpisodeSummary["episodes"][number]["status"]) {
+  switch (status) {
+    case "accepted":
+      return "Accepted";
+    case "review_needed":
+      return "Review";
+    case "rejected":
+      return "Rejected";
+  }
 }
 
 function statusDetail(status: MediaIndexingStatus): string {

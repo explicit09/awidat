@@ -338,6 +338,25 @@ await check("indexing dashboard keeps secondary insights compact and data-backed
   await page.close();
 });
 
+await check("indexing dashboard groups detected episodes by status", async () => {
+  const { page } = await makePage();
+  await page.goto(demoUrl("screen6"), { waitUntil: "networkidle" });
+  const body = await page.textContent("body");
+  for (const expected of [
+    "Episodes",
+    "Accepted episodes",
+    "Review episodes",
+    "Rejected episodes",
+    "Technologia Talks",
+    "AI News Roundtable",
+    "Rehearsal false start",
+    "3 evidence",
+  ]) {
+    assert.ok(body.includes(expected), `missing episode rollup text: ${expected}`);
+  }
+  await page.close();
+});
+
 await check("agent command rail renders Screen 2 intent, context, plan, activity, suggestions", async () => {
   const { page } = await makePage();
   await page.goto(BASE_URL, { waitUntil: "networkidle" });

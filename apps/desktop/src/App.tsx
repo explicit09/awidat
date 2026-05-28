@@ -47,6 +47,7 @@ import {
   type DeliveryRenderSummary,
   type DeliveryTarget,
   type IndexingMediaItem,
+  type IndexingEpisodeSummary,
   type IndexingStructurePreview,
   type IndexingTask,
   type IndexerConfigEntry,
@@ -168,6 +169,7 @@ function App() {
   const [dismissedContextChips, setDismissedContextChips] = useState<string[]>([]);
   const [indexerConfig, setIndexerConfig] = useState<IndexerConfigSnapshot | undefined>(undefined);
   const [indexReadiness, setIndexReadiness] = useState<IndexReadinessSnapshot | undefined>(undefined);
+  const [episodeSummary, setEpisodeSummary] = useState<IndexingEpisodeSummary | undefined>(undefined);
   const [mediaReadiness, setMediaReadiness] = useState<MediaReadinessSnapshot | undefined>(undefined);
   const [runningJobIds, setRunningJobIds] = useState<Set<string> | undefined>(undefined);
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
@@ -402,11 +404,13 @@ function App() {
         refreshMedia(),
         useTimelineStore.getState().refresh(),
         loadIndexReadiness(),
+        loadProjectEpisodes(),
         loadMediaReadiness(),
       ]);
     } catch (e) {
       setCommandError(String(e));
       await loadIndexReadiness();
+      await loadProjectEpisodes();
       await loadMediaReadiness();
     }
   }
@@ -517,6 +521,20 @@ function App() {
     } catch (e) {
       console.warn("index_readiness failed", e);
       setIndexReadiness(undefined);
+    }
+  }
+
+  async function loadProjectEpisodes() {
+    if (demoMode || !isTauri() || !current) {
+      setEpisodeSummary(undefined);
+      return;
+    }
+    try {
+      const snapshot = await invoke<ProjectEpisodesResponse>("get_project_episodes");
+      setEpisodeSummary(projectEpisodesToIndexingSummary(snapshot));
+    } catch (e) {
+      console.warn("get_project_episodes failed", e);
+      setEpisodeSummary(undefined);
     }
   }
 
@@ -1009,9 +1027,10 @@ function App() {
 
   useEffect(() => {
     void loadIndexReadiness();
+    void loadProjectEpisodes();
     void loadRunningJobIds();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, demoMode, completedJobKinds.size, activeJobs.length]);
+  }, [current, demoMode, completedJobKinds.size, activeJobs.length, timelineSnapshot.cut_boundaries.length]);
 
   useEffect(() => {
     mediaReadinessCommandUnavailableRef.current = false;
@@ -1037,6 +1056,7 @@ function App() {
   useEffect(() => {
     function onFocus() {
       void loadIndexReadiness();
+      void loadProjectEpisodes();
       void loadMediaReadiness();
       void loadRunningJobIds();
     }
@@ -1643,6 +1663,7 @@ function App() {
               sourceCount={sourceMediaCount}
               media={realIndexingMedia}
               ready={realIndexingReady}
+              episodes={episodeSummary}
               onImport={() => void chooseAndImportFiles()}
               onImportUrl={() => setShowUrlImport(true)}
               onOpenProject={() => void chooseAndOpenProject()}
@@ -1774,6 +1795,7 @@ function App() {
                 sourceCount={sourceMediaCount}
                 tasks={realIndexingTasks}
                 structurePreview={realIndexingStructure}
+                episodes={episodeSummary}
                 indexerConfig={indexerConfig}
                 activeIndexingStatus={activeJobs.find((job) => job.job_kind === "indexing")?.status}
                 ready={realIndexingReady}
@@ -2126,6 +2148,7 @@ function ProjectMediaPanel({
   sourceCount,
   media,
   ready,
+  episodes,
   onImport,
   onImportUrl,
   onOpenProject,
@@ -2141,6 +2164,7 @@ function ProjectMediaPanel({
   sourceCount: number;
   media: IndexingMediaItem[];
   ready: boolean;
+  episodes?: IndexingEpisodeSummary;
   onImport: () => void;
   onImportUrl: () => void;
   onOpenProject: () => void;
@@ -2190,6 +2214,39 @@ function ProjectMediaPanel({
           Change project
         </Button>
       </Inline>
+      {episodes && episodes.total > 0 ? (
+        <Card padding="sm" tone="flat">
+          <Stack gap="2">
+            <Inline justify="between" align="baseline" gap="2">
+              <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+                Episodes
+              </span>
+              <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                {episodes.total} detected
+              </span>
+            </Inline>
+            <Inline gap="1" wrap="wrap">
+              <Pill status="ready" dot={false}>{episodes.accepted} accepted</Pill>
+              <Pill status="warning" dot={false}>{episodes.reviewNeeded} review</Pill>
+              {episodes.rejected > 0 ? (
+                <Pill status="failed" dot={false}>{episodes.rejected} rejected</Pill>
+              ) : null}
+            </Inline>
+            <Stack gap="1">
+              {episodes.episodes.slice(0, 3).map((episode) => (
+                <Inline key={episode.id} justify="between" align="center" gap="2">
+                  <span className="min-w-0 truncate text-[var(--text-caption)] text-[var(--color-text-secondary)]">
+                    {episode.name || `Episode ${episode.order}`}
+                  </span>
+                  <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-muted)]">
+                    {formatDuration(episode.durationS)}
+                  </span>
+                </Inline>
+              ))}
+            </Stack>
+          </Stack>
+        </Card>
+      ) : null}
       <GeneratedMediaPanel
         entries={generatedMedia}
         loading={generatedMediaLoading}
@@ -2292,6 +2349,32 @@ function mediaStatusPill(status: IndexingMediaItem["status"]): PillStatus {
       return "failed";
     case "missing":
       return "missing";
+  }
+}
+
+function episodeStatusPill(
+  status: IndexingEpisodeSummary["episodes"][number]["status"],
+): PillStatus {
+  switch (status) {
+    case "accepted":
+      return "ready";
+    case "review_needed":
+      return "warning";
+    case "rejected":
+      return "failed";
+  }
+}
+
+function episodeStatusLabel(
+  status: IndexingEpisodeSummary["episodes"][number]["status"],
+): string {
+  switch (status) {
+    case "accepted":
+      return "Accepted";
+    case "review_needed":
+      return "Review";
+    case "rejected":
+      return "Rejected";
   }
 }
 
@@ -2399,6 +2482,7 @@ function IndexReadinessPanel({
   sourceCount,
   tasks,
   structurePreview,
+  episodes,
   indexerConfig,
   activeIndexingStatus,
   ready,
@@ -2411,6 +2495,7 @@ function IndexReadinessPanel({
   sourceCount: number;
   tasks: IndexingTask[];
   structurePreview?: IndexingStructurePreview;
+  episodes?: IndexingEpisodeSummary;
   indexerConfig?: IndexerConfigSnapshot;
   activeIndexingStatus?: string;
   ready: boolean;
@@ -2553,6 +2638,46 @@ function IndexReadinessPanel({
           >
             Trim empty tail
           </button>
+        </Stack>
+      ) : null}
+      {episodes && episodes.total > 0 ? (
+        <Stack gap="2">
+          <Inline justify="between" align="baseline" gap="2">
+            <span className="text-[var(--text-label)] uppercase tracking-[var(--text-label--letter-spacing)] font-semibold text-[var(--color-text-muted)]">
+              Episodes
+            </span>
+            <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+              {episodes.total} detected
+            </span>
+          </Inline>
+          <div className="grid grid-cols-3 gap-2">
+            <Metric label="Accepted" value={episodes.accepted} />
+            <Metric label="Review" value={episodes.reviewNeeded} />
+            <Metric label="Rejected" value={episodes.rejected} />
+          </div>
+          <Stack gap="1">
+            {episodes.episodes.slice(0, 4).map((episode) => (
+              <Inline
+                key={episode.id}
+                justify="between"
+                align="center"
+                gap="2"
+                className="rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-card)] px-2.5 py-1.5"
+              >
+                <Stack gap="0" className="min-w-0">
+                  <span className="truncate text-[var(--text-body-sm)] text-[var(--color-text-primary)]">
+                    {episode.name || `Episode ${episode.order}`}
+                  </span>
+                  <span className="text-[var(--text-caption)] text-[var(--color-text-muted)]">
+                    {formatDuration(episode.durationS)} · {Math.round(episode.confidence * 100)}%
+                  </span>
+                </Stack>
+                <Pill status={episodeStatusPill(episode.status)} dot={false}>
+                  {episodeStatusLabel(episode.status)}
+                </Pill>
+              </Inline>
+            ))}
+          </Stack>
         </Stack>
       ) : null}
       <Stack gap="3">
@@ -2996,6 +3121,47 @@ type IndexReadinessSnapshot = {
   ready_count: number;
   scene_count: number;
 };
+
+type ProjectEpisodesResponse = {
+  total: number;
+  accepted: number;
+  review_needed: number;
+  rejected: number;
+  episodes: Array<{
+    id: string;
+    name: string;
+    order: number;
+    asset_id: string;
+    start_s: number;
+    end_s: number;
+    duration_s: number;
+    confidence: number;
+    status: "accepted" | "review_needed" | "rejected";
+    evidence_count: number;
+  }>;
+};
+
+function projectEpisodesToIndexingSummary(
+  response: ProjectEpisodesResponse,
+): IndexingEpisodeSummary {
+  return {
+    total: response.total,
+    accepted: response.accepted,
+    reviewNeeded: response.review_needed,
+    rejected: response.rejected,
+    episodes: response.episodes.map((episode) => ({
+      id: episode.id,
+      name: episode.name,
+      order: episode.order,
+      startS: episode.start_s,
+      endS: episode.end_s,
+      durationS: episode.duration_s,
+      confidence: episode.confidence,
+      status: episode.status,
+      evidenceCount: episode.evidence_count,
+    })),
+  };
+}
 
 function indexTaskReady(
   readiness: IndexReadinessSnapshot,
