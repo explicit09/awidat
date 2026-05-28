@@ -55,6 +55,7 @@ use rmcp::tool_router;
 use crate::awidat_mcp::context::McpToolCtx;
 use crate::awidat_mcp::tools::analyze_sync::{self, AnalyzeSyncArgs};
 use crate::awidat_mcp::tools::apply_edl::{self, ApplyEdlArgs};
+use crate::awidat_mcp::tools::apply_episode_spans::{self, ApplyEpisodeSpansArgs};
 use crate::awidat_mcp::tools::assess_continuity::{self, AssessContinuityArgs};
 use crate::awidat_mcp::tools::assess_edit_quality::{self, AssessEditQualityArgs};
 use crate::awidat_mcp::tools::attempt_completion::{self, AttemptCompletionArgs};
@@ -88,6 +89,7 @@ use crate::awidat_mcp::tools::inspect_clip::{self, InspectClipArgs};
 use crate::awidat_mcp::tools::inspect_moment::{self, InspectMomentArgs};
 use crate::awidat_mcp::tools::list_assets::{self, ListAssetsArgs};
 use crate::awidat_mcp::tools::list_bins::{self, ListBinsArgs};
+use crate::awidat_mcp::tools::list_episodes::{self, ListEpisodesArgs};
 use crate::awidat_mcp::tools::list_looks::{self, ListLooksArgs};
 use crate::awidat_mcp::tools::list_markers::{self, ListMarkersArgs};
 use crate::awidat_mcp::tools::list_stringouts::{self, ListStringoutsArgs};
@@ -263,6 +265,24 @@ stringouts in parallel (e.g. per arc, alt-cut, cold-open).",
         args: Parameters<ListStringoutsArgs>,
     ) -> Result<String, ErrorData> {
         list_stringouts::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `list_episodes` — read durable episode span metadata.
+    #[tool(
+        description = "\
+List durable episode spans stored in Timeline.metadata.awidat.episodes as \
+JSON. Each episode includes id, optional name/order, source asset id, source \
+start/end/duration, confidence, review status, and evidence. Use this after \
+podcast_episode_spans/apply_episode_spans to inspect accepted, review-needed, \
+and rejected spans without mutating the project.",
+        annotations(read_only_hint = true)
+    )]
+    pub async fn list_episodes(
+        &self,
+        args: Parameters<ListEpisodesArgs>,
+    ) -> Result<String, ErrorData> {
+        list_episodes::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 
@@ -1689,6 +1709,26 @@ if a stringout with that id already exists.",
         args: Parameters<CreateStringoutArgs>,
     ) -> Result<String, ErrorData> {
         create_stringout::run(args.0, McpToolCtx::resolve())
+            .map_err(|msg| ErrorData::invalid_params(msg, None))
+    }
+
+    /// `apply_episode_spans` — persist reviewed episode spans.
+    #[tool(
+        description = "\
+Persist reviewed episode spans into Timeline.metadata.awidat.episodes. Use \
+this after podcast_episode_spans or transcript review to make episodes \
+first-class project metadata. With replace=true, replaces all stored episodes; \
+with replace=false, upserts by id. Each episode requires id, asset_id, \
+source_start_s, source_end_s, and status one of review_needed, accepted, or \
+rejected. Set create_stringouts=true to create/update source selects and an \
+ordered stringout for accepted episodes.",
+        annotations(destructive_hint = true)
+    )]
+    pub async fn apply_episode_spans(
+        &self,
+        args: Parameters<ApplyEpisodeSpansArgs>,
+    ) -> Result<String, ErrorData> {
+        apply_episode_spans::run(args.0, McpToolCtx::resolve())
             .map_err(|msg| ErrorData::invalid_params(msg, None))
     }
 

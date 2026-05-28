@@ -18,6 +18,7 @@
 
 pub mod analyze_sync;
 pub mod apply_edl;
+pub mod apply_episode_spans;
 pub mod assess_continuity;
 pub mod assess_edit_quality;
 pub mod attempt_completion;
@@ -46,6 +47,7 @@ pub mod inspect_clip;
 pub mod inspect_moment;
 pub mod list_assets;
 pub mod list_bins;
+pub mod list_episodes;
 pub mod list_looks;
 pub mod list_markers;
 pub mod list_stringouts;
