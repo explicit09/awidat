@@ -5853,7 +5853,7 @@ fn append_timeline_loudness_filter(
         filter.push(';');
     }
     filter.push_str(&format!(
-        "{audio_label}aresample=async=1:first_pts=0,loudnorm=I={}:TP={}:LRA=11{out}",
+        "{audio_label}aresample=async=1:first_pts=0,loudnorm=I={}:TP={}:LRA=11,aresample=48000{out}",
         fmt_filter_num(target.integrated_lufs),
         fmt_filter_num(true_peak_db),
     ));
@@ -6347,7 +6347,7 @@ fn audio_fx_filter_chain(plan: &AudioFxPlan) -> Option<String> {
     if let Some(i) = finite(plan.loudnorm_i) {
         let tp = finite(plan.loudnorm_tp).unwrap_or(-1.5);
         filters.push(format!(
-            "loudnorm=I={}:TP={}:LRA=11",
+            "loudnorm=I={}:TP={}:LRA=11,aresample=48000",
             fmt_filter_num(i),
             fmt_filter_num(tp),
         ));
@@ -12814,7 +12814,7 @@ mod tests {
             .find_map(|w| (w[0] == "-filter_complex").then(|| w[1].clone()))
             .unwrap();
         assert!(filter.contains(
-            "[outa]aresample=async=1:first_pts=0,loudnorm=I=-16:TP=-1.5:LRA=11[mastera]"
+            "[outa]aresample=async=1:first_pts=0,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000[mastera]"
         ));
         assert!(
             argv.windows(2)
@@ -13249,7 +13249,7 @@ mod tests {
         assert!(speed_pos < volume_pos, "filter graph: {filter}");
         assert!(filter.contains("bandstop=f=60"));
         assert!(filter.contains("acompressor=threshold=-18dB:ratio=2.5"));
-        assert!(filter.contains("loudnorm=I=-16:TP=-1.5:LRA=11"));
+        assert!(filter.contains("loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000"));
     }
 
     #[test]
