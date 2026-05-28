@@ -1,5 +1,6 @@
 import { useMode } from "../state/mode";
 import type { IndexingDashboardProps } from "./IndexingDashboard";
+import { IndexRailCreator } from "./IndexRailCreator";
 import { IndexRailPro } from "./IndexRailPro";
 
 // Types from IndexingDashboard are import-type-only, so this file does
@@ -9,23 +10,24 @@ import { IndexRailPro } from "./IndexRailPro";
 /**
  * IndexRail — thin selector between Pro and Creator index surfaces.
  *
- * In Pro mode (and currently in Creator until Task 15 lands a dedicated
- * surface), renders the dense IndexRailPro. The full IndexingDashboardProps
- * shape is accepted for source compatibility with the old IndexingDashboard
- * callers — Pro consumes only the subset it needs.
+ * Reads the active mode from the global mode store (Task 6) and renders the
+ * matching rail. Both rails accept the same prop shape (Pro's
+ * IndexRailProProps); IndexingDashboardProps is the source-compatible
+ * superset so callers don't need to migrate state.
  */
 export type IndexRailProps = IndexingDashboardProps;
 
 export function IndexRail(props: IndexRailProps) {
   const mode = useMode((s) => s.mode);
-  if (mode === "creator") {
-    // Creator surface arrives in Task 15. For now, Pro is the only render path.
-    return <IndexRailPro {...toProProps(props)} />;
-  }
-  return <IndexRailPro {...toProProps(props)} />;
+  const railProps = toRailProps(props);
+  return mode === "creator" ? (
+    <IndexRailCreator {...railProps} />
+  ) : (
+    <IndexRailPro {...railProps} />
+  );
 }
 
-function toProProps(props: IndexRailProps) {
+function toRailProps(props: IndexRailProps) {
   return {
     tasks: props.tasks,
     structurePreview: props.structurePreview,
