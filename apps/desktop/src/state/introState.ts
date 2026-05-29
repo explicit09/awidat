@@ -26,6 +26,39 @@ import { create } from "zustand";
  *  the chat renderer (ChatStream.tsx), and the turn grouping in App.tsx. */
 export const INTRO_PROMPT_PREFIX = "[awidat:intro]";
 
+/** Sentinel prefix the explicit "Prepare a starting cut" action carries
+ *  (Wave 3 B4). Same filtering contract as the intro prefix — the
+ *  message is an editorial instruction to the model, not a user
+ *  question, so the chat transcript hides it. Keep this load-bearing. */
+export const PREPARE_PROMPT_PREFIX = "[awidat:prepare]";
+
+/** The body fired by the Brief surface's "Prepare a starting cut"
+ *  button (B4). Asks the agent for an editorial first pass grounded in
+ *  AGENTS.md + indexer outputs and emitted as per-edit proposals. */
+export const PREPARE_PROMPT = `${PREPARE_PROMPT_PREFIX}
+Prepare a starting cut for this project. Use AGENTS.md as the editorial brief.
+Use the indexer outputs to ground your suggestions. Aim for an editorial first
+pass that the user can review and refine — not a finished cut.
+
+Emit each proposed edit as a separate approval/proposal so the user can
+accept/reject individually. Include a one-sentence rationale for each.`;
+
+/** All sentinel prefixes that mean "this is editorial guidance, not a user message".
+ *  Add new prefixes here and every renderer / turn-grouper picks them up. */
+export const AWIDAT_SENTINEL_PREFIXES: readonly string[] = [
+  INTRO_PROMPT_PREFIX,
+  PREPARE_PROMPT_PREFIX,
+];
+
+/** True if `text` carries any registered awidat sentinel. The canonical
+ *  cross-component "should this be hidden from transcript?" check. */
+export function isAwidatSentinel(text: string): boolean {
+  for (const prefix of AWIDAT_SENTINEL_PREFIXES) {
+    if (text.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 /** The editorial-system body the synthetic turn carries. Written as a
  *  meta-instruction so the model treats it as guidance rather than a
  *  user request. Voice: terse, evidence-grounded, no hand-holding. */

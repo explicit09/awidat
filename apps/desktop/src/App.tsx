@@ -35,6 +35,8 @@ import {
   CommandRail,
   DeliverySurface,
   SkillsSurface,
+  BriefSurface,
+  CenterModeTabs,
   IndexRail,
   PreviewSurface,
   ProposalInspector,
@@ -65,7 +67,10 @@ import { ClipInspector } from "./inspector/ClipInspector";
 import { useStageStore } from "./state";
 import { useAppGlue } from "./state/appGlue";
 import { useIndexReadinessStore } from "./state/indexReadiness";
-import { isIntroSyntheticInput } from "./state/introState";
+import { isAwidatSentinel, useIntroState } from "./state/introState";
+import { useBriefProposalsStore } from "./state/briefProposals";
+import { useCenterModeStore, type CenterMode } from "./state/centerMode";
+import type { BriefProposal } from "./state/briefProposals";
 import { useSettings } from "./state/settings";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
 import {
@@ -150,6 +155,26 @@ function App() {
 
   const activeProposal = useProposalStore((s) => s.active);
   const inspectorData = useProposalInspectorData();
+
+  // Wave 3 B1: Brief / Source / Timeline center-pane toggle. The store
+  // resolves the active mode per-project with a default rule (Brief
+  // when the agent has work waiting or the project hasn't been
+  // introduced yet; Source otherwise).
+  //
+  // Subscribe to the slice so re-renders fire after every set(). The
+  // approvals subscription on the brief store keeps `pending().length`
+  // current; intro state is read once per project change via hasIntroduced.
+  useBriefProposalsStore((s) => s.approvals);
+  useCenterModeStore((s) => s.byProject);
+  const briefPendingCount = useBriefProposalsStore.getState().pending().length;
+  const hasIntroduced = useIntroState((s) => s.hasIntroduced);
+  const centerModeStoreGet = useCenterModeStore.getState().get;
+  const setCenterModeStore = useCenterModeStore.getState().set;
+  const centerMode: CenterMode = centerModeStoreGet(current, {
+    pendingCount: briefPendingCount,
+    isFirstSession: current ? !hasIntroduced(current) : false,
+  });
+  const setCenterMode = (next: CenterMode) => setCenterModeStore(current, next);
 
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("timeline");
   const [timelineViewMode, setTimelineViewMode] = useState<TimelineViewMode>("proposed");
@@ -1012,12 +1037,13 @@ function App() {
     let current: ConversationTurn | null = null;
     for (const it of items) {
       if (it.kind === "user_input") {
-        // Synthetic intro turns are hidden from the transcript. Open a
-        // headerless turn so the agent's introduction still has a home
-        // but no user bubble is drawn for the editorial instruction.
-        if (isIntroSyntheticInput(it.text)) {
+        // Synthetic editorial turns (intro F3, prepare B4) are hidden
+        // from the transcript. Open a headerless turn so the agent's
+        // response still has a home but no user bubble is drawn for
+        // the editorial instruction.
+        if (isAwidatSentinel(it.text)) {
           current = {
-            id: `intro-${it.id.toString()}`,
+            id: `sentinel-${it.id.toString()}`,
             userText: "",
             parts: [],
           };
@@ -1730,7 +1756,41 @@ function App() {
       }
       preview={
         isEditStage ? (
-          <>
+          <div className="flex h-full w-full min-h-0 flex-col overflow-hidden">
+            <CenterModeTabs
+              active={centerMode}
+              onChange={setCenterMode}
+              badges={{ brief: briefPendingCount }}
+            />
+            {centerMode === "brief" ? (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <BriefSurface
+                  onReviewProposal={(mode: CenterMode, _proposal: BriefProposal) => {
+                    setCenterMode(mode);
+                    // TODO(Wave 4): focus the specific entity (timeline
+                    // scrolls to the proposal's time range, source preview
+                    // jumps to the affected segment, transcript navigates
+                    // to the caption). For now the tab switch is the whole
+                    // "Review →" contract.
+                  }}
+                />
+              </div>
+            ) : centerMode === "timeline" ? (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <TimelineHybrid
+                  tab={timelineTab}
+                  onChangeTab={setTimelineTab}
+                  viewMode={timelineViewMode}
+                  onChangeViewMode={setTimelineViewMode}
+                  durationS={effectiveDuration}
+                  currentTimeS={effectiveCurrentTime}
+                  changeCount={effectiveChanges.length}
+                  audioPeaks={demoMode ? screen2AudioPeaks : realAudioPeaks}
+                  contentForTab={demoMode ? undefined : { timeline: <TimelinePane /> }}
+                />
+              </div>
+            ) : (
+              <>
             <MediaOfflineBanner />
             <PreviewSurface
             proposalName={demoMode ? "Podcast Tightening v1" : activeProposal?.summary ?? "Source review"}
@@ -1785,7 +1845,9 @@ function App() {
             onRejectProposal={activeProposal ? rejectActiveProposal : undefined}
             onFullscreen={() => setInspectorCollapsed(false)}
           />
-          </>
+              </>
+            )}
+          </div>
         ) : stage === "deliver" ? (
           realDeliveryWorkspace
         ) : (

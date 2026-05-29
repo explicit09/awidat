@@ -54,6 +54,8 @@ export {
   type DeliveryRenderSummary,
 } from "./DeliverySurface";
 export { SkillsSurface, type SkillEntry } from "./SkillsSurface";
+export { BriefSurface, type BriefSurfaceProps } from "./BriefSurface";
+export { CenterModeTabs, type CenterModeTabsProps } from "./brief/CenterModeTabs";
 export {
   LoadingState,
   ErrorState,
