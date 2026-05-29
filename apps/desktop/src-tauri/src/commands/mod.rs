@@ -31,6 +31,7 @@ pub mod skills;
 pub mod still_export;
 pub mod thumbnail;
 pub mod timeline;
+pub mod timeline_restore;
 pub mod transcode;
 pub mod transcript;
 pub mod turn;

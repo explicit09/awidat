@@ -178,6 +178,8 @@ pub fn run() {
             commands::indexer_data::read_color_stats,
             commands::view::set_view_state,
             commands::timeline::read_timeline,
+            commands::timeline_restore::read_timeline_otio_raw,
+            commands::timeline_restore::restore_timeline_otio,
             commands::media::insert_media_on_timeline,
             commands::render::start_timeline_render,
             commands::render::poll_timeline_render,

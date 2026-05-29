@@ -1,11 +1,12 @@
 /**
- * HistorySurface — the workspace surface for the History tab (Wave 3 T4).
+ * HistorySurface — the workspace surface for the History tab (Wave 3 T4,
+ * Wave 4 W4.5 wired Restore for real).
  *
  * Renders the per-project log of proposal decisions from
- * `useProposalHistoryStore`: every accept, reject, and revise event is
- * surfaced as a chronological row. The data IS the project's history —
- * the propose → ghost → decide loop is Awidat's editorial primitive,
- * so the audit trail is the "git log" for a video edit.
+ * `useProposalHistoryStore`: every accept, reject, revise, and restore
+ * event is surfaced as a chronological row. The data IS the project's
+ * history — the propose → ghost → decide loop is Awidat's editorial
+ * primitive, so the audit trail is the "git log" for a video edit.
  *
  * Layout:
  *   [ filter chips ][ search ]
@@ -15,22 +16,27 @@
  *   | ...                        |
  *
  * Each row carries: relative timestamp, medium chip, source pill,
- * title, rationale (muted), decision badge, and an optional
- * "↺ Restore" button on Accepted rows (non-functional Wave 4 stub).
+ * title, rationale (muted), decision badge, and a "↺ Restore" button
+ * on rows that carry an inline OTIO snapshot (accepted + restored).
+ * Restore confirms via a token-styled modal, dispatches
+ * `restore_timeline_otio` to write the snapshot back, then records a
+ * "restored" entry so the action itself is reversible.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { History as HistoryIcon, RotateCcw, Search, Sparkles, User } from "lucide-react";
 
 import { cn } from "../ui";
 import { useProjectStore } from "../app/state";
 import { MEDIUM_STYLE } from "./brief/ProposalCard";
 import {
+  buildRestoreEntry,
   useProposalHistoryStore,
   type HistoryDecision,
   type HistoryEntry,
 } from "../state/proposalHistory";
-import type { BriefMedium, BriefProposalSource } from "../state/briefProposals";
+import { useBriefProposalsStore, type BriefMedium, type BriefProposalSource } from "../state/briefProposals";
+import { useTimelineStore } from "../timeline/store";
 
 type DecisionFilter = "all" | HistoryDecision;
 type MediumFilter = "all" | BriefMedium;
@@ -53,9 +59,10 @@ const DECISION_FILTERS: { id: DecisionFilter; label: string }[] = [
   { id: "accepted", label: "Accepted" },
   { id: "rejected", label: "Rejected" },
   { id: "revised", label: "Revised" },
+  { id: "restored", label: "Restored" },
 ];
 
-/** Decision → token-styled badge. Green/red/amber per spec. */
+/** Decision → token-styled badge. Green/red/amber/blue per spec. */
 const DECISION_BADGE: Record<HistoryDecision, { label: string; className: string }> = {
   accepted: {
     label: "Accepted",
@@ -71,6 +78,11 @@ const DECISION_BADGE: Record<HistoryDecision, { label: string; className: string
     label: "Revised",
     className:
       "bg-[rgba(245,158,11,0.12)] text-[#FCD34D] border-[rgba(245,158,11,0.32)]",
+  },
+  restored: {
+    label: "Restored",
+    className:
+      "bg-[rgba(59,130,246,0.12)] text-[#93C5FD] border-[rgba(59,130,246,0.32)]",
   },
 };
 
@@ -88,6 +100,15 @@ export function HistorySurface() {
   const [mediumFilter, setMediumFilter] = useState<MediumFilter>("all");
   const [query, setQuery] = useState("");
   const [restoreEntry, setRestoreEntry] = useState<HistoryEntry | null>(null);
+  const [restoreToast, setRestoreToast] = useState<string | null>(null);
+
+  // Toast auto-dismiss. 3.5s is the usual sweet spot — long enough to
+  // read, short enough that it doesn't linger as visual noise.
+  useEffect(() => {
+    if (!restoreToast) return;
+    const handle = window.setTimeout(() => setRestoreToast(null), 3500);
+    return () => window.clearTimeout(handle);
+  }, [restoreToast]);
 
   const filtered = useMemo(
     () => applyFilters(entries, { decisionFilter, mediumFilter, query }),
@@ -175,7 +196,24 @@ export function HistorySurface() {
         <RestoreDialog
           entry={restoreEntry}
           onClose={() => setRestoreEntry(null)}
+          onRestored={(message) => setRestoreToast(message)}
         />
+      )}
+
+      {restoreToast && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={cn(
+            "pointer-events-none absolute bottom-3 left-1/2 z-10",
+            "-translate-x-1/2 rounded-[var(--radius-sm)]",
+            "border border-[var(--color-border-subtle)]",
+            "bg-[var(--color-surface-app)] px-3 py-1.5",
+            "text-[11px] text-[var(--color-text-primary)] shadow-lg",
+          )}
+        >
+          {restoreToast}
+        </div>
       )}
     </section>
   );
@@ -268,7 +306,7 @@ function HistoryRow({ entry, onRestore }: HistoryRowProps) {
         {badge.label}
       </span>
 
-      {entry.decision === "accepted" && (
+      {canRestore(entry) && (
         <button
           type="button"
           onClick={onRestore}
@@ -278,7 +316,7 @@ function HistoryRow({ entry, onRestore }: HistoryRowProps) {
             "text-[10px] text-[var(--color-text-secondary)]",
             "hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]",
           )}
-          title="Restore the timeline to this point (coming Wave 4)"
+          title="Restore the timeline to this point"
         >
           <RotateCcw className="h-3 w-3" strokeWidth={1.75} />
           Restore
@@ -286,6 +324,19 @@ function HistoryRow({ entry, onRestore }: HistoryRowProps) {
       )}
     </div>
   );
+}
+
+/**
+ * Restore is available when we have an inline timeline snapshot.
+ * Accepted decisions captured a snapshot; restored entries carry the
+ * post-restore snapshot so the user can immediately undo the restore.
+ * Reject/revise rows never carry a snapshot.
+ */
+function canRestore(entry: HistoryEntry): boolean {
+  if (entry.decision !== "accepted" && entry.decision !== "restored") {
+    return false;
+  }
+  return typeof entry.timelineSnapshot === "string" && entry.timelineSnapshot.length > 0;
 }
 
 /**
@@ -351,52 +402,180 @@ function EmptyState({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Stub dialog — TODO Wave 4: wire to a real codex-rollout-snapshot
- * restorer that rewinds the timeline + EDL to `entry.decidedAt`. The
- * surface advertises the capability today so the muscle memory is
- * built; the engineering follows.
+ * Confirm-then-restore dialog. Restoring replaces the live OTIO with
+ * the inline snapshot the History tab stored at decision time
+ * (Wave 4 W4.5). The action is destructive in the sense that any
+ * edits AFTER this entry are overwritten — we warn explicitly when
+ * pending proposals exist because those will also vanish.
+ *
+ * Project-path guard: an entry from another project (a stale localStorage
+ * blob, or the user opened a different project) is refused. The restore
+ * is fundamentally tied to the OTIO at the time of capture and that
+ * OTIO is only meaningful inside its originating project.
  */
 function RestoreDialog({
   entry,
   onClose,
+  onRestored,
 }: {
   entry: HistoryEntry;
   onClose: () => void;
+  onRestored: (toast: string) => void;
 }) {
+  const currentProject = useProjectStore((s) => s.current);
+  const pendingCount = useBriefProposalsStore((s) => s.pending().length);
+  const refreshTimeline = useTimelineStore((s) => s.refresh);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const projectMismatch =
+    currentProject !== null && currentProject !== entry.projectPath;
+  const hasSnapshot =
+    typeof entry.timelineSnapshot === "string" &&
+    entry.timelineSnapshot.length > 0;
+
+  async function confirm() {
+    if (!hasSnapshot || projectMismatch || !currentProject) return;
+    setIsRestoring(true);
+    setError(null);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("restore_timeline_otio", {
+        snapshotJson: entry.timelineSnapshot,
+      });
+      // Capture the post-restore OTIO so the new history row's ↺ Restore
+      // button can undo the restore. Best-effort — if it fails we still
+      // record the event, just without a rollback target.
+      let postRestoreSnapshot: string | undefined;
+      try {
+        const raw = await invoke<string>("read_timeline_otio_raw");
+        postRestoreSnapshot = raw.trim().length > 0 ? raw : undefined;
+      } catch {
+        postRestoreSnapshot = undefined;
+      }
+      const restoreEntry = buildRestoreEntry({
+        source: entry,
+        projectPath: currentProject,
+        postRestoreSnapshot,
+      });
+      useProposalHistoryStore.getState().record(restoreEntry);
+      // Force the timeline store to pick up the new on-disk state.
+      await refreshTimeline();
+      onRestored(`Restored timeline to "${entry.title}"`);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsRestoring(false);
+    }
+  }
+
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Restore state"
+      aria-label="Restore timeline"
       className="absolute inset-0 z-10 flex items-center justify-center bg-[rgba(0,0,0,0.55)] p-4"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !isRestoring) onClose();
       }}
     >
       <div className="panel max-w-md rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-app)] p-4">
         <div className="flex items-center gap-2 text-[var(--color-text-primary)]">
           <RotateCcw className="h-4 w-4" strokeWidth={1.75} />
-          <h3 className="text-[13px] font-semibold">Restore is coming soon</h3>
+          <h3 className="text-[13px] font-semibold">Restore this timeline state?</h3>
         </div>
+
         <p className="mt-3 text-[12px] leading-snug text-[var(--color-text-secondary)]">
-          State restoration is coming soon — Wave 4 work. The timeline at
-          this entry's <code className="font-mono">decidedAt</code> would
-          be reconstructed from the codex rollout snapshot.
+          Replaces your current timeline with the snapshot captured when
+          you accepted this proposal. The current timeline will be
+          overwritten — any edits made since this point will be lost.
         </p>
+
         <p className="mt-3 rounded-[var(--radius-sm)] border-l-2 border-[var(--color-brand-secondary)] bg-[var(--color-surface-input)] px-2 py-1 font-mono text-[10px] text-[var(--color-text-muted)]">
           {entry.title} · {formatRelative(entry.decidedAt)}
         </p>
-        <div className="mt-4 flex justify-end">
+
+        {projectMismatch && (
+          <p
+            className={cn(
+              "mt-3 rounded-[var(--radius-sm)] border-l-2",
+              "border-[rgba(239,68,68,0.6)] bg-[rgba(239,68,68,0.08)]",
+              "px-2 py-1 text-[11px] text-[#FCA5A5]",
+            )}
+          >
+            This snapshot belongs to a different project
+            (<code className="font-mono">{entry.projectPath}</code>). Open
+            that project to restore.
+          </p>
+        )}
+
+        {!hasSnapshot && !projectMismatch && (
+          <p
+            className={cn(
+              "mt-3 rounded-[var(--radius-sm)] border-l-2",
+              "border-[rgba(245,158,11,0.6)] bg-[rgba(245,158,11,0.08)]",
+              "px-2 py-1 text-[11px] text-[#FCD34D]",
+            )}
+          >
+            No snapshot is attached to this entry. This row predates the
+            inline-snapshot system and can't be restored.
+          </p>
+        )}
+
+        {pendingCount > 0 && !projectMismatch && hasSnapshot && (
+          <p
+            className={cn(
+              "mt-3 rounded-[var(--radius-sm)] border-l-2",
+              "border-[rgba(245,158,11,0.6)] bg-[rgba(245,158,11,0.08)]",
+              "px-2 py-1 text-[11px] text-[#FCD34D]",
+            )}
+          >
+            {pendingCount} pending proposal{pendingCount === 1 ? "" : "s"}{" "}
+            on the Brief stack will become irrelevant after the restore —
+            their ghost overlays reference the post-restore timeline.
+          </p>
+        )}
+
+        {error && (
+          <p
+            className={cn(
+              "mt-3 rounded-[var(--radius-sm)] border-l-2",
+              "border-[rgba(239,68,68,0.6)] bg-[rgba(239,68,68,0.08)]",
+              "px-2 py-1 text-[11px] text-[#FCA5A5]",
+            )}
+            role="alert"
+          >
+            Restore failed: {error}
+          </p>
+        )}
+
+        <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
             onClick={onClose}
+            disabled={isRestoring}
             className={cn(
               "h-7 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] px-3",
               "text-[11px] text-[var(--color-text-primary)]",
               "hover:border-[var(--color-border-strong)]",
+              "disabled:opacity-60",
             )}
           >
-            Got it
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={isRestoring || !hasSnapshot || projectMismatch}
+            className={cn(
+              "h-7 rounded-[var(--radius-sm)] px-3 text-[11px] font-medium",
+              "border border-[var(--color-brand)]",
+              "bg-[var(--color-brand)] text-[var(--color-text-on-accent)]",
+              "hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed",
+            )}
+          >
+            {isRestoring ? "Restoring…" : "Restore"}
           </button>
         </div>
       </div>

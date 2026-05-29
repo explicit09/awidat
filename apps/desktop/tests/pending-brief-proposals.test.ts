@@ -53,6 +53,7 @@ function resetAll(mockDispatch?: Partial<BriefDispatch>): {
     rejectBroll: async (jobId) => {
       rejectBrollCalls.push(jobId);
     },
+    captureTimelineSnapshot: async () => undefined,
     ...mockDispatch,
   };
   useBriefProposalsStore.setState({

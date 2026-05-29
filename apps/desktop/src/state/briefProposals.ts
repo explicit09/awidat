@@ -88,6 +88,14 @@ export interface BriefDispatch {
   acceptBroll: (jobId: string, videoPath: string) => Promise<void>;
   /** Dismiss a generated-broll proposal — does not remove the asset. */
   rejectBroll: (jobId: string) => Promise<void>;
+  /**
+   * Snapshot the project's raw `project.otio.json` text for History's
+   * ↺ Restore. Returns `undefined` when no project is loaded or the
+   * backend read fails — callers must treat undefined as "no snapshot,
+   * proceed without one." Never throws; the audit log is non-load-
+   * bearing and a failed capture must not unwind an accept dispatch.
+   */
+  captureTimelineSnapshot: () => Promise<string | undefined>;
 }
 
 /**
@@ -167,6 +175,21 @@ const defaultDispatch: BriefDispatch = {
   },
   rejectBroll: async (_jobId) => {
     // No-op on the backend; the Brief store records the dismissal.
+  },
+  captureTimelineSnapshot: async () => {
+    // Best-effort read of project.otio.json. Returns undefined on any
+    // failure — accept paths must continue regardless because the
+    // History audit trail is non-load-bearing chrome.
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const raw = await invoke<string>("read_timeline_otio_raw");
+      const trimmed = raw.trim();
+      return trimmed.length > 0 ? raw : undefined;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn("captureTimelineSnapshot failed", e);
+      return undefined;
+    }
   },
 };
 
@@ -256,13 +279,21 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
   async accept(id) {
     const state = get();
     const snapshot = snapshotProposal(state, id);
+    // Capture the *post*-accept OTIO snapshot so the History tab's
+    // ↺ Restore can replay this exact timeline state. We snapshot
+    // AFTER the dispatch lands because accept mutates disk, and the
+    // user wants "restore to what the timeline looked like immediately
+    // after I accepted this" — not "before". Capture is best-effort:
+    // if the read fails (no project, IO error) we record the entry
+    // without a snapshot and the Restore button stays hidden.
     if (state.approvals.has(id)) {
       await state.dispatch.respondApproval(id, "allow");
       // Optimistic remove. The backend's matching Completed will also
       // arrive and drop it via ingest; the optimistic path keeps the
       // Brief responsive against backend round-trip latency.
       set((s) => removeApproval(s, id));
-      logDecision(snapshot, "accepted");
+      const timelineSnapshot = await state.dispatch.captureTimelineSnapshot();
+      logDecision(snapshot, "accepted", timelineSnapshot);
       return;
     }
     if (state.brollProposals.has(id)) {
@@ -272,13 +303,15 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
         await state.dispatch.acceptBroll(id, videoPath);
       }
       set((s) => decideBroll(s, id));
-      logDecision(snapshot, "accepted");
+      const timelineSnapshot = await state.dispatch.captureTimelineSnapshot();
+      logDecision(snapshot, "accepted", timelineSnapshot);
       return;
     }
     // Otherwise it's a proposed_edit — usePendingProposals clears its
     // own entry when the backend emits Completed.
     await state.dispatch.acceptProposal(id);
-    logDecision(snapshot, "accepted");
+    const timelineSnapshot = await state.dispatch.captureTimelineSnapshot();
+    logDecision(snapshot, "accepted", timelineSnapshot);
   },
 
   async reject(id, _reason) {
@@ -449,15 +482,25 @@ function snapshotProposal(
  * project is loaded (snapshot is null, or no project root yet) we drop
  * the event silently — the log is non-load-bearing chrome and a missing
  * entry should never crash a decision dispatch.
+ *
+ * `timelineSnapshot` is the raw OTIO bytes captured by the dispatch
+ * adapter at decision time. Only populated for the "accepted" decision
+ * so the History tab's ↺ Restore action has a rollback target.
  */
 function logDecision(
   proposal: BriefProposal | null,
   decision: HistoryDecision,
+  timelineSnapshot?: string,
 ): void {
   if (!proposal) return;
   const projectPath = useProjectStore.getState().current;
   if (!projectPath) return;
-  const entry = buildHistoryEntry({ proposal, projectPath, decision });
+  const entry = buildHistoryEntry({
+    proposal,
+    projectPath,
+    decision,
+    timelineSnapshot,
+  });
   useProposalHistoryStore.getState().record(entry);
 }
 
