@@ -16,3 +16,8 @@ export {
   type StageProgress,
   type StageStore,
 } from "./stages";
+
+export {
+  useSkillsStore,
+  type SkillsStore,
+} from "./skills";

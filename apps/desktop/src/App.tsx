@@ -33,6 +33,7 @@ import {
   AppShell,
   CommandRail,
   DeliverySurface,
+  SkillsSurface,
   IndexRail,
   PreviewSurface,
   ProposalInspector,
@@ -1623,6 +1624,8 @@ function App() {
       <Landing />
     ) : !demoMode && stage === "deliver" ? (
       realDeliveryWorkspace
+    ) : !demoMode && stage === "skills" ? (
+      <SkillsSurface />
     ) : undefined;
 
   if (demoMode && demoScreen.standalone && demoScreen.workspace) {

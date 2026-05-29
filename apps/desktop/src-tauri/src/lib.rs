@@ -206,6 +206,8 @@ pub fn run() {
             commands::vedit::restore_vedit_ref,
             commands::review::author_local_review_package,
             commands::color_scopes::get_color_scopes,
+            commands::skills::list_skills,
+            commands::skills::read_skill_body,
         ])
         .build(tauri::generate_context!());
 

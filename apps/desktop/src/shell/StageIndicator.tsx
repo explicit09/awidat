@@ -1,6 +1,7 @@
 import {
   SlidersHorizontal,
   Upload,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -20,6 +21,7 @@ import { cn } from "../ui";
 const STAGE_ICON: Record<Stage, LucideIcon> = {
   edit: SlidersHorizontal,
   deliver: Upload,
+  skills: Sparkles,
 };
 
 export type StageIndicatorProps = {

@@ -18,7 +18,7 @@ import { useMediaStore } from "../../media/store";
  * row always renders cleanly.
  */
 
-type TabId = Stage | "history" | "skills";
+type TabId = Stage | "history";
 
 type TabDef = {
   id: TabId;
@@ -30,9 +30,10 @@ type TabDef = {
 const TABS: readonly TabDef[] = [
   { id: "edit", label: "Edit", kbd: "⌘1" },
   { id: "deliver", label: "Deliver", kbd: "⌘2" },
-  // disabled placeholders kept visible to communicate scope:
+  // Skills is a real destination — see `SkillsSurface` in the workspace.
+  { id: "skills", label: "Skills", kbd: "⌘3" },
+  // History stays disabled until that tab gets implemented.
   { id: "history", label: "History", kbd: "", disabled: true },
-  { id: "skills", label: "Skills", kbd: "", disabled: true },
 ];
 
 export function WorkspaceRow() {
@@ -60,8 +61,8 @@ export function WorkspaceRow() {
               title={t.kbd ? `${t.label} (${t.kbd})` : t.label}
               onClick={() => {
                 if (t.disabled) return;
-                // Only Edit/Deliver are real Stage ids; the disabled tabs
-                // can never reach this branch.
+                // Edit/Deliver/Skills are real Stage ids; History
+                // remains disabled and can never reach this branch.
                 setActive(t.id as Stage);
               }}
               className={cn(

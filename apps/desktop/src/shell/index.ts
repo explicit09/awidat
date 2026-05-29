@@ -53,6 +53,7 @@ export {
   type PreflightFinding,
   type DeliveryRenderSummary,
 } from "./DeliverySurface";
+export { SkillsSurface, type SkillEntry } from "./SkillsSurface";
 export {
   LoadingState,
   ErrorState,
