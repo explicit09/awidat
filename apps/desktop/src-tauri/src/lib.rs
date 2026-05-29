@@ -30,6 +30,7 @@ mod codex_session;
 mod commands;
 mod generated_media_watcher;
 mod events;
+mod publishing;
 mod secrets;
 mod state;
 
@@ -228,6 +229,11 @@ pub fn run() {
             commands::indexer_config_overlay::write_disabled_indexers,
             commands::agents_md::read_agents_md,
             commands::agents_md::write_agents_md,
+            commands::publishing::list_providers,
+            commands::publishing::begin_provider_oauth,
+            commands::publishing::complete_provider_oauth,
+            commands::publishing::get_provider_status,
+            commands::publishing::upload_via_provider,
         ])
         .build(tauri::generate_context!());
 

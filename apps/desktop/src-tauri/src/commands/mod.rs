@@ -25,6 +25,7 @@ pub mod preview_cache;
 pub mod professional;
 pub mod project;
 pub mod proposal;
+pub mod publishing;
 pub mod render;
 pub mod review;
 pub mod silence;
