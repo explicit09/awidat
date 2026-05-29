@@ -44,6 +44,8 @@ import { TimelineEditorialOverlay } from "./TimelineEditorialOverlay.tsx";
 import { TimelineGhostOverlay } from "./TimelineGhostOverlay.tsx";
 import { UserMoveTooltip, UserTrimTooltip } from "./TimelineDragTooltips.tsx";
 import { useTimelineStore, type TimelineSnapshot } from "./store";
+import { useFlashRanges } from "../state/focusController";
+import { drawFlashRanges } from "./flashOverlay.ts";
 
 /** Wrapper that owns layout state (pps, width) so the canvas can
  *  publish it on each paint and the handles can subscribe. Avoids
@@ -142,6 +144,10 @@ function TimelineCanvas({
   // keyboard handling; the canvas just draws the dashed-cyan bands.
   const pendingProposals = usePendingProposals((s) => s.pending);
   const focusedProposalId = useTimelineProposalFocus((s) => s.focusedId);
+  // Wave 4 W4.6 — Review → flashes. Subscribe to the focus controller's
+  // ephemeral range set so the canvas re-paints when a range arrives
+  // and again when it expires (the range list is empty after ~600ms).
+  const flashRanges = useFlashRanges((s) => s.ranges);
   // Cursor hint when hovering near a clip edge (without dragging).
   const [edgeHover, setEdgeHover] = useState<EdgeHit | null>(null);
   // Active drag, set on pointerdown-near-edge, cleared on pointerup.
@@ -268,6 +274,14 @@ function TimelineCanvas({
         }
       }
 
+      // Wave 4 W4.6 — Review-focus flash pass. Paints a brief glow on
+      // ranges the focus controller registered (cleared after ~600ms).
+      // Drawn before the playhead so the playhead stays visible over a
+      // flashed range.
+      if (flashRanges.length > 0) {
+        drawFlashRanges(ctx, flashRanges, pps, laneHeight);
+      }
+
       drawPlayhead(ctx, cssWidth, cssHeight, currentTime, pps);
 
       // Hover affordance — faint cyan outline on the edge under the
@@ -332,6 +346,7 @@ function TimelineCanvas({
     selectedClipKey,
     pendingProposals,
     focusedProposalId,
+    flashRanges,
   ]);
 
   // Pointer dispatch:

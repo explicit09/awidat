@@ -74,7 +74,7 @@ import { useIndexReadinessStore } from "./state/indexReadiness";
 import { isAwidatSentinel, useIntroState } from "./state/introState";
 import { useBriefProposalsStore } from "./state/briefProposals";
 import { useCenterModeStore, type CenterMode } from "./state/centerMode";
-import type { BriefProposal } from "./state/briefProposals";
+import { installDefaultAdapter as installFocusAdapter } from "./state/focusController";
 import { useSettings } from "./state/settings";
 import { useRenderQueueWorker } from "./app/useRenderQueueWorker";
 import {
@@ -180,6 +180,41 @@ function App() {
     isFirstSession: current ? !hasIntroduced(current) : false,
   });
   const setCenterMode = (next: CenterMode) => setCenterModeStore(current, next);
+
+  // Wave 4 W4.6 — wire the focus controller. The adapter closes over
+  // the latest `current` (project root) + setCenterMode at the time of
+  // the effect, so a project switch re-installs the adapter and the
+  // controller drives the right project's tab. `installFocusAdapter`
+  // only swaps the singleton's adapter ref — it never re-creates the
+  // controller, so subscribers stay attached across re-installs.
+  useEffect(() => {
+    installFocusAdapter({
+      setCenterMode: (next: CenterMode) => {
+        if (current) setCenterModeStore(current, next);
+      },
+      requestTimelineSeek: (t) => {
+        useMediaStore.getState().requestTimelineSeek(t);
+      },
+      scrollTimelineTo: (centerTimeS) => {
+        // The timeline-stage's scrollLeft governs horizontal scroll.
+        // We translate seconds → pixels via the canvas's width / the
+        // snapshot duration — the canvas only renders once it has both,
+        // so when either is zero we skip silently.
+        const stage = document.querySelector<HTMLElement>(".timeline-stage");
+        const canvas = stage?.querySelector<HTMLCanvasElement>(".timeline-canvas");
+        if (!stage || !canvas) return;
+        const canvasWidth = canvas.clientWidth;
+        const duration = useTimelineStore.getState().snapshot.duration_s;
+        if (canvasWidth <= 0 || duration <= 0) return;
+        const pps = canvasWidth / duration;
+        const targetX = centerTimeS * pps;
+        const viewportWidth = stage.clientWidth;
+        const desiredLeft = Math.max(0, targetX - viewportWidth / 2);
+        stage.scrollTo({ left: desiredLeft, behavior: "smooth" });
+      },
+      readTimelineSnapshot: () => useTimelineStore.getState().snapshot,
+    });
+  }, [current, setCenterModeStore]);
 
   const [timelineTab, setTimelineTab] = useState<TimelineTab>("timeline");
   const [timelineViewMode, setTimelineViewMode] = useState<TimelineViewMode>("proposed");
@@ -1771,16 +1806,11 @@ function App() {
             />
             {centerMode === "brief" ? (
               <div className="flex-1 min-h-0 overflow-hidden">
-                <BriefSurface
-                  onReviewProposal={(mode: CenterMode, _proposal: BriefProposal) => {
-                    setCenterMode(mode);
-                    // TODO(Wave 4): focus the specific entity (timeline
-                    // scrolls to the proposal's time range, source preview
-                    // jumps to the affected segment, transcript navigates
-                    // to the caption). For now the tab switch is the whole
-                    // "Review →" contract.
-                  }}
-                />
+                {/* Wave 4 W4.6: the focus controller wired in
+                    `installFocusAdapter` above owns the tab switch +
+                    entity focus on every "Review →". BriefSurface no
+                    longer needs a per-click callback. */}
+                <BriefSurface />
               </div>
             ) : centerMode === "timeline" ? (
               <div className="flex-1 min-h-0 overflow-hidden">

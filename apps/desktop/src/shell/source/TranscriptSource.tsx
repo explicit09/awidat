@@ -39,6 +39,10 @@ import {
   buildDeleteRangeOpsForStem,
   isRangeCutFromTimeline,
 } from "./transcriptSourceLogic";
+import {
+  useSourceFocus,
+  useTranscriptFlashes,
+} from "../../state/focusController";
 
 type SubTab = "transcript" | "video";
 
@@ -52,6 +56,18 @@ export function TranscriptSource({ videoSlot }: TranscriptSourceProps) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
+
+  // Wave 4 W4.6 — drive the sub-tab from the focus controller. The
+  // controller bumps `subTabRequestId` on every `setSubTab` (even when
+  // the value didn't change) so a "stay-on-video" click still re-flashes.
+  const focusSubTab = useSourceFocus((s) => s.subTab);
+  const focusSubTabRequestId = useSourceFocus((s) => s.subTabRequestId);
+  const focusToast = useSourceFocus((s) => s.toast);
+  useEffect(() => {
+    if (focusSubTabRequestId === 0) return;
+    setSubTab(focusSubTab);
+    if (focusSubTab === "video") setSearchOpen(false);
+  }, [focusSubTab, focusSubTabRequestId]);
 
   // ⌘F / Ctrl+F opens search while the transcript sub-tab is active.
   useEffect(() => {
@@ -98,8 +114,41 @@ export function TranscriptSource({ videoSlot }: TranscriptSourceProps) {
           <TranscriptSurface />
         </>
       ) : (
-        <div className="flex-1 min-h-0 overflow-hidden">{videoSlot}</div>
+        <div className="relative flex-1 min-h-0 overflow-hidden">
+          {videoSlot}
+          {focusToast && <FocusToast kind={focusToast} />}
+        </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Wave 4 W4.6 — small floating tag rendered over the video preview when
+ * the focus controller asks for a color or B-roll review surface that
+ * isn't fully built out yet. We render the tag instead of the missing
+ * UI so the user gets a clear "the controller heard you, the preview
+ * piece is on its way" signal — silent no-op was the original failure
+ * mode for these mediums.
+ */
+function FocusToast({ kind }: { kind: "before-after" | "insert-preview" }) {
+  const label =
+    kind === "before-after"
+      ? "Before / After · coming soon"
+      : "Insert preview · coming soon";
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "absolute right-3 top-3 z-20 pointer-events-none select-none",
+        "rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)]",
+        "bg-[var(--color-surface-card)] px-2 py-1",
+        "text-[10px] font-semibold uppercase tracking-[0.08em]",
+        "text-[var(--color-text-secondary)] shadow-md",
+      )}
+    >
+      {label}
     </div>
   );
 }
@@ -304,11 +353,61 @@ function TranscriptSurface() {
     >
       <TranscriptView stem={stem} />
       <WordOverlays stem={stem} surfaceRef={surfaceRef} />
+      <FocusFlashOverlay surfaceRef={surfaceRef} />
       {stem && selection && selection.stem === stem && (
         <SelectionActions stem={stem} surfaceRef={surfaceRef} />
       )}
     </div>
   );
+}
+
+/**
+ * Wave 4 W4.6 — listens to the focus controller's transcript-flash
+ * store and scrolls the first matching `[data-word-start]` span into
+ * view + flashes every span inside the range. The flash is purely
+ * cosmetic; the underlying selection / annotation state isn't touched.
+ */
+function FocusFlashOverlay({
+  surfaceRef,
+}: {
+  surfaceRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const flashes = useTranscriptFlashes((s) => s.flashes);
+  useEffect(() => {
+    const root = surfaceRef.current;
+    if (!root) return;
+    // Clear stale flash classes before re-applying so a removed range
+    // doesn't leave a permanent glow on the spans it touched.
+    root
+      .querySelectorAll(".tx-focus-flash")
+      .forEach((el) => el.classList.remove("tx-focus-flash"));
+    if (flashes.length === 0) return;
+    // Wait for the next frame so the virtualizer has had a chance to
+    // render the words at the target time after a recent stem swap.
+    const id = requestAnimationFrame(() => {
+      const spans = Array.from(
+        root.querySelectorAll<HTMLElement>("[data-word-start]"),
+      );
+      if (spans.length === 0) return;
+      let firstHit: HTMLElement | null = null;
+      for (const flash of flashes) {
+        for (const span of spans) {
+          const startS = Number(span.getAttribute("data-word-start"));
+          const endS = Number(span.getAttribute("data-word-end") ?? startS);
+          if (!Number.isFinite(startS) || !Number.isFinite(endS)) continue;
+          // Overlap test (inclusive on the start side, exclusive on the
+          // end side — matches the audio-cue convention used elsewhere).
+          if (endS >= flash.startS && startS <= flash.endS) {
+            span.classList.add("tx-focus-flash");
+            if (!firstHit) firstHit = span;
+          }
+        }
+      }
+      firstHit?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [flashes, surfaceRef]);
+  return null;
 }
 
 /** Paints `tx-applied-cut` (agent's accepted cuts) + `tx-must-keep`

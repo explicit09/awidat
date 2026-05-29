@@ -7388,6 +7388,28 @@ button {
   opacity: 0.55;
 }
 
+/* Wave 4 W4.6 — Review-focus flash on transcript words. Applied
+   imperatively by <FocusFlashOverlay> for ~600ms after the user clicks
+   "Review →" on a caption/title proposal so the eye lands on the
+   affected words. The cyan tone matches the timeline ghost-clip and
+   selection language for visual consistency across surfaces. */
+.transcript-word.tx-focus-flash {
+  background: rgba(56, 189, 248, 0.32);
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.85);
+  border-radius: 3px;
+  animation: tx-focus-flash-anim 600ms ease-out;
+}
+@keyframes tx-focus-flash-anim {
+  0% {
+    background: rgba(56, 189, 248, 0.55);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 1);
+  }
+  100% {
+    background: rgba(56, 189, 248, 0.18);
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.4);
+  }
+}
+
 /* Floating action bar — appears anchored below the last selected
    word. Two buttons (Propose delete, Mark must-keep) + an inline
    error slot. Positioning is set inline via JS; the rule below sets

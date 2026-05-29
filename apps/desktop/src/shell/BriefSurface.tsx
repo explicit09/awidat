@@ -27,10 +27,13 @@ import { PrepareButton } from "./brief/PrepareButton";
 import type { CenterMode } from "../state/centerMode";
 
 export interface BriefSurfaceProps {
-  /** Called when a proposal's "Review →" link is clicked. App-level
-   *  handler switches the center tab and (best-effort, Wave 4) focuses
-   *  the entity. */
-  onReviewProposal: (mode: CenterMode, proposal: BriefProposal) => void;
+  /**
+   * Optional notification hook fired after a "Review →" click — the
+   * focus controller already drove the tab switch and entity focus by
+   * the time this runs (Wave 4 W4.6). Demo screens / tests can still
+   * pass it in to observe the route. Omit it in production wiring.
+   */
+  onReviewProposal?: (mode: CenterMode, proposal: BriefProposal) => void;
 }
 
 export function BriefSurface({ onReviewProposal }: BriefSurfaceProps) {
@@ -87,7 +90,7 @@ function ProposalStack({
   onReview,
 }: {
   pending: BriefProposal[];
-  onReview: (mode: CenterMode, proposal: BriefProposal) => void;
+  onReview?: (mode: CenterMode, proposal: BriefProposal) => void;
 }) {
   // pending() is already newest-first per the store contract.
   return (

@@ -1,12 +1,15 @@
 /**
- * ProposalCard — one row in the Brief stack (Wave 3 B2).
+ * ProposalCard — one row in the Brief stack (Wave 3 B2 + Wave 4 W4.6).
  *
  * Layout (left → right):
  *   [medium chip] [title + rationale] [source pill] [Accept / Reject]
  *                                                   + Review link
  *
- * Routing: clicking "Review →" switches the center pane to the surface
- * most relevant to the medium. Best-effort focus is reserved for Wave 4.
+ * Routing: clicking "Review →" hands the proposal id + medium +
+ * diff_hints to `useFocusController`, which switches the tab AND
+ * focuses the affected entity (timeline scroll, transcript jump,
+ * canvas flash). Callers no longer have to know how to focus — the
+ * controller owns the per-medium contract.
  */
 
 import { useState } from "react";
@@ -17,6 +20,8 @@ import type {
   BrollDisclosureMetadata,
 } from "../../state/briefProposals";
 import { useBriefProposalsStore } from "../../state/briefProposals";
+import { useFocusController } from "../../state/focusController";
+import { usePendingProposals } from "../../timeline/pendingProposals";
 import type { CenterMode } from "../../state/centerMode";
 
 /**
@@ -102,19 +107,45 @@ const REVIEW_LABEL: Partial<Record<BriefMedium, string>> = {
 
 export interface ProposalCardProps {
   proposal: BriefProposal;
-  /** Called when the user clicks "Review →". The Brief surface uses
-   *  this to switch the center pane to the relevant tab. */
-  onReview: (mode: CenterMode, proposal: BriefProposal) => void;
+  /**
+   * Optional escape hatch — tests + the demo screens still need to
+   * intercept the click without invoking the real focus controller.
+   * When omitted, the card defaults to `useFocusController.focusProposal`,
+   * which switches the tab AND focuses the entity.
+   */
+  onReview?: (mode: CenterMode, proposal: BriefProposal) => void;
 }
 
 export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
   const accept = useBriefProposalsStore((s) => s.accept);
   const reject = useBriefProposalsStore((s) => s.reject);
+  const focusProposal = useFocusController((s) => s.focusProposal);
   const [busy, setBusy] = useState<"accept" | "reject" | null>(null);
 
   const medium = MEDIUM_STYLE[proposal.medium];
   const reviewLabel = REVIEW_LABEL[proposal.medium];
   const reviewMode = REVIEW_MODE_FOR_MEDIUM[proposal.medium];
+
+  function handleReview(): void {
+    // Hand the controller everything it needs to focus the entity.
+    // diff_hints + proposed snapshot live on the matching
+    // PendingProposal entry — we look them up by callId rather than
+    // adding them to the BriefProposal projection (keeps that view
+    // load-bearing-data-free for the row chrome).
+    const pending = usePendingProposals
+      .getState()
+      .pending.find((p) => p.callId === proposal.id);
+    focusProposal({
+      proposalId: proposal.id,
+      medium: proposal.medium,
+      diffHints: pending?.diffHints,
+      proposedSnapshot: pending?.snapshot,
+    });
+    // The legacy callback is still invoked for callers (demo screens,
+    // tests) that want to observe the tab switch — the controller
+    // already drove the tab, this is just a notification hook.
+    onReview?.(reviewMode, proposal);
+  }
 
   async function onAccept() {
     if (busy) return;
@@ -239,7 +270,7 @@ export function ProposalCard({ proposal, onReview }: ProposalCardProps) {
         {reviewLabel && (
           <button
             type="button"
-            onClick={() => onReview(reviewMode, proposal)}
+            onClick={handleReview}
             className={cn(
               "self-start mt-0.5 text-[11px] font-medium",
               "text-[var(--color-brand)] hover:text-[var(--color-brand-hover)]",
