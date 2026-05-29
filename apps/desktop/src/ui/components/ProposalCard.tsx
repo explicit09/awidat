@@ -6,6 +6,7 @@ import { ConfidenceMeter } from "../primitives/ConfidenceMeter";
 import { RiskIndicator, type RiskLevel } from "../primitives/RiskIndicator";
 import { IconButton } from "../primitives/IconButton";
 import { Inline, Stack } from "../primitives/Stack";
+import { RationaleHint } from "./RationaleHint";
 import { cn } from "../cn";
 
 export type ProposalCardProps = {
@@ -19,6 +20,13 @@ export type ProposalCardProps = {
   timeRange: string;
   cutType?: string;
   explanation?: string;
+  /**
+   * One-sentence rationale ("why this specific edit"). Surfaced as a
+   * small italic muted line between the title block and the
+   * explanation/thumbnail block. Empty → not rendered. Full text in
+   * a native title= tooltip. See `RationaleHint`.
+   */
+  rationale?: string;
   confidence?: number;
   risk?: RiskLevel;
   thumbnail?: string;
@@ -37,6 +45,7 @@ export function ProposalCard({
   timeRange,
   cutType,
   explanation,
+  rationale,
   confidence,
   risk,
   thumbnail,
@@ -85,6 +94,11 @@ export function ProposalCard({
             ) : null}
           </Inline>
         </Inline>
+
+        {/* Rationale — single-line italic justification between the
+            title block and the thumbnail/explanation. Renders nothing
+            when absent (handled inside `RationaleHint`). */}
+        <RationaleHint rationale={rationale} />
 
         {thumbnail || explanation ? (
           <Inline gap="3" align="start">

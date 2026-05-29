@@ -18,6 +18,7 @@ import { useTimelineStore, type TimelineItem, type TimelineSnapshot } from "../t
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { editorDispatch } from "../editor/tauriDispatch";
 import { isAwidatSentinel } from "../state/introState";
+import { RationaleHint } from "../ui/components/RationaleHint";
 
 export function ChatStream() {
   const items = useAgentStore((s) => s.items);
@@ -182,6 +183,10 @@ function ItemView({ item }: { item: Item }) {
               <span className="proposal-phase-hint"> — {phaseLabel}</span>
             )}
           </div>
+          {/* Rationale — the agent's one-sentence "why", surfaced
+              right under the summary so the user can take the call
+              on faith without opening the inspector. */}
+          <RationaleHint rationale={item.rationale} className="mt-1" />
         </article>
       );
     }

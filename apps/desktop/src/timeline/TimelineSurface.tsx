@@ -201,7 +201,15 @@ function TimelineCanvas({
           cssWidth,
           proposal.snapshot.tracks,
           pps,
-          { highlightKeys, selectedKey },
+          {
+            highlightKeys,
+            selectedKey,
+            // Surface the agent's one-sentence rationale below the
+            // clip name on highlighted clips. The Inspector / Brief
+            // own the full treatment; this is the lightweight
+            // canvas hint (Wave 3 B5).
+            proposalRationale: proposal.rationale,
+          },
           laneHeight,
         );
       } else {

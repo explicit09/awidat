@@ -29,6 +29,7 @@ export {
 export { ReviewActions, type ReviewActionsProps } from "./primitives/ReviewActions";
 
 export { ProposalCard, type ProposalCardProps } from "./components/ProposalCard";
+export { RationaleHint, type RationaleHintProps } from "./components/RationaleHint";
 export { TranscriptSegment, type TranscriptSegmentProps } from "./components/TranscriptSegment";
 export {
   TimelineMarker,

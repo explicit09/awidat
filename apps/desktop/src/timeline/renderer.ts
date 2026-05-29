@@ -170,6 +170,15 @@ export function drawTracks(
     deletedKeys?: Set<string>;
     highlightKeys?: Set<string>;
     selectedKey?: string;
+    /**
+     * One-sentence agent rationale to surface as a 9px italic muted
+     * label below the clip name on highlighted (proposed-change)
+     * clips. Empty / undefined → no extra label. Truncated to the
+     * clip width; the full text still lives in the Inspector +
+     * Brief row. Wave 3 B5 — lightweight surface, Wave 4 C2 ghost-
+     * clip review will own the heavy layout work.
+     */
+    proposalRationale?: string;
   },
   laneHeight: number = LANE_HEIGHT,
 ) {
@@ -223,6 +232,7 @@ export function drawTracks(
         flag,
         selected,
         isTitlesRow,
+        flag === "highlight" ? opts.proposalRationale : undefined,
       );
     }
 
@@ -280,6 +290,7 @@ function drawItem(
   flag: ItemFlag,
   selected: boolean,
   isTitlesRow: boolean,
+  rationale?: string,
 ) {
   const radius = 4;
   if (item.kind === "clip") {
@@ -335,6 +346,23 @@ function drawItem(
       ctx.fillText(label, x + CLIP_PADDING_X + linkPad, y + 4);
       if (item.link_group_id) {
         drawLinkChainIcon(ctx, x + CLIP_PADDING_X, y + 5);
+      }
+      // Proposed-change rationale — 9px italic muted, drawn directly
+      // below the clip name. Only painted when the rationale is non-
+      // empty, the clip is wide enough to fit a useful first chunk
+      // (~80px), and there's vertical room below the name + badges
+      // strip (~h >= 28). Wave 4 ghost-clip review (task C2) will
+      // upgrade this into a fuller treatment.
+      if (rationale && w > 80 && h >= 28) {
+        ctx.font = `italic 9px ${FONT_SANS}`;
+        ctx.textBaseline = "top";
+        const rationaleLabel = truncateToWidth(
+          ctx,
+          rationale,
+          w - 2 * CLIP_PADDING_X,
+        );
+        ctx.fillStyle = TOKEN.textMuted;
+        ctx.fillText(rationaleLabel, x + CLIP_PADDING_X, y + 16);
       }
     }
     if (w > 36 && !isTitleClip) {
