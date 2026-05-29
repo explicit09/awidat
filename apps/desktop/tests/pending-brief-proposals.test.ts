@@ -78,6 +78,7 @@ function makeApproval(
   phase: Phase,
   toolName: string,
   argsSummary = "do the thing",
+  rationale?: string,
 ): unknown {
   return {
     kind: "approval_request",
@@ -86,6 +87,7 @@ function makeApproval(
     tool_name: toolName,
     args_summary: argsSummary,
     capability_metadata: null,
+    rationale,
   };
 }
 
@@ -553,7 +555,64 @@ function ingestPending(fake: unknown): void {
   assert.equal(pending[0]!.brollMetadata?.prompt, "later prompt");
 }
 
-// 16. clear() drops broll proposals AND the decided set.
+// 17. ApprovalRequest carrying rationale projects onto the Brief row.
+//     Locks the Wave 4 W4.2c contract: when the bridge captures
+//     `apply_edl(reasoning = …)` and stamps it onto ApprovalRequest's
+//     new `rationale` field, the Brief surface must render it instead
+//     of the historical `undefined`.
+{
+  resetAll();
+  ingestApproval(
+    makeApproval(
+      "a-r",
+      "started",
+      "apply_edl",
+      "trim 1 clip",
+      "trimmed 0.42s silence per podcast defaults",
+    ),
+  );
+  const pending = useBriefProposalsStore.getState().pending();
+  assert.equal(pending.length, 1);
+  assert.equal(
+    pending[0]!.rationale,
+    "trimmed 0.42s silence per podcast defaults",
+  );
+}
+
+// 18. Approval rationale survives a Delta that omits the field.
+//     Mirrors ProposedEdit's preserve-on-omit policy so a follow-up
+//     phase (e.g. updated args_summary) never strips "why" mid-flight.
+{
+  resetAll();
+  ingestApproval(
+    makeApproval(
+      "a-r2",
+      "started",
+      "apply_edl",
+      "trim 1 clip",
+      "trimmed 0.42s silence per podcast defaults",
+    ),
+  );
+  // Delta without rationale — must keep the Started value.
+  ingestApproval(makeApproval("a-r2", "delta", "apply_edl", "trim 1 clip"));
+  assert.equal(
+    useBriefProposalsStore.getState().pending()[0]!.rationale,
+    "trimmed 0.42s silence per podcast defaults",
+  );
+}
+
+// 19. Approval without rationale stays undefined — legacy and tools
+//     without a `reasoning` arg (bash, permissions) keep working.
+{
+  resetAll();
+  ingestApproval(makeApproval("a-bash", "started", "bash", "ls -l"));
+  assert.equal(
+    useBriefProposalsStore.getState().pending()[0]!.rationale,
+    undefined,
+  );
+}
+
+// 20. clear() drops broll proposals AND the decided set.
 {
   resetAll();
   useBriefProposalsStore.getState().ingestBroll({

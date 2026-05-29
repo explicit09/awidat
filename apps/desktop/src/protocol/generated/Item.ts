@@ -135,7 +135,24 @@ args_summary: string,
  * Typed capability metadata for this approval. Kept as JSON so the
  * desktop protocol does not depend on core internals.
  */
-capability_metadata: unknown, } | { "kind": "error", 
+capability_metadata: unknown, 
+/**
+ * Optional short-form rationale — the agent's one-sentence
+ * justification for the underlying tool call, e.g.
+ * "trimmed 0.42s silence per podcast defaults". Captured from
+ * `apply_edl(reasoning = …)` and equivalent fields on other
+ * tool calls; absent when the producing tool does not (yet)
+ * emit a `reasoning` argument.
+ *
+ * Wave 3's Brief surface reads this on every row (approvals
+ * included). Distinct from `args_summary` (mechanical "what")
+ * and the matching ToolCall's full args (raw envelope).
+ *
+ * Backwards-compatible: `Option<String>` so older serialized
+ * approvals deserialize fine. Producers that don't yet emit
+ * it can keep emitting `None`.
+ */
+rationale?: string, } | { "kind": "error", 
 /**
  * Stable id (one per error).
  */

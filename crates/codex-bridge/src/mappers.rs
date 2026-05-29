@@ -279,6 +279,30 @@ pub fn map_thread_item(item: &ThreadItem, phase: Phase) -> Vec<Item> {
     }
 }
 
+/// Extract the agent's `reasoning` string from a JSON tool-args
+/// payload, if any. Wave 3's Brief surface reads `rationale` on every
+/// row (approvals included); `apply_edl(reasoning = …)` and other
+/// tools that adopt the same contract surface their "why" through
+/// this helper.
+///
+/// Contract: looks for a top-level `reasoning` string field. Anything
+/// non-stringy (object, array, missing key) returns `None`. We trim
+/// whitespace and treat empty strings as `None` so the frontend never
+/// renders a hollow rationale chip.
+///
+/// Kept out of any specific approval path because the L1 catalog
+/// commits to `reasoning` as the universal field name — every new
+/// tool with a "why" arg should pipe through here, not invent its
+/// own surface.
+pub fn extract_reasoning(arguments: Option<&serde_json::Value>) -> Option<String> {
+    let value = arguments?.get("reasoning")?.as_str()?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
 /// Build the capability metadata JSON the ApprovalCard renderer
 /// expects for a shell-command approval. The legacy keys
 /// (`graph_mutates`, `preview_supported`, `side_effects`) are the
@@ -607,6 +631,30 @@ mod tests {
             }
             other => panic!("expected applied apply_patch tool, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn extract_reasoning_pulls_top_level_string() {
+        let args = json!({
+            "ops": [{ "trim_clip": {} }],
+            "reasoning": "trimmed 0.42s silence per podcast defaults",
+        });
+        assert_eq!(
+            extract_reasoning(Some(&args)).as_deref(),
+            Some("trimmed 0.42s silence per podcast defaults"),
+        );
+    }
+
+    #[test]
+    fn extract_reasoning_treats_missing_and_empty_as_none() {
+        assert!(extract_reasoning(None).is_none());
+        assert!(extract_reasoning(Some(&json!({}))).is_none());
+        assert!(extract_reasoning(Some(&json!({ "reasoning": "" }))).is_none());
+        assert!(extract_reasoning(Some(&json!({ "reasoning": "   " }))).is_none());
+        // Non-string reasoning is ignored — we don't try to coerce
+        // structured payloads into a one-liner.
+        assert!(extract_reasoning(Some(&json!({ "reasoning": { "x": 1 } }))).is_none());
+        assert!(extract_reasoning(Some(&json!({ "reasoning": 12 }))).is_none());
     }
 
     #[test]

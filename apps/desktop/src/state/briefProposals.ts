@@ -61,9 +61,11 @@ export interface BriefProposal {
   /** One-line title rendered on the row. */
   title: string;
   /**
-   * Agent's one-sentence "why" — present on ProposedEdits when the
-   * agent fills `rationale`, always `undefined` for ApprovalRequests
-   * (no rationale field on that wire variant today).
+   * Agent's one-sentence "why" — populated on ProposedEdits when the
+   * agent fills `rationale`, and on ApprovalRequest rows when the
+   * bridge captures `reasoning` from the underlying tool args. Stays
+   * `undefined` for older producers or approvals whose tool doesn't
+   * yet emit a `reasoning` field.
    */
   rationale: string | undefined;
   /** When this entry first hit the stack (ms epoch). */
@@ -132,6 +134,12 @@ interface ApprovalEntry {
   argsSummary: string;
   firstSeenAt: number;
   phase: ItemLifecycle;
+  /**
+   * Agent's `reasoning` argument captured by the bridge mapper, when
+   * the underlying tool emits one. `undefined` for tools (bash,
+   * permissions, legacy callers) that have no `reasoning` arg.
+   */
+  rationale: string | undefined;
 }
 
 // Lazy-load Tauri so tests can run in node without the import erroring.
@@ -181,12 +189,23 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
       // Started / Delta — upsert, preserving firstSeenAt across phases
       // so the "waiting 2m" badge stays anchored to first sight.
       const prev = state.approvals.get(item.id);
+      // Rationale follows the same preserve-on-omit policy used for
+      // ProposedEdit's optional inspector fields: a Delta that omits
+      // `rationale` keeps whatever the Started phase carried, so the
+      // Brief row never loses "why" mid-lifecycle.
+      const incomingRationale = (item as { rationale?: string | null })
+        .rationale;
+      const rationale =
+        incomingRationale == null || incomingRationale === ""
+          ? prev?.rationale
+          : incomingRationale;
       const entry: ApprovalEntry = {
         id: item.id,
         toolName: item.tool_name,
         argsSummary: item.args_summary,
         firstSeenAt: prev?.firstSeenAt ?? Date.now(),
         phase: item.phase,
+        rationale,
       };
       const next = new Map(state.approvals);
       next.set(item.id, entry);
@@ -379,7 +398,7 @@ function approvalToBriefProposal(entry: ApprovalEntry): BriefProposal {
     source: "approval",
     medium: mediumFromToolName(entry.toolName),
     title: titleFromSummary(entry.argsSummary, entry.toolName),
-    rationale: undefined,
+    rationale: entry.rationale,
     firstSeenAt: entry.firstSeenAt,
     toolName: entry.toolName,
   };

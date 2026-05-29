@@ -733,6 +733,10 @@ async fn handle_server_request(
                 tool_name: "bash".into(),
                 args_summary: summary,
                 capability_metadata: metadata,
+                // Exec approvals don't carry a structured `reasoning`
+                // arg today; the agent's rationale (if any) is captured
+                // on the matching MCP tool-call path.
+                rationale: None,
             });
         }
         ServerRequest::FileChangeRequestApproval { request_id, params } => {
@@ -759,6 +763,10 @@ async fn handle_server_request(
                 tool_name: "apply_patch".into(),
                 args_summary: summary,
                 capability_metadata: metadata,
+                // FileChange approvals carry a `reason` (already folded
+                // into `args_summary`) but no structured `reasoning`
+                // arg — agent rationale rides the MCP path instead.
+                rationale: None,
             });
         }
         ServerRequest::PermissionsRequestApproval { request_id, params } => {
@@ -785,6 +793,10 @@ async fn handle_server_request(
                 tool_name: "permissions".into(),
                 args_summary: summary,
                 capability_metadata: metadata,
+                // Permissions approvals have no agent-supplied
+                // `reasoning` arg; the user-facing `reason` is folded
+                // into `args_summary`.
+                rationale: None,
             });
         }
         ServerRequest::ToolRequestUserInput { request_id, params } => {
