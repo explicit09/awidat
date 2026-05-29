@@ -19,6 +19,7 @@ import { useProjectStore } from "./app/state";
 import { AgentsMdEditor } from "./app/AgentsMdEditor";
 import { NewProjectForm } from "./app/NewProjectForm";
 import { SettingsModal } from "./app/SettingsModal";
+import { WelcomeCard } from "./app/WelcomeCard";
 import { useMediaStore } from "./media/store";
 import { GeneratedMediaPanel } from "./media/GeneratedMediaPanel";
 import { useGeneratedMediaStore, type GeneratedMediaEntry } from "./media/generatedMediaStore";
@@ -1951,6 +1952,7 @@ function App() {
     )}
     <SettingsModal />
     <AgentsMdEditor />
+    <WelcomeCard />
     {showUrlImport && (
       <div className="modal-backdrop" onClick={() => setShowUrlImport(false)}>
         <div className="modal" onClick={(event) => event.stopPropagation()}>

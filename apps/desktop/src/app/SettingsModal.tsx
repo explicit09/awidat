@@ -29,6 +29,7 @@ import { useAgentsMdEditor } from "../state/agentsMdEditor";
 import { useIntroState } from "../state/introState";
 import { useMode } from "../state/mode";
 import { useSettings } from "../state/settings";
+import { useWelcome } from "../state/welcome";
 import { Button, Inline, Stack } from "../ui";
 import type { IndexerConfigSnapshot } from "../shell";
 
@@ -60,6 +61,8 @@ export function SettingsModal() {
   const setMode = useMode((s) => s.setMode);
   const introducedCount = useIntroState((s) => s.introduced.size);
   const resetIntroState = useIntroState((s) => s.reset);
+  const welcomeShown = useWelcome((s) => s.shown);
+  const resetWelcome = useWelcome((s) => s.reset);
 
   // Lazy-load the indexer config so the modal stays cheap when closed.
   // Calls the same `read_indexer_config` invoke used by App.tsx.
@@ -115,6 +118,13 @@ export function SettingsModal() {
     // stacked modals make ⌘W / Esc ambiguous.
     close();
     openAgentsMdEditor();
+  }
+
+  function showWelcomeAgain() {
+    // Same rationale as editAgentsMd — close Settings before opening
+    // another modal so the Esc / backdrop semantics stay sane.
+    close();
+    resetWelcome();
   }
 
   return (
@@ -199,6 +209,23 @@ export function SettingsModal() {
                 title="Clear the set of projects that have already received the agent intro turn"
               >
                 Reset
+              </Button>
+            </Row>
+            <Row
+              label="Show welcome again"
+              value={
+                welcomeShown
+                  ? "Dismissed · click to re-open the intro"
+                  : "Welcome card pending on next launch"
+              }
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={showWelcomeAgain}
+                title="Re-open the three-idea welcome card"
+              >
+                Show
               </Button>
             </Row>
             <Stack gap="1" className="mt-1">
