@@ -216,6 +216,8 @@ pub fn run() {
             commands::skills::list_skills,
             commands::skills::read_skill_body,
             commands::skills::ensure_user_skills_dir,
+            commands::skills::create_skill,
+            commands::skills::skills_authoring_guide_path,
             commands::skill_config::read_disabled_skills,
             commands::skill_config::write_disabled_skills,
             commands::skill_config::read_skill_config,

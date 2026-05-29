@@ -169,6 +169,14 @@ impl SkillRegistry {
                 if !path.is_dir() {
                     continue;
                 }
+                // Skip dotfiles and underscore-prefixed dirs. The
+                // `_template/` scaffold and `_authoring/` archives
+                // live alongside real skills; the agent must not
+                // discover them. Same filter applies to the Skills
+                // tab (see commands/skills.rs).
+                if is_hidden_skill_dir(&path) {
+                    continue;
+                }
                 match load_skill_dir(&path) {
                     Ok(skill) => out.push(skill),
                     Err(e) => errors.push(e),
@@ -228,6 +236,17 @@ impl SkillRegistry {
             })
             .unwrap_or_default()
     }
+}
+
+/// True when a directory's basename starts with `.` or `_`. We use it
+/// to hide scaffolds (`_template/`), archives (`_authoring/`), and
+/// dotfile noise from skill discovery on every layer. Exposed so the
+/// desktop Skills tab can apply the same filter when it walks
+/// directories directly to build provenance labels.
+pub fn is_hidden_skill_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|n| n.starts_with('.') || n.starts_with('_'))
 }
 
 /// Load one skill from a directory. The directory must contain a
@@ -499,5 +518,37 @@ mod tests {
         assert!(errs.is_empty());
         let s = reg.get("sample").unwrap();
         assert_eq!(s.meta.tools_allowlist, vec!["find_beat", "apply_edl"]);
+    }
+
+    #[test]
+    fn underscore_and_dot_prefixed_dirs_are_skipped() {
+        // Drop a real skill alongside two hidden dirs. The hidden dirs
+        // contain a SKILL.md whose `name` doesn't match the directory
+        // basename — if the filter were missing, they'd surface as a
+        // NameMismatch error or load and pollute the catalog.
+        let dir = tempfile::tempdir().unwrap();
+        write_skill(
+            dir.path(),
+            "real-skill",
+            "name: real-skill\ndescription: x",
+            "body",
+        );
+        write_skill(
+            dir.path(),
+            "_template",
+            "name: my-skill\ndescription: scaffold placeholder",
+            "body",
+        );
+        write_skill(
+            dir.path(),
+            ".scratch",
+            "name: scratch\ndescription: ignored",
+            "body",
+        );
+        let (reg, errs) = SkillRegistry::discover(Some(&dir.path().join("skills")), None);
+        assert!(errs.is_empty(), "hidden dirs must not surface errors: {errs:?}");
+        assert!(reg.get("real-skill").is_some());
+        assert!(reg.get("my-skill").is_none(), "_template must not load");
+        assert!(reg.get("scratch").is_none(), ".scratch must not load");
     }
 }

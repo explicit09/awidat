@@ -15,17 +15,22 @@
  * runtime loadout (see store comment).
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { FolderOpen, Sparkles } from "lucide-react";
+import { BookOpen, FolderOpen, Plus, Sparkles } from "lucide-react";
 
 import { cn } from "../ui";
 import { useProjectStore } from "../app/state";
 import { useSkillsStore } from "../state";
 import type { PinnedSkill } from "../state/skills";
+
+/** Kebab-case name validator — lowercase letters / digits / dashes,
+ *  must start and end with an alphanumeric. Mirrors the directory
+ *  naming convention enforced by `SkillRegistry`. */
+const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
  * Mirror of the Rust `SkillEntry` returned by `list_skills`.
@@ -56,10 +61,12 @@ function useSkills(): {
   skills: SkillEntry[];
   loading: boolean;
   error: string | null;
+  refresh: () => void;
 } {
   const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
   const projectRoot = useProjectStore((s) => s.current);
 
   useEffect(() => {
@@ -88,10 +95,12 @@ function useSkills(): {
       cancelled = true;
     };
     // Refresh when the project changes — different projects can
-    // ship different skill folders.
-  }, [projectRoot]);
+    // ship different skill folders. `nonce` lets callers (e.g., the
+    // "+ New skill" flow) force a refresh after writing a new SKILL.md.
+  }, [projectRoot, nonce]);
 
-  return { skills, loading, error };
+  const refresh = useCallback(() => setNonce((n) => n + 1), []);
+  return { skills, loading, error, refresh };
 }
 
 /** Lazy-load the SKILL.md body when a skill is selected. */
@@ -168,7 +177,7 @@ function useUserSkillsDir(): string | null {
 }
 
 export function SkillsSurface() {
-  const { skills, loading, error } = useSkills();
+  const { skills, loading, error, refresh } = useSkills();
   const userSkillsDir = useUserSkillsDir();
   const projectRoot = useProjectStore((s) => s.current);
   const disabledByProject = useSkillsStore((s) => s.disabledByProject);
@@ -185,6 +194,16 @@ export function SkillsSurface() {
     if (selected && skills.some((s) => s.name === selected)) return;
     setSelected(skills[0]?.name ?? null);
   }, [skills, selected]);
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const onCreated = useCallback(
+    (createdName: string) => {
+      setCreateOpen(false);
+      refresh();
+      setSelected(createdName);
+    },
+    [refresh],
+  );
 
   // Reactive lookups — pull from the maps directly so the
   // component re-renders when the user toggles or pins a skill.
@@ -213,12 +232,21 @@ export function SkillsSurface() {
         onSetPin={(pin) => setPin(projectRoot, pin)}
         onClearPin={(name) => clearPin(projectRoot, name)}
         userSkillsDir={userSkillsDir}
+        onOpenCreate={() => setCreateOpen(true)}
       />
       <SkillDetail
         skill={skills.find((s) => s.name === selected) ?? null}
         disabled={selected ? isDisabled(selected) : false}
         pin={selected ? getPin(selected) : null}
       />
+      {createOpen && (
+        <CreateSkillModal
+          existingNames={skills.map((s) => s.name)}
+          projectRoot={projectRoot}
+          onCancel={() => setCreateOpen(false)}
+          onCreated={onCreated}
+        />
+      )}
     </div>
   );
 }
@@ -241,6 +269,8 @@ type SkillListProps = {
    * link is hidden in that case.
    */
   userSkillsDir: string | null;
+  /** Opens the "+ New skill" modal — scaffolds an empty SKILL.md. */
+  onOpenCreate: () => void;
 };
 
 function SkillList({
@@ -255,6 +285,7 @@ function SkillList({
   onSetPin,
   onClearPin,
   userSkillsDir,
+  onOpenCreate,
 }: SkillListProps) {
   const openSkillsFolder = () => {
     if (!userSkillsDir) return;
@@ -262,6 +293,18 @@ function SkillList({
       // eslint-disable-next-line no-console
       console.warn("revealItemInDir(skills) failed", err);
     });
+  };
+  const openAuthoringGuide = async () => {
+    if (!isTauri()) return;
+    try {
+      const path = await invoke<string>("skills_authoring_guide_path");
+      await openPath(path);
+    } catch (err) {
+      // Fall back to revealing the docs folder so the user can still
+      // find it manually if the OS rejected the markdown handler.
+      // eslint-disable-next-line no-console
+      console.warn("open authoring guide failed", err);
+    }
   };
   return (
     <section
@@ -310,25 +353,231 @@ function SkillList({
         )}
       </div>
       {userSkillsDir ? (
-        <footer className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--color-border-subtle)] px-3 py-2">
-          <button
-            type="button"
-            onClick={openSkillsFolder}
-            className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
-            title={userSkillsDir}
-          >
-            <FolderOpen className="h-3 w-3" strokeWidth={1.75} />
-            <span>Skills folder</span>
-          </button>
-          <span
-            className="truncate font-mono text-[10px] text-[var(--color-text-muted)]"
-            title={userSkillsDir}
-          >
-            {userSkillsDir}
-          </span>
+        <footer className="flex shrink-0 flex-col gap-1 border-t border-[var(--color-border-subtle)] px-3 py-2">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={openSkillsFolder}
+              className="flex items-center gap-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
+              title={userSkillsDir}
+            >
+              <FolderOpen className="h-3 w-3" strokeWidth={1.75} />
+              <span>Skills folder</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenCreate}
+              className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-secondary)] hover:border-[var(--color-brand)] hover:text-[var(--color-brand)] transition-colors"
+              title="Scaffold a new SKILL.md from the bundled template"
+            >
+              <Plus className="h-3 w-3" strokeWidth={2} />
+              <span>New skill</span>
+            </button>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span
+              className="truncate font-mono text-[10px] text-[var(--color-text-muted)]"
+              title={userSkillsDir}
+            >
+              {userSkillsDir}
+            </span>
+            <button
+              type="button"
+              onClick={openAuthoringGuide}
+              className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+              title="Open docs/skills-authoring.md"
+            >
+              <BookOpen className="h-2.5 w-2.5" strokeWidth={1.75} />
+              <span>Authoring guide →</span>
+            </button>
+          </div>
         </footer>
       ) : null}
     </section>
+  );
+}
+
+type CreateSkillModalProps = {
+  /** Skills already in the catalog — used to flag duplicate names before
+   *  the backend rejects them. Cheaper than a backend round-trip. */
+  existingNames: string[];
+  /** Active project root; the "Project" target is disabled when null. */
+  projectRoot: string | null;
+  onCancel: () => void;
+  /** Called with the new skill's `name` after a successful write so the
+   *  parent can refresh + select it. */
+  onCreated: (name: string) => void;
+};
+
+/**
+ * Compact modal for scaffolding a new skill from the bundled template.
+ * The backend (`create_skill`) substitutes `{{name}}` / `{{description}}`
+ * placeholders and writes the resulting SKILL.md to the chosen layer.
+ */
+function CreateSkillModal({
+  existingNames,
+  projectRoot,
+  onCancel,
+  onCreated,
+}: CreateSkillModalProps) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  // Default to "user" — works on a fresh install with no project.
+  // The "project" option is disabled in the dropdown when no project
+  // is open, so we never start in a state we can't submit from.
+  const [target, setTarget] = useState<"user" | "project">("user");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Esc cancels.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !busy) {
+        event.preventDefault();
+        onCancel();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [busy, onCancel]);
+
+  // Autofocus the name field.
+  useEffect(() => {
+    const el = document.getElementById("create-skill-name");
+    if (el instanceof HTMLInputElement) el.focus();
+  }, []);
+
+  // Validation — surfaced inline so the Create button stays
+  // accurately enabled/disabled.
+  const nameValid = SKILL_NAME_PATTERN.test(name);
+  const duplicate = existingNames.includes(name);
+  const descriptionValid = description.trim().length > 0;
+  const canSubmit =
+    !busy &&
+    nameValid &&
+    !duplicate &&
+    descriptionValid &&
+    (target === "user" || projectRoot !== null);
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke<string>("create_skill", {
+        target,
+        name,
+        description: description.trim(),
+      });
+      onCreated(name);
+    } catch (e) {
+      setError(typeof e === "string" ? e : String(e));
+      setBusy(false);
+    }
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void submit();
+    }
+  };
+
+  return (
+    <div
+      className="modal-backdrop"
+      onClick={busy ? undefined : onCancel}
+      role="presentation"
+    >
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Create new skill"
+        style={{ maxWidth: 480 }}
+      >
+        <header className="modal-header">
+          <h2>New skill</h2>
+          <button
+            className="modal-close"
+            onClick={onCancel}
+            aria-label="Close"
+            disabled={busy}
+          >
+            ×
+          </button>
+        </header>
+        <div className="modal-body">
+          <label className="field">
+            <span>Name</span>
+            <input
+              id="create-skill-name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my-skill"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={busy}
+            />
+            <span
+              className={cn(
+                "text-[10px]",
+                name && (!nameValid || duplicate)
+                  ? "text-[var(--color-status-error)]"
+                  : "text-[var(--color-text-muted)]",
+              )}
+            >
+              {name && !nameValid
+                ? "kebab-case only (lowercase letters, digits, dashes)"
+                : duplicate
+                  ? `A skill named "${name}" already exists`
+                  : "kebab-case — matches the directory the file will live in"}
+            </span>
+          </label>
+          <label className="field">
+            <span>Description</span>
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="One line describing what this skill does."
+              disabled={busy}
+            />
+          </label>
+          <label className="field">
+            <span>Where to create</span>
+            <select
+              value={target}
+              onChange={(e) => setTarget(e.target.value as "user" | "project")}
+              disabled={busy}
+              className="h-[30px] w-full rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-input)] px-2 text-[var(--text-body-sm)] text-[var(--color-text-primary)]"
+            >
+              <option value="user">
+                User · ~/Library/Application Support/awidat/skills/
+              </option>
+              <option value="project" disabled={!projectRoot}>
+                Project ·{" "}
+                {projectRoot
+                  ? `${projectRoot}/skills/`
+                  : "(no project open)"}
+              </option>
+            </select>
+          </label>
+          {error && <div className="field-error">{error}</div>}
+        </div>
+        <footer className="modal-footer">
+          <button onClick={onCancel} disabled={busy}>
+            Cancel
+          </button>
+          <button className="primary" onClick={submit} disabled={!canSubmit}>
+            {busy ? "Creating…" : "Create"}
+          </button>
+        </footer>
+      </div>
+    </div>
   );
 }
 

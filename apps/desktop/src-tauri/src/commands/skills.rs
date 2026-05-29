@@ -29,7 +29,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use awidat_core::skills::SkillRegistry;
+use awidat_core::skills::{is_hidden_skill_dir, SkillRegistry};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -181,6 +181,12 @@ fn provenance_table(layers: &DiscoveryLayers) -> HashMap<String, Provenance> {
             if !p.is_dir() {
                 continue;
             }
+            // Same hidden-dir filter the registry applies — keeps the
+            // `_template/` scaffold and dotfile noise out of the
+            // Skills tab list. Mirrors `SkillRegistry::discover_many`.
+            if is_hidden_skill_dir(&p) {
+                continue;
+            }
             if !p.join("SKILL.md").is_file() {
                 continue;
             }
@@ -297,6 +303,140 @@ pub async fn ensure_user_skills_dir() -> Result<String, String> {
     .map_err(|e| format!("ensure_user_skills_dir join: {e}"))?
 }
 
+/// Scaffold a new skill folder from the bundled `_template/SKILL.md`.
+/// The frontend "+ New skill" button calls this; on success the
+/// returned path is the absolute location of the freshly written
+/// `SKILL.md`, which the React side reveals + selects.
+///
+/// `target` selects the destination layer:
+///   - `"user"`    → `user_skills_primary_dir()` (created if missing)
+///   - `"project"` → `<project_root>/skills/`    (created if missing)
+///
+/// The template body has `{{name}}` and `{{description}}` placeholders
+/// that we substitute literally before writing. The directory itself
+/// is named after the skill (kebab-case enforced by the frontend).
+///
+/// Errors:
+///   - unknown target value
+///   - "project" requested without an active project
+///   - bundled template missing (dev tree out of sync)
+///   - skill already exists at the target path (no clobber)
+///   - filesystem IO failures
+#[tauri::command]
+pub async fn create_skill(
+    state: State<'_, AwidatState>,
+    target: String,
+    name: String,
+    description: String,
+) -> Result<String, String> {
+    let project_root = state.project_root.lock().await.clone();
+    tokio::task::spawn_blocking(move || create_skill_impl(target, name, description, project_root))
+        .await
+        .map_err(|e| format!("create_skill join: {e}"))?
+}
+
+/// Synchronous worker for `create_skill` so the logic is testable
+/// without standing up a Tauri runtime. The `resolver` closure picks
+/// the destination + template paths — in production it dispatches to
+/// `user_skills_primary_dir` / `bundled_skill_root`; tests inject
+/// temp dirs.
+fn create_skill_impl(
+    target: String,
+    name: String,
+    description: String,
+    project_root: Option<PathBuf>,
+) -> Result<String, String> {
+    let bundled = bundled_skill_root()
+        .ok_or_else(|| "bundled skills root not found".to_string())?;
+    let user = user_skills_primary_dir();
+    create_skill_at(
+        &target,
+        &name,
+        &description,
+        project_root.as_deref(),
+        &bundled,
+        user.as_deref(),
+    )
+}
+
+/// Plain-paths variant of `create_skill_impl`. Pure FS — no globals
+/// queried. Drives both production and tests.
+fn create_skill_at(
+    target: &str,
+    name: &str,
+    description: &str,
+    project_root: Option<&Path>,
+    bundled_root: &Path,
+    user_root: Option<&Path>,
+) -> Result<String, String> {
+    let dest_root = match target {
+        "user" => user_root
+            .ok_or_else(|| "could not resolve user skills directory".to_string())?
+            .to_path_buf(),
+        "project" => {
+            let root = project_root.ok_or_else(|| "no project is open".to_string())?;
+            root.join("skills")
+        }
+        other => {
+            return Err(format!(
+                "unknown target '{other}' (expected 'user' or 'project')"
+            ));
+        }
+    };
+    std::fs::create_dir_all(&dest_root)
+        .map_err(|e| format!("create {}: {e}", dest_root.display()))?;
+
+    let skill_dir = dest_root.join(name);
+    if skill_dir.exists() {
+        return Err(format!(
+            "Skill '{name}' already exists at {}",
+            skill_dir.display()
+        ));
+    }
+
+    let template_path = bundled_root.join("_template").join("SKILL.md");
+    let template = std::fs::read_to_string(&template_path)
+        .map_err(|e| format!("read template {}: {e}", template_path.display()))?;
+    let rendered = template
+        .replace("{{name}}", name)
+        .replace("{{description}}", description);
+
+    std::fs::create_dir_all(&skill_dir)
+        .map_err(|e| format!("create {}: {e}", skill_dir.display()))?;
+    let md_path = skill_dir.join("SKILL.md");
+    std::fs::write(&md_path, rendered)
+        .map_err(|e| format!("write {}: {e}", md_path.display()))?;
+
+    Ok(md_path.display().to_string())
+}
+
+/// Return the absolute path to the bundled skills authoring guide
+/// (`docs/skills-authoring.md`) so the Skills tab footer can open it
+/// in the system Markdown viewer / editor. The doc lives next to
+/// `skills/` at the repo / install root; we reuse `bundled_skill_root`
+/// to walk up to the same parent.
+#[tauri::command]
+pub async fn skills_authoring_guide_path() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| {
+        let bundled = bundled_skill_root()
+            .ok_or_else(|| "bundled skills root not found".to_string())?;
+        let candidate = bundled
+            .parent()
+            .map(|p| p.join("docs").join("skills-authoring.md"))
+            .ok_or_else(|| "could not resolve docs root".to_string())?;
+        if candidate.is_file() {
+            Ok(candidate.display().to_string())
+        } else {
+            Err(format!(
+                "authoring guide not found at {}",
+                candidate.display()
+            ))
+        }
+    })
+    .await
+    .map_err(|e| format!("skills_authoring_guide_path join: {e}"))?
+}
+
 /// Mirror of `codex_session::bundled_skill_root`. In `cargo tauri
 /// dev` the binary lives at `<repo>/target/debug/awidat-desktop`, so
 /// the skills dir is `<repo>/skills`. Walk up three dirs from the
@@ -314,3 +454,107 @@ fn bundled_skill_root() -> Option<PathBuf> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stage a minimal bundled root with the `_template/SKILL.md`
+    /// the scaffolder reads. Mirrors the real placeholders.
+    fn stage_bundled(root: &Path) {
+        let tpl = root.join("_template");
+        std::fs::create_dir_all(&tpl).unwrap();
+        std::fs::write(
+            tpl.join("SKILL.md"),
+            "---\nname: {{name}}\ndescription: {{description}}\n---\n\n# {{name}}\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn create_skill_writes_user_layer_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundled = tmp.path().join("bundled");
+        let user = tmp.path().join("user");
+        std::fs::create_dir_all(&user).unwrap();
+        stage_bundled(&bundled);
+
+        let path = create_skill_at(
+            "user",
+            "my-new-skill",
+            "Does a thing.",
+            None,
+            &bundled,
+            Some(&user),
+        )
+        .expect("create_skill_at succeeds");
+        assert!(path.ends_with("my-new-skill/SKILL.md"));
+
+        let body = std::fs::read_to_string(&path).unwrap();
+        assert!(body.contains("name: my-new-skill"));
+        assert!(body.contains("description: Does a thing."));
+        assert!(!body.contains("{{name}}"), "placeholders must be substituted");
+    }
+
+    #[test]
+    fn create_skill_writes_project_layer_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundled = tmp.path().join("bundled");
+        let project = tmp.path().join("proj");
+        std::fs::create_dir_all(&project).unwrap();
+        stage_bundled(&bundled);
+
+        let path = create_skill_at(
+            "project",
+            "proj-skill",
+            "Project-scoped.",
+            Some(&project),
+            &bundled,
+            None,
+        )
+        .expect("project target succeeds");
+        assert!(path.starts_with(project.join("skills").to_string_lossy().as_ref()));
+        assert!(std::fs::metadata(&path).is_ok());
+    }
+
+    #[test]
+    fn create_skill_rejects_duplicate_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundled = tmp.path().join("bundled");
+        let user = tmp.path().join("user");
+        std::fs::create_dir_all(&user).unwrap();
+        stage_bundled(&bundled);
+
+        create_skill_at("user", "dup", "first", None, &bundled, Some(&user))
+            .expect("first call writes");
+        let err = create_skill_at("user", "dup", "second", None, &bundled, Some(&user))
+            .expect_err("second call must fail");
+        assert!(
+            err.contains("already exists"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn create_skill_rejects_project_target_without_project_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundled = tmp.path().join("bundled");
+        stage_bundled(&bundled);
+
+        let err = create_skill_at("project", "x", "d", None, &bundled, None)
+            .expect_err("no project must fail");
+        assert!(err.contains("no project is open"), "got: {err}");
+    }
+
+    #[test]
+    fn create_skill_rejects_unknown_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bundled = tmp.path().join("bundled");
+        stage_bundled(&bundled);
+
+        let err = create_skill_at("bogus", "x", "d", None, &bundled, None)
+            .expect_err("unknown target must fail");
+        assert!(err.contains("unknown target"), "got: {err}");
+    }
+}
+
