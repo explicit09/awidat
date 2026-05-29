@@ -23,6 +23,10 @@ import { useNotesStore } from "../notes/store";
 import { type SelectedClipKey, useTimelineSelectionStore } from "../properties/store";
 import { isProposedEditItem, useProposalStore } from "../timeline/proposal";
 import { usePendingProposals } from "../timeline/pendingProposals";
+import {
+  isApprovalRequestItem,
+  useBriefProposalsStore,
+} from "./briefProposals";
 import { serializeEdl, type EdlOp } from "../timeline/edlBuilder";
 import { useTimelineStore } from "../timeline/store";
 import {
@@ -59,6 +63,8 @@ export function useAppGlue() {
   const activeProposal = useProposalStore((s) => s.active);
   const ingestPendingProposal = usePendingProposals((s) => s.ingest);
   const clearPendingProposals = usePendingProposals((s) => s.clear);
+  const ingestBriefApproval = useBriefProposalsStore((s) => s.ingestApproval);
+  const clearBriefProposals = useBriefProposalsStore((s) => s.clear);
 
   const clearMediaSelection = useMediaStore((s) => s.select);
   const refreshMedia = useMediaStore((s) => s.refresh);
@@ -100,6 +106,9 @@ export function useAppGlue() {
         ingestProposal(item);
         ingestPendingProposal(item);
       }
+      if (isApprovalRequestItem(item)) {
+        ingestBriefApproval(item);
+      }
       if (item.kind === "editorial_note") {
         void ingestNote(item);
       }
@@ -126,6 +135,7 @@ export function useAppGlue() {
     setTurnError,
     ingestProposal,
     ingestPendingProposal,
+    ingestBriefApproval,
     ingestNote,
   ]);
 
@@ -263,6 +273,7 @@ export function useAppGlue() {
     clearAgent();
     clearProposal();
     clearPendingProposals();
+    clearBriefProposals();
     clearMediaStreamUrlCache();
     clearMediaSelection(null);
     clearSelection();
@@ -281,6 +292,7 @@ export function useAppGlue() {
     clearAgent,
     clearProposal,
     clearPendingProposals,
+    clearBriefProposals,
     clearMediaSelection,
     clearSelection,
     clearNotes,
