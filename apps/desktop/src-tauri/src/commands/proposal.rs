@@ -52,6 +52,13 @@ use crate::state::{AwidatState, PendingProposal};
 /// proposals; `None` for user-initiated. On accept we send `Deny` on
 /// the agent's oneshot per the plan's "user took over" semantics.
 ///
+/// `reasoning` is the agent's one-sentence justification for this
+/// envelope (e.g. "trimmed 0.42s silence per podcast defaults"),
+/// captured from `apply_edl(reasoning = …)`. The user-edit path
+/// (`propose_user_edit`) has no agent voice and passes `None`; the
+/// agent-initiated path threads the field through so Wave 3's
+/// ProposalInspector / pill tooltip have the rationale to render.
+///
 /// The id is the proposal's stable identifier — re-used across
 /// adjustment Deltas. Frontend keys its rendering on it.
 pub async fn build_proposal(
@@ -62,6 +69,7 @@ pub async fn build_proposal(
     project_root: &Path,
     source: ProposalSource,
     reply: Option<tokio::sync::oneshot::Sender<ApprovalDecision>>,
+    reasoning: Option<String>,
 ) -> Result<(), String> {
     let mut reply = reply;
     let envelope = match parse(&edl_text) {
@@ -147,11 +155,11 @@ pub async fn build_proposal(
             // `rationale` is the agent's one-sentence justification
             // ("trimmed 0.42s silence per podcast defaults") that
             // Wave 3 surfaces on every proposal pill / Brief row.
-            // `build_proposal` is the user-edit path (drag-to-trim,
-            // transcript delete) and has no agent voice, so we emit
-            // `None` here; the agent-side `apply_edl` producer will
-            // populate it once its tool plumbing carries the field.
-            rationale: None,
+            // For agent-initiated proposals it comes from
+            // `apply_edl(reasoning = …)`; user-initiated callers
+            // (drag-to-trim, transcript delete) pass `None` here
+            // because there's no agent voice to surface.
+            rationale: reasoning,
         },
     );
     Ok(())
@@ -497,6 +505,8 @@ pub async fn propose_user_edit(
         edl_text,
         &project_root,
         ProposalSource::User,
+        None,
+        // User-edit path: no agent voice, so no rationale on the wire.
         None,
     )
     .await?;
