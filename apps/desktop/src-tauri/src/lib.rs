@@ -131,6 +131,8 @@ pub fn run() {
             commands::dismissal::list_dismissals,
             commands::dismissal::dismiss_pattern,
             commands::dismissal::undismiss_pattern,
+            commands::feedback::append_feedback,
+            commands::feedback::read_feedback,
             commands::history::list_chat_sessions,
             commands::history::load_chat_history,
             commands::history::load_chat_session,

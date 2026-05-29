@@ -8,6 +8,7 @@ pub mod clip_params;
 pub mod color_scopes;
 pub mod config;
 pub mod dismissal;
+pub mod feedback;
 pub mod generated_media;
 pub mod history;
 pub mod import;

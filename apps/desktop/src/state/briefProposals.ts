@@ -96,6 +96,30 @@ export interface BriefDispatch {
    * bearing and a failed capture must not unwind an accept dispatch.
    */
   captureTimelineSnapshot: () => Promise<string | undefined>;
+  /**
+   * Append a rejection record to `<project>/.awidat/feedback.jsonl`
+   * (Wave 5 C2). Fire-and-forget — callers must never block the UI
+   * decision on the disk write, and the JSONL is the AGENT-facing
+   * source (the localStorage History store remains the UI source of
+   * truth). Failures must not unwind a reject dispatch.
+   */
+  appendFeedback: (projectPath: string, entry: FeedbackPayload) => Promise<void>;
+}
+
+/**
+ * Wire-shape of one row written to `<project>/.awidat/feedback.jsonl`.
+ * Mirrors `commands::feedback::FeedbackEntry` on the Rust side — keep
+ * the two in lock-step. `rationale` and `reason` are nullable so silent
+ * rejects (no reason supplied) still log a row, which lets the agent
+ * spot frequency patterns ("user just keeps rejecting cuts").
+ */
+export interface FeedbackPayload {
+  /** Unix epoch seconds. */
+  ts: number;
+  medium: BriefMedium;
+  title: string;
+  rationale: string | null;
+  reason: string | null;
 }
 
 /**
@@ -190,6 +214,12 @@ const defaultDispatch: BriefDispatch = {
       console.warn("captureTimelineSnapshot failed", e);
       return undefined;
     }
+  },
+  appendFeedback: async (projectPath, entry) => {
+    // Lazy-load Tauri so this module stays importable from node tests
+    // that don't run inside the desktop runtime.
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("append_feedback", { projectPath, entry });
   },
 };
 
@@ -324,16 +354,19 @@ export const useBriefProposalsStore = create<BriefState>((set, get) => ({
       await state.dispatch.respondApproval(id, "deny");
       set((s) => removeApproval(s, id));
       logDecision(snapshot, "rejected", undefined, rejectReason);
+      logFeedback(state, snapshot, rejectReason);
       return;
     }
     if (state.brollProposals.has(id)) {
       await state.dispatch.rejectBroll(id);
       set((s) => decideBroll(s, id));
       logDecision(snapshot, "rejected", undefined, rejectReason);
+      logFeedback(state, snapshot, rejectReason);
       return;
     }
     await state.dispatch.rejectProposal(id);
     logDecision(snapshot, "rejected", undefined, rejectReason);
+    logFeedback(state, snapshot, rejectReason);
   },
 
   clear() {
@@ -513,6 +546,39 @@ function logDecision(
     rejectReason,
   });
   useProposalHistoryStore.getState().record(entry);
+}
+
+/**
+ * Append a rejection record to the per-project JSONL log
+ * (Wave 5 C2). Fire-and-forget — the disk write must never block the
+ * UI decision dispatch, and a failed write must not unwind the reject
+ * (the localStorage History store has already recorded the event for
+ * the UI). C3 will read this file from the backend to inject recent
+ * rejections into the next agent turn.
+ *
+ * No project loaded → silently drop, same as `logDecision`: the JSONL
+ * is non-load-bearing chrome on the reject path.
+ */
+function logFeedback(
+  state: BriefState,
+  proposal: BriefProposal | null,
+  rejectReason: string | undefined,
+): void {
+  if (!proposal) return;
+  const projectPath = useProjectStore.getState().current;
+  if (!projectPath) return;
+  const payload: FeedbackPayload = {
+    ts: Math.floor(Date.now() / 1000),
+    medium: proposal.medium,
+    title: proposal.title,
+    rationale: proposal.rationale ?? null,
+    reason: rejectReason ?? null,
+  };
+  // Fire-and-forget — fail loud in console but never throw upstream.
+  void state.dispatch
+    .appendFeedback(projectPath, payload)
+    // eslint-disable-next-line no-console
+    .catch((e) => console.warn("appendFeedback failed", e));
 }
 
 /** Type-narrowing helper for the items subscription in appGlue. */

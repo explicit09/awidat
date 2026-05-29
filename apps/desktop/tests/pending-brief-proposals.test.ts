@@ -54,6 +54,10 @@ function resetAll(mockDispatch?: Partial<BriefDispatch>): {
       rejectBrollCalls.push(jobId);
     },
     captureTimelineSnapshot: async () => undefined,
+    // Wave 5 C2: most tests don't load a project, so the
+    // append-feedback path short-circuits before this is invoked. The
+    // dedicated test:feedback-log suite mocks this directly.
+    appendFeedback: async () => {},
     ...mockDispatch,
   };
   useBriefProposalsStore.setState({
