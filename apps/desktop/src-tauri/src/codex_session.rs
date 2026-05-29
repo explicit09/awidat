@@ -325,4 +325,24 @@ mod tests {
         let out = render_skills_catalog_from_roots(Some(empty.path()), &[], &[]);
         assert!(out.is_none());
     }
+
+    /// Wave 4 W4.2 — the rendered L1 catalog the bridge prepends to
+    /// every turn must carry the rationale-contract paragraph that
+    /// teaches the agent to populate `Item::ProposedEdit::rationale`.
+    /// Lives once in `AvailableSkillsFragment` so it appears on every
+    /// session — even when only one skill is installed.
+    #[test]
+    fn render_skills_catalog_carries_rationale_contract() {
+        let bundled = make_skills_root(&["only-skill"]);
+        let rendered = render_skills_catalog_from_roots(Some(bundled.path()), &[], &[])
+            .expect("catalog non-empty");
+        assert!(
+            rendered.contains("## Rationale contract"),
+            "rendered catalog must include the rationale contract; got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Every proposal you emit MUST include"),
+            "rendered catalog must include the MUST-rule; got:\n{rendered}"
+        );
+    }
 }

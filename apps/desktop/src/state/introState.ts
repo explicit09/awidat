@@ -41,7 +41,11 @@ Use the indexer outputs to ground your suggestions. Aim for an editorial first
 pass that the user can review and refine — not a finished cut.
 
 Emit each proposed edit as a separate approval/proposal so the user can
-accept/reject individually. Include a one-sentence rationale for each.`;
+accept/reject individually. Every proposal MUST include a one-sentence
+rationale in the \`rationale\` field — pass it through \`apply_edl\` as
+\`reasoning: "<one short sentence>"\`. Never leave it empty; the rationale
+is what lets the reviewer accept the call without scrubbing the timeline.
+See the Rationale contract in your skills catalog for the exact format.`;
 
 /** All sentinel prefixes that mean "this is editorial guidance, not a user message".
  *  Add new prefixes here and every renderer / turn-grouper picks them up. */
@@ -68,7 +72,10 @@ Introduce yourself in 2-3 short sentences:
 1. State what you've read (AGENTS.md if present, indexer signals available).
 2. State what you can do for this project_type given the skills loaded.
 3. Offer ONE next step (e.g., "Say the word and I'll prepare a starting cut.").
-Do not call any tools. Do not propose any edits. Wait for the user to direct you.`;
+Do not call any tools. Do not propose any edits. Wait for the user to direct you.
+
+When you do start proposing edits, include a one-sentence rationale per proposal
+— see the Rationale contract in your skills catalog for the format.`;
 
 export const STORAGE_KEY = "awidat:intro:introduced";
 
